@@ -11,12 +11,10 @@
 #
 # Direct edit (``bot_task=image``) skips the AR recaption stage.
 #
-# Run:
-#   HY_STEPS=8 HY_NUM_LAYERS=32 python_env/bin/python \
+# Run (Instruct-Distil, 8-step meanflow, no CFG):
+#   HY_DISTIL=1 HY_NUM_LAYERS=32 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/demo/demo_i2i.py \
-#     --prompt "make the sky sunset orange" \
-#     --cond /path/to/image.png \
-#     --bot-task think_recaption
+#     --distil --prompt "make the sky sunset orange" --cond /path/to/image.png
 #
 # Multi-image:
 #   --cond img1.png img2.png
@@ -68,7 +66,11 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     prepare_i2i_denoise_bundle,
     prepare_recaption_ar_bundle,
 )
-from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR, load_tensors
+from models.experimental.hunyuan_image_3_0.ref.weights import (
+    INSTRUCT_DISTIL_MODEL_DIR,
+    INSTRUCT_MODEL_DIR,
+    load_tensors,
+)
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
@@ -76,11 +78,10 @@ from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, decode_latent, denoise_loop
 from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
-from models.experimental.hunyuan_image_3_0.tests.pcc.i2i_helpers import ref_timestep_emb
 
 from hunyuan_image_3.system_prompt import get_system_prompt
 
-STEPS = int(os.environ.get("HY_STEPS", "8"))
+STEPS_ENV = os.environ.get("HY_STEPS")
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
 RECAPTION_LAYERS = int(os.environ.get("HY_RECAPTION_LAYERS", str(NUM_LAYERS)))
 RECAPTION_KV = os.environ.get("HY_RECAPTION_KV", "1") != "0"
@@ -89,8 +90,41 @@ SEED = int(os.environ.get("HY_SEED", "42"))
 VIT_LAYERS = int(os.environ.get("HY_VIT_LAYERS", "27"))
 MAX_NEW_TOKENS = int(os.environ.get("HY_MAX_NEW_TOKENS", "512"))
 RECAPTION_ON_DEVICE = os.environ.get("HY_RECAPTION_DEVICE", "1") != "0"
+USE_DISTIL = os.environ.get("HY_DISTIL", "0") == "1"
 SCALING = 0.562679178327931
-MODEL_DIR = INSTRUCT_MODEL_DIR
+
+
+def _resolve_model_dir(distil: bool) -> Path:
+    if distil:
+        return INSTRUCT_DISTIL_MODEL_DIR
+    return INSTRUCT_MODEL_DIR
+
+
+def _default_steps(model_dir: Path, *, distil: bool) -> int:
+    gen_cfg = model_dir / "generation_config.json"
+    if gen_cfg.is_file():
+        return int(json.load(open(gen_cfg)).get("diff_infer_steps", 8 if distil else 50))
+    return 8 if distil else 50
+
+
+def _model_flags(model_dir: Path) -> tuple[bool, bool]:
+    cfg = json.load(open(model_dir / "config.json"))
+    return bool(cfg.get("cfg_distilled", False)), bool(cfg.get("use_meanflow", False))
+
+
+class _WeightLoader:
+    def __init__(self, model_dir: Path):
+        self.model_dir = model_dir
+        self._wmap = json.load(open(model_dir / "model.safetensors.index.json"))["weight_map"]
+        self._open: dict = {}
+
+    def load(self, key):
+        shard = self._wmap[key]
+        f = self._open.get(shard) or self._open.setdefault(shard, safe_open(self.model_dir / shard, framework="pt"))
+        return f.get_tensor(key)
+
+    def load_prefix(self, prefix):
+        return {k[len(prefix) + 1 :]: self.load(k) for k in self._wmap if k.startswith(prefix + ".")}
 
 
 def _use_tt_recaption() -> bool:
@@ -107,22 +141,8 @@ def _use_tt_recaption() -> bool:
     return False
 
 
-_WMAP = json.load(open(MODEL_DIR / "model.safetensors.index.json"))["weight_map"]
-_OPEN: dict = {}
-
-
-def _load(key):
-    shard = _WMAP[key]
-    f = _OPEN.get(shard) or _OPEN.setdefault(shard, safe_open(MODEL_DIR / shard, framework="pt"))
-    return f.get_tensor(key)
-
-
-def _load_prefix(prefix):
-    return {k[len(prefix) + 1 :]: _load(k) for k in _WMAP if k.startswith(prefix + ".")}
-
-
-def _cfg():
-    c = json.load(open(MODEL_DIR / "config.json"))
+def _cfg(model_dir: Path):
+    c = json.load(open(model_dir / "config.json"))
     first = lambda v: v if isinstance(v, int) else v[0]
     return dict(
         H=c["hidden_size"],
@@ -165,11 +185,13 @@ def _load_cond_images(proc, paths: list[str], *, infer_align: bool) -> tuple[lis
     return cond_list, pil_list
 
 
-def _build_backbone(mesh_device, ccl, c, *, num_layers: int, apply_final_norm: bool, sp_factor: int = 2):
-    layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in _load_prefix(f"model.layers.{i}").items()}
+def _build_backbone(
+    mesh_device, ccl, c, weights: _WeightLoader, *, num_layers: int, apply_final_norm: bool, sp_factor: int = 2
+):
+    layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in weights.load_prefix(f"model.layers.{i}").items()}
     bf16_layers = {0, 1, 2, 3, num_layers - 4, num_layers - 3, num_layers - 2, num_layers - 1}
-    norm_sd = {"model.ln_f.weight": _load("model.ln_f.weight")} if apply_final_norm else None
-    embed_sd = {"model.wte.weight": _load("model.wte.weight")}
+    norm_sd = {"model.ln_f.weight": weights.load("model.ln_f.weight")} if apply_final_norm else None
+    embed_sd = {"model.wte.weight": weights.load("model.wte.weight")}
     return HunyuanTtModel(
         mesh_device,
         num_layers=num_layers,
@@ -199,7 +221,7 @@ def _build_backbone(mesh_device, ccl, c, *, num_layers: int, apply_final_norm: b
     )
 
 
-def _run_recaption_host(prompt, bot_task, system_prompt, pil_images, image_size):
+def _run_recaption_host(model_dir, weights, prompt, bot_task, system_prompt, pil_images, image_size):
     if not torch.cuda.is_available():
         raise RuntimeError(
             "Host recaption requires an NVIDIA GPU (CUDA). "
@@ -215,8 +237,8 @@ def _run_recaption_host(prompt, bot_task, system_prompt, pil_images, image_size)
         moe_impl="eager",
         moe_drop_tokens=True,
     )
-    model = AutoModelForCausalLM.from_pretrained(str(MODEL_DIR), **kwargs)
-    model.load_tokenizer(str(MODEL_DIR))
+    model = AutoModelForCausalLM.from_pretrained(str(model_dir), **kwargs)
+    model.load_tokenizer(str(model_dir))
     image_arg = pil_images[0] if len(pil_images) == 1 else pil_images
     result = run_recaption(
         model,
@@ -252,37 +274,57 @@ def main():
         action="store_true",
         default=os.environ.get("HY_INFER_ALIGN", "0") == "1",
     )
+    parser.add_argument(
+        "--distil",
+        action="store_true",
+        default=USE_DISTIL,
+        help="Use HunyuanImage-3.0-Instruct-Distil (8-step meanflow, cfg_distilled)",
+    )
     parser.add_argument("--out", default=os.environ.get("HY_OUT", str(ROOT / "hy_i2i.png")))
     args = parser.parse_args()
 
+    model_dir = _resolve_model_dir(args.distil)
+    if not (model_dir / "model.safetensors.index.json").is_file():
+        label = "Instruct-Distil" if args.distil else "Instruct"
+        raise SystemExit(f"{label} weights not found under {model_dir}")
+
+    cfg_distilled, use_meanflow = _model_flags(model_dir)
+    if args.distil and not cfg_distilled:
+        print(f"[demo_i2i] warning: --distil but config.json has cfg_distilled=false ({model_dir})")
+
+    steps = int(STEPS_ENV) if STEPS_ENV is not None else _default_steps(model_dir, distil=args.distil)
+    weights = _WeightLoader(model_dir)
+
     if not args.cond:
         raise SystemExit("Provide --cond /path/to/image.png or set HY_COND")
-    if not (MODEL_DIR / "model.safetensors.index.json").is_file():
-        raise SystemExit(f"Instruct weights not found under {MODEL_DIR}")
 
     image_size = _parse_image_size(args.image_size)
     cot_text = None
 
-    print(f"[demo_i2i] model={MODEL_DIR}  bot_task={args.bot_task}  " f"image_size={image_size}  cond={args.cond!r}")
+    variant = "Instruct-Distil" if args.distil or cfg_distilled else "Instruct"
+    print(
+        f"[demo_i2i] model={model_dir}  variant={variant}  bot_task={args.bot_task}  "
+        f"image_size={image_size}  steps={steps}  cond={args.cond!r}"
+    )
 
-    c = _cfg()
+    c = _cfg(model_dir)
     H = c["H"]
-    down_sd, up_sd = _load_prefix("patch_embed"), _load_prefix("final_layer")
+    down_sd, up_sd = weights.load_prefix("patch_embed"), weights.load_prefix("final_layer")
     LATENT, HID, HSZ = _pe_dims(down_sd)
 
-    proc = HunyuanImage3ImageProcessor(json.load(open(MODEL_DIR / "config.json")))
+    proc = HunyuanImage3ImageProcessor(json.load(open(model_dir / "config.json")))
     cond_list, pil_list = _load_cond_images(proc, args.cond, infer_align=args.infer_align_image_size)
     cond_for_bundle = cond_list if len(cond_list) > 1 else cond_list[0]
 
-    tok = HunyuanTokenizer.from_model_dir(MODEL_DIR, sequence_template="instruct")
-    wte = load_tensors(MODEL_DIR, ["model.wte.weight"])["model.wte.weight"]
+    tok = HunyuanTokenizer.from_model_dir(model_dir, sequence_template="instruct")
+    wte = load_tensors(model_dir, ["model.wte.weight"])["model.wte.weight"]
     gen = torch.Generator().manual_seed(SEED)
 
-    patch_embed_ref = load_patch_embed(MODEL_DIR)
-    time_embed_ref = load_timestep_embedder("time_embed", MODEL_DIR)
-    timestep_emb_ref = load_timestep_embedder("timestep_emb", MODEL_DIR)
-    vision_ref = load_siglip2_vision(MODEL_DIR, num_layers=VIT_LAYERS)
-    aligner_ref = load_aligner(MODEL_DIR)
+    patch_embed_ref = load_patch_embed(model_dir)
+    time_embed_ref = load_timestep_embedder("time_embed", model_dir)
+    timestep_emb_ref = load_timestep_embedder("timestep_emb", model_dir)
+    vision_ref = load_siglip2_vision(model_dir, num_layers=VIT_LAYERS)
+    aligner_ref = load_aligner(model_dir)
 
     if args.bot_task != "image":
         sp_key, sp_sub = system_prompt_for_bot_task(args.bot_task)
@@ -322,7 +364,7 @@ def main():
                     timestep_emb=timestep_emb_ref,
                     vision_model=vision_ref,
                     aligner=aligner_ref,
-                    model_dir=MODEL_DIR,
+                    model_dir=model_dir,
                     generator=gen,
                 )
                 prefix_len = int(recap_bundle.input_ids.shape[1])
@@ -337,11 +379,17 @@ def main():
                     f"[demo_i2i] loading recaption backbone ({RECAPTION_LAYERS} layers, sp={recap_sp}) ...", flush=True
                 )
                 recap_backbone = _build_backbone(
-                    recap_mesh, recap_ccl, c, num_layers=RECAPTION_LAYERS, apply_final_norm=True, sp_factor=recap_sp
+                    recap_mesh,
+                    recap_ccl,
+                    c,
+                    weights,
+                    num_layers=RECAPTION_LAYERS,
+                    apply_final_norm=True,
+                    sp_factor=recap_sp,
                 )
                 print(f"[demo_i2i] recaption backbone ready ({time.time() - t0:.0f}s)", flush=True)
                 print("[demo_i2i] loading LM head ...", flush=True)
-                lm_head = HunyuanTtLMHead(recap_mesh, {"lm_head.weight": _load("lm_head.weight")})
+                lm_head = HunyuanTtLMHead(recap_mesh, {"lm_head.weight": weights.load("lm_head.weight")})
                 recap_config = replace(default_recaption_sampling_config(), max_new_tokens=MAX_NEW_TOKENS)
                 recap_result = run_recaption_on_device(
                     recap_backbone,
@@ -364,7 +412,9 @@ def main():
                 ttnn.close_mesh_device(recap_mesh)
                 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         else:
-            cot_text, image_size = _run_recaption_host(args.prompt, args.bot_task, recap_system, pil_list, image_size)
+            cot_text, image_size = _run_recaption_host(
+                model_dir, weights, args.prompt, args.bot_task, recap_system, pil_list, image_size
+            )
 
         print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
 
@@ -393,7 +443,9 @@ def main():
     seq_len = bundle.seq_len
     print(f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}")
 
-    timestep_emb = ref_timestep_emb(H)
+    timestep_emb = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H)
+    guidance_emb = load_timestep_embedder("guidance_emb", model_dir, hidden_size=H) if cfg_distilled else None
+    timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
 
     print("[demo_i2i] opening denoise mesh (2x2) ...", flush=True)
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -429,14 +481,20 @@ def main():
         )
         print(f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers) ...", flush=True)
         t0 = time.time()
-        backbone = _build_backbone(mesh_device, ccl, c, num_layers=NUM_LAYERS, apply_final_norm=False)
+        backbone = _build_backbone(mesh_device, ccl, c, weights, num_layers=NUM_LAYERS, apply_final_norm=False)
         print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
         print("[demo_i2i] building timestep embedders ...", flush=True)
         te1 = HunyuanTtTimestepEmbedder(
-            mesh_device, H, {f"time_embed.{k}": v for k, v in _load_prefix("time_embed").items()}, "time_embed"
+            mesh_device,
+            H,
+            {f"time_embed.{k}": v for k, v in weights.load_prefix("time_embed").items()},
+            "time_embed",
         )
         te2 = HunyuanTtTimestepEmbedder(
-            mesh_device, H, {f"time_embed_2.{k}": v for k, v in _load_prefix("time_embed_2").items()}, "time_embed_2"
+            mesh_device,
+            H,
+            {f"time_embed_2.{k}": v for k, v in weights.load_prefix("time_embed_2").items()},
+            "time_embed_2",
         )
         step = HunyuanTtDenoiseStep(
             mesh_device,
@@ -461,8 +519,12 @@ def main():
         torch.manual_seed(SEED + 1)
         init_latent = torch.randn(1, LATENT, grid[0], grid[1])
         sched = HunyuanTtScheduler(mesh_device)
-        sched.set_timesteps(STEPS)
-        print(f"[demo_i2i] denoising {STEPS} steps (CFG={GUIDANCE}, seq_len={seq_len}) ...", flush=True)
+        sched.set_timesteps(steps)
+        mode = "distil" if cfg_distilled else "CFG"
+        print(
+            f"[demo_i2i] denoising {steps} steps ({mode}, guidance={GUIDANCE}, seq_len={seq_len}) ...",
+            flush=True,
+        )
         latent = denoise_loop(
             step,
             sched,
@@ -471,8 +533,12 @@ def main():
             time_embed_2=te2,
             cond=cond_tt,
             uncond=uncond_tt,
-            guidance_scale=GUIDANCE if uncond_tt is not None else 1.0,
+            guidance_scale=GUIDANCE,
             timestep_emb=timestep_emb,
+            guidance_emb=guidance_emb,
+            timestep_r_emb=timestep_r_emb,
+            cfg_distilled=cfg_distilled,
+            use_meanflow=use_meanflow,
             mesh_device=mesh_device,
         )
         print(f"[demo_i2i] denoised latent {tuple(latent.shape)}")

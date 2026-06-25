@@ -26,7 +26,7 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     HunyuanTokenizer,
     build_i2i_cfg_conds,
     prepare_i2i_denoise_bundle,
-    scatter_gen_timestep_embeds,
+    scatter_distill_step_embeds,
 )
 from models.experimental.hunyuan_image_3_0.ref.transformer_layer import HunyuanImage3DecoderLayer as RefLayer
 from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR, MODEL_DIR
@@ -197,10 +197,33 @@ def build_host_bundle(*, cfg_factor=CFG_FACTOR, vit_layers=VIT_LAYERS, seed=42):
     )
 
 
-def prepare_step_host_embeds(cond, t_scalar, timestep_emb):
+def prepare_step_host_embeds(
+    cond,
+    t_scalar,
+    timestep_emb,
+    *,
+    scheduler=None,
+    guidance_emb=None,
+    timestep_r_emb=None,
+    guidance_scalar=None,
+    use_meanflow=False,
+):
     host = cond["base_embeds_host"]
-    tvec = torch.tensor([float(t_scalar)] * host.shape[0], dtype=torch.float32)
-    return scatter_gen_timestep_embeds(host, tvec, cond.get("gen_timestep_scatter_index"), timestep_emb)
+    t_r = None
+    if use_meanflow and scheduler is not None:
+        t_r = float(scheduler.get_timestep_r(t_scalar))
+    return scatter_distill_step_embeds(
+        host,
+        t_scalar=float(t_scalar),
+        gen_timestep_scatter_index=cond.get("gen_timestep_scatter_index"),
+        timestep_emb=timestep_emb,
+        guidance_scalar=guidance_scalar,
+        guidance_scatter_index=cond.get("guidance_scatter_index"),
+        guidance_emb=guidance_emb,
+        t_r_scalar=t_r,
+        gen_timestep_r_scatter_index=cond.get("gen_timestep_r_scatter_index"),
+        timestep_r_emb=timestep_r_emb,
+    )
 
 
 def upload_mask(device, mask_add, batch=1):
