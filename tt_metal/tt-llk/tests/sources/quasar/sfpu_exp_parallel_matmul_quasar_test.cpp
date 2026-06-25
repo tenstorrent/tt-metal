@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "perf.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -60,10 +61,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM);
 
-    for (std::uint32_t j = 0; j < KT_DIM; j++)
-    {
-        _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
-    }
+    perf_scratch_measure(
+        PerfScratchSlot::Unpack,
+        [&]()
+        {
+            for (std::uint32_t j = 0; j < KT_DIM; j++)
+            {
+                _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+            }
+        });
 }
 
 #endif
@@ -85,11 +91,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
 
-    for (std::uint32_t i = 0; i < KT_DIM; i++)
-    {
-        _llk_math_matmul_block_(CT_DIM, RT_DIM);
-    }
-    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+    perf_scratch_measure(
+        PerfScratchSlot::Math,
+        [&]()
+        {
+            for (std::uint32_t i = 0; i < KT_DIM; i++)
+            {
+                _llk_math_matmul_block_(CT_DIM, RT_DIM);
+            }
+            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+        });
 }
 
 #endif
@@ -158,27 +169,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
-    for (std::uint32_t i = 0; i < num_tiles; ++i)
-    {
-        _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
-        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
-
-        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
+    perf_scratch_measure(
+        PerfScratchSlot::Sfpu,
+        [&]()
         {
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;
-            const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
+            for (std::uint32_t i = 0; i < num_tiles; ++i)
+            {
+                _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
+                _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
+
+                for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
+                {
+                    const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;
+                    const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
 
 #pragma GCC unroll 8
-            for (int d = 0; d < num_sfpu_iterations; d++)
-            {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
-                TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
-                TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
-            }
+                    for (int d = 0; d < num_sfpu_iterations; d++)
+                    {
+                        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
+                        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
+                        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
+                    }
 
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
-        }
-    }
+                    _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+                }
+            }
+        });
 
     wait_sfpu_idle();
     wait_unpack_idle();
@@ -214,8 +230,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
     _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1);
 
-    _llk_pack_matmul_(0, 0);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    perf_scratch_measure(
+        PerfScratchSlot::Pack,
+        [&]()
+        {
+            _llk_pack_matmul_(0, 0);
+            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        });
 }
 
 #endif
