@@ -76,3 +76,44 @@ def canvas_sampling_config_from_params(
         top_p=top_p,
         top_k_top_p_supported=False,
     )
+
+
+def canvas_sample_from_params(
+    logits,
+    sampling_params: Any,
+    *,
+    default_temperature: float,
+    default_seed: int | None = None,
+    gumbel_noise=None,
+    use_vocab_chunked_noise: bool = False,
+    vocab_chunk_size: int = 1,
+):
+    """Apply duck-typed TT sampling params to the device canvas sampler.
+
+    This is the small vLLM seam for W4: callers pass the vLLM-owned
+    ``TTSamplingParams`` object (or a dict with the same fields), and the helper
+    maps temperature/seed onto the per-position DiffusionGemma canvas sampler.
+    ``top_k``/``top_p`` remain parsed-only until the reference sampler ships
+    those filters.
+    """
+    from models.experimental.diffusion_gemma.tt import sampling as TS
+
+    config = canvas_sampling_config_from_params(
+        sampling_params,
+        default_temperature=default_temperature,
+        default_seed=default_seed,
+    )
+    if gumbel_noise is None:
+        if config.seed is None:
+            raise ValueError("canvas_sample_from_params requires gumbel_noise or a sampling seed")
+        if use_vocab_chunked_noise:
+            gumbel_noise = TS.sample_gumbel_noise_by_vocab_chunks(
+                logits.shape,
+                device=logits.device(),
+                seed=config.seed,
+                vocab_chunk_size=vocab_chunk_size,
+            )
+        else:
+            gumbel_noise = TS.sample_gumbel_noise(logits.shape, device=logits.device(), seed=config.seed)
+
+    return TS.canvas_sample(logits, config.temperature, gumbel_noise)

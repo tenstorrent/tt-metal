@@ -7,6 +7,7 @@ import pytest
 
 from models.experimental.diffusion_gemma.tt.sampling_params import (
     MODEL_CAPABILITIES,
+    canvas_sample_from_params,
     canvas_sampling_config_from_params,
 )
 
@@ -52,3 +53,14 @@ def test_canvas_sampling_params_rejects_greedy_temperature():
 
     with pytest.raises(ValueError, match="temperature > 0"):
         canvas_sampling_config_from_params(params, default_temperature=0.8)
+
+
+def test_canvas_sample_from_params_requires_noise_or_seed():
+    params = {"temperature": 0.8}
+
+    with pytest.raises(ValueError, match="gumbel_noise or a sampling seed"):
+        canvas_sample_from_params(
+            logits=None,
+            sampling_params=params,
+            default_temperature=0.8,
+        )

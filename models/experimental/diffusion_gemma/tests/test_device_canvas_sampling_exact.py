@@ -11,6 +11,7 @@ import torch
 import ttnn
 from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.tt import sampling as TS
+from models.experimental.diffusion_gemma.tt.sampling_params import canvas_sample_from_params
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [
@@ -49,6 +50,26 @@ def test_canvas_sample_matches_injected_gumbel_reference(device):
         _to_device(device, logits),
         temperature,
         _to_device(device, noise),
+    )
+
+    assert torch.equal(ttnn.to_torch(out).squeeze(-1).to(torch.long), ref)
+
+
+def test_canvas_sample_from_params_matches_injected_gumbel_reference(device):
+    torch.manual_seed(37)
+    length = 256
+    vocab_size = 512
+    temperature = S.temperature_at_step(step=11, num_steps=48, t_start=0.8, t_end=0.4)
+    logits = _structured_logits(length, vocab_size)
+    noise = S.sample_gumbel_noise(logits.shape, generator=torch.Generator().manual_seed(41))
+    sampling_params = {"temperature": temperature, "top_k": 64, "top_p": 0.95, "seed": 41}
+
+    ref = S.gumbel_max_sample(logits, temperature, noise=noise)
+    out = canvas_sample_from_params(
+        _to_device(device, logits),
+        sampling_params,
+        default_temperature=0.8,
+        gumbel_noise=_to_device(device, noise),
     )
 
     assert torch.equal(ttnn.to_torch(out).squeeze(-1).to(torch.long), ref)
