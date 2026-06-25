@@ -224,7 +224,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 37
+      timeout: 39
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
 
