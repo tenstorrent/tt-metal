@@ -14,10 +14,10 @@ Pairs with the kernel `kernels/d2d_socket_push.cpp` and, on the downstream stage
 pattern (host drives the lease cadence):
 
     sender.wait_for_fabric_links()                                   # reclaim (prev forward drained)
-    d2d_socket_push(sender, activation, metadata=[slot, start, end, is_last])  # push, no wait
+    d2d_socket_push(sender, activation, metadata=[slot, start, end])  # push, no wait
     sender.release_fabric_links()                                    # grant -> forward this chunk
     ... downstream stage ...
-    act, meta = h2d_socket_sync(receiver, worker_cores, metadata_size_bytes=16)
+    act, meta = h2d_socket_sync(receiver, worker_cores, metadata_size_bytes=12)
 """
 
 import ttnn
@@ -55,8 +55,8 @@ def d2d_socket_push(
             `sender.get_backing_tensor()` (same shape/dtype/layout/memory_config) — the op
             copies it page-for-page into the backing tensor.
         worker_cores: must match the `sender_worker_cores` the service was built with.
-        metadata: uint32 words shipped inline (e.g. [slot_id, actual_start, actual_end,
-            is_last]). len*4 must equal the service's configured metadata_size_bytes. The
+        metadata: uint32 words shipped inline (e.g. [slot_id, actual_start, actual_end]).
+            len*4 must equal the service's configured metadata_size_bytes. The
             designated worker (page slice starting at 0) writes them to the service core.
             None / [] = no metadata (service must have metadata_size_bytes == 0).
     """

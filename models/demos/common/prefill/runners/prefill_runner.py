@@ -480,7 +480,7 @@ def run_request_loop(
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
-def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
+def run_standalone_loop(runtime: TtPrefillRuntime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
     """Bring-up / benchmark loop — BOUNDED, golden-trace input. rank 0 drives NUM_CHUNKS chunks from the
     trace; downstream ranks receive the same count over D2D. Every rank knows NUM_CHUNKS (propagated via
     global_env), so each loops a fixed range independently — no end-of-stream marker needed. With
@@ -574,7 +574,6 @@ def _print_config() -> None:
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
         ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "<auto: 1d if sp<=8 else 2d>")),
-        ("PREFILL_PP_NUM_LINKS", os.environ.get("PREFILL_PP_NUM_LINKS", "2")),
         ("PREFILL_STANDALONE (pipeline/bring-up mode)", os.environ.get("PREFILL_STANDALONE", "0")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
@@ -634,9 +633,7 @@ def main() -> None:
         num_layers=num_my_layers,
         chunk_size=CHUNK_SIZE,
         num_users=NUM_USERS,
-        num_links=int(
-            os.environ.get("PREFILL_PP_NUM_LINKS", "2")
-        ),  # drop to 1 where the fabric trains only 1 routing plane
+        num_links=2 if is_blackhole() else 1,  # Blackhole trains 2 fabric routing planes, others 1
         capacity_factor=CAPACITY_FACTOR,
         gate_fallback_mode=GateComputeMode[_gate_mode_name],
         weight_cache_path=cache_path,
