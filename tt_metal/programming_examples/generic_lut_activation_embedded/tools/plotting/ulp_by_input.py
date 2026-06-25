@@ -184,6 +184,11 @@ def parse_args():
     parser.add_argument("--series", action="append", required=True, metavar="LABEL=CSV")
     parser.add_argument("--out", required=True, help="Output PNG path")
     parser.add_argument("--max-points", type=int, default=50000)
+    parser.add_argument(
+        "--split-series",
+        action="store_true",
+        help="Draw each series in its own side-by-side subplot with shared x/y bounds.",
+    )
     return parser.parse_args()
 
 
@@ -213,6 +218,63 @@ def legend_handles(plt, series):
     return handles
 
 
+def draw_series(ax, label, x, ulp, color, marker):
+    size, alpha, zorder = series_draw_params(label)
+    kwargs = {}
+    if marker != "x":
+        kwargs["edgecolors"] = "none"
+    ax.scatter(
+        x,
+        ulp,
+        s=size,
+        alpha=alpha,
+        color=color,
+        label=label,
+        marker=marker,
+        rasterized=True,
+        zorder=zorder,
+        **kwargs,
+    )
+
+
+def finish_axis(ax, precision):
+    ax.set_xlabel("Input domain")
+    ax.set_ylim(bottom=0)
+    ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 4), useMathText=True)
+    ax.grid(True, color="#CCCCCC", alpha=0.12, linewidth=0.5)
+
+
+def plot_split_series(plt, plotted, precision):
+    xs = [x for _, x, _, _, _ in plotted if len(x)]
+    ys = [y[np.isfinite(y)] for _, _, y, _, _ in plotted if np.any(np.isfinite(y))]
+    if not xs or not ys:
+        raise SystemExit("ulp_by_input: no finite points to plot")
+
+    xmin = min(float(np.nanmin(x)) for x in xs)
+    xmax = max(float(np.nanmax(x)) for x in xs)
+    ymax = max(float(np.nanmax(y)) for y in ys)
+    xpad = (xmax - xmin) * 0.02 if xmax > xmin else 1.0
+    ylim = (0, ymax * 1.04 if ymax > 0 else 1.0)
+
+    fig, axes = plt.subplots(1, len(plotted), figsize=(3.7 * len(plotted), 2.35), sharex=True, sharey=True)
+    if len(plotted) == 1:
+        axes = [axes]
+
+    for ax, (label, x, ulp, color, marker) in zip(axes, plotted):
+        draw_series(ax, label, x, ulp, color, marker)
+        ax.set_title(label, pad=2.0)
+        ax.set_xlim(xmin - xpad, xmax + xpad)
+        ax.set_ylim(*ylim)
+        finish_axis(ax, precision)
+        add_low_ulp_inset(ax, [(label, x, ulp, color, marker)])
+
+    axes[0].set_ylabel(f"ULP error ({precision.upper()})")
+    for ax in axes[1:]:
+        ax.set_ylabel("")
+    fig.tight_layout()
+    return fig
+
+
 def main():
     args = parse_args()
     import matplotlib
@@ -221,7 +283,6 @@ def main():
     import matplotlib.pyplot as plt
 
     apply_tufte_style(plt, compact=True)
-    fig, ax = plt.subplots(figsize=(3.7, 2.35))
     colors = ["#4E79A7", "#59A14F", "#F28E2B", "#E15759", "#B07AA1", "#76B7B2"]
     plotted = []
 
@@ -234,44 +295,31 @@ def main():
         x, ulp = downsample(x, ulp, args.max_points)
         color, marker = series_style(label, colors[i % len(colors)])
         plotted.append((label, x, ulp, color, marker))
-        size, alpha, zorder = series_draw_params(label)
-        kwargs = {}
-        if marker != "x":
-            kwargs["edgecolors"] = "none"
-        ax.scatter(
-            x,
-            ulp,
-            s=size,
-            alpha=alpha,
-            color=color,
-            label=label,
-            marker=marker,
-            rasterized=True,
-            zorder=zorder,
-            **kwargs,
-        )
 
-    ax.set_xlabel("Input domain")
-    ax.set_ylabel(f"ULP error ({args.precision.upper()})")
-    ax.set_ylim(bottom=0)
-    ymin, ymax = ax.get_ylim()
-    if ymax > 0:
-        ax.set_ylim(0, ymax * 1.04)
-    ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 4), useMathText=True)
-    ax.grid(True, color="#CCCCCC", alpha=0.12, linewidth=0.5)
-    add_low_ulp_inset(ax, plotted)
-    handles = legend_handles(plt, plotted)
-    ax.legend(
-        handles=handles,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 1.02),
-        ncols=min(4, len(handles)),
-        frameon=False,
-        handletextpad=0.45,
-        columnspacing=0.95,
-        borderaxespad=0.0,
-    )
-    fig.tight_layout()
+    if args.split_series:
+        fig = plot_split_series(plt, plotted, args.precision)
+    else:
+        fig, ax = plt.subplots(figsize=(3.7, 2.35))
+        for label, x, ulp, color, marker in plotted:
+            draw_series(ax, label, x, ulp, color, marker)
+        ax.set_ylabel(f"ULP error ({args.precision.upper()})")
+        finish_axis(ax, args.precision)
+        ymin, ymax = ax.get_ylim()
+        if ymax > 0:
+            ax.set_ylim(0, ymax * 1.04)
+        add_low_ulp_inset(ax, plotted)
+        handles = legend_handles(plt, plotted)
+        ax.legend(
+            handles=handles,
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncols=min(4, len(handles)),
+            frameon=False,
+            handletextpad=0.45,
+            columnspacing=0.95,
+            borderaxespad=0.0,
+        )
+        fig.tight_layout()
 
     out = Path(args.out).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)

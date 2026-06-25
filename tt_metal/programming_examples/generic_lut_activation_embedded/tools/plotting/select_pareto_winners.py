@@ -174,7 +174,7 @@ def manifest_row(act, dtype, role, status, us, ulp, row, tus, tulp, coeff_dir, d
     cfg_slug = slug(Path(row.get("csv") or "config").stem)
     role_slug = slug(role.replace("|", "_"))
     dump = dump_root / "frontier" / slug(dtype_name) / slug(act) / f"{role_slug}_{cfg_slug}.npz"
-    plot = plot_root / "ulp_by_input" / slug(dtype_name) / f"{slug(act)}.png"
+    plot = plot_root / "ulp_by_input" / f"{slug(act)}.png"
     return {
         "activation": act,
         "dtype": dtype_name,
@@ -197,7 +197,7 @@ def manifest_row(act, dtype, role, status, us, ulp, row, tus, tulp, coeff_dir, d
 def ttnn_manifest_row(act, dtype, tus, tulp, dump_root, plot_root):
     dtype_name = dtype or "bf16"
     dump = dump_root / "ttnn" / slug(dtype_name) / slug(act) / "ttnn.npz"
-    plot = plot_root / "ulp_by_input" / slug(dtype_name) / f"{slug(act)}.png"
+    plot = plot_root / "ulp_by_input" / f"{slug(act)}.png"
     return {
         "activation": act,
         "dtype": dtype_name,

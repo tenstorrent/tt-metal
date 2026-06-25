@@ -77,23 +77,15 @@ python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plot
   --manifest tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/pareto_winners.csv
 ```
 
-Pass BF16 and FP32 manifests together to generate one side-by-side subplot
-figure per activation with shared x/y bounds:
-
-```bash
-python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plotting/plot_pareto_io.py \
-  --manifest tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/pareto_winners.csv \
-  --manifest tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/fp32/data/csv/pareto_winners.csv \
-  --strict
-```
+Each generated IO PNG keeps the dtype-specific result location and splits
+`ours` and `TTNN` into side-by-side subplots with shared x/y bounds.
 
 Canonical raw dump and plot locations are:
 
 ```text
 results/frontier/<dtype>/data/dumps/frontier/<dtype>/<activation>/<role>_<config>.csv
 results/frontier/<dtype>/data/dumps/ttnn/<dtype>/<activation>/ttnn.csv
-results/frontier/<dtype>/plots/ulp_by_input/<dtype>/<activation>.png
-results/frontier/plots/ulp_by_input/<activation>.png
+results/frontier/<dtype>/plots/ulp_by_input/<activation>.png
 ```
 
 `ulp_by_input.py` reads explicit raw dump CSVs with `input,output` columns and

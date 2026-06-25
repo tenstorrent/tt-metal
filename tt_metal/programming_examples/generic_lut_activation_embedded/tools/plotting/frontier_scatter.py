@@ -182,7 +182,7 @@ def pareto(points):
     return front
 
 
-def add_one_ulp_inset(ax, comp, front, tus, tulp, method_color):
+def add_one_ulp_inset(ax, comp, front, tus, tulp, method_color, method_marker):
     low_ulp = [r for r in comp if r["_us"] is not None and r["_ulp"] is not None and 0 <= r["_ulp"] <= 1.0]
     ttnn_in_band = tus is not None and tulp is not None and 0 <= tulp <= 1.0
     if not low_ulp and not ttnn_in_band:
@@ -204,10 +204,12 @@ def add_one_ulp_inset(ax, comp, front, tus, tulp, method_color):
         if r["_us"] > x_max:
             continue
         method = r.get("method") or "unknown"
+        marker = method_marker.get(method, "o")
         inset.scatter(
             r["_us"],
             r["_ulp"],
             c=method_color.get(method, "gray"),
+            marker=marker,
             s=11,
             alpha=0.75,
             edgecolors="none",
@@ -312,6 +314,16 @@ def main():
         "exponent_alu_pow": "#B07AA1",
         "newton_root": "#76B7B2",
     }
+    METHOD_MARKER = {
+        "poly": "o",
+        "rational": "s",
+        "exponent_alu_exp2": "^",
+        "exponent_alu_log2": "v",
+        "exponent_alu_pow": "D",
+        "newton_root": "P",
+        "trig": "X",
+        "tan": "h",
+    }
     n_win = 0
     n_with_ttnn = 0
     activations = {act for act, _ in by_group}
@@ -347,12 +359,30 @@ def main():
                 continue
             method = r.get("method") or "unknown"
             c = METHOD_COLOR.get(method, "gray")
+            marker = METHOD_MARKER.get(method, "o")
             label = method if method not in plotted_methods else None
-            ax.scatter(r["_us"], r["_ulp"], c=c, s=12, alpha=0.72, edgecolors="none", label=label, clip_on=False)
+            ax.scatter(
+                r["_us"],
+                r["_ulp"],
+                c=c,
+                marker=marker,
+                s=13,
+                alpha=0.72,
+                edgecolors="none",
+                label=label,
+                clip_on=False,
+            )
             plotted_methods.add(method)
         for method in methods:
             if method not in plotted_methods:
-                ax.scatter([], [], c=METHOD_COLOR.get(method, "#666666"), s=12, label=method)
+                ax.scatter(
+                    [],
+                    [],
+                    c=METHOD_COLOR.get(method, "#666666"),
+                    marker=METHOD_MARKER.get(method, "o"),
+                    s=13,
+                    label=method,
+                )
         fxs = [p[0] for p in front]
         fys = [p[1] for p in front]
         if fxs:
@@ -362,7 +392,7 @@ def main():
             ax.scatter([tus], [tulp], c="#D62728", s=90, marker="*", zorder=5, label="TTNN", clip_on=False)
             ax.axhline(tulp, color="#D62728", ls=":", lw=0.7, alpha=0.55)
             ax.axvline(tus, color="#D62728", ls=":", lw=0.7, alpha=0.55)
-        add_one_ulp_inset(ax, comp, front, tus, tulp, METHOD_COLOR)
+        add_one_ulp_inset(ax, comp, front, tus, tulp, METHOD_COLOR, METHOD_MARKER)
         ax.set_xlabel("Tracy runtime (us)")
         ax.set_ylabel(f"Maximum ULP error ({dtype_label(dtype)})")
         ax.set_ylim(bottom=0)
