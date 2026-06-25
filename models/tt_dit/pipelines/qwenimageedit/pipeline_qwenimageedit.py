@@ -570,7 +570,7 @@ class QwenImageEditPipeline:
             height_par = self._wan_vae_parallel_config.height_parallel.factor * self._vae_scale_factor
             with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
                 tt_image, logical_h = self._vae_encoder.prepare_input(image_BCHW, height_par)
-                tt_latents_BCTHW, new_logical_h = self._vae_encoder.forward(tt_image, logical_h)
+                tt_latents_BCTHW, new_logical_h, _new_logical_w = self._vae_encoder.forward(tt_image, logical_h)
 
                 B, C, T, H_sh, W_sh = tt_latents_BCTHW.shape
                 tt_mean, tt_inv_std = self._get_tt_vae_latents_normalization((B, C, T, H_sh, W_sh))
