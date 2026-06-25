@@ -437,6 +437,7 @@ inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
         // TODO: with concurrent ALL consumers, this invalidates the same shared cache line once per
         // consumer; the redundant invalidations could be deduplicated (e.g. first-locker-per-round).
+        // invalidate_l2 also drops the matching L1 D$ line on all DM cores.
         invalidate_l2_cache_range(addr, entry);
         addr += stride;
         if (addr >= region.limit) {
@@ -453,6 +454,7 @@ inline void DataflowBuffer::lock_release_impl(ScopedLockRegion region, uint16_t 
     uint32_t addr = region.start;
     for (uint16_t k = 0; k < num_entries; ++k) {
         if (is_producer) {
+            // flush_l2 writes back + drops the matching L1 D$ line on all DM cores.
             flush_l2_cache_range(addr, entry);
         }
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, entry);
