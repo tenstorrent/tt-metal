@@ -115,6 +115,25 @@ def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
     return _gumbel_from_uniform(u)
 
 
+def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=ttnn.float32):
+    """Generate regenerated Gumbel noise with vocab not produced as the rand innermost axis.
+
+    QB2's single-call ``ttnn.rand(shape=[..., vocab])`` path currently shows
+    last-dimension correlation that biases Gumbel-max distributions. Generating
+    the vocab axis first and permuting back preserves one random draw per logits
+    element while avoiding that correlation in W4 distributional validation.
+    """
+    shape = tuple(shape)
+    if len(shape) < 2:
+        raise ValueError("shape must include at least a sample axis and a vocab axis")
+
+    rand_shape = (shape[-1], *shape[1:-1], shape[0])
+    permute_order = (len(shape) - 1, *range(1, len(shape) - 1), 0)
+    u = ttnn.rand(rand_shape, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, low=0.0, high=1.0, seed=seed)
+    u = ttnn.permute(u, permute_order)
+    return _gumbel_from_uniform(u)
+
+
 def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk_size: int = 1, dtype=ttnn.float32):
     """Slow iid-by-vocab-chunk Gumbel generator for distributional validation.
 

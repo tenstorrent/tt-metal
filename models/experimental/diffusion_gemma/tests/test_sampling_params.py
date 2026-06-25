@@ -64,3 +64,16 @@ def test_canvas_sample_from_params_requires_noise_or_seed():
             sampling_params=params,
             default_temperature=0.8,
         )
+
+
+def test_canvas_sample_from_params_rejects_multiple_rng_workarounds():
+    params = {"temperature": 0.8, "seed": 47472}
+
+    with pytest.raises(ValueError, match="at most one"):
+        canvas_sample_from_params(
+            logits=None,
+            sampling_params=params,
+            default_temperature=0.8,
+            use_vocab_chunked_noise=True,
+            use_vocab_permuted_noise=True,
+        )
