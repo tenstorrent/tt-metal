@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 import numpy as np
 import ttnn
@@ -21,6 +21,7 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from .completer_common import deallocate_tensors, async_read_to_host
 from .llama_overrides import LlamaCompositeKV
 
 
@@ -42,20 +43,6 @@ class LlamaCompletionCtx:
     completions_per_prompt: int = 1
     _tokenizer: Any = None
     _pad_token: Optional[int] = None
-
-
-def deallocate_tensors(tensors: Any) -> None:
-    if tensors is None:
-        return
-    if not isinstance(tensors, (list, tuple)):
-        tensors = [tensors]
-    for t in tensors:
-        if t is None:
-            continue
-        if isinstance(t, ttml.autograd.Tensor):
-            ttnn.deallocate(t.get_value(), force=True)
-        elif isinstance(t, ttnn.Tensor):
-            ttnn.deallocate(t, force=True)
 
 
 def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
@@ -84,18 +71,6 @@ def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> 
         print(f"Warning: {len(missing)} parameters not found in checkpoint:")
         for n in missing:
             print(f"  - {n}")
-
-
-def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
-    """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
-
-    Returns ``(host_tensors, event)``. The caller must call
-    ``event_synchronize(event)`` before consuming ``host_tensors``; deallocating
-    the source ``tensors`` before then races with the in-flight DMA.
-    """
-    hosts = [t.cpu(blocking=False) for t in tensors]
-    done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
-    return hosts, done
 
 
 class LlamaGRPOCompleter(GRPOCompleter):
@@ -497,7 +472,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
                     if done.all():
                         break
 
-                pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
+                pending_hosts, pending_event = async_read_to_host(chunk_columns, mesh_device)
                 chunk_columns = []
 
         completions_np = to_np(generated_columns)

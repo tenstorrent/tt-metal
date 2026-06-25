@@ -36,6 +36,7 @@ from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from .completer_common import deallocate_tensors, async_read_to_host
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.models.qwen3.kv_cache import KVCache
@@ -54,32 +55,6 @@ class Qwen3CompletionCtx:
     completions_per_prompt: int = 1
     _tokenizer: Any = None
     _pad_token: Optional[int] = None
-
-
-def deallocate_tensors(tensors: Any) -> None:
-    if tensors is None:
-        return
-    if not isinstance(tensors, (list, tuple)):
-        tensors = [tensors]
-    for t in tensors:
-        if t is None:
-            continue
-        if isinstance(t, ttml.autograd.Tensor):
-            ttnn.deallocate(t.get_value(), force=True)
-        elif isinstance(t, ttnn.Tensor):
-            ttnn.deallocate(t, force=True)
-
-
-def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
-    """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
-
-    Returns ``(host_tensors, event)``. The caller must ``event_synchronize(event)``
-    before consuming ``host_tensors``; deallocating the source ``tensors`` before
-    then races with the in-flight DMA.
-    """
-    hosts = [t.cpu(blocking=False) for t in tensors]
-    done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
-    return hosts, done
 
 
 class Qwen3GRPOCompleter(GRPOCompleter):
@@ -413,7 +388,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                             done |= np.isin(chunk_np, stop_arr).any(axis=1)
                             if done.all():
                                 break
-                        pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
+                        pending_hosts, pending_event = async_read_to_host(chunk_columns, mesh_device)
                         chunk_columns = []
 
                         n_done = i + 1
