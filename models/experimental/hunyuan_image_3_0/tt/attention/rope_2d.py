@@ -100,6 +100,13 @@ class HunyuanTtRoPE2D(LightweightModule):
         )
         return cos_tt, sin_tt
 
+    def slice_cos_sin(self, cos_tt: ttnn.Tensor, sin_tt: ttnn.Tensor, position: int):
+        """Return cos/sin for a single sequence position (decode step)."""
+        return (
+            ttnn.slice(cos_tt, [0, 0, position, 0], [1, 1, position + 1, self.head_dim]),
+            ttnn.slice(sin_tt, [0, 0, position, 0], [1, 1, position + 1, self.head_dim]),
+        )
+
     @staticmethod
     def _cos_sin_for_vision_apply(cos_tt: ttnn.Tensor, sin_tt: ttnn.Tensor):
         """Adapt [1, 1, S, D] tables to the [1, S, D] shape expected by vision RoPE."""

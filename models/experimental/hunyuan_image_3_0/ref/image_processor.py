@@ -165,6 +165,18 @@ def _tensor_scalar(value: Any) -> int:
     return int(value)
 
 
+def _extract_processor_field(value: Any) -> Any:
+    """Unwrap Siglip2 processor outputs (Fast uses batched tensors; slow uses per-image lists)."""
+    if isinstance(value, list):
+        if len(value) == 1:
+            value = value[0]
+        elif value and all(isinstance(v, torch.Tensor) for v in value):
+            value = torch.stack(value)
+    if isinstance(value, torch.Tensor) and value.ndim >= 2 and value.shape[0] == 1:
+        value = value.squeeze(0)
+    return value
+
+
 class HunyuanImage3ImageProcessor:
     """Host-side image processor for HunyuanImage-3.0 I2I / Instruct inputs."""
 
@@ -355,15 +367,12 @@ class HunyuanImage3ImageProcessor:
     def vit_process_image(self, image: Image.Image) -> ImageTensor:
         origin_size = image.size
         inputs = self.vit_info.processor(image)
-        pixel_values = inputs["pixel_values"].squeeze(0)
+        pixel_values = _extract_processor_field(inputs["pixel_values"])
 
         remain_keys = set(inputs.keys()) - {"pixel_values"}
         remain_kwargs = {}
         for key in remain_keys:
-            if isinstance(inputs[key], torch.Tensor):
-                remain_kwargs[key] = inputs[key].squeeze(0)
-            else:
-                remain_kwargs[key] = inputs[key]
+            remain_kwargs[key] = _extract_processor_field(inputs[key])
 
         return self.as_image_tensor(
             pixel_values,
