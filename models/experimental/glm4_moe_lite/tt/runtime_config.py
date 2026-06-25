@@ -97,6 +97,7 @@ class Glm4RuntimeConfig:
     # --- Memory layout ---
     decode_l1_act: bool
     sharded_decode_norm: bool
+    fuse_q_a_norm: bool
     dram_sharded_weights: bool
     dram_sharded_attn: bool
     dram_sharded_mlp: bool
@@ -181,6 +182,10 @@ class Glm4RuntimeConfig:
             # Memory layout
             decode_l1_act=_env_bool("GLM4_MOE_LITE_DECODE_L1_ACT", default=True),
             sharded_decode_norm=_env_bool("GLM4_MOE_LITE_SHARDED_DECODE_NORM", default=True),
+            # Run q_a_layernorm on the w_q_a matmul's native WIDTH_SHARDED spec instead of
+            # gathering to interleaved + re-sharding (drops the I2S before the norm). Decode
+            # non-TP/non-DRAM-sharded path only; self-guards if w_q_a output is not sharded.
+            fuse_q_a_norm=_env_bool("GLM4_MOE_LITE_FUSE_Q_A_NORM", default=True),
             dram_sharded_weights=dram_sharded,
             dram_sharded_attn=dram_sharded and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_ATTN"),
             dram_sharded_mlp=dram_sharded_mlp_val,
