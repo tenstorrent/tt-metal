@@ -109,7 +109,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--device-id", type=int, default=1)
     ap.add_argument("--m-pad", type=int, default=32)
-    ap.add_argument("--prefix", type=int, default=512)
+    ap.add_argument(
+        "--prefix", type=int, default=768, help="prefix KV length: 2-cam=768 (2×256 img + 256 lang), 3-cam=1024"
+    )
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument(
         "--config",
