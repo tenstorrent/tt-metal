@@ -477,12 +477,21 @@ def flush_comparison_records_to_db(report_dir):
     with open(sidecar_path, "w") as f:
         json.dump(_comparison_records_data, f)
 
+    rank = 0
+    try:
+        from ttnn._ttnn.multi_device import get_rank, is_initialized
+
+        if is_initialized():
+            rank = int(get_rank())
+    except (ImportError, OSError):
+        pass
+
     conn = sqlite3.connect(report_dir / "db.sqlite")
     cursor = conn.cursor()
     try:
         create_database_schema(cursor)
         save_database_schema_version(cursor)
-        import_tensor_comparison_records(cursor, _comparison_records_data)
+        import_tensor_comparison_records(cursor, _comparison_records_data, rank=rank)
         conn.commit()
     finally:
         conn.close()

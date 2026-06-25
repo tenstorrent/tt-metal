@@ -1703,7 +1703,7 @@ def _comparison_record_to_row(record: dict) -> tuple:
     )
 
 
-def _tensor_record_to_row(tensor: dict) -> tuple:
+def _tensor_record_to_row(tensor: dict, rank: int = 0) -> tuple:
     return (
         int(tensor["tensor_id"]),
         tensor.get("shape"),
@@ -1713,15 +1713,16 @@ def _tensor_record_to_row(tensor: dict) -> tuple:
         tensor.get("device_id"),
         tensor.get("address"),
         tensor.get("buffer_type"),
+        rank,
     )
 
 
-def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: dict) -> dict:
+def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: dict, rank: int = 0) -> dict:
     """Import comparison-mode sidecar records into the visualizer schema."""
     if not comparison_data:
         return {"local_tensor_comparison_records": 0, "global_tensor_comparison_records": 0, "tensors": 0}
 
-    tensors_batch = [_tensor_record_to_row(tensor) for tensor in comparison_data.get("tensors", [])]
+    tensors_batch = [_tensor_record_to_row(tensor, rank) for tensor in comparison_data.get("tensors", [])]
     local_records_batch = [
         _comparison_record_to_row(record) for record in comparison_data.get("local_tensor_comparison_records", [])
     ]
@@ -1730,7 +1731,7 @@ def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: di
     ]
 
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
     if local_records_batch:
         cursor.executemany(
             """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?)""", local_records_batch
@@ -1989,7 +1990,7 @@ def import_report(
             if comparison_data is None:
                 comparison_data = _load_comparison_records_sidecar(rpath)
             if comparison_data:
-                comparison_stats = import_tensor_comparison_records(cursor, comparison_data)
+                comparison_stats = import_tensor_comparison_records(cursor, comparison_data, rank=rank)
                 total_stats["comparison_records"] += (
                     comparison_stats["local_tensor_comparison_records"]
                     + comparison_stats["global_tensor_comparison_records"]
