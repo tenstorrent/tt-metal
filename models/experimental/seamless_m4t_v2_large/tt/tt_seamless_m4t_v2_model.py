@@ -797,21 +797,29 @@ class TTSeamlessM4Tv2Model:
     def _decode_argmax_token(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]``.
 
-        Returns ``(local_idx, chunk_max)``, each ``[1, 1, 32]``: the vocab is reshaped into 32 contiguous
-        chunks, and per chunk we keep the in-chunk argmax index and the in-chunk max value. The host
-        combine (cheap, 64 scalars) picks the winning chunk ``c = argmax(chunk_max)`` then the global token
-        ``c * chunk_width + local_idx[c]`` (see ``_greedy_next_token_id``).
+                Returns ``(local_idx, chunk_max)``, each ``[1, 1, 32]``: the vocab is reshaped into 32 contiguous
+                chunks, and per chunk we keep the in-chunk argmax index and the in-chunk max value. The host
+                combine (cheap, 64 scalars) picks the winning chunk ``c = argmax(chunk_max)`` then the global token
+                ``c * chunk_width + local_idx[c]`` (see ``_greedy_next_token_id``).
 
-        On-device ``ttnn.argmax`` is far faster than the 256k-vocab host readback but has two
-        alignment traps that both return *silent garbage*: (1) the dim before the reduced vocab dim must be
-        tile-aligned (32); (2) the multicore kernel reduces over the *physical* (tile-padded) width, so the
-        reduced dim must also be a multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height to 32
-        physically, so untilize/argmax churn ``32 × V`` elements for one real row. Reshaping to
-        ``[1, 1, 32, chunk_width]`` instead makes the 32 the *chunk count* (free tile alignment) and keeps
-        the physical work at ``32 × chunk_width ≈ V`` — ~3× faster than padding the row dim to 32. Pad V up
-        to ``32 * chunk_width`` with ``-1e9`` so the padding columns can never win. ``ttnn.max`` runs on the
-        TILE tensor directly; argmax needs ROW_MAJOR so untilize first. Both are used in the
-        compile-outside-trace step and inside the trace capture so the trace itself outputs the token.
+        <<<<<<< Updated upstream
+                On-device ``ttnn.argmax`` is far faster than the 256k-vocab host readback but has two
+                alignment traps that both return *silent garbage*: (1) the dim before the reduced vocab dim must be
+                tile-aligned (32); (2) the multicore kernel reduces over the *physical* (tile-padded) width, so the
+                reduced dim must also be a multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height to 32
+                physically, so untilize/argmax churn ``32 × V`` elements for one real row. Reshaping to
+        =======
+                ``ttnn.argmax`` is far faster than the 256k-vocab host readback but has two alignment traps that
+                both return *silent garbage*: (1) the dim before the reduced vocab dim must be tile-aligned (32);
+                (2) the kernel reduces over the *physical* (tile-padded) width, so the reduced dim must also be a
+                multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height to 32 physically, so
+                untilize/argmax churn ``32 × V`` elements for one real row. Reshaping to
+        >>>>>>> Stashed changes
+                ``[1, 1, 32, chunk_width]`` instead makes the 32 the *chunk count* (free tile alignment) and keeps
+                the physical work at ``32 × chunk_width ≈ V`` — ~3× faster than padding the row dim to 32. Pad V up
+                to ``32 * chunk_width`` with ``-1e9`` so the padding columns can never win. ``ttnn.max`` runs on the
+                TILE tensor directly; argmax needs ROW_MAJOR so untilize first. Both are used in the
+                compile-outside-trace step and inside the trace capture so the trace itself outputs the token.
         """
         v = int(logits.shape[-1])
         nch = self._ARGMAX_CHUNKS
@@ -878,8 +886,6 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(cand)
         else:
             cm_g, cand_g = chunk_max, cand
-            if dealloc_inputs:
-                ttnn.deallocate(chunk_max)
         cm_u = ttnn.untilize(cm_g, use_multicore=True)
         ttnn.deallocate(cm_g)
         cm_f = ttnn.typecast(cm_u, ttnn.float32)

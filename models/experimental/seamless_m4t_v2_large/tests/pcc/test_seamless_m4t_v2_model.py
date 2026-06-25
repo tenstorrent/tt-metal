@@ -34,10 +34,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     hf_aligned_generation_kwargs,
     to_torch_replicated_first_shard,
 )
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE,
-    mesh_default_device,
-)
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_default_device
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_seamless_m4t_v2_model_parameters
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
     TTSeamlessM4Tv2GenerationOutput,
@@ -62,6 +59,26 @@ _VOICING_FRAC_TOL = 0.15
 # TT/HF speech length tracks vocoder ``t_audio``; modest decode/T2U drift is expected.
 _SAMPLE_COUNT_RATIO_LO = 0.92
 _SAMPLE_COUNT_RATIO_HI = 1.08
+
+
+def _mesh_device_param():
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    if "TT_MESH_WIDTH" in os.environ:
+        return int(os.environ["TT_MESH_WIDTH"])
+    try:
+        return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
+    except Exception:
+        return (1, 1)
+
+
+def _device_params():
+    mesh_param = _mesh_device_param()
+    params = {"l1_small_size": 65536, "trace_region_size": 450_000_000, "num_command_queues": 2}
+    if mesh_param != (1, 1) and mesh_param != 1:
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return params
 
 
 def _weights_dir_or_skip() -> str:
@@ -272,7 +289,8 @@ def _assert_audio_plausible_voiced(
 
 
 @pytest.mark.timeout(5400)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_params, reset_seeds):
     """``TT generate()`` matches ``HF generate()`` across all 5 tasks on TP + 2CQ + decode-Trace.
 

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 import ttnn
@@ -13,11 +15,28 @@ from loguru import logger
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tests.pcc.test_seamless_m4t_v2_model import _make_tt_model
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import load_hf_model_and_processor
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    MESH_DEVICE_PARAMETRIZE_TEXT,
-    mesh_default_device,
-)
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_default_device
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import _read_int_scalar
+
+
+def _mesh_device_param():
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    if "TT_MESH_WIDTH" in os.environ:
+        return int(os.environ["TT_MESH_WIDTH"])
+    try:
+        return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
+    except Exception:
+        return (1, 1)
+
+
+def _device_params():
+    mesh_param = _mesh_device_param()
+    params = {"l1_small_size": 32768, "num_command_queues": 2}
+    if mesh_param != (1, 1) and mesh_param != 1:
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return params
 
 
 def _weights_dir_or_skip() -> str:
@@ -51,7 +70,8 @@ def _device_global_argmax(tt_model, logits_tt: ttnn.Tensor) -> int:
     return token_id
 
 
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_ondevice_global_argmax_matches_host_torch(mesh_device, device_params, reset_seeds):
     weights_dir = _weights_dir_or_skip()
     hf_model, _, _ = load_hf_model_and_processor(weights_dir)

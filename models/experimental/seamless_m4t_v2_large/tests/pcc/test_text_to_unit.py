@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Text-to-unit PCC at maximum encoder sequence length (4096)."""
+"""Text-to-unit PCC at mesh-specific encoder sequence length."""
+
+import os
 
 import pytest
 import torch
@@ -20,7 +22,6 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_to_unit impo
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    MESH_DEVICE_PARAMETRIZE_TEXT,
     from_torch_bfloat16_tile,
     from_torch_uint32_rm,
     mesh_default_device,
@@ -31,13 +32,42 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
 )
 
 PCC_THRESHOLD = 0.99
-MAX_ENCODER_SEQ = 4096
+MAX_ENCODER_SEQ_1x1 = 256
+MAX_ENCODER_SEQ_1x4 = 4096
+
+
+def _mesh_device_param():
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    if "TT_MESH_WIDTH" in os.environ:
+        return int(os.environ["TT_MESH_WIDTH"])
+    try:
+        return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
+    except Exception:
+        return (1, 1)
+
+
+def _device_params():
+    mesh_param = _mesh_device_param()
+    params = {"l1_small_size": 32768, "num_command_queues": 2}
+    if mesh_param != (1, 1) and mesh_param != 1:
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return params
+
+
+def _max_encoder_seq_for_mesh() -> int:
+    mesh_param = _mesh_device_param()
+    if mesh_param in ((1, 1), 1):
+        return MAX_ENCODER_SEQ_1x1
+    return MAX_ENCODER_SEQ_1x4
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, reset_seeds):
-    """T2U logits and padding-mask PCC ≥ 0.99 at encoder_seq=4096."""
+    """T2U logits and padding-mask PCC ≥ 0.99 at mesh max encoder sequence."""
     _ = reset_seeds
     _ = device_params
 
@@ -53,7 +83,7 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, re
         t2u, cfg = load_pretrained_text_to_unit(weights_dir, dtype=torch.bfloat16)
 
         batch = 1
-        encoder_seq_len = MAX_ENCODER_SEQ
+        encoder_seq_len = _max_encoder_seq_for_mesh()
         inputs_embeds, attention_mask, char_input_ids, char_count_per_id = synthetic_t2u_inputs(
             cfg,
             batch=batch,

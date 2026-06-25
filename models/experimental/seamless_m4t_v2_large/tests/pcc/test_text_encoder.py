@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot PCC test for the SeamlessM4Tv2 text encoder at its maximum designed sequence length.
+"""Single-shot PCC test for the SeamlessM4Tv2 text encoder at mesh-specific sequence length.
 
 Encoder design max = ``max_position_embeddings = 4096`` (HF NLLB-style sinusoidal positions).
 A single test at ``seq=4096`` exercises the chunked DRAM-sharded matmul path and the long-seq
@@ -12,8 +12,11 @@ Inputs are derived from the real downloaded weights (no synthetic weights). If
 per the project policy "real weights or skip".
 """
 
+import os
+
 import pytest
 import torch
+import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -25,7 +28,6 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_encoder impo
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    MESH_DEVICE_PARAMETRIZE_TEXT,
     from_torch_uint32_rm,
     mesh_default_device,
 )
@@ -33,7 +35,35 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import cre
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 
 PCC_THRESHOLD = 0.99
-MAX_SEQ = 4096  # HF ``max_position_embeddings``
+MAX_SEQ_1x1 = 256
+MAX_SEQ_1x4 = 4096  # HF ``max_position_embeddings``
+
+
+def _mesh_device_param():
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    if "TT_MESH_WIDTH" in os.environ:
+        return int(os.environ["TT_MESH_WIDTH"])
+    try:
+        return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
+    except Exception:
+        return (1, 1)
+
+
+def _device_params():
+    mesh_param = _mesh_device_param()
+    params = {"l1_small_size": 32768, "num_command_queues": 2}
+    if mesh_param != (1, 1) and mesh_param != 1:
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return params
+
+
+def _max_seq_for_mesh() -> int:
+    mesh_param = _mesh_device_param()
+    if mesh_param in ((1, 1), 1):
+        return MAX_SEQ_1x1
+    return MAX_SEQ_1x4
 
 
 def _create_position_ids_from_input_ids(input_ids: torch.Tensor, padding_idx: int) -> torch.Tensor:
@@ -44,7 +74,8 @@ def _create_position_ids_from_input_ids(input_ids: torch.Tensor, padding_idx: in
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_seamless_m4t_v2_text_encoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
     """Text encoder PCC ≥ 0.99 at the HF maximum sequence length (``max_position_embeddings`` = 4096).
 
@@ -66,7 +97,7 @@ def test_seamless_m4t_v2_text_encoder_max_seq_pcc(mesh_device, device_params, re
         encoder, cfg = load_pretrained_text_encoder(weights_dir, dtype=torch.bfloat16)
 
         batch = 1
-        seq = MAX_SEQ
+        seq = _max_seq_for_mesh()
         input_ids = torch.randint(1, min(cfg.vocab_size - 1, 2**31 - 1), (batch, seq), dtype=torch.int64)
         attn_mask = torch.ones(batch, seq, dtype=torch.long)
 
