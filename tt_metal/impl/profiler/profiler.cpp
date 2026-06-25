@@ -1493,13 +1493,16 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
-    if (!rtoptions.get_profiler_trace_only()) {
+    // Early-out when there is nothing to read. The HOST_BUFFER_END_INDEX_* slots are populated by the
+    // DRAM-flush path, so this guard only applies to the DRAM source. For the L1 source (used on the
+    // emulator / slow-dispatch) the per-RISC counts live in the DEVICE_BUFFER_END_INDEX_* slots and
+    // are checked per-slot in the read loop below (if (bufferEndIndex > 0)), so do not bail here.
+    if (!rtoptions.get_profiler_trace_only() && data_source != ProfilerDataBufferSource::L1) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
             return;
         }
     }
-
     const uint32_t profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes();
     const uint32_t profiler_dram_bank_vector_size_per_risc = profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t);
 
@@ -1525,7 +1528,12 @@ void DeviceProfiler::readRiscProfilerResults(
     int riscCount = 1;
 
     if (!rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
-        riscCount = 5;
+        // tt-1xx Tensix has 5 RISCs (BRISC, NCRISC, TRISC0-2) at dense profiler-buffer indices 0..4.
+        // Quasar writes markers at runtime hardware-thread indices (get_hw_thread_idx(): DM cores at
+        // 0..NUM_DM_CORES-1, TRISCs at NUM_DM_CORES + ...), which are sparse within a wider index
+        // space. Scan the full per-core processor count so those higher indices are read; empty
+        // slots have bufferEndIndex==0 and are skipped below.
+        riscCount = MetalContext::instance(context_id).hal().get_num_risc_processors(CoreType);
     }
 
     std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
@@ -1543,7 +1551,25 @@ void DeviceProfiler::readRiscProfilerResults(
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = tracy::RiscType::TENSIX_RISC_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            if (device_arch == tt::ARCH::QUASAR) {
+                // Quasar profiler-buffer index = get_hw_thread_idx(): DM cores occupy
+                // [0, num_quasar_dm_cores), TRISCs occupy [num_quasar_dm_cores, ...). Map to the
+                // (tt-1xx-shaped) RiscType labels so the cast stays in enum range: DM0->BRISC, other
+                // DMs->NCRISC, TRISCs->TRISC_0/1/2 (TRISC3 also labeled TRISC_2 — enum has no TRISC_3).
+                const uint32_t num_quasar_dm_cores =
+                    MetalContext::instance(context_id)
+                        .hal()
+                        .get_processor_types_count(CoreType, static_cast<uint32_t>(HalProcessorClassType::DM));
+                if (static_cast<uint32_t>(riscEndIndex) < num_quasar_dm_cores) {
+                    riscType = (riscEndIndex == 0) ? tracy::RiscType::BRISC : tracy::RiscType::NCRISC;
+                } else {
+                    const uint32_t trisc_id = static_cast<uint32_t>(riscEndIndex) - num_quasar_dm_cores;
+                    riscType = static_cast<tracy::RiscType>(
+                        static_cast<uint32_t>(tracy::RiscType::TRISC_0) + std::min<uint32_t>(trisc_id, 2));
+                }
+            } else {
+                riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            }
         } else {
             riscType = tracy::RiscType::ERISC;
         }
