@@ -178,7 +178,9 @@ GLM51 = TestVariant(
     mla_ref_cache_env="GLM51_MLA_REF_CACHE",
     mla_pcc_threshold=0.995,
     has_indexer=True,
-    tp_cap=2,
+    # 64 q-heads: the sparse MLA forward now transposes the TP shard (heads→seq) around sparse_sdpa
+    # so per-chip H is no longer the limit; tp=4 is supported (32-indexer-heads / tp must stay integral).
+    tp_cap=4,
     config_builder=glm_hf_config,
     cpu_model_args=glm_model_args,
     reference_kind="mlacpu",

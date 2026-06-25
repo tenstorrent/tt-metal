@@ -126,6 +126,22 @@ class TtIndexer:
             cluster_axis=self.sp_axis,
         )
 
+    def _tp_all_gather(self, t, dim):
+        """All-gather (concat) across the TP axis → replicated on TP. tp=1: no-op. Used by the
+        head→sequence reshuffle so each chip regains all H_idx heads before indexer_score."""
+        if self.tp_factor == 1:
+            return t
+        return ttnn.experimental.all_gather_async(
+            t,
+            dim=dim,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_topology,
+            cluster_axis=self.tp_axis,
+        )
+
     def _build_rope_tables(self):
         """Precompute device cos/sin for the indexer RoPE via the shared builder
         (``get_cos_sin_matrix``). ``index_rope_interleave`` picks the layout + matching device op:
@@ -228,16 +244,33 @@ class TtIndexer:
             )
         return ttnn.concat([pe, nope], dim=-1)
 
-    def _chunk_offset(self, start_pos: int, seq_len: int) -> ttnn.Tensor:
-        """SP-sharded per-device causal chunk-start (in TILES) for indexer_score. Each SP chip owns the
-        contiguous query block [sp_rank*seq_len, ...), so its absolute start is start_pos + sp_rank*seq_len
-        (seq_len = S_local). One uint32 tile per device, value at [0,0]; replicated across TP."""
+    def _chunk_offset(self, start_pos: int, seq_len: int, row_split: bool = False) -> ttnn.Tensor:
+        """Per-device causal chunk-start (in TILES) for indexer_score's fused causal mask. Each device's
+        first query row sits at this absolute position; the op masks keys beyond (offset·32 + local_row).
+
+        Default (head-parallel): each SP chip owns the contiguous query block [sp_rank*seq_len, ...), so its
+        start is start_pos + sp_rank*seq_len (seq_len = S_local), replicated across TP.
+
+        row_split (the head→sequence reshuffle): query rows are ALSO sharded over TP, so chip (sp=i, tp=r)
+        owns the sub-block [i*seq_len + r*(seq_len/tp), ...) and its start must include the TP offset —
+        otherwise tp_rank>0 rows get the wrong causal diagonal. Sharded over BOTH mesh axes."""
         sp = self.sp_factor
-        vals = torch.zeros(sp, 1, 32, 32, dtype=torch.int32)
-        for i in range(sp):
-            vals[i, 0, 0, 0] = (start_pos + i * seq_len) // 32
-        dims = [None, None]
-        dims[self.sp_axis] = 0  # shard the sp blocks across the SP axis, replicate across TP
+        if not row_split:
+            vals = torch.zeros(sp, 1, 32, 32, dtype=torch.int32)
+            for i in range(sp):
+                vals[i, 0, 0, 0] = (start_pos + i * seq_len) // 32
+            dims = [None, None]
+            dims[self.sp_axis] = 0  # shard the sp blocks across the SP axis, replicate across TP
+        else:
+            tp = self.tp_factor
+            sub = seq_len // tp  # rows per (sp, tp) chip
+            vals = torch.zeros(sp, tp, 32, 32, dtype=torch.int32)
+            for i in range(sp):
+                for r in range(tp):
+                    vals[i, r, 0, 0] = (start_pos + i * seq_len + r * sub) // 32
+            dims = [None, None]
+            dims[self.sp_axis] = 0  # sp sub-blocks across SP axis
+            dims[self.tp_axis] = 1  # tp sub-blocks across TP axis
         return ttnn.from_torch(
             vals,
             device=self.mesh_device,
@@ -278,7 +311,9 @@ class TtIndexer:
             k if start_pos == 0 or self._index_kbuf is None else ttnn.concat([self._index_kbuf, k], dim=2)
         )
 
-    def forward(self, hidden_states: ttnn.Tensor, qr: ttnn.Tensor, seq_len: int, start_pos: int = 0) -> ttnn.Tensor:
+    def forward(
+        self, hidden_states: ttnn.Tensor, qr: ttnn.Tensor, seq_len: int, start_pos: int = 0, reshard: bool = False
+    ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
         stems, RoPE, cache, logits, topk — no host. K stays full/replicated (every query scores all keys).
@@ -306,38 +341,49 @@ class TtIndexer:
         )  # [1, H_idx/tp, S/sp, D_idx]
         q_dev = self._device_rope_pe(q, glob, start_pos, sp_shard=True)  # per-chip query positions
 
-        # weights_proj: device stem -> reduce-scatter the H_idx heads across tp (each chip keeps the
-        # reduced H_idx/tp slice matching its wq_b heads) -> SP gather -> scale -> [1, 1, glob, H_idx/tp].
+        if reshard:
+            # Transpose the TP shard heads→sequence so each chip holds ALL H_idx indexer heads for a
+            # DISTINCT row slice. RoPE is already baked per-row (head-agnostic) so it rides along untouched.
+            # indexer_score then needs no head all-reduce, and top-k is born sharded over sp·tp — exactly
+            # sparse_sdpa's layout (see ttMLA._sparse_mla), so the two ops sit in one shared regime.
+            q_dev = self._tp_all_gather(q_dev, dim=1)  # [1, H_idx, S/sp, D_idx] replicated on TP
+            q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1, H_idx, S/(sp·tp), D_idx]
+
+        # weights_proj: device stem. head-parallel → reduce-scatter so each chip keeps its H_idx/tp slice;
+        # reshard → FULL all-reduce (every chip needs all H_idx weights) then split rows over TP.
         wts = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        wts = self._tp_rs_ag(wts, rs_only=True)  # reduce-scatter on the head dim -> this chip's heads
-        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)  # stays SP-sharded [1, 1, S/sp, H_idx/tp]
+        wts = self._tp_rs_ag(wts) if reshard else self._tp_rs_ag(wts, rs_only=True)
+        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * self.scale)  # [1, 1, S/sp, H_idx (reshard) | H_idx/tp]
+        if reshard:
+            wts = ttnn.mesh_partition(wts, dim=2, cluster_axis=self.tp_axis)  # [1, 1, S/(sp·tp), H_idx]
 
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx),
         # so no triu mask add here. Each chip scores only its H_idx/tp heads -> a PARTIAL logit
         # (the head-sum is separable; the -inf mask is head-independent so it survives the sum).
         # HB=0 keeps all H_idx/tp heads resident (fits L1 for tp>=2, i.e. <=32 heads/chip); tp=1 has
         # all 64 heads on one chip and must head-stream (HB=16).
-        hb = 0 if self.tp_factor > 1 else 16
+        # heads resident per chip: full H_idx under reshard, else the H_idx/tp shard. >32 must head-stream.
+        hb = (16 if a.index_n_heads > 32 else 0) if reshard else (0 if self.tp_factor > 1 else 16)
         # Indexer kernel knobs: QC=2 (q_chunk=64), KC=8 (k_chunk=256) capped to Skv/32 (the op requires
-        # KC <= Skv/32; inert at the model's DSA K). HB=0 keeps all heads resident; HB=16 streams (tp=1).
+        # KC <= Skv/32; inert at the model's DSA K). HB=0 keeps all heads resident; HB=16 streams.
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=min(256, end_pos), head_group_size=hb)
-        # SP-sharded queries: each chip scores only its S/sp rows vs the full key cache, with a per-device
-        # causal offset (start_pos + sp_rank*S_local) so the mask is correct without computing the full glob
-        # logits on every chip. topk below then stays SP-sharded ([1,1,S/sp,k]) — fed straight to sparse_mla.
-        offset = self._chunk_offset(start_pos, seq_len)
-        # indexer_score wants per-head weights [1, H_idx/tp, S/sp, 1]; wts is [1, 1, S/sp, H_idx/tp].
+        # Per-device causal offset: head-parallel → per-SP-rank start (start_pos + sp_rank*S_local); reshard →
+        # per-(sp,tp) start including the TP row sub-offset. Either way each chip masks its own rows correctly.
+        offset = self._chunk_offset(start_pos, seq_len, row_split=reshard)
+        # indexer_score wants per-head weights [1, H_idx*, Sq, 1]; wts is [1, 1, Sq, H_idx*] (* = full or /tp).
         weights = ttnn.permute(wts, (0, 3, 2, 1))
         logits = ttnn.experimental.indexer_score(
             q_dev, self._index_kbuf, weights, chunk_start_idx=start_pos, program_config=cfg, chunk_offset=offset
         )
-        # All-reduce(SUM) the partial logits over tp -> full head-summed logit before top-k. The op emits
-        # ROW_MAJOR; _tp_rs_ag (reduce_scatter+all_gather) runs in TILE, so round-trip the layout.
-        if self.tp_factor > 1:
+        # head-parallel: all-reduce(SUM) the partial logits over tp → full head-summed logit before top-k
+        # (op emits ROW_MAJOR; _tp_rs_ag runs in TILE, so round-trip). reshard: heads are all local already,
+        # logits are full → no reduction, and top-k is sharded over sp·tp to match the resharded attention q.
+        if self.tp_factor > 1 and not reshard:
             # The op emits ROW_MAJOR; round-trip to TILE for the all-reduce. Passing RM straight to the
             # CCL is correct but ~10 ms slower — ttnn's RM reduce_scatter/all_gather tilize-with-padding
             # internally and add RM concats, costing more than this explicit ~6 ms tilize/untilize.

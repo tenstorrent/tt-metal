@@ -45,8 +45,9 @@ SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1"]
 
 # Sparse MLA hardware mesh coverage. Includes Galaxy production (8x4),
 # a smaller TP=4 case, and TP=2 so GLM is not skipped out entirely.
-SPARSE_MESH_PARAMS = [(8, 4), (2, 4), (2, 2)]
-SPARSE_MESH_IDS = ["8x4", "2x4", "2x2"]
+# (4, 2) is the full-box LoudBox (8 chips) shape with tp <= GLM's tp_cap=2.
+SPARSE_MESH_PARAMS = [(8, 4), (4, 2), (2, 4), (2, 2)]
+SPARSE_MESH_IDS = ["8x4", "4x2", "2x4", "2x2"]
 
 SPARSE_DEVICE_PARAMS = [
     {
