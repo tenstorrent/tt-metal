@@ -464,8 +464,13 @@ def main():
                     logger.info(f"embed.tracy -> traces/{tracy_dst.name}")
                 except Exception as e:
                     logger.warning(f"Could not update embed.tracy: {e}")
-                launch_server_subprocess(port=options.web_app_port)
-                # Start the WASM server as a daemon with defaults
+                # Start the WASM GUI server as a detached daemon (default). For headless / CI
+                # profiling runs that only want the ops_perf CSV, set TT_METAL_TRACY_NO_WEB_SERVER=1
+                # to skip it so no server process lingers past the run.
+                if os.environ.get("TT_METAL_TRACY_NO_WEB_SERVER"):
+                    logger.info("TT_METAL_TRACY_NO_WEB_SERVER set -- skipping WASM GUI server launch")
+                else:
+                    launch_server_subprocess(port=options.web_app_port)
                 if options.report:
                     generate_report(
                         outputFolder,
