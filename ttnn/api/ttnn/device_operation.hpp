@@ -19,6 +19,7 @@
 #include <tt_stl/concepts.hpp>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
+#include "ttnn/up_front_compile.hpp"           // up-front parallel precompile collect hook
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
@@ -321,6 +322,18 @@ void create_and_cache_mesh_workload(
             }
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+
+            // Up-front parallel precompile: in collect mode, move the freshly
+            // built — but not-yet-compiled — workload into the collector keyed by its
+            // program hash, and skip caching + dispatch. The kernels are JIT-compiled
+            // later, in parallel, by ttnn::up_front_compile::parallel_compile (warming
+            // the on-disk cache). Collect runs under NO_DISPATCH so buffers are mocked
+            // (addr 0); that is fine because compilation is address-independent. See
+            // ttnn/up_front_compile.hpp.
+            if (auto* collector = ttnn::up_front_compile::ProgramCollector::active()) {
+                collector->collect(static_cast<std::uint64_t>(program_hash), std::move(cached_workload.workload));
+                return;
+            }
 
             // Don't cache programs during NO_DISPATCH graph capture mode because
             // buffer addresses are invalid (address=0). Caching such programs would

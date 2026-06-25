@@ -21,7 +21,9 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_consts.hpp"
+#include "ttnn/up_front_compile.hpp"
 #include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::graph {
 
@@ -359,6 +361,85 @@ void py_graph_module(nb::module_& m) {
         R"doc(is_detailed_buffer_tracing_enabled() -> bool
 
         Check if detailed per-page buffer tracing is currently enabled.
+        )doc");
+
+    // ----- Up-front parallel precompile (ttnn/up_front_compile.hpp) -----
+    m.def(
+        "up_front_begin_collect",
+        &ttnn::up_front_compile::begin_collect,
+        nb::arg("clear") = true,
+        nb::arg("real_alloc") = false,
+        R"doc(up_front_begin_collect(clear=True, real_alloc=False) -> None
+
+        Begin a precompile "collect" pass. Enables NO_DISPATCH graph capture (buffer
+        allocations mocked at address 0, nothing dispatched) and marks the collector
+        active on this thread. Run a model forward after this; every op stashes its
+        built-but-uncompiled program into the collector. Pair with up_front_end_collect().
+
+        clear=True (default) drops previously collected programs first (single-run
+        usage). clear=False ACCUMULATES — a pytest plugin wraps each test body in
+        up_front_begin_collect(clear=False)/up_front_end_collect() so programs from
+        every test pile into one deduped set for a single up_front_compile() at the
+        end. Clear once up front with up_front_clear() when accumulating.
+
+        real_alloc=False (default): NO_DISPATCH mocks buffers at address 0 (zero device
+        memory). real_alloc=True: assign REAL addresses during collect (dispatch still
+        blocked) so address-baked / address-branched kernels build the same program the real
+        run will and thus warm — at the cost of real device memory (~the real run's peak).
+
+        Run on a COLD device program cache with the cache ENABLED so each op is a miss
+        (reaches the collector) and carries a distinct program hash.
+        )doc");
+
+    m.def(
+        "up_front_end_collect",
+        &ttnn::up_front_compile::end_collect,
+        R"doc(up_front_end_collect() -> None
+
+        End the collect pass (stops NO_DISPATCH capture, deactivates the collector).
+        Collected programs remain until up_front_compile() (or up_front_clear()).
+        )doc");
+
+    m.def(
+        "up_front_num_unique",
+        []() { return ttnn::up_front_compile::ProgramCollector::instance().num_unique(); },
+        R"doc(up_front_num_unique() -> int
+
+        Number of distinct programs collected so far.
+        )doc");
+
+    m.def(
+        "up_front_num_collected",
+        []() { return ttnn::up_front_compile::ProgramCollector::instance().num_collected(); },
+        R"doc(up_front_num_collected() -> int
+
+        Total op invocations that stashed a program (including dropped duplicates).
+        )doc");
+
+    m.def(
+        "up_front_clear",
+        []() { ttnn::up_front_compile::ProgramCollector::instance().clear(); },
+        R"doc(up_front_clear() -> None
+
+        Drop all collected programs without compiling.
+        )doc");
+
+    m.def(
+        "up_front_compile",
+        [](tt::tt_metal::distributed::MeshDevice* device, int max_workers, bool clear) {
+            auto s = ttnn::up_front_compile::parallel_compile(device, max_workers, clear);
+            return std::make_tuple(s.num_programs, s.num_errors, s.max_workers, s.wall_seconds);
+        },
+        nb::arg("device"),
+        nb::arg("max_workers") = 0,
+        nb::arg("clear") = true,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(up_front_compile(device, max_workers=0, clear=True) -> (num_programs, num_errors, max_workers, wall_seconds)
+
+        JIT-compile every distinct collected program in parallel, warming the on-disk
+        kernel cache (TT_METAL_CACHE). The subsequent real run / trace capture runs warm.
+        max_workers<=0 uses hardware concurrency (note: the build executor saturates
+        ~4 workers, so higher buys little). The GIL is released for the duration.
         )doc");
 }
 
