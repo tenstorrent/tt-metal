@@ -30,7 +30,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/NoC_tile_transfer)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpu_eltwise_chain)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_add)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_smoothstep)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/generic_lut_activation)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/generic_lut_activation/CMakeLists.txt)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/generic_lut_activation)
+endif()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/generic_lut_activation_embedded)
 
 add_custom_target(

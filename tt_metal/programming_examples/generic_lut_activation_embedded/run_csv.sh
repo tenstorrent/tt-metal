@@ -1,0 +1,1020 @@
+#!/bin/bash
+# =============================================================================
+# run_csv.sh — Run an arbitrary coefficient CSV through the embedded flow
+#
+# Usage:
+#   ./run_csv.sh <csv_file> --activation <name> [--precision fp32|bf16|both] [--tiles N] [--range-min X] [--range-max X] [--skip-build] [--dump-csv <path>|--dump-npz <path>]
+#
+# Example:
+#   ./run_csv.sh /path/to/sigmoid_16_6_uniform_any_ulp.csv --activation sigmoid
+#   ./run_csv.sh my_coeffs.csv --activation gelu --precision bf16 --tiles 64
+# =============================================================================
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)
+WORK_DIR="tt_metal/programming_examples/generic_lut_activation_embedded"
+BUILD_DIR="${TT_METAL_RUNTIME_ROOT:-$REPO_ROOT}/build_Release"
+BINARY="$BUILD_DIR/programming_examples/programming_examples_generic_lut_activation_embedded_adhoc"
+KERNEL_DIR="$SCRIPT_DIR/kernels/compute/adhoc"
+
+source "$SCRIPT_DIR/profiler_helpers.sh"
+source "$SCRIPT_DIR/sweep_helpers.sh"
+init_arch_detection
+
+# TT_POLY_FIT_DIR needed for extract_accuracy.py (ground truth + ULP computation)
+TT_POLY_FIT_DIR="${TT_POLY_FIT_DIR:-/localdev/nkapre/tt-polynomial-fitter}"
+ACCURACY_SCRIPT="$TT_POLY_FIT_DIR/extract_accuracy.py"
+# Use system python for accuracy (python_env's torch has broken BF16 ULP spacing)
+ACCURACY_PYTHON="/usr/bin/python3"
+HAS_ACCURACY=false
+if [[ -f "$ACCURACY_SCRIPT" ]]; then
+    HAS_ACCURACY=true
+fi
+
+# Standard test shapes (same as sweep scripts)
+declare -a TEST_SHAPES=(
+    "single_tile:32:32"
+    "8_tiles:64:128"
+    "256_tiles:512:512"
+    "height_sharded:25600:128"
+    "yolov4:5120:320"
+)
+
+NUM_RUNS=3
+
+# --- Parse args ---
+CSV_FILE=""
+ACTIVATION=""
+PRECISION="fp32"
+TILES_OVERRIDE=""
+RANGE_MIN=""
+RANGE_MAX=""
+SKIP_BUILD=false
+DUMP_CSV=""
+DUMP_NPZ=""
+EXTRA_BINARY_ARGS=()
+
+show_help() {
+    echo "Usage: $0 <csv_file> --activation <name> [OPTIONS]"
+    echo ""
+    echo "Run an arbitrary coefficient CSV through the embedded kernel flow."
+    echo "Auto-detects polynomial degree and segment count from the CSV."
+    echo "Runs all 5 standard shapes with Tracy profiler timing (3 runs, takes min)."
+    echo ""
+    echo "Required:"
+    echo "  <csv_file>                Path to coefficient CSV (segment_id,lo,hi,c0,c1,...)"
+    echo "  --activation <name>       Activation function name (for ground truth comparison)"
+    echo ""
+    echo "Optional:"
+    echo "  --precision <fp32|bf16|both>  Precision mode (default: fp32). 'both' runs bf16 then fp32."
+    echo "  --tiles <N>               Override: run only this tile count (skip standard shapes)"
+    echo "  --range-min <X>           Override input range min (default: from CSV)"
+    echo "  --range-max <X>           Override input range max (default: from CSV)"
+    echo "  --runs <N>                Number of timing runs per shape (default: 3)"
+    echo "  --skip-build              Skip build (reuse last binary)"
+    echo "  --dump-csv <path>         Dump per-element hardware output CSV"
+    echo "  --dump-npz <path>         Dump per-element hardware output NPZ with input/output arrays"
+    echo "  --no-dual-eval            Disable dual x-vector evaluation"
+    echo "  --no-adaptive-degree      Disable per-segment degree optimization"
+    echo "  -h, --help                Show this help"
+    echo ""
+    echo "Standard shapes (run by default):"
+    echo "  single_tile    32x32      (1 tile)"
+    echo "  8_tiles        64x128     (8 tiles)"
+    echo "  256_tiles      512x512    (256 tiles)"
+    echo "  height_sharded 25600x128  (3200 tiles)"
+    echo "  yolov4         5120x320   (51200 tiles)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 coeffs/sigmoid_16_6_uniform_any_ulp.csv --activation sigmoid"
+    echo "  $0 my_gelu.csv --activation gelu --precision bf16"
+    echo "  $0 my_gelu.csv --activation gelu --tiles 256          # single shape only"
+    echo "  $0 exp_coeffs.csv --activation exp --dump-csv /tmp/hw_out.csv"
+    exit 0
+}
+
+# First positional arg is CSV file
+if [[ $# -eq 0 || "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+fi
+
+if [[ "$1" != --* ]]; then
+    CSV_FILE="$1"
+    shift
+fi
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --activation|-a) ACTIVATION="$2"; shift 2 ;;
+        --precision|-p)  PRECISION="$2"; shift 2 ;;
+        --tiles)         TILES_OVERRIDE="$2"; shift 2 ;;
+        --range-min)     RANGE_MIN="$2"; shift 2 ;;
+        --range-max)     RANGE_MAX="$2"; shift 2 ;;
+        --runs)          NUM_RUNS="$2"; shift 2 ;;
+        --skip-build)    SKIP_BUILD=true; shift ;;
+        --dump-csv)      DUMP_CSV="$2"; shift 2 ;;
+        --dump-npz)      DUMP_NPZ="$2"; shift 2 ;;
+        --no-dual-eval)  EXTRA_BINARY_ARGS+=("--no-dual-eval"); shift ;;
+        --no-adaptive-degree) EXTRA_BINARY_ARGS+=("--no-adaptive-degree"); shift ;;
+        -h|--help)       show_help ;;
+        *)               echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+if [[ -z "$CSV_FILE" ]]; then
+    echo "Error: CSV file path required as first argument"
+    exit 1
+fi
+if [[ ! -f "$CSV_FILE" ]]; then
+    echo "Error: CSV file not found: $CSV_FILE"
+    exit 1
+fi
+if [[ -z "$ACTIVATION" ]]; then
+    echo "Error: --activation is required"
+    exit 1
+fi
+
+# Make CSV path absolute
+CSV_FILE="$(cd "$(dirname "$CSV_FILE")" && pwd)/$(basename "$CSV_FILE")"
+
+# If --tiles is given, replace standard shapes with a single custom shape
+if [[ -n "$TILES_OVERRIDE" ]]; then
+    TEST_SHAPES=("custom:1:$((TILES_OVERRIDE * 1024))")
+    # Actually, tiles = rows/32 * cols/32. Simplest: use rows=32, cols=TILES*32
+    cols=$((TILES_OVERRIDE * 32))
+    TEST_SHAPES=("custom_${TILES_OVERRIDE}t:32:${cols}")
+fi
+
+# --- Step 1: Generate embedded kernel from CSV ---
+echo "================================================================================"
+echo "  run_csv.sh — Embedded flow for arbitrary coefficient CSV"
+echo "================================================================================"
+echo "CSV:        $CSV_FILE"
+echo "Activation: $ACTIVATION"
+echo "Precision:  $PRECISION"
+echo "Runs/shape: $NUM_RUNS"
+echo ""
+
+mkdir -p "$KERNEL_DIR"
+
+# Inline Python: parse CSV, auto-detect degree/segments, write kernel .cpp
+python3 -c "
+import csv, sys, os
+
+csv_path = '$CSV_FILE'
+kernel_path = '$KERNEL_DIR/adhoc.cpp'
+range_min_override = '$RANGE_MIN' or None
+range_max_override = '$RANGE_MAX' or None
+
+# Parse CSV
+import math
+boundaries = []
+coefficients = []
+segment_degrees = []
+asymptotic_flags = []  # per-segment: True if asymptotic
+dominant_factors = []  # per-segment: dominant factor string
+metadata = {}
+degree = 0
+
+with open(csv_path) as f:
+    reader = csv.DictReader(f)
+    headers = reader.fieldnames
+
+    # Auto-detect: polynomial (c0,c1,...) vs rational (n0,n1,...,d0,d1,...)
+    num_cols = sorted([h for h in headers if h.startswith('n') and h[1:].isdigit()], key=lambda h: int(h[1:]))
+    den_cols = sorted([h for h in headers if h.startswith('d') and h[1:].isdigit()], key=lambda h: int(h[1:]))
+    coeff_cols = sorted([h for h in headers if h.startswith('c') and h[1:].isdigit()], key=lambda h: int(h[1:]))
+
+    is_rational = len(num_cols) > 0 and len(den_cols) > 0
+    num_degree = 0
+    den_degree = 0
+
+    if is_rational:
+        num_degree = len(num_cols) - 1
+        den_degree = len(den_cols) - 1
+        degree = num_degree  # for compatibility with degree_macros logic below
+        print(f'Auto-detected RATIONAL approximation: n{num_degree}/d{den_degree} (num: {num_cols[0]}..{num_cols[-1]}, den: {den_cols[0]}..{den_cols[-1]})')
+    else:
+        degree = len(coeff_cols) - 1
+        print(f'Auto-detected polynomial degree: {degree} (columns: {coeff_cols[0]}..{coeff_cols[-1]})')
+
+    num_coefficients = []  # rational numerator
+    den_coefficients = []  # rational denominator
+
+    for row in reader:
+        if row.get('segment_id', '').upper() == 'METADATA':
+            key = row.get('lo', '')
+            val = row.get('hi', '')
+            if key:
+                metadata[key] = val
+            continue
+
+        if len(boundaries) == 0:
+            boundaries.append(float(row['lo']))
+        boundaries.append(float(row['hi']))
+
+        if is_rational:
+            seg_num = [float(row[col]) for col in num_cols]
+            seg_den = [float(row[col]) for col in den_cols]
+            num_coefficients.extend(seg_num)
+            den_coefficients.extend(seg_den)
+            coefficients.extend(seg_num + seg_den)
+            # Effective degree = max of num and den effective degrees
+            seg_deg = 0
+            for d in range(num_degree, -1, -1):
+                if seg_num[d] != 0.0:
+                    seg_deg = d
+                    break
+            segment_degrees.append(seg_deg)
+        else:
+            seg_coeffs = [float(row[col]) for col in coeff_cols]
+            coefficients.extend(seg_coeffs)
+            # Detect effective degree (highest non-zero coefficient)
+            seg_deg = 0
+            for d in range(degree, -1, -1):
+                if seg_coeffs[d] != 0.0:
+                    seg_deg = d
+                    break
+            segment_degrees.append(seg_deg)
+
+        # Asymptotic factoring metadata
+        is_asym = row.get('is_asymptotic', '').strip().lower() == 'true'
+        dom_factor = row.get('dominant_factor', '').strip() if is_asym else ''
+        asymptotic_flags.append(is_asym)
+        dominant_factors.append(dom_factor)
+
+num_segments = len(boundaries) - 1
+input_min = float(range_min_override) if range_min_override else boundaries[0]
+input_max = float(range_max_override) if range_max_override else boundaries[-1]
+
+print(f'Segments: {num_segments}')
+print(f'Range: [{input_min}, {input_max}]')
+print(f'LUT entries: {len(boundaries)} boundaries + {len(coefficients)} coefficients = {len(boundaries) + len(coefficients)} total')
+
+# Clamp float32
+def clamp(v):
+    if abs(v) > 3.4028234663852886e38:
+        return 3.4028234663852886e38 if v > 0 else -3.4028234663852886e38
+    if abs(v) < 1.4e-45:
+        return 0.0
+    return v
+
+if is_rational:
+    # Rational LUT layout: boundaries + [num_coeffs_seg0 + den_coeffs_seg0 + num_coeffs_seg1 + ...]
+    lut_values = boundaries + coefficients
+else:
+    lut_values = boundaries + coefficients
+lut_size = len(lut_values)
+lut_str = ',\n    '.join(f'{clamp(v):.10e}f' for v in lut_values)
+
+# Per-segment adaptive degree (skip wasted FMA on zero high-order coefficients)
+# Two mechanisms:
+#   1. SEGi_DEGREE macros — used by hand-written 4/8/16/32 specializations
+#   2. SEGMENT_DEGREES[] constexpr array — used by recursive _N unroller
+degree_macros = ''
+if any(d < degree for d in segment_degrees):
+    # SEGi_DEGREE macros for hand-written specializations (4/8/16/32)
+    seg_macro_lines = [f'#define SEG{i}_DEGREE {d}' for i, d in enumerate(segment_degrees)]
+    # constexpr array for recursive unroller (any segment count)
+    deg_array = ', '.join(str(d) for d in segment_degrees)
+    degree_macros = (
+        '\n#ifndef DISABLE_ADAPTIVE_DEGREE\n'
+        + '\n'.join(seg_macro_lines) + '\n'
+        + f'#define HAS_SEGMENT_DEGREES\n'
+        + f'constexpr uint32_t SEGMENT_DEGREES[] = {{{deg_array}}};\n'
+        + '#endif\n'
+    )
+    reduced = sum(1 for d in segment_degrees if d < degree)
+    avg_deg = sum(segment_degrees) / len(segment_degrees)
+    print(f'Adaptive degree: {reduced}/{num_segments} segments reduced (avg effective degree: {avg_deg:.1f} vs max {degree})')
+
+# Detect parity from coefficient values
+poly_parity_macro = ''
+threshold = 1e-30
+if is_rational and num_degree >= 2:
+    # Rational parity: check num (odd-index) and den (even-index) separately
+    num_even_zero = True  # even-index num coeffs zero → odd numerator
+    den_odd_zero = True   # odd-index den coeffs zero → even denominator
+    ncps = num_degree + 1
+    dcps = den_degree + 1
+    for s in range(num_segments):
+        seg_num = num_coefficients[s * ncps : (s + 1) * ncps]
+        seg_den = den_coefficients[s * dcps : (s + 1) * dcps]
+        for i in range(ncps):
+            if i % 2 == 0 and abs(seg_num[i]) > threshold:
+                num_even_zero = False
+        for i in range(dcps):
+            if i % 2 == 1 and abs(seg_den[i]) > threshold:
+                den_odd_zero = False
+    if num_even_zero and den_odd_zero:
+        poly_parity_macro = '\n// Rational parity: odd num / even den -> x^2-Horner\n#define RATIONAL_NUM_PARITY_ODD\n#define RATIONAL_DEN_PARITY_EVEN\n'
+        print(f'Rational parity: odd num / even den -> x^2-Horner enabled')
+elif not is_rational and degree >= 2:
+    # Polynomial parity
+    cps = degree + 1
+    seg_coeffs_list = []
+    for s in range(num_segments):
+        seg_coeffs_list.append(coefficients[s * cps : (s + 1) * cps])
+
+    even_all_zero = True
+    odd_all_zero = True
+    for seg in seg_coeffs_list:
+        for i in range(degree + 1):
+            if i % 2 == 0 and abs(seg[i]) > threshold:
+                even_all_zero = False
+            if i % 2 == 1 and abs(seg[i]) > threshold:
+                odd_all_zero = False
+
+    if even_all_zero:
+        poly_parity_macro = '\n// Polynomial parity: odd function (c0=c2=c4=...=0) -> x^2-Horner\n#define POLY_PARITY_ODD\n'
+        print(f'Polynomial parity: ODD (c0=c2=c4=...=0) -> x^2-Horner enabled')
+    elif odd_all_zero:
+        poly_parity_macro = '\n// Polynomial parity: even function (c1=c3=c5=...=0) -> x^2-Horner\n#define POLY_PARITY_EVEN\n'
+        print(f'Polynomial parity: EVEN (c1=c3=c5=...=0) -> x^2-Horner enabled')
+
+# Check for range reduction
+rr_macro = ''
+rr_method = metadata.get('range_reduction_method', '')
+# Standalone evaluator tags: exponent_alu (exp2/log2/pow) and the FIRST-CLASS
+# newton_root method. newton_root is no longer nested under exponent_alu in the
+# fitter tag; accept both the first-class 'newton_root' and the legacy
+# 'exponent_alu_newton_root' for back-compat. All standalone paths share the
+# constant-pool hoisting + bypass the cascade.
+if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
+    # Hardware-exponent-ALU backend (exp2 / log2 / pow) or newton_root. The
+    # fitted poly (exp/log/pow) lives in the first segment's coefficients; the
+    # kernel owns the exman/exexp/setexp decompose + scale fold + recombine.
+    # newton_root fits no poly (magic-seed + Newton). Disable adaptive-degree /
+    # parity (cascade is bypassed) to keep defines clean.
+    degree_macros = ''
+    poly_parity_macro = ''
+    kind = 'newton_root' if rr_method == 'newton_root' else rr_method[len('exponent_alu_'):]
+    cps = degree + 1
+    seg0 = coefficients[0:cps]
+
+    # ---- GENERIC constant-pool hoisting (data-driven, all kinds, any degree) ----
+    # Collect every loop-invariant constexpr the kernel reads for this kind, ranked
+    # by reuse (touched-every-element first). Top-3 -> vConstFloatPrgm0/1/2; the next
+    # HOIST_BUDGET -> pre-loop hoisted vFloat LREGs; anything beyond -> in-body
+    # literals, and we LOG the count (never silently dropped).
+    PRGM_SLOTS = 3
+    HOIST_BUDGET = 5  # iteration-invariant LREGs the compiler can keep across the loop
+    def _build_pool(kind, degree):
+        pool = []  # (name, reuse_rank) high rank = hotter
+        if kind == 'exp2':
+            pool.append(('MULT(1/ln2)', 100))
+            for k in range(degree, -1, -1):
+                pool.append((f'c{k}', 50 + k))     # higher coeffs slightly hotter (Horner head)
+            pool.append(('clamp255', 40))
+        elif kind == 'log2':
+            pool.append(('LOG_HW_SCALE', 100))
+            for k in range(degree, -1, -1):
+                pool.append((f'c{k}', 50 + k))
+        elif kind == 'pow':
+            pool.append(('SQRT2', 90))
+            pool.append(('round_magic', 60))
+            for k in range(degree, -1, -1):
+                pool.append((f'c{k}', 50 + k))
+        elif kind == 'newton_root':
+            # Newton path: 3 loop-invariants (seed magic + 2 Newton coeffs), all
+            # in prgm const regs. No polynomial coeffs touched on this path.
+            pool.append(('NEWTON_MAGIC', 100))
+            pool.append(('NEWTON_C1', 90))
+            pool.append(('NEWTON_C2', 80))
+        pool.sort(key=lambda t: -t[1])
+        return [n for n, _ in pool]
+    _pool = _build_pool(kind, degree)
+    _budget = PRGM_SLOTS + HOIST_BUDGET
+    _spilled = _pool[_budget:]
+    # HW_PRELOAD_DISABLE=1 lets A/B measure the non-preload baseline on identical HW.
+    hw_preload_macro = '' if os.environ.get('HW_PRELOAD_DISABLE') == '1' else '#define HW_PRELOAD\n'
+    if _spilled:
+        print(f'// HW_PRELOAD constant-pool: {len(_pool)} constants, {len(_spilled)} spilled to in-body load: {_spilled}')
+        hw_preload_macro += f'// HW_PRELOAD_SPILL: {len(_spilled)} constants spilled to in-body load: {_spilled}\n'
+    else:
+        print(f'// HW_PRELOAD constant-pool: {len(_pool)} constants, 0 spilled (all in prgm/hoist budget)')
+
+    if kind == 'exp2':
+        # Full degree-N natural [0,1) coeffs; kernel normalizes f then Horner.
+        # Honor the log2-domain multiplier + optional compose post-transform.
+        mult = metadata.get('expalu_log2_multiplier', '1.4426950408889634')
+        compose = metadata.get('expalu_compose', '').strip()
+        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        compose_macro = ''
+        if compose == 'sigmoid':
+            compose_macro = '#define EXP_HW_COMPOSE_SIGMOID\n'
+        elif compose == 'minus_one':
+            compose_macro = '#define EXP_HW_COMPOSE_MINUS_ONE\n'
+        # TTNN exp_21f instruction-count cuts (see piecewise_generic.cpp):
+        #   EXP_HW_FUSED       : fold 2^-23 normalize into coeffs (removes 1 SFPMUL).
+        #                        Safe unless a scaled coeff c[DEG]*2^-23*DEG underflows fp32.
+        #   EXP_HW_BARE_SETEXP : drop the pe correction (removes 1 SFPEXEXP + 2 SFPIADD).
+        #                        Safe when g(f) in [1,2) on f in [0,1), i.e. c0 >= 1.
+        c0v = float(seg0[0]) if len(seg0) else 0.0
+        c_topv = float(seg0[degree]) if len(seg0) > degree else 0.0
+        scaled_topv = abs(c_topv) * (2.0 ** (-23.0 * degree))
+        fused_safe = scaled_topv == 0.0 or scaled_topv >= 1e-37
+        bare_safe = c0v >= 1.0
+        fused_macro = '#define EXP_HW_FUSED\n' if fused_safe else ''
+        bare_macro = '#define EXP_HW_BARE_SETEXP\n' if bare_safe else ''
+        rr_macro = (
+            '\n// eval_method: exponent_alu / exp2 (exman/exexp/setexp), natural [0,1) coeffs. STANDALONE\n'
+            '#define EVAL_METHOD_EXPONENT_ALU\n'
+            '#define EXPONENT_ALU_EXP2\n'
+            f'#define EXP_HW_MULT {clamp(float(mult)):.10e}f\n'
+            f'{compose_macro}'
+            f'{fused_macro}'
+            f'{bare_macro}'
+            f'{hw_preload_macro}'
+            f'constexpr uint32_t EXP_HW_DEGREE = {degree};\n'
+            f'constexpr float EXP_HW_COEFFS[] = {{{coeff_str}}};\n'
+        )
+        print(f'Range reduction: HW exponent-ALU exp2 (degree {degree}, mult {mult}, compose {compose or \"none\"}, fused {\"ON\" if fused_safe else \"off\"}, bare_setexp {\"ON\" if bare_safe else \"off\"})')
+    elif kind == 'log2':
+        scale = metadata.get('expalu_log_scale', metadata.get('log_scale', '1.0'))
+        basis = metadata.get('expalu_log2_basis', 'natural')
+        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        basis_macro = '#define LOG_HW_BASIS_M_MINUS_1\n' if basis == 'm_minus_1' else ''
+        # log1p decomposes (x + 1) before log2 -> expalu_input_offset = 1.0.
+        offset = float(metadata.get('expalu_input_offset', '0.0') or '0.0')
+        offset_macro = f'#define LOG_HW_INPUT_OFFSET {clamp(offset):.10e}f\n' if offset != 0.0 else ''
+        rr_macro = (
+            '\n// eval_method: exponent_alu / log2 (exexp -> e, exman -> m), natural coeffs. STANDALONE\n'
+            '#define EVAL_METHOD_EXPONENT_ALU\n'
+            '#define EXPONENT_ALU_LOG2\n'
+            f'{basis_macro}'
+            f'{offset_macro}'
+            f'{hw_preload_macro}'
+            f'constexpr uint32_t LOG_HW_DEGREE = {degree};\n'
+            f'constexpr float LOG_HW_COEFFS[] = {{{coeff_str}}};\n'
+            f'#define LOG_HW_SCALE {scale}f\n'
+        )
+        print(f'Range reduction: HW exponent-ALU log2 (degree {degree}, scale {scale}, basis {basis}, offset {offset})')
+    elif kind == 'pow':
+        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        # root order N, optional final reciprocal (rsqrt), per-r scale constants.
+        root_n = int(float(metadata.get('expalu_root_n', '2') or '2'))
+        recip = str(metadata.get('expalu_reciprocal', 'False')).strip().lower() in ('true', '1')
+        recip_macro = '#define POW_HW_RECIPROCAL\n' if recip else ''
+        scale_macros = f'#define POW_HW_ROOT_N {root_n}\n'
+        for r in range(root_n):
+            key = f'expalu_pow_scale_c{r}'
+            if key in metadata:
+                scale_macros += f'#define POW_HW_SCALE_C{r} {clamp(float(metadata[key])):.10e}f\n'
+        rr_macro = (
+            '\n// eval_method: exponent_alu / pow/root_N (exexp -> e, exman -> m), natural [1,2) coeffs. STANDALONE\n'
+            '#define EVAL_METHOD_EXPONENT_ALU\n'
+            '#define EXPONENT_ALU_POW\n'
+            f'{scale_macros}'
+            f'{recip_macro}'
+            f'{hw_preload_macro}'
+            f'constexpr uint32_t POW_HW_DEGREE = {degree};\n'
+            f'constexpr float POW_HW_COEFFS[] = {{{coeff_str}}};\n'
+        )
+        print(f'Range reduction: HW exponent-ALU pow (degree {degree}, root_n {root_n}, reciprocal {recip})')
+    elif kind == 'newton_root':
+        # Newton-Raphson magic-seed integer root. Mirrors TTNN native sqrt:
+        # y0 = bits(MAGIC - (bits(x)>>1)); Newton steps. The seed magic + Newton
+        # coeffs are loop-invariant -> preloaded into prgm const registers.
+        # No exexp/setexp/parity cascade -> ~18 SFPU body instrs (vs ~39 for pow).
+        # The fitter owns all constants (metadata-driven, no per-op hardcoding):
+        #   sqrt : root_n=2, magic 0x5f1110a0, SQRT_23-bit double-Newton.
+        #   rsqrt: root_n=2 + reciprocal, inverse-sqrt magic 0x5f3759df, the seed
+        #          IS 1/sqrt(x) (no final reciprocal op), Newton y=y*(c1-0.5*x*y*y).
+        #   cbrt : root_n=3, cube magic 0x2a4f5e2b, seed bits/3+magic on |x|,
+        #          Newton y=(2y+|x|/y^2)/3, sign restored (odd function).
+        magic = metadata.get('newton_root_magic', '0x5f1110a0')
+        c1 = float(metadata.get('newton_root_c1', '2.2825186'))
+        c2 = float(metadata.get('newton_root_c2', '2.2533049'))
+        root_n = int(float(metadata.get('newton_root_n', metadata.get('expalu_root_n', '2')) or '2'))
+        recip = str(metadata.get('newton_root_reciprocal',
+                                 metadata.get('expalu_reciprocal', 'False'))).strip().lower() in ('true', '1')
+        iters = int(float(metadata.get('newton_root_iters', '3') or '3'))
+        recip_macro = '#define NEWTON_ROOT_RECIPROCAL\n' if recip else ''
+        rr_macro = (
+            '\n// eval_method: newton_root (magic-seed + Newton, NO poly fit). FIRST-CLASS standalone.\n'
+            '#define EVAL_METHOD_NEWTON_ROOT\n'
+            f'#define NEWTON_ROOT_MAGIC {magic}\n'
+            f'#define NEWTON_ROOT_C1 {c1:.10e}f\n'
+            f'#define NEWTON_ROOT_C2 {c2:.10e}f\n'
+            f'#define NEWTON_ROOT_N {root_n}\n'
+            f'#define NEWTON_ROOT_ITERS {iters}\n'
+            f'{recip_macro}'
+            # POLY_DEGREE template arg is unused on this path but the kernel
+            # signature still takes it; the LUT/coeffs are ignored.
+        )
+        print(f'Range reduction: Newton-Raphson magic-seed root (magic {magic}, c1 {c1}, c2 {c2}, '
+              f'root_n {root_n}, reciprocal {recip}, iters {iters})')
+    else:
+        print(f'WARNING: unknown exponent_alu kind {kind}')
+elif rr_method == 'exp':
+    rr_macro = '\n// eval_method: reduced_poly / exp\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_EXP\n'
+    print(f'Range reduction: exp')
+elif rr_method == 'trig':
+    rr_macro = '\n// eval_method: reduced_poly / trig\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TRIG\n'
+    print(f'Range reduction: trig')
+elif rr_method == 'log':
+    expand_const = metadata.get('log_ln2_constant', '0.6931471805599453')
+    rr_macro = (f'\n// eval_method: reduced_poly / log\n#define EVAL_METHOD_REDUCED_POLY\n'
+                f'#define REDUCE_LOG\n#define LOG_EXPAND_CONSTANT {expand_const}f\n')
+    print(f'Range reduction: log (expand_const={expand_const})')
+elif rr_method == 'tan':
+    rr_macro = '\n// eval_method: reduced_poly / tan\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TAN\n'
+    print(f'Range reduction: tan')
+elif rr_method == 'cbrt':
+    rr_macro = '\n// eval_method: reduced_poly / cbrt\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_CBRT\n'
+    print(f'Range reduction: cbrt')
+
+# Detect asymptotic factoring from CSV columns
+DOMINANT_FACTOR_MAP = {
+    '-exp(-x^2/2) / sqrt(2*pi)': ('EXP_QUADRATIC', -0.5, -1.0 / math.sqrt(2 * math.pi)),
+    'exp(-x^2/2) / sqrt(2*pi)': ('EXP_QUADRATIC', -0.5, 1.0 / math.sqrt(2 * math.pi)),
+    'exp(x)': ('EXP_LINEAR', 1.0, 1.0),
+    'exp(-x)': ('EXP_LINEAR', -1.0, 1.0),
+    '-exp(-x)': ('EXP_LINEAR', -1.0, -1.0),
+    'x * exp(x)': ('X_EXP_LINEAR', 1.0, 1.0),
+    'x': ('X', 0.0, 1.0),
+}
+
+asymptotic_macro = ''
+if any(asymptotic_flags):
+    active_factors = [f for f, a in zip(dominant_factors, asymptotic_flags) if a and f]
+    unique_factors = set(active_factors)
+    if len(unique_factors) == 1 and active_factors[0] in DOMINANT_FACTOR_MAP:
+        dom_str = active_factors[0]
+        factor_class, arg_scale, output_scale = DOMINANT_FACTOR_MAP[dom_str]
+        asymptotic_macro = f'\n// Asymptotic factoring: {dom_str}\n#define ASYMPTOTIC_FACTOR_{factor_class}\n'
+        if factor_class != 'X':
+            asymptotic_macro += f'constexpr float ASYMPTOTIC_EXP_ARG_SCALE = {arg_scale:.16e}f;\n'
+        asymptotic_macro += f'constexpr float ASYMPTOTIC_SCALE = {output_scale:.16e}f;\n'
+        # Determine bound: left tail (x < bound) or right tail (x > bound)
+        first_asym = next(i for i, a in enumerate(asymptotic_flags) if a)
+        last_asym = next(i for i in range(num_segments - 1, -1, -1) if asymptotic_flags[i])
+        if first_asym == 0 and last_asym < num_segments - 1:
+            bound = boundaries[last_asym + 1]
+            asymptotic_macro += f'constexpr float ASYMPTOTIC_UPPER_BOUND = {bound:.16e}f;\n'
+            print(f'Asymptotic factoring: {dom_str} (left tail, x < {bound})')
+        elif last_asym == num_segments - 1 and first_asym > 0:
+            bound = boundaries[first_asym]
+            asymptotic_macro += f'constexpr float ASYMPTOTIC_LOWER_BOUND = {bound:.16e}f;\n'
+            print(f'Asymptotic factoring: {dom_str} (right tail, x > {bound})')
+        elif first_asym == 0 and last_asym == num_segments - 1:
+            asymptotic_macro += 'constexpr float ASYMPTOTIC_UPPER_BOUND = 1.0e38f;\n'
+            print(f'Asymptotic factoring: {dom_str} (all segments)')
+        else:
+            asymptotic_macro = ''
+            print(f'WARNING: non-contiguous asymptotic segments, skipping')
+    elif len(unique_factors) > 1:
+        print(f'WARNING: mixed dominant factors not supported: {unique_factors}')
+
+# Affine collapse: whole fit is y = c0 + c1*x (single segment, effective degree
+# <= 1, NO range reduction). Identity (c0=0,c1=1) -> pure copy bypass; otherwise
+# one SFPMAD. Generic — any activation whose fit reduces to this shape qualifies.
+# (Rational / range-reduced fits never collapse this way.)
+affine_macro = ''
+if (not is_rational) and rr_method in ('', 'none') and num_segments == 1:
+    seg0_coeffs = coefficients[0:degree + 1]
+    higher_zero = all(c == 0.0 for c in seg0_coeffs[2:])
+    if higher_zero:
+        c0 = float(seg0_coeffs[0]) if len(seg0_coeffs) >= 1 else 0.0
+        c1 = float(seg0_coeffs[1]) if len(seg0_coeffs) >= 2 else 0.0
+        if c0 == 0.0 and c1 == 1.0:
+            affine_macro = '\n// eval_method: affine_collapse / identity. fit is y = x. Pure tile copy, no SFPU eval.\n#define EVAL_METHOD_AFFINE_COLLAPSE\n#define AFFINE_COLLAPSE\n#define AFFINE_IDENTITY\n'
+            print('AFFINE COLLAPSE: identity (c0=0, c1=1) -> pure-copy bypass (no SFPU eval)')
+        else:
+            affine_macro = (
+                '\n// eval_method: affine_collapse. fit is y = c0 + c1*x. One SFPMAD per element.\n'
+                '#define EVAL_METHOD_AFFINE_COLLAPSE\n'
+                '#define AFFINE_COLLAPSE\n'
+                f'#define AFFINE_C0 {clamp(c0):.10e}f\n'
+                f'#define AFFINE_C1 {clamp(c1):.10e}f\n'
+            )
+            print(f'AFFINE COLLAPSE: y = {c0:.6g} + {c1:.6g}*x -> single SFPMAD bypass')
+
+# Exactly one EVAL_METHOD_* selector. rr_macro emits EXPONENT_ALU / NEWTON_ROOT /
+# REDUCED_POLY; affine_macro emits AFFINE_COLLAPSE. Otherwise the method is the
+# default poly_cascade (parity / dual / adaptive / blend are orthogonal modifiers).
+eval_method_macro = ''
+if not is_rational:
+    if ('EVAL_METHOD_' not in rr_macro) and ('EVAL_METHOD_' not in affine_macro):
+        eval_method_macro = '\n// eval_method: poly_cascade (default piecewise polynomial cascade)\n#define EVAL_METHOD_POLY_CASCADE\n'
+else:
+    # rational_cascade is the base method; reduced_poly may layer on via rr_macro.
+    eval_method_macro = '\n// eval_method: rational_cascade (piecewise P(x)/Q(x))\n#define EVAL_METHOD_RATIONAL_CASCADE\n'
+
+# Write kernel .cpp
+if is_rational:
+    kernel = f'''// Auto-generated by run_csv.sh from: {os.path.basename(csv_path)}
+// Rational n{num_degree}/d{den_degree}, {num_segments} segments, range [{input_min}, {input_max}]
+#include <array>
+#include <cstdint>
+
+#define EMBEDDED_LUT
+constexpr uint32_t NUM_DEGREE = {num_degree};
+constexpr uint32_t DEN_DEGREE = {den_degree};
+constexpr uint32_t NUM_SEGMENTS = {num_segments};
+
+constexpr float INPUT_MIN = {input_min:.10e}f;
+constexpr float INPUT_MAX = {input_max:.10e}f;
+
+constexpr uint32_t LUT_SIZE = {lut_size};
+constexpr std::array<float, LUT_SIZE> LUT_DATA = {{{{
+    {lut_str}
+}}}};
+{eval_method_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}
+#include \"../piecewise_rational.cpp\"
+'''
+    # Override degree-related output variables for rational
+    degree = num_degree
+else:
+    kernel = f'''// Auto-generated by run_csv.sh from: {os.path.basename(csv_path)}
+// Degree {degree}, {num_segments} segments, range [{input_min}, {input_max}]
+#include <array>
+#include <cstdint>
+
+#define EMBEDDED_LUT
+constexpr uint32_t POLY_DEGREE = {degree};
+constexpr uint32_t NUM_SEGMENTS = {num_segments};
+
+constexpr float INPUT_MIN = {input_min:.10e}f;
+constexpr float INPUT_MAX = {input_max:.10e}f;
+
+constexpr uint32_t LUT_SIZE_BF16 = {lut_size};
+constexpr std::array<float, LUT_SIZE_BF16> LUT_DATA_BF16 = {{{{
+    {lut_str}
+}}}};
+
+constexpr uint32_t LUT_SIZE_FP32 = {lut_size};
+constexpr std::array<float, LUT_SIZE_FP32> LUT_DATA_FP32 = {{{{
+    {lut_str}
+}}}};
+
+#ifdef USE_BF16
+    constexpr auto& LUT_DATA = LUT_DATA_BF16;
+    constexpr uint32_t LUT_SIZE = LUT_SIZE_BF16;
+#else
+    constexpr auto& LUT_DATA = LUT_DATA_FP32;
+    constexpr uint32_t LUT_SIZE = LUT_SIZE_FP32;
+#endif
+{eval_method_macro}{degree_macros}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}
+#include \"../piecewise_generic.cpp\"
+'''
+
+with open(kernel_path, 'w') as f:
+    f.write(kernel)
+
+print(f'Generated: {kernel_path}')
+
+# Write detected values to stdout for bash to capture
+print(f'DETECTED_RANGE_MIN={input_min}')
+print(f'DETECTED_RANGE_MAX={input_max}')
+print(f'DETECTED_DEGREE={degree}')
+print(f'DETECTED_SEGMENTS={num_segments}')
+print(f'DETECTED_DEGREE_SUM={sum(segment_degrees)}')
+print(f'DETECTED_IS_RATIONAL={1 if is_rational else 0}')
+if is_rational:
+    print(f'DETECTED_NUM_DEGREE={num_degree}')
+    print(f'DETECTED_DEN_DEGREE={den_degree}')
+" 2>&1 | tee /tmp/run_csv_gen.log
+
+# Extract detected values from Python output
+if [[ -z "$RANGE_MIN" ]]; then
+    RANGE_MIN=$(grep '^DETECTED_RANGE_MIN=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+fi
+if [[ -z "$RANGE_MAX" ]]; then
+    RANGE_MAX=$(grep '^DETECTED_RANGE_MAX=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+fi
+POLY_DEGREE=$(grep '^DETECTED_DEGREE=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+NUM_SEGMENTS=$(grep '^DETECTED_SEGMENTS=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+COEFFS=$(grep '^DETECTED_DEGREE_SUM=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+IS_RATIONAL=$(grep '^DETECTED_IS_RATIONAL=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+[[ -z "$COEFFS" || "$COEFFS" == "0" ]] && COEFFS=$((POLY_DEGREE * NUM_SEGMENTS))
+
+if [[ "$IS_RATIONAL" == "1" ]]; then
+    NUM_DEG=$(grep '^DETECTED_NUM_DEGREE=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+    DEN_DEG=$(grep '^DETECTED_DEN_DEGREE=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+    CONFIG_NAME="n${NUM_DEG}d${DEN_DEG}_s${NUM_SEGMENTS}"
+    COEFFS=$(( (NUM_DEG + 1 + DEN_DEG + 1) * NUM_SEGMENTS ))
+else
+    CONFIG_NAME="p${POLY_DEGREE}_s${NUM_SEGMENTS}"
+fi
+
+echo "Config:     $CONFIG_NAME ($COEFFS coeffs/segment)"
+echo ""
+
+# Build list of precisions to iterate for accuracy/reporting
+if [[ "$PRECISION" == "both" ]]; then
+    PRECISION_LIST=(bf16 fp32)
+else
+    PRECISION_LIST=("$PRECISION")
+fi
+
+# --- Step 2: Build ---
+if [[ "$SKIP_BUILD" == true ]]; then
+    echo "Skipping build (--skip-build)"
+else
+    echo "Building adhoc target..."
+    cd "$REPO_ROOT"
+    ninja -C "$BUILD_DIR" programming_examples_generic_lut_activation_embedded_adhoc
+    echo "Build complete."
+fi
+
+echo ""
+
+# --- Step 3: Run all shapes with profiler timing and accuracy ---
+cd "$REPO_ROOT"
+
+# Hardware output directory for accuracy CSVs
+output_dir=$(get_hardware_output_dir "$ACTIVATION" "$WORK_DIR")
+
+# Build batch tile list from TEST_SHAPES
+batch_tiles=""
+declare -A shape_name_by_tiles=()
+for test_shape in "${TEST_SHAPES[@]}"; do
+    parse_shape "$test_shape"
+    batch_tiles="${batch_tiles:+$batch_tiles,}$tile_count"
+    shape_name_by_tiles[$tile_count]="$shape_name"
+done
+
+# Determine if we should use batch mode (multiple shapes → single binary invocation)
+use_batch=false
+if [[ ${#TEST_SHAPES[@]} -gt 1 ]]; then
+    use_batch=true
+fi
+
+# Print table header (matching sweep_best.sh format)
+echo "=== $ACTIVATION ($PRECISION, range: $RANGE_MIN to $RANGE_MAX) ==="
+printf "%-25s %8s %12s %12s %12s %12s %10s %10s\n" "Config" "DegSum" "MAE" "MaxErr" "MaxULP" "MeanULP" "Prof(µs)" "Host(ms)"
+printf "%-25s %8s %12s %12s %12s %12s %10s %10s\n" "-------------------------" "--------" "------------" "------------" "------------" "------------" "----------" "----------"
+
+# Per-shape result accumulators (associative arrays keyed by shape_name)
+declare -A profiler_times_csv=()   # shape_name → "t1,t2,t3" (comma-separated across runs)
+declare -A host_times_csv=()       # shape_name → "t1,t2,t3"
+declare -A csv_output_paths=()     # shape_name → path to hardware output CSV
+
+# Precompute per-shape, per-precision CSV output paths
+# Must match what the C++ binary produces from DUMP_OUTPUT_CSV base path:
+#   --precision both:  base (no precision) + _${prec}_tiles${N}.csv
+#   single precision:  base (with precision) + _tiles${N}.csv  (backward compat)
+for prec in "${PRECISION_LIST[@]}"; do
+    for test_shape in "${TEST_SHAPES[@]}"; do
+        parse_shape "$test_shape"
+        if [[ "$PRECISION" == "both" && "$use_batch" == true ]]; then
+            # Binary base: ${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}
+            # Binary suffix: _${prec}_tiles${N} (is_multi_precision + is_batch_mode)
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}_${prec}_tiles${tile_count}.csv"
+        elif [[ "$PRECISION" == "both" ]]; then
+            # Binary base: ${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}
+            # Binary suffix: _${prec} (is_multi_precision only, no batch)
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}_${prec}.csv"
+        elif [[ "$use_batch" == true ]]; then
+            # Single precision batch: base has precision, binary adds _tiles${N}
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${PRECISION}_${NUM_SEGMENTS}_${POLY_DEGREE}_tiles${tile_count}.csv"
+        else
+            # Single precision, single shape: exact path (no suffix added by binary)
+            csv_output_paths["${prec}_${shape_name}"]="${output_dir}/${ACTIVATION}_${PRECISION}_${NUM_SEGMENTS}_${POLY_DEGREE}_tiles${tile_count}.csv"
+        fi
+    done
+done
+
+# ===== STEP 1: Profiler + host timing + accuracy (single pass) =====
+# First run also dumps hardware output for accuracy computation
+profiler_success=true
+host_success=true
+
+for run in $(seq 1 $NUM_RUNS); do
+    PROFILER_BASE="$WORK_DIR/profiler_results/reports/adhoc_${ACTIVATION}_run${run}"
+    mkdir -p "$PROFILER_BASE"
+
+    # Dump hardware output on first run (for accuracy computation)
+    if [[ "$run" -eq 1 ]]; then
+        if [[ "$PRECISION" == "both" ]]; then
+            # Binary inserts _bf16/_fp32 and _tilesN before .csv (is_multi_precision + is_batch_mode)
+            export DUMP_OUTPUT_CSV="${output_dir}/${ACTIVATION}_${NUM_SEGMENTS}_${POLY_DEGREE}.csv"
+        elif [[ "$use_batch" == true ]]; then
+            # Single precision, binary inserts _tilesN before .csv
+            export DUMP_OUTPUT_CSV="${output_dir}/${ACTIVATION}_${PRECISION}_${NUM_SEGMENTS}_${POLY_DEGREE}.csv"
+        else
+            parse_shape "${TEST_SHAPES[0]}"
+            export DUMP_OUTPUT_CSV="${csv_output_paths[${PRECISION_LIST[0]}_${shape_name}]}"
+        fi
+    else
+        unset DUMP_OUTPUT_CSV
+    fi
+
+    set +e
+    if [[ "$use_batch" == true ]]; then
+        run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
+            "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+            --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" \
+            --batch-tiles "$batch_tiles" "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+    else
+        parse_shape "${TEST_SHAPES[0]}"
+        run_output=$(TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$PROFILER_BASE" \
+            "$BINARY" --activation "$ACTIVATION" --precision "$PRECISION" \
+            --range-min "$RANGE_MIN" --range-max "$RANGE_MAX" --tiles "$tile_count" \
+            "${EXTRA_BINARY_ARGS[@]}" 2>&1)
+    fi
+    run_exit=$?
+    set -e
+
+    if [[ $run_exit -ne 0 ]]; then
+        # Surface the binary's stderr/stdout — DON'T swallow it. A non-zero exit
+        # here (e.g. a post-dump exception from generic_lut_activation.cpp's
+        # try/catch) was previously invisible, turning every binary failure into a
+        # black-box "FAILED" row with no cause.
+        echo "  [run_csv] binary exited $run_exit (activation=$ACTIVATION); output follows:" >&2
+        echo "$run_output" >&2
+        profiler_success=false
+        host_success=false
+        break
+    fi
+
+    # Extract per-shape profiler times from single CSV (batch clustering)
+    PROFILER_CSV_PATH="${PROFILER_BASE}/.logs/profile_log_device.csv"
+    if [[ -f "$PROFILER_CSV_PATH" ]]; then
+        total_shapes=$(( ${#PRECISION_LIST[@]} * ${#TEST_SHAPES[@]} ))
+        batch_times=$(extract_batch_profiler_times "$PROFILER_CSV_PATH" "$total_shapes" "$WORK_DIR")
+        i=0
+        IFS=',' read -ra _ptimes <<< "$batch_times"
+        for prec in "${PRECISION_LIST[@]}"; do
+            for test_shape in "${TEST_SHAPES[@]}"; do
+                parse_shape "$test_shape"
+                pkey="${prec}_${shape_name}"
+                ptime="${_ptimes[$i]:-0}"
+                if [[ -n "$ptime" && "$ptime" != "0" && "$ptime" != "0.00" ]]; then
+                    profiler_times_csv[$pkey]="${profiler_times_csv[$pkey]:+${profiler_times_csv[$pkey]},}$ptime"
+                fi
+                i=$((i + 1))
+            done
+        done
+    fi
+
+    # Extract per-shape, per-precision host timing from same output
+    for prec in "${PRECISION_LIST[@]}"; do
+        for test_shape in "${TEST_SHAPES[@]}"; do
+            parse_shape "$test_shape"
+            pkey="${prec}_${shape_name}"
+            if [[ "$PRECISION" == "both" ]]; then
+                # Multi-precision format: BATCH[bf16,tiles=N]:TIMING_KERNEL_EXECUTION:
+                kernel_exec=$(echo "$run_output" | grep "BATCH\[${prec},tiles=${tile_count}\]:TIMING_KERNEL_EXECUTION:" | awk -F': ' '{print $2}')
+            elif [[ "$use_batch" == true ]]; then
+                # Single-precision batch: BATCH[tiles=N]:TIMING_KERNEL_EXECUTION:
+                kernel_exec=$(echo "$run_output" | grep "BATCH\[tiles=${tile_count}\]:TIMING_KERNEL_EXECUTION:" | awk -F': ' '{print $2}')
+            else
+                # Single shape, single precision: TIMING_KERNEL_EXECUTION:
+                kernel_exec=$(echo "$run_output" | grep "TIMING_KERNEL_EXECUTION:" | head -1 | awk -F': ' '{print $2}')
+            fi
+            if [[ -n "$kernel_exec" ]]; then
+                host_times_csv[$pkey]="${host_times_csv[$pkey]:+${host_times_csv[$pkey]},}$kernel_exec"
+            fi
+        done
+    done
+done
+unset DUMP_OUTPUT_CSV
+
+# ===== STEP 3: Compute results per shape and print table =====
+# Arrays to collect results for summary table
+declare -a result_configs=()
+declare -a result_coeffs=()
+declare -a result_mae=()
+declare -a result_max_err=()
+declare -a result_max_ulp=()
+declare -a result_mean_ulp=()
+declare -a result_profiler_us=()
+declare -a result_host_ms=()
+
+all_runs_passed=$( [[ "$profiler_success" == true && "$host_success" == true ]] && echo true || echo false )
+
+for prec in "${PRECISION_LIST[@]}"; do
+    for test_shape in "${TEST_SHAPES[@]}"; do
+        parse_shape "$test_shape"
+        pkey="${prec}_${shape_name}"
+        csv_output="${csv_output_paths[$pkey]}"
+
+        # If a dump path was specified, export first shape's output to user-requested path.
+        if [[ -n "$DUMP_CSV" && "${test_shape}" == "${TEST_SHAPES[0]}" && "$prec" == "${PRECISION_LIST[0]}" && -f "$csv_output" ]]; then
+            cp "$csv_output" "$DUMP_CSV"
+        fi
+        if [[ -n "$DUMP_NPZ" && "${test_shape}" == "${TEST_SHAPES[0]}" && "$prec" == "${PRECISION_LIST[0]}" && -f "$csv_output" ]]; then
+            mkdir -p "$(dirname "$DUMP_NPZ")"
+            /usr/bin/python3 - "$csv_output" "$DUMP_NPZ" <<'PY'
+import sys
+from pathlib import Path
+import numpy as np
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+data = np.genfromtxt(src, delimiter=",", names=True, invalid_raise=False)
+if data.size == 0:
+    x = np.array([], dtype=np.float32)
+    y = np.array([], dtype=np.float32)
+else:
+    data = np.atleast_1d(data)
+    names = data.dtype.names or ()
+    if "input" not in names or "output" not in names:
+        raise SystemExit(f"{src} must have input,output columns")
+    x = np.asarray(data["input"], dtype=np.float32)
+    y = np.asarray(data["output"], dtype=np.float32)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x = x[finite]
+    y = y[finite]
+np.savez_compressed(dst, input=x, output=y)
+PY
+        fi
+
+        if [[ "$all_runs_passed" == true ]]; then
+            # Compute profiler timing (in us)
+            profiler_min_us="0"
+            if [[ -n "${profiler_times_csv[$pkey]:-}" ]]; then
+                profiler_min_us=$(compute_kernel_exec_min "${profiler_times_csv[$pkey]}")
+            fi
+
+            # Compute host timing (in ms)
+            host_min_ms="0"
+            if [[ -n "${host_times_csv[$pkey]:-}" ]]; then
+                host_min_ms=$(compute_kernel_exec_min "${host_times_csv[$pkey]}")
+            fi
+
+            # Compute accuracy metrics
+            mae_hw="0" max_hw="0" max_ulp_hw="0" mean_ulp_hw="0"
+            if [[ "$HAS_ACCURACY" == true && -f "$csv_output" ]]; then
+                accuracy_stats=$($ACCURACY_PYTHON "$ACCURACY_SCRIPT" "$ACTIVATION" "$csv_output" 2>/dev/null) || true
+                if [[ -n "$accuracy_stats" ]]; then
+                    mae_hw=$(echo "$accuracy_stats" | cut -d',' -f1)
+                    max_hw=$(echo "$accuracy_stats" | cut -d',' -f3)
+                    max_ulp_hw=$(echo "$accuracy_stats" | cut -d',' -f5)
+                    mean_ulp_hw=$(echo "$accuracy_stats" | cut -d',' -f6)
+                fi
+            fi
+
+            # Compress hardware output CSV to save disk space (original deleted by gzip)
+            if [[ -f "$csv_output" ]]; then
+                gzip -f "$csv_output"
+            fi
+
+            # Print row — include precision prefix when running both
+            if [[ ${#PRECISION_LIST[@]} -gt 1 ]]; then
+                config_display="${prec}_${shape_name}_${CONFIG_NAME}"
+            else
+                config_display="${shape_name}_${CONFIG_NAME}"
+            fi
+            [[ "$shape_name" == "yolov4" ]] && printf "${GREEN}"
+            printf "%-25s %8d %12.2e %12.2e %12.2f %12.2f %9.2fµs %9.2fms\n" \
+                "$config_display" "$COEFFS" "$mae_hw" "$max_hw" "$max_ulp_hw" "$mean_ulp_hw" "$profiler_min_us" "$host_min_ms"
+            [[ "$shape_name" == "yolov4" ]] && printf "${NC}"
+
+            # Store for summary
+            result_configs+=("$config_display")
+            result_coeffs+=("$COEFFS")
+            result_mae+=("$mae_hw")
+            result_max_err+=("$max_hw")
+            result_max_ulp+=("$max_ulp_hw")
+            result_mean_ulp+=("$mean_ulp_hw")
+            result_profiler_us+=("$profiler_min_us")
+            result_host_ms+=("$host_min_ms")
+        else
+            if [[ ${#PRECISION_LIST[@]} -gt 1 ]]; then
+                config_display="${prec}_${shape_name}_${CONFIG_NAME}"
+            else
+                config_display="${shape_name}_${CONFIG_NAME}"
+            fi
+            printf "%-25s %8d %12s %12s %12s %12s %10s\n" "$config_display" "$COEFFS" "-" "-" "-" "-" "FAILED"
+
+            result_configs+=("$config_display")
+            result_coeffs+=("$COEFFS")
+            result_mae+=("-")
+            result_max_err+=("-")
+            result_max_ulp+=("-")
+            result_mean_ulp+=("-")
+            result_profiler_us+=("-")
+            result_host_ms+=("-")
+        fi
+    done
+done
+
+# --- Summary table ---
+echo ""
+echo "================================================================================"
+echo "  SUMMARY: $ACTIVATION  $PRECISION  $(basename "$CSV_FILE")"
+echo "================================================================================"
+printf "%-25s %8s %12s %12s %12s %12s %10s %10s\n" "Config" "DegSum" "MAE" "MaxErr" "MaxULP" "MeanULP" "Prof(µs)" "Host(ms)"
+printf "%-25s %8s %12s %12s %12s %12s %10s %10s\n" "-------------------------" "--------" "------------" "------------" "------------" "------------" "----------" "----------"
+
+for i in "${!result_configs[@]}"; do
+    if [[ "${result_mae[$i]}" == "-" ]]; then
+        printf "%-25s %8s %12s %12s %12s %12s %10s\n" \
+            "${result_configs[$i]}" "${result_coeffs[$i]}" "-" "-" "-" "-" "FAILED"
+    else
+        [[ "${result_configs[$i]}" == yolov4_* ]] && printf "${GREEN}"
+        printf "%-25s %8d %12.2e %12.2e %12.2f %12.2f %9.2fµs %9.2fms\n" \
+            "${result_configs[$i]}" "${result_coeffs[$i]}" \
+            "${result_mae[$i]}" "${result_max_err[$i]}" \
+            "${result_max_ulp[$i]}" "${result_mean_ulp[$i]}" \
+            "${result_profiler_us[$i]}" "${result_host_ms[$i]}"
+        [[ "${result_configs[$i]}" == yolov4_* ]] && printf "${NC}"
+    fi
+done
+
+echo "================================================================================"

@@ -135,59 +135,24 @@ def dedupe_configs(rows):
     return list(best.values())
 
 
-def normalized_distance(point, pool):
-    us, ulp, _ = point
-    runtimes = [p[0] for p in pool]
-    ulps = [p[1] for p in pool]
-    runtime_span = max(runtimes) - min(runtimes)
-    ulp_span = max(ulps) - min(ulps)
-    runtime_norm = 0.0 if runtime_span == 0 else (us - min(runtimes)) / runtime_span
-    ulp_norm = 0.0 if ulp_span == 0 else (ulp - min(ulps)) / ulp_span
-    return runtime_norm * runtime_norm + ulp_norm * ulp_norm
-
-
 def select_for_group(front, tus, tulp, max_configs):
-    selected = []
+    if not front:
+        return []
 
-    def add(role, item):
-        if item is None:
-            return
-        us, ulp, row = item
-        selected.append((role, us, ulp, row))
+    def by_runtime_then_ulp(point):
+        us, ulp, row = point
+        return (us, ulp, row.get("csv") or "")
 
-    wins = []
-    if tus is not None and tulp is not None:
-        wins = [(us, ulp, row) for us, ulp, row in front if us < tus and ulp <= tulp]
-    pool = wins or front
-    status = "ttnn_winner" if wins else "fallback_frontier"
+    if tulp is not None:
+        ttnn_ulp_matches = [(us, ulp, row) for us, ulp, row in front if ulp <= tulp]
+        if ttnn_ulp_matches:
+            us, ulp, row = min(ttnn_ulp_matches, key=by_runtime_then_ulp)
+            return [("fastest_ttnn_ulp_match", "ttnn_ulp_match", us, ulp, row)]
 
-    if pool:
-        add("primary", min(pool, key=lambda p: (p[0], p[1], p[2].get("csv") or "")))
-        add("best_accuracy", min(pool, key=lambda p: (p[1], p[0], p[2].get("csv") or "")))
-        add("knee", min(pool, key=lambda p: (normalized_distance(p, pool), p[0], p[1], p[2].get("csv") or "")))
-
-    deduped = {}
-    for role, us, ulp, row in selected:
-        key = ((row.get("csv") or "").strip(), (row.get("precision") or row.get("dtype") or "").strip())
-        if key in deduped:
-            old_roles, old_us, old_ulp, old_row = deduped[key]
-            deduped[key] = (old_roles + [role], old_us, old_ulp, old_row)
-        else:
-            deduped[key] = ([role], us, ulp, row)
-
-    ordered = sorted(
-        deduped.values(),
-        key=lambda item: (
-            0 if "primary" in item[0] else 1,
-            0 if "best_accuracy" in item[0] else 1,
-            0 if "knee" in item[0] else 1,
-            item[1],
-            item[2],
-        ),
-    )
-    if max_configs:
-        ordered = ordered[:max_configs]
-    return [("|".join(roles), status, us, ulp, row) for roles, us, ulp, row in ordered]
+    best_ulp = min(ulp for _, ulp, _ in front)
+    best_ulp_points = [(us, ulp, row) for us, ulp, row in front if ulp == best_ulp]
+    us, ulp, row = min(best_ulp_points, key=by_runtime_then_ulp)
+    return [("fastest_min_ulp", "fallback_min_ulp", us, ulp, row)]
 
 
 def coeff_path(row, coeff_dir):
@@ -208,7 +173,7 @@ def manifest_row(act, dtype, role, status, us, ulp, row, tus, tulp, coeff_dir, d
     dtype_name = dtype or (row.get("precision") or row.get("dtype") or "bf16")
     cfg_slug = slug(Path(row.get("csv") or "config").stem)
     role_slug = slug(role.replace("|", "_"))
-    dump = dump_root / "frontier" / slug(dtype_name) / slug(act) / f"{role_slug}_{cfg_slug}.csv"
+    dump = dump_root / "frontier" / slug(dtype_name) / slug(act) / f"{role_slug}_{cfg_slug}.npz"
     plot = plot_root / "ulp_by_input" / slug(dtype_name) / f"{slug(act)}.png"
     return {
         "activation": act,
@@ -231,7 +196,7 @@ def manifest_row(act, dtype, role, status, us, ulp, row, tus, tulp, coeff_dir, d
 
 def ttnn_manifest_row(act, dtype, tus, tulp, dump_root, plot_root):
     dtype_name = dtype or "bf16"
-    dump = dump_root / "ttnn" / slug(dtype_name) / slug(act) / "ttnn.csv"
+    dump = dump_root / "ttnn" / slug(dtype_name) / slug(act) / "ttnn.npz"
     plot = plot_root / "ulp_by_input" / slug(dtype_name) / f"{slug(act)}.png"
     return {
         "activation": act,
@@ -263,7 +228,9 @@ def parse_args():
     parser.add_argument("--plot-root", type=existing, help="Canonical plot root")
     parser.add_argument("--coeff-dir", type=existing, help="Coefficient CSV directory")
     parser.add_argument("--max-configs-per-activation", type=int, default=3)
-    parser.add_argument("--include-ttnn", action="store_true", help="Add one TTNN manifest row per activation with a TTNN ref")
+    parser.add_argument(
+        "--include-ttnn", action="store_true", help="Add one TTNN manifest row per activation with a TTNN ref"
+    )
     return parser.parse_args()
 
 
@@ -288,17 +255,15 @@ def main():
         compiled = [
             r
             for r in group
-            if r["_ok"]
-            and r["_us"] is not None
-            and r["_ulp"] is not None
-            and r["_us"] > 0
-            and r["_ulp"] >= 0
+            if r["_ok"] and r["_us"] is not None and r["_ulp"] is not None and r["_us"] > 0 and r["_ulp"] >= 0
         ]
         compiled = dedupe_configs(compiled)
         front = pareto([(r["_us"], r["_ulp"], r) for r in compiled])
         tus, tulp = ttnn_for(ttnn, act, dtype, has_typed_ttnn)
         for role, status, us, ulp, row in select_for_group(front, tus, tulp, args.max_configs_per_activation):
-            selected.append(manifest_row(act, dtype, role, status, us, ulp, row, tus, tulp, coeff_dir, dump_root, plot_root))
+            selected.append(
+                manifest_row(act, dtype, role, status, us, ulp, row, tus, tulp, coeff_dir, dump_root, plot_root)
+            )
         if args.include_ttnn and tus is not None and tulp is not None:
             selected.append(ttnn_manifest_row(act, dtype, tus, tulp, dump_root, plot_root))
 

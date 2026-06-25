@@ -93,7 +93,7 @@ PY
 
 cat > "$NATIVE_PY" <<'PY'
 import sys, torch, ttnn, numpy as np
-act, prec, lo, hi, out_csv, tiles = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), sys.argv[5], int(sys.argv[6])
+act, prec, lo, hi, out_csv, out_npz, tiles = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), sys.argv[5], sys.argv[6], int(sys.argv[7])
 dev = ttnn.open_device(device_id=0)
 try:
     fn = getattr(ttnn, act)
@@ -108,17 +108,23 @@ try:
     else:
         x = torch.linspace(lo, hi, 262144, dtype=torch.float32)
     n = len(x)
-    with open(out_csv, "w") as f:
-        f.write("input,output\n")
-        if n:
-            pad = ((n + 1023) // 1024) * 1024
-            xp = torch.zeros(pad, dtype=dt_t)
-            xp[:n] = x
-            xt = ttnn.from_torch(xp.reshape(1, 1, 1, -1), device=dev, layout=ttnn.TILE_LAYOUT, dtype=dt_tt)
-            hw = ttnn.to_torch(fn(xt)).squeeze().float().numpy()[:n]
-            xn = x.float().numpy()
+    if n:
+        pad = ((n + 1023) // 1024) * 1024
+        xp = torch.zeros(pad, dtype=dt_t)
+        xp[:n] = x
+        xt = ttnn.from_torch(xp.reshape(1, 1, 1, -1), device=dev, layout=ttnn.TILE_LAYOUT, dtype=dt_tt)
+        hw = ttnn.to_torch(fn(xt)).squeeze().float().numpy()[:n].astype(np.float32)
+        xn = x.float().numpy().astype(np.float32)
+    else:
+        xn = np.array([], dtype=np.float32)
+        hw = np.array([], dtype=np.float32)
+    if out_csv:
+        with open(out_csv, "w") as f:
+            f.write("input,output\n")
             for i in range(n):
                 f.write(f"{xn[i]},{hw[i]}\n")
+    if out_npz:
+        np.savez_compressed(out_npz, input=xn, output=hw)
     width = 32 * tiles
     xt_t = ttnn.from_torch(torch.rand(1, 1, 32, width, dtype=dt_t) * (hi - lo) + lo, device=dev, layout=ttnn.TILE_LAYOUT, dtype=dt_tt)
     for _ in range(3):
@@ -145,16 +151,18 @@ while IFS=, read -r act lo hi; do
     continue
   fi
   if [[ -n "$RUN_DIR" ]]; then
-    dump="$RUN_DIR/data/dumps/ttnn/${PRECISION}/${act}/ttnn.csv"
+    dump="$RUN_DIR/data/dumps/ttnn/${PRECISION}/${act}/ttnn.npz"
     mkdir -p "$(dirname "$dump")"
+    acc_dump="/tmp/ttnn_ref_${act}_${PRECISION}_${SHARD}.csv"
   else
     dump="/tmp/ttnn_ref_${act}_${PRECISION}_${SHARD}.csv"
+    acc_dump="$dump"
   fi
   prof_dir="/tmp/ttnn_ref_prof_${act}_${PRECISION}_${SHARD}"
   rm -rf "$prof_dir"; mkdir -p "$prof_dir"
   set +e
   ( source "$VENV"; TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$prof_dir" \
-      python3 "$NATIVE_PY" "$act" "$PRECISION" "$lo" "$hi" "$dump" "$TILES" >/dev/null 2>&1 )
+      python3 "$NATIVE_PY" "$act" "$PRECISION" "$lo" "$hi" "$acc_dump" "$([[ -n "$RUN_DIR" ]] && echo "$dump")" "$TILES" >/dev/null 2>&1 )
   rc=$?
   set -e
   if [[ "$rc" -ne 0 || ! -s "$dump" ]]; then
@@ -162,7 +170,7 @@ while IFS=, read -r act lo hi; do
     echo "$act $PRECISION native_fail_rc_$rc" >&2
     continue
   fi
-  acc="$("$SYSPY" "$ACCURACY_SCRIPT" "$act" "$dump" 2>/dev/null | tail -1)"
+  acc="$("$SYSPY" "$ACCURACY_SCRIPT" "$act" "$acc_dump" 2>/dev/null | tail -1)"
   maxulp="$(echo "$acc" | cut -d, -f5)"
   meanulp="$(echo "$acc" | cut -d, -f6)"
   pure="$(echo "$acc" | cut -d, -f9)"

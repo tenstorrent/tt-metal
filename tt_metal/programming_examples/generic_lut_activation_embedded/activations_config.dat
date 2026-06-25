@@ -1,0 +1,31 @@
+activation,has_native_sfpu,range_min,range_max,critical_point_x,critical_point_value,notes,piecewise_breakpoints
+atanh,false,-0.999,0.999,0,0,Inverse hyperbolic tangent - asymptotic at ±1 (tests use ±0.999),
+celu,false,-10.0,10.0,,,Smoother ELU variant,"-10,0,10"
+cos,true,-3.141592653589793,3.141592653589793,0.0,1.0,Periodic function (range limited to [-π,
+cosh,false,-10.0,10.0,0.0,1.0,Exponential growth; cosh(0) = 1,
+digamma,false,0.01,10.0,,,Digamma function - logarithmic derivative of gamma (pole at x=0; tests use [0.01-10]),
+elu,true,-10.0,10.0,,,Works on hardware,"-10,0,10"
+erf,true,-10.0,10.0,,,Works on hardware (saturates beyond ±3),
+exp,true,-10.0,10.0,,,Works on hardware,
+gelu,true,-10.0,10.0,"-1.41,1.41","-0.11177,1.29823",Approximately linear beyond ±4; inflections at ±sqrt(2),
+hardshrink,false,-11.0,11.0,,,Piecewise with threshold; supports lambda up to 5.0,"-11,-0.5,0.5,11"
+hardsigmoid,true,-10.0,10.0,,,PyTorch standard: clips at ±3,"-10,-3,3,10"
+hardswish,false,-10.0,10.0,,,x * hardsigmoid(x) - focus on transition region around ±3,"-10,-3,3,10"
+hardtanh,false,-10.0,10.0,,,Clipped tanh,"-10,-1,1,10"
+leaky_relu,true,-10.0,10.0,,,Works on hardware,"-10,0,10"
+logsigmoid,false,-10.0,10.0,,,log(sigmoid(x)),
+mish,true,-10.0,10.0,,,Works on hardware,
+prelu,true,-10.0,10.0,,,Works on hardware,"-10,0,10"
+relu,true,-10.0,10.0,,,Works on hardware - symmetric range,"-10,0,10"
+relu6,true,-10.0,10.0,,,Clips to [0,"-10,0,6,10"
+selu,true,-10.0,10.0,,,Self-normalizing ELU,"-10,0,10"
+sigmoid,true,-10.0,10.0,0,0.5,Saturates beyond ±5; inflection at x=0,
+sin,true,-3.141592653589793,3.141592653589793,0.0,0.0,Periodic function (range limited to [-π,
+sinh,false,-10.0,10.0,0.0,0.0,Exponential growth; sinh(0) = 0,
+softplus,true,-10.0,10.0,,,Smooth ReLU approximation - symmetric range,
+softshrink,false,-11.0,11.0,,,Piecewise with threshold; supports lambda up to 5.0,"-11,-0.5,0.5,11"
+softsign,true,-15.0,15.0,0.0,0.0,Saturates to ±1; softsign(0) = 0; tests use ±15 range,
+swish,true,-10.0,10.0,0.0,0.0,x * sigmoid(x); swish(0) = 0,
+tanh,true,-10.0,10.0,0.0,0.0,Works on hardware (saturates beyond ±3); tanh(0) = 0,
+tanhshrink,false,-10.0,10.0,0.0,0.0,x - tanh(x) residual-like; tanhshrink(0) = 0,
+threshold,true,-10.0,10.0,,,Works on hardware,"-10,0,10"

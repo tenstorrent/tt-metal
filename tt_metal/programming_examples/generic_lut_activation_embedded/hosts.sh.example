@@ -1,0 +1,14 @@
+#!/bin/bash
+# Server configuration for remote benchmarks
+# Copy this file to hosts.sh and update with your server details
+
+# Wormhole B0 server
+WORMHOLE_HOST="yyzc-wh-01"
+WORMHOLE_PORT="49819"
+
+# Blackhole P100 server
+BLACKHOLE_HOST="bh-34"
+BLACKHOLE_PORT="22"
+
+# Remote working directory (same on both servers)
+REMOTE_DIR="localdev/nkapre/tt-metal"
