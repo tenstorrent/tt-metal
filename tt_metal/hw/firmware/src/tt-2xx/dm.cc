@@ -16,6 +16,22 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
+#if defined(PROFILE_KERNEL)
+// The DM core emits profiler zones (DeviceZoneScopedMainN("DM0-FW")) and therefore must define the
+// profiler's per-core scratch globals, exactly as trisc.cc does. Without these the DM firmware fails
+// to link (undefined reference to kernel_profiler::wIndex/stackSize/sumIDs). The tt-1xx firmware
+// defines these in every per-RISC TU (brisc/ncrisc/trisc/...); tt-2xx had them only in trisc.cc.
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+// traceCount is owned by the host-flush RISC. On tt-1xx that is BRISC (brisc.cc); on Quasar the DM
+// core fills that role, so it is defined here (used at dm.cc's profiler finish path).
+uint32_t traceCount __attribute__((used));
+}  // namespace kernel_profiler
+#endif
+
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 

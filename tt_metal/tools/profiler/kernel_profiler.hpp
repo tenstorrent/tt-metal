@@ -17,6 +17,8 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "internal/risc_attribs.h"
+#include "api/debug/profiler_timestamp.h"  // profiler_read_timestamp() clock seam (rdcycle on Quasar)
+#include "internal/hw_thread.h"            // get_hw_thread_idx() runtime risc id (Quasar)
 
 #include "hostdev/dev_msgs.h"
 
@@ -82,25 +84,42 @@ volatile tt_l1_ptr uint32_t* profiler_control_buffer =
 volatile tt_l1_ptr profiler_msg_buffer_t* profiler_data_buffer =
     reinterpret_cast<volatile tt_l1_ptr profiler_msg_buffer_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.buffer));
 
+// myRiscID identifies this hardware thread's slot in the profiler buffers.
+//
+// On Wormhole/Blackhole it is a compile-time constant (PROCESSOR_INDEX). On Quasar a single kernel
+// binary can run across multiple hardware threads (the 4 TRISCs of a NEO share one binary), so
+// PROCESSOR_INDEX is not defined and the id must be read at RUNTIME from CSRs via
+// internal_::get_hw_thread_idx(). We expose `myRiscID` as a macro so the ~16 use-sites
+// (profiler_data_buffer[myRiscID]...) are unchanged: it is a constexpr on silicon and a runtime
+// inline on Quasar.
 #if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY)
-constexpr uint32_t myRiscID = 0;
+constexpr uint32_t myRiscID_const = 0;
+#define myRiscID myRiscID_const
+#elif defined(ARCH_QUASAR)
+#define myRiscID (internal_::get_hw_thread_idx())
 #else
-// TODO: Update for Quasar - PROCESSOR_INDEX is not defined for Quasar DM/TRISC
-// because kernels may run as a single binary across multiple hardware threads.
-// Need to use internal_::get_hw_thread_idx() but that requires non-constexpr handling
-constexpr uint32_t myRiscID = PROCESSOR_INDEX;
+constexpr uint32_t myRiscID_const = PROCESSOR_INDEX;
+#define myRiscID myRiscID_const
 #endif
 
 #if defined(DEVICE_DEBUG_DUMP)
-// Each risc has their own DRAM profiler address index
+// Each risc has their own DRAM profiler address index.
 constexpr bool NON_DROPPING = true;
+#if defined(ARCH_QUASAR)
+#define DRAM_PROFILER_ADDRESS (DRAM_PROFILER_ADDRESS_BR_ER_0 + myRiscID)
+#else
 constexpr uint32_t DRAM_PROFILER_ADDRESS = DRAM_PROFILER_ADDRESS_BR_ER_0 + myRiscID;
+#endif
 #else
 constexpr bool NON_DROPPING = false;
 constexpr uint32_t DRAM_PROFILER_ADDRESS = DRAM_PROFILER_ADDRESS_DEFAULT;
 #endif
 
+#if defined(ARCH_QUASAR)
+#define HOST_BUFFER_END_INDEX (HOST_BUFFER_END_INDEX_BR_ER + myRiscID)
+#else
 constexpr uint32_t HOST_BUFFER_END_INDEX = HOST_BUFFER_END_INDEX_BR_ER + myRiscID;
+#endif
 
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
     return n == 0 ? basis : Hash32_CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
@@ -176,10 +195,9 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 }
 
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    profiler_data_buffer[myRiscID].data[index] =
-        0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
-    profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
+    const profiler_ts_t ts = profiler_read_timestamp();
+    profiler_data_buffer[myRiscID].data[index] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (ts.hi & 0xFFF);
+    profiler_data_buffer[myRiscID].data[index + 1] = ts.lo;
 }
 
 inline __attribute__((always_inline)) void mark_padding() {
@@ -557,17 +575,21 @@ struct profileScopeGuaranteed {
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeAccumulate {
     uint64_t start_time = 0;
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+
+    static inline __attribute__((always_inline)) uint64_t now64() {
+        const profiler_ts_t ts = profiler_read_timestamp();
+        return ((uint64_t)ts.hi << 32) | ts.lo;
+    }
 
     inline __attribute__((always_inline)) profileScopeAccumulate() {
         if constexpr (kernel_profiler::DO_SUM) {
-            start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+            start_time = now64();
         }
     }
     inline __attribute__((always_inline)) ~profileScopeAccumulate() {
         if constexpr (kernel_profiler::DO_SUM) {
             sumIDs[index] = timer_id;
-            sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+            sums[index] += now64() - start_time;
         }
     }
 };

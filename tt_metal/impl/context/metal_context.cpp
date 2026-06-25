@@ -264,7 +264,17 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        TT_FATAL(hal().get_arch() != ARCH::QUASAR, "Device profiler is not yet supported on Quasar.");
+        // Quasar device profiling is experimental: the kernel profiler uses the per-core rdcycle
+        // clock (via the profiler_timestamp.h seam) because reading the tile WALL_CLOCK register
+        // hangs the Quasar RTL emulator. Cross-core timestamps are not yet synchronized to one
+        // timebase (sync kernel reads WALL_CLOCK; keep TT_METAL_PROFILER_SYNC off on Quasar), so
+        // treat per-core durations as authoritative and cross-core alignment as best-effort.
+        if (hal().get_arch() == ARCH::QUASAR) {
+            log_warning(
+                tt::LogMetal,
+                "Device profiler on Quasar is experimental: per-core rdcycle timestamps only; keep "
+                "TT_METAL_PROFILER_SYNC disabled (its sync kernel reads WALL_CLOCK and hangs the emulator).");
+        }
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
