@@ -747,6 +747,6 @@ def test_vadv2(
     }
     for key in keys_to_check:
         a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
-        b = torch.load(f"models/experimental/vadv2/tt/dumps/{key}.pt")
+        b = tt_model._last_outs[key]
         _, msg = assert_with_pcc(a, b, pcc_floors[key])
         logger.info(f"{key}: {msg}")
