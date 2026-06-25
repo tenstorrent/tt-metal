@@ -30,6 +30,7 @@ set(TTNN_CORE_SRCS
     core/graph/graph_trace_utils.cpp
     core/graph/levelized_graph.cpp
     core/prefetcher_pipe.cpp
+    core/up_front_compile.cpp
     core/reports.cpp
     core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
