@@ -24,7 +24,10 @@ from pathlib import Path
 import pytest
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.modeling_utils import no_init_weights
+try:  # transformers >= 5 moved no_init_weights to transformers.initialization
+    from transformers.initialization import no_init_weights
+except ImportError:  # transformers < 5
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
