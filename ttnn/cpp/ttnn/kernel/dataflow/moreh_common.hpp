@@ -787,12 +787,15 @@ void read_line(
                 {.offset_bytes = 0});
             noc.async_read_barrier();
             // Now copy only the valid elements to the destination CB via a local L1 unicast read.
-            UnicastEndpoint scratch_src{
-                .noc_x = static_cast<uint32_t>(my_x[0]),
-                .noc_y = static_cast<uint32_t>(my_y[0]),
-                .addr = cb_scratch.get_write_ptr(),
-            };
-            noc.async_read(scratch_src, cb, valid_elements_bytes, {.offset_bytes = 0}, {.offset_bytes = cb_offset});
+            UnicastEndpoint scratch_src{};
+            noc.async_read(
+                scratch_src,
+                cb,
+                valid_elements_bytes,
+                {.noc_x = static_cast<uint32_t>(my_x[0]),
+                 .noc_y = static_cast<uint32_t>(my_y[0]),
+                 .addr = cb_scratch.get_write_ptr()},
+                {.offset_bytes = cb_offset});
             noc.async_read_barrier();
         }
 
