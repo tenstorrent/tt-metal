@@ -83,6 +83,16 @@ def gumbel_max(logits, temperature: float, noise):
     return ttnn.argmax(perturbed, dim=-1, keepdim=True)
 
 
+def canvas_sample(logits, temperature: float, gumbel_noise):
+    """Deterministic canvas sampler for W4 using injected Gumbel noise.
+
+    This is the released per-position canvas draw used by the diffusion loop:
+    ``argmax(logits / T + gumbel)`` over every canvas position. The noise is
+    supplied by the caller for torch/device token-exact validation.
+    """
+    return gumbel_max(logits, temperature, gumbel_noise)
+
+
 def softmax(logits, temperature: float = 1.0, *, compute_kernel_config: Optional[object] = None):
     """``softmax(logits / T)`` over the vocab axis (the self-conditioning soft-embed prob)."""
     z = temperature_scale(logits, temperature)
