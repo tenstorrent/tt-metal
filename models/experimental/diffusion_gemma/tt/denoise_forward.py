@@ -161,19 +161,17 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, at
     return combined
 
 
-def denoise_logits_forward(
+def denoise_hidden_forward(
     tt_model,
     *,
     prompt_hidden_by_layer,
     canvas_hidden,
 ):
-    """Run a short-prompt DiffusionGemma denoise logits forward.
+    """Run the short-prompt DiffusionGemma denoise backbone to final hidden states.
 
     ``prompt_hidden_by_layer`` provides the frozen encoder-side attention source
     for each decoder layer. Entries can be either `[1, 1, P, H]` hidden tensors
-    (legacy shim) or projected `(K, V)` prompt heads produced by the encoder KV
-    path. The returned logits cover all canvas positions, which the diffusion
-    sampler consumes each denoise step.
+    (legacy shim) or projected `(K, V)` prompt heads produced by the encoder KV path.
     """
     if len(prompt_hidden_by_layer) != len(tt_model.layers):
         raise ValueError(
@@ -198,7 +196,25 @@ def denoise_logits_forward(
             prompt_len,
         )
     attn_mask.deallocate(True)
-    hidden_states = tt_model.norm.forward(hidden_states)
+    return tt_model.norm.forward(hidden_states)
+
+
+def denoise_logits_forward(
+    tt_model,
+    *,
+    prompt_hidden_by_layer,
+    canvas_hidden,
+):
+    """Run a short-prompt DiffusionGemma denoise logits forward.
+
+    The returned logits cover all canvas positions, which the diffusion sampler
+    consumes each denoise step.
+    """
+    hidden_states = denoise_hidden_forward(
+        tt_model,
+        prompt_hidden_by_layer=prompt_hidden_by_layer,
+        canvas_hidden=canvas_hidden,
+    )
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
 
 

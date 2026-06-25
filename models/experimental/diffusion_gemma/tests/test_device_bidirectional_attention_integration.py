@@ -33,6 +33,7 @@ from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_tra
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
     denoise_attention_forward,
+    denoise_hidden_forward,
     denoise_logits_from_tokens,
     embed_canvas_tokens,
     read_prompt_kv_cache_slice,
@@ -140,7 +141,7 @@ def _torch_attention_reference(hf_model, hf_text_config, layer_idx, canvas_hidde
     return attn.o_proj(out)
 
 
-def _torch_denoise_logits_reference(hf_model, canvas_hidden, prompt_kv_hidden_by_layer, mask):
+def _torch_denoise_hidden_reference(hf_model, canvas_hidden, prompt_kv_hidden_by_layer, mask):
     hidden = canvas_hidden
     for layer_idx, layer in enumerate(hf_model.layers):
         residual = hidden
@@ -166,7 +167,11 @@ def _torch_denoise_logits_reference(hf_model, canvas_hidden, prompt_kv_hidden_by
         hidden = residual + hidden
         hidden = hidden * layer.layer_scalar
 
-    hidden = hf_model.norm(hidden)
+    return hf_model.norm(hidden)
+
+
+def _torch_denoise_logits_reference(hf_model, canvas_hidden, prompt_kv_hidden_by_layer, mask):
+    hidden = _torch_denoise_hidden_reference(hf_model, canvas_hidden, prompt_kv_hidden_by_layer, mask)
     logits = hf_model.lm_head(hidden)
     cap = hf_model.config.final_logit_softcapping
     if cap and cap > 0:
@@ -348,6 +353,12 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     ).view(1, 1, canvas_len, total_len)
     with torch.no_grad():
         golden = _torch_denoise_logits_reference(hf_model, conditioned_canvas_hidden, [prompt_kv_hidden], mask)
+        golden_hidden = _torch_denoise_hidden_reference(
+            hf_model,
+            conditioned_canvas_hidden,
+            [prompt_kv_hidden],
+            mask,
+        )
 
     tt_canvas_tokens = _to_device_tokens(mesh_device, canvas_tokens)
     tt_prompt_tokens = _to_device_tokens(mesh_device, prompt_tokens)
@@ -380,13 +391,32 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
         prev_logits=tt_prev_logits,
         self_conditioning_embedding_weight=tt_self_conditioning_embedding,
     )
+    tt_canvas_hidden = embed_canvas_tokens(tt_model, tt_canvas_tokens)
+    conditioned = self_conditioning.condition(
+        tt_canvas_hidden,
+        tt_prev_logits,
+        tt_self_conditioning_embedding,
+    )
+    tt_canvas_hidden.deallocate(True)
+    tt_hidden = denoise_hidden_forward(
+        tt_model,
+        prompt_hidden_by_layer=tt_prompt_kv_by_layer,
+        canvas_hidden=conditioned,
+    )
     logits = _to_torch(tt_logits, mesh_device).squeeze(0)
+    hidden = _to_torch(tt_hidden, mesh_device).squeeze(0)
     for tt_k, tt_v in tt_prompt_kv_by_layer:
         tt_k.deallocate(True)
         tt_v.deallocate(True)
 
     # Full logits include the shared bf16 MoE/lm_head/softcap path; this branch's
     # known full-model ceiling is below the attention-only 0.99 acceptance.
+    _, hidden_pcc = comp_pcc(golden_hidden.float(), hidden.float(), pcc=0.0)
+    print(
+        "\n[denoise logits drift] "
+        f"hidden_pcc={hidden_pcc:.5f} logits_argmax_agreement="
+        f"{float((golden.argmax(dim=-1) == logits.argmax(dim=-1)).float().mean()):.4f}"
+    )
     passing, message = assert_with_pcc(golden.float(), logits.float(), 0.98)
     assert passing, message
 
@@ -615,15 +645,37 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
         float(comp_pcc(ref_logits_by_step[i].float(), tt_logits_by_step[i].float(), pcc=0.0)[1])
         for i in range(max_steps)
     ]
+    logits_mean_abs = [
+        float((ref_logits_by_step[i].float() - tt_logits_by_step[i].float()).abs().mean()) for i in range(max_steps)
+    ]
+    logits_max_abs = [
+        float((ref_logits_by_step[i].float() - tt_logits_by_step[i].float()).abs().max()) for i in range(max_steps)
+    ]
+    ref_top2_margin_mean = [
+        float(torch.topk(ref_logits_by_step[i].float(), k=2, dim=-1).values.diff(dim=-1).abs().mean())
+        for i in range(max_steps)
+    ]
     logits_argmax_agreement = [
         float((ref_logits_by_step[i].argmax(dim=-1) == tt_logits_by_step[i].argmax(dim=-1)).float().mean())
+        for i in range(max_steps)
+    ]
+    logits_top8_contains_ref_argmax = [
+        float(
+            (tt_logits_by_step[i].topk(k=8, dim=-1).indices == ref_logits_by_step[i].argmax(dim=-1, keepdim=True))
+            .any(dim=-1)
+            .float()
+            .mean()
+        )
         for i in range(max_steps)
     ]
     print(
         "\n[real-logits trajectory] "
         f"accept_flips={accept_flips} argmax_flips={argmax_flips} canvas_flips={canvas_flips} "
         f"entropy_pcc={comparison.per_step_entropy_pcc} "
-        f"logits_pcc={logits_pcc} logits_argmax_agreement={logits_argmax_agreement}"
+        f"logits_pcc={logits_pcc} logits_argmax_agreement={logits_argmax_agreement} "
+        f"logits_top8_contains_ref_argmax={logits_top8_contains_ref_argmax} "
+        f"logits_mean_abs={logits_mean_abs} logits_max_abs={logits_max_abs} "
+        f"ref_top2_margin_mean={ref_top2_margin_mean}"
     )
 
     tt_adapter_base.reset()
