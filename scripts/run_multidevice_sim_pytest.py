@@ -76,6 +76,9 @@ def load_config(path: Path):
     cfg = yaml.safe_load(path.read_text())
     raw_defaults = cfg.get("defaults", {})
     defaults = {k: _resolve_default(v) for k, v in raw_defaults.items()}
+    # `{repo}` resolves to the tt-metal checkout root, for descriptors that ship in-tree
+    # (e.g. tests/tt_metal/tt_fabric/custom_mesh_descriptors/) rather than in craq-sim's data/.
+    defaults.setdefault("repo", str(REPO_DIR))
     topologies = []
     for t in cfg.get("topologies", []):
         t = dict(t)

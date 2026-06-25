@@ -61,10 +61,13 @@ topologies:
   - name: wh_t3k_allmmio_all_gather
     arch: wormhole_b0
     sim_so: "{sim_wh_so}"
+    # All-MMIO cluster (Nachiket's fix for the remote-chip CQ-drain hang). The mesh-graph
+    # descriptor is the (1,8) line that the existing t3000 all_gather test opens — it ships
+    # in the tt-metal tree, not craq-sim's data/, so it uses the {repo} placeholder.
     cluster_desc: "{craqsim_data}/wh/wormhole_t3k_all_mmio.yaml"
-    mesh_graph_desc: "{craqsim_data}/wh/wormhole_t3k_mesh_graph_descriptor.textproto"
-    mesh_shape: [2, 4]    # Phase 2 — confirm against the descriptor when WH all_gather is wired
+    mesh_graph_desc: "{repo}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto"
+    mesh_shape: [1, 8]    # matches test_minimal_all_gather_async.py's mesh_device=[(1,8)]
     fabric_config: FABRIC_1D
     applies_to_ops: [all_gather]
-    required: false       # Phase 2 — informational until WH all_gather is wired
+    required: true        # VALIDATED 2026-06-25: test_all_gather_async gather_dim_0/fabric_linear PASS on the WH all-MMIO sim
     extra_env: {}
