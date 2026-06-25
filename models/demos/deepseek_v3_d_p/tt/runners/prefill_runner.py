@@ -57,7 +57,7 @@ def _apply_manifest_env():
     sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
     sd("PREFILL_STANDALONE_CHUNKED_NCHUNKS", sum(u["n_chunks"] for u in users))
     sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
-    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u["kv_cache"] for u in users))
+    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u.get("kv_cache", "") for u in users))
 
     # Mode: default to pairwise
     mode = mig.get("mode") or "pairwise"
