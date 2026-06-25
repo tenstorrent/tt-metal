@@ -36,16 +36,27 @@ class TtLlamaEmbedding(LightweightModule):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = ttnn.reshape(x, ttnn.Shape((1, 1, 1, x.shape[-2] * x.shape[-1])))
+        use_decode_memcfg = x.shape[-1] <= 32
+        # Prefetcher (TG) decode embeds directly onto the 24-core ATTN input ring memcfg.
+        # The no-prefetcher (Blackhole) decode runs on the 16-core grid; the ring memcfg does not
+        # fit, and ttnn.embedding cannot reliably emit the width-sharded DECODE_RESIDUAL_MEMCFG
+        # directly. So embed to DRAM (correct values), then reshard to the residual layout the
+        # model's decode forward expects (same layout prepare_residual_tensor_decode produces).
+        reshard_decode = use_decode_memcfg and not self.args.use_prefetcher
+        if use_decode_memcfg and self.args.use_prefetcher:
+            out_memcfg = self.args.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+        else:
+            out_memcfg = ttnn.DRAM_MEMORY_CONFIG
         x = ttnn.embedding(
             x,
             self.weights,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=(
-                self.args.model_config["DECODE_RESIDUAL_MEMCFG"] if x.shape[-1] <= 32 else ttnn.DRAM_MEMORY_CONFIG
-            ),
+            memory_config=out_memcfg,
             dtype=ttnn.bfloat8_b
             if x.shape[-1] > 32
             else ttnn.bfloat16,  # Keep bfloat16 for decode, bfloat8_b for prefill
         )
         x = ttnn.reshape(x, ttnn.Shape((1, 1, x.shape[-2], x.shape[-1])))
+        if reshard_decode:
+            x = ttnn.to_memory_config(x, self.args.model_config["DECODE_RESIDUAL_MEMCFG"])
         return x

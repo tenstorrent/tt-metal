@@ -72,7 +72,7 @@ from tqdm import tqdm
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 102000000,
-            "fabric_config": True,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         }
     ],
     indirect=True,
@@ -271,8 +271,10 @@ def test_qwen_model_acc(
         ]
     )
 
-    # Get the first input tensors
-    _, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+    # Get the first input tensors. No-prefetcher (BH) decode uses the non-fused rotary op, which
+    # needs the simple get_rot_* tables (get_rm_rot_* is the fused-qk expanded layout and yields a
+    # wrong rotary at pos>0 on the non-fused op).
+    _, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
 
     ref_token = input_ids[0, 0].item()  # First token
     ref_token = torch.tensor([[ref_token]], dtype=torch.int32)
@@ -284,7 +286,7 @@ def test_qwen_model_acc(
     )
 
     def run_model():
-        rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
 
         tt_out = tt_model(
             decode_input,
@@ -339,7 +341,7 @@ def test_qwen_model_acc(
 
     # Reset the current position and output token tensors for the real decode run
     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
 
     ttnn.synchronize_device(mesh_device)
@@ -407,14 +409,10 @@ def test_qwen_model_acc(
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
             )[0, 0, 0, : model_args.vocab_size]
 
-        tt_argmax_token = ttnn.to_torch(
-            tt_out_tok[0],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device,
-                dims=(3, 1),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )[0, 0, 0, 0]
+        # The argmax token is replicated across the mesh, so read device 0's shard and flatten.
+        # This is rank-agnostic: the regular sampling kernel returns [1,1,1,32] while the
+        # force-argmax (Blackhole) path returns [1,1,32]; reshape(-1) handles both.
+        tt_argmax_token = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok[0])[0]).reshape(-1)[0]
 
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:

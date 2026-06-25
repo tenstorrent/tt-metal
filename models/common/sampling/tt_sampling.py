@@ -469,20 +469,37 @@ class TTSampling(LightweightModule):
                     f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
                     f"num_links={num_links}, topology={topology}"
                 )
-                x = ttnn.experimental.all_gather_async(
-                    x,
-                    persistent_output_buffer=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-                    num_links=num_links,
-                    memory_config=x.memory_config(),
-                    cluster_axis=cluster_axis,
-                    topology=topology,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    chunks_per_sync=self.argmax_chunks_per_sync,
-                    num_workers_per_link=self.argmax_num_workers_per_link,
-                    num_buffers_per_channel=2,
+                # Prefer the shared gather helper (line_all_gather / ttnn.all_gather) when the
+                # CCL stack exposes it or does not provide the async semaphore-handle API used
+                # below. The Galaxy TT_CCL falls into this case (it has no
+                # get_and_cycle_ag_semaphore_handles), so this keeps force-argmax working there.
+                use_line_gather = callable(self._line_all_gather) or not hasattr(
+                    self.tt_ccl, "get_and_cycle_ag_semaphore_handles"
                 )
+                if use_line_gather:
+                    x = self._perform_all_gather(
+                        x,
+                        dim=3,
+                        cluster_axis=cluster_axis,
+                        memory_config=x.memory_config(),
+                        num_links=num_links,
+                        buffer_key="SAMPLING",
+                    )
+                else:
+                    x = ttnn.experimental.all_gather_async(
+                        x,
+                        persistent_output_buffer=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                        num_links=num_links,
+                        memory_config=x.memory_config(),
+                        cluster_axis=cluster_axis,
+                        topology=topology,
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                        chunks_per_sync=self.argmax_chunks_per_sync,
+                        num_workers_per_link=self.argmax_num_workers_per_link,
+                        num_buffers_per_channel=2,
+                    )
             x_untilized = ttnn.untilize(x, use_multicore=True)
             tt_out_tok = ttnn.argmax(
                 x_untilized,

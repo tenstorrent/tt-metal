@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import pytest
 from loguru import logger
@@ -20,6 +21,35 @@ from models.common.utility_functions import (
 )
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+
+
+def _is_blackhole_galaxy():
+    forced = os.environ.get("QWEN_TEST_FORCE_ARCH", "").lower()
+    if forced in ("blackhole", "bh"):
+        return True
+    if forced in ("wormhole", "wormhole_b0", "wh"):
+        return False
+    try:
+        cluster_type = ttnn.cluster.get_cluster_type()
+        if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
+            return True
+        if cluster_type in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG):
+            return False
+    except Exception:
+        pass
+    arch = os.environ.get("ARCH_NAME", "")
+    if not arch:
+        try:
+            arch = ttnn.get_arch_name()
+        except Exception:
+            arch = ""
+    return "blackhole" in arch.lower()
+
+
+_IS_BLACKHOLE = _is_blackhole_galaxy()
+# Blackhole prefill runs column-axis (cluster_axis=1) collectives on device, which require a 2D-torus
+# fabric; Wormhole uses the original 1D ring path.
+_PREFILL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if _IS_BLACKHOLE else ttnn.FabricConfig.FABRIC_1D_RING
 
 
 @torch.no_grad()
@@ -54,7 +84,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": _PREFILL_FABRIC_CONFIG}],
     indirect=True,
 )
 def test_qwen_decoder_inference_prefill(
@@ -131,9 +161,17 @@ def test_qwen_decoder_inference_prefill(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
-    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill", is_qwen=True)
+    # Mirror llama_model.setup_prefill for the no-prefetcher (Blackhole) path: do not load the
+    # narrow prefetcher worker sub-device, so prefill ops run on the full compute grid. With the
+    # prefetcher enabled (Wormhole) we still build it so the worker sub-device matches production.
+    if model_args.use_prefetcher:
+        prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        worker_sub_device_id = prefetcher_setup.worker_sub_device_id
+    else:
+        prefetcher_setup = None
+        worker_sub_device_id = None
+    tt_ccl = TT_CCL(mesh_device, model_args, worker_sub_device_id, mode="prefill", is_qwen=True)
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
