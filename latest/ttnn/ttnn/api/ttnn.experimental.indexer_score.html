@@ -204,7 +204,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.experimental.indexer_score">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weights</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weights</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_len</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>DeepSeek-V3.2 DSA lightning-indexer scorer.</p>
@@ -226,6 +226,15 @@ L1; raise head_group_size (0 = all resident) for performance.</p></li>
 math_fidelity is honored (default: HiFi2, or LoFi when q and k
 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
 stay false (the custom LLK is validated for bf16 DEST half-sync).</p></li>
+<li><p><strong>cache_batch_idx</strong> – optional int. Selects the batch slot of a shared
+[B, 1, T, D] k cache (which may then be ND-sharded across DRAM
+banks). Re-applied each dispatch, so switching slots does not
+recompile.</p></li>
+<li><p><strong>kv_len</strong> – optional int. Valid prefix of a k allocated at its full T;
+the rest is masked out. Tile-aligned, in (0, T], with
+chunk_start_idx + Sq &lt;= kv_len. Re-applied each dispatch, so a
+serving loop growing kv_len (&lt;= T) reuses one program – no
+recompile. Only output columns [0, kv_len) are written.</p></li>
 </ul>
 </dd>
 </dl>
