@@ -30,8 +30,7 @@ def _structured_logits(length: int, vocab_size: int):
     """Logits with stable argmax and well-separated entropy ordering."""
     logits = torch.full((1, length, vocab_size), -4.0, dtype=torch.float32)
     token_ids = torch.arange(length) % vocab_size
-    sharpness = torch.full((length,), 0.25, dtype=torch.float32)
-    sharpness[-8:] = torch.linspace(1.8, 2.0, 8)
+    sharpness = torch.linspace(0.25, 2.0, length)
     logits[0, torch.arange(length), token_ids] = sharpness
     logits += torch.randn_like(logits) * 1.0e-3
     return logits
@@ -55,7 +54,7 @@ def test_single_denoise_step_matches_reference(device):
     gumbel_noise = torch.zeros_like(logits)
     noise_tokens = torch.randint(0, vocab_size, (1, length), dtype=torch.long)
     ref_entropy = S.token_entropy(logits, temperature=temperature)
-    accept_count = 1
+    accept_count = 96
     budget = _budget_for_accept_count(ref_entropy, accept_count)
     ref = S.denoise_step(
         logits,

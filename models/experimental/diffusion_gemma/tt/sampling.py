@@ -5,7 +5,7 @@
 
 The accuracy harness must validate the diffusion *decisions* — not just logits.
 Two of those decisions have **no entropy / −Σ p·log p computation anywhere in
-gemma4**, so they are net-new and built here on `ttnn.softmax/log/mul/sum` (+
+gemma4**, so they are net-new and built here on `ttnn.max/exp/log/div/mul/sum` (+
 `argmax`):
 
   * :func:`token_entropy` — per-position Shannon entropy ``H = −Σ p·log p`` of
@@ -22,10 +22,9 @@ device-vs-torch, including under **bfp8** where small-probability drift can flip
 accept/renoise (the whole reason the harness validates decisions, not logits).
 ``tests/test_device_entropy_harness.py`` measures both on QB2.
 
-Numerical note: ``−Σ p·log p`` is computed directly per the issue. For finite
-logits ``softmax`` is > 0, so ``log`` is finite; with extreme underflow add a
-small eps before ``log`` (the harness inputs do not underflow). A logsumexp form
-(``H = logsumexp(z) − Σ p·z``) avoids ``log(p)`` entirely if needed downstream.
+Numerical note: entropy is computed as ``H = logsumexp(z) − Σ softmax(z)·z``.
+This is algebraically equivalent to ``−Σ p·log p`` while avoiding ``log(p)``
+underflow and reducing accept-boundary flips at the 256-token canvas length.
 """
 
 from __future__ import annotations
@@ -46,20 +45,29 @@ def token_entropy(logits, temperature: float = 1.0):
     """Per-position Shannon entropy ``H = −Σ p·log p`` of ``softmax(logits / T)``.
 
     ``logits``: ``[..., vocab]`` (TILE_LAYOUT). Returns ``[..., 1]`` (reduced over
-    the vocab axis). Built on ``ttnn.softmax`` / ``log`` / ``mul`` / ``sum``.
+    the vocab axis). Uses the logsumexp form to avoid ``log(p)`` underflow.
     """
     z = temperature_scale(logits, temperature)
-    p = ttnn.softmax(z, dim=-1)
-    # +eps before log: at the production vocab (262144) a near-one-hot row underflows
-    # the non-peak probs to exact 0 in bf16, and log(0)=-inf -> 0*-inf = NaN. The eps
-    # floors log at ~-20.7 so the 0*log term is 0; bias is negligible (eps << any real p).
-    logp = ttnn.log(ttnn.add(p, 1.0e-9))
-    plogp = ttnn.multiply(p, logp)
-    neg_h = ttnn.sum(plogp, dim=-1, keepdim=True)  # Σ p·log p  (negative)
-    p.deallocate(True)
-    logp.deallocate(True)
-    plogp.deallocate(True)
-    return ttnn.neg(neg_h)  # H = −Σ p·log p
+    zmax = ttnn.max(z, dim=-1, keepdim=True)
+    shifted = ttnn.subtract(z, zmax)
+    exp_shifted = ttnn.exp(shifted)
+    sum_exp = ttnn.sum(exp_shifted, dim=-1, keepdim=True)
+    log_sum_exp = ttnn.log(sum_exp)
+    log_sum = ttnn.add(log_sum_exp, zmax)
+    probs = ttnn.div(exp_shifted, sum_exp)
+    expected_terms = ttnn.multiply(probs, z)
+    expected_z = ttnn.sum(expected_terms, dim=-1, keepdim=True)
+    entropy = ttnn.subtract(log_sum, expected_z)
+    zmax.deallocate(True)
+    shifted.deallocate(True)
+    exp_shifted.deallocate(True)
+    sum_exp.deallocate(True)
+    log_sum_exp.deallocate(True)
+    log_sum.deallocate(True)
+    probs.deallocate(True)
+    expected_terms.deallocate(True)
+    expected_z.deallocate(True)
+    return entropy  # H = logsumexp(z) - Σ softmax(z)·z
 
 
 def gumbel_max(logits, temperature: float, noise):
