@@ -496,14 +496,12 @@ class Attention(Module):
     def forward(
         self,
         *,
-        spatial: ttnn.Tensor | None = None,
-        prompt: ttnn.Tensor | None = None,
-        spatial_prompt_concat: ttnn.Tensor | None = None,
-        spatial_size: int | None = None,
-        spatial_sequence_length: int,
-        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        combined_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        sequence_1: ttnn.Tensor,
+        sequence_1_length: int,
+        sequence_2: ttnn.Tensor | None = None,
+        sequence_2_length: int = 0,
+        sequence_1_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        sequence_2_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         addcmul_spatial_residual: ttnn.Tensor | None = None,
         addcmul_spatial_gate: ttnn.Tensor | None = None,
         addcmul_prompt_residual: ttnn.Tensor | None = None,
@@ -515,25 +513,17 @@ class Attention(Module):
         Linear callers must all-gather first. addcmul_*_residual+gate fuse the
         out projection's residual+gate when both are provided.
         """
-        if spatial is not None:
-            assert len(spatial.shape) == 3
-        else:
-            assert len(spatial_prompt_concat.shape) == 3
-        if prompt is not None:
-            assert len(prompt.shape) == 3
-        for t in spatial_rope or ():
+
+        assert len(sequence_1.shape) == 3
+        if sequence_2 is not None:
+            assert len(sequence_2.shape) == 3
+        for t in sequence_1_rope or ():
             assert len(t.shape) == 4, f"rope tensors must be pre-shaped to (1, 1, seq, head_dim), got {t.shape}"
-        for t in prompt_rope or ():
+        for t in sequence_2_rope or ():
             assert len(t.shape) == 4, f"rope tensors must be pre-shaped to (1, 1, seq, head_dim), got {t.shape}"
 
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
-        is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
-
-        # When the prompt is sharded across SP, its q/k/v are gathered to the full prompt length
-        # for the joint SDPA (which requires the full joint stream), and the prompt attention
-        # output is re-sharded back across SP afterwards.
         shard_prompt = self.shard_prompt and self.parallel_config.sequence_parallel.factor > 1
 
         def _split_heads(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -543,142 +533,87 @@ class Attention(Module):
             )
             return out
 
-        # Rope tensors arrive pre-shaped as (1, 1, seq, head_dim); no per-call reshape needed.
-        trans_mat = self.trans_mat if (spatial_rope is not None or combined_rope is not None) else None
+        # Sequence 1 processing Typically spatial or spatial+prompt.
+        q_flat_c, k_flat_c, v_flat_c = self.to_qkv(
+            sequence_1,
+            compute_kernel_config=self.mm_compute_kernel_config,
+            parallel_config=self.parallel_config,
+            core_grid=self.get_core_grid(sequence_1.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
+            use_heuristic_mmcfg=True,
+        )
 
-        if spatial_prompt_concat is not None:
-            # Single AGMM for both streams.
-            q_flat_c, k_flat_c, v_flat_c = self.to_qkv(
-                spatial_prompt_concat,
+        # Combined RoPE: concat spatial and prompt tensors along the seq dim (dim=2).
+        sequence_1_cos, sequence_1_sin = sequence_1_rope
+        trans_mat = self.trans_mat if sequence_1_rope is not None else None
+
+        # Single norm_q/norm_k/v on the full combined [spatial+prompt] shard.
+        q = self.norm_q(
+            ttnn.unsqueeze(q_flat_c, 0),
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=sequence_1_cos,
+            rope_sin=sequence_1_sin,
+            trans_mat=trans_mat,
+            per_head_norm=self.per_head_norm,
+        )
+
+        k = self.norm_k(
+            ttnn.unsqueeze(k_flat_c, 0),
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=sequence_1_cos,
+            rope_sin=sequence_1_sin,
+            trans_mat=trans_mat,
+            per_head_norm=self.per_head_norm,
+        )
+
+        v = _split_heads(v_flat_c)  # [1, H, M_s+M_p, D]
+
+        # No joint stream — dummies handled in the post-processing block below.
+        add_q = add_k = add_v = self.dummy_joint_input
+        persistent_joint_k = persistent_joint_v = None
+
+        if self.add_qkv_proj is not None and sequence_2 is not None:
+            # Rope tensors arrive pre-shaped as (1, 1, seq, head_dim); no per-call reshape needed.
+            prompt_cos = sequence_2_rope[0] if sequence_2_rope is not None else None
+            prompt_sin = sequence_2_rope[1] if sequence_2_rope is not None else None
+            prompt_trans_mat = self.trans_mat if sequence_2_rope is not None else None
+
+            add_q_flat, add_k_flat, add_v_flat = self.add_qkv_proj(
+                sequence_2,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=self.parallel_config,
-                core_grid=self.get_core_grid(
-                    spatial_prompt_concat.shape[-2], self.mesh_device.compute_with_storage_grid_size()
-                ),
+                core_grid=self.get_core_grid(sequence_2.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
                 use_heuristic_mmcfg=True,
             )
-
-            # Combined RoPE: concat spatial and prompt tensors along the seq dim (dim=2).
-            combined_cos, combined_sin = combined_rope
-
-            # Single norm_q/norm_k/v on the full combined [spatial+prompt] shard.
-            q = self.norm_q(
-                ttnn.unsqueeze(q_flat_c, 0),
+            add_q = self.norm_added_q(
+                ttnn.unsqueeze(add_q_flat, 0),
                 num_heads_per_device=self.n_local_heads,
-                rope_cos=combined_cos,
-                rope_sin=combined_sin,
-                trans_mat=trans_mat,
+                rope_cos=prompt_cos,
+                rope_sin=prompt_sin,
+                trans_mat=prompt_trans_mat,
                 per_head_norm=self.per_head_norm,
             )
-
-            k = self.norm_k(
-                ttnn.unsqueeze(k_flat_c, 0),
+            add_k = self.norm_added_k(
+                ttnn.unsqueeze(add_k_flat, 0),
                 num_heads_per_device=self.n_local_heads,
-                rope_cos=combined_cos,
-                rope_sin=combined_sin,
-                trans_mat=trans_mat,
+                rope_cos=prompt_cos,
+                rope_sin=prompt_sin,
+                trans_mat=prompt_trans_mat,
                 per_head_norm=self.per_head_norm,
             )
+            add_v = _split_heads(add_v_flat)
 
-            v = _split_heads(v_flat_c)  # [1, H, M_s+M_p, D]
-
-            # No joint stream — dummies handled in the post-processing block below.
-            add_q = add_k = add_v = None
-
-        else:
-            q_flat, k_flat, v_flat = self.to_qkv(
-                spatial,
-                compute_kernel_config=self.mm_compute_kernel_config,
-                parallel_config=self.parallel_config,
-                core_grid=self.get_core_grid(spatial.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
-                use_heuristic_mmcfg=True,
-            )
-            q = self.norm_q(
-                ttnn.unsqueeze(q_flat, 0),
-                num_heads_per_device=self.n_local_heads,
-                rope_cos=spatial_rope[0],
-                rope_sin=spatial_rope[1],
-                trans_mat=trans_mat,
-                per_head_norm=self.per_head_norm,
-            )
-            k = self.norm_k(
-                ttnn.unsqueeze(k_flat, 0),
-                num_heads_per_device=self.n_local_heads,
-                rope_cos=spatial_rope[0],
-                rope_sin=spatial_rope[1],
-                trans_mat=trans_mat,
-                per_head_norm=self.per_head_norm,
-            )
-            v = _split_heads(v_flat)
-
-            if self.add_qkv_proj is not None and prompt is not None:
-                # Rope tensors arrive pre-shaped as (1, 1, seq, head_dim); no per-call reshape needed.
-                prompt_cos = prompt_rope[0] if prompt_rope is not None else None
-                prompt_sin = prompt_rope[1] if prompt_rope is not None else None
-                prompt_trans_mat = self.trans_mat if prompt_rope is not None else None
-
-                add_q_flat, add_k_flat, add_v_flat = self.add_qkv_proj(
-                    prompt,
-                    compute_kernel_config=self.mm_compute_kernel_config,
-                    parallel_config=self.parallel_config,
-                    core_grid=self.get_core_grid(prompt.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
-                    use_heuristic_mmcfg=True,
-                )
-                add_q = self.norm_added_q(
-                    ttnn.unsqueeze(add_q_flat, 0),
-                    num_heads_per_device=self.n_local_heads,
-                    rope_cos=prompt_cos,
-                    rope_sin=prompt_sin,
-                    trans_mat=prompt_trans_mat,
-                    per_head_norm=self.per_head_norm,
-                )
-                add_k = self.norm_added_k(
-                    ttnn.unsqueeze(add_k_flat, 0),
-                    num_heads_per_device=self.n_local_heads,
-                    rope_cos=prompt_cos,
-                    rope_sin=prompt_sin,
-                    trans_mat=prompt_trans_mat,
-                    per_head_norm=self.per_head_norm,
-                )
-                add_v = _split_heads(add_v_flat)
-
-            else:
-                add_q = add_k = add_v = None
-
-        # When the concat path is used, q/k/v cover [spatial+prompt]; widen logical_n accordingly.
-        if spatial_prompt_concat is not None:
-            prompt_shard_len = spatial_prompt_concat.shape[-2] - spatial_size
-            combined_logical_n = (
-                spatial_sequence_length + prompt_shard_len * self.parallel_config.sequence_parallel.factor
-            )
-        else:
-            combined_logical_n = spatial_sequence_length
-
-        # Post-processing for the prompt stream: runs for both the merged path
-        # (use_spatial_weights_for_prompt=True) and the separate-weights path above.
-        if add_q is not None:
             if self.context_head_factors is not None:
                 add_q = add_q * self.context_head_factors.data
 
             if shard_prompt:
-                logical_l = add_k.shape[2] * self.parallel_config.sequence_parallel.factor
                 persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
-            else:
-                logical_l = 0
-                persistent_joint_k = None
-                persistent_joint_v = None
-        else:
-            add_q = add_k = add_v = self.dummy_joint_input
-            logical_l = 0
-            persistent_joint_k = None
-            persistent_joint_v = None
 
         if self.ring_sdpa_worker_grid is None:
-            self.ring_sdpa_worker_grid = self.get_ring_sdpa_core_grid(combined_logical_n)
+            self.ring_sdpa_worker_grid = self.get_ring_sdpa_core_grid(sequence_1_length)
 
         if self.parallel_config.sequence_parallel.factor > 1:
-            spatial, prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
                 v,
@@ -692,9 +627,9 @@ class Attention(Module):
                     v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),
                 joint_strategy="rear",
-                logical_n=combined_logical_n,
-                logical_l=logical_l,
-                program_config=self.get_ring_sdpa_program_config(combined_logical_n),
+                logical_n=sequence_1_length,
+                logical_l=sequence_2_length,
+                program_config=self.get_ring_sdpa_program_config(sequence_1_length),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -711,10 +646,10 @@ class Attention(Module):
             )
         else:
             assert (
-                spatial_sequence_length == spatial.shape[1]
+                sequence_1_length == spatial.shape[1]
             ), "spatial sequence must not be padded without sequence parallelism"
 
-            spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
+            spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(
                 q,
                 k,
                 v,
@@ -727,17 +662,29 @@ class Attention(Module):
             )
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
-        spatial = self._project_out(
-            spatial, self.to_out, addcmul_spatial_residual, addcmul_spatial_gate, is_ring, tp_axis
-        )
-
-        if prompt is not None and prompt.shape[-2] > 0:
-            prompt = ttnn.transformer.concatenate_heads(prompt)
-            prompt = self._project_out(
-                prompt, self.to_add_out, addcmul_prompt_residual, addcmul_prompt_gate, is_ring, tp_axis
+        if self.to_out is not None:
+            spatial = self.to_out.forward_fused_addcmul(
+                x=spatial,
+                addcmul_residual=addcmul_spatial_residual,
+                addcmul_gate=addcmul_spatial_gate,
+                parallel_config=self.parallel_config,
+                core_grid=self.get_core_grid(spatial.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
             )
 
-        return spatial, prompt
+        if sequence_2 is not None:
+            sequence_2 = ttnn.transformer.concatenate_heads(sequence_2)
+            if self.to_add_out is not None:
+                sequence_2 = self.to_add_out.forward_fused_addcmul(
+                    x=sequence_2,
+                    addcmul_residual=addcmul_prompt_residual,
+                    addcmul_gate=addcmul_prompt_gate,
+                    parallel_config=self.parallel_config,
+                    core_grid=self.get_core_grid(
+                        sequence_2.shape[-2], self.mesh_device.compute_with_storage_grid_size()
+                    ),
+                )
+
+        return spatial, sequence_2
 
     @classmethod
     def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int, k_chunk_size: int = 512) -> int:
