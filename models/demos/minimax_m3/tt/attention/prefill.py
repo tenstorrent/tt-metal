@@ -4,6 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
+from .dense_sp import dense_sp_attention_nocache
 from .msa import index_branch_forward, msa_sp_attention_sharded
 from .operations import (
     apply_allgather_and_slice,
@@ -130,6 +131,24 @@ def prefill_forward(
             tt_q, tt_k, tt_v, tt_iq, tt_ik,
             mesh_config=mesh_config, ccl_manager=ccl_manager, cached_len=0, s_local=seq_len,
             scale=config.head_dim**-0.5, num_groups=num_local_kv_heads,
+        )
+    elif config.sequence_parallel:
+        # SP dense (first chunk, no prior cache): ring_joint over the chunk's own SP-sharded K/V, each
+        # device's query shard attending the full sequence reconstructed across the SP ring. q/k/v are
+        # the per-device shards (seq_len = S/sp rows). logical_n = full sequence = seq_len * sp.
+        sp = mesh_device.shape[mesh_config.sp_axis]
+        grid = mesh_device.compute_with_storage_grid_size()
+        sp_prog = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
+            q_chunk_size=128, k_chunk_size=512, exp_approx_mode=False,  # Pavle's minimax3_gqa_causal_perf
+        )
+        sp_kcfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+        )
+        tt_sdpa_out = dense_sp_attention_nocache(
+            tt_q, tt_k, tt_v, mesh_config=mesh_config, ccl_manager=ccl_manager,
+            logical_n=seq_len * sp, n_kv=num_local_kv_heads, head_dim=config.head_dim,
+            scale=config.head_dim**-0.5, program_config=sp_prog, compute_kernel_config=sp_kcfg,
         )
     else:
         tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(

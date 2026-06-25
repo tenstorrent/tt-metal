@@ -17,6 +17,8 @@ tests/unit/test_ring_joint_cache_read_sp_vs_ref.py (PCC 0.99994); this is that m
 model forward. Perf config q_chunk=128 / k_chunk=512 (Pavle's minimax3_gqa_causal_perf).
 """
 
+import torch
+
 import ttnn
 
 
@@ -97,5 +99,40 @@ def dense_sp_attention(
         is_balanced=False,
         kv_cache_batch_idx=slot_idx,
         kv_actual_isl=kv_actual,
+    )
+    return out
+
+
+def dense_sp_attention_nocache(
+    tt_q, tt_k, tt_v, *, mesh_config, ccl_manager, logical_n, n_kv, head_dim, scale, program_config, compute_kernel_config
+):
+    """First-chunk dense SP attention: ring_joint over the chunk's OWN SP-sharded K/V (NO persistent cache).
+
+    Each device's query shard attends to the full `logical_n` sequence reconstructed across the SP ring
+    (grouped V, no inflation, is_balanced=False). For the first prefill chunk where there's no prior
+    cache; multi-chunk accumulation uses dense_sp_attention (cache-read). Validated op-level by
+    tests/unit/test_ring_joint_sp_vs_ref.py (PCC 0.99998). Returns the per-device query-shard output.
+    """
+    mesh_device = ccl_manager.mesh_device
+    rows, cols = tuple(mesh_device.shape)
+    sp_axis, tp_axis = mesh_config.sp_axis, mesh_config.tp_axis
+    pbuf_dims = [None, None]
+    pbuf_dims[tp_axis] = 1  # gathered full-seq buffer: heads on TP cols, seq replicated across SP
+
+    def pbuf():
+        return ttnn.from_torch(
+            torch.zeros(1, n_kv, logical_n, head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            device=mesh_device, mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=pbuf_dims),
+        )
+
+    out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_q, tt_k, tt_v, None, None, None,
+        persistent_output_buffer_k=pbuf(), persistent_output_buffer_v=pbuf(),
+        joint_strategy="rear", logical_n=logical_n, program_config=program_config,
+        compute_kernel_config=compute_kernel_config, dim=2,
+        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
+        num_links=ccl_manager.num_links, cluster_axis=sp_axis, mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear, ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset,
+        use_column_major_ccl=True, is_causal=True, scale=scale, is_balanced=False,
     )
     return out
