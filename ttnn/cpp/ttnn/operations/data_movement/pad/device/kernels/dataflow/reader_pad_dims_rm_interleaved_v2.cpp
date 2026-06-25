@@ -30,9 +30,18 @@ inline __attribute__((always_inline)) void read_input_stick_into_l1(
     uint32_t l1_write_addr,
     const uint32_t num_input_pages_in_row,
     const uint32_t stick_size_bytes) {
-    const uint32_t stick_id = i_page / num_input_pages_in_row;
-    tt::data_movement::common::noc_async_read_sharded(
-        noc, l1_write_addr, s, stick_id, /*offset=*/0, /*size=*/stick_size_bytes);
+    if (num_input_pages_in_row == 1) {
+        // Width fits in a single page: index the accessor with the flat page id directly.
+        // `noc_async_read_sharded` derives pages-per-row from the (rank-squeezed) dspec shape,
+        // which is wrong when an outer dim is sharded and the width is a single page (the
+        // width-page dim gets squeezed away and an inner dim is mistaken for the row width).
+        noc.async_read(
+            s, CoreLocalMem<uint32_t>(l1_write_addr), stick_size_bytes, {.page_id = i_page, .offset_bytes = 0}, {});
+    } else {
+        const uint32_t stick_id = i_page / num_input_pages_in_row;
+        tt::data_movement::common::noc_async_read_sharded(
+            noc, l1_write_addr, s, stick_id, /*offset=*/0, /*size=*/stick_size_bytes);
+    }
     i_page += num_input_pages_in_row;
 }
 
