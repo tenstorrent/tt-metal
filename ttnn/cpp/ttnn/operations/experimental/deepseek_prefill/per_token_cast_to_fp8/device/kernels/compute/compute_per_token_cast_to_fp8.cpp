@@ -49,6 +49,10 @@ void kernel_main() {
     constexpr uint32_t block_wt = block_w / tile_w;              // BlockWt
     constexpr uint32_t block_ht = get_compile_time_arg_val(12);  // BlockHt (tile-rows per block)
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
+    // Tiles processed per tile_regs acquire for abs/divide. Must divide tiles_per_block.
+    // Set to tiles_per_block (with dst_full_sync_en) to batch the whole block in one acquire,
+    // or to block_wt (half-sync) to keep math<->pack double-buffering across tile-rows.
+    constexpr uint32_t acq_tiles = get_compile_time_arg_val(13);
 
     uint32_t num_blocks = get_arg_val<uint32_t>(0);  // block_ht*tile_h x 128 blocks for this core
 
@@ -86,17 +90,19 @@ void kernel_main() {
         copy_tile_init(cb_tile);
         abs_tile_init();
         cb_reserve_back(cb_abs, tiles_per_block);
-        tile_regs_acquire();
-        for (uint32_t t = 0; t < tiles_per_block; ++t) {
-            copy_tile(cb_tile, t, t);
-            abs_tile(t);
+        for (uint32_t c = 0; c < tiles_per_block; c += acq_tiles) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < acq_tiles; ++j) {
+                copy_tile(cb_tile, c + j, j);
+                abs_tile(j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < acq_tiles; ++j) {
+                pack_tile(j, cb_abs);
+            }
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t t = 0; t < tiles_per_block; ++t) {
-            pack_tile(t, cb_abs);
-        }
-        tile_regs_release();
         cb_push_back(cb_abs, tiles_per_block);
 
         // ----- 2b. reduce -> per-row amax -> scale + 1/scale, all rows under one acquire -----
@@ -146,18 +152,20 @@ void kernel_main() {
         mul_bcast_cols_init_short(cb_tile, cb_inv_scale_tiles);
         cb_wait_front(cb_inv_scale_tiles, block_ht);
         cb_reserve_back(cb_out_tile, tiles_per_block);
-        tile_regs_acquire();
-        for (uint32_t r = 0; r < block_ht; ++r) {
-            for (uint32_t k = 0; k < block_wt; ++k) {
-                mul_tiles_bcast_cols(cb_tile, cb_inv_scale_tiles, r * block_wt + k, r, r * block_wt + k);
+        for (uint32_t c = 0; c < tiles_per_block; c += acq_tiles) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < acq_tiles; ++j) {
+                const uint32_t gt = c + j;         // global tile index in the block
+                const uint32_t r = gt / block_wt;  // its tile-row -> its 1/scale tile
+                mul_tiles_bcast_cols(cb_tile, cb_inv_scale_tiles, gt, r, j);
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < acq_tiles; ++j) {
+                pack_tile(j, cb_out_tile);
+            }
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t t = 0; t < tiles_per_block; ++t) {
-            pack_tile(t, cb_out_tile);
-        }
-        tile_regs_release();
         cb_push_back(cb_out_tile, tiles_per_block);
         cb_pop_front(cb_tile, tiles_per_block);
         cb_pop_front(cb_inv_scale_tiles, block_ht);

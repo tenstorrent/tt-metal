@@ -81,6 +81,11 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     const uint32_t block_wt = block_w / tile_w;  // BlockWt: tiles across the 128-wide block
     constexpr uint32_t block_ht = 2;             // BlockHt: tile-rows batched per block
     const uint32_t tiles_per_block = block_ht * block_wt;
+    // Fastest config (measured): block_ht=2 amortizes per-block init/reconfig over 2 tile-rows, and
+    // half-sync (dst_full_sync=false, acq_tiles=block_wt=4) keeps math<->pack double-buffering across
+    // tile-rows. Batching all 8 tiles in one acquire (dst_full_sync=true) was measurably slower.
+    const bool dst_full_sync = false;
+    const uint32_t acq_tiles = dst_full_sync ? tiles_per_block : block_wt;
 
     const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128
     const uint32_t in_elem_bytes = input.element_size();
@@ -204,7 +209,8 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         clamp_max_bits,
         inv_e4m3_max_bits,
         tile_w,
-        block_ht};
+        block_ht,
+        acq_tiles};
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     KernelHandle compute_kernel_id = CreateKernel(
@@ -212,7 +218,7 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/"
         "compute_per_token_cast_to_fp8.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .dst_full_sync_en = true, .compile_args = compute_ct_args});
+        ComputeConfig{.fp32_dest_acc_en = true, .dst_full_sync_en = dst_full_sync, .compile_args = compute_ct_args});
 
     // Each core owns rows [row_offset, row_offset+rows_for_core). Its 128-element scale blocks
     // form a flat stream read/written in tile_h-block batches.
