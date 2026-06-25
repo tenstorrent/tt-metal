@@ -108,9 +108,14 @@ def _patch_model_args(
 
 
 class Gemma4Generator(Generator):
+    # Kept in parity with ``Gemma4ForCausalLM.model_capabilities`` (the vLLM
+    # bridge that the TT platform actually reads). Async decode is supported:
+    # decode delegates to ``Generator.decode_forward`` (honours
+    # ``read_from_device=False``) and inherits ``read_decode_output`` with
+    # ``async_read=True``.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        "supports_async_decode": True,
     }
 
     def __init__(self, *args, **kwargs):
