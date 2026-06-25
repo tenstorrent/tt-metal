@@ -895,9 +895,9 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     return graph_json;
 }
 
-bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return block_alloc; }
 
-bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
+bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* /*buffer*/) { return block_alloc; }
 
 bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }
 
@@ -913,7 +913,11 @@ bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::Mesh
 
 bool ProcessorHooks::hook_program(tt::tt_metal::Program*) { return do_block; }
 
-void ProcessorHooks::set_block(bool block) { do_block = block; }
+void ProcessorHooks::set_block(bool block) {
+    do_block = block;
+    block_alloc = block;
+}
+void ProcessorHooks::set_block_alloc(bool block) { block_alloc = block; }
 bool ProcessorHooks::get_block() const { return do_block; }
 
 ScopedGraphCapture::ScopedGraphCapture(GraphProcessor::RunMode mode) : is_active(true) {

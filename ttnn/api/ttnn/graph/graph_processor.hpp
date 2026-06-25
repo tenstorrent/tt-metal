@@ -29,7 +29,10 @@ using node_id = int;
 
 class ProcessorHooks : public tt::tt_metal::IGraphHooks {
 private:
-    bool do_block = false;
+    bool do_block = false;     // gates dispatch / write / read (program execution)
+    bool block_alloc = false;  // gates allocate / deallocate, separable from do_block so a
+                               // "real-alloc" collect can assign real addresses (block_alloc=false)
+                               // while still blocking dispatch (do_block=true).
 
 public:
     ProcessorHooks() = default;
@@ -49,7 +52,8 @@ public:
 
     ~ProcessorHooks() override = default;
 
-    void set_block(bool block);
+    void set_block(bool block);        // sets BOTH do_block and block_alloc
+    void set_block_alloc(bool block);  // sets only block_alloc (for real-alloc collect)
 
     bool get_block() const;
 };
