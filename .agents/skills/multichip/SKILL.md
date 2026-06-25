@@ -19,6 +19,12 @@ A good multichip design needs to keep two objectives in mind: apply as much comp
 
 The next step will stack decoders together, so we should ensure that the decoder's output and input formats are the same as each other, but they do NOT need to be the same as the single-chip's inputs/outputs. Clearly given our goal, it's absolutely fine and in many cases desirable for the multichip implementation to maintain chip-sharded activations on its inputs and outputs, something the single-chip version cannot do. The right thing to do in this case is to modify the test code itself to provide the correct sharding for the multi-chip decoder as in the final model as long as this will only need to be performed once at the entry/exit to the entire model and not at the boundary to every layer. If there are multiple decoder layer types it's probably important that their input+output shardings and datatypes are compatible with each other, however! You may need to make other changes to the single-chip implementation's ops and configurations as well - for example we have both sharded and replicated variants of norms available. Think everything through and take nothing for granted as fixed or unalterable.
 
+Before committing to a hand-written attention, MLP, expert, or residual path, compare the model's dataflow to the reusable modules listed below. If a common module cannot be used directly, write down the exact contract mismatch and still reproduce the relevant optimization family in model-local code. A first import error, shape error, or helper API mismatch is not enough to discard a topology-critical optimization; adapt shapes, layouts, padding, weight packing, or the residual contract and retry, or use `$autofix`.
+
+For row-parallel output projections and other "local result then collective" boundaries, make a small topology table before coding the final path. Include at least: local matmul plus all-reduce/full gather, reduce-scatter plus delayed gather, fused all-gather-matmul where the next matmul consumes gathered input, fused matmul plus reduce-scatter/all-reduce where supported, and a residual-sharded variant. For each row record the residual layout before/after, the next op that consumes it, expected collective bytes, activation/CCL dtype, persistent-buffer plan, and why it should or should not win.
+
+Do not make the current replicated residual contract the only measured contract. A path that does `reduce-scatter -> all-gather` immediately may be correct, but it mostly recreates the communication the fused path was meant to avoid. If the candidate produces a sharded or fractured residual, adapt the next norm, residual add, attention input, MLP input, or test fixture so that layout can be consumed directly. For standalone decoder tests, it is fine to gather only at the test boundary to compare against the reference, but do not include that boundary gather inside the measured decoder layer unless the full stacked model would also pay it at every layer.
+
 The typical advice is "get correctness before chasing speed" but do not let this mislead you: our only acceptable goal is an extremely high-performance implementation. Pursuing the correctness of a design that clearly introduces unnecessary communication patterns may not be a good use of time. To evaluate correctness we recommend comparing multi-chip TTNN output to the single-chip TTNN baseline with identical synthetic or real weights, inputs, page tables, and positions. This isolates sharding and collective bugs from HF-vs-TTNN numerical differences.
 
 Treat RMSNorm, KV-cache layout, head ownership, bias placement, padding/slicing, and collective axes as first-class correctness questions. Most multi-chip bugs live there. If the failure involves subtle mesh layout, CCL, semaphore, cache, or routed-expert behavior and ordinary component comparisons are not enough, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix.
@@ -63,6 +69,8 @@ Prefer the GPT-OSS structured approach and `models/common` TTTv2 modules:
 
 Use these as the first implementation references. If they do not fit the target model, write model-local code in the same structured style: config dataclasses, explicit mesh helpers, setup-time weight conversion, and straight-line runtime forwards.
 
+Do not treat "does not fit" as a stopping point. The important reusable knowledge is the contract: local head ownership, sharded residuals, distributed norms, fused all-gather plus output projection, reduce-scatter outputs, persistent CCL buffers, and setup-time weight transformation. If the target model needs custom math, preserve these performance contracts where the math allows it.
+
 ## Galaxy As Evidence, Not Template
 
 `models/demos/llama3_70b_galaxy/` is highly optimized and useful for understanding where collectives belong, but it is too model-specific to copy into this skill's default path.
@@ -101,6 +109,10 @@ For 1D meshes up to 8 devices, start with the common TP pattern used in LLM impl
 - W2: row/input sharding over intermediate dimension, then reduce-scatter or all-reduce to restore residual layout.
 
 The output of each decoder layer must match the input layout contract. Avoid a design that requires an extra gather or reshard between stacked decoder layers unless evidence shows it is faster overall.
+
+Do not pick all-reduce simply because it gives a convenient replicated tensor. For each row-parallel output, compare replicated residual and sharded residual contracts. A replicated contract can simplify correctness, but a sharded contract can remove or shrink collectives across the full stack. The correct choice is the fastest measured whole-layer path that can be stacked without an extra boundary conversion.
+
+When a sharded residual contract is hard to wire through the full layer, build the smallest shape-faithful probe that includes the producing op and the next consuming op. For example, do not stop at "fused matmul plus reduce-scatter runs" or "fused matmul plus reduce-scatter followed by immediate all-gather is slow"; test whether the next norm, residual add, attention, or MLP boundary can consume the reduced layout. Use `$autofix` if the first layout/API attempt fails.
 
 ## RMSNorm Correctness
 
