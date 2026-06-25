@@ -752,31 +752,52 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 
-    # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
     ack_channel = None
-    if single_rank:
-        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
+    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+
+    # Migration KV-chunk-table publish: runs for ANY rank count. Every rank participates in the
+    # cross-host all-gather that merges the table, but only the first rank builds it and sends it to
+    # the worker (the gating lives inside publish_kv_chunk_table_and_wait_ready, mirroring tt-blaze
+    # where all ranks all-gather but only mesh 0 builds + sends). Previously single-rank only.
+    if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
+        if is_first_rank:
             # Clear a stale DONE sentinel from a prior run so the validator can't read its pairs.
+            # First rank only -- it owns the publish + validation handshake.
             _done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
             if os.path.exists(_done_file):
                 logger.warning(f"[migration] removing stale DONE sentinel {_done_file} from a prior run")
                 os.remove(_done_file)
 
-            # Full migration bring-up: the runtime builds the model-specific KV chunk table from
-            # its device cache layout; the runner publishes it (+ device map) to the worker and blocks
-            # on WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
-            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-            wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-            runtime.build_kv_chunk_table(kv_cache, path=table_path)
-            publish_table_and_wait_ready(
-                mesh_device=mesh_device,
-                mesh_shape=GLOBAL_MESH_SHAPE,
-                table_path=table_path,
-                wait_ready_timeout_ms=wait_ready_ms,
-            )
+        # Full migration bring-up: publish the KV chunk table + device map, then block on
+        # WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
+        # COLLECTIVE: all ranks must call this so the table all-gather completes; only the first rank
+        # attaches to the worker and sends.
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import publish_kv_chunk_table_and_wait_ready
 
-        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler reads the delta.
+        # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
+        # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
+        # rank's range (same split the runtime/cache was built with).
+        first_layer_idx, num_my_layers = compute_layer_split(NUM_LAYERS, num_ranks)[rank]
+        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
+        publish_kv_chunk_table_and_wait_ready(
+            mesh_device=mesh_device,
+            kvpe_cache=runtime.kvpe_cache,
+            seq_len=MAX_SEQ_LEN,
+            num_layers=NUM_LAYERS,
+            mesh_shape=GLOBAL_MESH_SHAPE,
+            sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
+            num_users=NUM_USERS,
+            chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
+            path=table_path,
+            first_layer_idx=first_layer_idx,
+            num_my_layers=num_my_layers,
+            wait_ready_timeout_ms=wait_ready_ms,
+        )
+
+    # Per-layer LayerAck: single-rank only for now (pipelined migration is future work).
+    if single_rank:
+        # The runner bumps a counter once per layer; the scheduler reads the delta.
         ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
         _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
         if os.path.exists(_stale_ack_shm):
