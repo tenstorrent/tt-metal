@@ -35,6 +35,7 @@ struct SocketPeerDescriptor {
     DeviceAddr config_buffer_address = 0;
     DeviceAddr data_buffer_address = 0;
     multihost::Tag exchange_tag = multihost::Tag{0};
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
 };
 
 // Create send/receive socket config buffers
@@ -77,11 +78,6 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context,
     const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
-
-std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
-    const SocketConfig& config,
-    const std::shared_ptr<MeshDevice>& sender_device = nullptr,
-    const std::shared_ptr<MeshDevice>& receiver_device = nullptr);
 
 std::vector<multihost::Rank> get_ranks_for_mesh_id(
     tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
