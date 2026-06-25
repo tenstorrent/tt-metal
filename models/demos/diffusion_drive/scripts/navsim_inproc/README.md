@@ -131,9 +131,11 @@ chunk** (not one shared instance).
 - **`worker=single_machine_thread_pool`** (**fastest**): the N worker chunks build
   features in parallel and funnel every forward to a **process-wide singleton**
   owning the device on one thread. This overlaps the CPU-bound feature-building
-  with the serialized device forward. Measured on a 2000-scene navtest: **237 s vs
-  377 s sequential = 1.59×** (118.5 vs 188.5 ms/scene), PDM **0.8678** (matches
-  sequential 0.8669/0.8676 → correct).
+  with the serialized device forward. Measured — **full navtest (12146 scenes):
+  25m53s, PDM 0.878922** (clean exit 0; matches the sequential baseline 0.878902
+  → correct at scale), **~2.1× faster** than the eager-sequential full run
+  (~54 min). Same-conditions 2000-scene A/B: **237 s vs 377 s sequential-traced =
+  1.59×** (118.5 vs 188.5 ms/scene).
   ```bash
   python …/run_pdm_score.py … worker=single_machine_thread_pool …
   ```
