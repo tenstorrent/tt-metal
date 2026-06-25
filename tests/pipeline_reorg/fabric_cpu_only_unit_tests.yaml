@@ -1,6 +1,6 @@
 # Fabric CPU-only unit test matrix (mock cluster / tt-run; no hardware).
 #
-# Each entry: name, cmd, skus, team, arch, owner_id.
+# Each entry: id, name, cmd, skus, team, arch, owner_id.
 # Commands are kept in sync with tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh.
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> unit).
 
