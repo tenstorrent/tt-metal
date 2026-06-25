@@ -164,6 +164,59 @@ def _pws_B(device, w_kn, n_blocks):
     return ttnn.from_torch(br, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc, dtype=ttnn.bfloat8_b)
 
 
+def _mm1d_pcfg(m_tiles, k_tiles, n_tiles, grid_x=8, grid_y=8, dst_budget=8):
+    """1D width-sharded matmul program config for the small-M (decode) regime.
+
+    At M=32 (1 tile) a default 2D matmul wastes grid rows (only m_tiles of grid_y get
+    work). This spreads N across many cores and multicasts the activation (mcast_in0),
+    matching the production tuning -- the qkv/o/gate/up/down projections go from ~24
+    cores to 60-120. Mirrors tt_symbiote's build_matmul_pcfg 1D branch. Returns None if
+    the shape doesn't fit the small-M criterion (caller keeps the default matmul)."""
+    total = grid_x * grid_y
+    if not (m_tiles * 4 <= grid_y and n_tiles >= total // 4):
+        return None
+    num_cores = min(total, n_tiles)
+    while num_cores > total // 2 and n_tiles % num_cores != 0:
+        num_cores -= 1
+    if n_tiles % num_cores != 0:
+        num_cores = total
+        per_core_N = (n_tiles + num_cores - 1) // num_cores
+    else:
+        per_core_N = n_tiles // num_cores
+    in0_bw = 16
+    while in0_bw > 1 and in0_bw * per_core_N > 32:
+        in0_bw //= 2
+    while k_tiles % in0_bw != 0 and in0_bw > 1:
+        in0_bw //= 2
+    in0_bw = max(in0_bw, 1)
+    osw = min(per_core_N, dst_budget)
+    while osw > 1 and per_core_N % osw != 0:
+        osw -= 1
+    osh = min(m_tiles, max(1, dst_budget // osw))
+    while osh > 1 and m_tiles % osh != 0:
+        osh -= 1
+    cfg_gx = min(grid_x, num_cores)
+    cfg_gy = (num_cores + cfg_gx - 1) // cfg_gx
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cfg_gx, cfg_gy),
+        in0_block_w=in0_bw,
+        out_subblock_h=osh,
+        out_subblock_w=osw,
+        per_core_M=m_tiles,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+MT = M // 32
+_QKV_PC = _mm1d_pcfg(MT, W // 32, QKV_OUT // 32)  # 1024 -> 2560
+_O_PC = _mm1d_pcfg(MT, (NH * HD) // 32, W // 32)  # 2048 -> 1024
+_GATE_PC = _mm1d_pcfg(MT, W // 32, MLP_DIM // 32)  # 1024 -> 4096
+_DOWN_PC = _mm1d_pcfg(MT, MLP_DIM // 32, W // 32)  # 4096 -> 1024
+
+
 # --------------------------------------------------------------------------- ttnn layer
 def _build_layer(device, wts, ins, mode):
     """Upload weights once; return a run() closure that does the full layer forward.
@@ -232,18 +285,18 @@ def _build_layer(device, wts, ins, mode):
             for t in (hw, gate, up, hid, hid2, ows):
                 ttnn.deallocate(t)
             return out
-        gate = ttnn.linear(h, gw, memory_config=_L1, compute_kernel_config=_HIFI2)
-        up = ttnn.linear(h, uw, memory_config=_L1, compute_kernel_config=_HIFI2)
+        gate = ttnn.linear(h, gw, memory_config=_L1, compute_kernel_config=_HIFI2, program_config=_GATE_PC)
+        up = ttnn.linear(h, uw, memory_config=_L1, compute_kernel_config=_HIFI2, program_config=_GATE_PC)
         gate = ttnn.gelu(gate, fast_and_approximate_mode=False)
         hid = ttnn.multiply(gate, up, memory_config=_L1)
-        out = ttnn.linear(hid, dw, memory_config=_L1, compute_kernel_config=_LOFI)
+        out = ttnn.linear(hid, dw, memory_config=_L1, compute_kernel_config=_LOFI, program_config=_DOWN_PC)
         for t in (gate, up, hid):
             ttnn.deallocate(t)
         return out
 
     def run():
         h = _adarms(x0, ln_a, sca, sha)
-        qkv = ttnn.linear(h, wqkv, memory_config=_L1, compute_kernel_config=_HIFI2)
+        qkv = ttnn.linear(h, wqkv, memory_config=_L1, compute_kernel_config=_HIFI2, program_config=_QKV_PC)
         ttnn.deallocate(h)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=NH, num_kv_heads=NKV, transpose_k_heads=False, memory_config=_L1
@@ -262,7 +315,7 @@ def _build_layer(device, wts, ins, mode):
         ttnn.deallocate(kk)
         ttnn.deallocate(vv)
         a = ttnn.experimental.nlp_concat_heads(a, memory_config=_L1)
-        o = ttnn.linear(a, wo, memory_config=_L1, compute_kernel_config=_HIFI2)
+        o = ttnn.linear(a, wo, memory_config=_L1, compute_kernel_config=_HIFI2, program_config=_O_PC)
         ttnn.deallocate(a)
         og = ttnn.multiply(o, gta, memory_config=_L1)
         x1 = ttnn.add(x0, og, memory_config=_L1)
