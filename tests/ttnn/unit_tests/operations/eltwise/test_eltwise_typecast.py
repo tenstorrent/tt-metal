@@ -740,5 +740,5 @@ def test_typecast_uint8_to_bfloat16_exhaustive(shape, layout, memory_config, dev
     assert result.dtype == torch.bfloat16, f"Expected bfloat16 output, got {result.dtype}"
     assert torch.equal(expected, result), (
         f"Mismatch: {(expected != result).sum().item()} / {expected.numel()} elements differ. "
-        f"First bad value at index {(expected != result).nonzero(as_tuple=True)[0][0].item()}"
+        f"First bad value at index {(expected != result).nonzero()[0].tolist()}"
     )
