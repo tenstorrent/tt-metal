@@ -2175,7 +2175,7 @@ TEST_F(ControlPlaneFixture, TestBlitzDecodePipelineBuilder) {
 
     ASSERT_GE(num_meshes, 2u) << "Pipeline builder requires at least 2 meshes";
 
-    const auto generated_stages = tt::tt_metal::experimental::blitz::generate_blitz_decode_pipeline(true);
+    const auto generated_stages = tt::tt_metal::internal::blitz::generate_blitz_decode_pipeline(true);
     std::vector<Sp5BlitzPipelineStage> stages;
     stages.reserve(generated_stages.size());
     for (const auto& s : generated_stages) {
