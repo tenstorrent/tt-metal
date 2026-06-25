@@ -34,7 +34,7 @@ from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_me
 from ..test_factory import parametrize_mesh_with_fabric
 
 HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
-INTER, LIMIT, ALPHA, V = 512, 7.0, 1.702, 2048
+INTER, SHARED_INTER, E, TOPK, SCALE, LIMIT, ALPHA, V = 512, 512, 32, 4, 2.0, 7.0, 1.702, 2048
 SCHEDULE = [0, 0]  # dense layers only (M3 layers 0-2 are dense); isolates SP flow from MoE reshard
 
 
@@ -83,10 +83,23 @@ def _ffn(x, w1, w3, w2):
     return _swiglu(x @ w1.t(), x @ w3.t()) @ w2.t()
 
 
-def _layer(x, w, cos, sin):
+def _moe(x, w):
+    scores = torch.sigmoid(x @ w["gate"].t())
+    _, idx = torch.topk(scores + w["bias"], TOPK, dim=-1)
+    tw = torch.gather(scores, 1, idx)
+    tw = (tw / tw.sum(-1, keepdim=True)) * SCALE
+    routed = torch.zeros_like(x)
+    for t in range(x.shape[0]):
+        for j in range(TOPK):
+            routed[t] += tw[t, j] * _ffn(x[t : t + 1], *w["experts"][idx[t, j].item()]).squeeze(0)
+    return routed + _ffn(x, *w["shared"])
+
+
+def _layer(x, w, cos, sin, is_dense=True):
     x = x + _attn(_gemma_norm(x, w["input_ln"]), w, cos, sin)
     normed = _gemma_norm(x, w["post_ln"])
-    ffn = _ffn(normed.reshape(-1, HIDDEN), *w["dense"])
+    flat = normed.reshape(-1, HIDDEN)
+    ffn = _ffn(flat, *w["dense"]) if is_dense else _moe(flat, w)
     return x + ffn.reshape(x.shape)
 
 
@@ -229,3 +242,141 @@ def test_model_sp_dense_vs_ref(mesh_device, device_params, seq_len, reset_seeds)
     logger.info(f"SP=8xTP=4 dense model vs torch ref: pcc={pcc} row_pccs=[{min(row_pccs):.4f}..{max(row_pccs):.4f}]")
     assert passing, f"SP dense model PCC fail: {pcc}"
     assert min(row_pccs) > 0.99, f"SP row collapse (sharding bug): row_pccs={row_pccs}"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("seq_len", [1024], ids=["s1024"])  # 128/row at SP=8
+def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
+    """SP=8 × TP=4 with a MoE layer (EP=32, use_ep_moe) over the SP-sharded residual vs torch ref.
+
+    The MoE-under-SP integration: layer 0 dense (validated SP attention) feeds its SP-sharded residual
+    into a MoE layer (layer 1) running the deployment unified-kernel EP path (use_ep_moe=True). That
+    path consumes per-device [1,1,s_local,H] tokens and routes per-row — blind to whether the rows hold
+    different prompts (DP) or seq-shards of ONE prompt (SP) — so EP=32 expert parallelism works over the
+    seq-sharded stream with no MoE change. Design A: the residual stays SP-sharded through the MoE.
+    """
+    rows, cols = tuple(mesh_device.shape)
+    assert (rows, cols) == (8, 4)
+    sp, tp, sp_axis = rows, cols, 0
+    s_local = seq_len // sp
+    schedule = [0, 1]  # layer 0 dense, layer 1 MoE
+
+    torch.manual_seed(0)
+    x = torch.randn(1, seq_len, HIDDEN) * 0.1
+
+    layer_w = []
+    for val in schedule:
+        w = _attn_weights()
+        if val == 0:
+            w["dense"] = (_rand(INTER, HIDDEN), _rand(INTER, HIDDEN), _rand(HIDDEN, INTER))
+        else:
+            w["gate"] = torch.randn(E, HIDDEN) * 0.05
+            w["bias"] = torch.randn(E) * 0.1
+            w["experts"] = [(_rand(INTER, HIDDEN), _rand(INTER, HIDDEN), _rand(HIDDEN, INTER)) for _ in range(E)]
+            w["shared"] = (_rand(SHARED_INTER, HIDDEN), _rand(SHARED_INTER, HIDDEN), _rand(HIDDEN, SHARED_INTER))
+        layer_w.append(w)
+    final_norm_w = torch.randn(HIDDEN) * 0.1
+    lm_head_w = _rand(V, HIDDEN)
+
+    # --- torch reference (one prompt, full sequence) ---
+    inv_freq = 1.0 / (THETA ** (torch.arange(0, ROTARY_DIM, 2).float() / ROTARY_DIM))
+    emb = torch.cat([torch.outer(torch.arange(seq_len).float(), inv_freq)] * 2, dim=-1)
+    cos_ref, sin_ref = emb.cos()[None, None], emb.sin()[None, None]
+    h = x.float()
+    for w, val in zip(layer_w, schedule):
+        h = _layer(h, w, cos_ref, sin_ref, is_dense=(val == 0))
+    ref_logits = _gemma_norm(h, final_norm_w) @ lm_head_w.t()
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M3", "config.json")
+    with open(cfg_path) as f:
+        c = json.load(f)
+    c.update(
+        num_hidden_layers=len(schedule),
+        num_local_experts=E,
+        num_experts_per_tok=TOPK,
+        intermediate_size=INTER,
+        vocab_size=V,
+        moe_layer_freq=list(schedule),
+    )
+    hf_config = SimpleNamespace(**c)
+
+    state = {
+        "model.embed_tokens.weight": _rand(V, HIDDEN),
+        "model.norm.weight": final_norm_w,
+        "lm_head.weight": lm_head_w,
+    }
+    for i, (w, val) in enumerate(zip(layer_w, schedule)):
+        p = f"model.layers.{i}."
+        state[p + "input_layernorm.weight"] = w["input_ln"]
+        state[p + "post_attention_layernorm.weight"] = w["post_ln"]
+        state[p + "self_attn.q_proj.weight"] = w["q"]
+        state[p + "self_attn.k_proj.weight"] = w["k"]
+        state[p + "self_attn.v_proj.weight"] = w["v"]
+        state[p + "self_attn.o_proj.weight"] = w["o"]
+        state[p + "self_attn.q_norm.weight"] = w["q_norm"]
+        state[p + "self_attn.k_norm.weight"] = w["k_norm"]
+        if val == 0:
+            g, u, d = w["dense"]
+            state[p + "mlp.gate_proj.weight"] = g
+            state[p + "mlp.up_proj.weight"] = u
+            state[p + "mlp.down_proj.weight"] = d
+        else:
+            state[p + "block_sparse_moe.gate.weight"] = w["gate"]
+            state[p + "block_sparse_moe.e_score_correction_bias"] = w["bias"]
+            state[p + "block_sparse_moe.shared_experts.gate_proj.weight"] = w["shared"][0]
+            state[p + "block_sparse_moe.shared_experts.up_proj.weight"] = w["shared"][1]
+            state[p + "block_sparse_moe.shared_experts.down_proj.weight"] = w["shared"][2]
+            for e, (w1, w3, w2) in enumerate(w["experts"]):
+                state[p + f"block_sparse_moe.experts.{e}.w1.weight"] = w1
+                state[p + f"block_sparse_moe.experts.{e}.w3.weight"] = w3
+                state[p + f"block_sparse_moe.experts.{e}.w2.weight"] = w2
+    state = convert_hf_qkv_to_meta_format_partial(state, HEAD_DIM, ROTARY_DIM)
+
+    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
+    model = Model(
+        mesh_device=mesh_device,
+        hf_config=hf_config,
+        state_dict=state,
+        ccl_manager=ccl_manager,
+        mesh_config=mesh_config,
+        create_kv_cache=True,
+        max_local_batch_size=1,
+        sequence_parallel=True,
+        use_ep_moe=True,
+        ep_seq_len_per_chip=s_local,  # per-device tokens = one prompt's seq-shard
+    )
+
+    in_dims = [None, None]
+    in_dims[sp_axis] = 2  # seq -> SP rows
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, seq_len, HIDDEN), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
+    )
+
+    def reshard_rope(dev_tensor):
+        full = ttnn.to_torch(ttnn.get_device_tensors(dev_tensor)[0])[:, :, :seq_len, :]
+        return ttnn.from_torch(
+            full, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
+        )
+
+    rope_sp = [reshard_rope(model.rope_setup.cos_matrix_prefill), reshard_rope(model.rope_setup.sin_matrix_prefill)]
+    logits = model.ttnn_prefill_forward(x_tt, rot_mats_global=rope_sp, get_last_token=-1)
+    out = ttnn.to_torch(
+        logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
+    ).float()
+    out = out.reshape(1, seq_len, -1)[..., :V]
+
+    # Threshold 0.93 matches test_model_ep_vs_ref — the EP=32 MoE runs bf4 expert weights + bf8 matmuls,
+    # a lower precision floor than the dense path. The SP-correctness signal is the per-row uniformity
+    # (no row collapses), not the absolute PCC.
+    passing, pcc = comp_pcc(ref_logits, out, 0.93)
+    row_pccs = []
+    for r in range(sp):
+        _, rpcc = comp_pcc(ref_logits[:, r * s_local : (r + 1) * s_local], out[:, r * s_local : (r + 1) * s_local])
+        row_pccs.append(rpcc)
+        logger.info(f"  row{r} (pos {r*s_local}:{(r+1)*s_local}) pcc={rpcc}")
+    logger.info(f"SP=8xTP=4 + MoE(EP=32) model vs torch ref: pcc={pcc} row_pccs=[{min(row_pccs):.4f}..{max(row_pccs):.4f}]")
+    assert passing, f"SP+MoE model PCC fail: {pcc}"
+    assert min(row_pccs) > 0.93, f"SP+MoE row collapse (sharding bug): row_pccs={row_pccs}"
