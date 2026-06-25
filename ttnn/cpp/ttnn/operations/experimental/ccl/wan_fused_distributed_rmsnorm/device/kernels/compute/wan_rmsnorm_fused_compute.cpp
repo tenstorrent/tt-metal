@@ -116,6 +116,14 @@ void kernel_main() {
     // resident POST would overflow L1 at wide per-head shards). Adds per-block
     // reconfigs (slower) but fits L1; only set for the OOMing config.
     constexpr uint32_t fuse_mm_rope = get_compile_time_arg_val(36);
+    // Full block-major POST: fuse ALL post sub-phases (x*1/rms, weight, bias,
+    // matmul-rotate, RoPE) into ONE per-block loop so intermediate_cb /
+    // rotated_input_cb / output_cb are block-local (O(block_size)). Engaged by the
+    // host only when even the input-streamed layout overflows L1 (wide low-TP
+    // shards: TP=1 WAN/FLUX/LTX-video, TP=2 FLUX). Implies streaming_low_l1 and
+    // per_head_norm==0. Bit-exact with the resident path (same math + order, fp32
+    // intermediates), trading per-block reconfigs for a bounded L1 footprint.
+    constexpr uint32_t block_major_post = get_compile_time_arg_val(37);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
@@ -513,68 +521,256 @@ void kernel_main() {
                             cb_wait_front(reduce_result_cb, 1);
                         }  // P_NRED
 
-                        DeviceZoneScopedN("P_NMUL");
-                        // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
-                        reconfig_data_format(input_cb, reduce_result_cb);
-                        pack_reconfig_data_format(mul_rms_result_cb);
-                        mul_bcast_cols_init_short(input_cb, reduce_result_cb);
-                        if constexpr (streaming_low_l1) {
-                            // Streamed POST re-read: reader's 2nd pass pushes the
-                            // row's input block by block. Each block is waited at a
-                            // block-relative index, multiplied by 1/rms, packed, then
-                            // popped — matching the reader's 2nd-pass pushes.
-                            // streaming_low_l1 implies per_head_norm==0, so there is a
-                            // single group with post_group_width == num_tile_cols, and
-                            // num_tile_cols % block_size == 0 (host TT_FATAL invariant).
-                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                                cb_wait_front(input_cb, block_size);
-                                cb_reserve_back(mul_rms_result_cb, block_size);
-                                tile_regs_acquire();
-                                for (uint32_t i = 0; i < block_size; i++) {
-                                    mul_tiles_bcast_cols(input_cb, reduce_result_cb, i, 0, i);
+                        // block_major_post fuses mul-rms into the single per-block POST loop
+                        // below, so the standalone P_NMUL sub-phase is skipped (and
+                        // reduce_result_cb stays resident for that loop to consume).
+                        if constexpr (!block_major_post) {
+                            DeviceZoneScopedN("P_NMUL");
+                            // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
+                            reconfig_data_format(input_cb, reduce_result_cb);
+                            pack_reconfig_data_format(mul_rms_result_cb);
+                            mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                            if constexpr (streaming_low_l1) {
+                                // Streamed POST re-read: reader's 2nd pass pushes the
+                                // row's input block by block. Each block is waited at a
+                                // block-relative index, multiplied by 1/rms, packed, then
+                                // popped — matching the reader's 2nd-pass pushes.
+                                // streaming_low_l1 implies per_head_norm==0, so there is a
+                                // single group with post_group_width == num_tile_cols, and
+                                // num_tile_cols % block_size == 0 (host TT_FATAL invariant).
+                                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                    cb_wait_front(input_cb, block_size);
+                                    cb_reserve_back(mul_rms_result_cb, block_size);
+                                    tile_regs_acquire();
+                                    for (uint32_t i = 0; i < block_size; i++) {
+                                        mul_tiles_bcast_cols(input_cb, reduce_result_cb, i, 0, i);
+                                    }
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    for (uint32_t i = 0; i < block_size; i++) {
+                                        pack_tile(i, mul_rms_result_cb);
+                                    }
+                                    tile_regs_release();
+                                    cb_push_back(mul_rms_result_cb, block_size);
+                                    cb_pop_front(input_cb, block_size);
                                 }
-                                tile_regs_commit();
-                                tile_regs_wait();
-                                for (uint32_t i = 0; i < block_size; i++) {
-                                    pack_tile(i, mul_rms_result_cb);
+                            } else {
+                                for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
+                                    // Per_head_norm pushes head_dim_tiles per head (no padding)
+                                    // so multiple heads don't blow past intermediate_cb. The
+                                    // legacy whole-row path keeps the block_size-padded push so
+                                    // downstream sub-phases (still block_size-driven) consume
+                                    // matching counts even when num_tile_cols < block_size.
+                                    const uint32_t tiles_in_block = (per_head_norm != 0)
+                                                                        ? (((post_group_width - col_tile) >= block_size)
+                                                                               ? block_size
+                                                                               : (post_group_width - col_tile))
+                                                                        : block_size;
+                                    cb_reserve_back(mul_rms_result_cb, tiles_in_block);
+                                    tile_regs_acquire();
+                                    for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
+                                        const uint32_t abs_idx = group_abs_base + col_tile + i;
+                                        mul_tiles_bcast_cols(input_cb, reduce_result_cb, abs_idx, 0, i);
+                                    }
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
+                                        pack_tile(i, mul_rms_result_cb);
+                                    }
+                                    tile_regs_release();
+                                    cb_push_back(mul_rms_result_cb, tiles_in_block);
                                 }
-                                tile_regs_release();
-                                cb_push_back(mul_rms_result_cb, block_size);
-                                cb_pop_front(input_cb, block_size);
                             }
-                        } else {
-                            for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
-                                // Per_head_norm pushes head_dim_tiles per head (no padding)
-                                // so multiple heads don't blow past intermediate_cb. The
-                                // legacy whole-row path keeps the block_size-padded push so
-                                // downstream sub-phases (still block_size-driven) consume
-                                // matching counts even when num_tile_cols < block_size.
-                                const uint32_t tiles_in_block = (per_head_norm != 0)
-                                                                    ? (((post_group_width - col_tile) >= block_size)
-                                                                           ? block_size
-                                                                           : (post_group_width - col_tile))
-                                                                    : block_size;
-                                cb_reserve_back(mul_rms_result_cb, tiles_in_block);
-                                tile_regs_acquire();
-                                for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
-                                    const uint32_t abs_idx = group_abs_base + col_tile + i;
-                                    mul_tiles_bcast_cols(input_cb, reduce_result_cb, abs_idx, 0, i);
-                                }
-                                tile_regs_commit();
-                                tile_regs_wait();
-                                for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
-                                    pack_tile(i, mul_rms_result_cb);
-                                }
-                                tile_regs_release();
-                                cb_push_back(mul_rms_result_cb, tiles_in_block);
-                            }
-                        }
 
-                        cb_pop_front(reduce_result_cb, 1);
+                            cb_pop_front(reduce_result_cb, 1);
+                        }  // !block_major_post
                     }
                 }  // P_NORM
 
-                if constexpr (has_weight) {
+                if constexpr (block_major_post) {
+                    // ===== Full block-major POST (wide low-TP shards) =====
+                    // streaming_low_l1 + per_head_norm==0 guaranteed: one resident row,
+                    // a single group (post_group_width == num_tile_cols), and
+                    // num_tile_cols % block_size == 0 (host TT_FATAL invariants). Per
+                    // block: x*(1/rms) -> [*weight] -> [+bias] -> [matmul-rotate + RoPE]
+                    // / output. Every intermediate CB is block-local (host sized them
+                    // O(block_size)). The aliases route the LAST affine sub-phase to
+                    // output_cb when !fuse_rope, so the no-rope case needs no extra copy.
+                    // reduce_result_cb (1/rms) is still at the front (P_NMUL skipped).
+                    DeviceZoneScopedN("P_BLKMAJOR");
+                    uint32_t rope_cursor = 0;  // broadcast cos/sin cyclic index (mod head_dim_tiles)
+                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                        // ---- x * (1/rms): input 2nd-pass block (streamed) -> mul_rms_result_cb ----
+                        cb_wait_front(input_cb, block_size);
+                        reconfig_data_format(input_cb, reduce_result_cb);
+                        pack_reconfig_data_format(mul_rms_result_cb);
+                        mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                        cb_reserve_back(mul_rms_result_cb, block_size);
+                        tile_regs_acquire();
+                        for (uint32_t i = 0; i < block_size; i++) {
+                            mul_tiles_bcast_cols(input_cb, reduce_result_cb, i, 0, i);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t i = 0; i < block_size; i++) {
+                            pack_tile(i, mul_rms_result_cb);
+                        }
+                        tile_regs_release();
+                        cb_push_back(mul_rms_result_cb, block_size);
+                        cb_pop_front(input_cb, block_size);
+
+                        // ---- * weight ----
+                        if constexpr (has_weight) {
+                            cb_wait_front(weight_cb, col_tile + block_size);
+                            cb_wait_front(mul_rms_result_cb, block_size);
+                            reconfig_data_format(mul_rms_result_cb, weight_cb);
+                            pack_reconfig_data_format(mul_weight_result_cb);
+                            if constexpr (per_token_weight != 0) {
+                                mul_tiles_init(mul_rms_result_cb, weight_cb);
+                            } else {
+                                mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                            }
+                            cb_reserve_back(mul_weight_result_cb, block_size);
+                            tile_regs_acquire();
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                if constexpr (per_token_weight != 0) {
+                                    mul_tiles(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
+                                } else {
+                                    mul_tiles_bcast_rows(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
+                                }
+                            }
+                            tile_regs_commit();
+                            cb_pop_front(mul_rms_result_cb, block_size);
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                pack_tile(i, mul_weight_result_cb);
+                            }
+                            tile_regs_release();
+                            cb_push_back(mul_weight_result_cb, block_size);
+                        }
+
+                        // ---- + bias ----
+                        if constexpr (has_bias) {
+                            cb_wait_front(bias_cb, col_tile + block_size);
+                            cb_wait_front(mul_weight_result_cb, block_size);
+                            reconfig_data_format(mul_weight_result_cb, bias_cb);
+                            pack_reconfig_data_format(add_bias_result_cb);
+                            if constexpr (per_token_bias != 0) {
+                                add_tiles_init(mul_weight_result_cb, bias_cb);
+                            } else {
+                                add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                            }
+                            cb_reserve_back(add_bias_result_cb, block_size);
+                            tile_regs_acquire();
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                if constexpr (per_token_bias != 0) {
+                                    add_tiles(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
+                                } else {
+                                    add_tiles_bcast_rows(mul_weight_result_cb, bias_cb, i, col_tile + i, i);
+                                }
+                            }
+                            tile_regs_commit();
+                            cb_pop_front(mul_weight_result_cb, block_size);
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                pack_tile(i, add_bias_result_cb);
+                            }
+                            tile_regs_release();
+                            cb_push_back(add_bias_result_cb, block_size);
+                        }
+
+                        // ---- matmul-rotate + RoPE finalize (fuse_rope), else block already output ----
+                        if constexpr (fuse_rope) {
+                            // affine'd block is at intermediate_cb front (add_bias_result_cb ==
+                            // intermediate_cb when fuse_rope). Rotate it, then RoPE-finalize.
+                            reconfig_data_format(transformation_mat_cb, intermediate_cb);
+                            pack_reconfig_data_format(rotated_input_cb);
+                            mm_block_init_short(
+                                intermediate_cb,
+                                transformation_mat_cb,
+                                /*transpose=*/0,
+                                /*ct_dim=*/1,
+                                /*rt_dim=*/block_size,
+                                /*kt_dim=*/1);
+                            cb_wait_front(intermediate_cb, block_size);  // NOT popped; RoPE re-reads it
+                            cb_reserve_back(rotated_input_cb, block_size);
+                            tile_regs_acquire();
+                            matmul_block(
+                                intermediate_cb,
+                                transformation_mat_cb,
+                                /*in0_idx=*/0,
+                                /*in1_idx=*/0,
+                                /*idst=*/0,
+                                /*transpose=*/0,
+                                /*ct_dim=*/1,
+                                /*rt_dim=*/block_size,
+                                /*kt_dim=*/1);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                pack_tile(i, rotated_input_cb);
+                            }
+                            tile_regs_release();
+                            cb_push_back(rotated_input_cb, block_size);
+
+                            // out = x*cos + rotate(x)*sin (FPU dst-accumulate, single rounding at pack).
+                            // cos/sin are RESIDENT whole-row under block-major (the reader pushed
+                            // the whole row before the deferred POST input pass). Per-head: this
+                            // block's tiles sit at absolute col_tile..; broadcast: head_dim_tiles
+                            // held resident, indexed cyclically. Drained once after the loop.
+                            if constexpr (per_head_rope != 0) {
+                                cb_wait_front(rope_cos_cb, col_tile + block_size);
+                                cb_wait_front(rope_sin_cb, col_tile + block_size);
+                            } else {
+                                cb_wait_front(rope_cos_cb, head_dim_tiles);
+                                cb_wait_front(rope_sin_cb, head_dim_tiles);
+                            }
+                            cb_wait_front(intermediate_cb, block_size);
+                            cb_wait_front(rotated_input_cb, block_size);
+                            cb_reserve_back(output_cb, block_size);
+                            reconfig_data_format(intermediate_cb, rope_cos_cb);
+                            pack_reconfig_data_format(output_cb);
+                            const uint32_t rope_base = rope_cursor;
+                            tile_regs_acquire();
+                            binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                const uint32_t ridx =
+                                    (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
+                                mul_tiles(intermediate_cb, rope_cos_cb, i, ridx, i);
+                            }
+                            binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                const uint32_t ridx =
+                                    (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
+                                mul_tiles(rotated_input_cb, rope_sin_cb, i, ridx, i);
+                            }
+                            if constexpr (per_head_rope == 0) {
+                                rope_cursor = (rope_base + block_size) % head_dim_tiles;
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t i = 0; i < block_size; i++) {
+                                pack_tile(i, output_cb);
+                            }
+                            tile_regs_release();
+                            cb_push_back(output_cb, block_size);
+                            cb_pop_front(intermediate_cb, block_size);
+                            cb_pop_front(rotated_input_cb, block_size);
+                            // cos/sin are resident whole-row; drained once after the loop (below).
+                        }
+                        // !fuse_rope: the last affine sub-phase already wrote output_cb (aliases).
+                    }
+                    cb_pop_front(reduce_result_cb, 1);
+                    if constexpr (fuse_rope) {
+                        // cos/sin held resident across the whole row; drain once. Per-head holds
+                        // num_tile_cols tiles (one per col); broadcast holds head_dim_tiles.
+                        const uint32_t rope_row_tiles = (per_head_rope != 0) ? num_tile_cols : head_dim_tiles;
+                        cb_pop_front(rope_cos_cb, rope_row_tiles);
+                        cb_pop_front(rope_sin_cb, rope_row_tiles);
+                    }
+                }
+
+                if constexpr (has_weight && !block_major_post) {
                     DeviceZoneScopedN("P_WEIGHT");
                     // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
                     // Broadcast weight (default): weight_cb holds num_tile_cols
@@ -618,7 +814,7 @@ void kernel_main() {
                     }
                 }
 
-                if constexpr (has_bias) {
+                if constexpr (has_bias && !block_major_post) {
                     // ----- Sub-phase 2.5: + bias → add_bias_result_cb -----
                     // Broadcast bias uses add_tiles_bcast_rows; per-token bias
                     // uses add_tiles. Same per-row pop pattern as weight when
@@ -655,96 +851,36 @@ void kernel_main() {
                     }
                 }
 
-                if constexpr (fuse_rope) {
-                  if constexpr (fuse_mm_rope) {
-                    // ===== Block-major POST: fuse matmul-rotate + RoPE finalize per block =====
-                    // rotated_input_cb is block-local (host shrank it for wide per-head
-                    // shards that would otherwise overflow L1), so rotate ONE block then
-                    // immediately RoPE-finalize it before the next. Costs per-block
-                    // matmul<->rope reconfigs (the resident sub-phase-major path below is
-                    // faster). fuse_mm_rope is only set when per_head_rope, so cos/sin are
-                    // streamed: block-relative index, popped per block.
-                    DeviceZoneScopedN("P_MMROPE");
-                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                        const uint32_t tiles_in_block =
-                            (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
-                        // --- rotate this block: intermediate[front] * trans -> rotated[block] ---
-                        reconfig_data_format(transformation_mat_cb, intermediate_cb);
-                        pack_reconfig_data_format(rotated_input_cb);
-                        mm_block_init_short(
-                            intermediate_cb, transformation_mat_cb, /*transpose=*/0, /*ct_dim=*/1,
-                            /*rt_dim=*/block_size, /*kt_dim=*/1);
-                        cb_wait_front(intermediate_cb, block_size);  // front block; popped after RoPE
-                        cb_reserve_back(rotated_input_cb, block_size);
-                        tile_regs_acquire();
-                        matmul_block(
-                            intermediate_cb, transformation_mat_cb, /*in0_idx=*/0, /*in1_idx=*/0, /*idst=*/0,
-                            /*transpose=*/0, /*ct_dim=*/1, /*rt_dim=*/block_size, /*kt_dim=*/1);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < block_size; i++) {
-                            pack_tile(i, rotated_input_cb);
-                        }
-                        tile_regs_release();
-                        cb_push_back(rotated_input_cb, block_size);
-                        // --- RoPE finalize: x*cos + rotate(x)*sin -> output (FPU dst-accumulate) ---
-                        cb_wait_front(rope_cos_cb, tiles_in_block);
-                        cb_wait_front(rope_sin_cb, tiles_in_block);
-                        cb_wait_front(rotated_input_cb, block_size);
-                        cb_reserve_back(output_cb, block_size);
-                        reconfig_data_format(intermediate_cb, rope_cos_cb);
-                        pack_reconfig_data_format(output_cb);
-                        tile_regs_acquire();
-                        binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
-                        for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                            mul_tiles(intermediate_cb, rope_cos_cb, i, i, i);  // block-relative cos
-                        }
-                        binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
-                        for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                            mul_tiles(rotated_input_cb, rope_sin_cb, i, i, i);  // + rotate*sin (acc)
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                            pack_tile(i, output_cb);
-                        }
-                        tile_regs_release();
-                        cb_push_back(output_cb, block_size);
-                        cb_pop_front(intermediate_cb, block_size);
-                        cb_pop_front(rotated_input_cb, block_size);
-                        cb_pop_front(rope_cos_cb, tiles_in_block);
-                        cb_pop_front(rope_sin_cb, tiles_in_block);
-                    }
-                  } else {
-                    {
-                        DeviceZoneScopedN("P_MM");
-                        // ----- Sub-phase 3a: matmul(intermediate, trans_mat) → rotated -----
-                        reconfig_data_format(transformation_mat_cb, intermediate_cb);
-                        pack_reconfig_data_format(rotated_input_cb);
-                        // Block matmul: rotate a whole block of tiles in ONE call —
-                        // rt_dim=block_size tiles of intermediate, each multiplied by the
-                        // single 32x32 transformation tile (kt_dim=ct_dim=1). One
-                        // unpack+math dispatch per block instead of block_size per-tile
-                        // matmul_tiles calls. intermediate_cb is padded to a block_size
-                        // multiple (P_WEIGHT pushes full block_size/block), so rt_dim is
-                        // always block_size; the RoPE finalize only consumes the valid
-                        // tiles, so any padding rows packed here are never used.
-                        mm_block_init_short(
-                            intermediate_cb,
-                            transformation_mat_cb,
-                            /*transpose=*/0,
-                            /*ct_dim=*/1,
-                            /*rt_dim=*/block_size,
-                            /*kt_dim=*/1);
+                if constexpr (fuse_rope && !block_major_post) {
+                    if constexpr (fuse_mm_rope) {
+                        // ===== Block-major POST: fuse matmul-rotate + RoPE finalize per block =====
+                        // rotated_input_cb is block-local (host shrank it for wide per-head
+                        // shards that would otherwise overflow L1), so rotate ONE block then
+                        // immediately RoPE-finalize it before the next. Costs per-block
+                        // matmul<->rope reconfigs (the resident sub-phase-major path below is
+                        // faster). fuse_mm_rope is only set when per_head_rope, so cos/sin are
+                        // streamed: block-relative index, popped per block.
+                        DeviceZoneScopedN("P_MMROPE");
                         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                            // Don't pop intermediate — the RoPE finalize re-reads it.
-                            cb_wait_front(intermediate_cb, col_tile + block_size);
+                            const uint32_t tiles_in_block =
+                                (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                            // --- rotate this block: intermediate[front] * trans -> rotated[block] ---
+                            reconfig_data_format(transformation_mat_cb, intermediate_cb);
+                            pack_reconfig_data_format(rotated_input_cb);
+                            mm_block_init_short(
+                                intermediate_cb,
+                                transformation_mat_cb,
+                                /*transpose=*/0,
+                                /*ct_dim=*/1,
+                                /*rt_dim=*/block_size,
+                                /*kt_dim=*/1);
+                            cb_wait_front(intermediate_cb, block_size);  // front block; popped after RoPE
                             cb_reserve_back(rotated_input_cb, block_size);
                             tile_regs_acquire();
                             matmul_block(
                                 intermediate_cb,
                                 transformation_mat_cb,
-                                /*in0_idx=*/col_tile,
+                                /*in0_idx=*/0,
                                 /*in1_idx=*/0,
                                 /*idst=*/0,
                                 /*transpose=*/0,
@@ -758,69 +894,21 @@ void kernel_main() {
                             }
                             tile_regs_release();
                             cb_push_back(rotated_input_cb, block_size);
-                        }
-                    }  // P_MM
-
-                    {
-                        DeviceZoneScopedN("P_ROPE");
-                        // ----- Fused RoPE finalize: out = x*cos + rotate(x)*sin -----
-                        // FPU dst-accumulate. The first mul writes x*cos into dst;
-                        // the second mul is initialized with acc_to_dest=true so the
-                        // FPU computes rotate(x)*sin + dst -> dst (the add is free,
-                        // done by the multiply, in fp32 dest). A SINGLE final rounding
-                        // happens at pack -> precision-preserving (same as the old
-                        // fp32-intermediate add). 1 dst reg / output tile (block_size
-                        // tiles per acquire), 1 pack/tile. Replaces P_COS/P_SIN/P_ADD.
-                        //
-                        // Broadcast RoPE (per_head_rope==0) reuses head_dim_tiles cos/
-                        // sin tiles cyclically; cos and sin share the same index, so we
-                        // recompute the cursor from rope_base for both mul passes.
-                        reconfig_data_format(intermediate_cb, rope_cos_cb);
-                        pack_reconfig_data_format(output_cb);
-                        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                            const uint32_t tiles_in_block =
-                                (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
-                            // Per-head RoPE: cos/sin are STREAMED — the reader pushes this
-                            // block's tiles (block_size groups) and we pop them at block end,
-                            // so only a few blocks are ever resident (O(block_size), not the
-                            // full per-device width num_heads*head_dim — which overflows L1 at
-                            // TP=2 feat-2048). Index is block-relative (front of CB).
-                            // Broadcast RoPE: a small head_dim_tiles cos/sin buffer is held
-                            // across the whole row and indexed cyclically; popped at end of row.
-                            if constexpr (per_head_rope != 0) {
-                                cb_wait_front(rope_cos_cb, tiles_in_block);
-                                cb_wait_front(rope_sin_cb, tiles_in_block);
-                            } else {
-                                cb_wait_front(rope_cos_cb, head_dim_tiles);
-                                cb_wait_front(rope_sin_cb, head_dim_tiles);
-                            }
-                            cb_wait_front(intermediate_cb, block_size);
+                            // --- RoPE finalize: x*cos + rotate(x)*sin -> output (FPU dst-accumulate) ---
+                            cb_wait_front(rope_cos_cb, tiles_in_block);
+                            cb_wait_front(rope_sin_cb, tiles_in_block);
                             cb_wait_front(rotated_input_cb, block_size);
                             cb_reserve_back(output_cb, block_size);
-                            const uint32_t rope_base = rope_cos_tile_in_head;
+                            reconfig_data_format(intermediate_cb, rope_cos_cb);
+                            pack_reconfig_data_format(output_cb);
                             tile_regs_acquire();
-                            // x*cos -> dst (overwrite: acc_to_dest=false)
                             binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
                             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                const uint32_t rope_idx =
-                                    (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
-                                mul_tiles(intermediate_cb, rope_cos_cb, i, rope_idx, i);
+                                mul_tiles(intermediate_cb, rope_cos_cb, i, i, i);  // block-relative cos
                             }
-                            // rotate(x)*sin + dst -> dst (FPU accumulate: acc_to_dest=true).
-                            // full_init=false: operand formats match the x*cos mul above
-                            // (intermediate/rotated both fp32, cos/sin both bf16), so the
-                            // unpacker AB config is already valid — only the math init
-                            // re-runs to flip acc_to_dest. Skips a redundant unpack init.
                             binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
-                            uint32_t valid = 0;
                             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                const uint32_t rope_idx =
-                                    (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
-                                mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_idx, i);
-                                valid++;
-                            }
-                            if constexpr (per_head_rope == 0) {
-                                rope_cos_tile_in_head = (rope_base + valid) % head_dim_tiles;
+                                mul_tiles(rotated_input_cb, rope_sin_cb, i, i, i);  // + rotate*sin (acc)
                             }
                             tile_regs_commit();
                             tile_regs_wait();
@@ -831,18 +919,138 @@ void kernel_main() {
                             cb_push_back(output_cb, block_size);
                             cb_pop_front(intermediate_cb, block_size);
                             cb_pop_front(rotated_input_cb, block_size);
-                            // Per-head: drain this block's streamed cos/sin now (matches the
-                            // reader's per-block push). Broadcast keeps them for cyclic reuse.
-                            if constexpr (per_head_rope != 0) {
-                                cb_pop_front(rope_cos_cb, tiles_in_block);
-                                cb_pop_front(rope_sin_cb, tiles_in_block);
-                            }
+                            cb_pop_front(rope_cos_cb, tiles_in_block);
+                            cb_pop_front(rope_sin_cb, tiles_in_block);
                         }
-                    }  // P_ROPE
-                  }  // else: resident sub-phase-major P_MM + P_ROPE
+                    } else {
+                        {
+                            DeviceZoneScopedN("P_MM");
+                            // ----- Sub-phase 3a: matmul(intermediate, trans_mat) → rotated -----
+                            reconfig_data_format(transformation_mat_cb, intermediate_cb);
+                            pack_reconfig_data_format(rotated_input_cb);
+                            // Block matmul: rotate a whole block of tiles in ONE call —
+                            // rt_dim=block_size tiles of intermediate, each multiplied by the
+                            // single 32x32 transformation tile (kt_dim=ct_dim=1). One
+                            // unpack+math dispatch per block instead of block_size per-tile
+                            // matmul_tiles calls. intermediate_cb is padded to a block_size
+                            // multiple (P_WEIGHT pushes full block_size/block), so rt_dim is
+                            // always block_size; the RoPE finalize only consumes the valid
+                            // tiles, so any padding rows packed here are never used.
+                            mm_block_init_short(
+                                intermediate_cb,
+                                transformation_mat_cb,
+                                /*transpose=*/0,
+                                /*ct_dim=*/1,
+                                /*rt_dim=*/block_size,
+                                /*kt_dim=*/1);
+                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                // Don't pop intermediate — the RoPE finalize re-reads it.
+                                cb_wait_front(intermediate_cb, col_tile + block_size);
+                                cb_reserve_back(rotated_input_cb, block_size);
+                                tile_regs_acquire();
+                                matmul_block(
+                                    intermediate_cb,
+                                    transformation_mat_cb,
+                                    /*in0_idx=*/col_tile,
+                                    /*in1_idx=*/0,
+                                    /*idst=*/0,
+                                    /*transpose=*/0,
+                                    /*ct_dim=*/1,
+                                    /*rt_dim=*/block_size,
+                                    /*kt_dim=*/1);
+                                tile_regs_commit();
+                                tile_regs_wait();
+                                for (uint32_t i = 0; i < block_size; i++) {
+                                    pack_tile(i, rotated_input_cb);
+                                }
+                                tile_regs_release();
+                                cb_push_back(rotated_input_cb, block_size);
+                            }
+                        }  // P_MM
+
+                        {
+                            DeviceZoneScopedN("P_ROPE");
+                            // ----- Fused RoPE finalize: out = x*cos + rotate(x)*sin -----
+                            // FPU dst-accumulate. The first mul writes x*cos into dst;
+                            // the second mul is initialized with acc_to_dest=true so the
+                            // FPU computes rotate(x)*sin + dst -> dst (the add is free,
+                            // done by the multiply, in fp32 dest). A SINGLE final rounding
+                            // happens at pack -> precision-preserving (same as the old
+                            // fp32-intermediate add). 1 dst reg / output tile (block_size
+                            // tiles per acquire), 1 pack/tile. Replaces P_COS/P_SIN/P_ADD.
+                            //
+                            // Broadcast RoPE (per_head_rope==0) reuses head_dim_tiles cos/
+                            // sin tiles cyclically; cos and sin share the same index, so we
+                            // recompute the cursor from rope_base for both mul passes.
+                            reconfig_data_format(intermediate_cb, rope_cos_cb);
+                            pack_reconfig_data_format(output_cb);
+                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                const uint32_t tiles_in_block =
+                                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                                // Per-head RoPE: cos/sin are STREAMED — the reader pushes this
+                                // block's tiles (block_size groups) and we pop them at block end,
+                                // so only a few blocks are ever resident (O(block_size), not the
+                                // full per-device width num_heads*head_dim — which overflows L1 at
+                                // TP=2 feat-2048). Index is block-relative (front of CB).
+                                // Broadcast RoPE: a small head_dim_tiles cos/sin buffer is held
+                                // across the whole row and indexed cyclically; popped at end of row.
+                                if constexpr (per_head_rope != 0) {
+                                    cb_wait_front(rope_cos_cb, tiles_in_block);
+                                    cb_wait_front(rope_sin_cb, tiles_in_block);
+                                } else {
+                                    cb_wait_front(rope_cos_cb, head_dim_tiles);
+                                    cb_wait_front(rope_sin_cb, head_dim_tiles);
+                                }
+                                cb_wait_front(intermediate_cb, block_size);
+                                cb_wait_front(rotated_input_cb, block_size);
+                                cb_reserve_back(output_cb, block_size);
+                                const uint32_t rope_base = rope_cos_tile_in_head;
+                                tile_regs_acquire();
+                                // x*cos -> dst (overwrite: acc_to_dest=false)
+                                binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
+                                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                                    const uint32_t rope_idx =
+                                        (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
+                                    mul_tiles(intermediate_cb, rope_cos_cb, i, rope_idx, i);
+                                }
+                                // rotate(x)*sin + dst -> dst (FPU accumulate: acc_to_dest=true).
+                                // full_init=false: operand formats match the x*cos mul above
+                                // (intermediate/rotated both fp32, cos/sin both bf16), so the
+                                // unpacker AB config is already valid — only the math init
+                                // re-runs to flip acc_to_dest. Skips a redundant unpack init.
+                                binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(
+                                    rotated_input_cb, rope_sin_cb, true);
+                                uint32_t valid = 0;
+                                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                                    const uint32_t rope_idx =
+                                        (per_head_rope != 0) ? i : ((rope_base + i) % head_dim_tiles);
+                                    mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_idx, i);
+                                    valid++;
+                                }
+                                if constexpr (per_head_rope == 0) {
+                                    rope_cos_tile_in_head = (rope_base + valid) % head_dim_tiles;
+                                }
+                                tile_regs_commit();
+                                tile_regs_wait();
+                                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                                    pack_tile(i, output_cb);
+                                }
+                                tile_regs_release();
+                                cb_push_back(output_cb, block_size);
+                                cb_pop_front(intermediate_cb, block_size);
+                                cb_pop_front(rotated_input_cb, block_size);
+                                // Per-head: drain this block's streamed cos/sin now (matches the
+                                // reader's per-block push). Broadcast keeps them for cyclic reuse.
+                                if constexpr (per_head_rope != 0) {
+                                    cb_pop_front(rope_cos_cb, tiles_in_block);
+                                    cb_pop_front(rope_sin_cb, tiles_in_block);
+                                }
+                            }
+                        }  // P_ROPE
+                    }  // else: resident sub-phase-major P_MM + P_ROPE
                 }
 
-                if constexpr (fuse_rope && per_head_rope == 0) {
+                if constexpr (fuse_rope && per_head_rope == 0 && !block_major_post) {
                     // Broadcast RoPE holds its head_dim_tiles cos/sin across the row;
                     // pop once here. Per-head streamed cos/sin were popped per block above
                     // (sum over blocks == num_tile_cols, the reader's per-row push count).

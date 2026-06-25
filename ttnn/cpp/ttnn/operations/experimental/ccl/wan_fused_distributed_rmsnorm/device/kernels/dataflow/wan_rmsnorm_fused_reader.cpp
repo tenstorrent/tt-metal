@@ -51,9 +51,15 @@ void kernel_main() {
     // block_size-tile pushes that compute pops as it consumes. The resident
     // fast path reads the whole row once. See program_factory.
     constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(16);
+    // defer_input (== block_major_post && is_tp_1): defer the streaming input to AFTER
+    // the resident weight/bias/cos pushes so the fused per-block POST has its side
+    // inputs before the POST re-read pass (avoids a reader<->compute deadlock on the
+    // no-AG is_tp_1 path). The mux block-major path keeps input-first — its all-gather
+    // window already covers the side-input pushes, and deferring raced the AG.
+    constexpr uint32_t defer_input = get_compile_time_arg_val(17);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
-    constexpr auto input_args = TensorAccessorArgs<17>();
+    constexpr auto input_args = TensorAccessorArgs<18>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -121,48 +127,49 @@ void kernel_main() {
         // it (cos/sin aren't consumed until the post-AG RoPE phase). Previously
         // a single shared barrier made input wait for the cos/sin reads too.
         const uint32_t input_tile_idx = tile_row * num_tile_cols;
-        if constexpr (streaming_low_l1) {
-            // Stream the row twice in block_size-tile pushes: pass 0 feeds
-            // compute's PRE sum-of-squares, pass 1 feeds the POST x*(1/rms)
-            // re-read. input_cb is block-sized so compute pops each block,
-            // keeping the resident footprint constant in num_tile_cols.
+        // defer_input DEFERS all input to the end of this row's reads (after
+        // weight/bias/cos, which are resident) so the fused per-block POST has its
+        // side inputs before it consumes the POST re-read pass — otherwise the
+        // reader blocks filling input_cb with the POST pass while compute waits on
+        // weight/cos not yet pushed (deadlock, observed on is_tp_1 TP=1). For all
+        // other paths the input is read HERE so PRE starts as soon as input lands:
+        // streaming = two block-sized passes (PRE + POST re-read), resident = the
+        // whole row once.
+        if constexpr (!defer_input) {
             DeviceZoneScopedN("R_INPUT");
-            for (uint32_t pass = 0; pass < 2; pass++) {
+            if constexpr (streaming_low_l1) {
+                for (uint32_t pass = 0; pass < 2; pass++) {
+                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                        const uint32_t tiles_in_block =
+                            ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                        cb_reserve_back(input_cb, tiles_in_block);
+                        uint32_t input_wr_ptr = get_write_ptr(input_cb);
+                        for (uint32_t i = 0; i < tiles_in_block; i++) {
+#ifndef WAN_ABL_SKIP_INPUT_READ
+                            noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
+#endif
+                            input_wr_ptr += input_tile_bytes;
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(input_cb, tiles_in_block);
+                    }
+                }
+            } else {
+                // Resident input read: push + barrier every block_size tiles.
                 for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                    const uint32_t tiles_in_block =
+                    const uint32_t grp =
                         ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                    cb_reserve_back(input_cb, tiles_in_block);
+                    cb_reserve_back(input_cb, grp);
                     uint32_t input_wr_ptr = get_write_ptr(input_cb);
-                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    for (uint32_t i = 0; i < grp; i++) {
 #ifndef WAN_ABL_SKIP_INPUT_READ
                         noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
 #endif
                         input_wr_ptr += input_tile_bytes;
                     }
                     noc_async_read_barrier();
-                    cb_push_back(input_cb, tiles_in_block);
+                    cb_push_back(input_cb, grp);
                 }
-            }
-        } else {
-            // Resident input read: push + barrier every block_size tiles. A galaxy
-            // A/B (rope/no-rope, small/large num_tile_cols incl. Wan 40-tile rows)
-            // showed block_size granularity is perf-neutral-to-faster vs the old
-            // f(rope, rows, num_tile_cols) heuristic and the whole-row deep read —
-            // so the heuristic was dropped.
-            DeviceZoneScopedN("R_INPUT");
-            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                const uint32_t grp =
-                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                cb_reserve_back(input_cb, grp);
-                uint32_t input_wr_ptr = get_write_ptr(input_cb);
-                for (uint32_t i = 0; i < grp; i++) {
-#ifndef WAN_ABL_SKIP_INPUT_READ
-                    noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
-#endif
-                    input_wr_ptr += input_tile_bytes;
-                }
-                noc_async_read_barrier();
-                cb_push_back(input_cb, grp);
             }
         }
 
@@ -317,6 +324,31 @@ void kernel_main() {
                         cb_push_back(rope_cos_cb, grp);
                         cb_push_back(rope_sin_cb, grp);
                     }
+                }
+            }
+        }
+
+        // Deferred block-major input: now that weight/bias/cos are resident, stream
+        // the row TWICE in block_size pushes — pass 0 feeds PRE sum-of-squares, pass
+        // 1 feeds the POST x*(1/rms) re-read. input_cb is block-sized so compute pops
+        // each block; the block-major POST consumes pass 1 with its side inputs
+        // already resident (no reader<->compute deadlock).
+        if constexpr (defer_input) {
+            DeviceZoneScopedN("R_INPUT");
+            for (uint32_t pass = 0; pass < 2; pass++) {
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                    cb_reserve_back(input_cb, tiles_in_block);
+                    uint32_t input_wr_ptr = get_write_ptr(input_cb);
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+#ifndef WAN_ABL_SKIP_INPUT_READ
+                        noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
+#endif
+                        input_wr_ptr += input_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(input_cb, tiles_in_block);
                 }
             }
         }
