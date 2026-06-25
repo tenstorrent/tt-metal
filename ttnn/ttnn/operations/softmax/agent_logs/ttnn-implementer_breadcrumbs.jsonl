@@ -2,3 +2,5 @@
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find eltwise_chain BinaryFpuOp and recip_tile usage","ts":"2026-06-25T22:12:58+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find split_work_to_cores and TensorAccessor patterns","ts":"2026-06-25T22:12:58+00:00"}
 {"event":"test_run","status":"pass","test":"test_softmax_basic","params":"dim_W-single_tile + dim_W-multi_tile_non_square","ts":"2026-06-25T22:26:16+00:00"}
+{"event":"test_run","status":"pass","test":"test_softmax.py (full suite)","params":"40/40 passed, all shapes, dims, configs, stability, L1, negative, uniform","ts":"2026-06-25T22:27:08+00:00"}
+{"event":"test_run","status":"pass","test":"test_softmax.py (non-dev mode)","params":"40/40 passed — no race conditions","ts":"2026-06-25T22:27:40+00:00"}
