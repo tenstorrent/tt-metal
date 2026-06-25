@@ -1428,23 +1428,30 @@ def run_case(case: Case) -> bool:
     test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
     logger.info("passed_test: {}", test_passed)
 
-    # Bit-distance ULP measurement — reinterpret the fp32-promoted results as
-    # int32 and take |golden_bits - hw_bits|; the max across finite samples is
-    # the worst-case ULP error. Useful for sanity-checking accuracy claims.
-    golden_fp32 = golden_tensor.to(torch.float32).contiguous().numpy()
-    hw_fp32 = res_tensor.to(torch.float32).contiguous().numpy()
-    finite_mask = np.isfinite(golden_fp32) & np.isfinite(hw_fp32)
-    if finite_mask.any():
-        gb = golden_fp32.view(np.int32)[finite_mask].astype(np.int64)
-        rb = hw_fp32.view(np.int32)[finite_mask].astype(np.int64)
-        int_min = np.iinfo(np.int32).min
+    # Bit-distance ULP measurement — reinterpret each result in its OWN format's
+    # integer width and take |golden_bits - hw_bits|; the max across finite
+    # samples is the worst-case ULP error.
+    torch_out = format_dict[formats.output_format]
+    if formats.output_format == DataFormat.Float32:
+        torch_int, np_int = torch.int32, np.int32
+    else:  # Float16_b / Float16 — 2-byte formats reinterpreted as int16
+        torch_int, np_int = torch.int16, np.int16
+    golden_native = golden_tensor.to(torch_out).contiguous()
+    hw_native = res_tensor.to(torch_out).contiguous()
+    valid_mask = (
+        torch.isfinite(golden_native) & torch.isfinite(hw_native) & (golden_native != 0)
+    ).numpy()
+    if valid_mask.any():
+        gb = golden_native.view(torch_int).numpy()[valid_mask].astype(np.int64)
+        rb = hw_native.view(torch_int).numpy()[valid_mask].astype(np.int64)
+        int_min = np.iinfo(np_int).min
         gb = np.where(gb < 0, int_min - gb, gb)
         rb = np.where(rb < 0, int_min - rb, rb)
         max_ulp = int(np.abs(gb - rb).max())
         logger.info(
-            "[{}] max ULP across {} finite samples: {}",
+            "[{}] max ULP across {} finite nonzero-golden samples: {}",
             mathop.name,
-            int(finite_mask.sum()),
+            int(valid_mask.sum()),
             max_ulp,
         )
     else:
