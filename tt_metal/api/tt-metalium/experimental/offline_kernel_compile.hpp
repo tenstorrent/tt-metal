@@ -27,6 +27,9 @@ namespace tt::tt_metal::experimental {
  *
  * The caller provides target-selection mode, output path, and per-CB compile
  * configuration required to reproduce runtime compile-hash inputs.
+ *
+ * @note Experimental. Will be superseded by the Metal 2.0 offline compilation
+ *       API (work in progress).
  */
 struct OfflineKernelCompileParams {
     /**
@@ -122,6 +125,9 @@ private:
  * @param precompiled_config  Where to find binaries and how to handle missing ones.
  * @return KernelHandle for the created kernel.
  * @throws PrecompiledKernelNotFoundError when binary is missing and policy is Error.
+ *
+ * @note Experimental. Will be superseded by the Metal 2.0 precompiled-kernel
+ *       loading API (work in progress).
  */
 KernelHandle CreateKernelFromPrecompiled(
     Program& program,
@@ -139,6 +145,9 @@ KernelHandle CreateKernelFromPrecompiled(
  * @param program Program containing the kernel and circular buffers.
  * @param kernel  Kernel handle in `program` to derive CB compile configs for.
  * @return Normalized per-CB compile configuration vector.
+ *
+ * @note Experimental. Will be superseded by the Metal 2.0 offline compilation
+ *       API (work in progress).
  */
 std::vector<OfflineKernelCompileParams::CBCompileConfig> CBCompileConfigsFromProgram(
     const Program& program, KernelHandle kernel);
@@ -152,6 +161,9 @@ std::vector<OfflineKernelCompileParams::CBCompileConfig> CBCompileConfigsFromPro
  * @param file_name Kernel source file path.
  * @param config    Kernel config: DataMovementConfig or ComputeConfig.
  * @param params    Offline compilation request and CB compile configs.
+ *
+ * @note Experimental. Will be superseded by the Metal 2.0 offline compilation
+ *       API (work in progress).
  */
 void CompileKernelOffline(
     const std::string& file_name,
