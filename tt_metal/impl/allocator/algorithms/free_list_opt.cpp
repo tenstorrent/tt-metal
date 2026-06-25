@@ -207,7 +207,9 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
         "Size segregated list must be sorted by block address");
     auto it = std::lower_bound(segregated_list.begin(), segregated_list.end(), target_block_index, by_address);
     TT_ASSERT(it != segregated_list.end() && *it == target_block_index, "Block not found in size segregated list");
-    segregated_list.erase(it);
+    if (it != segregated_list.end() && *it == target_block_index) {
+        segregated_list.erase(it);
+    }
 
     size_t offset = start_address - block_address_[target_block_index];
     // Allocated addresses cache is invalidated by allocate_in_block
