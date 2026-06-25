@@ -130,8 +130,13 @@ def validate(input_tensor, gather_dim, *, topology, output_tensor):
     rank = len(input_tensor.shape)
     gd = _canonical_gather_dim(gather_dim, rank)
 
+    # Load-bearing: the fabric writer sends align(page_size, l1_alignment) bytes per
+    # page (ccl_helpers_dataflow.inl:35). The output TensorAccessor spaces pages by the
+    # raw page_size, so a non-16-aligned page_size would make the on-wire (rounded-up)
+    # payload overrun into the next output page. Requiring 16B-aligned pages makes the
+    # round-up a no-op. (page % 16 == 0 already implies page == 16 is fine; no extra clause.)
     page = input_tensor.buffer_page_size()
-    if page % 16 != 0 and page != 16:
+    if page % 16 != 0:
         raise ValueError(f"all_gather: per-shard page size ({page} B) must be 16-byte aligned")
 
     if output_tensor is not None:
