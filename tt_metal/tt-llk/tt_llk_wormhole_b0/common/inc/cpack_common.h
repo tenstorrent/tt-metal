@@ -163,15 +163,6 @@ typedef union
     pack_counters_t f;
 } pack_counters_u;
 
-// Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
-// Distinct from SCALE_DATUM_SIZE (ckernel_defs.h): that switches on the full masked format and has
-// no Tf32 case (returns 1 for Tf32), whereas this keys on (fmt & 0x3) and returns 4 for Tf32 -- the
-// behavior register strides need. The two agree on every other format, so they are NOT interchangeable.
-inline std::uint32_t datum_size_in_bytes(const std::uint32_t data_format)
-{
-    return (data_format & 0x3) == to_underlying(DataFormat::Float32) ? 4 : (data_format & 0x3) == to_underlying(DataFormat::Float16) ? 2 : 1;
-}
-
 // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
 inline void packer_addr_counter_init()
 {
