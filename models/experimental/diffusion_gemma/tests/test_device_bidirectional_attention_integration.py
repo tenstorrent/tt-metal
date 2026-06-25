@@ -26,6 +26,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
+from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
 
@@ -207,16 +208,12 @@ def test_real_attention_denoise_mask_covers_prompt_prefix_for_layer_type(mesh_de
         golden = _torch_attention_reference(hf_model, hf_text_config, layer_idx, canvas_hidden, kv_hidden, mask)
 
     tt_canvas_hidden = _to_device(mesh_device, canvas_hidden.unsqueeze(0))
-    tt_kv_hidden = _to_device(mesh_device, kv_hidden.unsqueeze(0))
-    tt_mask = _to_device(mesh_device, mask)
-    tt_out = tt_model.layers[layer_idx].self_attn(
-        tt_canvas_hidden,
-        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=total_len),
-        is_decode=False,
-        kv_phase=KVCachePhase.DENOISE_READONLY,
-        attn_mask=tt_mask,
-        kv_hidden_states=tt_kv_hidden,
-        q_rope_offset=prompt_len,
+    tt_prompt_hidden = _to_device(mesh_device, prompt_hidden.unsqueeze(0))
+    tt_out = denoise_attention_forward(
+        tt_model,
+        layer_idx=layer_idx,
+        prompt_hidden=tt_prompt_hidden,
+        canvas_hidden=tt_canvas_hidden,
     )
     out = _to_torch(tt_out, mesh_device).squeeze(0)
 
