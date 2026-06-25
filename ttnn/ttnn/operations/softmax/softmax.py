@@ -75,7 +75,7 @@ INPUT_TAGGERS = {
 
 SUPPORTED = {
     "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
-    "layout": [ttnn.TILE_LAYOUT],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned"],
     "rank": [4],
     "dim": [-1, -2],

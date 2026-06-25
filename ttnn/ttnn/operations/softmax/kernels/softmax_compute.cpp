@@ -9,9 +9,17 @@
 //   Phase 3: sum reduce + recip→ cb_recip_sum
 //   Phase 4: mul (broadcast)   → cb_output_tiles
 //
-// All compute phases use kernel-lib helpers. The two cb_pop_front calls
-// are CB maintenance (freeing HeldBulk intermediates between phases),
-// not compute phases.
+// Layout dispatch (CT arg is_rm):
+//   TILE path: math reads from cb_input_tiles (reader populated it directly)
+//   RM path:   tilize cb_rm_in → cb_input_tiles at slab start,
+//               math runs on cb_input_tiles as usual,
+//               untilize cb_output_tiles → cb_rm_out at slab end.
+//
+// The 4-phase math is identical for both layouts — the layout decision lives
+// at the data-access boundary (tilize/untilize wrap), not in the math.
+//
+// All compute phases use kernel-lib helpers. The cb_pop_front calls between
+// phases are CB maintenance (freeing HeldBulk intermediates), not compute.
 
 #include <cstdint>
 
@@ -21,13 +29,17 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 namespace {
 // CB indices — must match program descriptor
 constexpr uint32_t cb_input_tiles = 0;
 constexpr uint32_t cb_scaler_max = 1;
 constexpr uint32_t cb_scaler_sum = 2;
+constexpr uint32_t cb_rm_in = 3;
 constexpr uint32_t cb_output_tiles = 16;
+constexpr uint32_t cb_rm_out = 17;
 constexpr uint32_t cb_max = 24;
 constexpr uint32_t cb_exp = 25;
 constexpr uint32_t cb_recip_sum = 26;
@@ -38,13 +50,22 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    // dim is passed as uint32_t (two's complement); cast to int32_t to recover -1 or -2
     constexpr int32_t dim = static_cast<int32_t>(get_compile_time_arg_val(2));
+    constexpr uint32_t is_rm = get_compile_time_arg_val(3);
 
     uint32_t num_slabs = get_arg_val<uint32_t>(0);  // slabs assigned to this core
 
     // compute_kernel_hw_startup configures SrcA=input, SrcB=scaler, Pack=intermediate
-    compute_kernel_hw_startup(cb_input_tiles, cb_scaler_max, cb_max);
+    // For RM path: icb0=cb_rm_in is the tilize input; ocb=cb_input_tiles is the tilize output.
+    //   The softmax math will later reconfigure SrcA to cb_input_tiles (handled by helpers).
+    // For TILE path: icb0=cb_input_tiles is the math input; icb1=cb_scaler_max; ocb=cb_max.
+    if constexpr (is_rm) {
+        // RM path: hw_startup with tilize's input and output CBs
+        compute_kernel_hw_startup(cb_rm_in, cb_input_tiles);
+    } else {
+        // TILE path: hw_startup with softmax math's input/scaler/output CBs
+        compute_kernel_hw_startup(cb_input_tiles, cb_scaler_max, cb_max);
+    }
 
     // PostReduceOp: reciprocal after sum reduce
     auto recip_op = [](uint32_t dst_idx) {
@@ -56,6 +77,21 @@ void kernel_main() {
     constexpr auto eltwise_shape = ckl::EltwiseShape::grid(Ht, Wt);
 
     for (uint32_t slab = 0; slab < num_slabs; ++slab) {
+        // ===== RM path: tilize cb_rm_in → cb_input_tiles =====
+        if constexpr (is_rm) {
+            // Tilize Ht blocks of Wt tiles each.
+            // InitAndUninit: full init on first call, uninit on last.
+            // WaitBlock: wait for each block before processing.
+            // NoReconfigure: same dtype on input and output (both are the input dtype).
+            ckl::tilize<
+                Wt,
+                cb_rm_in,
+                cb_input_tiles,
+                ckl::tilize_config::InitUninitMode::InitAndUninit,
+                ckl::tilize_config::WaitMode::WaitBlock,
+                ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Ht);
+        }
+
         if constexpr (dim == -1) {
             // ===== dim=-1 (W reduction): REDUCE_ROW, BroadcastDim::Col =====
 
@@ -72,9 +108,6 @@ void kernel_main() {
                 ckl::NoOp>(reduce_block_shape);
 
             // Phase 2: Sub + Exp (fused chain)
-            //   BinaryFpu(Sub, Col): cb_input_tiles(Bulk, pops at end) - cb_max(HeldBulk, no pop) → D0
-            //   Exp: D0
-            //   PackTile: cb_exp (Streaming)
             ckl::eltwise_chain(
                 eltwise_shape,
                 ckl::BinaryFpu<
@@ -108,7 +141,6 @@ void kernel_main() {
                 reduce_block_shape, ckl::ReduceInputMemoryLayout::contiguous(), ckl::NoAccumulation{}, recip_op);
 
             // Phase 4: Mul (broadcast recip_sum across W columns)
-            //   cb_exp(Bulk, pops at end) * cb_recip_sum(HeldBulk, no pop) → cb_output_tiles(Streaming)
             ckl::mul<
                 cb_exp,
                 cb_recip_sum,
@@ -141,8 +173,6 @@ void kernel_main() {
                 ckl::NoOp>(reduce_block_shape);
 
             // Phase 2: Sub + Exp (fused chain)
-            //   BinaryFpu(Sub, Row): cb_input_tiles(Bulk) - cb_max(HeldBulk, Row) → D0
-            //   Exp → PackTile(cb_exp, Streaming)
             ckl::eltwise_chain(
                 eltwise_shape,
                 ckl::BinaryFpu<
@@ -191,6 +221,21 @@ void kernel_main() {
 
             // Pop cb_recip_sum — HeldBulk left it unpopped (Wt tiles for REDUCE_COL)
             cb_pop_front(cb_recip_sum, Wt);
+        }
+
+        // ===== RM path: untilize cb_output_tiles → cb_rm_out =====
+        if constexpr (is_rm) {
+            // Untilize Ht blocks of Wt tiles each.
+            // InitAndUninit: full init on first call, uninit on last.
+            // WaitBlock: wait for each block before processing.
+            // NoReconfigure: same dtype on input and output.
+            ckl::untilize<
+                Wt,
+                cb_output_tiles,
+                cb_rm_out,
+                ckl::untilize_config::InitUninitMode::InitAndUninit,
+                ckl::untilize_config::WaitMode::WaitBlock,
+                ckl::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Ht);
         }
     }
 }

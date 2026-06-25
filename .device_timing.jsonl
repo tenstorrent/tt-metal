@@ -1,0 +1,89 @@
+{"event": "phase", "phase": "planner", "state": "start", "at_ms": 1782420265060}
+{"event": "phase", "phase": "planner", "state": "end", "at_ms": 1782425312346}
+{"event": "phase", "phase": "implementer", "state": "start", "at_ms": 1782425312863}
+{"source":"run_safe_pytest","pid":642489,"started_at_ms":1782425977121,"wait_ms":3,"run_ms":24051,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":643233,"started_at_ms":1782426036395,"wait_ms":3,"run_ms":10141,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":644007,"started_at_ms":1782426110864,"wait_ms":2,"run_ms":10183,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":644491,"started_at_ms":1782426137769,"wait_ms":2,"run_ms":10112,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":645002,"started_at_ms":1782426171982,"wait_ms":3,"run_ms":14875,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":645822,"started_at_ms":1782426207702,"wait_ms":3,"run_ms":17047,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":647094,"started_at_ms":1782426269767,"wait_ms":2,"run_ms":17237,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":648180,"started_at_ms":1782426290661,"wait_ms":3,"run_ms":12927,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":649524,"started_at_ms":1782426348500,"wait_ms":3,"run_ms":22373,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":0}
+{"source":"run_safe_pytest","pid":652407,"started_at_ms":1782426391761,"wait_ms":3,"run_ms":28197,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":0}
+{"source":"run_safe_pytest","pid":654860,"started_at_ms":1782426431622,"wait_ms":2,"run_ms":22890,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":0}
+{"event": "phase", "phase": "implementer", "state": "end", "at_ms": 1782426472475}
+{"event": "phase", "phase": "verifier", "state": "start", "at_ms": 1782426472475}
+{"source":"run_safe_pytest","pid":657745,"started_at_ms":1782426582768,"wait_ms":3,"run_ms":7592,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":3}
+{"source":"run_safe_pytest","pid":659665,"started_at_ms":1782426792669,"wait_ms":2,"run_ms":9757,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":0}
+{"source":"eval_test_runner","pid":660177,"started_at_ms":1782426808478,"wait_ms":3402,"run_ms":222889,"test_path":"eval/golden_tests/softmax/","exit_code":0}
+{"source":"run_safe_pytest","pid":676276,"started_at_ms":1782427187521,"wait_ms":3,"run_ms":9766,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":0}
+{"source":"eval_test_runner","pid":676785,"started_at_ms":1782427202568,"wait_ms":3445,"run_ms":138291,"test_path":"eval/golden_tests/softmax/","exit_code":0}
+{"source":"run_safe_pytest","pid":689771,"started_at_ms":1782427379296,"wait_ms":3,"run_ms":6707,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_fp32_dest_acc_false_raises","exit_code":0}
+{"source":"run_safe_pytest","pid":690086,"started_at_ms":1782427410519,"wait_ms":3,"run_ms":7294,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_baseline.py","exit_code":0}
+{"source":"run_safe_pytest","pid":690366,"started_at_ms":1782427424092,"wait_ms":2,"run_ms":10402,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":0}
+{"source":"run_safe_pytest","pid":691221,"started_at_ms":1782427520183,"wait_ms":3,"run_ms":17400,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_extended.py","exit_code":0}
+{"source":"run_safe_pytest","pid":692025,"started_at_ms":1782427543918,"wait_ms":3,"run_ms":11570,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":0}
+{"event": "phase", "phase": "verifier", "state": "end", "at_ms": 1782427595446}
+{"event": "phase", "phase": "phase0_golden", "state": "start", "at_ms": 1782427602979}
+{"source":"eval_test_runner","pid":694202,"started_at_ms":1782427602982,"wait_ms":3361,"run_ms":138188,"test_path":"eval/golden_tests/softmax/","exit_code":0}
+{"event": "phase", "phase": "phase0_golden", "state": "end", "at_ms": 1782427744534}
+{"event": "phase", "phase": "refinement_1", "state": "start", "at_ms": 1782427749079}
+{"source":"run_safe_pytest","pid":707787,"started_at_ms":1782427882878,"wait_ms":2,"run_ms":8682,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":0}
+{"source":"tt-probe","pid":709194,"started_at_ms":1782428021771,"wait_ms":176,"run_ms":16215,"test_path":"softmax","exit_code":1}
+{"source":"tt-probe","pid":709388,"started_at_ms":1782428044751,"wait_ms":177,"run_ms":30098,"test_path":"softmax","exit_code":0}
+{"source":"run_safe_pytest","pid":710953,"started_at_ms":1782428093897,"wait_ms":2,"run_ms":8702,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":0}
+{"source":"run_safe_pytest","pid":711468,"started_at_ms":1782428106909,"wait_ms":3,"run_ms":16625,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_extended.py","exit_code":0}
+{"source":"run_safe_pytest","pid":712376,"started_at_ms":1782428130812,"wait_ms":2,"run_ms":29280,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":713933,"started_at_ms":1782428170667,"wait_ms":2,"run_ms":139943,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":721721,"started_at_ms":1782428330790,"wait_ms":3,"run_ms":6808,"test_path":"eval/golden_tests/softmax/test_regression.py::test_small_magnitude_input","exit_code":1}
+{"source":"run_safe_pytest","pid":722196,"started_at_ms":1782428344291,"wait_ms":2,"run_ms":6811,"test_path":"eval/golden_tests/softmax/test_regression.py::test_small_magnitude_input","exit_code":1}
+{"source":"run_safe_pytest","pid":722816,"started_at_ms":1782428365831,"wait_ms":3,"run_ms":11046,"test_path":"eval/golden_tests/softmax/test_translated.py::test_softmax_accuracy","exit_code":1}
+{"source":"run_safe_pytest","pid":723416,"started_at_ms":1782428383667,"wait_ms":2,"run_ms":6900,"test_path":"eval/golden_tests/softmax/test_translated.py::test_softmax_accuracy[shape0-True-False-3-False]","exit_code":1}
+{"source":"run_safe_pytest","pid":723813,"started_at_ms":1782428397149,"wait_ms":2,"run_ms":14315,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":724154,"started_at_ms":1782428415531,"wait_ms":3,"run_ms":14309,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":724498,"started_at_ms":1782428435694,"wait_ms":2,"run_ms":14335,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":724847,"started_at_ms":1782428454720,"wait_ms":3,"run_ms":14297,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":725323,"started_at_ms":1782428501771,"wait_ms":3,"run_ms":13915,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement1_dtypes.py","exit_code":0}
+{"source":"run_safe_pytest","pid":726150,"started_at_ms":1782428520900,"wait_ms":2,"run_ms":98969,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py","exit_code":1}
+{"source":"run_safe_pytest","pid":730720,"started_at_ms":1782428627877,"wait_ms":3,"run_ms":6748,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py::test_softmax_precision_matrix[64x64-fp32-LoFi-fp32_acc-uniform]","exit_code":1}
+{"source":"run_safe_pytest","pid":731034,"started_at_ms":1782428637817,"wait_ms":3,"run_ms":6782,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py::test_softmax_precision_matrix[64x64-fp32-LoFi-fp32_acc-uniform]","exit_code":1}
+{"source":"run_safe_pytest","pid":731353,"started_at_ms":1782428648413,"wait_ms":2,"run_ms":6786,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py::test_softmax_precision_matrix[64x64-fp32-LoFi-fp32_acc-uniform]","exit_code":1}
+{"source":"run_safe_pytest","pid":731670,"started_at_ms":1782428660335,"wait_ms":3,"run_ms":6759,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py::test_softmax_precision_matrix[64x64-fp32-LoFi-fp32_acc-uniform]","exit_code":1}
+{"source":"run_safe_pytest","pid":731987,"started_at_ms":1782428670916,"wait_ms":2,"run_ms":6732,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py::test_softmax_precision_matrix[64x64-fp32-LoFi-fp32_acc-uniform]","exit_code":1}
+{"source":"run_safe_pytest","pid":732301,"started_at_ms":1782428681667,"wait_ms":2,"run_ms":6766,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py::test_softmax_precision_matrix[64x64-fp32-LoFi-fp32_acc-uniform]","exit_code":1}
+{"source":"run_safe_pytest","pid":732642,"started_at_ms":1782428699169,"wait_ms":3,"run_ms":18404,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_precision_matrix.py","exit_code":0}
+{"source":"run_safe_pytest","pid":734918,"started_at_ms":1782428757566,"wait_ms":3,"run_ms":24083,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":0}
+{"event": "phase", "phase": "refinement_1", "state": "end", "at_ms": 1782428820992}
+{"event": "phase", "phase": "refinement_1_golden", "state": "start", "at_ms": 1782428821410}
+{"source":"eval_test_runner","pid":738299,"started_at_ms":1782428821413,"wait_ms":3374,"run_ms":185387,"test_path":"eval/golden_tests/softmax/","exit_code":0}
+{"event": "phase", "phase": "refinement_1_golden", "state": "end", "at_ms": 1782429010176}
+{"event": "phase", "phase": "refinement_2", "state": "start", "at_ms": 1782429013729}
+{"source":"run_safe_pytest","pid":761436,"started_at_ms":1782430042302,"wait_ms":3,"run_ms":7517,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":1}
+{"source":"run_safe_pytest","pid":761793,"started_at_ms":1782430056113,"wait_ms":2,"run_ms":7495,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":1}
+{"source":"run_safe_pytest","pid":762345,"started_at_ms":1782430097811,"wait_ms":2,"run_ms":23290,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":0}
+{"source":"run_safe_pytest","pid":763818,"started_at_ms":1782430145872,"wait_ms":2,"run_ms":7635,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py::test_softmax_basic","exit_code":0}
+{"source":"run_safe_pytest","pid":764276,"started_at_ms":1782430162314,"wait_ms":2,"run_ms":11744,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":0}
+{"source":"run_safe_pytest","pid":765026,"started_at_ms":1782430180221,"wait_ms":3,"run_ms":6551,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement2_layout.py::test_softmax_rm_basic[fp32-single_tile-dim_W]","exit_code":3}
+{"source":"run_safe_pytest","pid":765301,"started_at_ms":1782430193061,"wait_ms":3,"run_ms":8046,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement2_layout.py","exit_code":0}
+{"source":"run_safe_pytest","pid":765754,"started_at_ms":1782430208001,"wait_ms":2,"run_ms":35767,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement2_layout.py","exit_code":2}
+{"source":"run_safe_pytest","pid":766528,"started_at_ms":1782430289488,"wait_ms":3,"run_ms":8044,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement2_layout.py","exit_code":0}
+{"source":"run_safe_pytest","pid":766951,"started_at_ms":1782430304829,"wait_ms":3,"run_ms":41780,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement2_layout.py","exit_code":0}
+{"source":"run_safe_pytest","pid":769135,"started_at_ms":1782430356351,"wait_ms":3,"run_ms":15966,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_layout_matrix.py","exit_code":1}
+{"source":"run_safe_pytest","pid":770053,"started_at_ms":1782430376120,"wait_ms":2,"run_ms":7376,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_layout_matrix.py","exit_code":1}
+{"source":"run_safe_pytest","pid":770424,"started_at_ms":1782430389077,"wait_ms":3,"run_ms":7379,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_layout_matrix.py","exit_code":1}
+{"source":"run_safe_pytest","pid":770807,"started_at_ms":1782430404760,"wait_ms":2,"run_ms":39450,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_layout_matrix.py","exit_code":0}
+{"source":"run_safe_pytest","pid":773071,"started_at_ms":1782430453604,"wait_ms":2,"run_ms":157423,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":0}
+{"source":"run_safe_pytest","pid":781268,"started_at_ms":1782430621507,"wait_ms":3,"run_ms":5944,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":3}
+{"source":"run_safe_pytest","pid":781533,"started_at_ms":1782430631503,"wait_ms":2,"run_ms":60899,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":784797,"started_at_ms":1782430699462,"wait_ms":3,"run_ms":8234,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":785117,"started_at_ms":1782430711949,"wait_ms":3,"run_ms":5962,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":3}
+{"source":"run_safe_pytest","pid":785524,"started_at_ms":1782430736715,"wait_ms":3,"run_ms":93583,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":790090,"started_at_ms":1782430839850,"wait_ms":2,"run_ms":18042,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":790446,"started_at_ms":1782430862287,"wait_ms":3,"run_ms":18047,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":790799,"started_at_ms":1782430886324,"wait_ms":2,"run_ms":18030,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":791035,"started_at_ms":1782430904364,"wait_ms":3,"run_ms":18086,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":791396,"started_at_ms":1782430929368,"wait_ms":3,"run_ms":18088,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":791632,"started_at_ms":1782430947468,"wait_ms":2,"run_ms":18085,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":791871,"started_at_ms":1782430965564,"wait_ms":2,"run_ms":18070,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":792233,"started_at_ms":1782430992321,"wait_ms":3,"run_ms":18096,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
