@@ -29,14 +29,27 @@ public:
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
-    /// Create default dispatch core config,
+    /// Create a hardware-aware dispatch core config that prefers maximum available worker cores.
     ///
-    /// Default type: ETH for N300, T3K, N300_2x2 clusters; else WORKER
-    /// Default axis: Blackhole without MUX -> COL; otherwise ROW
-    static DispatchCoreConfig create_dispatch_core_config(
+    /// Any field left unspecified is resolved from the active cluster/arch:
+    ///   type:  ETH for N300, T3K, N300_2x2 clusters; otherwise WORKER.
+    ///   axis:  Blackhole without fabric tensix MUX -> COL; otherwise ROW.
+    /// Throws if type == ETH and axis == COL, or if axis == ROW on Blackhole without fabric tensix MUX.
+    static DispatchCoreConfig create_with_max_worker_availability(
         std::optional<DispatchCoreType> dispatch_core_type = std::nullopt,
         std::optional<DispatchCoreAxis> dispatch_core_axis = std::nullopt,
-        std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config = std::nullopt);
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED);
+
+    /// Create a hardware-aware dispatch core config that prefers maximum dispatch performance.
+    ///
+    /// Mirrors the default-constructor policy. Any field left unspecified is resolved as:
+    ///   type:  WORKER.
+    ///   axis:  Blackhole without fabric tensix MUX -> COL; otherwise ROW.
+    /// Throws if type == ETH and axis == COL, or if axis == ROW on Blackhole without fabric tensix MUX.
+    static DispatchCoreConfig create_with_max_dispatch_performance(
+        std::optional<DispatchCoreType> dispatch_core_type = std::nullopt,
+        std::optional<DispatchCoreAxis> dispatch_core_axis = std::nullopt,
+        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED);
 
     static constexpr auto attribute_names = std::forward_as_tuple("type", "axis");
     auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }

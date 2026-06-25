@@ -20,7 +20,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
         l1_small_size,
         trace_region_size,
         num_command_queues,
-        dispatch_core_config.value_or(tt::tt_metal::DispatchCoreConfig::create_dispatch_core_config()),
+        dispatch_core_config.value_or(tt::tt_metal::DispatchCoreConfig::create_with_max_worker_availability()),
         {},
         worker_l1_size);
 }

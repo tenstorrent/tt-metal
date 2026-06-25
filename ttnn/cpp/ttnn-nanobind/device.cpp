@@ -44,6 +44,7 @@
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
@@ -137,13 +138,31 @@ void py_device_module_types(nb::module_& m_device) {
             nb::arg("type"),
             nb::arg("axis"))
         .def_static(
-            "create_dispatch_core_config",
-            &tt::tt_metal::DispatchCoreConfig::create_dispatch_core_config,
+            "create_with_max_worker_availability",
+            [](std::optional<tt::tt_metal::DispatchCoreType> type,
+               std::optional<tt::tt_metal::DispatchCoreAxis> axis,
+               std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+                return tt::tt_metal::DispatchCoreConfig::create_with_max_worker_availability(
+                    type, axis, fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED));
+            },
             nb::kw_only(),
             nb::arg("type") = nb::none(),
             nb::arg("axis") = nb::none(),
             nb::arg("fabric_tensix_config") = nb::none(),
-            "Create a dispatch core config with eager hardware-aware default resolution.")
+            "Create a cluster/arch-aware dispatch core config that prefers maximum available worker cores.")
+        .def_static(
+            "create_with_max_dispatch_performance",
+            [](std::optional<tt::tt_metal::DispatchCoreType> type,
+               std::optional<tt::tt_metal::DispatchCoreAxis> axis,
+               std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+                return tt::tt_metal::DispatchCoreConfig::create_with_max_dispatch_performance(
+                    type, axis, fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED));
+            },
+            nb::kw_only(),
+            nb::arg("type") = nb::none(),
+            nb::arg("axis") = nb::none(),
+            nb::arg("fabric_tensix_config") = nb::none(),
+            "Create a cluster/arch-aware dispatch core config that prefers maximum dispatch performance.")
         .def_prop_ro("type", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_type(); })
         .def_prop_ro(
             "axis", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_axis(); });
@@ -228,7 +247,7 @@ void device_module(nb::module_& m_device) {
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config.value_or(tt::tt_metal::DispatchCoreConfig::create_dispatch_core_config()),
+                dispatch_core_config.value_or(tt::tt_metal::DispatchCoreConfig::create_with_max_worker_availability()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -261,7 +280,7 @@ void device_module(nb::module_& m_device) {
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config.value_or(tt::tt_metal::DispatchCoreConfig::create_dispatch_core_config()),
+                dispatch_core_config.value_or(tt::tt_metal::DispatchCoreConfig::create_with_max_worker_availability()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
