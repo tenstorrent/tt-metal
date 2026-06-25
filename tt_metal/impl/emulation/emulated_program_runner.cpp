@@ -60,6 +60,7 @@
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/tile_counter.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
+#include "emule_fiber_scheduler.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <tt-logger/tt-logger.hpp>
@@ -151,6 +152,21 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
     return nullptr;
 }
 
+// Fiber-scheduler bridge — the dlopen'd kernel .so calls these (declared in
+// include/jit_hw/internal/emule_fiber_bridge.h) to park/wake/yield on the one
+// scheduler instance. Resolved at dlopen via -rdynamic, like the resolvers above.
+namespace efib = tt::tt_metal::emule_fiber;
+extern "C" void __emule_fiber_lock(void) { efib::FiberScheduler::instance().lock(); }
+extern "C" void __emule_fiber_unlock(void) { efib::FiberScheduler::instance().unlock(); }
+extern "C" void __emule_fiber_park_locked(const void* key) {
+    efib::FiberScheduler::instance().park_locked(key);
+}
+extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
+extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
+extern "C" void __emule_fiber_note_publish(unsigned pages) {
+    efib::FiberScheduler::instance().note_publish(pages);
+}
+
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
@@ -240,6 +256,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
                     uint32_t val;
                     std::memcpy(&val, src, sizeof(uint32_t));
                     reinterpret_cast<std::atomic<uint32_t>*>(dst)->store(val, std::memory_order_release);
+                    efib::FiberScheduler::instance().wake(dst);  // wake the target core's sem waiter
                 } else {
                     std::memcpy(dst, src, size);
                     std::atomic_thread_fence(std::memory_order_release);
@@ -2106,167 +2123,107 @@ static void launch_cores(
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;
 #endif
-    std::vector<std::thread> core_threads;
-    std::vector<std::exception_ptr> core_exceptions(core_setups.size());
+    // Fiber engine: one cooperatively-scheduled fiber per (core, RISC), multiplexed
+    // onto a runtime-sized worker pool (TT_EMULE_FIBER_WORKERS). A blocked fiber parks
+    // (yields its worker) instead of blocking an OS thread — no thread ceiling, no spin.
+    // See docs/fiber-engine.md.
+    auto& sched = tt::tt_metal::emule_fiber::FiberScheduler::instance();
 
-    // Startup barrier modeling silicon's simultaneous multi-core dispatch. emule
-    // spawns kernel threads sequentially, so without it an early thread can run its
-    // whole kernel (including cross-core semaphore increments) before a later peer
-    // has executed its prologue — e.g. racing ahead of an argmax reducer's k=0
-    // done_sem reset. Releasing all threads from one barrier restores "all cores
-    // start together".
-    size_t total_kernel_threads = 0;
-    for (const auto& cs : core_setups) {
-        total_kernel_threads += cs.ki_list->size();
-    }
-    std::atomic<uint32_t> kernel_start_barrier{0};
+    // The fibers borrow the per-core DFB interface arrays; own them here so they
+    // outlive run_until_idle.
+    std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>> dfb_keepalive;
+    dfb_keepalive.reserve(core_setups.size());
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
-        core_threads.emplace_back(
-            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx],
-             &kernel_start_barrier, total_kernel_threads]() {
-                try {
-                    auto* core = cs.core;
-                    uint8_t* l1_data = core->l1_data();
-                    tt_emule::CBSyncState* cb_array = core->cb_sync_array();
-                    tt_emule::TileCounterArray* tc_array = cs.has_dfbs ? core->tile_counters() : nullptr;
-                    uint8_t px = cs.phys_x;
-                    uint8_t py = cs.phys_y;
+        auto& cs = core_setups[core_idx];
+        auto* core = cs.core;
+        uint8_t* l1_data = core->l1_data();
+        tt_emule::CBSyncState* cb_array = core->cb_sync_array();
+        tt_emule::TileCounterArray* tc_array = cs.has_dfbs ? core->tile_counters() : nullptr;
+        const uint8_t px = cs.phys_x;
+        const uint8_t py = cs.phys_y;
+        const uint32_t lx = cs.logical_core.x;
+        const uint32_t ly = cs.logical_core.y;
 
-                    std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
-                    if (cs.has_dfbs) {
-                        per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
-                    }
+        // Per-core logical coords (shared by all RISC fibers on this core).
+        auto& cstate = core->core_state();
+        cstate.logical_x = lx;
+        cstate.logical_y = ly;
 
-                    std::vector<std::thread> threads;
-                    std::vector<std::exception_ptr> kernel_exceptions(cs.ki_list->size());
-                    uint32_t lx = cs.logical_core.x;
-                    uint32_t ly = cs.logical_core.y;
-                    for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
-                        KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
-                        tt_emule::EmuleDFBInterface* dfb_array =
-                            cs.has_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
-                        threads.emplace_back([ki_ptr,
-                                              core,
-                                              l1_data,
-                                              dram_data,
-                                              cb_array,
-                                              dfb_array,
-                                              tc_array,
-                                              core_map_ptr,
-                                              px,
-                                              py,
-                                              lx,
-                                              ly,
-                                              kidx,
-                                              &kernel_start_barrier,
-                                              total_kernel_threads,
-                                              &kep = kernel_exceptions[kidx]]() {
-                            (void)kidx;
-                            auto& ki = *ki_ptr;
-                            // Per-thread execution context — the single source of truth
-                            // for this RISC's thread-local state (emule_thread_ctx.h),
-                            // specialized by RISC type; freed at lambda scope exit. Set
-                            // FIRST so the identity writes below land in the ctx.
-                            std::unique_ptr<ThreadCommonCtx> emule_ctx =
-                                ki.is_tensix
-                                    ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
-                                    : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
-                            __emule_self = emule_ctx.get();
-
-                            __emule_self->rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
-                                      ki.kernel_config_base + ki.rta_offset_in_kc))
-                                : nullptr;
-                            __emule_self->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
-                                      ki.kernel_config_base + ki.crta_offset_in_kc))
-                                : nullptr;
-                            __emule_self->bridge_l1 = l1_data;
-                            __emule_self->bridge_dram = dram_data;
-                            __emule_self->cbs = cb_array;
-                            __emule_self->dfbs = dfb_array;
-                            __emule_self->tc_array = tc_array;
-                            __emule_self->processor_id = ki.processor_id;
-                            __emule_self->core_obj = core;
-                            __emule_self->device = nullptr;
-                            __emule_self->core_map = core_map_ptr;
-                            __emule_self->neo_id = ki.is_tensix ? ki.processor_id : 0;
-                            __emule_self->trisc_id = 0;
-                            __emule_self->num_threads = ki.num_threads;
-                            __emule_self->my_thread_id = ki.thread_idx;
-
-                            // my_x/my_y stay runner-set globals (silicon-named; read by
-                            // unmodified upstream). Logical coords go in per-core CoreState.
-                            my_x[0] = px; my_x[1] = px;
-                            my_y[0] = py; my_y[1] = py;
-                            auto& cstate = core->core_state();
-                            cstate.logical_x = lx; cstate.logical_y = ly;
-                            __emule_self->core = &cstate;
-
-                            // Startup barrier (declared in launch_cores): all
-                            // kernel threads start together.
-                            kernel_start_barrier.fetch_add(1, std::memory_order_acq_rel);
-                            while (kernel_start_barrier.load(std::memory_order_acquire) < total_kernel_threads) {
-                                std::this_thread::yield();
-                            }
-
-                            log_debug(
-                                tt::LogMetal,
-                                "  Launching kernel[{}] on logical ({},{}) phys ({},{}) rta_off=0x{:x} crta_off=0x{:x}",
-                                kidx, lx, ly, px, py, ki.rta_offset_in_kc, ki.crta_offset_in_kc);
-
-                            try {
-                                for (size_t t = 0; t < ki.variants.size(); ++t) {
-                                    if (ki.run_all_variants) {
-                                        __emule_self->trisc_id = static_cast<uint8_t>(t);
-                                    }
-                                    ki.variants[t]();
-                                }
-                            } catch (...) {
-                                kep = std::current_exception();
-                            }
-
-                            __emule_self = nullptr;  // ctx auto-freed at lambda scope exit
-                        });
-                    }
-
-                    for (auto& t : threads) {
-                        t.join();
-                    }
-
-                    // Rethrow first kernel exception
-                    for (size_t i = 0; i < kernel_exceptions.size(); ++i) {
-                        if (kernel_exceptions[i]) {
-                            try {
-                                std::rethrow_exception(kernel_exceptions[i]);
-                            } catch (const std::exception& e) {
-                                std::throw_with_nested(std::runtime_error(
-                                    "EMULE: kernel[" + std::to_string(i) + "] on core (" + std::to_string(lx) + "," +
-                                    std::to_string(ly) + ") failed"));
-                            } catch (...) {
-                                throw std::runtime_error(
-                                    "EMULE: kernel[" + std::to_string(i) + "] on core (" + std::to_string(lx) + "," +
-                                    std::to_string(ly) + ") threw unknown exception");
-                            }
-                        }
-                    }
-                } catch (...) {
-                    core_ep = std::current_exception();
-                }
-            });
-    }
-
-    for (auto& t : core_threads) {
-        t.join();
-    }
-
-    // Rethrow first core exception
-    for (size_t i = 0; i < core_exceptions.size(); ++i) {
-        if (core_exceptions[i]) {
-            std::rethrow_exception(core_exceptions[i]);
+        std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
+        if (cs.has_dfbs) {
+            per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
         }
+
+        for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
+            KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
+            auto& ki = *ki_ptr;
+            tt_emule::EmuleDFBInterface* dfb_array = cs.has_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
+
+            // Build + populate the fiber-owned ctx (set-once identity). The scheduler
+            // repoints __emule_self to this ctx on swap-in; my_x/my_y are restored from
+            // the FiberIdentity (they cannot move into the ctx — silicon-named globals).
+            std::unique_ptr<ThreadCommonCtx> ctx =
+                ki.is_tensix ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
+                             : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
+            ctx->rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.rta_offset_in_kc))
+                : nullptr;
+            ctx->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
+                : nullptr;
+            ctx->bridge_l1 = l1_data;
+            ctx->bridge_dram = dram_data;
+            ctx->cbs = cb_array;
+            ctx->dfbs = dfb_array;
+            ctx->tc_array = tc_array;
+            ctx->processor_id = ki.processor_id;
+            ctx->core_obj = core;
+            ctx->device = nullptr;
+            ctx->core_map = core_map_ptr;
+            ctx->neo_id = ki.is_tensix ? ki.processor_id : 0;
+            ctx->trisc_id = 0;
+            ctx->num_threads = ki.num_threads;
+            ctx->my_thread_id = ki.thread_idx;
+            ctx->core = &cstate;
+
+            tt::tt_metal::emule_fiber::FiberIdentity id;
+            id.phys_x = px;
+            id.phys_y = py;
+            id.logical_x = lx;
+            id.logical_y = ly;
+            id.proc_id = ki.processor_id;
+            id.kernel_src = nullptr;
+
+            // The fiber entry is the kernel body. __emule_self is set by the scheduler
+            // on swap-in; the no-op start-barrier of the OS-thread model is gone (a
+            // blocked fiber parks rather than spins, so start order is irrelevant).
+            sched.spawn(
+                [ki_ptr, lx, ly]() {
+                    auto& ki = *ki_ptr;
+                    try {
+                        for (size_t t = 0; t < ki.variants.size(); ++t) {
+                            if (ki.run_all_variants) {
+                                __emule_self->trisc_id = static_cast<uint8_t>(t);
+                            }
+                            ki.variants[t]();
+                        }
+                    } catch (...) {
+                        std::throw_with_nested(std::runtime_error(
+                            "EMULE: kernel on core (" + std::to_string(lx) + "," + std::to_string(ly) +
+                            ") failed"));
+                    }
+                },
+                std::move(ctx),
+                id);
+        }
+
+        dfb_keepalive.push_back(std::move(per_thread_dfbs));
     }
+
+    // Run all registered fibers to completion; rethrows the first kernel exception,
+    // throws on a quiescent deadlock, aborts with a dump on livelock/hang.
+    sched.run_until_idle();
 }
 
 // ---------------------------------------------------------------------------
