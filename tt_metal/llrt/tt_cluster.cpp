@@ -1524,6 +1524,18 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, CoreCoord eth_core) con
             // UBB 5 has external cables on channels 4-7
             is_external_cable = (chan_id >= 4 and chan_id <= 7);
         }
+    } else if (board_type == BoardType::UBB_BLACKHOLE) {
+        // QSFP_DD port channels on UBB_BLACKHOLE (see tools/scaleout/board/board.cpp).
+        auto ubb_asic_id = get_ubb_asic_id(physical_chip_id);
+        if (ubb_asic_id == 1) {
+            is_external_cable = (chan_id <= 3) || (chan_id == 8) || (chan_id == 9);
+        } else if (ubb_asic_id == 2 || ubb_asic_id == 3 || ubb_asic_id == 4) {
+            is_external_cable = (chan_id <= 1) || (chan_id == 8) || (chan_id == 9);
+        } else if (ubb_asic_id == 5) {
+            is_external_cable = (chan_id == 2 || chan_id == 3) || (chan_id == 8) || (chan_id == 9);
+        } else if (ubb_asic_id >= 6 && ubb_asic_id <= 8) {
+            is_external_cable = (chan_id == 8) || (chan_id == 9);
+        }
     } else if (board_type == BoardType::N300) {
         // N300 has external cables on channels 8-9 on MMIO chips and channels 0-1 on non-MMIO chips
         auto mmio_device_id = this->get_associated_mmio_device(physical_chip_id);

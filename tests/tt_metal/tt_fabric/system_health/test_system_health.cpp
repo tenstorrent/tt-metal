@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
@@ -366,7 +367,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& eth_connections = cluster.get_ethernet_connections();
     std::uint32_t num_expected_chips = 0;
-    std::uint32_t num_connections_per_side = 0;
+    std::uint32_t num_internal_connections_per_side = 0;
+    std::uint32_t num_external_connections_per_side = 0;
     std::uint32_t num_expected_mmio_chips = 0;
 
     auto input_args = ::testing::internal::GetArgvs();
@@ -404,31 +406,39 @@ TEST(Cluster, TestMeshFullConnectivity) {
     if (cluster_type == tt::tt_metal::ClusterType::T3K) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 4;
-        num_connections_per_side = 2;
+        num_internal_connections_per_side = 2;
+        num_external_connections_per_side = 2;
     } else if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         num_expected_chips = 32;
         num_expected_mmio_chips = 32;
-        num_connections_per_side = 4;
+        num_internal_connections_per_side = 4;
+        num_external_connections_per_side = 4;
     } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         num_expected_chips = 32;
         num_expected_mmio_chips = 32;
-        num_connections_per_side = 2;
+        // Intra-UBB links use 2 ethernet channels; cross-tray QSFP links use 4.
+        num_internal_connections_per_side = 2;
+        num_external_connections_per_side = 4;
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X2) {
         num_expected_chips = 2;
         num_expected_mmio_chips = 2;
-        num_connections_per_side = 4;
+        num_internal_connections_per_side = 4;
+        num_external_connections_per_side = 4;
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X4) {
         num_expected_chips = 4;
         num_expected_mmio_chips = 4;
-        num_connections_per_side = 4;
+        num_internal_connections_per_side = 4;
+        num_external_connections_per_side = 4;
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X8) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 8;
-        num_connections_per_side = 2;
+        num_internal_connections_per_side = 2;
+        num_external_connections_per_side = 2;
     } else if (cluster_type == tt::tt_metal::ClusterType::P300_X2) {
         num_expected_chips = 4;
         num_expected_mmio_chips = 4;
-        num_connections_per_side = 2;
+        num_internal_connections_per_side = 2;
+        num_external_connections_per_side = 2;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << enchantum::to_string(cluster_type);
     }
@@ -444,13 +454,15 @@ TEST(Cluster, TestMeshFullConnectivity) {
     std::uint32_t num_target_connections = 0;
     std::tie(num_target_connections, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--min-connections", 0);
-    if (num_target_connections > num_connections_per_side) {
+    const std::uint32_t max_connections_per_side =
+        std::max(num_internal_connections_per_side, num_external_connections_per_side);
+    if (num_target_connections > max_connections_per_side) {
         log_warning(
             tt::LogTest,
             "Min connections specified is greater than expected num connections per side for {}, overriding to {}.",
             enchantum::to_string(cluster_type),
-            num_connections_per_side);
-        num_target_connections = num_connections_per_side;
+            max_connections_per_side);
+        num_target_connections = max_connections_per_side;
     }
 
     std::optional<FabricType> target_system_topology = std::nullopt;
@@ -550,9 +562,29 @@ TEST(Cluster, TestMeshFullConnectivity) {
                     << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
                     << ", expected at least " << num_target_connections;
             } else {
-                EXPECT_EQ(count, num_connections_per_side)
-                    << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str() << ", expected "
-                    << num_connections_per_side;
+                if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
+                    cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+                    const auto internal_count_it = num_internal_connections_to_chip.find(other_chip);
+                    const auto external_count_it = num_external_connections_to_chip.find(other_chip);
+                    const std::uint32_t internal_count =
+                        internal_count_it != num_internal_connections_to_chip.end() ? internal_count_it->second : 0;
+                    const std::uint32_t external_count =
+                        external_count_it != num_external_connections_to_chip.end() ? external_count_it->second : 0;
+                    if (internal_count > 0) {
+                        EXPECT_EQ(internal_count, num_internal_connections_per_side)
+                            << chip_ss.str() << " has " << internal_count << " internal connections to "
+                            << other_chip_ss.str() << ", expected " << num_internal_connections_per_side;
+                    }
+                    if (external_count > 0) {
+                        EXPECT_EQ(external_count, num_external_connections_per_side)
+                            << chip_ss.str() << " has " << external_count << " external connections to "
+                            << other_chip_ss.str() << ", expected " << num_external_connections_per_side;
+                    }
+                } else {
+                    EXPECT_EQ(count, num_internal_connections_per_side)
+                        << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
+                        << ", expected " << num_internal_connections_per_side;
+                }
             }
         }
     }
