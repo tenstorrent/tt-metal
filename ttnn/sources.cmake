@@ -232,6 +232,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_fused_qk/rotary_embedding_fused_qk_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_rope/nlp_create_qkv_heads_rope_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/concat_heads_matmul/concat_heads_matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/transformer/concat_heads_matmul_decode/concat_heads_matmul_decode_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp

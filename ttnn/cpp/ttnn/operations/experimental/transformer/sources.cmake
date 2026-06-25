@@ -73,6 +73,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     concat_heads_matmul/device/concat_heads_matmul_device_operation.cpp
     concat_heads_matmul/device/concat_heads_matmul_program_factory.cpp
     concat_heads_matmul/concat_heads_matmul.cpp
+    concat_heads_matmul_decode/concat_heads_matmul_decode.cpp
     rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp
     rotary_embedding_llama/device/rotary_embedding_llama_multi_core_program_factory.cpp
     rotary_embedding_llama/device/rotary_embedding_llama_multi_core_prefill_sharded_program_factory.cpp
