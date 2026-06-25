@@ -282,7 +282,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-p100-tests:
     needs: [check-harbor, build-artifact]
-    if: ${{ github.event_name == 'schedule' || inputs.run_blackhole }}
+    if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
@@ -297,7 +297,7 @@ jobs:
   # =============================================================================
   umd-p100-tests:
     needs: [resolve-docker-pull-refs, build-artifact]
-    if: ${{ github.event_name == 'schedule' || inputs.run_blackhole }}
+    if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
     secrets: inherit
     uses: ./.github/workflows/umd-sanity-tests-impl.yaml
     with:
