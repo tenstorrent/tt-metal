@@ -13,7 +13,7 @@ python -m tracy -p -r -n ccl_prefill_tp8 -o /tmp/tracy_ccl_tp8 \
 
 Parse `ops_perf_results.csv` → filter `ReduceScatterDeviceOperation` / `AllGatherDeviceOperation` → read `DEVICE KERNEL DURATION [ns]`.
 
-## Latency numbers (chips 24-31, sane devices 2/5/6/7)
+## Latency numbers (chips 8-15, sane devices 1/5/6)
 
 Each VLM layer has **2 all-reduces** (MLP down_proj + attention o_proj). RS and AG operate on
 different shapes — RS takes the full hidden partial sum, AG takes the scattered slice:

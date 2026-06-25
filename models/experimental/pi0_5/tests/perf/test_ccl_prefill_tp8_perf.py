@@ -16,7 +16,7 @@ Run once and capture device-kernel duration via tracy:
 Parse ops_perf_results CSV: filter OP TYPE reduce_scatter / all_gather,
 read DEVICE KERNEL DURATION [ns] — that is the authoritative prefill budget.
 
-Requires 8 BH chips (24-31) + fabric.  Reset with tt-smi -glx_reset if needed.
+Requires 8 BH chips (8-15) + fabric.  Reset with tt-smi -glx_reset if needed.
 """
 
 import os
@@ -27,9 +27,10 @@ import ttnn
 
 from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
 
-# Expose chips 24-31 as devices 0-7 via TT_VISIBLE_DEVICES so open_prefill_tp4_mesh
+# Expose chips 8-15 as devices 0-7 via TT_VISIBLE_DEVICES so open_prefill_tp4_mesh
 # opens a 1×8 logical mesh over these physical chips under FABRIC_1D.
-_VISIBLE_DEVICES = ",".join(str(i) for i in range(24, 32))
+# Same chip set as the production prefill bench (_bench_prefill_tp8_ccl.py).
+_VISIBLE_DEVICES = ",".join(str(i) for i in range(8, 16))
 
 _TP = 8
 _SEQ = 768
