@@ -28,12 +28,13 @@
 //           output discarded to scratch) — leaves SrcA in the G0 tilize state.
 //   Transition (only when DO_RESTORE): `_llk_unpack_tilize_uninit_(G0)` +
 //           `_llk_unpack_reconfig_data_format_srca_impl_<.. FACE_ROW_MAJOR>(G1)`.
-//   Readback: UNP0 Y-stride / Z-stride, Tile_x_dim_cntx0, tile-descriptor Z-dim.
-//           DEVICE_PRINT (expected G1 baseline, actual); LLK_ASSERT when DO_RESTORE.
+//   Readback: UNP0 Y-stride / Z-stride, Tile_x_dim_cntx0, tile-descriptor Z-dim,
+//           compared against the canonical G1 baseline on-device via LLK_ASSERT.
 //
 // DO_RESTORE=false is the negative control: with no transition the registers stay in
-// the G0 tilize state, so the host sees actual != G1-expected (the Tile_x_dim / Z-dim
-// differ between G0 and G1), proving the transition is load-bearing.
+// the G0 tilize state, so actual != G1-expected (the Tile_x_dim / Z-dim differ between
+// G0 and G1) — the kernel LLK_ASSERTs that the G1 baseline is NOT reproduced, proving
+// the transition is load-bearing.
 
 #include <algorithm>
 #include <cstdint>
@@ -52,7 +53,6 @@ constexpr std::uint32_t buffer_polluter_scratch = 0xA0000;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "dprint.h"
 #include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
@@ -136,17 +136,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t exp_tile_x_dim = canonical_unpA_tile_x_dim_cntx(g1_face_r_dim);
     const std::uint32_t exp_z_dim      = g1_num_faces;
 
-    DEVICE_PRINT("T1 ystride exp={} act={}", exp_y_stride, act_y_stride);
-    DEVICE_PRINT("T1 zstride exp={} act={}", exp_z_stride, act_z_stride);
-    DEVICE_PRINT("T1 txdim exp={} act={}", exp_tile_x_dim, act_tile_x_dim);
-    DEVICE_PRINT("T1 zdim exp={} act={}", exp_z_dim, act_z_dim);
-
     if constexpr (DO_RESTORE)
     {
+        // The transition must reproduce the canonical G1 SrcA baseline exactly.
         LLK_ASSERT(act_y_stride == exp_y_stride, "transition: SrcA Y-stride not the canonical G1 baseline");
         LLK_ASSERT(act_z_stride == exp_z_stride, "transition: SrcA Z-stride not the canonical G1 baseline");
         LLK_ASSERT(act_tile_x_dim == exp_tile_x_dim, "transition: Tile_x_dim_cntx0 not retargeted to G1 face_r_dim");
         LLK_ASSERT(act_z_dim == exp_z_dim, "transition: tile-descriptor Z-dim not retargeted to G1 num_faces");
+    }
+    else
+    {
+        // Negative control: without the transition the SrcA baseline stays in the G0
+        // tilize state, so the full G1 baseline must NOT be reproduced (the
+        // geometry-bearing Tile_x_dim / Z-dim differ between G0 and G1).
+        const bool all_match =
+            (act_y_stride == exp_y_stride) && (act_z_stride == exp_z_stride) && (act_tile_x_dim == exp_tile_x_dim) && (act_z_dim == exp_z_dim);
+        LLK_ASSERT(!all_match, "negative control: SrcA already matches the G1 baseline without the transition");
     }
 }
 
