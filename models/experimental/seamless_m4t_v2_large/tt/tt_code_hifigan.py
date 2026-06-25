@@ -399,8 +399,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
                     out_dim=t_span,
                 )
                 part = ttnn.matmul(use_sl, h_sl, program_config=pc, **mm_kwargs)
-                ttnn.deallocate(use_sl)
-                ttnn.deallocate(h_sl)
                 if acc is None:
                     acc = part
                 else:

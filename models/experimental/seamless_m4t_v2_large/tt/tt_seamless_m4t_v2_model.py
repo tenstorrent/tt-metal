@@ -802,7 +802,7 @@ class TTSeamlessM4Tv2Model:
         combine (cheap, 64 scalars) picks the winning chunk ``c = argmax(chunk_max)`` then the global token
         ``c * chunk_width + local_idx[c]`` (see ``_greedy_next_token_id``).
 
-        ``ttnn.argmax(use_multicore=True)`` is far faster than the 256k-vocab host readback but has two
+        On-device ``ttnn.argmax`` is far faster than the 256k-vocab host readback but has two
         alignment traps that both return *silent garbage*: (1) the dim before the reduced vocab dim must be
         tile-aligned (32); (2) the multicore kernel reduces over the *physical* (tile-padded) width, so the
         reduced dim must also be a multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height to 32
@@ -823,7 +823,7 @@ class TTSeamlessM4Tv2Model:
         cr = ttnn.reshape(lp, [1, 1, nch, chunk_w])
         chunk_max = ttnn.max(cr, dim=-1, keepdim=False)
         cu = ttnn.untilize(cr, use_multicore=True)
-        local_idx = ttnn.argmax(cu, dim=-1, keepdim=False, use_multicore=True)
+        local_idx = ttnn.argmax(cu, dim=-1, keepdim=False)
         return local_idx, chunk_max
 
     def _argmax_chunk_width(self, v_loc: int) -> int:
@@ -889,7 +889,7 @@ class TTSeamlessM4Tv2Model:
             self._argmax_tie_break_bias_1d(n_flat),
         )
         ttnn.deallocate(cm_f)
-        flat = ttnn.argmax(cm_b, dim=-1, keepdim=True, use_multicore=True)
+        flat = ttnn.argmax(cm_b, dim=-1, keepdim=True)
         ttnn.deallocate(cm_b)
         flat_t = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
         ttnn.deallocate(flat)
