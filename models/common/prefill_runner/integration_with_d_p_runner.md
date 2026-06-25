@@ -31,7 +31,7 @@ class PrefillRuntime(Protocol):
 
 class PrefillModelAdapter(Protocol):
     # --- static knobs (no device needed) ---
-    name: str                          # variant name; matches weight-cache dir prefix {name}_{arch}_{N}dev
+    name: str                          # model name; matches weight-cache dir prefix {name}_{arch}_{N}dev
     default_gate_mode: str             # gate-mode NAME as a string; PREFILL_GATE_FALLBACK_MODE overrides.
                                        #   crosses the seam as a string so common/ never imports your enum
     uses_l1_small_semaphores: bool     # True -> runner opens the mesh with an L1_SMALL region (e.g. Kimi routing)
@@ -67,7 +67,9 @@ class PrefillModelAdapter(Protocol):
     #   build the KV chunk address table from YOUR cache layout, serialize to `path`. See section below.
 ```
 
-Also expose a `make_adapter(name) -> PrefillModelAdapter` factory — that's what the registry calls.
+The registry constructs your adapter with **no args**, so registering the adapter class directly is
+enough (or expose a zero-arg `make_adapter()` factory if you need custom construction). DeepSeek/Kimi
+are two such classes (`DeepSeekPrefillAdapter` / `KimiPrefillAdapter`) sharing a base.
 
 ## Steps
 
@@ -77,12 +79,12 @@ Also expose a `make_adapter(name) -> PrefillModelAdapter` factory — that's wha
    in the adapter, so there's no back-dependency.
 2. **Adapter** — implement the Protocol above (copy `ds_prefill_adapter.py`).
 3. **KV chunk address table** (if `supports_migration`) — see below.
-4. **Register** — one line in `registry.py`:
-  ```python
-   "<your_variant>": "models.demos.<your_model>...:<adapter_module>:make_adapter",
-  ```
-   Out-of-tree: set `PREFILL_ADAPTER_FACTORY=module.path:make_adapter` instead. Select at runtime with
-   `PREFILL_MODEL_VARIANT=<your_variant>`.
+4. **Register** — one line in `registry.py` (the value is `module:zero-arg-factory`, an adapter class works):
+   ```python
+   "<your_model_name>": "models.demos.<your_model>...:<YourAdapterClass>",
+   ```
+   Out-of-tree: set `PREFILL_ADAPTER_FACTORY=module.path:YourAdapterClass` instead. Select at runtime with
+   `PREFILL_MODEL_NAME=<your_model_name>`.
 
 ## KV cache PCC check
 
@@ -114,12 +116,12 @@ extend that ttnn API. No disaggregation? Set `supports_migration = False` and sk
 
 ## Running it — C1 (standalone PCC) and C2 (request mode)
 
-Run from the repo root with the venv active. Swap `<your_variant>` and the mesh/chunk sizes for yours.
+Run from the repo root with the venv active. Swap `<your_model_name>` and the mesh/chunk sizes for yours.
 
 **C1 — standalone chunked prefill + golden KV PCC** (the key correctness check; single process):
 
 ```bash
-PREFILL_MODEL_VARIANT=<your_variant> \
+PREFILL_MODEL_NAME=<your_model_name> \
 PREFILL_STANDALONE=1 PREFILL_STANDALONE_PCC=1 \
 PREFILL_SP=8 PREFILL_TP=4 \
 PREFILL_NUM_LAYERS=61 PREFILL_CHUNK_SIZE=5120 PREFILL_MAX_SEQ_LEN=61440 \
@@ -136,7 +138,7 @@ small (`PREFILL_NUM_LAYERS=5 PREFILL_STANDALONE_NCHUNKS=2 PREFILL_MAX_SEQ_LEN=20
 `PREFILL_STANDALONE`):
 
 ```bash
-PREFILL_MODEL_VARIANT=<your_variant> \
+PREFILL_MODEL_NAME=<your_model_name> \
 PREFILL_SP=8 PREFILL_TP=4 \
 PREFILL_NUM_LAYERS=61 PREFILL_CHUNK_SIZE=5120 PREFILL_MAX_SEQ_LEN=61440 \
 PREFILL_NUM_USERS=2 PREFILL_H2D_SERVICE_ID=ds_prefill \
@@ -147,7 +149,7 @@ PREFILL_NUM_USERS=2 PREFILL_H2D_SERVICE_ID=ds_prefill \
 Terminal B, the producer (match SP/TP/CHUNK_SIZE/SERVICE_ID):
 
 ```bash
-PREFILL_MODEL_VARIANT=<your_variant> PREFILL_H2D_SERVICE_ID=ds_prefill \
+PREFILL_MODEL_NAME=<your_model_name> PREFILL_H2D_SERVICE_ID=ds_prefill \
 PREFILL_SP=8 PREFILL_TP=4 PREFILL_CHUNK_SIZE=5120 \
 PREFILL_STANDALONE_NCHUNKS=11 PREFILL_STANDALONE_ITERS=1 \
   python -m models.common.prefill_runner.producer

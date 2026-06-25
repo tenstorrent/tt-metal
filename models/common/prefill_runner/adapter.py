@@ -4,7 +4,7 @@
 """The runner ↔ model seam.
 
 `PrefillModelAdapter` is everything the generic runner needs from a model; a model package provides
-one implementation per variant and registers it (see `registry.py`). The runner core depends only on
+one implementation per model and registers it (see `registry.py`). The runner core depends only on
 these Protocols + `ttnn` — never on a model package.
 
 Design notes:
@@ -48,10 +48,10 @@ class PrefillRuntime(Protocol):
 @runtime_checkable
 class PrefillModelAdapter(Protocol):
     """Per-model plumbing the runner needs to build and drive a prefill model. One instance per
-    variant; the registry maps a variant name to a factory that returns one of these."""
+    model; the registry maps a model name to a factory that returns one of these."""
 
     # --- static knobs (no device needed) ---
-    name: str  # variant name; matches the weight-cache dir prefix {name}_{arch}_{N}dev
+    name: str  # model name; matches the weight-cache dir prefix {name}_{arch}_{N}dev
     default_gate_mode: str  # GateComputeMode name (string); PREFILL_GATE_FALLBACK_MODE overrides
     uses_l1_small_semaphores: bool  # carve an L1_SMALL region when opening the mesh (e.g. Kimi routing)
     fabric_payload_size: int  # max fabric packet payload (model_cfg.FABRIC_PAYLOAD_SIZE)
@@ -68,7 +68,7 @@ class PrefillModelAdapter(Protocol):
         ...
 
     def resolve_trace_dir(self) -> Path:
-        """Golden trace dir holding metadata.json (PREFILL_TRACE_DIR overrides the variant default)."""
+        """Golden trace dir holding metadata.json (PREFILL_TRACE_DIR overrides the model default)."""
         ...
 
     def load_trace_token_ids(self, trace_dir, total_len=None) -> list:

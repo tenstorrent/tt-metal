@@ -5,7 +5,7 @@
 """Model-agnostic prefill runner.
 
 Same standalone / request-loop driver as the DeepSeek-specific prefill_runner.py, but everything
-model-specific is reached through a `PrefillModelAdapter` resolved from PREFILL_MODEL_VARIANT (see
+model-specific is reached through a `PrefillModelAdapter` resolved from PREFILL_MODEL_NAME (see
 registry.py). The core imports no model package directly.
 
 Run as:  python -m models.common.prefill_runner.runner
@@ -28,7 +28,7 @@ from models.common.prefill_runner.h2d_service import (
 from models.common.prefill_runner.migration import send_kv_chunk_table
 from models.common.prefill_runner.registry import get_adapter
 
-ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
+ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL_NAME", "deepseek_v3_d_p"))
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
@@ -42,7 +42,7 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 4 * CHUNK_SIZE))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 # Model-agnostic gate-mode default comes from the active adapter (DEVICE_FP32 for the
-# deepseek_v3_d_p variant; HOST_ALL source default is much slower).
+# deepseek_v3_d_p model; HOST_ALL source default is much slower).
 GATE_FALLBACK_MODE = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
 # When on (default), the last transformer layer runs kv-only: it fills the KV
 # cache for migration and skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head.
@@ -63,7 +63,7 @@ def _handle_sigterm(signum, frame):
 
 
 def run_standalone_loop(runtime) -> None:
-    """Standalone chunked prefill: read the input token IDs from this variant's golden trace and drive
+    """Standalone chunked prefill: read the input token IDs from this model's golden trace and drive
     them through the runtime in chunk_size chunks (advancing kv_actual per chunk), filling slot_id's
     KV cache. No H2D socket, no SHM, no external producer — single process, for local bring-up / perf.
     Chunked prefill does not sample; the populated KV cache is the output. With PREFILL_STANDALONE_PCC
@@ -73,7 +73,7 @@ def run_standalone_loop(runtime) -> None:
     per-iter timing.
 
     Env:
-      PREFILL_TRACE_DIR golden trace dir (default: this variant's prefill_trace_default)
+      PREFILL_TRACE_DIR golden trace dir (default: this model's prefill_trace_default)
       PREFILL_STANDALONE_INPUT   JSON file {"token_ids": [...]} overriding the trace's default input
       PREFILL_STANDALONE_SLOT    cache user slot to fill (default 0)
       PREFILL_STANDALONE_NCHUNKS chunks to run (default: ceil(len(token_ids)/chunk_size); pads the tail)
@@ -211,7 +211,7 @@ def run_request_loop(runtime, h2d_service: ttnn.H2DStreamService) -> None:
 def _print_config() -> None:
     """Print all env var values at startup so the config is visible in logs."""
     rows = [
-        ("PREFILL_MODEL_VARIANT", ADAPTER.name),
+        ("PREFILL_MODEL_NAME", ADAPTER.name),
         ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", "<adapter default>")),
         ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", "<adapter default>")),
         ("resolved weight_cache_path", str(ADAPTER.resolve_weight_cache_path(GLOBAL_MESH_SHAPE))),

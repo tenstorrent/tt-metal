@@ -13,9 +13,9 @@ PREFILL_STANDALONE=1). The runner constructs an `H2DStreamService`, calls
 This producer:
   * Attaches to the same service via `ttnn.H2DStreamService.connect(service_id)`
     — no `MeshDevice` handle needed.
-  * Reads the input token IDs from this variant's golden trace metadata.json (same source as the
+  * Reads the input token IDs from this model's golden trace metadata.json (same source as the
     runner's standalone loop), pushing the first PREFILL_STANDALONE_NCHUNKS chunks. Trace resolution
-    is model-agnostic — it goes through the active adapter (PREFILL_MODEL_VARIANT).
+    is model-agnostic — it goes through the active adapter (PREFILL_MODEL_NAME).
   * Replays the same host-side block-cyclic reshape the runner uses. Kept inline so this
     script does NOT need a `MeshDevice` (the device-side prepare_prefill_input_tensor can't run here).
   * Pushes the byte buffer once per chunk via `forward_to_tensor_bytes`. The runner's per-iter
@@ -23,8 +23,8 @@ This producer:
 
 Env vars:
   PREFILL_H2D_SERVICE_ID       — must match runner's value (default: "ds_prefill")
-  PREFILL_MODEL_VARIANT        — selects the adapter / its golden trace default (default: deepseek_v3_d_p)
-  PREFILL_TRACE_DIR   — golden trace dir (overrides the variant default; must match the runner)
+  PREFILL_MODEL_NAME        — selects the adapter / its golden trace default (default: deepseek_v3_d_p)
+  PREFILL_TRACE_DIR   — golden trace dir (overrides the model default; must match the runner)
   PREFILL_STANDALONE_NCHUNKS   — chunks to push (default 11 -> 56320 tokens)
   PREFILL_NUM_USERS            — cache user slots (default 2); the requested slot wraps mod this
   PREFILL_STANDALONE_SLOT      — cache user slot (default 0, wrapped mod PREFILL_NUM_USERS)
@@ -75,12 +75,12 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 
-ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
+ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL_NAME", "deepseek_v3_d_p"))
 
 
 def _load_tokens():
-    """Return (task_id, slot_id, actual_isl, token_ids) — the input token_ids from this variant's
-    golden trace metadata.json (PREFILL_TRACE_DIR overrides the variant default). Loads the
+    """Return (task_id, slot_id, actual_isl, token_ids) — the input token_ids from this model's
+    golden trace metadata.json (PREFILL_TRACE_DIR overrides the model default). Loads the
     first NCHUNKS*CHUNK_SIZE tokens (chunk-aligned, all real). Pairs with the runner's request-loop
     PCC check against the same trace's golden KV."""
     trace_dir = ADAPTER.resolve_trace_dir()

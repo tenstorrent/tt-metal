@@ -1,16 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""DeepSeek-V3-family adapter for the model-agnostic prefill runner.
+"""DeepSeek-V3-family adapters for the model-agnostic prefill runner.
 
-Implements `models.common.prefill_runner.adapter.PrefillModelAdapter` for both the deepseek_v3_d_p
-and kimi_k2_6 variants. It is a thin wrapper: every method delegates to the existing
-`runner_utils` / `integration_setup` helpers and the `TtDeepSeekPrefillRuntime`, so the new common
-runner and the old in-package prefill_runner.py exercise the SAME underlying code (easy to compare).
-
-The variant differences (config class, cache/trace paths, gate-mode default) come from the
-`RunnerVariant` registry in runner_utils; the only behavioural branch is whether routing semaphores
-go to L1_SMALL (Kimi).
+Two concrete `PrefillModelAdapter`s — `DeepSeekPrefillAdapter` and `KimiPrefillAdapter` — share their
+logic via `_DeepSeekFamilyPrefillAdapter` and differ only in a handful of per-model constants (config
+class, cache/trace paths, gate-mode default) plus whether routing semaphores go to L1_SMALL (Kimi).
+Every method is a thin wrapper over the existing `runner_utils` / `integration_setup` helpers and the
+`TtDeepSeekPrefillRuntime`, so the runner exercises the same underlying model code for both.
 """
 
 import os
@@ -18,10 +15,11 @@ from pathlib import Path
 from typing import Optional
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import build_and_serialize_kv_chunk_table
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
-    get_variant,
     kv_cache_pcc_check,
     load_hf_config,
     load_trace_token_ids,
@@ -41,45 +39,43 @@ _H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
 )
 
 
-class DeepSeekPrefillAdapter:
-    """PrefillModelAdapter implementation backed by a RunnerVariant + TtDeepSeekPrefillRuntime."""
+class _DeepSeekFamilyPrefillAdapter:
+    """Shared PrefillModelAdapter logic for the DeepSeek-V3 family. The concrete adapters below set the
+    per-model constants; everything here is identical between DeepSeek and Kimi."""
 
+    # --- per-model constants (set by the concrete subclasses) ---
+    name: str = ""  # matches the weight-cache dir prefix: {name}_{arch}_{N}dev
+    model_config: type = None  # DeepSeekV3Config | KimiK26Config (static dimension constants)
+    hf_model_default: str = ""  # HF model dir for config.json; PREFILL_HF_MODEL overrides
+    ttnn_cache_default: str = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides
+    default_gate_mode: str = ""  # GateComputeMode name; PREFILL_GATE_FALLBACK_MODE overrides
+    prefill_trace_default: str = ""  # golden trace dir; resolve_trace_dir descends one level if needed
+    uses_l1_small_semaphores: bool = False  # carve an L1_SMALL region when opening the mesh
+
+    # --- shared knobs ---
     supports_migration = True
     h2d_mapper_config = _H2D_MAPPER_CONFIG
 
-    def __init__(self, variant):
-        self._variant = variant
-
-    # --- static knobs ---
-    @property
-    def name(self) -> str:
-        return self._variant.name
-
-    @property
-    def default_gate_mode(self) -> str:
-        return self._variant.default_gate_mode
-
-    @property
-    def uses_l1_small_semaphores(self) -> bool:
-        # Kimi (single expert group, device gate) routes the MoE routing all-gather's global
-        # semaphores to L1_SMALL; DeepSeek keeps them in main L1.
-        return self._variant.name == "kimi_k2_6"
+    def __init__(self):
+        # Honour + surface PREFILL_TTNN_CACHE even when only the model default applies (mirrors the
+        # old prefill_runner.py module-level setdefault).
+        os.environ.setdefault("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
 
     @property
     def fabric_payload_size(self) -> int:
-        return self._variant.model_config.FABRIC_PAYLOAD_SIZE
+        return self.model_config.FABRIC_PAYLOAD_SIZE
 
     # --- resource resolution ---
     def load_hf_config(self, max_seq_len: int):
-        hf_config = load_hf_config(self._variant)
+        hf_config = load_hf_config(self.hf_model_default)
         hf_config.max_seq_len = max_seq_len
         return hf_config
 
     def resolve_weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
-        return resolve_weight_cache_path(self._variant, mesh_shape)
+        return resolve_weight_cache_path(self.name, self.ttnn_cache_default, mesh_shape)
 
     def resolve_trace_dir(self) -> Path:
-        return resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", self._variant.prefill_trace_default))
+        return resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", self.prefill_trace_default))
 
     def load_trace_token_ids(self, trace_dir, total_len=None) -> list:
         return load_trace_token_ids(trace_dir, total_len)
@@ -110,7 +106,7 @@ class DeepSeekPrefillAdapter:
             capacity_factor=capacity_factor,
             gate_fallback_mode=GateComputeMode[gate_fallback_mode],
             weight_cache_path=weight_cache_path,
-            model_cfg=self._variant.model_config,
+            model_cfg=self.model_config,
             kv_only_last_layer=kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.uses_l1_small_semaphores,
         )
@@ -144,11 +140,30 @@ class DeepSeekPrefillAdapter:
         )
 
 
-def make_adapter(name: str) -> DeepSeekPrefillAdapter:
-    """Registry factory: resolve the RunnerVariant and return its adapter.
+class DeepSeekPrefillAdapter(_DeepSeekFamilyPrefillAdapter):
+    name = "deepseek_v3_d_p"
+    model_config = DeepSeekV3Config
+    hf_model_default = "models/demos/deepseek_v3/reference"
+    ttnn_cache_default = "/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure"
+    default_gate_mode = "DEVICE_FP32"
+    prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad"
+    uses_l1_small_semaphores = False  # semaphores stay in main L1
 
-    Mirrors the old prefill_runner.py module-level setdefault so PREFILL_TTNN_CACHE is honoured and
-    visible in logs even when only the variant default applies."""
-    variant = get_variant(name)
-    os.environ.setdefault("PREFILL_TTNN_CACHE", variant.ttnn_cache_default)
-    return DeepSeekPrefillAdapter(variant)
+
+class KimiPrefillAdapter(_DeepSeekFamilyPrefillAdapter):
+    name = "kimi_k2_6"
+    model_config = KimiK26Config
+    # Repo-local config (dot-free, in-tree). The runner only needs config dims; real weights come
+    # from the TTNN cache. To use a different checkpoint, set PREFILL_HF_MODEL to a dot-free path
+    # (transformers' trust_remote_code import chokes on the "." in the canonical
+    # /mnt/models/moonshotai/Kimi-K2.6-dequantized dir name).
+    hf_model_default = "models/demos/deepseek_v3_d_p/reference/kimi_k2_6"
+    ttnn_cache_default = "/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill"
+    default_gate_mode = "DEVICE_FP32"  # Kimi (1 expert group)
+    # vllm-traced golden: metadata.json + kv_cache live under a single run-hash subdir, and the
+    # per-layer KV is row-sharded into layer_N/rows_*.safetensors. resolve_trace_dir descends to
+    # the subdir; kv_cache_pcc_check reassembles the shards.
+    prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320"
+    # Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
+    # L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs.
+    uses_l1_small_semaphores = True

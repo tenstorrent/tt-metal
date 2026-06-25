@@ -9,7 +9,6 @@ live in blaze at `disaggregation/migration/python/prefill_runner_util.py`.
 """
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -19,68 +18,8 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
-
-
-# ---------------------------------------------------------------------------
-# Model-variant registry
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class RunnerVariant:
-    """Per-model knobs the runner needs to build a DeepSeek-V3-family model.
-
-    The TT layer code is variant-agnostic — it takes `model_config` (the static
-    dimension constants) + the HF `config`. Everything here is the runner-side
-    plumbing that differs per model: where to find the HF config and the TTNN
-    weight cache, and the sensible defaults for input layout / gate mode.
-    """
-
-    name: str  # matches the pytest weight-cache dir prefix: {name}_{arch}_{N}dev
-    model_config: type  # DeepSeekV3Config | KimiK26Config
-    hf_model_default: str  # HF model dir for config.json; PREFILL_HF_MODEL overrides
-    ttnn_cache_default: str  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides
-    default_gate_mode: str  # GateComputeMode name
-    prefill_trace_default: (
-        str  # golden trace dir (input token_ids + kv_post_transform); resolve_trace_dir descends one level if needed
-    )
-
-
-VARIANTS = {
-    "deepseek_v3_d_p": RunnerVariant(
-        name="deepseek_v3_d_p",
-        model_config=DeepSeekV3Config,
-        hf_model_default="models/demos/deepseek_v3/reference",
-        ttnn_cache_default="/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure",
-        default_gate_mode="DEVICE_FP32",
-        prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad",
-    ),
-    "kimi_k2_6": RunnerVariant(
-        name="kimi_k2_6",
-        model_config=KimiK26Config,
-        # Repo-local config (dot-free, in-tree). The runner only needs config dims; real weights come
-        # from the TTNN cache. To use a different checkpoint, set PREFILL_HF_MODEL to a dot-free path
-        # (transformers' trust_remote_code import chokes on the "." in the canonical
-        # /mnt/models/moonshotai/Kimi-K2.6-dequantized dir name).
-        hf_model_default="models/demos/deepseek_v3_d_p/reference/kimi_k2_6",
-        ttnn_cache_default="/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill",
-        default_gate_mode="DEVICE_FP32",  # Kimi (1 expert group)
-        # vllm-traced golden: metadata.json + kv_cache live under a single run-hash subdir, and the
-        # per-layer KV is row-sharded into layer_N/rows_*.safetensors. resolve_trace_dir descends to
-        # the subdir; kv_cache_pcc_check reassembles the shards.
-        prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320",
-    ),
-}
-
-
-def get_variant(name: str) -> RunnerVariant:
-    """Resolve a RunnerVariant by name; raises KeyError with the valid set."""
-    try:
-        return VARIANTS[name]
-    except KeyError:
-        raise KeyError(f"Unknown PREFILL_MODEL_VARIANT={name!r}; valid: {sorted(VARIANTS)}")
 
 
 # ---------------------------------------------------------------------------
@@ -104,11 +43,11 @@ def unwrap_multimodal_config(cfg):
     return cfg
 
 
-def load_hf_config(variant: RunnerVariant):
-    """Load (and unwrap) the HF config for a variant from PREFILL_HF_MODEL
-    (falling back to the variant's repo-local default)."""
-    model_path = os.environ.get("PREFILL_HF_MODEL") or variant.hf_model_default
-    logger.info(f"Loading HF config for variant={variant.name!r} from {model_path}")
+def load_hf_config(hf_model_default: str):
+    """Load (and unwrap) the HF config from PREFILL_HF_MODEL
+    (falling back to the model's repo-local default)."""
+    model_path = os.environ.get("PREFILL_HF_MODEL") or hf_model_default
+    logger.info(f"Loading HF config from {model_path}")
     cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     return unwrap_multimodal_config(cfg)
 
@@ -139,18 +78,18 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0)
     return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size)
 
 
-def resolve_weight_cache_path(variant: RunnerVariant, mesh_shape: tuple) -> Optional[Path]:
+def resolve_weight_cache_path(name: str, ttnn_cache_default: str, mesh_shape: tuple) -> Optional[Path]:
     """Mirror the layout produced by the pytest weight_cache_path fixture so
     we read the same files the cache-populate run wrote:
-      $PREFILL_TTNN_CACHE / {variant.name}_{arch}_{N}dev / {sp}x{tp}
-    Defaults to the variant's cache root; returns None only if explicitly empty."""
-    env_cache = os.environ.get("PREFILL_TTNN_CACHE", variant.ttnn_cache_default)
+      $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}
+    Defaults to the model's cache root; returns None only if explicitly empty."""
+    env_cache = os.environ.get("PREFILL_TTNN_CACHE", ttnn_cache_default)
     if not env_cache:
         return None
     arch = "bh" if is_blackhole() else "wh"
     num_devices = ttnn.get_num_devices()
     sp, tp = mesh_shape
-    path = Path(env_cache) / f"{variant.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+    path = Path(env_cache) / f"{name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -450,7 +389,7 @@ def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None) ->
     min per-layer PCC and asserts (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is
     below threshold.
 
-    `trace_dir` defaults to the resolved PREFILL_TRACE_DIR env (caller passes the variant's
+    `trace_dir` defaults to the resolved PREFILL_TRACE_DIR env (caller passes the model's
     prefill_trace_default). The golden is loaded format-agnostically (DeepSeek single-file or Kimi vllm
     row-shards) via _load_golden_kv_post.
 
