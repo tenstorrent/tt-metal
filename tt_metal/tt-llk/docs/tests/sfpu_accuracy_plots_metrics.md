@@ -169,7 +169,7 @@ For all **finite** points:
   This is the largest absolute difference between HW and golden over all sampled x.
 - **Mean absolute error**
 
-  $$\text{mean abs error} = \operatorname{mean}_x |\text{hw}(x) - \text{golden}(x)|$$
+  $$\text{mean abs error} = \mathrm{mean}_x |\text{hw}(x) - \text{golden}(x)|$$
 
   This is the average absolute difference between HW and golden.
 - **Max / median relative error**
@@ -179,7 +179,7 @@ For all **finite** points:
 
     - **Median relative error**:
 
-      $$\text{median relative error} = \operatorname{median}(\text{relative error}(x))$$
+      $$\text{median relative error} = \mathrm{median}(\text{relative error}(x))$$
 
       (50% of the points have relative error below this value.)
 
