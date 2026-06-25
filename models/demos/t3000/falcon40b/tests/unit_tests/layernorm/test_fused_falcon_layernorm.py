@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
+from models.demos.t3000.falcon40b.tests.test_utils import load_falcon_reference_model
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -230,15 +230,7 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
 
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_name, low_cpu_mem_usage=True, num_hidden_layers=1
-    )
-    # transformers v5 loads from_pretrained in the checkpoint dtype (bf16 for Falcon-40B);
-    # force float32 so the CPU reference matches the float32 test inputs (avoids
-    # "mixed dtype (CPU)" LayerNorm errors). Restores the pre-v5 default; mirrors the
-    # .to(torch.float32) fix applied to the falcon7b tests in #47218.
-    hugging_face_reference_model = hugging_face_reference_model.to(torch.float32)
-    hugging_face_reference_model.eval()
+    hugging_face_reference_model = load_falcon_reference_model(model_name, num_hidden_layers=1)
     config = hugging_face_reference_model.config
     gamma1 = hugging_face_reference_model.transformer.h[0].ln_attn.weight
     beta1 = hugging_face_reference_model.transformer.h[0].ln_attn.bias
