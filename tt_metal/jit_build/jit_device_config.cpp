@@ -79,11 +79,13 @@ std::vector<bool> routing_fw_configs_for_product(tt::ARCH arch, std::string_view
     return {false};
 }
 
-std::vector<uint32_t> dram_harvesting_configs_for_product(tt::ARCH arch, std::string_view product_name) {
-    // TODO(#39462): Hand-curated precompile coverage. For Blackhole, "2xharvested" covers both 0- and 1-DRAM-harvested
-    // variants: typical P150/P300 present at runtime as product "2xharvested" (when tensix_harvest=2) with 0 DRAM
-    // harvested, while P100 has 1 DRAM harvested.
-    if (arch == tt::ARCH::BLACKHOLE && product_name == "2xharvested") {
+std::vector<uint32_t> dram_harvesting_configs_for_product(tt::ARCH arch, std::string_view /*product_name*/) {
+    // TODO(#39462): Hand-curated precompile coverage. DRAM bank count is a compile input (it feeds the
+    // kernel/firmware build key), so a config must be precompiled for every DRAM-harvest state a device may
+    // report at runtime. On Blackhole DRAM harvesting is independent of tensix (column) harvesting, so any
+    // tensix-harvest product can appear with 0 or 1 DRAM banks harvested; emit both variants for every product.
+    // Wormhole has no DRAM harvesting, so only the unharvested variant is needed.
+    if (arch == tt::ARCH::BLACKHOLE) {
         return {0, 1};
     }
     return {0};
