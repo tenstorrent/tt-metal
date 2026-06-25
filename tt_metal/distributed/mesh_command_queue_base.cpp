@@ -9,6 +9,7 @@
 #include <mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <optional>
+#include <cstdint>
 
 #include "buffer.hpp"
 #include "mesh_coord.hpp"
@@ -43,22 +44,23 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
     auto num_shards_x = global_buffer_shape.width() / shard_shape.width();
     auto num_shards_y = global_buffer_shape.height() / shard_shape.height();
 
-    uint32_t num_devices_x = buffer.device()->num_cols();
-    uint32_t num_devices_y = buffer.device()->num_rows();
+    std::uint32_t num_devices_x = buffer.device()->num_cols();
+    std::uint32_t num_devices_y = buffer.device()->num_rows();
 
-    uint32_t device_x = 0;
-    uint32_t device_y = 0;
-    std::vector<uint32_t> shard_data = std::vector<uint32_t>(total_read_size_per_shard / sizeof(uint32_t), 0);
+    std::uint32_t device_x = 0;
+    std::uint32_t device_y = 0;
+    std::vector<std::uint32_t> shard_data =
+        std::vector<std::uint32_t>(total_read_size_per_shard / sizeof(std::uint32_t), 0);
     const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
             auto read_offset = (shard_x * single_read_size) + (shard_y * stride_size_bytes * shard_shape.height());
-            uint32_t size_to_read = total_read_size_per_shard;
-            uint32_t local_offset = 0;
+            std::uint32_t size_to_read = total_read_size_per_shard;
+            std::uint32_t local_offset = 0;
             while (size_to_read) {
                 std::memcpy(
-                    shard_data.data() + (local_offset * (single_read_size / sizeof(uint32_t))),
-                    (uint8_t*)(src) + read_offset + (local_offset * stride_size_bytes),
+                    shard_data.data() + (local_offset * (single_read_size / sizeof(std::uint32_t))),
+                    (std::uint8_t*)(src) + read_offset + (local_offset * stride_size_bytes),
                     single_read_size);
                 size_to_read -= single_read_size;
                 local_offset++;
@@ -124,19 +126,20 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
 
     const auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
     const auto single_write_size = datum_size_bytes * shard_shape.width();
-    const uint64_t total_write_size_per_shard = single_write_size * shard_shape.height();
+    const std::uint64_t total_write_size_per_shard = single_write_size * shard_shape.height();
     auto num_shards_x = global_buffer_shape.width() / shard_shape.width();
     auto num_shards_y = global_buffer_shape.height() / shard_shape.height();
-    uint32_t num_devices_x = buffer.device()->num_cols();
-    uint32_t num_devices_y = buffer.device()->num_rows();
+    std::uint32_t num_devices_x = buffer.device()->num_cols();
+    std::uint32_t num_devices_y = buffer.device()->num_rows();
 
-    uint32_t device_x = 0;
-    uint32_t device_y = 0;
+    std::uint32_t device_x = 0;
+    std::uint32_t device_y = 0;
 
-    std::vector<uint32_t> shard_data = std::vector<uint32_t>(total_write_size_per_shard / sizeof(uint32_t), 0);
+    std::vector<std::uint32_t> shard_data =
+        std::vector<std::uint32_t>(total_write_size_per_shard / sizeof(std::uint32_t), 0);
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
-            std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+            std::unordered_map<IDevice*, std::uint32_t> num_txns_per_device = {};
             this->read_shard_from_device(
                 buffer,
                 MeshCoordinate(device_y, device_x),
@@ -145,14 +148,14 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
                 /*region=*/std::nullopt,
                 num_txns_per_device);
             this->submit_memcpy_request(num_txns_per_device, true);
-            uint64_t write_offset =
+            std::uint64_t write_offset =
                 (shard_x * single_write_size) + (shard_y * stride_size_bytes * shard_shape.height());
-            uint64_t size_to_write = total_write_size_per_shard;
-            uint32_t local_offset = 0;
+            std::uint64_t size_to_write = total_write_size_per_shard;
+            std::uint32_t local_offset = 0;
             while (size_to_write) {
                 std::memcpy(
-                    (uint8_t*)(dst) + write_offset + (local_offset * stride_size_bytes),
-                    shard_data.data() + (local_offset * (single_write_size / sizeof(uint32_t))),
+                    (std::uint8_t*)(dst) + write_offset + (local_offset * stride_size_bytes),
+                    shard_data.data() + (local_offset * (single_write_size / sizeof(std::uint32_t))),
                     single_write_size);
                 local_offset++;
                 size_to_write -= single_write_size;
@@ -233,14 +236,14 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
     bool blocking,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
-    // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
+    // TODO: #17215 - this API is used by TTNN, as it currently implements rich N-D sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
 
     // Track if any transfer actually used pinned memory
     std::atomic<bool> any_pinned_used = false;
 
     auto dispatch_lambda =
-        [&shard_data_transfers, &buffer, &any_pinned_used, logical_core_filter, this](uint32_t shard_idx) {
+        [&shard_data_transfers, &buffer, &any_pinned_used, logical_core_filter, this](std::uint32_t shard_idx) {
             const auto& shard_data_transfer = shard_data_transfers[shard_idx];
             bool pinned_used = this->write_shard_to_device(
                 buffer,
@@ -326,9 +329,9 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     const std::shared_ptr<MeshBuffer>& buffer,
     bool blocking,
     std::vector<MemoryPin> memory_pins) {
-    // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
+    // TODO: #17215 - this API is used by TTNN, as it currently implements rich N-D sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+    std::unordered_map<IDevice*, std::uint32_t> num_txns_per_device = {};
     bool has_pinned_memory = false;
     for (const auto& shard_data_transfer : shard_data_transfers) {
         if (mesh_device_->impl().is_local(shard_data_transfer.shard_coord())) {
@@ -406,9 +409,10 @@ void MeshCommandQueue::enqueue_write_shards(
     std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
     distributed_shard_data_transfers.reserve(shard_data_transfers.size());
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
+        distributed_shard_data_transfers.push_back(
+            distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
+                .host_data(shard_data_transfer.host_data)
+                .region(shard_data_transfer.region));
     }
     this->enqueue_write_shards(mesh_buffer, distributed_shard_data_transfers, blocking);
 }
@@ -420,9 +424,10 @@ void MeshCommandQueue::enqueue_read_shards(
     std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
     distributed_shard_data_transfers.reserve(shard_data_transfers.size());
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
+        distributed_shard_data_transfers.push_back(
+            distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
+                .host_data(shard_data_transfer.host_data)
+                .region(shard_data_transfer.region));
     }
     this->enqueue_read_shards(distributed_shard_data_transfers, mesh_buffer, blocking);
 }
