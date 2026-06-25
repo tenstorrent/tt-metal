@@ -1208,23 +1208,39 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 guidance);
         }
 
-        // Self-loop interplay with multi-binding: when ANY kernel self-loops a DFB (appears in
-        // both producers and consumers), the producer set must equal the consumer set as sets
-        // of KernelSpec*. This permits the natural pattern of multiple same-source KernelSpecs
-        // each self-looping the DFB on their disjoint node ranges, while rejecting the case
-        // where a self-looping kernel shares the DFB with an unrelated kernel (which would
-        // make per-instance tensix-scope semantics ambiguous).
-        const bool has_self_loop = [&] {
-            for (const auto& p : endpoints.producers) {
-                for (const auto& c : endpoints.consumers) {
-                    if (p.kernel == c.kernel) {
-                        return true;
-                    }
+        // Find a self-loop participant: a kernel bound to this DFB as both producer and consumer.
+        // Stays nullptr if the DFB is not self-looped. Iterating producers in vector order keeps the
+        // pick — and any resulting error message — deterministic across runs.
+        const KernelSpec* self_loop_kernel = nullptr;
+        for (const auto& p : endpoints.producers) {
+            for (const auto& c : endpoints.consumers) {
+                if (p.kernel == c.kernel) {
+                    self_loop_kernel = p.kernel;
+                    break;
                 }
             }
-            return false;
-        }();
-        if (has_self_loop) {
+            if (self_loop_kernel != nullptr) {
+                break;
+            }
+        }
+
+        if (self_loop_kernel != nullptr) {
+            // DFB supports self-loop for compute kernels, but NOT for DM kernels.
+            // Catch this here (and emit a clear error message), rather than let it slip through and cause
+            // a much more confusing downstream error in the DFB backend code.
+            TT_FATAL(
+                !self_loop_kernel->is_data_movement_kernel(),
+                "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
+                "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels. Consider using a "
+                "scratchpad or LocalTensorAccessor instead.",
+                dfb.unique_id,
+                self_loop_kernel->unique_id);
+
+            // Self-loop interplay with multi-binding: the producer set must equal the consumer set
+            // as sets of KernelSpec*. This permits the natural pattern of multiple same-source
+            // KernelSpecs each self-looping the DFB on their disjoint node ranges, while rejecting
+            // the case where a self-looping kernel shares the DFB with an unrelated kernel (which
+            // would make per-instance tensix-scope semantics ambiguous).
             std::unordered_set<const KernelSpec*> producer_kernels;
             std::unordered_set<const KernelSpec*> consumer_kernels;
             for (const auto& p : endpoints.producers) {

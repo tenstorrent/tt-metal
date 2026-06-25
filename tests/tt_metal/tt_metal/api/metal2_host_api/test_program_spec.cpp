@@ -277,9 +277,13 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     spec.name = "test_program";
 
     // A kernel that both produces and consumes the same DFB may share a single
-    // accessor_name across the PRODUCER and CONSUMER bindings.
-    auto kernel = MakeMinimalDMKernel("kernel");
+    // accessor_name across the PRODUCER and CONSUMER bindings. Uses a COMPUTE kernel: a compute
+    // self-loop is the only legal self-loop (it lowers to the intra-Tensix packer->unpacker flow),
+    // so it exercises the accessor-name relaxation through a path that survives validation. (A DM
+    // self-loop is rejected — see DMKernelSelfLoopFails.)
+    auto kernel = MakeMinimalComputeKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "acc"));
     kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "acc"));
 
@@ -290,15 +294,19 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
+TEST_F(ProgramSpecTestQuasar, DMKernelSelfLoopFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // A producer+consumer self-loop on one DFB may use DISTINCT accessor names ('p'/'c'): it binds
-    // one PRODUCER and one CONSUMER (different roles), which is the sanctioned multi-binding form.
-    // Only a second binding of the SAME role under a different name is forbidden.
+    // A data-movement kernel may NOT self-loop a DFB (bind it as both PRODUCER and CONSUMER). A DFB
+    // synchronizes a producer and a consumer on DISTINCT cores via per-side credit masks, and a
+    // single DM kernel's producer and consumer masks are identical — the DFB backend would reject it
+    // with an opaque "producer_risc_mask and consumer_risc_mask must not overlap". Caught up front at
+    // validation with an actionable message instead. The legal alternatives are a private L1 scratch
+    // buffer, a LocalTensorAccessor tensor view, or a two-kernel cross-bind. (Compute self-loops stay
+    // legal — see SelfLoopWithSharedLocalAccessorNameSucceeds.)
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
@@ -308,7 +316,10 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("self-looped by data-movement kernel 'kernel'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
@@ -321,7 +332,7 @@ TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
     // same DFB twice in the SAME role (here two CONSUMER bindings) under different accessor names,
     // yielding two accessors / DataflowBuffer objects for one FIFO. Forbidden — the right port is a
     // kernel-side handle alias over a single binding. (A producer+consumer self-loop is a different,
-    // legitimate multi-binding and stays legal — see SelfLoopWithDistinctAccessorNamesSucceeds.)
+    // legitimate multi-binding and stays legal — see SelfLoopWithSharedLocalAccessorNameSucceeds.)
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
@@ -779,11 +790,13 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     // Producer set = {self_loop_1, extra_producer}; consumer set = {self_loop_1, extra_consumer}.
     // The sets are not equal — the self-loop multi-binding rule rejects this mix.
     //
-    // All three kernels are DM (an unusual self-loop pattern but mechanically valid) so the
-    // per-role kind-uniformity check passes and the self-loop refinement check is reached.
-    auto self_loop_1 = MakeMinimalDMKernel("self_loop_1");
-    auto extra_producer = MakeMinimalDMKernel("extra_producer");
-    auto extra_consumer = MakeMinimalDMKernel("extra_consumer");
+    // All three kernels are COMPUTE so the self-loop participant (self_loop_1) is a legal compute
+    // self-loop — a DM self-loop would be rejected earlier (see DMKernelSelfLoopFails), masking the
+    // rule under test. With compute kernels the per-role kind-uniformity check passes and the
+    // self-loop set-equality refinement check is reached.
+    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
+    auto extra_producer = MakeMinimalComputeKernel("extra_producer");
+    auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
