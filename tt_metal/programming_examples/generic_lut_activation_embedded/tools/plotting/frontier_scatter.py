@@ -250,7 +250,7 @@ def parse_args():
     parser.add_argument("--ttnn", help="Optional TTNN reference CSV")
     parser.add_argument(
         "--frontier-subdir",
-        default="",
+        default="frontier_scatter",
         help="Optional subdirectory under --outdir for per-activation frontier plots",
     )
     parser.add_argument(

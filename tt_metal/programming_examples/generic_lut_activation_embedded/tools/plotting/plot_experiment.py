@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument("--outdir", type=existing, help="Output plot directory. Defaults to <frontier>/plots.")
     parser.add_argument(
         "--frontier-subdir",
-        default="",
+        default="frontier_scatter",
         help="Optional subdirectory under --outdir for frontier scatters.",
     )
     return parser.parse_args()

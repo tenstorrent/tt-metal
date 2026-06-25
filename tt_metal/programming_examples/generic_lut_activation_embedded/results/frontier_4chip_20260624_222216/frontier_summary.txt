@@ -63,4 +63,4 @@ threshold          47 compile /   47 total | frontier  2 pts
 
 # 32/53 activation groups with TTNN refs have a config that beats TTNN on both axes
 # tier comparison plots -> tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier_4chip_20260624_222216/plots/tier_comparison/
-# per-activation scatters -> tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier_4chip_20260624_222216/plots/
+# per-activation scatters -> tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier_4chip_20260624_222216/plots/frontier_scatter/
