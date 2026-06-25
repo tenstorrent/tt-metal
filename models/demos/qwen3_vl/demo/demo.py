@@ -224,7 +224,9 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        # DIAGNOSTIC: use accuracy (higher decode precision) to test whether the residual sporadic
+        # wrong-token corruption (F1 ~0.55) is a decode-precision issue vs a structural sampling bug.
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=[
         "performance",
