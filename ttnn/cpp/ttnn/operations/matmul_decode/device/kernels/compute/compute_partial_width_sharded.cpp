@@ -7,6 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 
 using std::uint32_t;
 
@@ -113,26 +114,41 @@ void kernel_main() {
     // (mt,nc) pairwise accumulate the matching tile across all K_blocks slabs.
     cb_wait_front(reduce_cb_id, reduce_num_tiles);
 
-    binary_op_init_common(reduce_cb_id, reduce_cb_id, out_cb_id);
-    add_tiles_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
-
     cb_reserve_back(out_cb_id, block_num_tiles);
-    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-        for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
-            const uint32_t tile_in_block = mt * Nc_tiles + nc;
-            tile_regs_acquire();
-            for (uint32_t block = 0; block < K_blocks; block += 2) {
-                add_tiles(
-                    reduce_cb_id,
-                    reduce_cb_id,
-                    block * block_num_tiles + tile_in_block,
-                    (block + 1) * block_num_tiles + tile_in_block,
-                    0);
+    if constexpr (K_blocks == 1) {
+        // Single slab: no addition needed, just copy to output.
+        copy_tile_init(reduce_cb_id);
+        for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+            for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
+                const uint32_t tile_in_block = mt * Nc_tiles + nc;
+                tile_regs_acquire();
+                copy_tile(reduce_cb_id, tile_in_block, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, out_cb_id, tile_in_block);
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, out_cb_id, tile_in_block);
-            tile_regs_release();
+        }
+    } else {
+        binary_op_init_common(reduce_cb_id, reduce_cb_id, out_cb_id);
+        add_tiles_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
+        for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+            for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
+                const uint32_t tile_in_block = mt * Nc_tiles + nc;
+                tile_regs_acquire();
+                for (uint32_t block = 0; block < K_blocks; block += 2) {
+                    add_tiles(
+                        reduce_cb_id,
+                        reduce_cb_id,
+                        block * block_num_tiles + tile_in_block,
+                        (block + 1) * block_num_tiles + tile_in_block,
+                        0);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, out_cb_id, tile_in_block);
+                tile_regs_release();
+            }
         }
     }
     cb_push_back(out_cb_id, block_num_tiles);
