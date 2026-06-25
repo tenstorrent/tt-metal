@@ -177,9 +177,6 @@ struct BenchmarkConfig {
     // address, so the written DRAM won't match the input; for latency/BW measurement
     // (which needs real DRAM writes, i.e. not --read-only) we don't care about data.
     bool skip_output_validation = false;
-    // Writer: 0 = noc_async_writes_flushed every page; 1 = flush only when output
-    // CB back-pressure requires it (recommended back-pressure write path).
-    bool writer_flush_on_pressure = false;
     // Each program reads/writes a disjoint per-program tile slice rather than the
     // same tiles every program. Forces DRAM controller to open new rows per
     // program (more app-like streaming pattern); allocates a buffer big enough
@@ -274,9 +271,6 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     if (test_args::has_command_option(args, "--lean-compute")) {
         cfg.lean_compute = true;
     }
-    if (test_args::has_command_option(args, "--writer-flush-on-pressure")) {
-        cfg.writer_flush_on_pressure = true;
-    }
     if (test_args::has_command_option(args, "--cross-program-dram-offset")) {
         cfg.cross_program_dram_offset = true;
     }
@@ -340,7 +334,7 @@ void log_realtime_op_to_op_gaps(const std::vector<tt::tt_metal::experimental::Pr
             if (cur.runtime_id == prev.runtime_id) {
                 log_warning(
                     LogTest,
-                    "Real-time profiler chip {}: skipping dispatch gap between duplicate program_id {} "
+                    "Real-time profiler chip {}: skipping dispatch gap between duplicate runtime_id {} "
                     "(trace replay may report the same host runtime id twice)",
                     chip_id,
                     cur.runtime_id);
@@ -741,14 +735,13 @@ BuiltProgram build_program(
 
     // Writer: NOC0 / RISCV0, pushes to interleaved DRAM.
     // Compile-time args order MUST match writer_interleaved.cpp:
-    //   [0]=cb_out, [1]=TILES_PER_PAGE, [2]=READ_ONLY, [3]=WRITER_FLUSH_MODE,
-    //   [4]=OUTPUT_CB_DEPTH_TILES, [5]=CROSS_PROGRAM_OFFSET_TILES,
-    //   [6]=END_BARRIER_MODE, then TensorAccessorArgs starting at index 7.
+    //   [0]=cb_out, [1]=TILES_PER_PAGE, [2]=READ_ONLY, [3]=OUTPUT_CB_DEPTH_TILES,
+    //   [4]=CROSS_PROGRAM_OFFSET_TILES, [5]=END_BARRIER_MODE,
+    //   then TensorAccessorArgs starting at index 6.
     std::vector<uint32_t> writer_compile_time_args = {
         kOutputCbId,
         page_size_tiles,
         cfg.read_only ? 1u : 0u,
-        cfg.writer_flush_on_pressure ? 1u : 0u,
         output_cb_depth,
         cross_program_offset_tiles,
         cfg.writer_end_barrier_mode};

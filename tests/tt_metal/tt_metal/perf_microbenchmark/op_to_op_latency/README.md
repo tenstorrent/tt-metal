@@ -71,7 +71,7 @@ first two transitions in the export):
   --num-pages-per-core 16 --compute-nops 2000 \
   --num-programs 8 --use-trace --trace-warmup-replays 2 \
   --reader-dbuf-trid --reader-trid-in-flight 2 --reader-push-tiles 2 \
-  --writer-flush-on-pressure --writer-end-barrier-mode 1 \
+  --writer-end-barrier-mode 1 \
   --use-device-profiler --use-realtime-profiler
 
 python3 tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/export_op_to_op_profiler_csv.py \
@@ -153,7 +153,6 @@ Optional: `export TT_METAL_PROFILER_CPP_POST_PROCESS=1` for kernel-duration summ
 | `--trace-region-size N` | 1 MiB | trace buffer (bytes) |
 | `--device-id N` | 0 | physical device |
 | `--read-only` | off | reader pops, writer skips DRAM writes. `bytes_per_program` drops from `2× tiles× tile_size` to `1×` (reads only) |
-| `--writer-flush-on-pressure` | off | writer only calls `noc_async_writes_flushed` when the output CB is about to back-pressure, instead of every tile |
 | `--writer-end-barrier-mode N` | 0 | end-of-kernel synchronization: 0 = `noc_async_write_barrier` (waits for DRAM ACK), 1 = `noc_async_writes_flushed` (waits for L1 drain only), 2 = none |
 | `--cross-program-dram-offset` | off | each program reads/writes a disjoint DRAM tile slice (host allocates `(num_programs+1)×` size). Use to avoid trace replay reusing warm DRAM rows across programs |
 | `--buffer-tune` | off | sweep CB depths for DRAM BW, then run op-to-op at the smallest depth within tolerance of peak BW |
@@ -188,8 +187,7 @@ Parse results: `grep BUFFER_TUNE` in the test log. Helper scripts: `run_buffer_t
 
 | flag | behavior |
 |---|---|
-| (default) | `noc_async_writes_flushed` after every tile, `noc_async_write_barrier` at kernel end |
-| `--writer-flush-on-pressure` | only flush when the output CB is about to back-pressure |
+| (default) | writer flushes (`noc_async_writes_flushed`) once per CB-worth of pages (never per page — per-page flush ~halves write BW when not DRAM-bound). End-of-kernel sync set by `--writer-end-barrier-mode` |
 | `--writer-end-barrier-mode 0` | end-of-kernel `noc_async_write_barrier` (default; waits for DRAM ACK) |
 | `--writer-end-barrier-mode 1` | end-of-kernel `noc_async_writes_flushed` (waits only for L1 drain; safe when the next consumer tolerates non-ACK'd data) |
 | `--writer-end-barrier-mode 2` | no end-of-kernel synchronization (experiment only — next program may overlap with in-flight DRAM writes) |

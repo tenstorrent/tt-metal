@@ -7,13 +7,12 @@
 // instance of this kernel runs on every Tensix core; each core gets its own
 // [start_tile_id, start_tile_id + n_tiles) slice via runtime args.
 //
-// Synchronization (per kernel review feedback):
-//   - noc_async_writes_flushed() so the source L1 slot is safe to recycle on
-//     cb_pop_front (write has at least left L1).  Mode 0: flush every page.
-//     Mode 1: flush only when output CB back-pressure requires it —
-//     batch up to (output_cb_depth / tiles_per_page - 1) writes before flush.
-//   - noc_async_write_barrier() ONCE at kernel exit so the next op sees fully
-//     committed DRAM writes (op-end safety).
+// Synchronization:
+//   - noc_async_writes_flushed() once per CB-worth of pages (batch up to
+//     output_cb_depth/tiles_per_page - 1 writes before a flush) so the source L1 slot is
+//     safe to recycle on cb_pop_front. Per-page flushing serializes the writer and ~halves
+//     write BW when not DRAM-bound, with no benefit when saturated, so it is not an option.
+//   - End of kernel: END_BARRIER_MODE selects barrier / flush / none (op-end safety).
 //
 // Runtime args:
 //   0: dst_addr
@@ -21,15 +20,14 @@
 //   2: start_tile_id
 //   3: program_id
 //
-// Compile-time args (see TensorAccessorArgs<7> for dst accessor):
+// Compile-time args (see TensorAccessorArgs<6> for dst accessor):
 //   0: cb_out
 //   1: TILES_PER_PAGE
 //   2: READ_ONLY        (1 = skip DRAM writes, just pop from output CB)
-//   3: WRITER_FLUSH_MODE (0 = flush every page; 1 = flush on CB back-pressure)
-//   4: OUTPUT_CB_DEPTH_TILES
-//   5: CROSS_PROGRAM_OFFSET_TILES (0 = every program writes same slice; >0 = program k
+//   3: OUTPUT_CB_DEPTH_TILES
+//   4: CROSS_PROGRAM_OFFSET_TILES (0 = every program writes same slice; >0 = program k
 //                                  writes pages starting at start_tile_id + k*OFFSET)
-//   6: END_BARRIER_MODE   (Batch-8 latency experiment — 's HW-barrier proposal)
+//   5: END_BARRIER_MODE
 //                          0 = noc_async_write_barrier (DEFAULT; wait for DRAM ACK; current)
 //                          1 = noc_async_writes_flushed (just flush local L1; writes left
 //                              the source but next op may see in-flight committed-at-NoC)
@@ -49,15 +47,15 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t TILES_PER_PAGE = get_compile_time_arg_val(1);
     constexpr uint32_t READ_ONLY = get_compile_time_arg_val(2);
-    constexpr uint32_t WRITER_FLUSH_MODE = get_compile_time_arg_val(3);
-    constexpr uint32_t OUTPUT_CB_DEPTH_TILES = get_compile_time_arg_val(4);
-    constexpr uint32_t CROSS_PROGRAM_OFFSET_TILES = get_compile_time_arg_val(5);
-    constexpr uint32_t END_BARRIER_MODE = get_compile_time_arg_val(6);
+    constexpr uint32_t OUTPUT_CB_DEPTH_TILES = get_compile_time_arg_val(3);
+    constexpr uint32_t CROSS_PROGRAM_OFFSET_TILES = get_compile_time_arg_val(4);
+    constexpr uint32_t END_BARRIER_MODE = get_compile_time_arg_val(5);
     constexpr uint32_t tiles_per_page = TILES_PER_PAGE > 0 ? TILES_PER_PAGE : 1;
     constexpr uint32_t output_cb_depth_tiles = OUTPUT_CB_DEPTH_TILES > 0 ? OUTPUT_CB_DEPTH_TILES : tiles_per_page;
     constexpr uint32_t cb_page_slots = output_cb_depth_tiles / tiles_per_page;
+    // Flush once per CB-worth of pages (never per page -- see header).
     constexpr uint32_t max_writes_before_flush = cb_page_slots > 1 ? cb_page_slots - 1 : 1;
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr auto dst_args = TensorAccessorArgs<6>();
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
@@ -83,21 +81,13 @@ void kernel_main() {
         if constexpr (READ_ONLY == 0) {
             const uint32_t l1_read_addr = get_read_ptr(cb_out);
             noc_async_write_tile(page_id, dst, l1_read_addr);
-            writes_since_flush++;
-            const bool flush_every_page = (WRITER_FLUSH_MODE == 0);
-            const bool flush_on_pressure = (WRITER_FLUSH_MODE != 0) && (writes_since_flush >= max_writes_before_flush);
-            if (flush_every_page || flush_on_pressure) {
+            // Flush once per CB-worth of pages so the source slot is safe to recycle.
+            if (++writes_since_flush >= max_writes_before_flush) {
                 noc_async_writes_flushed();
                 writes_since_flush = 0;
             }
         }
         cb_pop_front(cb_out, tiles_per_page);
-    }
-
-    if constexpr (READ_ONLY == 0) {
-        if ((WRITER_FLUSH_MODE != 0) && (writes_since_flush > 0)) {
-            noc_async_writes_flushed();
-        }
     }
 
     if constexpr (READ_ONLY == 0) {
