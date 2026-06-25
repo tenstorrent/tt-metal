@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 
 from ..layers.module import Module
+from . import walltime
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -114,14 +115,16 @@ def load_model(
             f"converted device weights."
         )
         logger.info(f"{subfolder}: no device cache (set TT_DIT_CACHE_DIR to cache converted weights).")
-        _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+            _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
         ttnn.distributed_context_barrier()
         logger.info(f"{subfolder}: loaded in {time.monotonic() - t0:.0f}s")
         return
 
     if Path(cache_dir).is_dir():
         logger.info(f"{subfolder}: loading cached device weights from '{cache_dir}'...")
-        tt_model.load(cache_dir)
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
+            tt_model.load(cache_dir)
         ttnn.distributed_context_barrier()
         logger.info(f"{subfolder}: loaded from cache in {time.monotonic() - t0:.0f}s")
         return
@@ -130,7 +133,8 @@ def load_model(
         raise MissingCacheError(cache_dir)
 
     logger.info(f"{subfolder}: device cache miss at '{cache_dir}'.")
-    _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
+    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+        _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
 
     # If distributed, ensure that all processes have completed the check whether cache_dir exists,
     # before any rank might proceed to create that dir to save.

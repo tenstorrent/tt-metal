@@ -42,6 +42,7 @@ from ...parallel.config import (
 )
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
+from ...utils import walltime
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.mochi import get_rot_transformation_mat
@@ -2157,6 +2158,10 @@ class LTXPipeline:
             logger.info(
                 f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
             )
+            # The vocoder+BWE first touch is a cold build (~3 min); record both audio stages
+            # so this large, otherwise-untracked cost is visible in the wall-time ledger.
+            walltime.record("audio", "mel_vae", _t_vae - _t0)
+            walltime.record("audio", "vocoder+bwe", _t_voc - _t_vae)
         else:
             with Watchdog("audio decode (mel-VAE + vocoder)"):
                 mel = self._decode_mel(audio_spatial)

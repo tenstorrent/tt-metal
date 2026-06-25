@@ -15,6 +15,7 @@ from loguru import logger
 import ttnn
 
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
+from ...utils import walltime
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio
@@ -88,15 +89,18 @@ class LTXDistilledPipeline(LTXPipeline):
             s1_h, s1_w = height // 2, width // 2
 
             logger.info(f"warmup stage 1: {s1_h}x{s1_w}, σ={s1_sigmas}")
-            self._denoise_no_guidance(
-                v_p,
-                a_p,
-                num_frames=num_frames,
-                height=s1_h,
-                width=s1_w,
-                sigma_values=s1_sigmas,
-                seed=0,
-            )
+            # Cold kernel compile for the stage-1 denoise — a dominant, otherwise-untracked
+            # slice of warmup wall time.
+            with walltime.timed("warmup", "stage1 build"):
+                self._denoise_no_guidance(
+                    v_p,
+                    a_p,
+                    num_frames=num_frames,
+                    height=s1_h,
+                    width=s1_w,
+                    sigma_values=s1_sigmas,
+                    seed=0,
+                )
 
         if "s2" in stages:
             # Upsample runs between stage 1 and stage 2; compile its kernels here.
@@ -112,17 +116,20 @@ class LTXDistilledPipeline(LTXPipeline):
             dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
 
             logger.info(f"warmup stage 2: {height}x{width}, σ={s2_sigmas}")
-            self._denoise_no_guidance(
-                v_p,
-                a_p,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                sigma_values=s2_sigmas,
-                seed=0,
-                initial_video_latent=dummy_v_init,
-                initial_audio_latent=dummy_a_init,
-            )
+            # Cold kernel compile for the stage-2 denoise (full-res) — the other dominant
+            # warmup slice.
+            with walltime.timed("warmup", "stage2 build"):
+                self._denoise_no_guidance(
+                    v_p,
+                    a_p,
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    sigma_values=s2_sigmas,
+                    seed=0,
+                    initial_video_latent=dummy_v_init,
+                    initial_audio_latent=dummy_a_init,
+                )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             self._warmup_decode(num_frames, height, width)
@@ -643,6 +650,11 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
 
         self.last_timings = list(timings)
+        # The denoise stages are the generation cost with no Watchdog of their own; surface
+        # them from the timings already collected (vae/upsample/audio are tracked elsewhere).
+        for _label, _secs in timings:
+            if "denoise" in _label.lower():
+                walltime.record("gen", _label, _secs)
         if output_path is None:
             logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | frames={tuple(video_pixels.shape)}")
             return video_pixels, audio_obj

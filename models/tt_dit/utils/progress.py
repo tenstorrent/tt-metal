@@ -17,6 +17,22 @@ import time
 
 from loguru import logger
 
+from . import walltime
+
+
+def _phase_category(label: str) -> str | None:
+    """Map a watchdog label to a wall-time category. ``None`` means don't record: cache
+    load/convert spans are already timed (with HIT/MISS) by ``cache.load_model``, so
+    recording them here too would double-count their seconds."""
+    low = label.lower()
+    if low.startswith("warmup"):
+        return "warmup"
+    if low.startswith(("gen", "denoise", "sampling", "step")):
+        return "gen"
+    if low.startswith(("load-cache", "load ", "loading", "convert", "save")):
+        return None
+    return "phase"
+
 
 class Watchdog:
     """Context manager that logs ``<label>: still working, Ns elapsed`` every ``interval``
@@ -41,5 +57,9 @@ class Watchdog:
     def __exit__(self, *exc: object) -> None:
         self._stop.set()
         self._thread.join(timeout=1.0)
+        elapsed = time.monotonic() - self._t0
         if self._log_done:
-            logger.info(f"{self._label}: done in {time.monotonic() - self._t0:.0f}s")
+            logger.info(f"{self._label}: done in {elapsed:.0f}s")
+        category = _phase_category(self._label)
+        if category is not None:
+            walltime.record(category, self._label, elapsed)
