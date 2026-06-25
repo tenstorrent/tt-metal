@@ -74,12 +74,6 @@ void kernel_main() {
             }
 
             if (do_mask_w) {
-                // CopyTile<cb_input(=c_0)> + CopyTile<cb_mask_w, D1> + Mask + PackTile.
-                // cb_input here is always c_0 (the runtime variable cb_input was reset to c_0
-                // at line 51 before this conditional). cb_input InputLifecycle::Streaming; cb_mask_w
-                // InputLifecycle::CallerManaged (held outside the NC×Ht loop); cb_masked_input
-                // OutputLifecycle::Streaming. Reconfig: copy_tile_init_with_dt -> Input on each; pack_tile_with_dt ->
-                // Output.
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<tt::CBIndex::c_0>{},

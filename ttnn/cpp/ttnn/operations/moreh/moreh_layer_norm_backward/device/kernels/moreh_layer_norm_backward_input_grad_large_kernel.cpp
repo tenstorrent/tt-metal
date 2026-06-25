@@ -97,8 +97,6 @@ void kernel_main() {
             // x - mean
             constexpr auto cb_xmm = cb_tmp3;
             CircularBuffer cb_xmm_obj(cb_xmm);
-            // x - mean. cb_x Streaming; cb_mean held -> CallerManaged + Scalar. is_lastdim -> Col bcast else
-            // Scalar. *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::sub<
                 cb_x,
                 cb_mean,
@@ -261,9 +259,6 @@ void kernel_main() {
             // Compute cb_ydy and cb_ydyadd
             constexpr auto cb_ydy = cb_tmp3;
             CircularBuffer cb_ydy_obj(cb_ydy);
-            // Compute cb_ydy = y * dycopy. cb_y Streaming; cb_dycopy NoWaitPop (waited above in the dyadd
-            // block, "we don't pop cb_dycopy there" -> chain pops it here per-tile). mul_tiles_init_with_dt
-            // -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::mul<
                 cb_y,
                 cb_dycopy,
@@ -320,9 +315,6 @@ void kernel_main() {
         // rstd / n -> cb_tmp3
         constexpr auto cb_recip_nrstd = cb_tmp3;
         CircularBuffer cb_recip_nrstd_obj(cb_recip_nrstd);
-        // rstd / n: cb_n_recip_n[1] * cb_rstd. cb_n_recip_n CallerManaged + Scalar + TileOffset::Set{1} (held);
-        // cb_rstd CallerManaged + Scalar (held); cb_recip_nrstd Streaming. is_lastdim -> Col else Scalar bcast.
-        // *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -430,8 +422,6 @@ void kernel_main() {
             // n * dy
             constexpr auto cb_ndy = cb_tmp1;
             CircularBuffer cb_ndy_obj(cb_ndy);
-            // n * dy. cb_n_recip_n held -> CallerManaged + Scalar (idx 0); cb_dycopy Streaming.
-            // mul_tiles_init_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::mul<
                 cb_n_recip_n,
                 cb_dycopy,
@@ -444,8 +434,6 @@ void kernel_main() {
             // n * dy - Sum[dy]
             constexpr auto cb_ndymdysum = cb_tmp2;
             CircularBuffer cb_ndymdysum_obj(cb_ndymdysum);
-            // n*dy - Sum[dy]. cb_ndy Streaming; cb_dysum held -> CallerManaged + Scalar. is_lastdim -> Col
-            // bcast else Scalar. *_init_short_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
             ckl::sub<
                 cb_ndy,
                 cb_dysum,
@@ -495,8 +483,6 @@ void kernel_main() {
             tile_regs_release();
 
             // Compute cb_y
-            // (x - mean) * rstd. cb_xmm Streaming; cb_rstd held -> CallerManaged + Scalar. is_lastdim -> Col
-            // bcast else Scalar. *_init_short_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
             ckl::mul<
                 cb_xmm,
                 cb_rstd,
@@ -509,8 +495,6 @@ void kernel_main() {
             // y * Sum[y * dy]
             constexpr auto cb_yydysum = cb_tmp1;
             CircularBuffer cb_yydysum_obj(cb_yydysum);
-            // y * Sum[y*dy]. cb_y Streaming; cb_ydysum held -> CallerManaged + Scalar. is_lastdim -> Col
-            // bcast else Scalar. *_init_short_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
             ckl::mul<
                 cb_y,
                 cb_ydysum,
@@ -523,13 +507,9 @@ void kernel_main() {
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             constexpr auto cb_tmp4 = cb_y;
             CircularBuffer cb_tmp4_obj(cb_tmp4);
-            // (n*dy - Sum[dy]) - (y * Sum[y*dy]). both Streaming. sub_tiles_init_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::sub<cb_ndymdysum, cb_yydysum, cb_tmp4>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_dx
-            // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n). cb_tmp4 Streaming; cb_recip_nrstd held ->
-            // CallerManaged + Scalar. mul_tiles_init_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
             ckl::mul<
                 cb_tmp4,
                 cb_recip_nrstd,

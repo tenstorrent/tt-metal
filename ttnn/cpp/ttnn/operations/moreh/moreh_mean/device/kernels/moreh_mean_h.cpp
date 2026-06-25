@@ -61,11 +61,6 @@ void kernel_main() {
 
             // Optional masking of last H tile
             if constexpr (do_mask_h) {
-                // CopyTile<cb_input> + CopyTile<cb_mask_h, D1> + Mask + PackTile.
-                // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input on each.
-                //   pack_tile_with_dt -> PackTileReconfig::Output.
-                // cb_input InputLifecycle::Streaming (chain owns wait+pop); cb_mask_h InputLifecycle::CallerManaged
-                //   (held outside the loop); cb_masked_input OutputLifecycle::Streaming.
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_input>{},

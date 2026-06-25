@@ -106,9 +106,6 @@ void kernel_main() {
          */
         constexpr uint32_t normed_output_cb = do_gamma ? cb_x_normed : cb_out;
 
-        /*
-         * x * 1/sqrt(stdev)
-         */
         ckl::mul<
             cb_norm_x_input,
             cb_recip_sqrt_var,
@@ -132,7 +129,7 @@ void kernel_main() {
                 cb_times_gamma_out,
                 ckl::BroadcastDim::Row,
                 ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::HeldBulk,  // gamma resident across NCHt: chain waits Wt/row, no pop
+                ckl::InputLifecycle::HeldBulk,
                 ckl::OutputLifecycle::Bulk,
                 ckl::BinaryDataFormatReconfig::Input,
                 ckl::PackTileReconfig::Output,
@@ -148,7 +145,7 @@ void kernel_main() {
                     cb_out,
                     ckl::BroadcastDim::Row,
                     ckl::InputLifecycle::Bulk,
-                    ckl::InputLifecycle::HeldBulk,  // beta resident across NCHt: chain waits Wt/row, no pop
+                    ckl::InputLifecycle::HeldBulk,
                     ckl::OutputLifecycle::Bulk,
                     ckl::BinaryDataFormatReconfig::Input,
                     ckl::PackTileReconfig::Output,

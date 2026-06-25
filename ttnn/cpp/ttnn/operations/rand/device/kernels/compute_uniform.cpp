@@ -25,10 +25,6 @@ void kernel_main() {
 
     init_sfpu(intermed_cb_id, intermed_cb_id);
 
-    // Per-tile chain: RandTile + PackTile. RandTile carries the runtime seed and seeds
-    // the PRNG in its init() (rand_tile_init), which the chain emits once at boot.
-    // Reconfig: original had no per-iter reconfig (init_sfpu at boot, plain pack_tile)
-    // -> PackTileReconfig::None.
     eltwise_chain(
         EltwiseShape::tiles(num_tiles),
         RandTile<Dst::D0>{f2u_from.u, f2u_scale.u, seed},

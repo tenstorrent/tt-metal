@@ -25,25 +25,6 @@ void kernel_main() {
 
     init_sfpu(cb_input, cb_output);
 
-    // Logit(x) = log(x / (1 - x)).
-    //
-    // Stage 1: cb_input -> [Clamp(s1, s2)] -> cb_tmp0
-    //   Clamp is gated on #ifdef CLAMP — when undefined, the chain is just
-    //   CopyTile + PackTile (an in-place pre-clip pass that matches the
-    //   original copy + conditional clamp + pack to cb_tmp0).
-    //
-    // Stage 2: cb_tmp0 (held + popped at end) ->
-    //   CopyTile<cb_tmp0, D0 InputLifecycle::HeldStream> + CopyTile<cb_tmp0, D1 InputLifecycle::NoWaitPop>
-    //   RsubUnary<D0>{1.0f bits} -> D0 = 1 - cb_tmp0
-    //   DivBinary<D1, D0, D0>    -> D0 = cb_tmp0 / (1 - cb_tmp0)
-    //   Log<D0>                  -> D0 = log(D0)
-    //   PackTile<cb_output>
-    //
-    // Reconfig matches original init_sfpu + copy_tile_init at boot —
-    // CopyTileReconfig::None + PackTileReconfig::None.
-    // Clamp stage gated on the CLAMP build flag (normalized to a constexpr bool so the chain
-    // carries no preprocessor). OptionalChainElement forwards the {lo, hi} ctor args when enabled
-    // and swallows them (stage dropped from the chain) when not.
 #ifdef CLAMP
     constexpr bool do_clamp = true;
 #else

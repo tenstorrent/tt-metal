@@ -84,13 +84,11 @@ void kernel_main() {
     TILIZE_ONE_TILE<untilized_cos_cb, retilized_cos_cb>(untilized_cos_sync_cb);
     constexpr uint32_t updated_cos_cb = retilized_cos_cb;
     constexpr uint32_t updated_sin_cb = retilized_sin_cb;
-    // DECODE: sin/cos held across all iters, bcast across rows.
     constexpr auto trig_bcast = BroadcastDim::Row;
     constexpr auto trig_lifecycle = InputLifecycle::HeldStream;
 #else
     constexpr uint32_t updated_cos_cb = cos_cb;
     constexpr uint32_t updated_sin_cb = sin_cb;
-    // Non-DECODE: sin/cos streamed per-iter, full-tile mul.
     constexpr auto trig_bcast = BroadcastDim::None;
     constexpr auto trig_lifecycle = InputLifecycle::Streaming;
 #endif
@@ -112,10 +110,6 @@ void kernel_main() {
         cb_push_back(rotated_in_interm_cb, onetile);
 
         // sin_interim = rotated * sin
-        // DECODE_MODE / non-DECODE collapse via constexpr selectors above —
-        // the chain's per-element init programs the eltwise-binary math state
-        // out of the matmul mode set by mm_init / mm_init_short above, so no
-        // explicit binary_op_init_common is needed here.
         compute_kernel_lib::mul<
             rotated_in_interm_cb,
             updated_sin_cb,

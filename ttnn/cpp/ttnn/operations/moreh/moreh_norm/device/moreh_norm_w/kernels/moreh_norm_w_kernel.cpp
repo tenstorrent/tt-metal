@@ -22,13 +22,13 @@ void kernel_main() {
     const auto recip_p = get_arg_val<uint32_t>(i++);
     const bool recip_p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    constexpr uint32_t cb_x = tt::CBIndex::c_0;                // input
-    constexpr uint32_t cb_one = tt::CBIndex::c_1;              // one
-    constexpr uint32_t cb_decimal = tt::CBIndex::c_2;          // decimal
-    constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;  // recip_p_decimal
-    constexpr uint32_t cb_mask_w = tt::CBIndex::c_4;           // mask_w
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    constexpr uint32_t cb_decimal = tt::CBIndex::c_2;
+    constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;
+    constexpr uint32_t cb_mask_w = tt::CBIndex::c_4;
 
-    constexpr uint32_t cb_y = tt::CBIndex::c_16;  // output
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
     constexpr uint32_t cb_tmp0 = tt::CBIndex::c_24;
     constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
@@ -66,8 +66,6 @@ void kernel_main() {
 
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
-            // |x| with optional mask on last col tile.
-            // Same pattern as moreh_norm_h 7743f35794f.
             if (do_mask_w && (col_idx == Wt - 1)) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
@@ -80,7 +78,6 @@ void kernel_main() {
                 ckl::unary<ckl::Abs<ckl::Dst::D0>, cb_x, cb_xabs>(ckl::EltwiseShape::tiles(onetile));
             }
 
-            // power_tile_to_cb body inlined as 4 chain stages -> cb_correct_xpow.
             if (p_is_negative) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
@@ -110,7 +107,6 @@ void kernel_main() {
                 ckl::PackTile<cb_exp_lxmd>{});
             ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
-            // Accumulator: col_idx==0 -> seed copy; else -> in-place add.
             if (col_idx == 0) {
                 ckl::copy<cb_correct_xpow, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -118,11 +114,8 @@ void kernel_main() {
             }
         }
 
-        // Sum(|x|^p) - reduce single tile.
         ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_xpowsum>(ckl::ReduceInputBlockShape::single());
 
-        // Final |sum|^(1/p) — power_tile_to_cb inlined; maps cb_xpow=cb_tmp0,
-        // cb_logx=cb_tmp1, cb_exp_lxmd=cb_tmp2, cb_correct_xpow=cb_y.
         if (recip_p_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),

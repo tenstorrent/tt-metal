@@ -12,18 +12,6 @@
 
 namespace ckl = compute_kernel_lib;
 
-// where(cond, true_value, false_value): copy cond -> D0, fill true -> D1,
-// fill false -> D2, Where(D0,D1,D2 -> D0), pack D0 -> out. The factory used to
-// inject this as the SFPU_OP_CHAIN_0 macro, but for WHERE_TSS the op-chain is
-// always exactly [WHERE_TSS] (where_tile<DF>(0,1,2,0)), so the macro is removed
-// and the explicit `Where` chain element expresses it directly.
-//
-// `Where`'s DataFormat template arg matches unary_op_utils.cpp:538-545 exactly:
-//   INT32 -> Int32, UINT32 -> UInt32, FLOAT32 -> Float32, else -> Float16_b.
-// The fills follow the original kernel: int dtypes fill via fill_tile_int<Int32>
-// (Int32 for BOTH int32 and uint32), float dtypes fill the float whose bits are
-// the packed scalar arg — FillBitcast(bits) == the original fill_tile(*float*),
-// without the strict-aliasing type-pun.
 #if defined(INP_INT32) || defined(INP_UINT32)
 constexpr bool kIsInt = true;
 #else
@@ -43,13 +31,13 @@ constexpr DataFormat kWhereDF = DataFormat::Float16_b;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);  // true_value (bits)
-    const uint32_t packed_scalar2 = get_arg_val<uint32_t>(2);  // false_value (bits)
+    const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);
+    const uint32_t packed_scalar2 = get_arg_val<uint32_t>(2);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    init_sfpu(cb_input, cb_output);  // caller-owned BIG init
+    init_sfpu(cb_input, cb_output);
 
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),

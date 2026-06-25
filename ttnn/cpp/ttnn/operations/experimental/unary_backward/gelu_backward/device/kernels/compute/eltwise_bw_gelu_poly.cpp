@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for GELU backward using polynomial-based GELU derivative.
-// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1).
-
 #include <cstdint>
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -24,18 +21,6 @@ void kernel_main() {
 
     unary_op_init_common(cb_grad_out, cb_grad_in);
 
-    // GELU backward: grad_in = grad_out * GELU'(input).
-    //
-    // 1D shape with explicit block size: EltwiseShape::tiles(n, block_size) emits
-    // a chain that walks n tiles in chunks of block_size each. Per-element inits
-    // (gelu_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short)
-    // are hoisted once at chain entry; per-chunk InputLifecycle::Chunked lifecycle waits / pops
-    // block_size tiles at a time. PF picks per_core_block_size as the largest
-    // power-of-2 divisor of per_core_tile_cnt (<= 8).
-    //
-    // Lifecycles:
-    //   cb_grad_out / cb_input  InputLifecycle::Chunked + Block (per-chunk wait+pop of per_core_block_size tiles)
-    //   cb_grad_in              OutputLifecycle::Chunked + Block (per-chunk reserve+push)
     const auto shape = ckl::EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size);
 
     ckl::eltwise_chain(

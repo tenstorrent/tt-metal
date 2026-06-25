@@ -69,15 +69,9 @@ void kernel_main() {
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
                 ckl::ReduceInputBlockShape::single(),
                 ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
+                ckl::Accumulate::at(cb_max, 1));
         }
 
-        // compute x - max(x)  — ROW bcast: cb_max is 1 tile broadcast across Ht rows.
-        // Reconfig audit: sub_bcast_rows_init_short_with_dt reconfigs srca/srcb -> Input.
-        //   pack_tile_with_dt -> Output.
-        // Lifecycles: cb_in0 InputLifecycle::Bulk + Block (chain owns wait Ht + pop Ht). cb_max
-        //   InputLifecycle::Bulk + Scalar — chain emits cb_wait_front(cb_max, 1) thanks to the
-        //   OperandKind-aware window_1d helper. cb_x_m_max OutputLifecycle::Bulk + Block.
         ckl::sub<
             cb_in0,
             cb_max,
@@ -91,21 +85,6 @@ void kernel_main() {
             ckl::OperandKind::Block,
             ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Ht));
 
-        // compute exp(x - max(x)). Original per-tile copy + (Negative if !SOFTMAX)
-        // + Exp + (Mask on last tile) + pack with cb_exps reserve(Ht) upfront and
-        // push(Ht) at end. Split into 2 chains:
-        //   A (Ht-1 iters, non-last): CopyTile(cb_x_m_max @ i) + ... + Exp + Pack
-        //   B (1 iter, last with mask): CopyTile(cb_x_m_max @ Ht-1) + ... + Exp +
-        //                                CopyTile(cb_mask) + Mask + Pack
-        //
-        // cb_x_m_max InputLifecycle::CallerManaged + Block (held outside; sequential read 0..Ht-1
-        // across iters; ckl::TileOffset::Set(Ht-1) for the last tile).
-        // cb_mask InputLifecycle::CallerManaged + Scalar (held outside via line 42 wait_front(1)).
-        // cb_exps OutputLifecycle::Streaming (per-tile reserve+push replaces upfront reserve+
-        // push; net Ht tiles pushed matches original).
-        //
-        // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input.
-        // pack_tile_with_dt -> PackTileReconfig::Output.
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef SOFTMAX
         constexpr bool is_softmax = true;
@@ -173,16 +152,6 @@ void kernel_main() {
             });
 #endif
 
-        // compute final result — ROW bcast on cb_recipsumexps (1 tile).
-        // LOG path: out = (x - max) - log(sum_exp). Reads cb_x_m_max (held by
-        //   external wait/pop) and cb_recipsumexps.
-        // !LOG path: out = exp(x-max) / sum_exp. Reads cb_exps (chain-owned bulk
-        //   wait+pop) and cb_recipsumexps; cb_x_m_max held externally because
-        //   the chain doesn't touch it.
-        // cb_x_m_max wait/pop wrap the chain symmetrically in both paths (chain
-        // uses InputLifecycle::CallerManaged on it in LOG path).
-        // Reconfig: *_bcast_rows_init_short_with_dt -> Input.
-        //   pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef LOG
         ckl::sub<

@@ -17,7 +17,6 @@ void kernel_main() {
     constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
     constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
 
-    // Compile-time BroadcastDim from (ht_need_bcast, wt_need_bcast).
     constexpr auto kBcast = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
                             : ht_need_bcast                  ? ckl::BroadcastDim::Row
                             : wt_need_bcast                  ? ckl::BroadcastDim::Col
@@ -31,16 +30,16 @@ void kernel_main() {
     const auto p_minus_one = get_arg_val<uint32_t>(i++);
     const bool p_minus_one_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    constexpr uint32_t cb_x = tt::CBIndex::c_0;        // input(==x)
-    constexpr uint32_t cb_y = tt::CBIndex::c_1;        // output(==y)
-    constexpr uint32_t cb_dy = tt::CBIndex::c_2;       // output_grad(==dy)
-    constexpr uint32_t cb_decimal = tt::CBIndex::c_3;  // decimal
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;
+    constexpr uint32_t cb_y = tt::CBIndex::c_1;
+    constexpr uint32_t cb_dy = tt::CBIndex::c_2;
+    constexpr uint32_t cb_decimal = tt::CBIndex::c_3;
     CircularBuffer cb_x_obj(cb_x);
     CircularBuffer cb_y_obj(cb_y);
     CircularBuffer cb_dy_obj(cb_dy);
     CircularBuffer cb_decimal_obj(cb_decimal);
 
-    constexpr uint32_t cb_dx = tt::CBIndex::c_16;  // input_grad(==dx)
+    constexpr uint32_t cb_dx = tt::CBIndex::c_16;
 
     constexpr uint32_t cb_xpow = tt::CBIndex::c_24;
     constexpr uint32_t cb_logx = tt::CBIndex::c_25;
@@ -61,16 +60,9 @@ void kernel_main() {
         cb_y_obj.wait_front(onetile);
         cb_dy_obj.wait_front(onetile);
 
-        // sign(x) -> cb_sign. cb_x held (waited outside, no pop here).
-        // Matches sign_tile_to_cb(cb_x, cb_sign, 0, pop=0) macro.
         ckl::unary<ckl::Sign<ckl::Dst::D0>, cb_x, cb_sign, ckl::InputLifecycle::HeldStream>(
             ckl::EltwiseShape::tiles(onetile));
 
-        // |x|^(p-1) — power_tile_with_abs_x_to_cb inlined as 4 chain stages.
-        // Stage A: cb_x -> Abs -> Power(p-1) -> [Recip if neg] -> cb_xpow. InputLifecycle::HeldStream (no pop).
-        // Stage B: cb_x -> Abs -> Log -> cb_logx. InputLifecycle::NoWaitPop (pops cb_x).
-        // Stage C: cb_logx * cb_decimal -> Exp -> cb_exp_lxmd.
-        // Stage D: cb_xpow * cb_exp_lxmd -> cb_correct_xpow.
         if (p_minus_one_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
@@ -106,9 +98,6 @@ void kernel_main() {
             ckl::PackTile<cb_exp_lxmd>{});
         ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
-        // cb_correct_xpow * cb_y -> cb_tmp4. 4-branch bcast dispatch (compile-time).
-        // cb_correct_xpow InputLifecycle::Streaming + Scalar (just pushed). cb_y InputLifecycle::CallerManaged (waited
-        // outside).
         ckl::mul<
             cb_correct_xpow,
             cb_y,
@@ -117,15 +106,9 @@ void kernel_main() {
             ckl::InputLifecycle::Streaming,
             ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
 
-        // cb_tmp4 * cb_dy -> cb_tmp5. Same bcast pattern. cb_dy held outside loop.
         ckl::mul<cb_tmp4, cb_dy, cb_tmp5, kBcast, ckl::InputLifecycle::Streaming, ckl::InputLifecycle::CallerManaged>(
             ckl::EltwiseShape::tiles(onetile));
 
-        // 1 / y^p — power_and_recip_tile_to_cb inlined as 4 chain stages.
-        // Stage A: cb_y -> Power(p) -> [Recip if neg] -> cb_xpow. InputLifecycle::HeldStream.
-        // Stage B: cb_y -> Log -> cb_logx. InputLifecycle::NoWaitPop (pops cb_y).
-        // Stage C: cb_logx * cb_decimal -> Exp -> cb_exp_lxmd.
-        // Stage D: cb_xpow * cb_exp_lxmd -> Recip -> cb_recip_ypow.
         if (p_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
@@ -159,12 +142,10 @@ void kernel_main() {
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<cb_recip_ypow>{});
 
-        // (cb_tmp5 * cb_recip_ypow) -> cb_tmp4. Same 4-branch bcast.
         ckl::mul<cb_tmp5, cb_recip_ypow, cb_tmp4, kBcast>(ckl::EltwiseShape::tiles(onetile));
 
         cb_dy_obj.pop_front(onetile);
 
-        // cb_sign * cb_tmp4 -> cb_dx. Final mul_tiles_to_cb inlined.
         ckl::mul<cb_sign, cb_tmp4, cb_dx>(ckl::EltwiseShape::tiles(onetile));
     }
 

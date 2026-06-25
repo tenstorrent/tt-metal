@@ -36,7 +36,6 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
-        // sum(dy) — accumulate with mask on last tile.
         for (uint32_t w = 0; w < Wt; ++w) {
             if (w == Wt - 1) {
                 if (w == 0) {
@@ -84,7 +83,6 @@ void kernel_main() {
 
         cb_sum_obj.pop_front(onetile);
 #else
-        // step 1: y*dy + accumulator.
         for (uint32_t w = 0; w < Wt; ++w) {
             if (w == Wt - 1) {
                 ckl::eltwise_chain(
@@ -107,7 +105,6 @@ void kernel_main() {
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_add, cb_bcast_scaler, cb_sum>(
             ckl::ReduceInputBlockShape::single());
 
-        // Per-tile result.
         for (uint32_t w = 0; w < Wt; w += onetile) {
             ckl::sub<
                 cb_dy,

@@ -32,9 +32,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;                           // x**2
-    constexpr uint32_t cb_res = tt::CBIndex::c_5;                          // residual b (unused when !FUSE_PRE_ADD)
-    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;  // fused a + b, or just a
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;
+    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;
 
     if constexpr (FUSE_PRE_ADD) {
         binary_op_init_common(cb_in0, cb_res, cb_inp);
@@ -42,16 +42,9 @@ void kernel_main() {
         binary_op_init_common(cb_inp, cb_reduce, cb_x2);
     }
 
-    // 2D walk for the squaring chain: outer = Wt/blk subblocks, inner = blk tiles.
-    // Total iterations = Wt. Wt is assumed divisible by blk (matches the original
-    // loop `for (wt = 0; wt < Wt; wt += blk)` which has no tail handling).
     constexpr auto squaring_shape = ckl::EltwiseShape::of(Wt / blk, blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD). Migrated from
-        // pre_add::one_row to eltwise_chain: per-block (blk) bulk add over Wt tiles via
-        // Bulk + Block index, reproducing one_row's wait/pop/reserve/push(blk) loop. Reconfig
-        // Input (reconfig_data_format + add_tiles_init) + Output (pack_reconfig_data_format).
         if constexpr (FUSE_PRE_ADD) {
             ckl::add<
                 cb_in0,
@@ -67,11 +60,6 @@ void kernel_main() {
                 ckl::OperandKind::Block>(squaring_shape);
         }
 
-        // x**2 — same-CB FPU mul. cb_inp lifecycle: InputLifecycle::Pipelined (chain emits
-        // cumulative `cb_wait_front(cb_inp, (i+1)*blk)` per blk-chunk AND bulk-pops Wt at chain end
-        // — cb_inp feeds only this square; the reduce below reads cb_x2). cb_x2 lifecycle:
-        // OutputLifecycle::Chunked (chain emits reserve_back(blk) + push_back(blk) per chunk;
-        // pack writes absolute slots via Block index).
         ckl::square<
             cb_inp,
             cb_x2,
@@ -81,7 +69,6 @@ void kernel_main() {
             ckl::PackTileReconfig::Output,
             ckl::OperandKind::Block>(squaring_shape);
 
-        // sum(x**2) — BulkWaitBulkPop: all Wt tiles already in CB.
         ckl::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,

@@ -35,7 +35,7 @@ constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
 constexpr uint32_t cb_stats_reduced_id = tt::CBIndex::c_6;    // [E(x**2), E(x)]
 constexpr uint32_t cb_recip_sqrt_var_id = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
-constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
+constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;
 
 // Layernorm-specific CBs
 constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_11;  // x - E(x)
@@ -138,13 +138,6 @@ void kernel_main() {
          * 1/sqrt(var + eps)
          */
 
-        // 1/sqrt(var + eps)  — Add reads cb_stats_reduced at index 1 (variance slot;
-        // mean is at index 0); cb_eps at index 0.
-        // Reconfig audit: explicit reconfig_data_format + add_tiles_init -> Input.
-        // Explicit pack_reconfig_data_format -> Output. rsqrt_tile_init<true> -> Legacy::On.
-        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + ckl::TileOffset::Set
-        // (held, popped at line 164 with stats_tile_stride). cb_eps InputLifecycle::CallerManaged + Scalar.
-        // cb_recip_sqrt_var OutputLifecycle::Streaming.
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<

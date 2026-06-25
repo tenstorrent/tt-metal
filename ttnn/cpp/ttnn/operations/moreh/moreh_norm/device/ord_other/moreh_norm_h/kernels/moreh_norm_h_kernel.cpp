@@ -20,17 +20,17 @@ void kernel_main() {
     const auto Ht = get_arg_val<uint32_t>(i++);
     const auto origin_h = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_x = tt::CBIndex::c_0;       // input
-    constexpr uint32_t cb_one = tt::CBIndex::c_1;     // one
-    constexpr uint32_t cb_mask_h = tt::CBIndex::c_2;  // mask_h
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    constexpr uint32_t cb_mask_h = tt::CBIndex::c_2;
     CircularBuffer cb_one_obj(cb_one);
     CircularBuffer cb_mask_h_obj(cb_mask_h);
 
-    constexpr uint32_t cb_y = tt::CBIndex::c_16;  // output
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_val = tt::CBIndex::c_24;     // f(x)
-    constexpr uint32_t cb_cal = tt::CBIndex::c_25;     // accumulator (sum or max across rows)
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_26;  // reduce output
+    constexpr uint32_t cb_val = tt::CBIndex::c_24;
+    constexpr uint32_t cb_cal = tt::CBIndex::c_25;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_26;
 
     constexpr uint32_t onetile = 1;
 
@@ -45,9 +45,6 @@ void kernel_main() {
         cb_mask_h_obj.wait_front(onetile);
     }
 
-    // p-norm op family selected by compile-time flags (MINUS_INF: max-norm via +inf masking +
-    // negate; IS_ZERO: count-nonzero). Normalized to constexpr bools so the chains carry no
-    // preprocessor — MaskPosInf<->Mask and UnaryNe<->Abs become complementary OptionalChainElements.
 #ifdef MINUS_INF
     constexpr bool minus_inf = true;
 #else
@@ -60,9 +57,6 @@ void kernel_main() {
 #endif
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
-            // f(x) prologue. 2-branch dispatch on (do_mask_h && last-row).
-            // Per-stage reconfig matches original copy_tile_init_with_dt / pack_tile_with_dt.
-            // cb_x InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside loop).
             const bool mask_this = do_mask_h && (row_idx == Ht - 1);
             if (mask_this) {
                 ckl::eltwise_chain(
@@ -85,26 +79,19 @@ void kernel_main() {
                     ckl::PackTile<cb_val>{});
             }
 
-            // Accumulator: row_idx==0 -> seed copy; else -> reduce-across-rows op.
-            //   IS_ZERO  -> add_tiles (sum of != zero count)
-            //   default  -> binary_max (running max via two-DEST SFPU)
             if (row_idx == 0) {
                 ckl::copy<cb_val, cb_cal>(ckl::EltwiseShape::tiles(onetile));
             } else {
 #ifdef IS_ZERO
-                // cb_cal = cb_val + cb_cal (in-place accumulator).
                 ckl::add<cb_val, cb_cal, cb_cal>(ckl::EltwiseShape::tiles(onetile));
 #else
-                // cb_cal = max(cb_val, cb_cal) via two-DEST SFPU.
                 ckl::binary_sfpu<ckl::BinaryMax<>, cb_val, cb_cal, cb_cal>(ckl::EltwiseShape::tiles(onetile));
 #endif
             }
         }
 
-        // Reduce f(x) accumulator across the column. Uses reduce helper.
         ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_cal, cb_one, cb_reduce>(ckl::ReduceInputBlockShape::single());
 
-        // Final: copy reduce result -> [negate if MINUS_INF] -> cb_y.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::CopyTile<cb_reduce>{},

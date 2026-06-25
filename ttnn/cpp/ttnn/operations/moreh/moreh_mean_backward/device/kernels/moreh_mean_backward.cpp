@@ -36,17 +36,6 @@ void kernel_main() {
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     cb_in1_obj.wait_front(onetile);
 
-    // Stage A: cb_intermed0 = add_bcast<dim>(cb_in1, cb_in0) (or plain copy if no bcast).
-    //   bcast dim chosen at compile time from (ht_need_bcast, wt_need_bcast).
-    //   cb_in1 InputLifecycle::CallerManaged + Scalar (held outside the loop).
-    //   cb_in0 InputLifecycle::Streaming + Scalar (chain owns wait+pop).
-    //   cb_intermed0 OutputLifecycle::Streaming + Scalar.
-    // Reconfig: *_init_short_with_dt + pack_tile_with_dt -> Input + Output.
-    //
-    // Four (ht_need_bcast × wt_need_bcast) cases collapse into one chain via two
-    // mutually-exclusive OptionalChainElement gates: BinaryFpu<Add, bcast_dim> runs
-    // when any bcast is needed (Scalar / Row / Col); CopyTile runs when neither is
-    // needed (faster than add(zero, x) for the no-bcast path).
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
     constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
                                : ht_need_bcast                  ? ckl::BroadcastDim::Row
@@ -62,7 +51,6 @@ void kernel_main() {
             ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<cb_in0>>{},
             ckl::PackTile<cb_intermed0>{});
 
-        // Stage B: cb_out0 = cb_intermed0 * cb_scalar (SCALAR bcast).
         ckl::mul<
             cb_intermed0,
             cb_scalar,

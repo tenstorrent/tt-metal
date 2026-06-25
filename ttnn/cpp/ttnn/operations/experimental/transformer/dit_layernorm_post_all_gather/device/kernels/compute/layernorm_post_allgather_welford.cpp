@@ -29,9 +29,9 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
     constexpr uint32_t cb_eps = tt::CBIndex::c_4;
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_5;   // [mean, var]
-    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_6;  // 1/sqrt(var+eps)
-    constexpr uint32_t cb_intermediate = tt::CBIndex::c_7;    // intermediate result
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_5;
+    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_6;
+    constexpr uint32_t cb_intermediate = tt::CBIndex::c_7;
     constexpr uint32_t cb_out = tt::CBIndex::c_8;
 
     constexpr uint32_t stats_tile_stride = 2;
@@ -54,7 +54,7 @@ void kernel_main() {
 
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
 
-    cb_wait_front(cb_eps, 1);  // broadcast epsilon is ready
+    cb_wait_front(cb_eps, 1);
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows; tile_row++) {
         // Calculate global tile row and batch index
@@ -70,14 +70,6 @@ void kernel_main() {
         cb_push_back(cb_stats_reduced, stats_tile_stride);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
 
-        // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var.
-        // Same migration as layernorm_distributed/layernorm_post_allgather_welford.
-        // cb_stats_reduced tile 1 holds variance (after combine_welford_partials).
-        // Reconfig: Input + Output (explicit reconfig_data_format +
-        //   pack_reconfig_data_format + add_tiles_init in original).
-        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + ckl::TileOffset::Set;
-        //   cb_eps InputLifecycle::CallerManaged + Scalar; cb_recip_sqrt_var OutputLifecycle::Streaming.
-        // rsqrt_tile_init<true> -> Legacy::On.
         ckl::eltwise_chain(
             ckl::EltwiseShape::single(),
             ckl::BinaryFpu<
@@ -97,13 +89,6 @@ void kernel_main() {
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
-            // 1) x_minus_mean: cb_intermediate[i] = cb_inp[i] - cb_stats_reduced[0]
-            // (bcast cols).  cb_inp: InputLifecycle::Bulk + Block (per-block_size wait+pop).
-            // cb_stats_reduced: InputLifecycle::CallerManaged + Scalar (held by outer per-row scope).
-            // cb_intermediate: OutputLifecycle::Bulk + Block (per-block_size reserve+push).
-            // Reconfig: explicit reconfig_data_format + sub_bcast_cols_init_short ->
-            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
-            // PackTileReconfig::Output.
             ckl::sub<
                 cb_inp,
                 cb_stats_reduced,
@@ -117,16 +102,6 @@ void kernel_main() {
                 ckl::OperandKind::Block,
                 ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size));
 
-            // 2) normalize: norm_target_cb[i] = cb_intermediate[i] * cb_recip_sqrt_var[0]
-            // (bcast cols). In-place when norm_target_cb == cb_intermediate (do_gamma||do_beta).
-            // Migrated to eltwise_chain: InputLifecycle::Chunked + OutputLifecycle::Chunked
-            // reproduce the raw per-block pop-before-reserve (stage the whole block_size chunk in
-            // DEST, pop block_size, THEN reserve block_size) that the single-buffered in-place CB
-            // requires — same sequence the hand-written compute/pack split implemented.
-            // cb_intermediate: Chunked + Block. cb_recip_sqrt_var: CallerManaged + Scalar (1 tile
-            // held across the col_tile loop; waited below, popped at row end).
-            // Reconfig: reconfig_data_format + mul_bcast_cols_init_short -> BinaryDataFormatReconfig::Input;
-            // pack_reconfig_data_format -> PackTileReconfig::Output.
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
             cb_wait_front(cb_recip_sqrt_var, 1);
             ckl::mul<
@@ -142,15 +117,6 @@ void kernel_main() {
                 ckl::OperandKind::Block,
                 ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size));
 
-            // 3) optional gamma: gamma_out_cb[i] = norm_target_cb[i] * cb_gamma[col_tile + i]
-            // (bcast rows). In-place when gamma_out_cb == cb_intermediate (do_beta). Migrated to
-            // eltwise_chain — same Chunked in/out pop-before-reserve as the normalize block above,
-            // which the single-buffered in-place CB requires. norm_target_cb (== cb_intermediate):
-            // Chunked + Block (local idx). cb_gamma: CallerManaged + Block + TileOffset::Set{col_tile}
-            // (held, cumulatively waited below, popped at row/end), mirroring the beta block — the
-            // chain's per-side index path gives A=local i, B=col_tile+i. Reconfig: reconfig_data_format
-            // + mul_bcast_rows_init_short -> BinaryDataFormatReconfig::Input; pack_reconfig_data_format
-            // -> PackTileReconfig::Output.
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_cb = do_beta ? cb_intermediate : cb_out;
                 cb_wait_front(cb_gamma, col_tile + block_size);
@@ -173,14 +139,6 @@ void kernel_main() {
             }
 
             // 4) optional beta (only if gamma was provided)
-            // cb_out[i] = cb_intermediate[i] + cb_beta[col_tile + i] (bcast rows).
-            // Different CBs (no in-place). cb_intermediate InputLifecycle::Bulk + Block. cb_beta
-            // InputLifecycle::CallerManaged + Block + col_tile (cb_beta is held
-            // across the col_tile loop via the cumulative wait_front above).
-            // cb_out OutputLifecycle::Bulk + Block.
-            // Reconfig: reconfig_data_format + add_bcast_rows_init_short ->
-            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
-            // PackTileReconfig::Output.
             if constexpr (do_beta) {
                 cb_wait_front(cb_beta, col_tile + block_size);
                 ckl::eltwise_chain(

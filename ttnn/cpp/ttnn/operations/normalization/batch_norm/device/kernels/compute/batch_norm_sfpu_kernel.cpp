@@ -11,22 +11,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
-// batchnorm_bcast_tiles: for each output tile in [tile_start, freq), computes
-//
-//   cb_den         = rsqrt(cb_batch_var + cb_eps)                  // Stage 1, one tile
-//   running        = (cb_other - cb_bcast) * cb_den                // Stage 2
-//                    [* cb_weight if WeightHas]                    // Stage 3
-//                    [+ cb_bias  if BiasHas]                       // Stage 4
-//   cb_final_out   = [typecast(running) if NeedsTypecast]          // Stage 5
-//                    else running
-//
-// SFPU variant: every multiplicand other than the running operand is loaded into
-// DEST::D1 via CopyTile (which the chain emits before the binary). The binary
-// SFPU helpers (AddBinary/SubBinary/MulBinary) consume D0+D1 and write D0, so the
-// running result stays in D0 across the whole chain — no intermediate CB writes.
-// Original code staged through cb_tmp_1 between separate tile_regs windows; with
-// the fused chain that bridge is unnecessary and cb_tmp_1 is dropped.
-
 template <
     bool WeightHas,
     bool BiasHas,
@@ -45,9 +29,6 @@ template <
 ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     using namespace compute_kernel_lib;
 
-    // Stage 1: cb_den = rsqrt(cb_batch_var + cb_eps).
-    // cb_batch_var: InputLifecycle::Bulk + Scalar — chain emits 1-tile wait+pop per call (window_1d<Scalar>).
-    // cb_eps:        InputLifecycle::CallerManaged + Scalar — held by kernel_main for the whole kernel.
     eltwise_chain(
         EltwiseShape::single(),
         CopyTile<cb_batch_var, Dst::D0, InputLifecycle::Bulk>{},
@@ -58,24 +39,8 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
 
     const uint32_t inner_count = freq - tile_start;
 
-    // Output CB depends on whether the typecast tail runs: when NeedsTypecast is true the
-    // typecast tile writes the cast result to cb_output_final directly, so the fused chain's
-    // pack target is cb_output_final; otherwise it's cb_output_0.
     constexpr uint32_t cb_final_out = NeedsTypecast ? cb_output_final : cb_output_0;
 
-    // Stage 2..5 fused — DEST[0] threaded through Sub → Mul(den) → [Mul(weight)] → [Add(bias)]
-    // → [Typecast] → Pack. CopyTile<…, D1> loads each new operand into D1; the SFPU binaries
-    // then consume (D0, D1) and write back to D0.
-    //
-    // Lifecycles: every held single-tile operand uses InputLifecycle::Bulk + Scalar — chain's
-    // window_1d<Scalar> collapses to 1, so each side emits a single
-    // cb_wait_front(cb, 1) at the chain head and cb_pop_front(cb, 1) at the tail.
-    // For cb_weight / cb_bias, wrapping the CopyTile in OptionalChainElement also
-    // makes the wait/pop conditional on the compile-time flag — when the option
-    // is off the wrapped element collapses to a tag with a_policy() == InputLifecycle::CallerManaged,
-    // so the chain emits NOTHING for the inactive branch (CB ids, wait, pop all
-    // suppressed).
-    // TODO review _all_ comments
     eltwise_chain(
         EltwiseShape::tiles(inner_count),
         CopyTile<cb_other>{},
@@ -104,14 +69,11 @@ void kernel_main() {
 
     constexpr auto cb_input = get_compile_time_arg_val(2);       // input
     constexpr auto cb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
-    constexpr auto cb_output_0 = get_compile_time_arg_val(4);    // pre-typecast staging (or final output)
+    constexpr auto cb_output_0 = get_compile_time_arg_val(4);
     constexpr auto cb_batch_var = get_compile_time_arg_val(5);
     constexpr auto cb_eps = get_compile_time_arg_val(6);
     constexpr auto cb_den = get_compile_time_arg_val(7);
     constexpr auto cb_weight = get_compile_time_arg_val(8);
-    // get_compile_time_arg_val(9) used to be cb_tmp_1 — no longer referenced (the fused chain
-    // keeps the running result in DEST instead of staging through cb_tmp_1). CT-arg slot kept
-    // for ABI compatibility with the program factory.
     constexpr auto cb_bias = get_compile_time_arg_val(10);
     constexpr auto cb_output_final = get_compile_time_arg_val(11);
     constexpr bool needs_output_typecast = get_compile_time_arg_val(12) == 1;

@@ -14,10 +14,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
 #include "api/dataflow/circular_buffer.h"
 
-// lgamma (fast): unary stirling on x directly (no reflection preamble), then the
-// same log|sin(pi*x)| adjustment as the slow kernel. cb_input is read 5 times:
-// first HeldStream (owns wait), middle CallerManaged, last NoWaitPop (owns pop).
-// where_tile is Float16_b here (matches the original fast kernel).
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {

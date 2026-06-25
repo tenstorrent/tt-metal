@@ -53,8 +53,6 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
         if (Wt == 1) {
-            // mask cb_in0[0] (held -> HeldStream) with cb_mask (held externally -> CallerManaged).
-            // copy_tile_init_with_dt -> Input; pack_tile_with_dt -> Output.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::CopyTile<cb_in0, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
@@ -79,7 +77,6 @@ void kernel_main() {
             // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
             // into cb_max via Accumulate. The accumulator and output are both cb_max:
             // the helper waits+pops the previous tile, then packs+pushes the new one.
-            // mask cb_in0[Wt-1] (held -> HeldBulk + TileOffset::Set) with cb_mask (held -> CallerManaged).
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::CopyTile<
@@ -98,11 +95,6 @@ void kernel_main() {
                 ckl::Accumulate::at(cb_max, /*iter=*/1));
         }
 
-        // compute x - max(x)  — COL bcast: cb_max is 1 tile broadcast across Wt cols.
-        // Reconfig: sub_bcast_cols_init_short_with_dt -> Input. pack_tile_with_dt -> Output.
-        // Lifecycles: cb_in0 InputLifecycle::Bulk + Block; cb_max InputLifecycle::Bulk + Scalar (chain emits
-        //   wait/pop(1) via window_1d<Scalar> — commit 14a5a61e462 made the
-        //   OperandKind drive the wait count); cb_x_m_max OutputLifecycle::Bulk + Block.
         ckl::sub<
             cb_in0,
             cb_max,
@@ -116,11 +108,6 @@ void kernel_main() {
             ckl::OperandKind::Block,
             ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Wt));
 
-        // compute exp(x - max(x)) — split into 2 chains, same pattern as
-        // moreh_softmax_h.cpp. cb_x_m_max held outside; cb_mask held outside;
-        // cb_exps OutputLifecycle::Streaming per-tile.
-        //
-        // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Wt);
 #ifdef SOFTMAX
         constexpr bool is_softmax = true;
@@ -188,15 +175,6 @@ void kernel_main() {
             });
 #endif
 
-        // compute final result — COL bcast on cb_recipsumexps (1 tile).
-        // LOG: out = (x-max) - log(sum_exp). cb_x_m_max chain-read (LOG owns it).
-        // !LOG: out = exp(x-max) / sum_exp. cb_exps chain-read; cb_x_m_max held
-        //   externally (chain doesn't touch it — uses InputLifecycle::CallerManaged-style outer
-        //   wait/pop in !LOG path).
-        // cb_x_m_max wait/pop wrap the chain symmetrically; chain uses
-        // InputLifecycle::CallerManaged + Scalar in LOG path to avoid double-pop.
-        // Reconfig: *_bcast_cols_init_short_with_dt + pack_tile_with_dt
-        // -> Input + Output.
         cb_x_m_max_obj.wait_front(Wt);
 #ifdef LOG
         ckl::sub<

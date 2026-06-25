@@ -116,17 +116,7 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
-            // x = in + b  — per-block bulk add (eltwise from incoming/0106).
-            // Reconfig audit: original had explicit reconfig_data_format(cb_in, cb_inb) +
-            // pack_reconfig_data_format(cb_x) + add_tiles_init ONCE outside the loop.
-            // Chain emits per-call (fold elides after first iter). -> Input + Output.
-            // Lifecycles: cb_in/cb_inb InputLifecycle::Bulk + Block, cb_x OutputLifecycle::Bulk + Block.
             for (auto block : generic::blocks(Wt, blk)) {
-                // welford_fp32_alias: cb_x_welford shares SRAM with cb_x and must be pushed
-                // alongside it so Welford's wait_front on the alias sees the tiles. The add
-                // chain manages cb_x's reserve/pack/push internally; bracket it with the alias
-                // reserve/push to keep the alias's independent counter in sync (gated — when the
-                // alias is off cb_x_welford == cb_x and these would double-count).
                 if constexpr (welford_fp32_alias) {
                     cb_x_welford_obj.reserve_back(block.full_block_size());
                 }
@@ -286,18 +276,7 @@ void kernel_main() {
         cb_ex_obj.push_back(onetile);
         cb_ex2_obj.push_back(onetile);
 
-        // x - E[x]  per-block, col bcast on cb_ex (1 tile per row).
-        // Reconfig audit:
-        //   - conditional reconfig_data_format(cb_x, cb_ex) under FLOAT32_DTYPE +
-        //     sub_bcast_cols_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
-        //   - No pack_reconfig in original -> PackTileReconfig::None.
-        // Behavioral diff: original had cb_xmm.reserve_back(total_buffer_size) ONCE
-        // upfront; chain BlockIter pack requires Upfront*/NoReserve* (chain.inl:361)
-        // so OutputLifecycle::Bulk emits per-block reserve+push. The total capacity is the same.
-        // cb_ex_obj.wait_front(1) outside the chain matches InputLifecycle::CallerManaged on the B side.
-        // Lifecycles: cb_x InputLifecycle::Bulk + Block, cb_ex InputLifecycle::CallerManaged + Scalar, cb_xmm
-        // OutputLifecycle::Bulk + Block.
-        cb_ex_obj.wait_front(onetile);  // pre-wait, never popped inside chain
+        cb_ex_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
             ckl::sub<
                 cb_x,
@@ -319,12 +298,6 @@ void kernel_main() {
             reconfig_data_format_srca(cb_x, cb_xmm);
         }
 
-        // Var(x) + eps  ->  1/sqrt(Var(x) + eps)
-        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
-        // Reconfig audit: add_tiles_init reconfigs srca/srcb regardless (matches Input);
-        // no explicit pack_reconfig in original -> PackTileReconfig::None.
-        // cb_ex2: InputLifecycle::Streaming. cb_eps: InputLifecycle::CallerManaged. cb_ex2pe:
-        // OutputLifecycle::Streaming.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -338,20 +311,8 @@ void kernel_main() {
             ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
         // Remainder of the layernorm operation
-        // norm(x) * gamma + beta, where norm(x) = (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
-        //
-        // No SFPU_OP_INIT_ACTIVATION macros in welford variant -> all three stages migrate
-        // cleanly into chains. cb_xmm: InputLifecycle::HeldBulk + Block +
-        // ckl::TileOffset::Set(block.start()) (held from x-E[x] stage, popped at end of NCHt loop).
-        // cb_ex2pe: Caller-managed. cb_gamma / cb_beta: cumulative wait (block.start() + full_block_size); model as
-        // InputLifecycle::HeldBulk + Block + ckl::TileOffset::Set(block.start()) — chain emits
-        // cb_wait_front(cb, base + n_tiles) per call matching original.
         cb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
-            // Stage 1 (always-on): cb_im_or_out = cb_xmm * cb_ex2pe (col bcast).
-            //   Reconfig: explicit reconfig_data_format(cb_xmm, cb_ex2pe) +
-            //     mul_bcast_cols_init_short -> Input. Explicit pack_reconfig
-            //     selects cb_out or cb_fusion at compile time -> Output.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                 ckl::BinaryFpu<
@@ -369,10 +330,6 @@ void kernel_main() {
                 ckl::PackTile<cb_im_or_out, ckl::OutputLifecycle::Bulk>{});
 
             if constexpr (do_gamma) {
-                // Stage 2: cb_outg = cb_fusion * cb_gamma (row bcast).
-                // cb_fusion was just pushed by stage 1 (intermediate when do_gamma|do_beta);
-                // InputLifecycle::Bulk wait+pop per block. cb_gamma: cumulative wait, never popped ->
-                // InputLifecycle::HeldBulk + Block + ckl::TileOffset::Set(block.start()).
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
@@ -392,8 +349,6 @@ void kernel_main() {
                     ckl::PackTile<cb_outg, ckl::OutputLifecycle::Bulk>{});
             }
             if constexpr (do_beta) {
-                // Stage 3: cb_out = cb_fusion + cb_beta (row bcast).
-                // Same lifecycle pattern as Stage 2 with gamma -> beta.
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
                     ckl::BinaryFpu<

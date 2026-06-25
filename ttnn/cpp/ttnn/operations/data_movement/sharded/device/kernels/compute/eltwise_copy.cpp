@@ -15,14 +15,8 @@ void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    // Standard hw-config big init only: the chain's CopyTile emits copy_tile_init
-    // (the datacopy MOP) unconditionally, so unary_op_init_common's datacopy init was
-    // redundant. compute_kernel_hw_startup does the unpack/math/pack hw_configure +
-    // pack init; the chain supplies the copy MOP.
     compute_kernel_hw_startup(cb_in, cb_out);
 
-    // Per-tile copy cb_in -> cb_out. No per-iter reconfig (boot-time format only),
-    // so CopyTileReconfig::None + PackTileReconfig::None.
     compute_kernel_lib::copy<
         cb_in,
         cb_out,

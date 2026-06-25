@@ -27,9 +27,6 @@ void kernel_main() {
 
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    // Emit the chain's one-time setup ONCE, out of the loop — the original raw bcast init
-    // (BIG hw config + ROW bcast MOP + pack init). The per-tile chain calls below pass
-    // SetupOwner::Caller, so the chain skips that setup instead of re-emitting it each iteration.
     unary_bcast_init<BroadcastType::ROW>(cb_id_src, cb_id_dst);
 
     uint32_t HtWt = Ht * Wt;
@@ -38,7 +35,6 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    // Per-tile row broadcast; setup already emitted above (SetupOwner::Caller).
                     ckl::eltwise_chain<ckl::SetupOwner::Caller>(
                         ckl::EltwiseShape::single(),
                         ckl::UnaryBcast<

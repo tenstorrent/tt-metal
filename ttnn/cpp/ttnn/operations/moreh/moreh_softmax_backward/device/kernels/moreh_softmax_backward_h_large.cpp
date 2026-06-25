@@ -36,11 +36,9 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
-        // sum(dy) — accumulate with mask on last tile.
         for (uint32_t h = 0; h < Ht; ++h) {
             if (h == Ht - 1) {
                 if (h == 0) {
-                    // Single tile: mask cb_dy and write to cb_add directly.
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::tiles(onetile),
                         ckl::CopyTile<cb_dy>{},
@@ -48,7 +46,6 @@ void kernel_main() {
                         ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                         ckl::PackTile<cb_add>{});
                 } else {
-                    // mask cb_dy -> cb_inter0; then add to cb_add.
                     constexpr auto cb_inter0 = tt::CBIndex::c_24;
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::tiles(onetile),
@@ -70,8 +67,6 @@ void kernel_main() {
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_add, cb_bcast_scaler, cb_sum>(
             ckl::ReduceInputBlockShape::single());
 
-        // Per-tile: exp(y) -> mul_bcast(cb_sum, Row) -> sub(cb_dy, .) -> cb_dx.
-        // cb_sum held outside loop (InputLifecycle::CallerManaged). cb_y / cb_dy streaming pop=1.
         for (uint32_t h = 0; h < Ht; ++h) {
             constexpr auto cb_exp = tt::CBIndex::c_24;
             ckl::unary<ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>, cb_y, cb_exp>(
@@ -89,10 +84,8 @@ void kernel_main() {
         cb_sum_obj.pop_front(onetile);
 #else
 
-        // step 1: y*dy -> cb_ydy (with mask on last) + accumulate -> cb_add.
         for (uint32_t h = 0; h < Ht; ++h) {
             if (h == Ht - 1) {
-                // mul_tiles_and_mask_tile_to_cb: y*dy + mask -> cb_ydy.
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::BinaryFpu<cb_y, cb_dy, ckl::BinaryFpuOp::Mul>{},
@@ -103,7 +96,6 @@ void kernel_main() {
                 ckl::mul<cb_y, cb_dy, cb_ydy>(ckl::EltwiseShape::tiles(onetile));
             }
 
-            // Accumulator.
             if (h == 0) {
                 ckl::copy<cb_ydy, cb_add>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -114,7 +106,6 @@ void kernel_main() {
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, cb_add, cb_bcast_scaler, cb_sum>(
             ckl::ReduceInputBlockShape::single());
 
-        // Per-tile result: sub_bcast_rows(cb_dy, cb_sum) + mul(cb_y, .) [+ Neg if !SOFTMAX].
         for (uint32_t h = 0; h < Ht; ++h) {
             ckl::sub<
                 cb_dy,
@@ -126,7 +117,6 @@ void kernel_main() {
 #ifdef SOFTMAX
             ckl::mul<cb_y, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // mul_tiles_and_negative_to_cb: mul then negate.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<cb_y, cb_inter2, ckl::BinaryFpuOp::Mul>{},

@@ -26,16 +26,6 @@ void kernel_main() {
     binary_op_init_common(cb_in1, cb_in0, cb_out0);
     cb_in1_obj.wait_front(onetile);
 
-    // cb_out0 = add_bcast<dim>(cb_in1, cb_in0)  (or plain copy if no bcast).
-    // Reconfig: original uses *_init_short (NOT _with_dt) and plain pack_tile,
-    // relying on startup binary_op_init_common formats -> None + None.
-    // cb_in1 InputLifecycle::CallerManaged + Scalar (held outside loop). cb_in0 InputLifecycle::Streaming + Scalar.
-    // cb_out0 OutputLifecycle::Streaming + Scalar.
-    //
-    // The four (ht_need_bcast × wt_need_bcast) cases collapse into one chain via two
-    // mutually-exclusive OptionalChainElement gates: the BinaryFpu<Add, bcast_dim>
-    // runs when any bcast is needed (Scalar / Row / Col); the CopyTile runs when
-    // neither is needed (faster than add(zero, x) for the no-bcast path).
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
     constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
                                : ht_need_bcast                  ? ckl::BroadcastDim::Row

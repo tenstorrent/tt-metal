@@ -92,10 +92,6 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     for (auto block : generic::blocks(Wt, blk)) {
-        // Fused pre-add: cb_in + cb_inb -> cb_interm_pre_add over one padded block (Bulk in/out,
-        // block_size = full_block_size so all tiles run in one DEST window — matches the original
-        // for(i:block.local()) inside one ACQ; padding tiles are processed harmlessly).
-        // add_tiles_init + reconfig -> Input; pack_reconfig(cb_interm_pre_add) -> Output.
         ckl::add<
             cb_in,
             cb_inb,
@@ -470,10 +466,6 @@ void kernel_main() {
         // =====================================
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
-        // 1/sqrt(Var(X) + eps): BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
-        // Reconfig: reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init -> Input; no pack_reconfig
-        // in original (cb_ex2/cb_ex2pe compatible) -> PackTileReconfig::None.
-        // cb_ex2pe.reserve_back IS called -> OutputLifecycle::Streaming. Non-LEGACY rsqrt -> Legacy::Off.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -486,8 +478,6 @@ void kernel_main() {
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
-        // Broadcast the column vector across cols (UnaryBcast<COL>): reconfigs both srca/srcb to
-        // cb_ex2pe (Input), downstream PackTile owns pack reconfig. Streaming in/out.
         ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
 
         // =====================================

@@ -38,7 +38,6 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; ++n) {
         // find max
         if (Wt == 1) {
-            // mask cb_in0[0] (Streaming) with cb_mask (held externally -> CallerManaged).
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::CopyTile<cb_in0, ckl::Dst::D0>{},
@@ -53,9 +52,6 @@ void kernel_main() {
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_in0, cb_max_scaler, cb_max>(
                 ckl::ReduceInputBlockShape::row(Wt - 1));
 
-            // Phase 2: mask the last tile (eltwise chain from incoming/0106) and continue
-            // reducing into cb_max via Accumulate (reduce kept from main).
-            // mask cb_in0[0] (Streaming) with cb_mask (held externally -> CallerManaged).
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::CopyTile<cb_in0, ckl::Dst::D0>{},
@@ -68,10 +64,7 @@ void kernel_main() {
                 ckl::Accumulate::at(cb_max, /*iter=*/1));
         }
 
-        // step 1: exp(x - max) accumulator over w. cb_in0 streaming + Scalar (pop=1).
-        // cb_max InputLifecycle::CallerManaged (held outside loop). cb_mask InputLifecycle::CallerManaged (popm=0).
         for (uint32_t w = 0; w < Wt; ++w) {
-            // compute exp(x - max) [+ mask if last] OR rexp[+ mask] (!SOFTMAX last).
             if (w == Wt - 1) {
 #ifdef SOFTMAX
                 ckl::eltwise_chain(
@@ -88,7 +81,6 @@ void kernel_main() {
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<cb_exps>{});
 #else
-                // rexp + mask (no sub); matches rexp_tile_and_mask_tile_to_cb.
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_in0>{},
@@ -127,7 +119,6 @@ void kernel_main() {
 #endif
             }
 
-            // Accumulator over w. Seed copy on first iteration.
             if (w == 0) {
                 ckl::copy<cb_exps, cb_add>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -173,7 +164,6 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; w += onetile) {
 #ifdef LOG
 #ifdef SOFTMAX
-            // x - max - log(sum). Two chains (cb_in0 -> cb_tmp -> cb_out0).
             ckl::sub<
                 cb_in0,
                 cb_max,
@@ -189,11 +179,9 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // logsoftmin not implemented in original.
 #endif
 #else
 #ifdef SOFTMAX
-            // exp(x - max) * 1/sum. Sub+Exp folded; then Mul by recip.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
@@ -213,7 +201,6 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // rexp(x - max) / sum (softmin path).
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<

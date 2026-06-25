@@ -53,10 +53,8 @@ void kernel_main() {
 
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
-            // |x| — no mask in ord_other variant.
             ckl::unary<ckl::Abs<ckl::Dst::D0>, cb_x, cb_xabs>(ckl::EltwiseShape::tiles(onetile));
 
-            // power_tile_to_cb 4 chain stages -> cb_correct_xpow.
             if (p_is_negative) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
@@ -86,7 +84,6 @@ void kernel_main() {
                 ckl::PackTile<cb_exp_lxmd>{});
             ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
-            // Accumulator (cb_xpowadd): inner_idx==0 -> seed; else -> add.
             if (inner_idx == 0) {
                 ckl::copy<cb_correct_xpow, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -94,9 +91,6 @@ void kernel_main() {
             }
         }
 
-        // Final |xpowadd|^(1/p) — power_tile_to_cb on cb_xpowadd -> cb_y.
-        // Same 4-stage decomposition: cb_xpow=cb_tmp0, cb_logx=cb_tmp1,
-        // cb_exp_lxmd=cb_tmp2, cb_correct_xpow=cb_y.
         if (recip_p_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),

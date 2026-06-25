@@ -11,19 +11,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
-// running_statistics (SFPU / fp32 path): updated_stat = (1 - momentum) * old_stat + momentum * batch_stat
-// for mean and/or var (compile-time gated).
-//
-// One chain per stat, no intermediate CBs (the original staged through cb_tmp1/2/3). The CBs are
-// unpacked to DEST as fp32 (UnpackToDestFp32) and the arithmetic runs on DEST via SFPU binaries, so
-// the running result is threaded through DEST slots:
-//   D0 = one ; D1 = momentum ; D0 = D0 - D1            (1 - momentum)
-//   D1 = old_stat ; D0 = D0 * D1                        (1 - momentum) * old
-//   D1 = momentum ; D2 = batch_stat ; D1 = D1 * D2      momentum * batch
-//   D0 = D0 + D1                                        sum
-// (3 DEST slots — within the fp32 limit of 4/8). cb_out0 receives a copy of the last computed stat
-// (var if present, else mean). When the output dtype differs from the fp32 compute format the result
-// is typecast into a writer-facing CB by maybe_typecast_stat (unchanged).
 namespace ckl = compute_kernel_lib;
 using D = ckl::Dst;
 
@@ -46,9 +33,6 @@ ALWI void update_running_stat() {
     constexpr auto CP_IN = ckl::CopyTileReconfig::Input;
     constexpr auto PK_OUT = ckl::PackTileReconfig::Output;
 
-    // one/momentum held (CallerManaged); old_stat and batch_stat streamed (wait 1 / pop 1, as the
-    // original popped them). cb_updated -> OutputLifecycle::Bulk (chain reserves+pushes M=1); cb_out0
-    // stays CallerManaged — handled by kernel_main.
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::CopyTile<cb_one, D::D0, CM, CP_IN, SCALAR>{},
@@ -67,7 +51,6 @@ ALWI void update_running_stat() {
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcCb, uint32_t DstCb>
 ALWI void maybe_typecast_stat() {
     if constexpr (NeedsTypecast) {
-        // src (the updated stat just written) -> typecast -> writer-facing CB.
         ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, SrcCb, DstCb>(ckl::EltwiseShape::single());
     }
 }
@@ -86,7 +69,6 @@ void kernel_main() {
     constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);
     constexpr auto cb_momentum = get_compile_time_arg_val(9);
     constexpr auto cb_one = get_compile_time_arg_val(10);
-    // The former cb_tmp1/2/3 CT-args are gone — the chain threads the result through DEST.
     constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(11);
     constexpr auto cb_writer_updated_var = get_compile_time_arg_val(12);
     constexpr bool stat_needs_typecast = get_compile_time_arg_val(13) == 1;
@@ -98,7 +80,7 @@ void kernel_main() {
     unary_op_init_common(cb_batch_mean, cb_out0);
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_momentum, 1);  // held for the whole kernel
+    cb_wait_front(cb_momentum, 1);
     cb_wait_front(cb_one, 1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {

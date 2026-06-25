@@ -15,9 +15,6 @@ void kernel_main() {
 
     init_sfpu(input_cb, output_cb);
 
-    // CHAIN_TYPECAST_IN_DF / CHAIN_TYPECAST_OUT_DF are numeric defines emitted
-    // by the program factory; they map to DataFormat enum values consumed by
-    // the chain Typecast<InDF, OutDF, Slot> element.
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     compute_kernel_lib::unary<
         compute_kernel_lib::Typecast<CHAIN_TYPECAST_IN_DF, CHAIN_TYPECAST_OUT_DF, compute_kernel_lib::Dst::D0>,

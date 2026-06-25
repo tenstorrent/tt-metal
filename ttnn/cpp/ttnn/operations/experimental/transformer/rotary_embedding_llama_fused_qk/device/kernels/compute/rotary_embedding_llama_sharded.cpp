@@ -95,18 +95,6 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        // sin_interim = rotated * sin (ROW-bcast).
-        // PARTIAL: only the sin stage migrates here. cos and add stages BLOCKED on
-        // runtime CB ids (in_cb / out_cb selected via is_q at runtime). Chain template
-        // args require constexpr CBs; duplicating the chain in both q/k branches
-        // would inflate code size — file is already at TRISC2 size limit (see comment
-        // at line 17). PARTIAL gate cite: chain template constexpr CB constraint;
-        // file-level TRISC2 size budget blocks the duplication workaround.
-        //
-        // Lifecycles: NoWait* / NoReserve* on all sides. Outer cb_wait_front /
-        // cb_pop_front (line 92, 103) and cb_push_back (102) stay on raw LLK.
-        // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> Input.
-        // No pack_reconfig -> None.
         compute_kernel_lib::mul<
             rotated_in_interm_cb,
             sin_cb,

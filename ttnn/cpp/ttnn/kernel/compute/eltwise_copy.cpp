@@ -14,9 +14,6 @@ void kernel_main() {
 
     unary_op_init_common(cb_in, cb_out);
 
-    // Per-tile copy cb_in -> cb_out via a single chain over all tiles.
-    // Original used unary_op_init_common + copy_tile_init at boot (no per-iter
-    // reconfig) — CopyTileReconfig::None + PackTileReconfig::None preserve that.
     compute_kernel_lib::copy<
         cb_in,
         cb_out,

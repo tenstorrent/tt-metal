@@ -18,7 +18,6 @@
 
 namespace ckl = compute_kernel_lib;
 
-// Templated on the CBs so the eltwise_chain below can take them as compile-time NTTPs.
 template <
     uint32_t block_w,
     uint32_t num_subblocks_w,
@@ -36,16 +35,6 @@ ALWI void calc_numeric_stable() {
         reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_in, cb_max_scaler, cb_max, ckl::ReduceInputPolicy::NoWaitNoPop>(
             ckl::ReduceInputBlockShape::row(block_w));
 
-    // x - max(x) then exp, fused — DEST-batched subblock_w tiles per acquire, matching the
-    // original's `for (j < num_subblocks_w) { for (w < subblock_w) }` window with absolute
-    // index `w + index_subblock_w_offset`. cb_in resident (popped at chain end) -> DeferredPop
-    // + Block, read by absolute index `wt_base + j`; cb_max consumed once -> Bulk + Scalar
-    // (the chain owns the single wait/pop — M=1 via window_1d<Scalar>); cb_out reserve+push
-    // block_w upfront/walk -> Bulk (block-correct).
-    // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size; the chain clamps
-    // it to DEST capacity automatically. sub_bcast_cols_init_short ->
-    // BinaryDataFormatReconfig::Input; plain pack_tile (format already cb_out) ->
-    // PackTileReconfig::None.
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(block_w, subblock_w),
         ckl::BinaryFpu<
@@ -101,10 +90,6 @@ void kernel_main() {
 
     constexpr int dst0 = 0;
 
-    // Compile-time mask configuration for the fused mask-add chain below — replaces the inline
-    // #ifdef CAUSAL_MASK that used to live inside the BinaryFpu<...> template args. Macro
-    // presence is normalized to constexpr bools, then the broadcast dim and the cb_fused_attn
-    // lifecycle are each selected once.
 #if FUSED_SCALE_MASK
 #ifdef CAUSAL_MASK
     constexpr bool causal_mask = true;
@@ -121,48 +106,28 @@ void kernel_main() {
 #else
     constexpr bool numeric_stable = false;
 #endif
-    // CAUSAL -> no broadcast (full mask tile); else broadcast the mask row across rows.
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
-    // cb_fused_attn lifecycle matrix — reproduces the original "#ifndef SHARDED_CAUSAL_MASK wait"
-    // + "#ifdef CAUSAL_MASK pop": wait <- !SHARDED, pop <- CAUSAL.
-    constexpr auto mask_lifecycle = (causal_mask && sharded_causal_mask)
-                                        ? ckl::InputLifecycle::DeferredPop                        // no wait, pop
-                                    : causal_mask          ? ckl::InputLifecycle::Bulk            // wait + pop
-                                    : !sharded_causal_mask ? ckl::InputLifecycle::HeldBulk        // wait, no pop
-                                                           : ckl::InputLifecycle::CallerManaged;  // no wait, no pop
+    constexpr auto mask_lifecycle = (causal_mask && sharded_causal_mask) ? ckl::InputLifecycle::DeferredPop
+                                    : causal_mask                        ? ckl::InputLifecycle::Bulk
+                                    : !sharded_causal_mask               ? ckl::InputLifecycle::HeldBulk
+                                                                         : ckl::InputLifecycle::CallerManaged;
 #endif
 
     for (uint32_t i = 0; i < block_h; i++) {
 #if FUSED_SCALE_MASK
-        // fused scale — DEST-batched subblock_w tiles per acquire, matching the original's
-        // per-subblock window with absolute index `w + index_subblock_w_offset`. cb_in0
-        // (resident sharded, popped at chain end) * cb_fused_scale (held scalar) ->
-        // cb_scale_mask. cb_in0 DeferredPop + Block (absolute index `wt_base + j`);
-        // cb_fused_scale CallerManaged + Scalar (wait kept below); cb_scale_mask reserve+push
-        // block_w upfront/walk -> Bulk (block-correct). reconfig +
-        // mul_tiles_bcast_scalar_init_short -> Input; pack_reconfig -> Output.
-        // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
         ckl::mul<
             cb_in0,
             cb_fused_scale,
             cb_scale_mask,
             ckl::BroadcastDim::Scalar,
             ckl::InputLifecycle::DeferredPop,
-            ckl::InputLifecycle::HeldBulk,  // cb_fused_scale: held scalar, chain waits(1)/call, no pop
+            ckl::InputLifecycle::HeldBulk,
             ckl::OutputLifecycle::Bulk,
             ckl::BinaryDataFormatReconfig::Input,
             ckl::PackTileReconfig::Output,
             ckl::OperandKind::Block,
             ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_w, subblock_w));
 
-        // fused mask add (+exp) — DEST-batched subblock_w tiles per acquire, matching the
-        // original's per-subblock window with absolute index `w + index_subblock_w_offset`.
-        // cb_scale_mask (Bulk: wait+pop block_w, absolute index `wt_base + j`) + cb_fused_attn
-        // (lifecycle per the CAUSAL_MASK / SHARDED_CAUSAL_MASK matrix — chain owns wait+pop,
-        // exactly reproducing the original's #ifndef SHARDED_CAUSAL_MASK wait + #ifdef CAUSAL_MASK
-        // pop) -> cb_x (reserve+push block_w upfront/walk -> Bulk). add init -> Input; plain
-        // pack_tile -> None. Exp dropped when NUMERIC_STABLE (done in calc_numeric_stable below).
-        // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(block_w, subblock_w),
             ckl::BinaryFpu<
@@ -189,8 +154,6 @@ void kernel_main() {
         calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_x, cb_max_scaler, cb_max, cb_exps>();
 #endif
 
-        // cb_fused_attn pop is now owned by the fused-attn chain above (DeferredPop/Bulk under
-        // CAUSAL_MASK; held otherwise) — no external pop needed.
         reconfig_data_format(cb_exps, cb_sum_scaler);
 
 #else
@@ -198,17 +161,6 @@ void kernel_main() {
 #ifdef NUMERIC_STABLE
         calc_numeric_stable<block_w, num_subblocks_w, subblock_w, cb_in0, cb_max_scaler, cb_max, cb_exps>();
 #else
-        // exp(x): CopyTile + Exp + PackTile, DEST-batched subblock_w tiles per acquire over the
-        // whole block_w — matching the original's `for (j < num_subblocks_w) { for (w <
-        // subblock_w) copy_tile(cb_in0, w + index_subblock_w_offset, w) }` window with absolute
-        // index `w + index_subblock_w_offset`. cb_in0 is sharded-resident (block_w*block_h),
-        // read by absolute index `wt_base + j` and popped block_w at chain end -> DeferredPop +
-        // Block (the prior per-subblock loop with TileOffset::Set was BlockSize=1; this is the
-        // single batched form). cb_exps reserve+push block_w upfront/walk -> Bulk (block-correct).
-        // Reconfig: CopyTileReconfig::Input (== original reconfig_data_format(cb_in0, cb_in0) +
-        // copy_tile_to_dst_init_short) + PackTileReconfig::Output (== pack_reconfig_data_format(
-        // cb_exps)). EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size,
-        // DEST-clamped.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(block_w, subblock_w),
             ckl::CopyTile<
@@ -241,25 +193,13 @@ void kernel_main() {
                 recip_tile(0);
             });
 
-        // exp(x) / (sum(exp(x))) — bcast COL on cb_recipsumexps (1 tile held) — DEST-batched
-        // subblock_w tiles per acquire, matching the original's per-subblock window with
-        // absolute index `w + index_subblock_w_offset`. The SUM reduce above (NoWaitNoPop) ran
-        // after cb_wait_front(cb_exps, block_w), so cb_exps is fully resident (block_w): it
-        // walks by absolute index `wt_base + j` -> DeferredPop + Block, chain pops block_w at
-        // end (== the original's lone cb_exps_obj.pop_front(block_w) after the mul loop).
-        // cb_recipsumexps held outside (wait/pop bracket the chain) -> CallerManaged + Scalar.
-        // cb_out0 (block_w*block_h resident) reserve+push block_w upfront/walk -> Bulk.
-        //
-        // Reconfig: reconfig_data_format + mul_bcast_cols_init_short -> Input;
-        // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
-        // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
         ckl::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
             ckl::BroadcastDim::Col,
             ckl::InputLifecycle::DeferredPop,
-            ckl::InputLifecycle::Bulk,  // cb_recipsumexps: chain owns wait(1)/pop(1)
+            ckl::InputLifecycle::Bulk,
             ckl::OutputLifecycle::Bulk,
             ckl::BinaryDataFormatReconfig::Input,
             ckl::PackTileReconfig::Output,

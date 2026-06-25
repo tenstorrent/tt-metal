@@ -56,15 +56,6 @@ void kernel_main() {
             cb_push_back(in_cb, Wt);
             cb_wait_front(in_cb, Wt);
 
-            // ---- rotate-half: stays raw LLK (genuine chain blocker) ----
-            // The two sub-steps below write disjoint halves [0,half_Wt) and [half_Wt,Wt) of a
-            // SINGLE co-reserved Wt-tile rotated_in_interm window (reserved once above, pushed once
-            // below). The chain can't reproduce that bracketing: PackTile CallerManaged is pinned at
-            // base (eltwise_chain.inl:569), so it can't walk a multi-tile half-window; OutputLifecycle::Bulk
-            // would reserve+push its own half-window instead of sharing the Wt reservation. This is the
-            // same partial-window / co-reserved-output blocker documented for welford-c. (The structural
-            // sibling rotary_embedding_llama_sharded.cpp likewise leaves its rotate — a matmul — raw.)
-
             // Process second half: multiply by -1 and store in rotated buffer
             mul_tiles_bcast_scalar_init_short(in_cb, scalar_cb);
             tile_regs_acquire();
@@ -93,12 +84,6 @@ void kernel_main() {
 
             cb_push_back(rotated_in_interm_cb, Wt);
 
-            // sin_interim = rotated * sin (bcast ROW). Mirrors the device-validated
-            // rotary_embedding_llama_sharded.cpp: rotated InputLifecycle::Bulk (waited+popped
-            // within this stage); sin InputLifecycle::HeldBulk (pushed at batch level above,
-            // popped at batch level below — held across the heads_per_batch_t loop); sin_interm
-            // OutputLifecycle::Bulk. mul_bcast_rows_init_short -> Reconfig::Input; no explicit
-            // pack_reconfig -> PackTileReconfig::None. Block walk over Wt tiles.
             ckl::mul<
                 rotated_in_interm_cb,
                 sin_cb,
@@ -111,9 +96,6 @@ void kernel_main() {
                 ckl::PackTileReconfig::None,
                 ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
-            // cos_interim = x * cos (bcast ROW). in_cb InputLifecycle::Bulk — this is its last use,
-            // so the stage's wait+pop replaces the original cb_pop_front(in_cb, Wt) (in_cb was
-            // held raw across the rotate stages above). cos InputLifecycle::HeldBulk (batch-level).
             ckl::mul<
                 in_cb,
                 cos_cb,
@@ -126,8 +108,6 @@ void kernel_main() {
                 ckl::PackTileReconfig::None,
                 ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
-            // out = cos_interim + sin_interim. Both InputLifecycle::Bulk (wait+pop within stage),
-            // out_cb OutputLifecycle::Bulk.
             ckl::add<
                 cos_interm_cb,
                 sin_interm_cb,

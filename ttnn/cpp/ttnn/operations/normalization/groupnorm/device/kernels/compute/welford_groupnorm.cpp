@@ -561,10 +561,6 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        // cb_x_id *= cb_gamma_id[nt] (bcast rows). Reconfig:
-                        // mul_bcast_rows_init_short + manual reconfig_data_format_srcb ->
-                        // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
-                        // PackTileReconfig::None.
                         ckl::eltwise_chain(
                             ckl::EltwiseShape::single(),
                             ckl::BinaryFpu<
@@ -584,10 +580,6 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        // cb_x_id += cb_beta_id[nt] (bcast rows). Reconfig:
-                        // add_bcast_rows_init_short + manual reconfig_data_format_srcb ->
-                        // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
-                        // PackTileReconfig::None.
                         ckl::eltwise_chain(
                             ckl::EltwiseShape::single(),
                             ckl::BinaryFpu<
@@ -606,10 +598,6 @@ void kernel_main() {
                             ckl::PackTile<cb_x_id, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
                     }
 
-                    // Write out the final output: cb_out = cb_x. Reconfig:
-                    // copy_tile_init + manual reconfig_data_format_srcb ->
-                    // CopyTileReconfig::Input. pack_tile (no _with_dt) ->
-                    // PackTileReconfig::None.
                     ckl::copy<
                         cb_x_id,
                         cb_out_id,

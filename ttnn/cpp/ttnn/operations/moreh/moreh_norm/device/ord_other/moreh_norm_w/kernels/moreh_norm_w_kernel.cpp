@@ -20,17 +20,17 @@ void kernel_main() {
     const auto Wt = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_x = tt::CBIndex::c_0;       // input
-    constexpr uint32_t cb_one = tt::CBIndex::c_1;     // one
-    constexpr uint32_t cb_mask_w = tt::CBIndex::c_2;  // mask_w
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    constexpr uint32_t cb_mask_w = tt::CBIndex::c_2;
     CircularBuffer cb_one_obj(cb_one);
     CircularBuffer cb_mask_w_obj(cb_mask_w);
 
-    constexpr uint32_t cb_y = tt::CBIndex::c_16;  // output
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_val = tt::CBIndex::c_24;     // f(x)
-    constexpr uint32_t cb_cal = tt::CBIndex::c_25;     // accumulator across cols
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_26;  // reduce output
+    constexpr uint32_t cb_val = tt::CBIndex::c_24;
+    constexpr uint32_t cb_cal = tt::CBIndex::c_25;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_26;
 
     constexpr uint32_t onetile = 1;
 
@@ -45,7 +45,6 @@ void kernel_main() {
         cb_mask_w_obj.wait_front(onetile);
     }
 
-    // p-norm op family via compile-time flags -> constexpr bools (no preprocessor in the chains).
 #ifdef MINUS_INF
     constexpr bool minus_inf = true;
 #else
@@ -58,8 +57,6 @@ void kernel_main() {
 #endif
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
-            // f(x) prologue — 2-branch dispatch on (do_mask_w && last-col).
-            // Per-stage reconfig matches original *_with_dt calls.
             const bool mask_this = do_mask_w && (col_idx == Wt - 1);
             if (mask_this) {
                 ckl::eltwise_chain(
@@ -82,7 +79,6 @@ void kernel_main() {
                     ckl::PackTile<cb_val>{});
             }
 
-            // Accumulator: col_idx==0 -> seed copy; else -> add (IS_ZERO) or max.
             if (col_idx == 0) {
                 ckl::copy<cb_val, cb_cal>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -94,10 +90,8 @@ void kernel_main() {
             }
         }
 
-        // Reduce f(x) across the row.
         ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_cal, cb_one, cb_reduce>(ckl::ReduceInputBlockShape::single());
 
-        // Final: copy reduce result -> [negate if MINUS_INF] -> cb_y.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::CopyTile<cb_reduce>{},

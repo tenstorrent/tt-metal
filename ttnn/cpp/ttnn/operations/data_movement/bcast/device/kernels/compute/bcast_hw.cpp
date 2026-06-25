@@ -17,26 +17,14 @@ void kernel_main() {
     constexpr auto cb_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_16;
 
-    // Bcast-HW (scalar bcast). Original `init_bcast<BCAST_LLKOP, BCAST_DIM>`
-    // preserved as the big init. Chain's BinaryFpu uses CHAIN_BCAST_OP /
-    // CHAIN_BCAST_DIM (helper-lib types emitted by bcast_op_utils).
     init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_lhs, cb_rhs, cb_out);
 
-    // BCAST_SCALAR flips the cb_rhs lifecycle:
-    //   defined  -> cb_rhs is a single scalar tile held for the whole walk: read at the front
-    //               (OperandKind::Scalar) for every output tile and never popped. The chain owns
-    //               the wait via InputLifecycle::HeldStream (cb_wait_front(1) per iter, idempotent
-    //               since never popped) — folding in what was a manual external wait_front +
-    //               CallerManaged. Matches the original's wait-once / hold / never-pop held tile.
-    //   undefined -> cb_rhs is waited+popped each iter (InputLifecycle::Streaming).
 #ifdef BCAST_SCALAR
     constexpr auto rhs_lifecycle = ckl::InputLifecycle::HeldStream;
 #else
     constexpr auto rhs_lifecycle = ckl::InputLifecycle::Streaming;
 #endif
 
-    // Flat 1D chain over total tiles (B*Ht*Wt) — bcast_hw is tile-by-tile,
-    // no need for 2D shape.
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(B * Ht * Wt),
         ckl::BinaryFpu<

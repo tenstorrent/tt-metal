@@ -102,17 +102,6 @@ void kernel_main() {
                 rotated_in_interm_cb_obj.push_back(Wt);
                 rotated_in_interm_cb_obj.wait_front(Wt);
 
-                // sin_interim = rotated * sin
-                // A = rotated_in_interm_cb InputLifecycle::Bulk + Block (Wt tiles waited above, chain pops).
-                // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + ckl::TileOffset::Set.
-                //   RELOAD_IMPL==0: sin held externally (waited my_cos_sin_tiles outside)
-                //     -> InputLifecycle::CallerManaged; sin_cos_row_cnt increments per seq_tile so offset varies.
-                //   RELOAD_IMPL==1: sin waited Wt per iter (above), chain pops Wt
-                //     -> InputLifecycle::Bulk; sin_cos_row_cnt always 0 so ckl::TileOffset::Set(0).
-                // Output sin_interm_cb OutputLifecycle::Bulk + Block (Wt tiles).
-                // Reconfig audit: mul_tiles_init reconfigs srca/srcb -> Input.
-                //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb's
-                //   from startup) -> PackTileReconfig::None.
 #if RELOAD_IMPL == 0
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
@@ -144,7 +133,6 @@ void kernel_main() {
                     ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
-                // cos_interim = x * cos  — same pattern as sin_interim.
 #if RELOAD_IMPL == 0
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
@@ -176,9 +164,6 @@ void kernel_main() {
                     ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
-                // out = cos_interim + sin_interim
-                // Both operands InputLifecycle::Bulk + Block (Wt tiles, popped at end), out_cb OutputLifecycle::Bulk +
-                // Block. Reconfig: add_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
                 ckl::add<
                     cos_interm_cb,
                     sin_interm_cb,

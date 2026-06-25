@@ -24,13 +24,13 @@ void kernel_main() {
     const auto recip_p = get_arg_val<uint32_t>(i++);
     const bool recip_p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    constexpr uint32_t cb_x = tt::CBIndex::c_0;                // input
-    constexpr uint32_t cb_one = tt::CBIndex::c_1;              // one
-    constexpr uint32_t cb_decimal = tt::CBIndex::c_2;          // decimal
-    constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;  // recip_p_decimal
-    constexpr uint32_t cb_mask_h = tt::CBIndex::c_4;           // mask_h
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;
+    constexpr uint32_t cb_decimal = tt::CBIndex::c_2;
+    constexpr uint32_t cb_recip_p_decimal = tt::CBIndex::c_3;
+    constexpr uint32_t cb_mask_h = tt::CBIndex::c_4;
 
-    constexpr uint32_t cb_y = tt::CBIndex::c_16;  // output
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;
 
     constexpr uint32_t cb_tmp0 = tt::CBIndex::c_24;
     constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
@@ -40,13 +40,13 @@ void kernel_main() {
     constexpr uint32_t cb_tmp5 = tt::CBIndex::c_29;
     constexpr uint32_t cb_tmp6 = tt::CBIndex::c_30;
 
-    constexpr uint32_t cb_xabs = cb_tmp0;          // |x|
-    constexpr uint32_t cb_xpow = cb_tmp1;          // |x|^p
-    constexpr uint32_t cb_logx = cb_tmp2;          // log(|x|)
-    constexpr uint32_t cb_exp_lxmd = cb_tmp3;      // exp(log(|x|) * decimal)
-    constexpr uint32_t cb_correct_xpow = cb_tmp4;  // |x|^p * exp(log(|x|) * decimal)
-    constexpr uint32_t cb_xpowadd = cb_tmp5;       // Add(|x + decimal|^p)
-    constexpr uint32_t cb_xpowsum = cb_tmp6;       // Sum(|x + decimal|^p)
+    constexpr uint32_t cb_xabs = cb_tmp0;
+    constexpr uint32_t cb_xpow = cb_tmp1;
+    constexpr uint32_t cb_logx = cb_tmp2;
+    constexpr uint32_t cb_exp_lxmd = cb_tmp3;
+    constexpr uint32_t cb_correct_xpow = cb_tmp4;
+    constexpr uint32_t cb_xpowadd = cb_tmp5;
+    constexpr uint32_t cb_xpowsum = cb_tmp6;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -54,24 +54,20 @@ void kernel_main() {
 
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    cb_wait_front(cb_one, onetile);              // comes from the reader
-    cb_wait_front(cb_decimal, onetile);          // comes from the reader
-    cb_wait_front(cb_recip_p_decimal, onetile);  // comes from the reader
+    cb_wait_front(cb_one, onetile);
+    cb_wait_front(cb_decimal, onetile);
+    cb_wait_front(cb_recip_p_decimal, onetile);
 
     constexpr uint32_t TILE_H = 32;
     const bool do_mask_h = (origin_h % TILE_H) != 0;
     const auto mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
 
     if (do_mask_h) {
-        cb_wait_front(cb_mask_h, onetile);  // comes from the reader
+        cb_wait_front(cb_mask_h, onetile);
     }
 
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
-            // |x| with optional mask on last row tile.
-            // 2-branch dispatch on (do_mask_h && need_to_do_mask_h).
-            // cb_x InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside loop);
-            // cb_xabs OutputLifecycle::Streaming. Reconfig: Input + Output (matches *_with_dt).
             if (do_mask_h && need_to_do_mask_h(row_idx, Ht)) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
@@ -84,11 +80,6 @@ void kernel_main() {
                 ckl::unary<ckl::Abs<ckl::Dst::D0>, cb_x, cb_xabs>(ckl::EltwiseShape::tiles(onetile));
             }
 
-            // power_tile_to_cb body inlined as 4 chain stages — see step2 51cffeb6f03.
-            //   A: |x|^p
-            //   B: log(|x|)
-            //   C: exp(log(|x|) * decimal)
-            //   D: xpow * exp_lxmd -> cb_correct_xpow
             if (p_is_negative) {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
@@ -118,25 +109,15 @@ void kernel_main() {
                 ckl::PackTile<cb_exp_lxmd>{});
             ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
-            // Add(|x|^p) accumulator: row_idx==0 -> seed copy; else -> add in-place.
             if (row_idx == 0) {
-                // Seed cb_xpowadd with cb_correct_xpow. Same pattern as
-                // moreh_clip_grad_norm_step1 d47573e2270 seed-copy.
                 ckl::copy<cb_correct_xpow, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator).
                 ckl::add<cb_correct_xpow, cb_xpowadd, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
             }
         }
 
-        // Sum(|x|^p) - reduce single pre-accumulated tile (uses reduce_helpers).
         ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_xpowsum>(ckl::ReduceInputBlockShape::single());
 
-        // Final |sum|^(1/p) — power_tile_to_cb inlined as 4 chain stages.
-        // Maps original power_tile_to_cb(cb_xpowsum, cb_tmp0, cb_tmp1,
-        //   cb_recip_p_decimal, cb_tmp2, cb_y, recip_p, recip_p_is_negative):
-        //   cb_x=cb_xpowsum, cb_xpow=cb_tmp0, cb_logx=cb_tmp1, cb_decimal=cb_recip_p_decimal,
-        //   cb_exp_lxmd=cb_tmp2, cb_correct_xpow=cb_y.
         if (recip_p_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),

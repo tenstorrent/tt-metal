@@ -22,11 +22,6 @@ void kernel_main() {
 
     init_sfpu(cb_input, cb_output);
 
-    // Original: per-tile copy_tile + dropout_tile + pack_tile. Chain compresses
-    // the two nested loops into a single n=block_cnt*block_dim sweep, since
-    // there's no inter-block state. The chain owns dropout_kernel_init(seed) now:
-    // the Dropout element carries the runtime seed and the chain fires its
-    // init_runtime() once at boot (see Dropout in eltwise_scalar.inl).
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(total_tiles),

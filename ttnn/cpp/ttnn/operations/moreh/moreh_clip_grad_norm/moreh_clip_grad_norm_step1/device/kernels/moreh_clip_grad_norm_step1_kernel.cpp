@@ -22,19 +22,19 @@ void kernel_main() {
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_x = 0;         // input(==x)
-    constexpr uint32_t cb_one = 1;       // one
-    constexpr uint32_t cb_decimal = 2;   // decimal
-    constexpr uint32_t cb_mask_h_w = 3;  // mask_h_w
+    constexpr uint32_t cb_x = 0;
+    constexpr uint32_t cb_one = 1;
+    constexpr uint32_t cb_decimal = 2;
+    constexpr uint32_t cb_mask_h_w = 3;
 
-    constexpr uint32_t cb_y = 16;  // output(==y)
+    constexpr uint32_t cb_y = 16;
 
-    constexpr uint32_t cb_xabs = 24;          // |x|
-    constexpr uint32_t cb_xpow = 25;          // |x|^p
-    constexpr uint32_t cb_xpowadd = 26;       // Add[|x|^p * exp(log(|x|) * decimal)]
-    constexpr uint32_t cb_logx = 27;          // log(|x|)
-    constexpr uint32_t cb_exp_lxmd = 28;      // exp(log(|x|) * decimal)
-    constexpr uint32_t cb_correct_xpow = 29;  // |x|^p * exp(log(|x|) * decimal)
+    constexpr uint32_t cb_xabs = 24;
+    constexpr uint32_t cb_xpow = 25;
+    constexpr uint32_t cb_xpowadd = 26;
+    constexpr uint32_t cb_logx = 27;
+    constexpr uint32_t cb_exp_lxmd = 28;
+    constexpr uint32_t cb_correct_xpow = 29;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -51,26 +51,15 @@ void kernel_main() {
 
     binary_op_init_common(cb_logx, cb_decimal, cb_y);
 
-    cb_wait_front(cb_decimal, onetile);  // comes from the reader
-    cb_wait_front(cb_one, onetile);      // comes from the reader
+    cb_wait_front(cb_decimal, onetile);
+    cb_wait_front(cb_one, onetile);
 
     if (do_mask_h || do_mask_w) {
-        cb_wait_front(cb_mask_h_w, 2);  // comes from the reader
+        cb_wait_front(cb_mask_h_w, 2);
     }
 
     // Compute cb_xpowadd
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        // abs(x) with optional H/W masking.
-        // 4-branch runtime dispatch on (mh, mw): copy_x -> [opt mask(0)] ->
-        // [opt mask(1)] -> abs -> pack to cb_xabs.
-        //
-        // Reconfig audit: copy_tile_init reconfigs srca per copy ->
-        //   CopyTileReconfig::Input on each copy. pack_tile (no reconfig) ->
-        //   PackTileReconfig::None.
-        // Lifecycles: cb_x InputLifecycle::Streaming (chain owns wait+pop); cb_mask_h_w
-        //   InputLifecycle::CallerManaged + Scalar (waited once outside loop at line 53;
-        //   chain reads at index 0 / index 1 via ckl::TileOffset::Set);
-        //   cb_xabs OutputLifecycle::Streaming.
         const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
         if (mh && mw) {
@@ -123,13 +112,6 @@ void kernel_main() {
         }
 
         // |x + decimal|^p
-        // Inline power_tile_to_cb body as 4 eltwise_chain stages
-        // (see moreh_clip_grad_norm_step2 51cffeb6f03 for the same pattern).
-        //   A: |x|^p  (InputLifecycle::HeldStream cb_xabs + PowerIterative(p) + [Recip] + PackTile<cb_xpow>)
-        //   B: log(|x|) (InputLifecycle::NoWaitPop cb_xabs + Log + PackTile<cb_logx>)
-        //   C: exp(log*decimal) (BinaryFpu Mul + Exp + PackTile<cb_exp_lxmd>)
-        //   D: xpow * exp_lxmd -> cb_correct_xpow
-        // cb_decimal InputLifecycle::CallerManaged (pre-waited at top of kernel).
         if (p_is_negative) {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
@@ -160,9 +142,6 @@ void kernel_main() {
         ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
         if (tile_idx == 0) {
-            // Seed cb_xpowadd with first cb_correct_xpow tile.
-            // Original: copy_tile_init(cb_correct_xpow) reconfigs srca; pack_tile has no
-            // pack reconfig (pack is set to cb_y at startup).
             ckl::copy<
                 cb_correct_xpow,
                 cb_xpowadd,
@@ -171,8 +150,6 @@ void kernel_main() {
                 ckl::CopyTileReconfig::Input,
                 ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
         } else {
-            // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator).
-            // Original: add_tiles_init reconfigs srca/srcb; pack_tile no reconfig.
             ckl::add<
                 cb_correct_xpow,
                 cb_xpowadd,

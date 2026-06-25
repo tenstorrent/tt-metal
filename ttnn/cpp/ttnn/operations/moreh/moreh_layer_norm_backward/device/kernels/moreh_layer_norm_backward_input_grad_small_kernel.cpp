@@ -91,11 +91,6 @@ void kernel_main() {
 
         // Compute cb_recip_nrstd
         // rstd / n
-        // rstd / n: cb_n_recip_n[1] (the recip_n tile of the 2-tile [n, recip_n] buffer) * cb_rstd.
-        // cb_n_recip_n CallerManaged + Scalar + TileOffset::Set{1} (held: waited(2) before the ncht loop);
-        // cb_rstd CallerManaged + Scalar (held across the row); cb_recip_nrstd Streaming. is_lastdim ->
-        // mul_bcast_cols (BroadcastDim::Col) else mul_tiles_bcast_scalar (Scalar). *_init_short_with_dt ->
-        // Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -308,9 +303,6 @@ void kernel_main() {
         CircularBuffer cb_ydyadd_obj(cb_ydyadd);
         cb_y_obj.wait_front(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            // Compute cb_ydy = y * dycopy. cb_y + cb_dycopy both held (CallerManaged + Scalar) read at index
-            // wt -> TileOffset::Set{wt}; cb_ydy Streaming. mul_tiles_init_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
@@ -379,9 +371,6 @@ void kernel_main() {
             // n * dy
             constexpr auto cb_ndy = cb_tmp1;
             CircularBuffer cb_ndy_obj(cb_ndy);
-            // n * dy. cb_n_recip_n held -> CallerManaged + Scalar (idx 0); cb_dycopy held read at index wt ->
-            // CallerManaged + Scalar + TileOffset::Set{wt}; cb_ndy Streaming. mul_tiles_init_with_dt ->
-            // Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
@@ -403,8 +392,6 @@ void kernel_main() {
             // n * dy - Sum[dy]
             constexpr auto cb_ndymdysum = cb_tmp2;
             CircularBuffer cb_ndymdysum_obj(cb_ndymdysum);
-            // n*dy - Sum[dy]. cb_ndy Streaming; cb_dysum held -> CallerManaged + Scalar. is_lastdim -> Col
-            // bcast else Scalar. *_init_short_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
             ckl::sub<
                 cb_ndy,
                 cb_dysum,
@@ -417,9 +404,6 @@ void kernel_main() {
             // y * Sum[y * dy]
             constexpr auto cb_yydysum = cb_tmp3;
             CircularBuffer cb_yydysum_obj(cb_yydysum);
-            // y * Sum[y*dy]. cb_y held read at index wt -> CallerManaged + Scalar + TileOffset::Set{wt};
-            // cb_ydysum held -> CallerManaged + Scalar (idx 0). is_lastdim -> Col bcast else Scalar.
-            // *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
@@ -439,14 +423,10 @@ void kernel_main() {
 
             // Compute cb_tmp1
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
-            // (n*dy - Sum[dy]) - (y * Sum[y*dy]). both Streaming. sub_tiles_init_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::sub<cb_ndymdysum, cb_yydysum, cb_tmp1>(ckl::EltwiseShape::tiles(onetile));
 
             // Compute cb_dx
             // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
-            // ((n*dy - Sum[dy]) - (y * Sum[y*dy])) * (rstd/n). cb_tmp1 Streaming; cb_recip_nrstd held ->
-            // CallerManaged + Scalar. mul_tiles_init_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
             ckl::mul<
                 cb_tmp1,
                 cb_recip_nrstd,

@@ -18,7 +18,6 @@ void kernel_main() {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         bool last_out = block == (per_core_block_cnt - 1);
 
-        // elemwise-mul: cb_intermed0 = cb_in0 * cb_in1
         ckl::mul<
             tt::CBIndex::c_0,
             tt::CBIndex::c_1,

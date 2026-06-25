@@ -314,11 +314,6 @@ void kernel_main() {
 
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
-                // mask input: in * mask -> cb_x. mask is a row of block_w tiles broadcast down the
-                // h rows -> OperandKind::Row + CallerManaged (waited at loop top, popped at group end).
-                // input Block; cb_x Bulk. TILIZE_IN reads cb_in (pre-waited per_core_MN at line 261;
-                // pop actual -> DeferredPop); else cb_in0 (wait/pop normal -> Bulk + slack pop).
-                // mul_tiles_init -> Input; plain pack_tile -> None.
                 ckl::mul<
 #ifdef TILIZE_IN
                     cb_in_id,
@@ -396,15 +391,6 @@ void kernel_main() {
                 }
 
                 cb_in0.wait_front(out_block_hw_normal);
-                // x - E[x] — sub_bcast_scalar per-tile streaming over
-                // out_block_hw_actual tiles. Same shape as the Variance Calc
-                // sibling block below. cb_in0 InputLifecycle::Streaming + Scalar pops 1 per
-                // tile; cb_ex_global InputLifecycle::CallerManaged (external wait/pop bracket).
-                // cb_xmm via OutputLifecycle::Streaming per-tile reserve+push; slack pops/
-                // pushes handle the extra_out_block case.
-                //
-                // Reconfig: sub_tiles_bcast_scalar_init_short -> Input.
-                // Original plain pack_tile -> PackTileReconfig::None.
                 cb_ex_global.wait_front(1);
                 ckl::sub<
                     cb_in0_id,
@@ -424,9 +410,6 @@ void kernel_main() {
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                // zero out the garbage values by mult mask again — xmm * mask -> cb_x.
-                // mask Row (block_w tiles reused per row) + CallerManaged; cb_xmm Block + Bulk;
-                // cb_x Bulk. mul_tiles_init -> Input; plain pack_tile -> None. Slack handles extra block.
                 ckl::mul<
                     cb_xmm_id,
                     cb_input_mask_id,
@@ -446,9 +429,6 @@ void kernel_main() {
                 }
 
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
-                // (x - E[x])^2 — square over the actual block; slack handles the extra-last block.
-                // cb_x Bulk (wait+pop); cb_xmm Bulk (reserve+push). mul_tiles_init -> Input;
-                // plain pack_tile (cb_x/cb_xmm share format) -> None.
                 ckl::square<
                     cb_x_id,
                     cb_xmm_id,
@@ -497,15 +477,6 @@ void kernel_main() {
 
             // Start Variance Calc
             //  global reduce results
-            // PARTIAL migration: (Var + eps) -> 1/sqrt(...) becomes
-            // BinaryFpu(Add) + Rsqrt + PackTile. Reconfig audit:
-            //   - add_tiles_init reconfigs srca/srcb (no explicit reconfig_data_format)
-            //     -> BinaryDataFormatReconfig::Input.
-            //   - No pack_reconfig_data_format in original -> PackTileReconfig::None.
-            //   - rsqrt_tile_init<true> -> Legacy::On.
-            //   - cb_ex2pe.reserve_back + push_back present -> OutputLifecycle::Streaming.
-            // Lifecycles: cb_ex2_global InputLifecycle::Streaming (wait+pop per iter); cb_eps held outside
-            // the chain via the unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
@@ -537,22 +508,6 @@ void kernel_main() {
                 }
 
                 cb_in0.wait_front(out_block_hw_normal);
-                // x - E[x] — sub_bcast_scalar per-tile streaming. Chain emits
-                // wait+pop on cb_in0 and reserve+push on cb_xmm per tile, matching
-                // the original's net effect over out_block_hw_actual iterations.
-                //
-                // Original quirks preserved:
-                //   - cb_xmm.reserve_back(out_block_hw_normal) upfront + push_back at end
-                //     becomes per-tile reserve+push (chain OutputLifecycle::Streaming). For non-extra
-                //     blocks (actual==normal) this matches exactly. For the extra-last
-                //     block, the slack (normal - actual) is reserved+pushed after the
-                //     chain so downstream wait_front(out_block_hw_normal) succeeds.
-                //   - cb_in0 row-level pop becomes per-tile pop; total pops match
-                //     out_block_hw_actual; the extra cleanup pop covers the slack.
-                //
-                // Reconfig: sub_tiles_bcast_scalar_init_short -> BinaryDataFormatReconfig::Input.
-                // Original pack_tile (no _with_dt / no pack_reconfig) -> PackTileReconfig::None.
-                // cb_ex_global held by external wait_front(1) / pop_front(1) -> InputLifecycle::CallerManaged.
                 cb_ex_global.wait_front(1);
                 ckl::sub<
                     cb_in0_id,
@@ -566,16 +521,12 @@ void kernel_main() {
                     ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(out_block_hw_actual));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
-                    // Slack reserve+push so consumer wait_front(out_block_hw_normal) succeeds.
                     cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
                     cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                // zero out the garbage values by mult mask again — xmm * mask -> cb_x.
-                // mask Row (block_w tiles reused per row) + CallerManaged; cb_xmm Block + Bulk;
-                // cb_x Bulk. mul_tiles_init -> Input; plain pack_tile -> None. Slack handles extra block.
                 ckl::mul<
                     cb_xmm_id,
                     cb_input_mask_id,
@@ -595,10 +546,6 @@ void kernel_main() {
                 }
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
-                // (x - Ex) * 1/sqrt(Var + eps) — mul scalar-bcast over the actual block.
-                // cb_x Bulk; cb_ex2pe held scalar (wait kept below, popped at group end) ->
-                // CallerManaged + Scalar; cb_xmm Bulk. mul_tiles_bcast_scalar_init_short -> Input;
-                // plain pack_tile -> None.
                 cb_ex2pe.wait_front(1);
                 ckl::mul<
                     cb_x_id,

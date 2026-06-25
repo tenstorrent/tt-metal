@@ -261,9 +261,6 @@ void kernel_main() {
          */
         cb_xmm_obj.wait_front(num_inner);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
-            // (x-E[x])^2 — same-buffer square of cb_xmm[inner_idx]. cb_xmm InputLifecycle::CallerManaged + Block +
-            // TileOffset::Set{inner_idx} (held: waited at num_inner, popped at row end); cb_xmm2 Streaming.
-            // mul_tiles_init_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
@@ -326,11 +323,6 @@ void kernel_main() {
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
          * cb_recip_std
          */
-        // BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile(cb_recip_std).
-        // cb_var InputLifecycle::Streaming (wait+pop); cb_eps InputLifecycle::CallerManaged (waited once at
-        // top, popped once at end — held); cb_recip_std OutputLifecycle::Streaming. add_tiles_init_with_dt ->
-        // Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output. Rsqrt<Exact,Off> matches the
-        // original rsqrt_tile() defaults (legacy_compat=false, FAST_APPROX=false).
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -369,11 +361,6 @@ void kernel_main() {
         constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
         CircularBuffer cb_gamma_beta_or_out_obj(cb_gamma_beta_or_out);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            // (x - E[x]) * 1/sqrt(Var + eps) over the block. cb_xmm InputLifecycle::CallerManaged + Block +
-            // TileOffset::Set{inner_idx} (held: waited once at num_inner, popped at end); cb_recip_std
-            // CallerManaged + Scalar (index 0, held). is_lastdim -> mul_bcast_cols (BroadcastDim::Col), else
-            // mul_tiles_bcast_scalar (BroadcastDim::Scalar). *_init_short_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output. Output Bulk (reserve+push block_size).
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(block_size, block_size),
                 ckl::BinaryFpu<
@@ -391,11 +378,6 @@ void kernel_main() {
                     ckl::TileOffset::Unset>{inner_idx, 0u},
                 ckl::PackTile<cb_gamma_beta_or_out, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::Output>{});
 
-            // * gamma over the block. cb_gamma_beta_or_out + cb_gamma both InputLifecycle::Bulk
-            // (wait+pop block_size, index j); cb_outg OutputLifecycle::Bulk. Broadcast mode is the only
-            // thing that varies (all compile-time): groupnorm -> bcast_scalar (Scalar), lastdim ->
-            // bcast_rows (Row), else plain mul (None). *_init_short_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output.
             if (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
                 constexpr auto gamma_bcast =
@@ -415,10 +397,6 @@ void kernel_main() {
                     ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block_size, block_size));
             }  // if (gamma_has_value)
 
-            // + beta over the block. cb_gamma_beta + cb_beta both InputLifecycle::Bulk (wait+pop
-            // block_size, index j); cb_out OutputLifecycle::Bulk. Broadcast mode is the only thing that
-            // varies (all compile-time): groupnorm -> bcast_scalar (Scalar), lastdim -> bcast_rows (Row),
-            // else plain add (None). *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> Output.
             if (beta_has_value) {
                 constexpr auto beta_bcast =
                     is_groupnorm ? ckl::BroadcastDim::Scalar

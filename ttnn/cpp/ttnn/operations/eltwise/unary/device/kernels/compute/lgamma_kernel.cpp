@@ -15,12 +15,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
 #include "api/dataflow/circular_buffer.h"
 
-// lgamma(x) via reflection: stirling(x, log z) adjusted by log|sin(pi*x)|.
-// One tile_regs window, single cb_input wait/pop per iter. cb_input is read 6
-// times into D0..D3; the chain reproduces the single wait/pop by giving the
-// FIRST read HeldStream (owns wait), the middle reads CallerManaged (no edges),
-// and the LAST read NoWaitPop (owns pop). All compute ops are DEST-internal.
-// where_tile is hardcoded Float32 here (matches the original kernel).
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {

@@ -114,9 +114,6 @@ void kernel_main() {
          */
         cb_wait_front(reduce_result_cb, 1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            // norm x: input * 1/sqrt(E[x^2]+eps) (col bcast). input_cb Bulk (wait+pop block_size);
-            //   reduce_result_cb held (wait kept above) -> CallerManaged + Scalar; mul_rms_result_cb Bulk.
-            //   block_size = one DEST window. reconfig+mul_bcast_cols_init -> Input; pack_reconfig -> Output.
             ckl::mul<
                 input_cb,
                 reduce_result_cb,
@@ -134,15 +131,6 @@ void kernel_main() {
              * Weight (gamma) fusion
              */
             if constexpr (has_weight) {
-                // gamma: mul_rms_result * weight (bcast rows). In-place onto intermediate_cb
-                // when rope is fused (mul_weight_result_cb == mul_rms_result_cb), so
-                // InputLifecycle::Chunked + OutputLifecycle::Chunked: the chain pops the block
-                // in the compute phase before the pack phase reserves it (eltwise_chain.inl:1902
-                // < :1929), exactly the raw pop-before-reserve that the single-buffered in-place
-                // CB needs. weight (gamma) is a full vector indexed col_tile + i (linear), held
-                // via the cumulative wait below -> CallerManaged + Block + TileOffset::Set{col_tile},
-                // mirroring the layernorm gamma / beta blocks. Reconfig: reconfig_data_format +
-                // mul_bcast_rows_init_short -> Input; pack_reconfig(mul_weight_result_cb) -> Output.
                 cb_wait_front(weight_cb, col_tile + block_size);
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
@@ -243,8 +231,6 @@ void kernel_main() {
                 tile_regs_release();
                 cb_push_back(rotated_input_cb, block_size);
 
-                // Write cos_interim + sin_interim to output_cb. Both inputs Bulk (wait+pop block_size),
-                // output_cb Bulk. add_tiles_init + reconfig -> Input; pack_reconfig -> Output.
                 ckl::add<
                     intermediate_cb,
                     rotated_input_cb,

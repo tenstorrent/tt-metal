@@ -41,11 +41,6 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            // Accumulator add: cb_intermed0 = cb_in0 + (reload? cb_intermed0 : cb_in1)
-            // First iter (!reload): B=cb_in1 (InputLifecycle::CallerManaged — pre-waited, never popped).
-            // Subsequent iters (reload): B=cb_intermed0 (InputLifecycle::Streaming, same-CB in/out).
-            // cb_in0 InputLifecycle::Streaming on A. cb_intermed0 OutputLifecycle::Streaming.
-            // Reconfig: add_tiles_init_with_dt + pack_tile_with_dt -> Input + Output.
             if (enable_reload) {
                 ckl::add<cb_in0, cb_intermed0, cb_intermed0>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -61,10 +56,6 @@ void kernel_main() {
             enable_reload = true;
         }
 
-        // output * (1 / number_of_elements)  — SCALAR bcast Mul.
-        // cb_intermed0 InputLifecycle::Streaming (last iter's push, popped here);
-        // cb_scalar InputLifecycle::CallerManaged + Scalar (pre-waited at top of kernel);
-        // cb_out0 OutputLifecycle::Streaming.
         ckl::mul<
             cb_intermed0,
             cb_scalar,

@@ -58,13 +58,6 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < Ht; h += onetile) {
             // compute exp(x - max(x))
-            //   SOFTMAX  : Sub(cb_in0, cb_max, Row) + Exp [+ Mask if last]
-            //   !SOFTMAX : !last:  Sub(cb_in0, cb_max, Row) + Negative + Exp
-            //              last :  CopyTile(cb_in0) + Negative + Exp + Mask (no sub)
-            //                     — matches rexp_tile_and_mask_tile_to_cb which
-            //                       does NOT subtract max in the original.
-            // cb_in0 InputLifecycle::Streaming + Scalar (pop=1). cb_max InputLifecycle::CallerManaged held outside.
-            // cb_mask InputLifecycle::CallerManaged (popm=0).
             if (h == Ht - 1) {
 #ifdef SOFTMAX
                 ckl::eltwise_chain(
@@ -81,7 +74,6 @@ void kernel_main() {
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<cb_exps>{});
 #else
-                // rexp + mask, no sub (matches rexp_tile_and_mask_tile_to_cb).
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_in0>{},
@@ -105,8 +97,6 @@ void kernel_main() {
                     ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
                     ckl::PackTile<cb_exps>{});
 #else
-                // sub_bcast_rows then rexp via cb_tmp intermediary. Original used
-                // two helper calls; chain folds both into a single chain.
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::BinaryFpu<
@@ -122,7 +112,6 @@ void kernel_main() {
 #endif
             }
 
-            // Accumulate sum of exps into cb_add. Seed copy on first iteration.
             if (h == 0) {
                 ckl::copy<cb_exps, cb_add>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -131,7 +120,6 @@ void kernel_main() {
         }
 
 #ifdef LOG
-        // log(sum) — pop tile after reduce
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
@@ -147,7 +135,6 @@ void kernel_main() {
                 log_tile(dst_idx);
             });
 #else
-        // 1 / sum(exp(x)) — pop tile after reduce
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
@@ -168,9 +155,6 @@ void kernel_main() {
         for (uint32_t h = 0; h < Ht; h += onetile) {
 #ifdef LOG
 #ifdef SOFTMAX
-            // x - max - log(sum). Original chains two sub_tiles_bcast_rows calls
-            // via cb_tmp; the chain is the same shape (no DEST-fold possible
-            // because BinaryFpu reads from CBs, not DEST). Keep two chains.
             ckl::sub<
                 cb_in0,
                 cb_max,
@@ -186,11 +170,9 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // -x + max - log(sum) — logsoftmin not implemented in original.
 #endif
 #else
 #ifdef SOFTMAX
-            // exp(x - max) / sum. Sub+Exp folded; then Mul by recip.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
@@ -210,7 +192,6 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // rexp(x - max) / sum (softmin path).
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<

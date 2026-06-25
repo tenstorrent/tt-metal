@@ -33,20 +33,14 @@ void kernel_main() {
     binary_op_init_common(cb_in0, cb_exps, cb_out0);
 
     for (uint32_t n = 0; n < N; ++n) {
-        // find max via running BinaryMax across C-dim.
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                // Seed cb_max with first cb_in0 tile.
                 ckl::copy<cb_in0, cb_max>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                // cb_max = max(cb_in0, cb_max) — same accumulator pattern as
-                // moreh_norm_h/w ord_other (7e61967482a).
                 ckl::binary_sfpu<ckl::BinaryMax<>, cb_in0, cb_max, cb_max>(ckl::EltwiseShape::tiles(onetile));
             }
         }
 
-        // compute exp(x - max(x)) per C tile. No bcast since cb_max and cb_in0
-        // are both full tiles. cb_max held outside loop (InputLifecycle::CallerManaged).
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef SOFTMAX
             ckl::eltwise_chain(
@@ -75,7 +69,6 @@ void kernel_main() {
                 ckl::PackTile<cb_exps>{});
 #endif
 
-            // Accumulator over C-dim.
             if (i == 0) {
                 ckl::copy<cb_exps, cb_add>(ckl::EltwiseShape::tiles(onetile));
             } else {
@@ -83,7 +76,6 @@ void kernel_main() {
             }
         }
 
-        // log(sum) or 1/sum: single chain on cb_add -> cb_recipsumexps.
 #ifdef LOG
         ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_add, cb_recipsumexps>(
             ckl::EltwiseShape::tiles(onetile));
@@ -91,12 +83,10 @@ void kernel_main() {
         ckl::unary<ckl::Recip<ckl::Dst::D0>, cb_add, cb_recipsumexps>(ckl::EltwiseShape::tiles(onetile));
 #endif
 
-        // step 3, compute final result per C tile.
         cb_recipsumexps_obj.wait_front(onetile);
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef LOG
 #ifdef SOFTMAX
-            // x - max - log(sum). Two chains.
             ckl::sub<
                 cb_in0,
                 cb_max,
@@ -112,8 +102,6 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // -x + max - log(sum). Same as Sub(cb_max, cb_in0) followed by Sub.
-            // cb_max held (pop0=0); cb_in0 popped (pop1=1).
             ckl::sub<cb_max, cb_in0, cb_tmp, ckl::BroadcastDim::None, ckl::InputLifecycle::HeldStream>(
                 ckl::EltwiseShape::tiles(onetile));
             ckl::sub<
@@ -126,7 +114,6 @@ void kernel_main() {
 #endif
 #else
 #ifdef SOFTMAX
-            // exp(x - max) / sum. Sub+Exp folded; then Mul.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<
@@ -146,7 +133,6 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
-            // rexp(x - max) / sum (softmin path).
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::BinaryFpu<

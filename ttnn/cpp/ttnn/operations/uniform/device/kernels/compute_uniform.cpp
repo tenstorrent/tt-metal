@@ -20,16 +20,10 @@ void kernel_main() {
     f2u_from.u = get_arg_val<uint32_t>(1);
     f2u_to.u = get_arg_val<uint32_t>(2);
     f2u_scale.f = f2u_to.f - f2u_from.f;
-    // num_tiles is the work this core consumes; start_id (tile placement) is the writer's
-    // job, so it's not passed to compute.
     const uint32_t num_tiles = get_arg_val<uint32_t>(3);
 
     init_sfpu(intermed_cb_id, intermed_cb_id);
 
-    // Per-tile rand into D0 + pack to intermed_cb. RandTile carries the runtime seed and
-    // seeds the PRNG in its init() (rand_tile_init), which the chain emits once at boot.
-    // Reconfig: original used init_sfpu at boot then plain pack_tile (no _with_dt)
-    // -> PackTileReconfig::None.
     eltwise_chain(
         EltwiseShape::tiles(num_tiles),
         RandTile<Dst::D0>{f2u_from.u, f2u_scale.u, seed},

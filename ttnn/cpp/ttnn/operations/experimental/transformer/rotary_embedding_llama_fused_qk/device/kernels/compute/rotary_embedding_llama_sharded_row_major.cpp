@@ -92,13 +92,6 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        // sin_interim = rotated * sin (single tile compute; outer push/pop on Wt).
-        // PARTIAL: only sin stage migrates. cos and add stages use runtime in_cb /
-        // out_cb (lines 33-38 select from q_*_cb / k_*_cb based on runtime is_q).
-        // BLOCKED — same constexpr-CB constraint as sibling sharded.cpp.
-        // Reconfig: mul_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
-        // Lifecycles: InputLifecycle::CallerManaged on both sides (outer push/pop unchanged);
-        //   OutputLifecycle::CallerManaged on pack so chain emits no reserve/push.
         compute_kernel_lib::mul<
             rotated_in_interm_cb,
             sin_cb,

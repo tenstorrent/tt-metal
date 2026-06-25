@@ -80,11 +80,6 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in);
-    // X + Y pre-add over the block as a single chain (block_w == num_subblocks_w*subblock_w,
-    // so tiles() needs no padding). cb_in0/cb_in1 are resident sharded inputs — the original
-    // neither wait_front's nor pop_front's them -> CallerManaged (chain emits neither, exact
-    // match). cb_in output: reserve+push num_tiles_per_block -> Bulk. add_tiles_init + reconfig
-    // -> BinaryDataFormatReconfig::Input; pack_reconfig(cb_in) -> PackTileReconfig::Output.
     ckl::add<
         cb_in0,
         cb_in1,
@@ -104,10 +99,6 @@ void kernel_main() {
     binary_op_init_common(cb_in, cb_in, cb_x2);
 #endif
 
-    // X^2 — square via BinaryFpu reading cb_in for both operands. cb_in is resident/externally
-    // waited (cb_wait_front above in the FUSE path; sharded-resident otherwise) -> CallerManaged.
-    // cb_x2 reserve+push num_tiles_per_block -> Bulk. mul_tiles_init -> BinaryDataFormatReconfig::Input;
-    // plain pack_tile (pack format already programmed above) -> PackTileReconfig::None.
     ckl::square<
         cb_in,
         cb_x2,
@@ -200,14 +191,6 @@ void kernel_main() {
                 ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_pop_front(cb_stats, num_distributed_blocks);
 
-            // 1/[sqrt(Var + eps)] — Variance Calc to inverse square root.
-            // PARTIAL migration: BinaryFpu(Add) + Rsqrt + PackTile.
-            // Reconfig audit: explicit reconfig_data_format(cb_var, cb_eps) +
-            //   add_tiles_init reconfigs srca/srcb -> Input. Explicit
-            //   pack_reconfig_data_format(cb_stats_reduced) -> Output.
-            // Lifecycles: cb_var InputLifecycle::Streaming (wait+pop per call); cb_eps InputLifecycle::Streaming
-            //   (also wait+pop per call here, unlike other rsqrt kernels where
-            //   cb_eps is held); cb_stats_reduced OutputLifecycle::Streaming. rsqrt Legacy::On.
             ckl::eltwise_chain(
                 ckl::EltwiseShape::single(),
                 ckl::BinaryFpu<cb_var, cb_eps>{},
@@ -215,17 +198,6 @@ void kernel_main() {
                 ckl::PackTile<cb_stats_reduced>{});
         }
     }
-    // (x - Ex) * 1/[sqrt(Var + eps)] — Col-bcast over the block, single chain.
-    // cb_xmm (A): resident block of num_tiles_per_block tiles. Bulk folds the trailing
-    //   cb_pop_front into the chain (AtEnd pop of M tiles); its Upfront wait(M) is a no-op
-    //   because the block is already resident (the prior pop of M proves M are present).
-    //   NOTE: DeferredPop would read as "no wait, pop at end", but policy_supports_block
-    //   (eltwise_chain.inl) excludes it, so it static_asserts under BlockSize>1 — Bulk is
-    //   the block-safe lifecycle that still folds the pop.
-    // cb_ex_global (B): 1-tile scalar -> Bulk folds its wait(1)/pop(1) (Scalar window = 1:
-    //   Upfront wait_front(1) + AtEnd pop_front(1)), Scalar index, BroadcastDim::Col.
-    // cb_im out: reserve+push num_tiles_per_block -> Bulk. reconfig_data_format +
-    //   mul_bcast_cols_init_short -> Input; pack_reconfig(cb_im) -> Output.
     ckl::mul<
         cb_xmm,
         cb_ex_global,
@@ -239,13 +211,6 @@ void kernel_main() {
         ckl::OperandKind::Block,
         ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
-    // gamma: cb_im * gamma (bcast-rows) -> cb_outgamma, single chain.
-    // cb_im: Bulk (chain waits+pops num_tiles_per_block — folds the prior cb_wait_front(cb_im)
-    //   and the trailing pop). cb_gamma: HeldBulk (wait block_w upfront, never popped). Ht==1
-    //   (single-row block) so the original's Row index wt == Block flat index -> OperandKind::Block
-    //   for both with BroadcastDim::Row (the FPU bcast-rows mode). cb_outgamma: reserve(num_tiles
-    //   _per_block) upfront + push(subblock_w) per chunk -> BulkReservePerChunk.
-    //   reconfig_data_format + mul_bcast_rows_init_short -> Input; pack_reconfig(cb_out) -> Output.
     ckl::mul<
         cb_im,
         cb_gamma,

@@ -14,27 +14,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
-// DECODE_MODE mirrored as a kernel-local constexpr so branch logic below uses
-// `if constexpr` instead of the preprocessor. (The kernel_main #ifdef stays — the
-// DECODE-only compile-time args / untilize-retilize setup don't exist in non-DECODE,
-// so they can't live in an `if constexpr (false)` branch.)
 #ifdef DECODE_MODE
 inline constexpr bool kDecodeMode = true;
 #else
 inline constexpr bool kDecodeMode = false;
 #endif
 
-// Per-CB-constexpr chain wrapper for `mul(in0, in1) -> out`. Replaces the
-// older raw-LLK ALWI MUL_TILES helper. All three CBs are compile-time
-// (compile-time args) so this resolves to a single eltwise_chain call.
-//
-// DECODE_MODE branch: in1_cb is the retilized sin/cos held across the entire
-// num_rows*Wt walk; we read tile at runtime offset `in1_idx` (= j) with
-// bcast-rows, never popping in1. compute_kernel_lib::TileOffset::Set requires InputLifecycle::CallerManaged
-// lifecycle, so the wait/reserve/pop/push are emitted externally.
-//
-// Non-DECODE_MODE branch: standard per-iter InputLifecycle::Streaming on both sides + plain
-// mul_tiles (no bcast).
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain(uint32_t in1_idx) {
     using namespace compute_kernel_lib;
@@ -56,10 +41,8 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
                 compute_kernel_lib::TileOffset::Unset,
                 compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
             PackTile<out_cb, OutputLifecycle::Streaming, PackTileReconfig::None>{});
-        // in0 / out_cb owned by the chain (Streaming); in1 NOT popped — held across the walk
-        // per DECODE_MODE contract.
     } else {
-        (void)in1_idx;  // unused — in1 is per-iter streamed at index 0.
+        (void)in1_idx;
         mul<in0_cb,
             in1_cb,
             out_cb,
@@ -137,16 +120,8 @@ void kernel_main() {
 #endif
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
-            // DECODE: read the held retilized sin/cos at runtime offset j; else index 0.
             const uint32_t in1_idx = kDecodeMode ? j : 0;
             if (j < half_Wt) {
-                // Multiply half of the rotated input by scalar (-1).
-                // Reconfig audit: explicit reconfig_data_format(rotated_in_cb, scalar_cb) +
-                //   mul_tiles_bcast_scalar_init_short reconfigs srca/srcb -> Input.
-                //   Explicit pack_reconfig_data_format(rotated_in_interm_cb) -> Output.
-                // Lifecycles: rotated_in_cb InputLifecycle::Streaming (wait+pop per iter); scalar_cb
-                //   InputLifecycle::CallerManaged (waited once at line 85, never popped); rotated_in_interm_cb
-                //   OutputLifecycle::Streaming.
                 compute_kernel_lib::mul<
                     rotated_in_cb,
                     scalar_cb,
@@ -157,24 +132,15 @@ void kernel_main() {
                     compute_kernel_lib::EltwiseShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
-                // Multiply rotated input by sin (chain-based)
                 mul_tiles_chain<rotated_in_interm_cb, updated_sin_cb, sin_interm_cb>(in1_idx);
             } else {
                 reconfig_data_format(rotated_in_cb, updated_sin_cb);
                 pack_reconfig_data_format(out_cb, sin_interm_cb);
-                // Multiply rotated input by sin (chain-based)
                 mul_tiles_chain<rotated_in_cb, updated_sin_cb, sin_interm_cb>(in1_idx);
             }
 
-            // Multiply input by cos (chain-based)
             mul_tiles_chain<in_cb, updated_cos_cb, cos_interm_cb>(in1_idx);
 
-            // Add applied sin/cos tensors -> out_cb.
-            // Reconfig audit: reconfig_data_format_srca(rotated_in_cb, cos_interm_cb)
-            //   reconfigs srca to cos_interm_cb; add_tiles_init reconfigs srca/srcb to
-            //   (cos_interm, sin_interm) -> Input. Explicit pack_reconfig to out_cb -> Output.
-            // Lifecycles: cos_interm_cb/sin_interm_cb InputLifecycle::Streaming (per-iter wait+pop);
-            //   out_cb OutputLifecycle::Streaming.
             compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(
                 compute_kernel_lib::EltwiseShape::tiles(onetile));
         }

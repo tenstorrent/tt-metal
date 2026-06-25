@@ -16,7 +16,6 @@ void kernel_main() {
 
     init_sfpu(cb_input, cb_output);
 
-    // Identity: per-tile cb_input -> cb_output. Single-stage chain.
     compute_kernel_lib::copy<
         cb_input,
         cb_output,

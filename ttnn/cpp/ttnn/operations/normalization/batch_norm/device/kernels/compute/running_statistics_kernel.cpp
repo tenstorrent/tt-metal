@@ -9,18 +9,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
-// running_statistics (FPU path): updated_stat = (1 - momentum) * old_stat + momentum * batch_stat
-// for mean and/or var (compile-time gated).
-//
-// One chain per stat, no intermediate CBs (the original staged through cb_tmp1/2/3). The two
-// products live in separate DEST slots and are summed in DEST by an SFPU add:
-//
-//   D0 = (1 - momentum) ;  D0 *= old_stat        BinaryFpu Sub(one, momentum) -> DestReuse Mul(.old)
-//   D1 = momentum * batch_stat                    BinaryFpu Mul(momentum, batch) -> D1
-//   D0 = D0 + D1                                  AddBinary (DEST + DEST)
-//
-// cb_out0 receives a copy of the last computed stat (var if present, else mean), reproducing the
-// original's trailing pack_tile(0, cb_out0).
 namespace ckl = compute_kernel_lib;
 
 template <
@@ -35,9 +23,6 @@ ALWI void update_running_stat() {
     using D = ckl::Dst;
     using ckl::BinaryFpuOp;
 
-    // one/momentum held (CallerManaged); old_stat and batch_stat streamed (wait 1 / pop 1, as the
-    // original popped them). cb_updated -> OutputLifecycle::Bulk (chain reserves+pushes M=1); cb_out0
-    // stays CallerManaged — reserved/pushed once per loop iteration by kernel_main.
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
@@ -81,7 +66,7 @@ void kernel_main() {
     binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_one, 1);  // held for the whole kernel
+    cb_wait_front(cb_one, 1);
     cb_wait_front(cb_momentum, 1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {

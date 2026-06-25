@@ -13,15 +13,8 @@ void kernel_main() {
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
 
-    // Standard hw-config big init only: the chain's CopyTile emits copy_tile_init
-    // (the datacopy MOP) unconditionally, so unary_op_init_common's datacopy init was
-    // redundant. compute_kernel_hw_startup does the unpack/math/pack hw_configure +
-    // pack init; the chain supplies the copy MOP.
     compute_kernel_hw_startup(src_cb_id, dst_cb_id);
 
-    // Per-tile copy from src_cb -> dst_cb. Chain does wait/pop on src, reserve/push
-    // on dst. No per-iter reconfig (boot-time format only) —
-    // CopyTileReconfig::None and PackTileReconfig::None match that.
     compute_kernel_lib::copy<
         src_cb_id,
         dst_cb_id,

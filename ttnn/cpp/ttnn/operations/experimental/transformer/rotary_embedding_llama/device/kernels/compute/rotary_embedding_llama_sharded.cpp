@@ -88,9 +88,6 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        // sin_interim = rotated * sin (bcast ROW).
-        // rotated InputLifecycle::Bulk + Block; sin InputLifecycle::HeldBulk + Block (pre-waited line 42, popped at
-        // 106). sin_interm OutputLifecycle::Bulk + Block. Reconfig Input + None (no explicit pack_reconfig).
         ckl::mul<
             rotated_in_interm_cb,
             sin_cb,
@@ -103,7 +100,6 @@ void kernel_main() {
             ckl::PackTileReconfig::None,
             ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
-        // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
         ckl::mul<
             in_cb,
             cos_cb,
@@ -116,7 +112,6 @@ void kernel_main() {
             ckl::PackTileReconfig::None,
             ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
-        // out = cos_interim + sin_interim. Both InputLifecycle::Bulk + Block, out_cb OutputLifecycle::Bulk + Block.
         ckl::add<
             cos_interm_cb,
             sin_interm_cb,

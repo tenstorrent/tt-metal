@@ -53,13 +53,6 @@ void kernel_main() {
     CircularBuffer cb_zero(cb_zero_id);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD). Migrated
-        // from pre_add::one_row to eltwise_chain: per-block (blk) bulk add over Wt tiles via
-        // Bulk + Block index, reproducing one_row's wait/pop/reserve/push(blk) loop. Reconfig
-        // Input (reconfig_data_format + add_tiles_init) + Output (pack_reconfig_data_format).
-        // NOTE: residual (FUSE_PRE_ADD) path is not validatable locally — the 2d-core-grid test
-        // is @skip + needs an 8-device mesh + passes no residual. Mechanically identical to the
-        // validated layernorm_pre_allgather.cpp / rmsnorm_pre_allgather.cpp migration.
         if constexpr (FUSE_PRE_ADD) {
             ckl::add<
                 cb_in0_id,

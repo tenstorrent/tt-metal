@@ -14,14 +14,6 @@
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
 
-// GELU backward, tanh approximation. Transcribed 1:1 from the hand-coded SFPU
-// sequence into a single eltwise_chain so the math (and ULP accuracy) is
-// identical. grad_out -> D0; x copied to D1/D2/D5; D3 is a fill scratch; D4 holds
-// tanh then (1 - tanh^2). result = grad * (cdf_term + x * pdf_term) -> D0.
-//
-// cb_input is read 3 times: D1 owns the wait (HeldStream), D5 owns the pop
-// (NoWaitPop), the middle read is edge-free (CallerManaged). cb_grad_out is read
-// once (Streaming). All math is DEST-internal (no intermediate CBs).
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {

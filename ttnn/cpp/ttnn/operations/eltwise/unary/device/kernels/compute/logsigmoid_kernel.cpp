@@ -20,11 +20,6 @@ void kernel_main() {
 
     init_sfpu(cb_input, cb_output);
 
-    // Logsigmoid(x) = -log(1 + exp(-x)) = -softplus(-x).
-    //   D0 = cb_input   (InputLifecycle::HeldStream — second copy reuses same tile)
-    //   D1 = -cb_input -> exp -> exp(-x) (InputLifecycle::NoWaitPop pops cb_input)
-    //   Logsigmoid<D0, D1, D0> reads D0=x and D1=exp(-x), writes D0.
-    //   pack_tile(D0) -> cb_output.
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},

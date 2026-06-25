@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for tanh backward using sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))².
 // Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
 
 #include <cstdint>
@@ -24,19 +23,6 @@ void kernel_main() {
 
     unary_op_init_common(cb_grad_out, cb_grad_in);
 
-    // tanh backward: grad_in = grad_out * sech²(input).
-    //   D0 = grad_out, D1 = input -> TanhDerivative<D1>, MulBinary<D0, D1, D0>.
-    //
-    // 1D shape with explicit block size: EltwiseShape::tiles(n, block_size) emits
-    // a chain that walks n tiles in chunks of block_size each. Per-element inits
-    // (tanh_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short)
-    // are hoisted once at chain entry; per-chunk InputLifecycle::Chunked lifecycle waits / pops
-    // block_size tiles at a time. PF picks per_core_block_size as the largest
-    // power-of-2 divisor of per_core_tile_cnt (<= 8).
-    //
-    // Lifecycles:
-    //   cb_grad_out / cb_input  InputLifecycle::Chunked + Block (per-chunk wait+pop of per_core_block_size tiles)
-    //   cb_grad_in              OutputLifecycle::Chunked + Block (per-chunk reserve+push)
     const auto shape = ckl::EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size);
 
     ckl::eltwise_chain(

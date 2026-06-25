@@ -208,10 +208,6 @@ void kernel_main() {
          * xmm
          */
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            // x - E[x] over the block — identical to the output-loop sub below. cb_x InputLifecycle::Bulk
-            // (wait+pop block_size); cb_ex CallerManaged + Scalar (held: read idx 0, popped at row end).
-            // is_lastdim -> sub_bcast_cols (BroadcastDim::Col) else sub_tiles_bcast_scalar (Scalar).
-            // *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::sub<
                 cb_x,
                 cb_ex,
@@ -268,9 +264,6 @@ void kernel_main() {
              * (x - E[x])^2
              * cb_xmm2
              */
-            // (x-E[x])^2 — same-buffer square over the block. cb_xmm InputLifecycle::Bulk (wait+pop block_size,
-            // index j); cb_xmm2 OutputLifecycle::Bulk. mul_tiles_init_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output.
             ckl::square<
                 cb_xmm,
                 cb_xmm2,
@@ -330,10 +323,6 @@ void kernel_main() {
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
          * cb_recip_std
          */
-        // BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile(cb_recip_std). cb_var Streaming (wait+pop);
-        // cb_eps CallerManaged (waited once at top, popped once at end); cb_recip_std Streaming.
-        // add_tiles_init_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
-        // Rsqrt<Exact,Off> matches rsqrt_tile() defaults (legacy_compat=false, FAST_APPROX=false).
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -376,10 +365,6 @@ void kernel_main() {
              * x - E[x]
              * cb_reuse(==cb_xmm)
              */
-            // x - E[x] over the block. cb_x InputLifecycle::Bulk (wait+pop block_size); cb_ex CallerManaged +
-            // Scalar (held: read at index 0, popped at end). is_lastdim -> sub_bcast_cols (BroadcastDim::Col)
-            // else sub_tiles_bcast_scalar (BroadcastDim::Scalar). *_init_short_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output. Output cb_reuse Bulk.
             ckl::sub<
                 cb_x,
                 cb_ex,
@@ -399,10 +384,6 @@ void kernel_main() {
              */
             constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
             CircularBuffer cb_gamma_beta_or_out_obj(cb_gamma_beta_or_out);
-            // (x - E[x]) * 1/sqrt(Var + eps) over the block. cb_reuse InputLifecycle::Bulk (wait+pop);
-            // cb_recip_std CallerManaged + Scalar (held). is_lastdim -> mul_bcast_cols (BroadcastDim::Col) else
-            // mul_tiles_bcast_scalar (BroadcastDim::Scalar). *_init_short_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output. Output Bulk.
             ckl::mul<
                 cb_reuse,
                 cb_recip_std,
@@ -416,11 +397,6 @@ void kernel_main() {
                 ckl::OperandKind::Block,
                 ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_size, block_size));
 
-            // * gamma over the block. cb_gamma_beta_or_out + cb_gamma both InputLifecycle::Bulk
-            // (wait+pop block_size, index j); cb_outg OutputLifecycle::Bulk. Broadcast mode is the only
-            // thing that varies (all compile-time): groupnorm -> bcast_scalar (Scalar), lastdim ->
-            // bcast_rows (Row), else plain mul (None). *_init_short_with_dt -> Reconfig::Input,
-            // pack_tile_with_dt -> PackTileReconfig::Output.
             if (gamma_has_value) {
                 constexpr auto cb_outg = beta_has_value ? cb_gamma_beta : cb_out;
                 constexpr auto gamma_bcast =
@@ -440,10 +416,6 @@ void kernel_main() {
                     ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block_size, block_size));
             }
 
-            // + beta over the block. cb_gamma_beta + cb_beta both InputLifecycle::Bulk (wait+pop
-            // block_size, index j); cb_out OutputLifecycle::Bulk. Broadcast mode is the only thing that
-            // varies (all compile-time): groupnorm -> bcast_scalar (Scalar), lastdim -> bcast_rows (Row),
-            // else plain add (None). *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> Output.
             if (beta_has_value) {
                 constexpr auto beta_bcast =
                     is_groupnorm ? ckl::BroadcastDim::Scalar

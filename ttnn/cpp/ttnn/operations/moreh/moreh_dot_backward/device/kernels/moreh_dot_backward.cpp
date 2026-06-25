@@ -17,7 +17,6 @@ void kernel_main() {
     cb_wait_front(tt::CBIndex::c_0, onetile);
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
-            // cb_16 = cb_2 * cb_0 (scalar bcast on cb_0)
             ckl::mul<
                 tt::CBIndex::c_2,
                 tt::CBIndex::c_0,
@@ -31,7 +30,6 @@ void kernel_main() {
         }
 
         if (has_other_grad) {
-            // cb_17 = cb_1 * cb_0 (scalar bcast on cb_0)
             ckl::mul<
                 tt::CBIndex::c_1,
                 tt::CBIndex::c_0,
