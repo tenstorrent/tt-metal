@@ -27,7 +27,7 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
@@ -133,6 +133,16 @@ $(BUILD)/pollmp.elf: $(BUILD)/entry.o $(BUILD)/pollmp.o $(LD_SCRIPT) | toolchain
 $(BUILD)/pollmp.bin: $(BUILD)/pollmp.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "pollmp.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/gridilp.o: src/gridilp.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/gridilp.elf: $(BUILD)/entry.o $(BUILD)/gridilp.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/gridilp.o
+
+$(BUILD)/gridilp.bin: $(BUILD)/gridilp.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "gridilp.bin: $$(wc -c < $@) bytes"
 
 $(BUILD):
 	mkdir -p $@

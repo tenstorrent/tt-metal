@@ -22,31 +22,32 @@ driver is a tt-metal **C++ programming example** under
 
 ## TL;DR
 
-- **⚠️ The "530 MB/s wall" was an artifact — the real ceiling is ~1.8 GB/s.**
-  530 MB/s is only the *latency-bound scatter* regime: 4 harts each issuing **one
-  outstanding NoC read** (1 flit/core, read→consume→next). It is NOT a hardware
-  bandwidth limit. Issue **multiple NoC reads in flight per hart** (ILP) on a
-  sequential stream and a single hart hits **793 MB/s**; 2–3 harts at ILP 8 reach
-  **~1.8 GB/s** (§11). The earlier "shared mesh ingress" conclusion (§7/§10) was
-  measuring that scatter regime, not the link.
-- **Bare-metal beats Linux** for the original scatter profiler poll (530 vs 430),
-  because all 4 harts are free (Linux must spend the 4th on the OS).
-- **Concurrency, not port or VC, is the lever.** The cached Memory Port was *worse*
-  single-hart (472 < 793) and static-VC pinning did nothing (§11). What scales is
-  reads-in-flight = harts × per-hart ILP — up to a point: **4 harts at ILP≥4
-  collapses to ~275** (resource thrash); the safe peak is **2–3 harts, ILP 4–8**.
+- **⚠️ The "530 MB/s wall" was an artifact. The real profiler does 1533 MB/s.**
+  530 was only the *latency-bound* regime: each hart kept **one outstanding NoC
+  read** (1 flit/core, read→consume→next). Issue **multiple reads in flight** (ILP)
+  and the actual 110-core scatter drain (`gridilp`, §12) hits **1533 MB/s with 2
+  harts** (110/110 verified) — **2.9×**, using only half the harts. Even 1 hart ×
+  ILP 4 = **860**, beating the old 4-hart number with 3 harts idle. (Synthetic
+  sequential streaming peaks a bit higher, ~1.8 GB/s, §11.)
+- **The §7/§10 "shared mesh ingress wall" was measuring the 1-outstanding regime,
+  not the link.** It was never a bandwidth ceiling.
+- **Concurrency is the lever — not port, VC, or read width.** Cached Memory Port was
+  *worse* (472 < 793) and static-VC did nothing (§11). What scales is reads-in-flight
+  = harts × per-hart ILP, **up to a point**: **≥3 harts with ILP≥4 collapses**
+  (resource thrash; 4h×4 → 277). Sweet spot: **few harts (1–2), ILP 4**.
 - The DMA's value is **core-offload** (drains the grid with the harts asleep),
   not throughput.
 
 | Config | Throughput | Note |
 |---|---|---|
-| **1 hart, seq stream, ILP 8** | **914 MB/s** | one hart alone beats the old "wall" |
-| **2–3 harts, seq stream, ILP 8** | **~1.8 GB/s** | true peak (§11) |
-| 4 harts, seq stream, ILP ≥4 | 275 MB/s | collapse — too many issuers |
+| **2 harts, 110-core scatter drain, ILP 4** | **1533 MB/s** | the real profiler — 2.9×, 2 harts free (§12) |
+| **1 hart, scatter drain, ILP 4** | **860 MB/s** | beats old 4-hart 530 with 3 harts idle |
+| 2–3 harts, seq stream, ILP 8 | ~1.8 GB/s | synthetic peak (§11) |
+| ≥3 harts, ILP ≥4 | ~280–460 MB/s | collapse — too many issuers |
 | cached Memory Port, 1 hart | 472 MB/s | #3 long shot — worse than System Port |
 | Linux, 3 harts (prior work) | 430 MB/s | OS takes the 4th hart |
-| bare-metal 4-hart scatter poll (1 flit/core) | 530 MB/s | the original latency-bound profiler poll |
-| 4 harts split 2/2 across NoC0/NoC1 | 530 MB/s | no gain in the scatter regime |
+| bare-metal 4-hart scatter poll, ILP 1 (poll4) | 530 MB/s | the original latency-bound profiler poll |
+| 4 harts split 2/2 across NoC0/NoC1 | 530 MB/s | no gain in the 1-outstanding regime |
 | 4 harts NOC0 + 2 DMA on NOC1 | 464 MB/s | scatter regime + DMA contention |
 | bigger chunks (2–8 flits/*one* load) | 274 MB/s | worse — a wide load serialises (≠ ILP) |
 | 1 hart, 2-channel DMA | 111 MB/s | **cores free** |
@@ -222,9 +223,33 @@ Supporting files:
   MB/s). The *same* 16 outstanding from 2 harts (2×8) gives 1782, so it's **4
   contending issuers**, not the outstanding count, that thrashes the port. Safe
   recipe: **2–3 harts, ILP 4–8.**
-- Caveat: this is **sequential** streaming from a core's L1. The profiler's job is
-  *scatter* (1 flit from each of 110 cores); applying ILP there (issue reads to
-  several cores' windows before consuming) is the untested next step.
+- Caveat: this is **sequential** streaming from a core's L1. The real profiler is
+  *scatter* (1 flit from each of 110 cores) — see §12, which applies ILP there.
+
+### 12. The real profiler — scatter drain + ILP (breaks 530 for real)
+- FW `src/gridilp.c` · example `test_x280_gridilp`
+  (`--nharts N --ilp 1|2|4|8 --nrounds N`)
+- poll4's full 110-core drain (each hart owns a slice, 1 flit/core, identity +
+  liveness verified against the live BRISC counters), but each hart issues `ilp`
+  **independent reads to `ilp` different cores' windows** before draining them.
+- **Scatter overlaps across windows just like the sequential stream did** — the
+  profiler pattern is *not* inherently latency-bound. **`nharts=4 ilp=1` = 530 MB/s
+  exactly reproduces poll4** (harness check). All configs kept **110/110 identity**.
+- **nharts × ILP grid (110-core scatter drain, MB/s):**
+
+  | harts \ ILP | 1 | 2 | 4 | 8 |
+  |---|---|---|---|---|
+  | 1 | 251 | 478 | 860 | 830 |
+  | 2 | 487 | 915 | **1533** | 1371 |
+  | 3 | 549 | 1051 | 455 | 555 |
+  | 4 | 530 | 1043 | 277 | 281 |
+
+- **Best profiler config: 2 harts × ILP 4 = 1533 MB/s (2.9× the old 530), using
+  only 2 of 4 harts.** 1 hart × ILP 4 = 860 already beats the old 4-hart number with
+  3 harts free.
+- Collapse is sharper than the sequential case: **≥3 harts with ILP≥4 craters**
+  (3h4=455, 4h4=277). Keep it to **1–2 harts, ILP 4**. (Slightly below §11's
+  sequential peaks — scatter pays a little for spreading across 110 windows.)
 
 ---
 
@@ -279,9 +304,10 @@ Firmware — `tools/x280_bm/`:
 | `src/poll4n1.c` | §9 dual-NoC split + burst depth |
 | `src/poll6n1.c` | §10 4 harts NOC0 + 2 DMA NOC1 |
 | `src/pollmp.c` | §11 ILP / cached port / static VC — breaks the wall (~1.8 GB/s) |
+| `src/gridilp.c` | §12 real 110-core scatter drain + ILP (1533 MB/s, 2 harts) |
 
 Host examples — `tt_metal/programming_examples/profiler/`:
 `test_x280_counter`, `test_x280_poll_rate` (+`kernels/brisc_counter.cpp`),
 `test_x280_dma_probe`, `test_x280_grid_drain`, `test_x280_grid_drain4`,
 `test_x280_poll4`, `test_x280_noc1_probe`, `test_x280_poll4n1`,
-`test_x280_poll6n1`, `test_x280_pollmp`.
+`test_x280_poll6n1`, `test_x280_pollmp`, `test_x280_gridilp`.
