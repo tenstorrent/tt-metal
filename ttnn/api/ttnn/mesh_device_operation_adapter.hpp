@@ -699,21 +699,19 @@ public:
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
-            // Build a pointer→index map once (O(n)) to avoid O(params × tensors) std::find_if.
-            std::unordered_map<const tt::tt_metal::MeshTensor*, std::size_t> tensor_index_map;
-            tensor_index_map.reserve(mesh_tensors.size());
-            for (std::size_t idx = 0; idx < mesh_tensors.size(); ++idx) {
-                tensor_index_map.emplace(&mesh_tensors[idx].get(), idx);
-            }
+            // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
                 const auto* target = &tt::tt_metal::experimental::mesh_tensor_of(tensor_arg);
-                auto map_it = tensor_index_map.find(target);
+                auto it = std::find_if(mesh_tensors.begin(), mesh_tensors.end(), [target](const auto& wrapped) {
+                    return &wrapped.get() == target;
+                });
                 TT_FATAL(
-                    map_it != tensor_index_map.end(),
+                    it != mesh_tensors.end(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args / "
                     "tensor_return_value, or one of the factory's op_owned_tensors (got an unowned MeshTensor)",
                     tensor_parameter_name);
-                bindings.push_back({tensor_parameter_name, map_it->second});
+                bindings.push_back(
+                    {tensor_parameter_name, static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
             }
             return bindings;
         }

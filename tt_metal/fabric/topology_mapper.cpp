@@ -1307,35 +1307,31 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
         std::vector<MeshHostRankId> host_rank_values(host_grid_shape.mesh_size(), MeshHostRankId{0});
         std::vector<std::uint32_t> row_list(rows.begin(), rows.end());
         std::vector<std::uint32_t> col_list(cols.begin(), cols.end());
+        auto row_index = [&](std::uint32_t r) {
+            return std::distance(row_list.begin(), std::find(row_list.begin(), row_list.end(), r));
+        };
+        auto col_index = [&](std::uint32_t c) {
+            return std::distance(col_list.begin(), std::find(col_list.begin(), col_list.end(), c));
+        };
         // Compute base_rank as min over host_ranks
         std::uint32_t base_rank = std::numeric_limits<std::uint32_t>::max();
         for (const auto& [host_rank, _] : range_map) {
             base_rank = std::min(base_rank, host_rank.get());
         }
-        // Build a coord -> (normalized host rank, range) lookup once to avoid the O(|range_map|)
-        // inner scan per (r, c). range_map is keyed by host rank and iterated in ascending order,
-        // so try_emplace keeps the FIRST matching host rank for a given start coord -- preserving
-        // the original "break on first match" semantics if two ranges ever share a start coord.
-        std::map<std::pair<std::uint32_t, std::uint32_t>, std::pair<MeshHostRankId, MeshCoordinateRange>>
-            coord_to_rank_range;
-        for (const auto& [original_host_rank, range] : range_map) {
-            const std::uint32_t norm_rank = original_host_rank.get() - base_rank;
-            coord_to_rank_range.try_emplace(
-                {range.start_coord()[0], range.start_coord()[1]}, MeshHostRankId{norm_rank}, range);
-        }
-        // row_list/col_list are sorted-unique (materialized from a std::set), so the grid index of
-        // a (row, col) is simply its iteration position -- no lookup needed.
-        for (std::size_t ri = 0; ri < row_list.size(); ++ri) {
-            for (std::size_t ci = 0; ci < col_list.size(); ++ci) {
+        for (std::uint32_t r : row_list) {
+            for (std::uint32_t c : col_list) {
                 // find host_rank whose range starts at (r,c)
-                auto it = coord_to_rank_range.find({row_list[ri], col_list[ci]});
-                if (it != coord_to_rank_range.end()) {
-                    const auto& [host_rank_val, range] = it->second;
-                    std::size_t idx = (ri * host_grid_shape[1]) + ci;
-                    if (idx < host_rank_values.size()) {
-                        host_rank_values[idx] = host_rank_val;
+                for (const auto& [original_host_rank, range] : range_map) {
+                    if (range.start_coord()[0] == r && range.start_coord()[1] == c) {
+                        std::size_t idx = (row_index(r) * host_grid_shape[1]) + col_index(c);
+                        std::uint32_t norm_rank = original_host_rank.get() - base_rank;
+                        MeshHostRankId host_rank_val{norm_rank};
+                        if (idx < host_rank_values.size()) {
+                            host_rank_values[idx] = host_rank_val;
+                        }
+                        mesh_host_rank_coord_ranges_.insert({{mesh_id, host_rank_val}, range});
+                        break;
                     }
-                    mesh_host_rank_coord_ranges_.insert({{mesh_id, host_rank_val}, range});
                 }
             }
         }

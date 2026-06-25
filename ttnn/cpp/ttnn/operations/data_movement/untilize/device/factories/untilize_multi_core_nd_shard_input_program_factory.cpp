@@ -4,8 +4,6 @@
 
 #include "untilize_multi_core_nd_shard_input_program_factory.hpp"
 
-#include <unordered_map>
-
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
@@ -214,23 +212,16 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     // in the writer kernel.
     const auto& mapped_cores = page_mapping.all_cores;
 
-    // Build a hash map from CoreCoord to its index in mapped_cores for O(1) lookup
-    // instead of O(n) std::find inside the loop over ordered_cores_with_data.
-    std::unordered_map<CoreCoord, size_t> mapped_core_index;
-    for (size_t i = 0; i < mapped_cores.size(); ++i) {
-        mapped_core_index.emplace(mapped_cores[i], i);
-    }
-
     // Use page_mapping to count non-padding blocks per core
     // page_mapping.core_host_page_indices[core_id] contains host page indices for all device pages on that core,
     // with UncompressedBufferPageMapping::PADDING indicating padding pages
     uint32_t start_shard_id = 0;
     for (const auto& core : ordered_cores_with_data) {
-        auto core_it = mapped_core_index.find(core);
+        auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
         uint32_t num_input_blocks_to_process = 0;
 
-        if (core_it != mapped_core_index.end()) {
-            const size_t core_idx = core_it->second;
+        if (core_it != mapped_cores.end()) {
+            const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
             const auto& host_page_indices = page_mapping.core_host_page_indices[core_idx];
 
             // Iterate through device pages in blocks of num_tiles_per_input_block.
