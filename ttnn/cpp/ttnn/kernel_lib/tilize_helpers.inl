@@ -12,9 +12,6 @@
  */
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "api/dataflow/dataflow_buffer.h"
-#ifdef CONV_TILIZE_RB_DEBUG
-#include "api/debug/ring_buffer.h"  // DEBUG: per-block tilize stall localization (guarded; off by default)
-#endif
 
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
 // The arrays are available in scope but guarded by TRISC type:
@@ -70,8 +67,7 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode,
-    bool allow_fast>
+    tilize_config::RemapMode remap_mode>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
@@ -87,8 +83,7 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
     constexpr bool lossless_fp32_override =
         (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
-    constexpr bool use_fast =
-        can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override && allow_fast;
+    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
@@ -109,9 +104,6 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     // Block floats have shared exponents that break row-major-to-tile reinterpretation.
     UNPACK(ASSERT(!is_block_float_format(unpack_src_format[input_dfb])));
 
-#ifdef CONV_TILIZE_RB_DEBUG
-    MATH(WATCHER_RING_BUFFER_PUSH(0xF0000000u));  // DEBUG: tilize() entry (pre reconfig)
-#endif
     // Reconfigure register datatypes if requested
     if constexpr (use_unpack_reconfig) {
         // Reconfigure srcA for unpack
@@ -131,9 +123,6 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         // Reconfigure output for pack
         pack_reconfig_data_format(output_dfb);
     }
-#ifdef CONV_TILIZE_RB_DEBUG
-    MATH(WATCHER_RING_BUFFER_PUSH(0xFA000000u));  // DEBUG: post reconfig, pre fast_tilize_init
-#endif
 
     // Compile-time initialization based on InitUninitMode
     if constexpr (
@@ -152,10 +141,6 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             tilize_init(input_dfb, block_width_tiles, output_dfb);
         }
     }
-
-#ifdef CONV_TILIZE_RB_DEBUG
-    MATH(WATCHER_RING_BUFFER_PUSH(0xFB000000u));  // DEBUG: post fast_tilize_init, pre loop
-#endif
 
     // Validate DFB capacity
     if (asymmetric_dfb_pages) {
@@ -186,29 +171,17 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             input_pages = (pages_left < 32) ? pages_left : 32;
         }
 
-#ifdef CONV_TILIZE_RB_DEBUG
-        MATH(WATCHER_RING_BUFFER_PUSH(0xF1000000u | (block & 0xffff)));  // DEBUG: pre wait_front(input)
-#endif
         if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
             in_dfb.wait_front(input_pages);
         }
-#ifdef CONV_TILIZE_RB_DEBUG
-        MATH(WATCHER_RING_BUFFER_PUSH(0xF2000000u | (block & 0xffff)));  // DEBUG: got input, pre reserve(output)
-#endif
 
         out_dfb.reserve_back(block_width_tiles);
-#ifdef CONV_TILIZE_RB_DEBUG
-        MATH(WATCHER_RING_BUFFER_PUSH(0xF3000000u | (block & 0xffff)));  // DEBUG: got output slot, pre tilize_block
-#endif
 
         if constexpr (use_fast) {
             fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
         } else {
             tilize_block(input_dfb, block_width_tiles, output_dfb);
         }
-#ifdef CONV_TILIZE_RB_DEBUG
-        MATH(WATCHER_RING_BUFFER_PUSH(0xF4000000u | (block & 0xffff)));  // DEBUG: tilize_block done, pre push/pop
-#endif
 
         out_dfb.push_back(block_width_tiles);
         in_dfb.pop_front(input_pages);
