@@ -17,7 +17,7 @@
 
 ---
 
-## 0. Status (living) — last updated 2026-06-23
+## 0. Status (living) — last updated 2026-06-25
 
 ### 0.1 What we inherit (validated MiniMax-M2.7 base — the foundation we convert)
 Everything below was validated on a real Blackhole Galaxy (32 chips) for **M2.7** and
@@ -109,6 +109,35 @@ locally (not deferred). All vs self-authored torch refs, random weights, full-GQ
 > runs in. The **SP=8 + chunked-KV + MSA** rearchitecture (1M context) is the remaining work; its two
 > hardest pieces (the SP attn op + the GQA chunked cache) are de-risked above but **NOT wired into
 > `tt/attention/prefill.py`** (still the baseline SDPA, see [prefill.py:124]). Integration is next.
+
+### 0.2e SP=8 INTEGRATED into the model + MSA-under-SP + cleanup — 2026-06-25
+The §0.2d building blocks are now **wired into the whole-model prefill** (the rearchitecture the BASELINE
+note called "next"). Deployment config **TP=4 × SP=8 × EP=32, DP eliminated**. All validated at REAL
+shapes/parallelization on `(8,4)` vs composed torch refs (reduced config, random weights):
+- ✅ **Dense SP forward** (`ring_joint` no-cache + per-row RoPE + SP-sharded residual): PCC 0.9966,
+  per-row uniform. `tt/attention/dense_sp.py` + `prefill.py` gate on `config.sequence_parallel`.
+- ✅ **MSA under SP — unblocked.** Added optional per-device `chunk_offset` to `indexer_score_msa`
+  (`fb808efb7db`) so SP-sharded queries score/select blocks with correct causality at their true global
+  positions; `msa_sp_attention_sharded` keeps Q sharded + AllGathers K/V/index_k across SP. Validated
+  chunked at SP=8×TP=4 (`test_msa_sp_chunked_vs_ref`, incl. cross-chunk selection into cached context).
+  *`chunk_offset` is a stopgap → switch to the DeepSeek mesh-coordinate approach (functionally equiv,
+  cf. #47939) once upstream `indexer_msa` carries per-device coords; that also drops the shared-op overlap.*
+- ✅ **MoE under SP** (EP=32 `TtMiniMaxMoE` unified kernel over the seq-sharded residual): PCC 0.976,
+  row-uniform. The EP MoE is token-parallel → consumes the SP-sharded stream with NO change (DP-prompts
+  vs SP-seq-shards are transparent).
+- ✅ **Full input path** (`prepare_inputs_prefill` SP-shard + per-row RoPE re-shard → logits): PCC 0.977,
+  **last-token argmax matches** the ref. (`tt/model.py`, `test_model_sp_vs_ref.py` {dense, moe, tokens}.)
+- ✅ **Repo cleanup** — `tt/` slimmed to mirror `deepseek_v3_d_p` (chunked-prefill main pass only). MoE
+  collapsed to a single EP backend; deleted the EP=1 `experts/`, non-EP throughput, and decode paths
+  (~38→26 files); tests slimmed to the main pass (42, all green at real shapes).
+- ⚠️ **BLOCKER — real-weights 5k SP run:** intermittent `SIGBUS "non-existent physical address"` in
+  `SiliconTlbWindow::write32` → `write_shard_to_device` (`PinnedMemory`) during **expert-weight upload**
+  (model build, before any forward). Crash layer varies run-to-run (0/5/16+); bare-device + small-CCL
+  smokes are 100% reliable; host RAM fine (489 GB free); not corrupted weights (a no-model repro
+  `tests/ep_upload_repro.py` with random weights reproduces it); not ep_seq (cache is ep_seq-independent
+  — load path, not convert). Looks like an **intermittent large bf4 sharded-write issue over 32 chips** —
+  escalating to infra/UMD with the minimal repro; NOT M3 logic. (Reduced-config model tests are
+  unaffected, so functional work proceeds in parallel.)
 
 ### 0.4 ⓘ HF oracle — it EXISTS upstream (correction)
 Earlier drafts said "no HF modeling code." **Correction:** native `transformers` **main** has
@@ -303,6 +332,37 @@ dense-mask on real head geometry). Open for the kernel owner: K/V as two tensors
 - **For M3 + MSA:** the chunked KV buffer holds all K/V; **`sparse_sdpa` gathers the selected
   key rows from it by index** (the index list from §3 STEP 2b). So M3 KV = DeepSeek chunked-KV
   substrate + index-gather on top. Block-size for MSA selection = 128 (`sparse_block_size`).
+
+### 5.1 Multi-chunk under SP — design decided (2026-06-25 discussion)
+Single-chunk SP is validated (§0.2e, `cached_len=0`). Multi-chunk (process a long prompt chunk-by-chunk,
+each attending the accumulated cache) is the next milestone — mirror DeepSeek's runner
+(`runners/prefill_runner.py`): `prefill()` = ONE chunk, the loop advances `kv_actual = c*chunk_size`;
+chunk-aligned offsets degenerate the block-cyclic layout to a per-chip reshape (`is_balanced=False`);
+first chunk uses the no-cache path (`ring_joint` needs `Q.seq < K.seq`).
+
+The two layer types need DIFFERENT cache *access*, but the **persistent cache is SP-sharded for both**:
+- **Dense — native.** `ring_joint` reads the SP-sharded chunked-KV cache AND gathers across SP
+  *internally* (online softmax over the ring) — never materializes the full context. No blocker;
+  `dense_sp_attention` (cache-read) validated (`test_ring_joint_cache_read_sp_vs_ref`, PCC 0.99994).
+- **MSA — sharded cache + transient AllGather.** `sparse_sdpa_msa(q,k,v,indices,…,cache_batch_idx)` is a
+  **pure full-context kernel**: the `cache_batch_idx` selects a per-slot cache buffer but it is NOT an
+  online/streaming read — it needs the full-length K/V resident to gather the top-k blocks. So the
+  wrapper writes each chunk's K/V **and index_k** into the SP-sharded cache, then **AllGathers to full
+  per device only during the forward** (freed after), runs `indexer(chunk_start_idx=cached_len)` +
+  `sparse_sdpa_msa`. MSA must cache **index_k** too (extra vs DS's MLA).
+- **DECISION (capacity-first):** persistent cache stays **SP-sharded** (1/SP per device) so per-user
+  footprint is small → more users cached → good KV-cache hit rate. The MSA AllGather is **transient**
+  (forward-only, deallocated after) so it costs prefill comm but **not** persistent capacity. *Rejected*
+  a replicated full-context MSA cache: it stores the context ×SP per user (every device holds the whole
+  thing) and kills serving capacity — even though it's only 1 KV head/device at TP=4 and would avoid the
+  per-chunk re-gather.
+- **Open / future optimization (PROFILE FIRST):** the MSA AllGather re-gathers the growing context each
+  chunk → O(ISL²/chunk) prefill comm; *might* be a bottleneck at long ISL, might not. The endgame, only
+  if profiling shows it hurts: a **sparse block-gather across SP** (add fabric into `sparse_sdpa_msa` to
+  fetch ONLY the top-k selected blocks from the sharded cache) → per-chunk comm O(topk×block_size), flat
+  in ISL, keeping the sharded persistent cache. Needs kernel/CCL work + the sparse-SDPA/indexer authors.
+- **Validate:** 2-chunk prefill == single-shot forward of the full sequence (chunked==contiguous golden)
+  at reduced config (E=32; unaffected by the §0.2e SIGBUS). Then perf (tok/s) off the chunk loop.
 
 ---
 
