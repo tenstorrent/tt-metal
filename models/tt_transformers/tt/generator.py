@@ -1284,6 +1284,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # The host position itself may lag the device by one step under
                 # async scheduling, so accept both.
                 host_pos = start_pos[i].reshape(-1).to(torch.int64)
+                # The device token/position buffers are read from a single device
+                # shard (get_device_tensors(...)[0]). That holds the full per-chunk
+                # batch only when the decode inputs are replicated across the mesh
+                # (e.g. Llama-3.1-8B, which this async-ahead keep was designed for).
+                # Models that shard the decode batch across mesh devices
+                # (users_row_sharded, e.g. GPT-OSS) expose only B/num_shards entries
+                # on shard 0, so dev_toks/dev_pos are shorter than the full host
+                # chunk. Reconstructing the full batch needs the model's mesh layout,
+                # which the shared generator doesn't have; rather than crash on the
+                # mismatched comparison, fall back to the host-provided tokens and
+                # positions for this chunk (the pre-fix behaviour).
+                if dev_pos.shape[0] != host_pos.shape[0] or dev_toks.shape[0] != tok_chunk.reshape(-1).shape[0]:
+                    new_tokens.append(tok_chunk)
+                    new_start_pos.append(start_pos[i])
+                    continue
                 use_dev = (dev_pos == host_pos) | (dev_pos == host_pos + 1)
                 prefilled = getattr(self, "_slots_prefilled_since_decode", None)
                 if prefilled:
