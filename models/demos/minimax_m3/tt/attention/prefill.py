@@ -4,7 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .msa import index_branch_forward, msa_sp_attention
+from .msa import index_branch_forward, msa_sp_attention_sharded
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -114,21 +114,21 @@ def prefill_forward(
     tt_k_orig.deallocate(True)
 
     # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
-    #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse attention
-    #     (msa_sp_attention: AllGather K/V/index_k across SP -> indexer -> top-k -> sparse_sdpa_msa).
-    #     num_groups = local KV heads (1 GQA group per KV head; 1 at TP=4, 4 at TP=1).
-    #   Dense layers (0-2): plain causal GQA SDPA over THIS call's Q/K/V (exact when the whole
-    #     sequence is on one chip — the sp=1 regime). The SP dense ring_joint path (dense_sp.py) +
-    #     the multi-chunk K/V/index_k cache lifecycle + the SP output re-shard are the remaining
-    #     wiring (msa_sp_attention currently returns the full-seq output, a no-op re-shard at sp=1).
+    #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
+    #     (msa_sp_attention_sharded): AllGather K/V/index_k across SP, keep q/index_q SP-sharded
+    #     (S/sp rows/device), per-device causal chunk_offset (cached_len + rank*S_local) -> SP-sharded
+    #     output. num_groups = local KV heads (1 GQA group/KV head; 1 at TP=4). Degenerates to the
+    #     full-context path at sp=1. cached_len is 0 for the first chunk (multi-chunk cache: TODO).
+    #   Dense layers (0-2): plain causal GQA SDPA (exact at sp=1). SP dense via dense_sp_attention
+    #     (ring_joint, dense_sp.py) + the per-layer KV cache lifecycle is the remaining model-level wiring.
     if config.is_sparse:
         tt_iq, tt_ik = index_branch_forward(
             hidden_states, weights, rope_mats_sliced, transformation_mat, rms_norm_eps=config.rms_norm_eps
         )
         hidden_states.deallocate(True)
-        tt_sdpa_out = msa_sp_attention(
+        tt_sdpa_out = msa_sp_attention_sharded(
             tt_q, tt_k, tt_v, tt_iq, tt_ik,
-            mesh_config=mesh_config, ccl_manager=ccl_manager, cached_len=0,
+            mesh_config=mesh_config, ccl_manager=ccl_manager, cached_len=0, s_local=seq_len,
             scale=config.head_dim**-0.5, num_groups=num_local_kv_heads,
         )
     else:
