@@ -2,13 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Op test for ``ttnn.experimental.deepseek_prefill.d2d_socket_sync`` (the D2D sender op).
+"""Op test for ``ttnn.experimental.deepseek_prefill.outbound_socket_service_sync`` (the D2D sender op).
 
 Splits the 8x4 Galaxy into a 4x4 sender stage (rows 0-3) and a 4x4 receiver stage (rows
 4-7) and streams one sharded activation chunk between them over tt-fabric: per-chip shard
 [640 tokens, 1792 hidden] uint32 ROW_MAJOR DRAM ([2560, 7168] total). ``create_pair`` runs
-in OWN mode; ``d2d_socket_sync`` pushes it (non-blocking, 2x2 worker grid) and the native
-``h2d_socket_sync`` (D2DStreamServiceReceiver overload) drains it. Asserts each receiver
+in OWN mode; ``outbound_socket_service_sync`` pushes it (non-blocking, 2x2 worker grid) and the native
+``inbound_socket_service_sync`` (D2DStreamServiceReceiver overload) drains it. Asserts each receiver
 shard equals its wired sender shard (coord (r,c)->(r,c)) bit-exact, plus metadata; a 2nd
 iteration checks the program cache (input address is a per-dispatch BufferBinding).
 
@@ -123,10 +123,10 @@ def test_d2d_socket_sync(mesh_device, metadata_words):
                 md_tensor = _to_device(md_torch, sender_mesh, _replicate_mapper(sender_mesh))
 
             # non-blocking push of the sharded activation
-            ttnn.experimental.deepseek_prefill.d2d_socket_sync(sender, tt_in, metadata=md_tensor)
+            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(sender, tt_in, metadata=md_tensor)
 
             # drain on the receiver
-            drained = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+            drained = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
                 receiver, metadata_size_bytes=metadata_size_bytes
             )
             recv = drained[0]
@@ -157,7 +157,7 @@ def test_d2d_socket_sync(mesh_device, metadata_words):
             elif n_cached is not None:
                 assert (
                     n_cached == cache_after_first
-                ), "d2d_socket_sync should hit the program cache on iter 2 (no rebuild)"
+                ), "outbound_socket_service_sync should hit the program cache on iter 2 (no rebuild)"
     finally:
         del receiver
         del sender

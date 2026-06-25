@@ -16,7 +16,7 @@ namespace ttnn::experimental {
 
 // Copy `input` (a producing stage's output) into the D2D sender service's backing
 // tensor and inc the service's data_ready_counter, signalling it to forward over
-// fabric. The inverse of `h2d_socket_sync`.
+// fabric. The inverse of `inbound_socket_service_sync`.
 //
 // NON-BLOCKING: it does NOT wait for the forward. The sender forwards once it has
 // num_workers acks AND the host grants the fabric lease (`service.release_fabric_links()`,
@@ -27,7 +27,7 @@ namespace ttnn::experimental {
 // `metadata` is provided (a [1,1,1,N] uint32 tensor), the designated worker forwards it
 // to the sender service core (metadata mode; its size must match the service config).
 // Returns the (now-filled) backing tensor.
-Tensor d2d_socket_sync(
+Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2DStreamServiceSender& service,
     const Tensor& input,
     const std::optional<Tensor>& metadata = std::nullopt);

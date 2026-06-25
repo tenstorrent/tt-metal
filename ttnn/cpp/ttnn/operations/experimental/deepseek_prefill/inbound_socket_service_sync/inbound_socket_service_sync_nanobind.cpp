@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "h2d_socket_sync_nanobind.hpp"
+#include "inbound_socket_service_sync_nanobind.hpp"
 
 #include <cstdint>
 
@@ -10,13 +10,13 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "h2d_socket_sync.hpp"
+#include "inbound_socket_service_sync.hpp"
 #include "ttnn/services/h2d_socket_service.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::h2d_socket_sync::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::inbound_socket_service_sync::detail {
 
-void bind_h2d_socket_sync(nb::module_& mod) {
+void bind_inbound_socket_service_sync(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Wait for the next H2DStreamService transfer, copy it into a freshly-allocated
@@ -43,25 +43,27 @@ void bind_h2d_socket_sync(nb::module_& mod) {
     using H2DReceiverFn = std::vector<ttnn::Tensor> (*)(const tt::tt_metal::H2DStreamService&, uint32_t);
     using D2DReceiverFn = std::vector<ttnn::Tensor> (*)(const tt::tt_metal::D2DStreamServiceReceiver&, uint32_t);
 
-    ttnn::bind_function<"h2d_socket_sync", "ttnn.experimental.deepseek_prefill.">(
+    ttnn::bind_function<"inbound_socket_service_sync", "ttnn.experimental.deepseek_prefill.">(
         mod,
         doc,
         ttnn::overload_t(
-            static_cast<H2DReceiverFn>(&ttnn::experimental::h2d_socket_sync),
+            static_cast<H2DReceiverFn>(&ttnn::experimental::inbound_socket_service_sync),
             nb::arg("service"),
             nb::kw_only(),
             nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0)),
         ttnn::overload_t(
-            static_cast<D2DReceiverFn>(&ttnn::experimental::h2d_socket_sync),
+            static_cast<D2DReceiverFn>(&ttnn::experimental::inbound_socket_service_sync),
             nb::arg("service"),
             nb::kw_only(),
             nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0)));
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::h2d_socket_sync::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::inbound_socket_service_sync::detail
 
 namespace ttnn::operations::experimental::deepseek_prefill::detail {
 
-void bind_h2d_socket_sync(::nanobind::module_& mod) { h2d_socket_sync::detail::bind_h2d_socket_sync(mod); }
+void bind_inbound_socket_service_sync(::nanobind::module_& mod) {
+    inbound_socket_service_sync::detail::bind_inbound_socket_service_sync(mod);
+}
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::detail

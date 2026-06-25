@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "d2d_socket_sync_program_factory.hpp"
+#include "outbound_socket_service_sync_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -13,17 +13,17 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-ProgramDescriptor D2DSocketSyncProgramFactory::create_descriptor(
-    const D2DSocketSyncParams& args,
-    const D2DSocketSyncInputs& tensor_args,
+ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
+    const OutboundSocketServiceSyncParams& args,
+    const OutboundSocketServiceSyncInputs& tensor_args,
     Tensor& backing_out,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
-        "d2d_socket_sync: the program factory requires a per-device mesh dispatch coordinate");
+        "outbound_socket_service_sync: the program factory requires a per-device mesh dispatch coordinate");
     const auto& coord = *mesh_dispatch_coordinate;
     const uint32_t idx = coord[0] * args.mesh_num_cols + coord[1];
-    TT_FATAL(idx < args.data_ready_addrs.size(), "d2d_socket_sync: mesh coordinate {} out of range", idx);
+    TT_FATAL(idx < args.data_ready_addrs.size(), "outbound_socket_service_sync: mesh coordinate {} out of range", idx);
 
     const auto& input = tensor_args.input;
     const bool has_metadata = args.metadata_size_bytes > 0;
@@ -48,7 +48,7 @@ ProgramDescriptor D2DSocketSyncProgramFactory::create_descriptor(
         }
     }
     const uint32_t num_workers = static_cast<uint32_t>(workers.size());
-    TT_FATAL(num_workers > 0, "d2d_socket_sync: worker_cores must contain at least one core");
+    TT_FATAL(num_workers > 0, "outbound_socket_service_sync: worker_cores must contain at least one core");
 
     auto* input_buffer = input.buffer();
     auto* backing_buffer = backing_out.buffer();
@@ -82,8 +82,8 @@ ProgramDescriptor D2DSocketSyncProgramFactory::create_descriptor(
 
     KernelDescriptor writer;
     writer.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/d2d_socket_sync/device/kernels/"
-        "d2d_socket_sync_writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/device/kernels/"
+        "outbound_socket_service_sync_writer.cpp";
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = worker_crs;
     writer.compile_time_args = std::move(ct_args);

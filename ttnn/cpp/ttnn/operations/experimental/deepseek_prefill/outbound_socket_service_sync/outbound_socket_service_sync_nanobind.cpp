@@ -2,25 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "d2d_socket_sync_nanobind.hpp"
+#include "outbound_socket_service_sync_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "d2d_socket_sync.hpp"
+#include "outbound_socket_service_sync.hpp"
 // nanobind needs the COMPLETE D2DStreamServiceSender type (typeid / type_caster) to
 // bind a function taking it by reference -- the forward declaration in the public
 // header is not enough at the binding site.
 #include "ttnn/tensor/d2d_stream_service.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::d2d_socket_sync::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::outbound_socket_service_sync::detail {
 
-void bind_d2d_socket_sync(nb::module_& mod) {
+void bind_outbound_socket_service_sync(nb::module_& mod) {
     const auto* doc =
         R"doc(
         Copy ``input`` into a D2DStreamServiceSender's backing tensor and signal the
-        service to forward it over fabric. The inverse of ``h2d_socket_sync``.
+        service to forward it over fabric. The inverse of ``inbound_socket_service_sync``.
 
         NON-BLOCKING: returns once the data is staged and the service's data_ready
         counter is inc'd. The sender forwards once it has ``num_workers`` acks AND the
@@ -42,20 +42,22 @@ void bind_d2d_socket_sync(nb::module_& mod) {
             ttnn.Tensor: the (now-filled) sender backing tensor.
         )doc";
 
-    ttnn::bind_function<"d2d_socket_sync", "ttnn.experimental.deepseek_prefill.">(
+    ttnn::bind_function<"outbound_socket_service_sync", "ttnn.experimental.deepseek_prefill.">(
         mod,
         doc,
-        &ttnn::experimental::d2d_socket_sync,
+        &ttnn::experimental::outbound_socket_service_sync,
         nb::arg("service"),
         nb::arg("input"),
         nb::kw_only(),
         nb::arg("metadata") = std::nullopt);
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill::d2d_socket_sync::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::outbound_socket_service_sync::detail
 
 namespace ttnn::operations::experimental::deepseek_prefill::detail {
 
-void bind_d2d_socket_sync(::nanobind::module_& mod) { d2d_socket_sync::detail::bind_d2d_socket_sync(mod); }
+void bind_outbound_socket_service_sync(::nanobind::module_& mod) {
+    outbound_socket_service_sync::detail::bind_outbound_socket_service_sync(mod);
+}
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::detail

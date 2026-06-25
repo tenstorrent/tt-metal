@@ -14,7 +14,7 @@
 
 namespace ttnn::experimental::prim {
 
-struct H2DSocketSyncParams {
+struct InboundSocketServiceSyncParams {
     // Uniform across the mesh (the backing tensor shares one address/page-config
     // on every device; the data-ready semaphore is a mesh-wide GlobalSemaphore).
     tt::tt_metal::DeviceAddr data_ready_sem_addr = 0;
@@ -34,7 +34,7 @@ struct H2DSocketSyncParams {
     std::vector<uint32_t> service_core_y;  // LOGICAL service-core y per coord
 };
 
-struct H2DSocketSyncInputs {
+struct InboundSocketServiceSyncInputs {
     // The service's persistent backing tensor (read by the kernel). Supplies the
     // mesh device + per-shard spec; the output tensors mirror its spec.
     const Tensor& backing;

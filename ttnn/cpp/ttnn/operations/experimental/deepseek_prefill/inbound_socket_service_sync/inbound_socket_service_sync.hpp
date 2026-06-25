@@ -12,7 +12,7 @@
 namespace tt::tt_metal {
 class H2DStreamService;
 class D2DStreamServiceReceiver;
-}
+}  // namespace tt::tt_metal
 
 namespace ttnn::experimental {
 
@@ -24,12 +24,13 @@ namespace ttnn::experimental {
 // [tokens, metadata] when > 0 (the metadata tensor is [1,1,1,N/4] uint32 DRAM).
 // The Python wrapper unpacks this to a single Tensor or a (tokens, metadata)
 // tuple to preserve the existing call contract.
-std::vector<Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes = 0);
+std::vector<Tensor> inbound_socket_service_sync(
+    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes = 0);
 
 // Same op, but draining a D2DStreamServiceReceiver (disaggregated-prefill
 // device->device path). The receiver exposes the same getters as
 // H2DStreamService. Returns [tokens] or [tokens, metadata] identically.
-std::vector<Tensor> h2d_socket_sync(
+std::vector<Tensor> inbound_socket_service_sync(
     const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes = 0);
 
 }  // namespace ttnn::experimental

@@ -6,11 +6,11 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::d2d_socket_sync::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::inbound_socket_service_sync::detail {
 namespace nb = nanobind;
-void bind_d2d_socket_sync(nb::module_& mod);
-}  // namespace ttnn::operations::experimental::deepseek_prefill::d2d_socket_sync::detail
+void bind_inbound_socket_service_sync(nb::module_& mod);
+}  // namespace ttnn::operations::experimental::deepseek_prefill::inbound_socket_service_sync::detail
 
 namespace ttnn::operations::experimental::deepseek_prefill::detail {
-void bind_d2d_socket_sync(::nanobind::module_& mod);
+void bind_inbound_socket_service_sync(::nanobind::module_& mod);
 }  // namespace ttnn::operations::experimental::deepseek_prefill::detail

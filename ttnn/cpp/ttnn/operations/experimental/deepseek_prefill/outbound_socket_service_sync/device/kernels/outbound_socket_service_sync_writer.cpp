@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // One-shot worker-side producer for D2DStreamServiceSender -- the inverse of
-// h2d_socket_sync_writer.cpp. Instead of draining a service-filled backing tensor
+// inbound_socket_service_sync_writer.cpp. Instead of draining a service-filled backing tensor
 // into a fresh output, it fills the sender backing tensor from an input activation
 // and signals the persistent sender service that there is data to forward.
 //
@@ -37,7 +37,7 @@
 #include "api/tensor/tensor_accessor.h"    // TensorAccessor / TensorAccessorArgs
 #include "api/tensor/noc_traits.h"         // noc_traits_t for TensorAccessor on the Noc API
 
-// CT-arg layout (must stay in sync with d2d_socket_sync_program_factory.cpp).
+// CT-arg layout (must stay in sync with outbound_socket_service_sync_program_factory.cpp).
 constexpr uint32_t page_size = get_compile_time_arg_val(0);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(1);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(2);  // 0 disables the metadata path

@@ -14,7 +14,7 @@
 
 namespace ttnn::experimental::prim {
 
-struct D2DSocketSyncParams {
+struct OutboundSocketServiceSyncParams {
     // Uniform across the mesh (the sender backing shares one page-config on every
     // device).
     uint32_t page_size = 0;
@@ -33,7 +33,7 @@ struct D2DSocketSyncParams {
     std::vector<uint32_t> metadata_addrs;    // per-coord service-core metadata L1 (metadata mode)
 };
 
-struct D2DSocketSyncInputs {
+struct OutboundSocketServiceSyncInputs {
     // input: the producing stage's output hidden state (read source). Its address
     //   varies per dispatch -> registered as a BufferBinding.
     // backing: the sender service's persistent backing tensor (write dest). Shares
