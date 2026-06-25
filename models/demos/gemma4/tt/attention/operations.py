@@ -173,7 +173,15 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
     return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
 
 
-def prefill_sdpa_program_config(head_dim, seq_len):
+def _largest_tile_divisor(length, preferred):
+    """Pick a tile-multiple chunk size that divides ``length``."""
+    for candidate in range(min(preferred, length), 31, -32):
+        if length % candidate == 0:
+            return candidate
+    return 32
+
+
+def prefill_sdpa_program_config(head_dim, seq_len, k_seq_len=None):
     """Tuned SDPAProgramConfig for the non-chunked prefill path (seq <= 32768).
 
     The op defaults to small auto-picked q/k chunks; explicit larger chunks cut
@@ -197,8 +205,9 @@ def prefill_sdpa_program_config(head_dim, seq_len):
     q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
     k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
     # Chunk sizes must be a multiple of 32 and not exceed the (padded) seq_len.
-    q_chunk = max(32, min(q_chunk, seq_len))
-    k_chunk = max(32, min(k_chunk, seq_len))
+    k_seq_len = seq_len if k_seq_len is None else k_seq_len
+    q_chunk = _largest_tile_divisor(seq_len, q_chunk)
+    k_chunk = _largest_tile_divisor(k_seq_len, k_chunk)
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid,
         q_chunk_size=q_chunk,

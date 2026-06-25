@@ -20,14 +20,24 @@ def test_kv_phase_accepts_explicit_readonly_value():
 def test_kv_phase_is_threaded_through_attention_call_chain():
     assert "kv_phase" in inspect.signature(Gemma4Model.__call__).parameters
     assert "attn_mask" in inspect.signature(Gemma4Model.__call__).parameters
+    assert "kv_hidden_states" in inspect.signature(Gemma4Model.__call__).parameters
+    assert "q_rope_offset" in inspect.signature(Gemma4Model.__call__).parameters
     assert "kv_phase" in inspect.signature(Gemma4Model.ttnn_prefill_forward).parameters
     assert "attn_mask" in inspect.signature(Gemma4Model.ttnn_prefill_forward).parameters
+    assert "kv_hidden_states" in inspect.signature(Gemma4Model.ttnn_prefill_forward).parameters
+    assert "q_rope_offset" in inspect.signature(Gemma4Model.ttnn_prefill_forward).parameters
     assert "kv_phase" in inspect.signature(Gemma4Model.ttnn_decode_forward).parameters
     assert "kv_phase" in inspect.signature(Gemma4Model.ttnn_verify_forward).parameters
     assert "kv_phase" in inspect.signature(Gemma4DecoderLayer.__call__).parameters
     assert "attn_mask" in inspect.signature(Gemma4DecoderLayer.__call__).parameters
+    assert "kv_hidden_states" in inspect.signature(Gemma4DecoderLayer.__call__).parameters
+    assert "q_rope_offset" in inspect.signature(Gemma4DecoderLayer.__call__).parameters
     assert "kv_phase" in inspect.signature(Gemma4Attention.__call__).parameters
     assert "attn_mask" in inspect.signature(Gemma4Attention.__call__).parameters
+    assert "kv_hidden_states" in inspect.signature(Gemma4Attention.__call__).parameters
+    assert "q_rope_offset" in inspect.signature(Gemma4Attention.__call__).parameters
     assert "write_kv_cache" in inspect.signature(prefill_forward).parameters
     assert "attn_mask" in inspect.signature(prefill_forward).parameters
+    assert "kv_hidden_states" in inspect.signature(prefill_forward).parameters
+    assert "q_rope_offset" in inspect.signature(prefill_forward).parameters
     assert "write_kv_cache" in inspect.signature(decode_forward).parameters

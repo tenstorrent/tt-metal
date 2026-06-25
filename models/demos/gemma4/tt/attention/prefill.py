@@ -26,6 +26,12 @@ from .operations import (
 from .weights import AttentionWeights
 
 
+def _slice_rope_cache(cache, start, length):
+    if start == 0 and cache.shape[-2] == length:
+        return cache
+    return ttnn.slice(cache, [0, 0, start, 0], [cache.shape[0], cache.shape[1], start + length, cache.shape[3]])
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -42,15 +48,28 @@ def _prefill_forward_single(
     valid_seq_len=None,
     write_kv_cache=True,
     attn_mask=None,
+    kv_hidden_states=None,
+    q_rope_offset=0,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations."""
     tp = mesh_config.tp if mesh_config else 1
 
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    if kv_hidden_states is not None and (shared_kv is not None or write_kv_cache):
+        raise ValueError("kv_hidden_states is only supported for readonly masked denoise prefill")
 
+    xqkv = apply_qkv_projection(hidden_states, weights)
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
         xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
     )
+    if kv_hidden_states is not None:
+        xqkv_kv = apply_qkv_projection(kv_hidden_states, weights)
+        tt_kv_q, tt_k_from_kv, tt_v_from_kv = split_qkv_heads_prefill(
+            xqkv_kv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+        )
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+        tt_kv_q.deallocate(True)
+        tt_k, tt_v = tt_k_from_kv, tt_v_from_kv
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
 
@@ -62,7 +81,13 @@ def _prefill_forward_single(
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache)
+    q_cos_cache = _slice_rope_cache(cos_cache, q_rope_offset, tt_q.shape[-2])
+    q_sin_cache = _slice_rope_cache(sin_cache, q_rope_offset, tt_q.shape[-2])
+    tt_q = apply_rope(tt_q, q_cos_cache, q_sin_cache)
+    if q_cos_cache is not cos_cache:
+        q_cos_cache.deallocate(True)
+    if q_sin_cache is not sin_cache:
+        q_sin_cache.deallocate(True)
     if shared_kv is None:
         tt_k = apply_rope(tt_k, cos_cache, sin_cache)
 
@@ -125,7 +150,7 @@ def _prefill_forward_single(
             attn_mask=attn_mask,
             is_causal=False,
             scale=1.0,
-            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, tt_k.shape[-2]),
         )
     elif long_seq and config.is_sliding and sliding_window is not None:
         tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
@@ -175,6 +200,8 @@ def prefill_forward(
     valid_seq_len=None,
     write_kv_cache=True,
     attn_mask=None,
+    kv_hidden_states=None,
+    q_rope_offset=0,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -200,7 +227,12 @@ def prefill_forward(
             valid_seq_len=valid_seq_len,
             write_kv_cache=write_kv_cache,
             attn_mask=attn_mask,
+            kv_hidden_states=kv_hidden_states,
+            q_rope_offset=q_rope_offset,
         )
+
+    if kv_hidden_states is not None:
+        raise ValueError("kv_hidden_states is only supported for single-user prefill")
 
     tp = mesh_config.tp if mesh_config else 1
     hidden_states = ttnn.reshape(

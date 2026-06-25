@@ -137,6 +137,8 @@ class Gemma4Attention:
         sequential_kv_write=False,
         kv_phase=None,
         attn_mask=None,
+        kv_hidden_states=None,
+        q_rope_offset=0,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -196,6 +198,8 @@ class Gemma4Attention:
                 valid_seq_len=valid_seq_len,
                 write_kv_cache=write_kv_cache,
                 attn_mask=attn_mask,
+                kv_hidden_states=kv_hidden_states,
+                q_rope_offset=q_rope_offset,
             )
             self._last_kv = kept_kv
             return tt_out
