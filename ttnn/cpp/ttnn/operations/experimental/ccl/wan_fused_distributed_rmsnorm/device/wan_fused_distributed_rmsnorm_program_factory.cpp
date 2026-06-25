@@ -277,6 +277,42 @@ bool decide_streaming_low_l1(
     const uint64_t total = input_bytes + intermediate_bytes + output_bytes + weight_bytes + kFixedOverheadBytes;
     return total > kResidentL1BudgetBytes;
 }
+// Block-major POST fallback. Streaming input_cb alone (decide_streaming_low_l1)
+// only shrinks input_cb — intermediate_cb + rotated_input_cb + output_cb stay
+// WHOLE-ROW resident, so the streamed-input layout still tops out around
+// num_tile_cols ~= 80 on Wormhole. At wider low-TP shards (TP=1 WAN feat-5120 =
+// 160 tile-cols, LTX-video feat-4096 = 128, FLUX feat-6144 = 192; TP=2 FLUX
+// feat-3072 = 96) it overflows L1. When that happens we ALSO make intermediate/
+// rotated/output block-local (O(block_size)) and the compute fuses every POST
+// sub-phase into one per-block loop (block-major POST). This estimate sums the
+// big CBs that block-major removes (intermediate/rotated/output whole-row) plus
+// the whole-row weight/bias, against the real CB-usable L1 cap with margin; a
+// calibrated constant covers the streamed input_cb + cos/sin + the ~dozen small
+// CBs (refined to exact per-CB accounting separately). block_major implies
+// streaming_low_l1 (input is streamed too) and per_head_norm==0 (streaming is
+// never auto-enabled for per_head_norm — that path is a separate L1 question).
+bool decide_block_major_post(
+    uint32_t num_tile_cols,
+    uint32_t block_size,
+    uint32_t intermediate_tile_bytes,
+    uint32_t output_tile_bytes,
+    bool has_weight,
+    bool has_bias,
+    bool fuse_rope,
+    uint64_t l1_cap_bytes) {
+    const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
+    // Whole-row CBs that the block-major layout collapses to O(block_size):
+    uint64_t whole_row = static_cast<uint64_t>(padded) * intermediate_tile_bytes;             // intermediate_cb
+    whole_row += fuse_rope ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;  // rotated_input_cb
+    whole_row += 2ull * padded * output_tile_bytes;                                           // output_cb (2 rows)
+    whole_row += has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;          // weight_cb (bf16)
+    whole_row += has_bias ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;            // bias_cb (bf16)
+    // Streamed input_cb + resident cos/sin + the dozen small fp32 stat/scalar CBs +
+    // (mux) packet/header. Calibrated against the observed FLUX TP=2 feat-3072
+    // streamed-input allocation (1,601,824 B at the same big-CB sum).
+    constexpr uint64_t kSmallCbOverheadBytes = 225000ull;
+    return whole_row + kSmallCbOverheadBytes > l1_cap_bytes;
+}
 // The POST phase is sub-phase-major (mul-rms -> weight -> matmul -> rope, each
 // across the whole row) — the fast layout, but it keeps intermediate_cb AND
 // rotated_input_cb resident for a full row. At wide PER-HEAD shards (LTX TP=2
@@ -587,7 +623,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // intermediate/rotated/output CBs would overflow L1, stream input_cb in
     // block_size chunks for PRE + a POST re-read pass instead. See
     // decide_streaming_low_l1() for the budget heuristic.
-    const bool streaming_low_l1 = decide_streaming_low_l1(
+    const bool streaming_input = decide_streaming_low_l1(
         num_tile_cols,
         block_size,
         chunk_size_rows,
@@ -596,6 +632,23 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         output_tile_size,
         has_weight,
         args.per_head_norm);
+    // Block-major POST: even input-streaming leaves intermediate/rotated/output
+    // whole-row, which overflows L1 on wide low-TP shards. When so, shrink those
+    // CBs to block-local + run the fused per-block POST. Implies streaming_low_l1.
+    // Gated on streaming_input so it can only engage on the whole-row-norm path
+    // (per_head_norm never auto-streams). Margin below l1_size_per_core covers the
+    // ~72 KB firmware/kernel-config reserve plus slack.
+    const uint64_t l1_cap_bytes = static_cast<uint64_t>(device->l1_size_per_core()) - 112640ull;
+    const bool block_major_post = streaming_input && decide_block_major_post(
+                                                         num_tile_cols,
+                                                         block_size,
+                                                         intermediate_tile_size,
+                                                         output_tile_size,
+                                                         has_weight,
+                                                         has_bias,
+                                                         fuse_rope,
+                                                         l1_cap_bytes);
+    const bool streaming_low_l1 = streaming_input || block_major_post;
     // Clamp to a single resident row for (a) per-head RoPE — its cos/sin CBs are
     // chunk*num_tile_cols fp32 tiles (overflow L1 at feat>=1024) and the compute
     // deadlocks at chunk>=2 with many rows; and (b) the streaming-low-L1 path,
@@ -819,7 +872,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // per block) ONLY in the block-major path — that's where we need the L1 back.
         // The resident path keeps the WHOLE-ROW cos/sin so it isn't slowed (a shrunk
         // cos/sin CB regressed TP=4 video self-attn ~10-27% by starving prefetch).
-        const uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope)
+        // Block-major POST consumes cos/sin RESIDENT (the reader pushes the whole
+        // row's cos/sin before the deferred POST input re-read pass), so never
+        // stream them when block_major_post — keep the whole-row resident size.
+        const uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope && !block_major_post)
                                            ? std::min(rope_resident_tiles, rope_stream_blocks() * block_size)
                                            : rope_resident_tiles;
         create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
@@ -845,7 +901,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // input distribution has high variance (e.g. matmul-output values).
     // (intermediate_format / intermediate_tile_size are computed earlier for
     // the streaming-low-L1 decision.)
-    const uint32_t intermediate_cb_tiles = tt::div_up(num_tile_cols, block_size) * block_size;
+    // Block-major POST collapses intermediate_cb to O(block_size) (double-buffered)
+    // so wide low-TP shards fit L1; the resident/input-streaming paths keep the
+    // whole (padded) row for sub-phase-major handoff.
+    const uint32_t intermediate_cb_tiles =
+        block_major_post ? (2u * block_size) : (tt::div_up(num_tile_cols, block_size) * block_size);
     create_cb(
         intermediate_cb_id,
         program,
@@ -923,6 +983,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
         static_cast<uint32_t>(streaming_low_l1),
+        // Defer the streaming input past the resident side-inputs ONLY on the is_tp_1
+        // block-major path: there's no all-gather between PRE and POST to give the
+        // reader a window to push weight/cos before the POST block loop needs them, so
+        // it must push them first. The mux (ring>1) block-major path keeps input-first
+        // (the AG window covers the side-input pushes) — deferring there raced the AG.
+        static_cast<uint32_t>(block_major_post && is_tp_1),  // reader "defer_input" (CT arg 17)
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -1126,7 +1192,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_bias),
         float_to_u32(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
         static_cast<uint32_t>(streaming_low_l1),
-        static_cast<uint32_t>(fuse_mm_rope),  // block-major POST: fuse matmul+rope per block (rotated block-local)
+        static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
+        static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
