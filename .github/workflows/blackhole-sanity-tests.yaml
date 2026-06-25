@@ -120,8 +120,8 @@ on:
   schedule:
     - cron: "0 */4 * * *"
   # Pause this since not enough runners to support every commit to main
-  # push:
-  #  branches: ["main"]
+  push:
+    branches: ["tdowdall/BHPC-reorg"]
 
 run-name: >-
   ${{ (inputs.enable-watcher == true && 'Blackhole sanity tests (watcher enabled)')
