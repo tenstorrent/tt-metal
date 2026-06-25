@@ -853,7 +853,9 @@ public:
         // run_params reference this dispatch's tensors.)
         static void apply_run_args(cached_mesh_workload_t& cached_workload, const BuiltSpec& built) {
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params);
+                // skip_validation: the args were validated on the cache miss, and the factory rebuilds
+                // them conformant to the (matched) spec every dispatch -- re-validating on a hit is redundant.
+                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params, /*skip_validation=*/true);
             }
         }
     };
@@ -914,7 +916,8 @@ public:
         // Cache hit: apply this dispatch's fresh run args and re-park this dispatch's owned tensors.
         static void apply_run_args(cached_mesh_workload_t& cached_workload, const BuiltSpec& built) {
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params);
+                // skip_validation: validated on the cache miss; the factory rebuilds conformant args every hit.
+                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params, /*skip_validation=*/true);
                 cached_workload.shared_variables.at(coordinate_range).owned_tensors = built.owned;
             }
         }
