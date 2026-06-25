@@ -101,6 +101,7 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
+    assert_trisc_reset();
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
