@@ -266,7 +266,7 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         # If local_hidden was padded (e.g., 360 -> 384), we need to slice back to original hidden_size.
         local_hidden = hidden_size // mesh_config.tp
         padded_local_hidden = ((local_hidden + 31) // 32) * 32
-        if padded_local_hidden != local_hidden:
+        if padded_local_hidden != local_hidden and tensor.shape[-1] > hidden_size:
             # Slice from padded_hidden back to hidden_size on the last dimension.
             # Works for both decode [1, 1, batch, padded_hidden] and prefill [1, batch, seq_len, padded_hidden].
             shape = tensor.shape

@@ -43,6 +43,8 @@ def fused_decode_forward(
     config: ThroughputExpertConfig,
     fused_config: FusedMoeGptConfig,
     mesh_device,
+    mesh_config=None,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """Fused decode: all_to_all_dispatch_metadata + moe_gpt + selective_reduce_combine.
 
@@ -262,13 +264,18 @@ def fused_decode_forward(
     ttnn.deallocate(tt_weighted)
     tt_sum = ttnn.typecast(tt_sum, ttnn.bfloat8_b)
 
-    tt_output = ttnn.all_reduce(
-        tt_sum,
-        num_links=fused_config.num_links,
-        topology=ttnn.Topology.Ring,
-        cluster_axis=1,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    ttnn.deallocate(tt_sum)
+    if mesh_config is not None and ccl_manager is not None:
+        from .decode import apply_allreduce
+
+        tt_output = apply_allreduce(tt_sum, mesh_config, ccl_manager, config.hidden_size)
+    else:
+        tt_output = ttnn.all_reduce(
+            tt_sum,
+            num_links=fused_config.num_links,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(tt_sum)
 
     return tt_output  # [1, 1, tokens_per_device, H]

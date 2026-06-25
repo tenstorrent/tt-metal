@@ -35,26 +35,28 @@ Usage:
     output = experts(hidden_states, topk_indices, topk_weights)
 """
 
-import ttnn
 from typing import Optional
+
+import ttnn
 from models.demos.gpt_oss.config import MeshConfig
+
 from .config import (
+    AllToAllCombineConfig,
+    AllToAllDispatchConfig,
+    FusedMoeGptConfig,
     ThroughputExpertConfig,
     ThroughputProgramConfig,
-    AllToAllDispatchConfig,
-    AllToAllCombineConfig,
-    FusedMoeGptConfig,
     create_expert_mapping_tensors,
     create_remap_topk_mask,
 )
 from .decode import decode_forward
 from .fused_decode import fused_decode_forward
-from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
+from .prefill import DeepSeekPrefillConfig, _prepare_expert_weights_for_deepseek, forward_prefill_deepseek
 from .weights import (
     ThroughputExpertWeights,
-    load_throughput_expert_weights,
     create_fused_moe_gpt_config,
     get_moe_gpt_combine_core_range,
+    load_throughput_expert_weights,
 )
 
 __all__ = [
@@ -299,6 +301,8 @@ class ThroughputExperts:
                 config=self.config,
                 fused_config=self.fused_config,
                 mesh_device=self.mesh_device,
+                mesh_config=self.mesh_config,
+                ccl_manager=self.ccl_manager,
             )
         return decode_forward(
             hidden_states=hidden_states,

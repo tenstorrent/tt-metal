@@ -74,9 +74,6 @@ const char* direct_write_candidate_reject_reason(
     if (!has_direct_write_runtime_requirements(guard, src, region)) {
         return "runtime_requirements";
     }
-    if (shard_view.device()->allocator_impl()->get_config().trace_region_size != 0) {
-        return "trace_region";
-    }
     if (shard_view.buffer_type() != BufferType::DRAM &&
         !(shard_view.buffer_type() == BufferType::L1 && is_sharded(shard_view.buffer_layout()))) {
         return "unsupported_buffer";
