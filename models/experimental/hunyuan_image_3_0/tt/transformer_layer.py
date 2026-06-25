@@ -111,7 +111,18 @@ class HunyuanTtDecoderLayer(LightweightModule):
                 stream_experts=stream_experts,
             )
 
-    def forward(self, x, seq_len, image_infos=None, attention_mask=None, cos_sin=None):
+    def forward(
+        self,
+        x,
+        seq_len,
+        image_infos=None,
+        attention_mask=None,
+        cos_sin=None,
+        *,
+        kv_cache=None,
+        use_cache=False,
+        decode_step=False,
+    ):
         """
         Args:
             x:              TTNN tensor [B, S, H] in TILE_LAYOUT.
@@ -136,7 +147,16 @@ class HunyuanTtDecoderLayer(LightweightModule):
         # --- self-attention block ---
         residual = x
         h = self.input_layernorm(x)
-        attn_out = self.self_attn(h, cos_tt, sin_tt, attention_mask=attention_mask)
+        attn_out = self.self_attn(
+            h,
+            cos_tt,
+            sin_tt,
+            attention_mask=attention_mask,
+            kv_cache=kv_cache,
+            layer_idx=self.layer_num,
+            use_cache=use_cache,
+            decode_step=decode_step,
+        )
         ttnn.deallocate(h)
         # Attention emits [B, 1, S, H] (4-D, from nlp_create_qkv_heads); collapse
         # the singleton head-group dim back to the [B, S, H] residual-stream rank

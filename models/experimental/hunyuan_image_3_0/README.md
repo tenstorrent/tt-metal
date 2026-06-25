@@ -165,9 +165,11 @@ Vision input path — device pieces + host glue DONE; full on-box AR decode rema
     to upstream `_StageTransitionLogitsProcessor` (`test_generate.py`, 7 unit tests). The loop
     is decoupled via a `forward_logits_fn` callback; `make_backbone_logits_fn` wires the
     resident backbone + LM head as the device adapter.
-    **Remaining (on-box):** the adapter re-forwards the full sequence each step (no KV cache →
-    O(S²)); a `HunyuanStaticCache`-style incremental decode is the optimization, and a full
-    32-layer end-to-end recaption run on QB2 is the integration check.
+    **Host recaption orchestration:** `ref/recaption.py` + `tt/recaption.py`
+    (`run_recaption_on_device` with `make_recaption_logits_fn` for I2I cond embeds).
+    `demo/demo_i2i.py` runs the full ``think_recaption`` → denoise chain.
+    **Remaining:** KV-cache incremental decode (``HY_RECAPTION_KV=1``, ``sp_factor=1`` on
+    recaption backbone); default ``HY_RECAPTION_LAYERS`` matches ``HY_NUM_LAYERS``.
 
 ---
 

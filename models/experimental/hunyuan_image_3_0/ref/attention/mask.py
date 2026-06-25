@@ -64,6 +64,12 @@ def build_attention_mask(seq_len, image_slices=None, bsz=1, device=None):
     return attention_mask.unsqueeze(1)  # [bsz, 1, S, S]
 
 
+def build_attention_mask_query_row(seq_len, query_pos, image_slices=None, bsz=1, device=None):
+    """Additive-mask row for a single decode query position: [bsz, 1, 1, seq_len]."""
+    full = build_attention_mask(seq_len, image_slices, bsz=bsz, device=device)
+    return full[:, :, query_pos : query_pos + 1, :seq_len]
+
+
 def to_additive(bool_mask, dtype=torch.float32):
     """Convert a boolean keep-mask to an additive mask: 0 where True (attend),
     a large negative value where False (masked). Useful for TT/SDPA paths that
