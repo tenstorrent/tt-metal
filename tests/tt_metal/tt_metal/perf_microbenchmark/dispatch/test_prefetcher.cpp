@@ -2619,6 +2619,9 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->device_ = tt_metal::CreateDevice(0);
+        if (tt::tt_metal::internal::sd_cq_kernel_tests_should_skip(this->device_)) {
+            GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
+        }
 
         Common::DispatchPayloadGenerator::Config pgcfg;
         pgcfg.use_coherent_data = this->cfg_.use_coherent_data;
@@ -2634,8 +2637,7 @@ public:
         this->send_to_all_ = this->cfg_.send_to_all;
         this->host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
         // Cap inline command size to avoid cmddat_q L1 overflow on the prefetch-d core.
-        this->max_fetch_bytes_ =
-            tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER).scratch_db_size();
+        this->max_fetch_bytes_ = Common::sd_dispatch_mem_map(this->device_).scratch_db_size();
 
         this->dram_base_ = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
         this->num_banks_ = this->device_->allocator_impl()->get_num_banks(BufferType::DRAM);
@@ -2676,7 +2678,10 @@ public:
         uint32_t num_iterations,
         bool /*wait_for_completion*/ = true,
         bool /*wait_for_host_writes*/ = false) override {
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& memmap = Common::sd_dispatch_mem_map(this->device_);
+        const tt::CoreType cq_core_type = Common::sd_cq_kernel_core_type(this->device_);
+        const CoreCoord prefetch_logical = Common::sd_prefetch_core(this->device_);
+        const CoreCoord dispatch_logical = Common::dispatch_core(this->device_);
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
         TT_FATAL(entry_size == 4, "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
         const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
@@ -2723,8 +2728,8 @@ public:
         }
 
         // Physical cores
-        const CoreCoord phys_prefetch = this->device_->worker_core_from_logical_core(Common::sd_prefetch_core);
-        const CoreCoord phys_disp = this->device_->worker_core_from_logical_core(Common::dispatch_core(this->device_));
+        const CoreCoord phys_prefetch = Common::sd_virtual_core(this->device_, prefetch_logical);
+        const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, dispatch_logical);
         const tt_cxy_pair prefetch_cxy(this->device_->id(), phys_prefetch);
 
         auto& cluster = tt_metal::MetalContext::instance().get_cluster();
@@ -2839,10 +2844,11 @@ public:
         const bool fd_kernels_on_same_core = (phys_prefetch == phys_disp);
 
         // prefetch_sync_sem: dispatch signals prefetch when a stall round-trip is done.
-        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
+        const uint32_t pf_sync_sem =
+            tt_metal::CreateSemaphore(program, {prefetch_logical}, 0u, cq_core_type);
         uint32_t di_sync_sem = pf_sync_sem;
         if (!fd_kernels_on_same_core) {
-            di_sync_sem = tt_metal::CreateSemaphore(program, {Common::dispatch_core(this->device_)}, 0u);
+            di_sync_sem = tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
             TT_FATAL(
                 pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
         }
@@ -2850,9 +2856,9 @@ public:
         // downstream_cb_sem on prefetch (init=dispatch_buffer_pages, the credit pool); dispatch_cb_sem on
         // dispatch (init=0, the received-pages count).
         const uint32_t pf_downstream_cb_sem =
-            tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, dispatch_buffer_pages);
+            tt_metal::CreateSemaphore(program, {prefetch_logical}, dispatch_buffer_pages, cq_core_type);
         const uint32_t di_dispatch_cb_sem =
-            tt_metal::CreateSemaphore(program, {Common::dispatch_core(this->device_)}, 0u);
+            tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
         if (!fd_kernels_on_same_core) {
             TT_FATAL(
                 pf_downstream_cb_sem == di_dispatch_cb_sem,
@@ -2882,32 +2888,14 @@ public:
             entry_size,
             phys_prefetch,
             phys_disp);
-        // On Quasar the experimental API auto-assigns DM cores in creation order, so prefetch must be
-        // created before dispatch to land on DM0 (dispatch then gets DM1). is_legacy_kernel ports the
-        // WH/BH kernel unchanged.
-        auto create_fd_kernel = [&](const std::string& kernel_path,
-                                    const CoreCoord& core,
-                                    const std::map<std::string, std::string>& defines) -> tt_metal::KernelHandle {
-            if (this->device_->arch() == tt::ARCH::QUASAR) {
-                return tt::tt_metal::experimental::quasar::CreateKernel(
-                    program,
-                    kernel_path,
-                    core,
-                    tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                        .num_threads_per_cluster = 1, .defines = defines, .is_legacy_kernel = true});
-            }
-            return tt_metal::CreateKernel(
-                program,
-                kernel_path,
-                {core},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::NOC_0,
-                    .defines = defines});
-        };
-        const tt_metal::KernelHandle prefetch_kernel = create_fd_kernel(
-            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp", Common::sd_prefetch_core, prefetch_defines);
-        tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
+        const tt_metal::KernelHandle prefetch_kernel = Common::create_sd_cq_kernel(
+            program,
+            this->device_,
+            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+            prefetch_logical,
+            Common::prefetch_dm(),
+            prefetch_defines);
+        tt_metal::SetRuntimeArgs(program, prefetch_kernel, prefetch_logical, {0u, 0u, 0u});
 
         const uint32_t dev_completion_base = dev_hugepage_base + this->sd_issue_queue_size();
         auto dispatch_defines = Common::make_sd_dispatch_defines(
@@ -2922,10 +2910,14 @@ public:
             memmap.dispatch_buffer_base(),
             dev_completion_base,
             this->sd_completion_queue_size());
-        // prefetch already occupies DM0 on this shared core, so dispatch auto-assigns to DM1.
-        const tt_metal::KernelHandle dispatch_kernel = create_fd_kernel(
-            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp", Common::dispatch_core(this->device_), dispatch_defines);
-        tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::dispatch_core(this->device_), {0u, 0u, 0u});
+        const tt_metal::KernelHandle dispatch_kernel = Common::create_sd_cq_kernel(
+            program,
+            this->device_,
+            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+            dispatch_logical,
+            Common::dispatch_dm(),
+            dispatch_defines);
+        tt_metal::SetRuntimeArgs(program, dispatch_kernel, dispatch_logical, {0u, 0u, 0u});
 
         // Initialize the dispatcher's completion queue write/read pointers in L1, mirroring
         // what topology.cpp does for FD mode.  The kernel reads this slot at startup; without
@@ -3001,7 +2993,7 @@ public:
             quasar_completion_buf_.resize(Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE);
             return quasar_completion_buf_.data();
         }
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& memmap = Common::sd_dispatch_mem_map(device_);
         const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         const ChipId mmio_id =
             tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
@@ -3018,9 +3010,8 @@ public:
         if (Common::is_quasar_sim()) {
             // Read the dispatch kernel's DRAM completion writes into the host staging buffer so
             // device_data.validate() sees the correct data.
-            const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
-            const CoreCoord phys_disp =
-                this->device_->worker_core_from_logical_core(Common::dispatch_core(this->device_));
+            const auto& memmap = Common::sd_dispatch_mem_map(device_);
+            const CoreCoord phys_disp = Common::sd_virtual_core(this->device_, Common::dispatch_core(this->device_));
             const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
             const uint32_t completion_q_wr_l1 =
                 memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
