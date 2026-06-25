@@ -19,26 +19,28 @@ Model Configurations:
 BH adaptation: uses init_device_compute_kernel_config instead of WormholeComputeKernelConfig.
 """
 
-import os
 import math
-from unittest import mock
-
-import torch
+import os
 from dataclasses import dataclass, replace
 from itertools import product
-from typing import List, Dict, Sequence, Tuple
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-import ttnn
-from ttnn.operations.ccl import Topology
-from loguru import logger
+from typing import Dict, List, Sequence, Tuple
+from unittest import mock
+
 import pytest
+import torch
+from loguru import logger
+from ttnn.operations.ccl import Topology
+
+import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
 # ============================================================================
 from tests.nightly.sdpa_perf_utils import MeshConfig
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_pcc,
+)
 
 MESH_CONFIG = MeshConfig.detect()
 
@@ -247,10 +249,12 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 
 from tests.nightly.sdpa_perf_utils import (
     ARCH_CONSTANTS,
-    post_process_ops_log,
+)
+from tests.nightly.sdpa_perf_utils import compute_math_utilization as compute_ring_joint_utilization
+from tests.nightly.sdpa_perf_utils import (
     compute_sdpa_flops,
-    compute_math_utilization as compute_ring_joint_utilization,
     create_balanced_chunk_order,
+    post_process_ops_log,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
@@ -1361,6 +1365,7 @@ def run_ring_joint_sdpa_chunked(
     persistent_buffer_mode: str = "exact_per_chunk",
     use_ring_mla: bool = False,
     do_check: bool = True,
+    reuse_kv_buffer: bool = False,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1395,6 +1400,15 @@ def run_ring_joint_sdpa_chunked(
         assert model.nhk == 1, f"ring_mla requires one shared latent K/V head, got nhk={model.nhk}"
         assert not indexed_nd_sharded_kv_cache, "ring_mla chunked path here does not use the indexed ND-sharded cache"
         assert model.d_v <= model.d_k, f"latent V (d_v={model.d_v}) must fit within the K/V latent (d_k={model.d_k})"
+
+    # reuse_kv_buffer: reuse one fixed, oversized KV cache across all chunks (logical_n / kv_actual_isl
+    # grow per chunk) instead of a fresh right-sized input each chunk. Perf-only (pad-rotation permutes
+    # the output); covers both ring_mla and classic separate-K/V.
+    if reuse_kv_buffer:
+        assert persistent_buffer_mode == "reuse_max", "reuse_kv_buffer requires reuse_max"
+        assert not do_check, "reuse_kv_buffer is perf-only (pad-rotation permutes output; no PCC check)"
+        assert num_iterations == 1, "reuse_kv_buffer is a single-pass perf path"
+        assert not indexed_nd_sharded_kv_cache, "reuse_kv_buffer uses its own oversized cache layout"
     if indexed_nd_sharded_kv_cache:
         assert BATCH_SIZE == 1, "Indexed K/V cache test path assumes query batch is 1"
         assert (
@@ -1614,11 +1628,55 @@ def run_ring_joint_sdpa_chunked(
         assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} not divisible by sp_size {sp_size}"
         assert slab_rows % 32 == 0, f"slab_rows {slab_rows} not tile-aligned (TILE_HEIGHT=32)"
 
+        # Oversized cache reused across chunks: strictly larger than any chunk's valid prefix, so its
+        # stable shape hits one cached program.
+        reuse_kv_stable_seq = (math.ceil(total_seq / chunk_size) + 1) * chunk_size
+
         k_memory_config = nd_sharded_dram_memory_config(mesh_device, d_k) if indexed_nd_sharded_kv_cache else None
         v_memory_config = nd_sharded_dram_memory_config(mesh_device, d_v) if indexed_nd_sharded_kv_cache else None
 
         def prepare_chunk_inputs(i):
             s, e = i * chunk_size, (i + 1) * chunk_size
+
+            if reuse_kv_buffer:
+                # Pad-rotation layout for the [0, s) prefix + new [s, e) chunk, then grow each device's
+                # slab to reuse_kv_stable_seq with a garbage tail. The tail is never read iff the gather
+                # honours logical_n=e / kv_actual_isl=s (set in run_chunk_call).
+                Q_chunk, K_chunk = Q_full[:, :, s:e, :].contiguous(), K_full[:, :, s:e, :].contiguous()
+                stable_per_dev = reuse_kv_stable_seq // sp_size
+
+                def oversize(host, nh, head_dim):
+                    seq_per_dev = host.shape[2] // sp_size
+                    assert stable_per_dev >= seq_per_dev, "reuse_kv_stable_seq too small for chunk's valid prefix"
+                    out = torch.randn(host.shape[0], nh, sp_size, stable_per_dev, head_dim, dtype=host.dtype) * 100
+                    out[:, :, :, :seq_per_dev, :] = host.reshape(host.shape[0], nh, sp_size, seq_per_dev, head_dim)
+                    return out.reshape(host.shape[0], nh, reuse_kv_stable_seq, head_dim)
+
+                if use_ring_mla:
+                    q_host, kv_host, *_ = build_kv_pad_rotation_mla_inputs(
+                        K_full[:, :, :s, :], Q_chunk, K_chunk, s, sp_size, slab_rows
+                    )
+                    return (s, e, b, None, upload_q(q_host), upload_kv(oversize(kv_host, nhk, d_k)), None)
+
+                q_host, k_host, v_host, *_ = build_kv_pad_rotation_inputs(
+                    K_full[:, :, :s, :],
+                    V_full[:, :, :s, :],
+                    Q_chunk,
+                    K_chunk,
+                    V_full[:, :, s:e, :].contiguous(),
+                    s,
+                    sp_size,
+                    slab_rows,
+                )
+                return (
+                    s,
+                    e,
+                    b,
+                    None,
+                    upload_q(q_host),
+                    upload_k(oversize(k_host, nhk, d_k)),
+                    upload_v(oversize(v_host, nhv, d_v)),
+                )
 
             Q_chunk = Q_full[:, :, s:e, :].contiguous()
             K_balanced = to_balanced_growing_cache_layout(K_full, sp_size, chunk_size, i)
@@ -1685,7 +1743,8 @@ def run_ring_joint_sdpa_chunked(
                         persistent_output_buffer_kv=persistent_output_buffer_k,
                         head_dim_v=d_v,
                         logical_n=e,
-                        is_balanced=is_balanced,
+                        # kv_actual_isl requires is_balanced=False.
+                        is_balanced=False if reuse_kv_buffer else is_balanced,
                         program_config=program_config,
                         compute_kernel_config=compute_kernel_config,
                         dim=2,
@@ -1697,6 +1756,7 @@ def run_ring_joint_sdpa_chunked(
                         subdevice_id=worker_sub_device_id,
                         ccl_core_grid_offset=(ccl_column, 0),
                         use_column_major_ccl=True,
+                        kv_actual_isl=s if reuse_kv_buffer else None,
                     )
                     return tt_out
 
@@ -1706,7 +1766,8 @@ def run_ring_joint_sdpa_chunked(
                     tt_V,
                     e,
                     is_causal=True,
-                    is_balanced=is_balanced,
+                    # kv_actual_isl requires is_balanced=False.
+                    is_balanced=False if reuse_kv_buffer else is_balanced,
                     p_buf_k=persistent_output_buffer_k,
                     p_buf_v=persistent_output_buffer_v,
                     program_config=program_config,
@@ -1719,6 +1780,7 @@ def run_ring_joint_sdpa_chunked(
                     worker_sub_device_id=worker_sub_device_id,
                     ccl_column=ccl_column,
                     kv_cache_batch_idx=kv_cache_batch_idx_arg,
+                    kv_actual_isl=s if reuse_kv_buffer else None,
                 )
             except Exception as exc:
                 op_name = "ring_mla" if use_ring_mla else "SDPA"
@@ -1744,8 +1806,10 @@ def run_ring_joint_sdpa_chunked(
         determinism_mismatch_marker = None
         shared_persistent_buffers = None
         if persistent_buffer_mode == "reuse_max":
+            # The gather buffer must hold the full physical input — the oversized cache under reuse_kv_buffer.
+            reuse_seq = reuse_kv_stable_seq if reuse_kv_buffer else total_seq
             shared_persistent_buffers = (
-                create_ring_mla_kv_buffer(total_seq, b) if use_ring_mla else create_persistent_buffers(total_seq, b)
+                create_ring_mla_kv_buffer(reuse_seq, b) if use_ring_mla else create_persistent_buffers(reuse_seq, b)
             )
 
         for i in range(n_chunks):
@@ -3064,6 +3128,7 @@ def test_ring_joint_attention_sdpa_determinism(model_names):
     RING_MLA_TEST_CONFIGS,
     ids=RING_MLA_TEST_CONFIG_IDS,
 )
+@skip_with_llk_assert("ring_mla deterministic replay is timing-sensitive with LLK asserts enabled. Issue #47906.")
 def test_ring_mla_determinism(
     b,
     sq,
@@ -3342,6 +3407,7 @@ else:
     RING_JOINT_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_JOINT_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
 ):
@@ -3566,6 +3632,31 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, qk_configs, chun
     )
 
 
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,qk_configs",
+    CHUNKED_TEST_CONFIGS,
+    ids=CHUNKED_TEST_CONFIG_IDS,
+)
+def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
+    """Classic separate-K/V ring joint SDPA chunked prefill without the CPU reference (profiled by
+    test_ring_joint_attention_create_chunked_perf_table). reuse_kv: one oversized cache reused across
+    chunks; fresh_kv: a per-chunk right-sized input."""
+    mesh_config = MESH_CONFIG
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
+        chunk_size=chunk_size,
+        qk_configs=qk_configs,
+        persistent_buffer_mode="reuse_max",
+        do_check=False,
+        reuse_kv_buffer=reuse_kv_buffer,
+    )
+
+
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,qk_configs",
@@ -3591,14 +3682,17 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
 # directly; it is driven by test_ring_mla_chunked_perf_check via run_device_profiler (which sets
 # CI=false in the subprocess). Mirrors the test_ring_joint_attention_sdpa_sweep_perf_impl pattern.
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,qk_configs",
     RING_MLA_CHUNKED_TEST_CONFIGS,
     ids=RING_MLA_CHUNKED_TEST_CONFIG_IDS,
 )
-def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size):
-    """ring_mla chunked prefill without the CPU reference — profiled by the chunked perf check."""
+def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
+    """ring_mla chunked prefill without the CPU reference (profiled by the perf table and check).
+    reuse_kv: one oversized cache reused across chunks; fresh_kv (what the CI perf check profiles):
+    a per-chunk right-sized input."""
     mesh_config = MESH_CONFIG
 
     run_ring_joint_sdpa_chunked(
@@ -3609,6 +3703,7 @@ def test_ring_mla_chunked_perf_impl(model_name, qk_configs, chunk_size):
         persistent_buffer_mode="reuse_max",
         use_ring_mla=True,
         do_check=False,
+        reuse_kv_buffer=reuse_kv_buffer,
     )
 
 
@@ -3654,7 +3749,16 @@ def test_ring_mla_chunked_determinism(model_name, qk_configs, chunk_size):
 
 # === TEST 8: CHUNKED-PREFILL PERF TABLE (skipped on CI) ===
 def _run_chunked_perf_table(
-    mesh_config, model, model_name, q_chunk_size, k_chunk_size, chunk_size, accuracy_test_name, subdir, label
+    mesh_config,
+    model,
+    model_name,
+    q_chunk_size,
+    k_chunk_size,
+    chunk_size,
+    accuracy_test_name,
+    subdir,
+    label,
+    id_suffix="",
 ):
     """Run chunked prefill once with tracy and print a per-chunk math-util table.
 
@@ -3682,7 +3786,7 @@ def _run_chunked_perf_table(
     chunk_indices = [only_chunk] if only_chunk is not None else list(range(n_chunks))
     num_profiled = len(chunk_indices)
 
-    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}"
+    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}{id_suffix}"
     command = f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::{accuracy_test_name}[{config_id}]"
 
     float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]", "PM FPU UTIL (%)"]
@@ -3798,7 +3902,9 @@ def _run_chunked_perf_table(
     ids=CHUNKED_CONFIG_IDS,
 )
 def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size):
-    """Per-chunk math-util table for the classic separate-K/V chunked-prefill path."""
+    """Per-chunk math-util + duration table for the classic separate-K/V chunked-prefill path,
+    profiling the reuse_kv variant (one oversized cache reused across chunks). Per-chunk device time
+    tracks the logical_n-bounded gather, exposing whether the gather honours that bound."""
     _run_chunked_perf_table(
         MESH_CONFIG,
         CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
@@ -3806,9 +3912,10 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
         q_chunk_size,
         k_chunk_size,
         chunk_size,
-        accuracy_test_name="test_ring_joint_attention_sdpa_chunked_accuracy",
+        accuracy_test_name="test_ring_joint_attention_chunked_perf_impl",
         subdir="ttnn_ring_joint_sdpa_chunked_performance",
-        label="Ring Joint Chunked-Prefill",
+        label="Ring Joint Chunked-Prefill (reuse KV buffer)",
+        id_suffix="-reuse_kv",
     )
 
 
@@ -3821,7 +3928,9 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
     ids=RING_MLA_CHUNKED_CONFIG_IDS,
 )
 def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size):
-    """Per-chunk math-util table for the ring_mla (latent V) chunked-prefill path."""
+    """Per-chunk math-util + duration table for the ring_mla chunked-prefill path, profiling the
+    reuse_kv variant (one oversized cache reused across chunks). Per-chunk device time tracks the
+    logical_n-bounded gather, exposing whether the gather honours that bound."""
     _run_chunked_perf_table(
         MESH_CONFIG,
         RING_MLA_CHUNKED_MODEL_CONFIGS[model_name],
@@ -3829,9 +3938,10 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
         q_chunk_size,
         k_chunk_size,
         chunk_size,
-        accuracy_test_name="test_ring_mla_chunked_accuracy",
+        accuracy_test_name="test_ring_mla_chunked_perf_impl",
         subdir="ttnn_ring_mla_chunked_performance",
-        label="Ring MLA Chunked-Prefill",
+        label="Ring MLA Chunked-Prefill (reuse KV buffer)",
+        id_suffix="-reuse_kv",
     )
 
 
@@ -3863,6 +3973,7 @@ else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_MLA_CHUNKED_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via tracy and assert
@@ -3881,7 +3992,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
     perf_chunk = n_chunks - 1  # final chunk: largest K/V prefix + current chunk (simulates galaxy 50k+5k)
 
-    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}"
+    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
     subdir = "ttnn_ring_mla_chunked_perf_check"
     command = (
         f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_impl[{config_id}]"

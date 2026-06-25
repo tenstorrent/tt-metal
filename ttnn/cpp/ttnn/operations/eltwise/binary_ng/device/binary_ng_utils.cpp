@@ -148,7 +148,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, [[maybe_unused]] std::optional<DataType> dtype) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -204,14 +205,14 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::EQ:
-            if (is_sfpu_op() && (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16)) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::EQ;
             } else {
                 postprocess = unary::UnaryOpType::EQZ;
             }
             break;
         case BinaryOpType::NE:
-            if (is_sfpu_op() && (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16)) {
+            if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::NE;
             } else {
                 postprocess = unary::UnaryOpType::NEZ;
@@ -529,15 +530,19 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
             return {"le_binary_tile_init();", "le_binary_tile"};
         case EQ:
-            if (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16) {
-                return {"eq_binary_tile_init();", "eq_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("eq_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("eq_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            TT_THROW("SFPU EQ binary tile is only defined for Float32");
+            return {"eq_binary_tile_init();", "eq_binary_tile"};
         case NE:
-            if (dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16) {
-                return {"ne_binary_tile_init();", "ne_binary_tile"};
+            if (int_data_format) {
+                return {
+                    fmt::format("ne_int_tile_init<DataFormat::{}>();", *int_data_format),
+                    fmt::format("ne_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            TT_THROW("SFPU NE binary tile is only defined for Float32");
+            return {"ne_binary_tile_init();", "ne_binary_tile"};
         case WHERE: {
             const char* data_format = (dtype == DataType::INT32)     ? "Int32"
                                       : (dtype == DataType::UINT32)  ? "UInt32"

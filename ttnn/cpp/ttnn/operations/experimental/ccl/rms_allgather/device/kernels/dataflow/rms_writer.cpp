@@ -94,7 +94,7 @@ void kernel_main() {
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
     const uint32_t eps = get_arg_val<uint32_t>(base_post_rt + 1);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);

@@ -388,37 +388,6 @@ SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
-ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
-    bool is_chunked_prefill = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
-    bool flexible_chunked = attrs.chunk_start_idx_tensor.has_value();
-
-    const Tensor& q = tensors.q;
-    const Tensor& k = tensors.k;
-    const Tensor& v = tensors.v.value_or(tensors.k);
-
-    const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
-    const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
-    operation::Hash hash = operation::hash_operation<SDPAOperation>(
-        attrs.head_dim_v,
-        attrs.scale,
-        attrs.sliding_window_size,
-        attrs.output_mem_config,
-        attrs.program_config,
-        attrs.is_causal,
-        is_chunked_prefill,
-        flexible_chunked,
-        chunk_start_idx_for_hash,
-        attrs.compute_kernel_config,
-        q,
-        k,
-        v,
-        tensors.attn_mask,
-        page_table_for_hash,
-        tensors.attention_sink,
-        attrs.use_mla);
-    return hash;
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>
 SDPAOperation::create_op_performance_model(
     const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {

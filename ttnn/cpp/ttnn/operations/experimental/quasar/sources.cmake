@@ -22,6 +22,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     binary_ng/types.hpp
     binary/binary.hpp
     binary/binary_composite.hpp
+    fold/fold.hpp
+    interleaved_to_sharded/interleaved_to_sharded.hpp
+    sharded_to_interleaved/sharded_to_interleaved.hpp
+    to_memory_config/to_memory_config_op.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -102,11 +106,25 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
     binary_ng/device/binary_ng_program_factory.cpp
+    binary_ng/device/binary_ng_metal_v2_factory.cpp
     binary_ng/device/binary_ng_utils.cpp
     # binary (host front-end: add/subtract/multiply/... -> quasar binary_ng device op)
     binary/binary.cpp
     binary/common/binary_op_utils.cpp
     binary/device/binary_composite_op.cpp
+    # fold (compositional: own device op + internal pad/transpose/slice/reshard -> quasar)
+    fold/fold.cpp
+    fold/device/fold_device_op.cpp
+    fold/device/fold_multi_core_program_factory.cpp
+    fold/device/fold_multi_core_dram_program_factory.cpp
+    # to_memory_config trio (interleaved_to_sharded + sharded_to_interleaved + to_memory_config dispatcher)
+    interleaved_to_sharded/interleaved_to_sharded.cpp
+    interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
+    interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
+    sharded_to_interleaved/sharded_to_interleaved.cpp
+    sharded_to_interleaved/device/sharded_to_interleaved_device_operation.cpp
+    sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp
+    to_memory_config/to_memory_config_op.cpp
     # matmul
     matmul/matmul.cpp
     matmul/device/matmul_device_operation.cpp
