@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccache-diagnose.sh — targeted at tt_metal/hal.cpp
+# ccache-diagnose.sh
 set -euo pipefail
 
 BUILD_DIR="${1:?Usage: $0 <cmake-build-dir>}"
@@ -7,12 +7,13 @@ BUILD_DIR="${1:?Usage: $0 <cmake-build-dir>}"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-# Find the specific entry for hal.cpp
-ENTRY=$(jq 'map(select(.file | test("tt_metal/hal\\.cpp$"))) | first' \
+ENTRY=$(jq 'map(select(.file == "/work/tt-train/sources/ttml/schedulers/cosine_annealing_scheduler.cpp")) | first' \
   "$BUILD_DIR/compile_commands.json")
 
 if [[ "$ENTRY" == "null" || -z "$ENTRY" ]]; then
-  echo "ERROR: tt_metal/hal.cpp not found in compile_commands.json"
+  echo "ERROR: cosine_annealing_scheduler.cpp not found in compile_commands.json"
+  echo "Nearby entries:"
+  jq -r '.[].file' "$BUILD_DIR/compile_commands.json" | grep -i "scheduler\|ttml\|tt-train" || true
   exit 1
 fi
 
@@ -70,13 +71,10 @@ echo ""
 echo "========================================"
 echo "SECTION 7: preprocessed output (.ii)"
 echo "========================================"
-# Strip the -o flag and replace the compiler with clang++ -E to preprocess only.
-# Also strip -c so clang doesn't complain about -E -c together.
 PREPROCESS_CMD=$(echo "$CMD" \
   | sed 's| -o [^ ]*||g' \
   | sed 's| -c | |g')
 
-# Extract the compiler (first token) and the rest of the flags
 COMPILER=$(echo "$PREPROCESS_CMD" | awk '{print $1}')
 FLAGS=$(echo "$PREPROCESS_CMD" | cut -d' ' -f2-)
 
