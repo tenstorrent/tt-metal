@@ -5,9 +5,6 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt_stl/reflection.hpp>
 #include "dispatch_core_common.hpp"
-#include <tt-metalium/cluster.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/hal.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -16,77 +13,6 @@
 
 namespace tt::tt_metal {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-// Single source of truth for the default axis given an arch and fabric tensix config.
-DispatchCoreAxis default_dispatch_core_axis(tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    if (arch == tt::ARCH::BLACKHOLE && fabric_tensix_config == tt_fabric::FabricTensixConfig::DISABLED) {
-        return DispatchCoreAxis::COL;
-    }
-    return DispatchCoreAxis::ROW;
-}
-
-DispatchCoreType cluster_aware_dispatch_core_type() {
-    const auto cluster_type = tt::tt_metal::GetClusterType();
-    if (cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-        cluster_type == tt::tt_metal::ClusterType::N300_2x2) {
-        return DispatchCoreType::ETH;
-    }
-    return DispatchCoreType::WORKER;
-}
-
-void validate_dispatch_core_config(
-    std::optional<DispatchCoreType> dispatch_core_type,
-    std::optional<DispatchCoreAxis> dispatch_core_axis,
-    tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    if (dispatch_core_type.has_value() && dispatch_core_axis.has_value() &&
-        dispatch_core_type.value() == DispatchCoreType::ETH && dispatch_core_axis.value() == DispatchCoreAxis::COL) {
-        TT_THROW("COL axis is not supported for ETH dispatch core type");
-    }
-
-    if (dispatch_core_axis.has_value() && dispatch_core_axis.value() == DispatchCoreAxis::ROW &&
-        tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE &&
-        fabric_tensix_config != tt_fabric::FabricTensixConfig::MUX) {
-        TT_THROW("ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled");
-    }
-}
-
-// Shared resolution: validate the request, then fill unspecified fields. The two public factories
-// only differ in the default type used when the caller does not specify one.
-DispatchCoreConfig resolve_dispatch_core_config(
-    DispatchCoreType default_type,
-    std::optional<DispatchCoreType> dispatch_core_type,
-    std::optional<DispatchCoreAxis> dispatch_core_axis,
-    tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    validate_dispatch_core_config(dispatch_core_type, dispatch_core_axis, fabric_tensix_config);
-    return DispatchCoreConfig(
-        dispatch_core_type.value_or(default_type),
-        dispatch_core_axis.value_or(default_dispatch_core_axis(tt::tt_metal::hal::get_arch(), fabric_tensix_config)));
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-DispatchCoreConfig DispatchCoreConfig::create_with_max_worker_availability(
-    std::optional<DispatchCoreType> dispatch_core_type,
-    std::optional<DispatchCoreAxis> dispatch_core_axis,
-    tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    return CMAKE_UNIQUE_NAMESPACE::resolve_dispatch_core_config(
-        CMAKE_UNIQUE_NAMESPACE::cluster_aware_dispatch_core_type(),
-        dispatch_core_type,
-        dispatch_core_axis,
-        fabric_tensix_config);
-}
-
-DispatchCoreConfig DispatchCoreConfig::create_with_max_dispatch_performance(
-    std::optional<DispatchCoreType> dispatch_core_type,
-    std::optional<DispatchCoreAxis> dispatch_core_axis,
-    tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    return CMAKE_UNIQUE_NAMESPACE::resolve_dispatch_core_config(
-        DispatchCoreType::WORKER, dispatch_core_type, dispatch_core_axis, fabric_tensix_config);
-}
-
 DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
     // All internal callers should use resolve_dispatch_core_axis(arch, fabric_tensix_config) instead.
 
@@ -94,8 +20,11 @@ DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
     // if we already have one in MetalEnv
     // TOOD: https://github.com/tenstorrent/tt-metal/issues/39974
     if (MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return CMAKE_UNIQUE_NAMESPACE::default_dispatch_core_axis(
-            MetalContext::instance().get_cluster().arch(), MetalContext::instance().get_fabric_tensix_config());
+        if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+            if (MetalContext::instance().get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+                return DispatchCoreAxis::COL;
+            }
+        }
     }
     return DispatchCoreAxis::ROW;
 }
@@ -106,7 +35,10 @@ DispatchCoreAxis resolve_dispatch_core_axis(
     if (axis.has_value()) {
         return axis.value();
     }
-    return CMAKE_UNIQUE_NAMESPACE::default_dispatch_core_axis(arch, fabric_tensix_config);
+    if (arch == tt::ARCH::BLACKHOLE && fabric_tensix_config == tt_fabric::FabricTensixConfig::DISABLED) {
+        return DispatchCoreAxis::COL;
+    }
+    return DispatchCoreAxis::ROW;
 }
 
 CoreType get_core_type_from_config(const DispatchCoreConfig& config) {

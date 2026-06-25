@@ -35,9 +35,7 @@ class DispatchCoreConfig(_DispatchCoreConfig):
         axis: Optional[DispatchCoreAxis] = None,
         fabric_tensix_config=None,
     ):
-        if fabric_tensix_config is None:
-            fabric_tensix_config = ttnn.FabricTensixConfig.DISABLED
-        resolved_config = _DispatchCoreConfig.create_with_max_worker_availability(
+        resolved_config = ttnn._ttnn.device.create_dispatch_core_config(
             type=type, axis=axis, fabric_tensix_config=fabric_tensix_config
         )
         super().__init__(resolved_config.type, resolved_config.axis)
