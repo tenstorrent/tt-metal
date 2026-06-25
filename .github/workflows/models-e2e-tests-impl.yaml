@@ -148,10 +148,11 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Download Voxtral TTS model weights (QB2 / yyz4-mnt-models)
-        if: ${{ contains(matrix.test-group.name, 'Voxtral') && matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' }}
+        if: ${{ contains(matrix.test-group.name, 'Voxtral') && (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' || matrix.test-group['weights-cache-mode'] == 'cloud-mlperf') }}
         timeout-minutes: 30
         run: |
           set -e
+          export HF_HUB_OFFLINE=0
           mkdir -p /tmp/voxtral_hf_cache/hub
           python3 - <<'PY'
           import os
