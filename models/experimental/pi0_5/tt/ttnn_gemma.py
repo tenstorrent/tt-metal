@@ -939,55 +939,15 @@ class GemmaMLPTTNN:
 
         self._md_denoise = _os_md.environ.get("PI0_MD_DENOISE", "").lower() in ("1", "true", "yes", "on")
         if self._md_denoise:
-            # Pad gate/up N: 4096→6144, down K: 4096→6144.
-            # _md_n_cores(6144)=96 on P150 (6144//32=192>120→96); partial K-split (k_blocks=1, n_blocks=96).
-            # Zero-padding is exact (bf8 zero×any=0) → output identical to unpadded → PCC=1.
-            _PAD = 6144
-            _K_gu = self.gate_proj.shape[-2]  # 1024
-            _N_gu = self.gate_proj.shape[-1]  # 4096
-            _K_dn = self.down_proj.shape[-2]  # 4096
-            _N_dn = self.down_proj.shape[-1]  # 1024
-
-            def _pad_n(w, target_n):
-                """[K, N] → [K, target_n] by appending zero columns."""
-                wt = ttnn.to_torch(w).float()
-                pad = torch.zeros(wt.shape[0], target_n - wt.shape[1], dtype=wt.dtype)
-                return ttnn.from_torch(
-                    torch.cat([wt, pad], dim=-1).bfloat16(),
-                    dtype=ttnn.bfloat8_b,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                )
-
-            def _pad_k(w, target_k):
-                """[K, N] → [target_k, N] by appending zero rows."""
-                wt = ttnn.to_torch(w).float()
-                pad = torch.zeros(target_k - wt.shape[0], wt.shape[1], dtype=wt.dtype)
-                return ttnn.from_torch(
-                    torch.cat([wt, pad], dim=0).bfloat16(),
-                    dtype=ttnn.bfloat8_b,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                )
-
-            _gate_p = _pad_n(self.gate_proj, _PAD)  # [1024, 6144]
-            _up_p = _pad_n(self.up_proj, _PAD)  # [1024, 6144]
-            _down_p = _pad_k(self.down_proj, _PAD)  # [6144, 1024]
-
-            self._gate_nc = _md_n_cores(_gate_p.shape[-1], device)  # 96
-            self._up_nc = _md_n_cores(_up_p.shape[-1], device)  # 96
-            self._down_nc = _md_n_cores(_down_p.shape[-1], device)  # 32
-            # K_blocks=1 for all: B shard has full K height → full_width_sharded
-            self._gate_partial = False
-            self._up_partial = False
-            self._down_partial = False
-
-            self._gate_md = _md_shard_b(_gate_p, device, self._gate_nc)
-            self._up_md = _md_shard_b(_up_p, device, self._up_nc)
-            self._down_md = _md_shard_b(_down_p, device, self._down_nc)
-            ttnn.deallocate(_gate_p)
-            ttnn.deallocate(_up_p)
-            ttnn.deallocate(_down_p)
+            self._gate_nc = _md_n_cores(self.gate_proj.shape[-1], device)
+            self._up_nc = _md_n_cores(self.up_proj.shape[-1], device)
+            self._down_nc = _md_n_cores(self.down_proj.shape[-1], device)
+            self._gate_md = _md_shard_b(self.gate_proj, device, self._gate_nc)
+            self._up_md = _md_shard_b(self.up_proj, device, self._up_nc)
+            self._down_md = _md_shard_b(self.down_proj, device, self._down_nc)
+            self._gate_partial = self._gate_nc < self.gate_proj.shape[-1] // 32
+            self._up_partial = self._up_nc < self.up_proj.shape[-1] // 32
+            self._down_partial = self._down_nc < self.down_proj.shape[-1] // 32
 
         # PI0_DRAM_SHARDED_MLP_DOWN=1 — DRAM width-sharded weight variant for
         # down_proj. Per PERF_PLAYBOOKS/05 §3b + 08 §2 (decode matmul recipe).
