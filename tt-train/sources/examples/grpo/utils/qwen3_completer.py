@@ -243,7 +243,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
         The new query at absolute position ``cur_pos`` attends to cache columns
         ``[0, cur_pos]`` (causal). Mirrors ``KVCache.get_attn_mask`` in
-        examples/qwen3/utils/kv_cache.py (a row of the full causal mask).
+        ``ttml.models.qwen3.kv_cache`` (a row of the full causal mask).
         """
         mask = np.zeros((1, 1, 1, width), dtype=np.float32)
         hi = min(cur_pos, width - 1)
