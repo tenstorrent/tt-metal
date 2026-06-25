@@ -49,3 +49,25 @@ models:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
       output_file: "data/tokenized_shakespeare_llama8b"
+
+  - name: "Qwen 3 1.7B DDP=32 Shakespeare"
+    filename: "qwen3_1_7b_ddp32_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_17b_ddp.yaml"
+      - "--track_memory"
+      - "--max_steps=2048"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "Qwen/Qwen3-1.7B"
+      output_file: "data/tokenized_shakespeare_qwen3"
+
+  - name: "Tiny Deepseek v3 DDP=32 (Char) Shakespeare"
+    filename: "tiny_deepseek_v3_ddp32_char_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char_ddp.yaml"
+      - "--max_steps 1000"
+      - "--track_memory"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"

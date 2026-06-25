@@ -130,6 +130,9 @@ jobs:
             -v ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
           install_wheel: true
           run_args: |
+            ls -l /mnt/MLPerf/huggingface/hub/
+            ls -l /mnt/MLPerf/huggingface/hub/hub
+
             if [ "${{ matrix.test-group.team }}" == "train" ]; then
               # Create .pth files the same way as create_venv.sh script
               SITE_PACKAGES=$(uv pip show ttnn | sed -n 's/^Location: //p')
@@ -145,6 +148,8 @@ jobs:
               uv pip list
               uv pip install "gitpython==3.1.47" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
             fi
+
+
 
             ${{ matrix.test-group.cmd }}
       - name: Check if benchmark data directory exists
