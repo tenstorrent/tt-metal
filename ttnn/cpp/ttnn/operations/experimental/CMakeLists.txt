@@ -17,7 +17,6 @@
 
 # metalium-developers-convolutions
 add_subdirectory(adaptive_pool)
-add_subdirectory(conv1d_depthwise)
 add_subdirectory(conv3d)
 add_subdirectory(cnn)
 
@@ -78,7 +77,6 @@ target_link_libraries(
     ttnn_op_experimental_shared
     INTERFACE
         TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::Conv1dDepthwise
         TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::CCL
@@ -126,7 +124,6 @@ target_sources(
     ttnn_op_experimental_shared
     INTERFACE
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::AdaptivePool>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Conv1dDepthwise>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Conv3d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CNN>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
