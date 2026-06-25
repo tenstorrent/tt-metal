@@ -54,6 +54,22 @@ topologies:
     required: true        # failure of a required topology => non-zero aggregate exit
     extra_env: {}
 
+  # ── Additional BH coverage topology (validated via --topology, not in any --op set) ──
+  # A second BH topology proving the runner/matrix extend beyond 8xP150. applies_to_ops is empty
+  # on purpose: --op grading runs ONE primary topology per op (the grade writes a single junit, so
+  # multiple topologies per --op would overwrite each other — a runner enhancement for later).
+  # Validate directly: run_multidevice_sim_pytest.py --topology bh_galaxy_4x2_p2p -- <a (4,2) test>.
+  - name: bh_galaxy_4x2_p2p
+    arch: blackhole
+    sim_so: "{sim_bh_so}"
+    cluster_desc: "{craqsim_data}/bh/blackhole_8xGalaxy_4x2.yaml"
+    mesh_graph_desc: "{craqsim_data}/bh/blackhole_8xGalaxy_4x2_torus_x_mesh_graph_descriptor.textproto"
+    mesh_shape: [4, 2]    # dims [4,2] (LINE, RING); 8 chips. VALIDATED 2026-06-25: p2p green.
+    fabric_config: FABRIC_1D
+    applies_to_ops: []
+    required: false
+    extra_env: {}
+
   # ── Phase 2 (declared, not yet exercised here): WH T3K all-MMIO for all_gather ───────
   # all_gather is @skip_for_blackhole, so it needs the WH sim. Uses Nachiket's shipped
   # all-MMIO descriptor (fixes the remote-chip CQ-drain hang). sim-wh must be rebuilt
