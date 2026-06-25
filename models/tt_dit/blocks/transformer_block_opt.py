@@ -222,6 +222,7 @@ class TransformerBlock(Module):
         prompt: ttnn.Tensor,
         time_embed: ttnn.Tensor,
         spatial_sequence_length: int,
+        prompt_sequence_length: int,
         *,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
@@ -326,33 +327,24 @@ class TransformerBlock(Module):
 
         is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
 
-        # Attention now expects pre-gathered input on TP (no internal AGMM in to_qkv).
-        # if self.parallel_config.tensor_parallel.factor > 1:
-        #     spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
-        #         spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        #     )
-        #     prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
-        #         prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        #     )
-
         # NOTE: workaround - addcmul is less accurate with fp32 gate input
         spatial_gate_attn = ttnn.typecast(spatial_gate_attn, dtype=ttnn.bfloat16)
         if prompt_gate_attn is not None:
             prompt_gate_attn = ttnn.typecast(prompt_gate_attn, dtype=ttnn.bfloat16)
 
-        # Fused: to_out + gate * result + residual via addcmul params.
         spatial, prompt_attn = self.attn.forward(
-            spatial=spatial_normed,
-            prompt=prompt_normed,
-            spatial_rope=spatial_rope,
-            prompt_rope=prompt_rope,
-            spatial_sequence_length=spatial_sequence_length,
+            sequence_1=spatial_normed,
+            sequence_2=prompt_normed,
+            sequence_1_rope=spatial_rope,
+            sequence_2_rope=prompt_rope,
+            sequence_1_length=spatial_sequence_length,
+            sequence_2_length=prompt_sequence_length,
             addcmul_spatial_residual=spatial,
             addcmul_spatial_gate=spatial_gate_attn,
             addcmul_prompt_residual=prompt if not self.context_pre_only else None,
             addcmul_prompt_gate=prompt_gate_attn,
         )
-        # spatial = original_spatial + to_out(attn) * gate_attn (fused)
+
         if prompt_attn is not None:
             prompt = prompt_attn
 
@@ -367,7 +359,6 @@ class TransformerBlock(Module):
 
         spatial_gate_ff = ttnn.typecast(spatial_gate_ff, dtype=ttnn.bfloat16)
         if is_ring:
-            # Ring: ff1 fuses AG+GEMM internally via parallel_config; ff2 fuses RS+addcmul at final write.
             spatial = self.ff.forward_fused_addcmul(
                 spatial_normed,
                 spatial,
@@ -402,7 +393,6 @@ class TransformerBlock(Module):
 
         prompt_gate_ff = ttnn.typecast(prompt_gate_ff, dtype=ttnn.bfloat16)
         if is_ring:
-            # Ring: ff1 fuses AG+GEMM internally via parallel_config; ff2 fuses RS+addcmul at final write.
             prompt = self.ff_context.forward_fused_addcmul(
                 prompt_normed,
                 prompt,
