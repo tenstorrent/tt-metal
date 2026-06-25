@@ -32,6 +32,7 @@ void kernel_main() {
     CircularBuffer cb_src(cb_id_src);
     CircularBuffer cb_dst(cb_id_dst);
 
+#ifndef SFPU_SCALAR_IMMEDIATE
     // we only need to fill a tile with the scalar value once
     cb_src.reserve_back(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
@@ -42,6 +43,7 @@ void kernel_main() {
     FILL_WITH_VALUE(cb_src.get_write_ptr(), packed_scalar);
 #endif
     cb_src.push_back(onetile);
+#endif
 
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();

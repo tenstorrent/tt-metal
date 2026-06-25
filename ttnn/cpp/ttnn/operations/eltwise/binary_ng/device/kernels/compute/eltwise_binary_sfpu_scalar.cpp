@@ -7,6 +7,10 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
+#ifdef SFPU_SCALAR_IMMEDIATE
+#include "api/compute/eltwise_unary/fill.h"
+#endif
+
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/binary_bitwise_sfpu.h"
 #include "api/compute/binary_shift.h"
@@ -74,6 +78,44 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 }
 
 void kernel_main() {
+#ifdef SFPU_SCALAR_IMMEDIATE
+    // Tensor-scalar fast path: the scalar is splatted into a DST tile on-chip with the vectorized
+    // SFPU fill LLK instead of being materialized as a full 1024-element tile by the writer RISC.
+    // This removes the writer's per-element fill, the scalar circular-buffer (c_1) traffic, and the
+    // per-tile scalar copy_tile, so the tensor-scalar op does strictly less work than the equivalent
+    // tensor-tensor op (one fewer DRAM input stream) at every shape.
+    const uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t scalar_value = get_arg_val<uint32_t>(3);
+
+    constexpr auto cb_in_id = tt::CBIndex::c_0;
+    constexpr auto cb_out_id = tt::CBIndex::c_2;
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_out(cb_out_id);
+
+    unary_op_init_common(cb_in_id, cb_out_id);
+    BINARY_SFPU_INIT;
+
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_in_id);
+        copy_tile(cb_in_id, 0, 0);  // LHS tile -> DST 0
+        fill_tile_init();
+        FILL_LLK(1, scalar_value);  // scalar -> DST 1 (fast vectorized splat)
+        BINARY_SFPU_OP(0, 1, 0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, cb_out_id);
+        tile_regs_release();
+
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
+    }
+    return;
+#else
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 #ifdef ISCLOSE_OP
     const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
@@ -118,4 +160,5 @@ void kernel_main() {
 
     // Pop the scalar tile from RHS CB
     cb_post_rhs.pop_front(1);
+#endif
 }

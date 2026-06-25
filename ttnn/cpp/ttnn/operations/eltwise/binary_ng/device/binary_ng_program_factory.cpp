@@ -556,6 +556,36 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool inputs_row_major =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, has_sharding);
 
+    // Tensor-scalar SFPU fast path.  For integer bitwise/shift scalar ops, splat the scalar into a
+    // DST tile on-chip with the vectorized SFPU fill LLK instead of having the writer RISC fill a
+    // full 1024-element scalar tile in L1.  This removes the writer's per-element fill, the scalar
+    // circular-buffer traffic, and the per-tile scalar copy_tile, so the tensor-scalar op does
+    // strictly less work than the equivalent tensor-tensor op (one fewer DRAM input stream) at every
+    // shape.  Restricted to ops whose SFPU form is a plain (lhs op scalar) with no pre/post
+    // activations or dtype change, so the filled tile is a correct stand-in for the second operand.
+    bool scalar_immediate_op_supported = false;
+    switch (op_type) {
+        case BinaryOpType::BITWISE_AND:
+        case BinaryOpType::BITWISE_OR:
+        case BinaryOpType::BITWISE_XOR:
+        case BinaryOpType::LEFT_SHIFT:
+        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT: scalar_immediate_op_supported = true; break;
+        default: break;
+    }
+    const bool use_scalar_immediate =
+        scalar_immediate_op_supported && !b.has_value() && is_sfpu_op && !is_where_op && !inputs_row_major &&
+        !is_quant_op && (a_dtype == DataType::INT32 || a_dtype == DataType::UINT32) && a_dtype == c_dtype &&
+        operation_attributes.lhs_activations.empty() && operation_attributes.rhs_activations.empty() &&
+        operation_attributes.post_activations.empty() && !op_config.process_lhs.has_value() &&
+        !op_config.process_rhs.has_value() && !op_config.postprocess.has_value();
+    if (use_scalar_immediate) {
+        compute_kernel_defines["SFPU_SCALAR_IMMEDIATE"] = "1";
+        compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        compute_kernel_defines["FILL_LLK"] =
+            (a_dtype == DataType::UINT32) ? "fill_tile_uint<DataFormat::UInt32>" : "fill_tile_int<DataFormat::Int32>";
+    }
+
     // CB: a (c_0)
     {
         uint32_t a_num_pages = a_num_tiles_per_shard.value_or(2);
@@ -680,6 +710,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     auto writer_defines = make_dataflow_defines(b_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
+    if (use_scalar_immediate) {
+        // Scalar is consumed directly by the SFPU as an immediate; no scalar tile to fill.
+        writer_defines["SFPU_SCALAR_IMMEDIATE"] = "1";
+    }
 
     auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
@@ -1179,6 +1213,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
                 packed_scalar_for_reader = packed_scalar;
+                if (use_scalar_immediate) {
+                    // Deliver the packed scalar to the compute kernel as the SFPU immediate operand
+                    // (compute runtime arg index 3) instead of via a filled tile.
+                    compute_scalar_value = packed_scalar;
+                }
                 std::vector<uint32_t> writer_runtime_args;
                 if (row_major_inputs) {
                     writer_runtime_args = {
