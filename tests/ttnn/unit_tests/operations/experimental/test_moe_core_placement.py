@@ -99,3 +99,76 @@ def test_get_moe_combine_cores_avoids_mux_cores(device):
     assert (drain.x, drain.y) not in {
         (x, y) for y in range(1, 4) for x in range(1, 4)
     }, "tilize drain core overlaps mux region"
+
+
+def test_moe_worker_mcast_bbox_consistent_with_mux_placement(device):
+    """get_moe_worker_mcast_bounding_box must agree with the worker placement
+    the op actually uses when mux cores are present.
+
+    The helper accepts mux_core_range_set and forwards it to
+    select_moe_compute_cores, so the bbox reflects the real worker layout
+    regardless of mux avoidance.
+    """
+    hidden_size = 4096
+    token_parallel = 4
+    data_parallel = auto_output_width_shard_dim(hidden_size)
+    grid = device.compute_with_storage_grid_size()
+
+    # Block the eastern 2 columns — the combine strip's preferred location
+    # and the tilize 2x2 block's preferred location.
+    mux_x_start = grid.x - 2
+    mux = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(mux_x_start, 0),
+                ttnn.CoreCoord(grid.x - 1, grid.y - 1),
+            )
+        ]
+    )
+
+    combine_with_mux = ttnn.experimental.get_moe_combine_cores(
+        device, token_parallel, data_parallel, hidden_size, mux_core_range_set=mux
+    )
+    drain_with_mux = ttnn.experimental.get_moe_tilize_drain_core(
+        device, token_parallel, data_parallel, hidden_size, mux_core_range_set=mux
+    )
+
+    bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
+        device, token_parallel, data_parallel, hidden_size, mux_core_range_set=mux
+    )
+
+    def in_bbox(cx, cy):
+        return bbox.start.x <= cx <= bbox.end.x and bbox.start.y <= cy <= bbox.end.y
+
+    for c in combine_with_mux:
+        assert in_bbox(c.x, c.y), (
+            f"combine core ({c.x},{c.y}) falls outside mcast bbox "
+            f"[({bbox.start.x},{bbox.start.y})-({bbox.end.x},{bbox.end.y})]"
+        )
+
+    assert in_bbox(drain_with_mux.x, drain_with_mux.y), (
+        f"tilize drain ({drain_with_mux.x},{drain_with_mux.y}) falls outside mcast bbox "
+        f"[({bbox.start.x},{bbox.start.y})-({bbox.end.x},{bbox.end.y})]"
+    )
+
+    # The bbox must NOT extend into the mux region (no mux core should be a
+    # worker core, so the bbox should have shrunk away from the mux columns).
+    combine_no_mux = ttnn.experimental.get_moe_combine_cores(device, token_parallel, data_parallel, hidden_size)
+    bbox_no_mux = ttnn.experimental.get_moe_worker_mcast_bounding_box(
+        device, token_parallel, data_parallel, hidden_size
+    )
+    with_mux_set = {(c.x, c.y) for c in combine_with_mux}
+    no_mux_set = {(c.x, c.y) for c in combine_no_mux}
+
+    # Precondition: mux actually forced a different placement.
+    assert no_mux_set != with_mux_set, (
+        "Test setup failure: mux region did not change the combine placement. "
+        "Choose a mux region that overlaps the preferred combine strip."
+    )
+
+    # The mux-aware bbox must differ from the no-mux bbox.
+    mux_bbox_tuple = (bbox.start.x, bbox.start.y, bbox.end.x, bbox.end.y)
+    no_mux_bbox_tuple = (bbox_no_mux.start.x, bbox_no_mux.start.y, bbox_no_mux.end.x, bbox_no_mux.end.y)
+    assert mux_bbox_tuple != no_mux_bbox_tuple, (
+        f"mux shifted combine cores but the bbox did not change — " f"mux_core_range_set is not being forwarded"
+    )

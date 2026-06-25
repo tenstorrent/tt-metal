@@ -148,13 +148,14 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set,
     const uint32_t bh_ring_size) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
         combine_token_parallel_cores,
         combine_data_parallel_cores,
         hidden_size,
-        CoreRangeSet{},
+        mux_core_range_set,
         bh_ring_size);
     return selection.all_worker_cores_range_set.bounding_box();
 }
