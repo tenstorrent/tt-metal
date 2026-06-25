@@ -201,29 +201,79 @@ def _t_neighbor_pad(
     )
 
 
-# conv1d_depthwise is ~2.5x faster than the MAC fallback (one tilized matmul vs K sequential
-# slice/mul/add) and matches the unsharded device baseline to ~3.5e-4 on the full audio decode.
-# Its reduction reorders the kaiser sinc's alternating-sign taps (~1.35% RMSE vs MAC), so MAC
-# stays behind the flag as the bit-faithful baseline; conv1d is the default.
+# Depthwise tap filter runs through native ``ttnn.conv1d`` (groups=C): one tilized matmul,
+# ~2.5x faster than the MAC fallback (K sequential slice/mul/add) and matching the unsharded
+# device baseline to ~3.5e-4 on the full audio decode. Its reduction reorders the kaiser sinc's
+# alternating-sign taps (~1.35% RMSE vs MAC), so MAC stays behind the flag as the bit-faithful
+# baseline; native conv1d is the default.
 _USE_CONV1D_DEPTHWISE = True
 
 
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps on every channel):
     ``y[b, t, c] = sum_{j<K} taps[j] * x[b, t*stride + j, c]`` on an
-    already-padded ``(B, T_pad, C)`` ROW_MAJOR FLOAT32 input. Returns
+    already-padded ``(B, T_pad, C)`` ROW_MAJOR input. Returns
     ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1``.
 
-    ``cache`` is accepted for API compatibility but unused.
+    Default path is a single ``ttnn.conv1d`` (groups=C) used for all shapes; the prepared
+    conv weight is cached per channel count in ``cache`` (an opaque per-instance dict the
+    caller owns) and reused. With ``_USE_CONV1D_DEPTHWISE=False`` it falls back to the
+    bit-faithful MAC reduction (``cache`` unused).
     """
-    del cache
-    if _USE_CONV1D_DEPTHWISE:
-        del mesh_device
-        return ttnn.experimental.conv1d_depthwise(x_BTC, taps=taps, stride=stride, dtype=dtype)
-    del mesh_device
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
+
+    if _USE_CONV1D_DEPTHWISE:
+        shape_key = (C, T_pad, stride)
+        # Cache the *prepared* conv weight (the tilized/sharded tensor ttnn.conv1d returns) and feed
+        # it back on subsequent calls. A raw ROW_MAJOR weight fails conv2d's is_valid_device_conv_weights
+        # check, so conv2d pulls it back to host and re-prepares it *every* call — the host-fallback that
+        # floods (and, under trace, breaks) the T-sharded vocoder. Reusing the prepared weight takes the
+        # on-device path. Key on (C, stride, taps): the polyphase upsampler calls this twice with the same
+        # C but different sub-tap vectors through one cache, so keying on C alone would alias them.
+        wkey = ("w", C, stride, K, tuple(taps))
+        weight = cache.get(wkey)
+        prepared = weight is not None
+        if weight is None:
+            wt = torch.tensor(taps, dtype=torch.float32).reshape(1, 1, K).expand(C, 1, K).contiguous()
+            weight = ttnn.from_torch(wt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+        if "cc" not in cache:
+            cache["cc"] = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+            )
+        conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+        out, _, (weight, _bias) = ttnn.conv1d(
+            input_tensor=ttnn.reshape(x_BTC, (B, T_pad, 1, C)),
+            weight_tensor=weight,
+            device=mesh_device,
+            in_channels=C,
+            out_channels=C,
+            batch_size=B,
+            input_length=T_pad,
+            kernel_size=K,
+            stride=stride,
+            padding=0,
+            dilation=1,
+            groups=C,
+            dtype=dtype,
+            conv_config=conv_config,
+            compute_config=cache["cc"],
+            return_output_dim=True,
+            return_weights_and_bias=True,
+        )
+        # Only (re)cache when we just prepared a fresh one; the prepared weight is device-resident and
+        # reused for the life of this layer's cache (one prepare per distinct filter).
+        if not prepared:
+            cache[wkey] = weight
+        cache[shape_key] = "conv1d"
+        # conv1d emits HEIGHT_SHARDED TILE; downstream ops expect interleaved ROW_MAJOR.
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(out, (B, T_out, C))
+
+    # MAC fallback: bit-faithful baseline (K sequential slice/mul/add).
+    del mesh_device, cache
     y = None
     for j in range(K):
         w = float(taps[j])
