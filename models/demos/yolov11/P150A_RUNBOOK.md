@@ -44,6 +44,54 @@ done
 
 ---
 
+## 1b. ★ P300 ボードの場合（P150a と手順が変わる）
+
+ホストが **P150a 単機**ではなく **P300（`p300c`）ボード**のことがある。まず board type を確認:
+
+```bash
+docker run --rm --device /dev/tenstorrent/0 -v /dev/hugepages-1G:/dev/hugepages-1G \
+  "$IMG" bash -lc 'tt-smi -ls'
+# Board Type 列が "p300c" なら下記の P300 手順に従う。"p150" 系なら以降は通常手順でOK。
+```
+
+P300 は **1ボードに2チップ**載っており、両方が PCIe 露出する。`tt-smi -ls` の Board Number
+が同じものが同一ボード。例（2ボード構成）:
+
+| /dev/tenstorrent | Board Number | ボード |
+|---|---|---|
+| 0, 1 | `...924037` | A |
+| 2, 3 | `...92402c` | B |
+
+### P300 で必須の2点
+
+1. **同一ボードの2チップを両方コンテナに渡す**（`--device /dev/tenstorrent/0 --device /dev/tenstorrent/1`）。
+   - 1チップだけ渡すと `num_chips==1` → クラスタタイプが **CUSTOM** 判定になり
+     `TT_FATAL: Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type`
+     （`tt_metal/llrt/tt_cluster.cpp:273`）で起動失敗する。
+2. **初回はボードをリセットする**。2チップを渡しても、チップ間 ethernet リンクが立ち上がらず
+   `Timed out while waiting for active ethernet core ... Try resetting the board` で失敗することがある。
+   その場合:
+   ```bash
+   docker run --rm --device /dev/tenstorrent/0 --device /dev/tenstorrent/1 \
+     -v /dev/hugepages-1G:/dev/hugepages-1G "$IMG" bash -lc 'tt-smi -r 0 1'
+   #   "Re-initializing boards after reset" が出れば成功。以後 §5 の起動が通る。
+   ```
+
+> 以降の §4-1 / §5 の docker コマンドでは、`--device /dev/tenstorrent/$DEV_ID` を
+> **`--device /dev/tenstorrent/0 --device /dev/tenstorrent/1`** に置き換える（同一ボードの2チップ）。
+> テスト自体はシングルデバイス実行で、メッシュの片チップを使う。
+
+### P300 実測値（参考: device 0+1）
+
+| 項目 | P300 実測 | P150a 想定 |
+|---|---|---|
+| §5-1 BS=1 e2e | 334 FPS (PASSED) | ~368 |
+| §5-2 `[E2E-BF16]` BS=2 | ~490 FPS | ~535 |
+
+シリコンが異なるため P150a の目標値より低めになるのは正常。
+
+---
+
 ## 2. ブランチを受け取る
 
 ```bash
@@ -81,11 +129,18 @@ docker run --rm \
   "$IMG" bash -lc '
     set -e
     ./build_metal.sh --enable-ccache            # C++ 本体ビルド（初回 ~30-60分）。build/ が生成される
-    ./create_venv.sh                            # python_env を作成（Python3.10, editable install）
+    ./create_venv.sh --env-dir /tt-metal/python_env   # ★ --env-dir 必須（理由は下記）。python_env を作成（Python3.10, editable install）
     uv pip install --python /tt-metal/python_env/bin/python "ultralytics==8.3.0"  # common.py が要求
   '
 ```
 > 生成物 `build/` と `python_env/` はマウント経由でホスト側 `$REPO` に残る（次回以降は再ビルド不要）。
+>
+> **★ `--env-dir /tt-metal/python_env` が必須な理由:** dev イメージは環境変数
+> `PYTHON_ENV_DIR=/opt/venv` をプリセットしている。`create_venv.sh` はこの環境変数を
+> 既定の `./python_env` より優先するため、引数で上書きしないと `/opt/venv`（イメージ内に
+> 既存）を上書きしようとし、非対話モードで `Non-interactive mode: use --force to
+> overwrite without prompting.` と表示して中断する。`--env-dir` 指定で venv を
+> `/tt-metal/python_env` に作れば回避できる（後続手順が前提とするパスとも一致）。
 
 ### 4-1. 動作確認（任意）
 ```bash
@@ -145,6 +200,7 @@ docker run --rm --device /dev/tenstorrent/$DEV_ID \
 | `ttnn.__file__` が `None` / `No module named 'ttnn.device'` | リポジトリを `/tt-metal` にマウントし、`/tt-metal/python_env/bin/python` を使う |
 | `Querying size for a host channel that does not exist` | `-v /dev/hugepages-1G:/dev/hugepages-1G` を付け忘れ。ホストの hugepage 設定も確認 |
 | `No module named 'ultralytics'` | 手順4のvenvへの `uv pip install ultralytics==8.3.0` を実行 |
+| `create_venv.sh` が `Non-interactive mode: use --force to overwrite without prompting.` で中断 | dev イメージの `PYTHON_ENV_DIR=/opt/venv` を継承して既存 venv を上書きしようとしている。`./create_venv.sh --env-dir /tt-metal/python_env` で venv 先を明示する（手順4参照） |
 | `tt_tlb_alloc ... -12` / 次回デバイスオープン失敗 | 前回のトレースキャプチャ失敗でプロセスがデバイスを掴んだまま残留。下記で解放: |
 | | `docker kill <container>; kill -9 $(cat /proc/driver/tenstorrent/$DEV_ID/pids \| head -1)`<br>`/proc/driver/tenstorrent/$DEV_ID/pids` が空になるまで確認 |
 | `pre-commit not found`（コミット時） | `git commit --no-verify`（フック未導入環境） |
