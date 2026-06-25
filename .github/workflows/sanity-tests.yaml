@@ -122,7 +122,7 @@ on:
         required: false
         default: true
         type: boolean
-        description: "Run TTNN unit tests"
+        description: "Run TTNN sanity tests"
       run-profiler-tests:
         required: false
         default: true
@@ -138,11 +138,11 @@ on:
         default: true
         type: boolean
         description: "Run ops unit tests"
-      run-ttsim-integration-tests:
+      run-ttsim-tests:
         required: false
         default: true
         type: boolean
-        description: "Run TTSim integration tests"
+        description: "Run TTSim sanity tests"
       enable-watcher:
         required: false
         default: false
