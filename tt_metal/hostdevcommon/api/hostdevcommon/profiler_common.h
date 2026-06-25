@@ -9,6 +9,13 @@
 #define PROFILER_OPT_DO_DISPATCH_CORES (1 << 1)
 #define PROFILER_OPT_DO_TRACE_ONLY (1 << 2)
 #define PROFILER_OPT_DO_SUM (1 << 3)
+// Accumulate multiple kernel invocations into the L1 buffer before pushing to
+// DRAM. The "main"/"main child" zones use the growing wIndex (like a normal
+// DeviceZoneScopedN) instead of the fixed guaranteed slots, so successive
+// program iterations append rather than overwrite. The L1 buffer is only
+// flushed to DRAM once it is nearly full; the un-pushed residual is read back
+// directly from L1 (host ProfilerDataBufferSource::DRAM_AND_L1).
+#define PROFILER_OPT_DO_ACCUMULATE (1 << 4)
 
 namespace kernel_profiler {
 
