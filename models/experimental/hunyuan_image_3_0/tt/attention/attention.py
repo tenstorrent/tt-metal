@@ -211,6 +211,11 @@ class HunyuanTtAttention(LightweightModule):
         cos_tt: ttnn.Tensor,
         sin_tt: ttnn.Tensor,
         attention_mask=None,
+        *,
+        kv_cache=None,
+        layer_idx: int = 0,
+        use_cache: bool = False,
+        decode_step: bool = False,
     ) -> ttnn.Tensor:
         """
         Prefill forward pass.
@@ -273,6 +278,12 @@ class HunyuanTtAttention(LightweightModule):
             q_rot = self.query_norm(q_rot)
             k_rot = self.key_norm(k_rot)
 
+        if use_cache and kv_cache is not None and decode_step:
+            past_k, past_v = kv_cache.get(layer_idx)
+            if past_k is not None:
+                k_rot = ttnn.concat([past_k, k_rot], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         # ---- 4b. SP K/V all-gather -----------------------------------------
         # Q stays sequence-sharded; gather K/V along the sequence dim (2) over the
         # SP axis so every device sees the FULL sequence of keys/values. RoPE+QK-norm
@@ -283,6 +294,10 @@ class HunyuanTtAttention(LightweightModule):
             k_rot = self.ccl.all_gather(k_rot, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
             v = self.ccl.all_gather(v, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
 
+        if use_cache and kv_cache is not None:
+            kv_cache.replace(layer_idx, k_rot, v)
+
+        k_attn, v_attn = k_rot, v
         # ---- 5. GQA expansion: interleaved repeat K/V heads to match Q --------
         # PyTorch GQA: Q head i uses KV head i//grp, so expansion is interleaved:
         #   [K0,K0,K0,K0, K1,K1,K1,K1, ..., K7,K7,K7,K7]
@@ -292,35 +307,36 @@ class HunyuanTtAttention(LightweightModule):
             grp = self.num_heads // self.num_kv_heads
             # K/V seq length is the (possibly SP-gathered) full sequence, which may
             # differ from Q's sharded length — slice each by its OWN seq extent.
-            k_seq = k_rot.shape[2]
-            v_seq = v.shape[2]
+            k_seq = k_attn.shape[2]
+            v_seq = v_attn.shape[2]
             k_chunks, v_chunks = [], []
             for h in range(self.num_kv_heads):
                 kh = ttnn.slice(
-                    k_rot, [0, h, 0, 0], [1, h + 1, k_seq, self.head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    k_attn, [0, h, 0, 0], [1, h + 1, k_seq, self.head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
                 vh = ttnn.slice(
-                    v, [0, h, 0, 0], [1, h + 1, v_seq, self.head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    v_attn, [0, h, 0, 0], [1, h + 1, v_seq, self.head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
                 )
                 for _ in range(grp):
                     k_chunks.append(kh)
                     v_chunks.append(vh)
-            k_rot = ttnn.concat(k_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            v = ttnn.concat(v_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k_attn = ttnn.concat(k_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_attn = ttnn.concat(v_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # ---- 6. SDPA -------------------------------------------------------
-        is_causal = attention_mask is None
+        is_causal = attention_mask is None and not use_cache
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q_rot,
-            k_rot,
-            v,
+            k_attn,
+            v_attn,
             is_causal=is_causal,
             attn_mask=attention_mask,
             compute_kernel_config=self.compute_kernel_config,
         )
         q_rot.deallocate(True)
-        k_rot.deallocate(True)
-        v.deallocate(True)
+        if not use_cache:
+            k_attn.deallocate(True)
+            v_attn.deallocate(True)
 
         # ---- 7. Merge heads -------------------------------------------------
         # [B, num_heads, S, head_dim] → [B, S, hidden_size]

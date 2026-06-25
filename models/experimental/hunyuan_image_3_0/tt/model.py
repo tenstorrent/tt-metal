@@ -24,6 +24,8 @@
 # and fits comfortably. `layer_loader(i)` returns the state_dict for layer i,
 # keyed `model.layers.{i}.*`.
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -88,12 +90,16 @@ class HunyuanTtModel(LightweightModule):
         self.sp_factor = sp_factor
 
         # Token embedding table (ROW_MAJOR weight; ttnn.embedding emits TILE).
+        # bf8/bf4 require TILE layout and cannot back a ROW_MAJOR embedding table.
         self.embed_weight = None
         if embed_state_dict is not None:
             w = embed_state_dict["model.wte.weight"]  # [V, H]
+            embed_dtype = weight_dtype
+            if embed_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                embed_dtype = ttnn.bfloat16
             self.embed_weight = ttnn.from_torch(
                 w,
-                dtype=weight_dtype,
+                dtype=embed_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -108,7 +114,10 @@ class HunyuanTtModel(LightweightModule):
         bf16_layers = set(bf16_layers or [])
 
         self.layers = []
+        verbose = os.environ.get("HY_VERBOSE", "1") != "0"
         for i in range(num_layers):
+            if verbose:
+                print(f"[backbone] loading layer {i + 1}/{num_layers} ...", flush=True)
             sd = layer_loader(i)
             layer_dtype = ttnn.bfloat16 if i in bf16_layers else weight_dtype
             self.layers.append(
@@ -136,6 +145,8 @@ class HunyuanTtModel(LightweightModule):
                     sp_factor=sp_factor,
                 )
             )
+            if verbose:
+                print(f"[backbone] layer {i + 1}/{num_layers} ready", flush=True)
 
         self.ln_f = None
         if apply_final_norm:
@@ -162,6 +173,10 @@ class HunyuanTtModel(LightweightModule):
         seq_len: int,
         image_infos=None,
         attention_mask=None,
+        kv_cache=None,
+        use_cache: bool = False,
+        decode_step: bool = False,
+        cos_sin=None,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -187,7 +202,10 @@ class HunyuanTtModel(LightweightModule):
             raise ValueError("provide either input_ids or inputs_embeds")
 
         # Build the 2D RoPE tables once and share them across all layers.
-        cos_tt, sin_tt = self.layers[0].self_attn.rope.prepare_cos_sin(seq_len, image_infos=image_infos)
+        if cos_sin is not None:
+            cos_tt, sin_tt = cos_sin
+        else:
+            cos_tt, sin_tt = self.layers[0].self_attn.rope.prepare_cos_sin(seq_len, image_infos=image_infos)
 
         # --- Sequence-parallel entry reshard --------------------------------
         # Split the replicated inputs across sp_axis: hidden + cos/sin on the seq
@@ -230,6 +248,9 @@ class HunyuanTtModel(LightweightModule):
                 image_infos=image_infos,
                 attention_mask=attention_mask,
                 cos_sin=(cos_tt, sin_tt),
+                kv_cache=kv_cache,
+                use_cache=use_cache,
+                decode_step=decode_step,
             )
             if not caller_owns_hidden:
                 ttnn.deallocate(hidden)
