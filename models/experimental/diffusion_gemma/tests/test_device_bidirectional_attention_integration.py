@@ -26,7 +26,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
-from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward
+from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward, denoise_logits_forward
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
 
@@ -105,6 +105,40 @@ def _torch_attention_reference(hf_model, hf_text_config, layer_idx, canvas_hidde
     )
     out = out.transpose(1, 2).reshape(canvas_hidden.shape[0], canvas_hidden.shape[1], -1)
     return attn.o_proj(out)
+
+
+def _torch_denoise_logits_reference(hf_model, canvas_hidden, prompt_kv_hidden_by_layer, mask):
+    hidden = canvas_hidden
+    for layer_idx, layer in enumerate(hf_model.layers):
+        residual = hidden
+        normed = layer.input_layernorm(hidden)
+        kv_hidden = torch.cat([prompt_kv_hidden_by_layer[layer_idx], normed], dim=1)
+        hidden = _torch_attention_reference(hf_model, hf_model.config, layer_idx, normed, kv_hidden, mask)
+        hidden = layer.post_attention_layernorm(hidden)
+        hidden = residual + hidden
+
+        residual = hidden
+        hidden = layer.pre_feedforward_layernorm(hidden)
+        hidden = layer.mlp(hidden)
+        if layer.enable_moe_block:
+            hidden_1 = layer.post_feedforward_layernorm_1(hidden)
+            hidden_flat = residual.reshape(-1, residual.shape[-1])
+            _, top_k_weights, top_k_index = layer.router(hidden_flat)
+            hidden_2 = layer.pre_feedforward_layernorm_2(hidden_flat)
+            hidden_2 = layer.experts(hidden_2, top_k_index, top_k_weights)
+            hidden_2 = hidden_2.reshape(residual.shape)
+            hidden_2 = layer.post_feedforward_layernorm_2(hidden_2)
+            hidden = hidden_1 + hidden_2
+        hidden = layer.post_feedforward_layernorm(hidden)
+        hidden = residual + hidden
+        hidden = hidden * layer.layer_scalar
+
+    hidden = hf_model.norm(hidden)
+    logits = hf_model.lm_head(hidden)
+    cap = hf_model.config.final_logit_softcapping
+    if cap and cap > 0:
+        logits = torch.tanh(logits / cap) * cap
+    return logits
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
@@ -218,4 +252,46 @@ def test_real_attention_denoise_mask_covers_prompt_prefix_for_layer_type(mesh_de
     out = _to_torch(tt_out, mesh_device).squeeze(0)
 
     passing, message = assert_with_pcc(golden.float(), out.float(), 0.99)
+    assert passing, message
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_seeds):
+    torch.manual_seed(6)
+    prompt_len = 64
+    canvas_len = 256
+    total_len = prompt_len + canvas_len
+    vocab_size = 256
+
+    hf_text_config = _create_hf_text_config(vocab_size=vocab_size, num_layers=1)
+    if getattr(hf_text_config, "enable_moe_block", False):
+        hf_text_config.num_experts = 4
+        hf_text_config.top_k_experts = 2
+    hf_model = _create_hf_model(hf_text_config)
+    tt_model = _build_tt_model(mesh_device, hf_model, hf_text_config, num_layers=1, max_seq_len=total_len)
+
+    canvas_hidden = torch.randn(1, canvas_len, hf_text_config.hidden_size)
+    prompt_kv_hidden = torch.randn(1, prompt_len, hf_text_config.hidden_size)
+    mask = build_canvas_denoise_mask(
+        prompt_len,
+        canvas_len,
+        local_window=False,
+        neg_inf=NEG,
+        dtype=torch.float32,
+    ).view(1, 1, canvas_len, total_len)
+    with torch.no_grad():
+        golden = _torch_denoise_logits_reference(hf_model, canvas_hidden, [prompt_kv_hidden], mask)
+
+    tt_canvas_hidden = _to_device(mesh_device, canvas_hidden.unsqueeze(0))
+    tt_prompt_kv_hidden = _to_device(mesh_device, prompt_kv_hidden.unsqueeze(0))
+    tt_logits = denoise_logits_forward(
+        tt_model,
+        prompt_hidden_by_layer=[tt_prompt_kv_hidden],
+        canvas_hidden=tt_canvas_hidden,
+    )
+    logits = _to_torch(tt_logits, mesh_device).squeeze(0)
+
+    # Full logits include the shared bf16 MoE/lm_head/softcap path; this branch's
+    # known full-model ceiling is below the attention-only 0.99 acceptance.
+    passing, message = assert_with_pcc(golden.float(), logits.float(), 0.98)
     assert passing, message

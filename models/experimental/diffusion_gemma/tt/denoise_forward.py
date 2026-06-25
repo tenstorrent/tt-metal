@@ -93,3 +93,96 @@ def denoise_attention_forward(
     if created_mask:
         attn_mask.deallocate(True)
     return out
+
+
+def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_kv_hidden, attn_mask, prompt_len):
+    layer = tt_model.layers[layer_idx]
+    residual = hidden_states
+    normed = layer.input_layernorm.forward(hidden_states)
+    kv_hidden = ttnn.concat([prompt_kv_hidden, normed], dim=2)
+    attn_output = layer.self_attn(
+        normed,
+        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=prompt_len + hidden_states.shape[-2]),
+        is_decode=False,
+        kv_phase=KVCachePhase.DENOISE_READONLY,
+        attn_mask=attn_mask,
+        kv_hidden_states=kv_hidden,
+        q_rope_offset=prompt_len,
+    )
+    normed.deallocate(True)
+    kv_hidden.deallocate(True)
+
+    attn_output = layer.post_attention_layernorm.forward(attn_output)
+    hidden_states = ttnn.add(residual, attn_output)
+    residual.deallocate(True)
+    attn_output.deallocate(True)
+
+    residual = hidden_states
+    normed = layer.pre_feedforward_layernorm.forward(hidden_states)
+    mlp_output = layer.shared_mlp(normed)
+    normed.deallocate(True)
+
+    if layer.enable_moe_block:
+        mlp_normed = layer.post_feedforward_layernorm_1.forward(mlp_output)
+        mlp_output.deallocate(True)
+        expert_input = layer.pre_feedforward_layernorm_2.forward(residual)
+        expert_output = layer.moe(residual, expert_input)
+        expert_input.deallocate(True)
+        expert_normed = layer.post_feedforward_layernorm_2.forward(expert_output)
+        expert_output.deallocate(True)
+        hidden_states = ttnn.add(mlp_normed, expert_normed)
+        mlp_normed.deallocate(True)
+        expert_normed.deallocate(True)
+    else:
+        hidden_states = mlp_output
+
+    hidden_states = layer.post_feedforward_layernorm.forward(hidden_states)
+    combined = ttnn.add(residual, hidden_states)
+    residual.deallocate(True)
+    hidden_states.deallocate(True)
+    if layer.layer_scalar != 1.0:
+        scaled = ttnn.mul(combined, layer.layer_scalar)
+        combined.deallocate(True)
+        combined = scaled
+    return combined
+
+
+def denoise_logits_forward(
+    tt_model,
+    *,
+    prompt_hidden_by_layer,
+    canvas_hidden,
+):
+    """Run a short-prompt DiffusionGemma denoise logits forward.
+
+    ``prompt_hidden_by_layer`` provides the frozen encoder-side attention inputs
+    used as K/V source for each decoder layer. It is a list of `[1, 1, P, H]`
+    device tensors with length matching `tt_model.layers`. The returned logits
+    cover all canvas positions, which the diffusion sampler consumes each denoise
+    step.
+    """
+    if len(prompt_hidden_by_layer) != len(tt_model.layers):
+        raise ValueError(
+            f"prompt_hidden_by_layer has {len(prompt_hidden_by_layer)} entries but model has {len(tt_model.layers)} layers"
+        )
+
+    hidden_states = canvas_hidden
+    prompt_len = prompt_hidden_by_layer[0].shape[-2]
+    canvas_len = canvas_hidden.shape[-2]
+    attn_mask = build_device_canvas_denoise_mask(
+        tt_model.mesh_device,
+        prompt_len=prompt_len,
+        canvas_len=canvas_len,
+    )
+    for layer_idx in range(len(tt_model.layers)):
+        hidden_states = _denoise_layer_forward(
+            tt_model,
+            layer_idx,
+            hidden_states,
+            prompt_hidden_by_layer[layer_idx],
+            attn_mask,
+            prompt_len,
+        )
+    attn_mask.deallocate(True)
+    hidden_states = tt_model.norm.forward(hidden_states)
+    return tt_model._apply_lm_head(hidden_states, is_decode=False)
