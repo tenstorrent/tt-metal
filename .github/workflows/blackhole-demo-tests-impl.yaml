@@ -59,8 +59,7 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             ALL_SKUS_IN_TESTS \
-            ./.github/sku_config.yaml \
-            ./.github/blackhole_demo_systems.yaml
+            ./.github/sku_config.yaml
       - name: Filter test matrix by model + system-type
         id: filter-matrix
         env:
@@ -71,8 +70,8 @@ jobs:
           # Filter pipeline:
           #   1. Drop entries whose model-name doesn't match (unless model == 'all')
           #   2. Drop entries whose system-name doesn't match (unless system-type-filter == 'all')
-          #      Entries without a system-name (e.g. tests on SKUs not in
-          #      blackhole_demo_systems.yaml) are kept verbatim.
+          #      Entries without a system-name (e.g. tests on SKUs without a name field
+          #      in sku_config.yaml) are kept verbatim.
           filtered=$(echo "$MATRIX" \
             | jq -c --arg model "$MODEL" '
                 if $model == "all" then .
@@ -112,7 +111,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         # Cache-mode is per-job now (matrix.test-group.weights-cache-mode), populated
-        # from .github/blackhole_demo_systems.yaml during matrix build.
+        # from the weights-cache-mode field in .github/sku_config.yaml during matrix build.
         # If weights-cache-mode is lfc, we don't mount the model cache volume — weights download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
         # If weights-cache-mode is cloud-mlperf, mount from /mnt/MLPerf/huggingface (canonical HF cache root, shared with the Wormhole pipelines)
         # If weights-cache-mode is yyz4-mnt-models, mount from /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)

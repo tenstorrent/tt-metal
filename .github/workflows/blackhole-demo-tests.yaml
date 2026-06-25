@@ -118,10 +118,10 @@ jobs:
 
           with open("tests/pipeline_reorg/blackhole_demo_tests.yaml") as f:
               tests = yaml.safe_load(f) or []
-          with open(".github/blackhole_demo_systems.yaml") as f:
-              systems = yaml.safe_load(f) or {}
+          with open(".github/sku_config.yaml") as f:
+              sku_config = yaml.safe_load(f) or {}
 
-          sku_to_system = {s["sku"]: s["name"] for s in systems.get("systems", [])}
+          sku_to_system = {sku: cfg["name"] for sku, cfg in sku_config.get("skus", {}).items() if "name" in cfg}
 
           selected_model = os.environ["SELECTED_MODEL"]
           system_filter = os.environ["SYSTEM_TYPE_FILTER"]
