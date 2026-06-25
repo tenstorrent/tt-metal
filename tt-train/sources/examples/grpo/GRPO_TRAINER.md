@@ -194,10 +194,14 @@ completer = Qwen3GRPOCompleter(
 ```
 
 Unlike the Llama completer, `setup_device` opens a **named** mesh via
-`ttml.open_device_mesh` so an `"fsdp"` axis exists. After loading the (still
-replicated) HuggingFace weights it wraps each block plus the root model with
-`fully_shard`, so parameters, gradients, and optimizer state are sharded
-`1/N` across the FSDP axis.
+`ttml.open_device_mesh` so an `"fsdp"` axis exists. By default
+(`lazy_parameter_init=True`) the model is built lazily, each block plus the root
+model is wrapped with `fully_shard`, the parameters are materialized
+already-sharded, and the HuggingFace weights are then streamed in sharded (the
+full unsharded model is never materialized on one chip). With
+`lazy_parameter_init=False` it instead loads the (still replicated) weights
+first and then wraps with `fully_shard`. Either way, parameters, gradients, and
+optimizer state end up sharded `1/N` across the FSDP axis.
 
 ---
 
