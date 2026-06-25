@@ -37,10 +37,15 @@ driver is a tt-metal **C++ programming example** under
   (resource thrash; 4h×4 → 277). Sweet spot: **few harts (1–2), ILP 4**.
 - The DMA's value is **core-offload** (drains the grid with the harts asleep),
   not throughput.
+- **Export (D2H) — X280 → host: ~3.0 GB/s sustained, ~11× the Linux 268 ceiling
+  (§13).** Posted `vse64` (64 B) writes through the PCIe tile into host pinned
+  memory; **1 hart is optimal** (egress-bound — more harts don't help), all data
+  verified in host. The old 268 was scalar 8 B stores under Linux.
 
 | Config | Throughput | Note |
 |---|---|---|
-| **2 harts, 110-core scatter drain, ILP 4** | **1533 MB/s** | the real profiler — 2.9×, 2 harts free (§12) |
+| **X280 → host D2H write, 1 hart, vse64** | **~3.0 GB/s** | export ceiling, ~11× Linux 268 (§13) |
+| **2 harts, 110-core scatter drain, ILP 4** | **1533 MB/s** | the real profiler read — 2.9×, 2 harts free (§12) |
 | **1 hart, scatter drain, ILP 4** | **860 MB/s** | beats old 4-hart 530 with 3 harts idle |
 | 2–3 harts, seq stream, ILP 8 | ~1.8 GB/s | synthetic peak (§11) |
 | ≥3 harts, ILP ≥4 | ~280–460 MB/s | collapse — too many issuers |
@@ -251,9 +256,37 @@ Supporting files:
   (3h4=455, 4h4=277). Keep it to **1–2 harts, ILP 4**. (Slightly below §11's
   sequential peaks — scatter pays a little for spreading across 110 windows.)
 
+### 13. Export direction — X280 → host D2H write BW (~3.0 GB/s)
+- FW `src/d2hbw.c` · example `test_x280_d2hbw`
+  (`--nharts N --ilp 1|2|4|8 --bytes B --nrounds N`)
+- The other half of the profiler: the X280 fabricates fake 64 B packets and blasts
+  **posted `vse64` NoC writes through the PCIe tile into host pinned memory**
+  (sysmem ch 0). Addressing = PCIe tile **translated coord** (derived at runtime:
+  `soc_desc.get_cores(PCIE, TRANSLATED)` → enc `0x613` = (19,24)) + host IOVA
+  (`get_pcie_base_addr_from_device` + offset), `posted=1`. **Write-only** — a NoC
+  *read* through the PCIe tile hangs the in-order hart, so the FW issues none.
+  Verified end-to-end: a FOOTER flit is the final posted write; the host polls it
+  via `read_sysmem` (host-side, safe), then checks the data pattern landed.
+- **Sustained (512 MB single pass, all bytes verified in host): ~2.9–3.0 GB/s.**
+  1-hart ILP 1→2→8 = 2660 → 3060 → 3068; **1 hart is optimal** — 2 harts 2472, 3–4
+  harts 2286, i.e. *more harts don't help* → **egress-bound** (the PCIe-tile write
+  path), not issue-bound. ILP gives only a ~15 % bump then saturates.
+- **~11× the Linux D2H ceiling (268 MB/s @ 2 harts).** The gap is mostly the store
+  width: Linux used scalar **8 B** stores; this FW uses **64 B `vse64`** flits → 8×
+  fewer store instructions / 8× bigger NoC write transactions (268 × 8 ≈ 2.1 GB/s,
+  same order), plus no OS jitter and no flow-control overhead.
+- BW is computed from the FW's `rdcycle` (issue) window; corroborated as the true
+  egress rate by (a) invariance to hart count and size, (b) ILP saturation, (c) the
+  512 MB sustained run holding. A host-wall (`release → footer`) cross-check is the
+  remaining belt-and-suspenders measurement if an independent number is wanted.
+
 ---
 
 ## Hardware facts established
+
+- **X280 → host D2H write ceiling ≈ 3.0 GB/s** (1 hart, posted 64 B `vse64`,
+  egress-bound at the PCIe tile; §13). ~11× the Linux 268 (which was scalar 8 B
+  stores). Write-only: PCIe-tile *reads* hang the hart.
 
 - **NoC read ceiling ≈ 1.8 GB/s** per L2CPU tile (2–3 harts, ILP 8, sequential;
   §11). The widely-quoted **530 MB/s is only the latency-bound *scatter* regime**
@@ -305,9 +338,10 @@ Firmware — `tools/x280_bm/`:
 | `src/poll6n1.c` | §10 4 harts NOC0 + 2 DMA NOC1 |
 | `src/pollmp.c` | §11 ILP / cached port / static VC — breaks the wall (~1.8 GB/s) |
 | `src/gridilp.c` | §12 real 110-core scatter drain + ILP (1533 MB/s, 2 harts) |
+| `src/d2hbw.c` | §13 X280→host D2H write BW (~3.0 GB/s, posted vse64 via PCIe tile) |
 
 Host examples — `tt_metal/programming_examples/profiler/`:
 `test_x280_counter`, `test_x280_poll_rate` (+`kernels/brisc_counter.cpp`),
 `test_x280_dma_probe`, `test_x280_grid_drain`, `test_x280_grid_drain4`,
 `test_x280_poll4`, `test_x280_noc1_probe`, `test_x280_poll4n1`,
-`test_x280_poll6n1`, `test_x280_pollmp`, `test_x280_gridilp`.
+`test_x280_poll6n1`, `test_x280_pollmp`, `test_x280_gridilp`, `test_x280_d2hbw`.
