@@ -15,7 +15,12 @@ import pytest
 
 from models.experimental.diffusion_gemma.config import DiffusionGemmaConfig, TextConfig
 
-REPO = os.environ.get("TT_METAL_HOME", "/home/zni/tt-metal")
+# Repo root: honor TT_METAL_HOME, else derive from this file's location so the
+# config-drift guard below actually runs wherever the repo is checked out (a
+# personal-home fallback silently skips the guard when TT_METAL_HOME is unset).
+REPO = os.environ.get("TT_METAL_HOME") or os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+)
 CFG_26B = os.path.join(REPO, "models/demos/gemma4/configs/gemma-4-26B-A4B-it/config.json")
 
 

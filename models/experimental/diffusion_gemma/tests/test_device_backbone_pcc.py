@@ -75,12 +75,19 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.tests.test_factory import compare_tensors, parametrize_mesh_with_fabric
 
-DG_CKPT = os.getenv(
-    "DG_CKPT",
-    "/home/zni/.cache/huggingface/hub/models--google--diffusiongemma-26B-A4B-it/"
-    "snapshots/0f28bc42f588fbd8f71e08102b1c3960298a1358",
+# Repo root for the in-repo gemma4 config default (honor TT_METAL_HOME, else derive
+# from this file's location — no personal-path default).
+_REPO = os.environ.get("TT_METAL_HOME") or os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
 )
-GEMMA_CONFIG_DIR = os.getenv("GEMMA_CONFIG_DIR", "/home/zni/dg_models/gemma-4-26B-A4B-it")
+# Default to the HF model id (resolved from the HF cache / hub), not a personal
+# snapshot path with a pinned revision hash — portable on any box that has the
+# gated checkpoint cached.
+DG_CKPT = os.getenv("DG_CKPT", "google/diffusiongemma-26B-A4B-it")
+# Arch config only (Gemma4ModelArgs.load_hf_config) — default to the in-repo config.
+GEMMA_CONFIG_DIR = os.getenv(
+    "GEMMA_CONFIG_DIR", os.path.join(_REPO, "models/demos/gemma4/configs/gemma-4-26B-A4B-it")
+)
 PROMPT = os.getenv("DG_PROMPT", "The capital of France is")
 PCC_THRESHOLD = float(os.getenv("DG_BACKBONE_PCC", "0.99"))
 KNOWN_QB2_PCC_FLOOR = float(os.getenv("DG_BACKBONE_KNOWN_QB2_PCC_FLOOR", "0.83"))

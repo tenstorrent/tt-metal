@@ -9,7 +9,7 @@ captured WITHOUT a prefill. Env-parameterized (one build per pytest process):
 
     PROBE_KV=0|1   PROBE_CTX=<max_seq_len>   PROBE_BATCH=<batch>
 
-    DG_RUN_DEVICE=1 MESH_DEVICE=P150x4 HF_MODEL=/home/zni/dg_models/gemma-4-26B-A4B-it \
+    DG_RUN_DEVICE=1 MESH_DEVICE=P150x4 HF_MODEL=<gemma-4-26B-A4B-it checkpoint> \
       PROBE_KV=1 PROBE_CTX=262144 PROBE_BATCH=1 \
       pytest models/experimental/diffusion_gemma/tests/test_qb2_memory_budget.py -k 1x4 -q -s
 """
@@ -25,7 +25,9 @@ from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric
 PROBE_KV = os.getenv("PROBE_KV", "1") == "1"
 PROBE_CTX = int(os.getenv("PROBE_CTX", "262144"))
 PROBE_BATCH = int(os.getenv("PROBE_BATCH", "1"))
-MODEL_PATH = os.getenv("HF_MODEL", "/home/zni/dg_models/gemma-4-26B-A4B-it")
+# No personal-path default: require HF_MODEL (a 26B-A4B checkpoint dir); skip when
+# unset so the harness is portable instead of pointing at a developer's home dir.
+MODEL_PATH = os.getenv("HF_MODEL")
 PROBE_PREFILL = os.getenv("PROBE_PREFILL", "0") == "1"
 PREFILL_LEN = int(os.getenv("PROBE_PREFILL_LEN", str(PROBE_CTX)))
 BLOCK = 64
@@ -58,6 +60,8 @@ def test_qb2_dram_budget(mesh_device, reset_seeds, request):
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     if tp < 2:
         pytest.skip("26B-A4B backbone needs TP>=2 (use -k 1x4 on QB2)")
+    if MODEL_PATH is None:
+        pytest.skip("set HF_MODEL to a 26B-A4B checkpoint dir (no personal-path default)")
 
     base_used, total = _dram(mesh_device, "baseline (empty)")
     pac = (
