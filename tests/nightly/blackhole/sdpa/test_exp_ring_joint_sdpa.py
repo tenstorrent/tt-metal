@@ -17,20 +17,21 @@ import math
 import os
 from unittest import mock
 
-import torch
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-import ttnn
-from ttnn.operations.ccl import Topology
-from loguru import logger
 import pytest
+import torch
+from loguru import logger
+from ttnn.operations.ccl import Topology
 
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from tests.nightly.sdpa_perf_utils import (
-    post_process_ops_log,
     compute_cores_used,
-    compute_sdpa_flops,
     compute_math_utilization,
+    compute_sdpa_flops,
+    post_process_ops_log,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
 
 def create_fabric_router_config(max_payload_size):
@@ -805,6 +806,7 @@ EXP_RING_JOINT_PERF_CHECK_CONFIGS = [
     EXP_RING_JOINT_PERF_CHECK_CONFIGS,
     ids=[f"ring{cfg[0]}-{cfg[2]}" for cfg in EXP_RING_JOINT_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 def test_exp_ring_joint_attention_perf_check(ring_size_expected, max_payload_size, payload_id, expected_util):
     """Measure exp ring joint SDPA math utilization via tracy and assert within +/- EXP_RING_JOINT_PERF_MARGIN."""
     from tracy.process_model_log import run_device_profiler
