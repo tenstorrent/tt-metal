@@ -580,7 +580,7 @@ def main() -> None:
 
     preamble_path = ensure_demo_audio()
     preamble_wav, _ = _load_mono_wav_resampled(preamble_path, sample_rate)
-    audio_inputs = processor(audios=preamble_wav, sampling_rate=sample_rate, return_tensors="pt")
+    audio_inputs = processor(audio=preamble_wav, sampling_rate=sample_rate, return_tensors="pt")
     input_features = audio_inputs["input_features"]
     input_speech_attn = audio_inputs["attention_mask"]
     mel_frames = int(input_speech_attn.sum().item())
