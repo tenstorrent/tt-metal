@@ -103,10 +103,10 @@ def test_distinct_trajectories_fail():
     assert cmp.min_argmax_agreement < 1.0
 
 
-def test_assert_trajectory_matches_raises_on_mismatch():
+def test_assert_trajectory_matches_raises_on_mismatch(expect_error):
     ref = _random_traj(seed=3)
     cand = _random_traj(seed=88)
-    with pytest.raises(AssertionError):
+    with expect_error(AssertionError):
         assert_trajectory_matches(ref, cand)
 
 

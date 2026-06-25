@@ -131,12 +131,12 @@ def test_zero_noise_gumbel_is_argmax(device, dtype_name):
     assert agreement >= 0.95, f"zero-noise argmax agreement {agreement:.4f} < 0.95 ({dtype_name})"
 
 
-def test_gumbel_max_rejects_bfp8(device):
+def test_gumbel_max_rejects_bfp8(device, expect_error):
     """Document the op constraint: `ttnn.argmax` rejects bfp8 TILE inputs, so the
     Gumbel-max/argmax decision step must use bf16+ logits (entropy is fine in bfp8,
     but it shows large drift — see test_token_entropy_*)."""
     logits = _varied_logits(seed=5)
-    with pytest.raises(RuntimeError, match="BFLOAT16, FLOAT32"):
+    with expect_error(RuntimeError, match="BFLOAT16, FLOAT32"):
         TS.gumbel_max(
             _to(logits, device, ttnn.bfloat8_b), 0.8, _to(torch.zeros(1, _SEQ, _VOCAB), device, ttnn.bfloat8_b)
         )

@@ -10,7 +10,6 @@ shapes offsets, not visibility — so the denoise mask is all-attend. The
 path only) and is tested as such.
 """
 
-import pytest
 import torch
 
 from models.experimental.diffusion_gemma.reference.attention_mask import (
@@ -39,8 +38,8 @@ def test_denoise_mask_is_fully_bidirectional_by_default():
 # --- below: the NON-canonical local_window bake (ttnn SDPA windowed-mask path only) ---
 
 
-def test_local_window_requires_window_half():
-    with pytest.raises(ValueError):
+def test_local_window_requires_window_half(expect_error):
+    with expect_error(ValueError):
         build_canvas_denoise_mask(prompt_len=4, canvas_len=4, local_window=True)
 
 

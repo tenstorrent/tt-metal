@@ -8,7 +8,6 @@ Reconciled against transformers ``DiffusionGemmaSelfConditioning``: the module i
 with a scaleless ``post_norm``, and the soft-embedding feeds it.
 """
 
-import pytest
 import torch
 
 from models.experimental.diffusion_gemma.reference.self_conditioning import (
@@ -114,9 +113,9 @@ def test_rmsnorm_matches_reference_formula():
     assert torch.allclose(n(x), expected.type_as(x), atol=1e-6)
 
 
-def test_activation_silu_supported_and_unknown_rejected():
+def test_activation_silu_supported_and_unknown_rejected(expect_error):
     SelfConditioning(8, activation="silu")  # ok
-    with pytest.raises(ValueError):
+    with expect_error(ValueError):
         SelfConditioning(8, activation="relu6")._act(torch.zeros(1))
 
 

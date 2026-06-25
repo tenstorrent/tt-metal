@@ -47,10 +47,10 @@ class _MockCanvasModel:
         return out
 
 
-def test_guard_reports_unavailable_and_loader_raises():
+def test_guard_reports_unavailable_and_loader_raises(expect_error):
     # In this environment diffusion_gemma is not installed.
     if not is_hf_reference_available():
-        with pytest.raises(ImportError, match="diffusion_gemma"):
+        with expect_error(ImportError, match="diffusion_gemma"):
             load_hf_reference("google/diffusiongemma-26B-A4B-it")
     else:  # pragma: no cover - only when a diffusion_gemma build is present
         pytest.skip("diffusion_gemma is available; loader guard not exercised")
@@ -97,13 +97,13 @@ class _FakeRawHFModel:
         return {"sequences": input_ids, "kw": kw}
 
 
-def test_canvas_logits_seam_rejects_raw_hf_model():
+def test_canvas_logits_seam_rejects_raw_hf_model(expect_error):
     """make_logits_fn / run_reference_trajectory must NOT accept a raw HF model
     (its canvas is decoder_input_ids, not the first positional). Finding #2."""
     raw = _FakeRawHFModel()
-    with pytest.raises(TypeError, match="canvas-logits callable"):
+    with expect_error(TypeError, match="canvas-logits callable"):
         make_logits_fn(raw)
-    with pytest.raises(TypeError, match="canvas-logits callable"):
+    with expect_error(TypeError, match="canvas-logits callable"):
         run_reference_trajectory(raw, torch.zeros(1, 8, dtype=torch.long), _cfg(), 32)
 
 
