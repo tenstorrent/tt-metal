@@ -89,6 +89,9 @@ struct MinimalMatmulStridedReduceScatterAsyncInputs {
     /* Fused addcmul inputs: output = addcmul_a + scalar * mm_output * addcmul_b */
     const std::optional<const Tensor> addcmul_input_tensor1 = std::nullopt;  // residual/base
     const std::optional<const Tensor> addcmul_input_tensor2 = std::nullopt;  // gate/multiplier
+
+    /* Virtual concatenation: the second in0 source (suffix K-tiles). */
+    const std::optional<const Tensor> mm_optional_input_tensor = std::nullopt;
 };
 
 }  // namespace ttnn::experimental::prim

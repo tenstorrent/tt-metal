@@ -78,9 +78,11 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_TERNARY
-// Calculate offset for ternary_a_args - must account for FUSE_BIAS and potentially FUSE_AG
-#if defined(FUSE_AG) && defined(READ_FROM_LOCAL_INPUT)
-// If we have FUSE_AG with READ_FROM_LOCAL_INPUT, in3 is defined
+// Calculate offset for ternary_a_args - must account for FUSE_BIAS and an optional in3 accessor.
+// in3 is present whenever in0 has a second source (AG local slice OR virtual concat), so the
+// ternary args sit one accessor-block later in the CTA list in both cases.
+#ifdef IN0_HAS_SECOND_SOURCE
+// in3 is defined (AG local slice or virtual-concat second half)
 #ifdef FUSE_BIAS
     // After in2, then in3, then ternary
     constexpr uint32_t ternary_a_args_cta_offset =
@@ -168,8 +170,12 @@ void kernel_main() {
             device_k_block_start_ids,
             forward_k_block_schedule);
     }
+#endif  // FUSE_AG
 
-#ifdef READ_FROM_LOCAL_INPUT
+// in3 is the second in0 source buffer. AG path: this device's local pre-gather slice. Virtual
+// concat: the second concat half (e.g. mlp output) supplied via optional_input_tensor. Set up
+// whenever in0 has a second source, independent of FUSE_AG.
+#ifdef IN0_HAS_SECOND_SOURCE
 #ifdef FUSE_BIAS
     constexpr auto in3_args =
         TensorAccessorArgs<in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS>();
@@ -179,7 +185,6 @@ void kernel_main() {
     constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr);
-#endif
 #endif
 
 #ifdef SRS_FUSE_OP_SIGNALER
@@ -323,11 +328,23 @@ void kernel_main() {
                         in0_shape,
                         cb_in0_id,
                         in0_tile_size,
-#ifdef READ_FROM_LOCAL_INPUT
+#ifdef IN0_HAS_SECOND_SOURCE
+#ifdef IN0_VIRTUAL_CONCAT
+                        // Virtual concatenation (concat-free): in0 (main) holds K-tiles [0, k_split);
+                        // in3 holds K-tiles [k_split, K). main_Wt = k_split is the main buffer width.
+                        in3_reader,
+                        /*local_k_start=*/IN0_K_SPLIT_TILES,
+                        /*local_k_end=*/K_tiles - 1,
+                        /*input_tensor_Wt=*/K_tiles - IN0_K_SPLIT_TILES,
+                        /*main_Wt=*/IN0_K_SPLIT_TILES,
+#else
+                        // AG: in0 is the full gathered K; in3 is this device's local pre-gather slice.
                         in3_reader,
                         fused_op_receiver.local_k_start,
                         fused_op_receiver.local_k_end,
                         fused_op_receiver.input_tensor_Wt,
+                        /*main_Wt=*/K_tiles,
+#endif
 #endif
                         m_tile,
                         m_tile_end,

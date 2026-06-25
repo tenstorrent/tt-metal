@@ -21,6 +21,9 @@ struct MinimalMatmulProgramFactory {
         tt::tt_metal::KernelHandle compute_kernels_id{};
         bool transpose_core_grid{};
         bool read_local_slice_from_input{};
+        // Virtual concatenation: in0's K is sourced from input_tensor + optional_input_tensor (no
+        // materialized concat). When set, optional_input_tensor feeds the in3 address on re-runs.
+        bool two_input_split{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -67,6 +70,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
     std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler = std::nullopt,
-    bool fuse_swiglu = false);
+    bool fuse_swiglu = false,
+    // Virtual concat (concat-free): when set, in0's K is sourced from input_tensor (prefix tiles) then
+    // optional_input_tensor (suffix tiles). The split point is input_tensor's own K width.
+    const std::optional<const Tensor>& optional_input_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

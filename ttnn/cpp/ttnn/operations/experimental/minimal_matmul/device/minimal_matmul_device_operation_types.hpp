@@ -44,7 +44,9 @@ struct MinimalMatmulInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<Tensor> bias_tensor;
-    std::optional<Tensor> optional_input_tensor;  // for StridedAllGatherMinimalMatmul
+    // Second in0 source. AG-fused matmul: this device's local pre-gather slice. Virtual concat: the
+    // suffix half of in0's K (input_tensor is the prefix half; the weight is stacked [W_prefix; W_suffix]).
+    std::optional<Tensor> optional_input_tensor;
 
     // Fused addcmul: ternary_a + scalar * matmul_output * ternary_b
     std::optional<Tensor> fused_ternary_input_a;  // residual/base (broadcast like bias)
