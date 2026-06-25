@@ -20,6 +20,8 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
     auto indices_tensor = tensor_args.expert_indices_tensor;
     auto scores_tensor = tensor_args.expert_scores_tensor;
 
+    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a backing buffer");
+    TT_FATAL(input_tensor.buffer()->is_l1(), "Input tensor must be allocated in L1");
     TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be in row major layout");
     TT_FATAL(indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Indices tensor must be in row major layout");
     TT_FATAL(scores_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Scores tensor must be in row major layout");
