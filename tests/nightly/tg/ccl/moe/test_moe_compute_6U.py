@@ -108,6 +108,7 @@ class MoEMeshConfig:
     use_linear_topology: bool = False
     num_links: int = 4
     cluster_axis: int = 1
+    mux_core_range: tuple = ((1, 1), (3, 3))
 
     @property
     def mesh_shape(self):
@@ -306,6 +307,10 @@ _MODELS_8x1_ROW = [
     MoEModelConfig("gpt_oss",     N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("correctness",), activation_types=(MoEActivationFunction.SWIGLU,)),
 ]
 
+_MODELS_1x8_MUX_EASTERN = [
+    MoEModelConfig("deepseek_ocr", N=896, hidden_size=1280, selected_experts_k=6),
+]
+
 _MOE_MESH_CONFIGS = [
     MoEMeshConfig("1x8-torus",        8, MESH_GRAPH_DESC_1x8,              _MODELS_1x8,       MOE_DEVICE_PARAMS),
     MoEMeshConfig("1x16-torus",      16, MESH_GRAPH_DESC_1x16,             _MODELS_1x16,      MOE_DEVICE_PARAMS),
@@ -315,6 +320,7 @@ _MOE_MESH_CONFIGS = [
     MoEMeshConfig("16x1-row",        16, MESH_GRAPH_DESC_16x1,             _MODELS_16x1_ROW,  MOE_DEVICE_PARAMS_ROW, cluster_axis=0),
     MoEMeshConfig("8x1-row",          8, MESH_GRAPH_DESC_8x1,              _MODELS_8x1_ROW,   MOE_DEVICE_PARAMS_ROW, cluster_axis=0),
     MoEMeshConfig("8x1-row-bh_lb",    8, MESH_GRAPH_DESC_BH_LB_8x1_LINEAR, _MODELS_8x1_ROW,  MOE_DEVICE_PARAMS_ROW_LINEAR, use_linear_topology=True, num_links=2, cluster_axis=0),
+    MoEMeshConfig("1x8-torus-mux",    8, MESH_GRAPH_DESC_1x8, _MODELS_1x8_MUX_EASTERN, MOE_DEVICE_PARAMS, mux_core_range=((6, 0), (7, 9))),
 ]
 # fmt: on
 
@@ -333,6 +339,7 @@ def _run_model_test(
     num_links=4,
     topology=None,
     cluster_axis=1,
+    mux_core_range=((1, 1), (3, 3)),
 ):
     if test_mode == "perf":
         selected_experts_k = 1
@@ -369,6 +376,7 @@ def _run_model_test(
         has_bias=has_bias,
         topology=topology,
         num_links=num_links,
+        mux_core_range=mux_core_range,
     )
 
 
@@ -1837,6 +1845,7 @@ def _run_moe_compute_impl(
     has_bias,
     num_links,
     topology=None,
+    mux_core_range=((1, 1), (3, 3)),
 ):
     """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
     experts = experts_per_device * mesh_shape[cluster_axis]
@@ -1926,7 +1935,7 @@ def _run_moe_compute_impl(
     # CREATE DEVICE INPUT TENSORS
     #########################################
 
-    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
+    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(mux_core_range[0], mux_core_range[1])])
 
     # Drain tilize core holds height-sharded expert indices/scores in L1.
     tilize_drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
@@ -2387,6 +2396,7 @@ def test_moe_compute(
         topology=topology,
         num_links=mesh_cfg.num_links,
         cluster_axis=mesh_cfg.cluster_axis,
+        mux_core_range=mesh_cfg.mux_core_range,
     )
 
 
