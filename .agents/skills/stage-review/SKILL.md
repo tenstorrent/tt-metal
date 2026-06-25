@@ -175,6 +175,25 @@ For optimization stages, also inspect:
   `$autofix`. Accept rejection only when the adapted path is measured slower,
   fails correctness for an understood reason, or a minimal repro proves the op
   cannot express the required contract;
+- whether multi-device optimization candidates were measured as coherent
+  families. A rejection is not earned if the stage tried a dtype/fidelity
+  change under one residual/collective topology, tried a fused CCL/matmul path
+  under another topology, and never measured the compatible combination. For
+  material row-parallel or column-parallel boundaries, require evidence for the
+  residual-layout contract, collective placement, activation/CCL dtype,
+  projection packing or separation, and persistent-buffer plan used by the
+  candidate;
+- whether lower-movement residual contracts were actually tested. If a fused
+  matmul+reduce-scatter, reduce-scatter, or similar candidate was measured only
+  with an immediate all-gather/full replication back to the old contract, that
+  does not reject the sharded/fractured residual family. Require an adapted
+  stack-compatible measurement through the next consuming norm/residual/MLP or
+  attention boundary, or a minimal repro showing that boundary cannot consume
+  the layout;
+- whether the final default path reproduces the selected best candidate. If the
+  final default run is materially slower than the candidate evidence, the stage
+  must either fix the default wiring or report the final reproduced number as
+  the optimized result instead of claiming the earlier candidate result;
 - whether performance claims compare like with like.
 
 For datatype-sweep stages, also inspect:
