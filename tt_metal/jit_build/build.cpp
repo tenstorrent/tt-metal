@@ -141,8 +141,9 @@ void JitBuildEnv::init(
 
     // Flags
     string common_flags =
-        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
-        "-flto=auto -ffast-math -fno-exceptions ";
+        "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
+        "-flto=auto -ffast-math "
+        "-fno-exceptions -fno-rtti -fno-use-cxa-atexit ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
         common_flags += "-fdump-rtl-all -fdump-tree-original ";
@@ -155,8 +156,6 @@ void JitBuildEnv::init(
     this->cflags_ = common_flags;
     this->cflags_ +=
         "-MMD "
-        "-fno-use-cxa-atexit "
-        "-ftt-no-dyninit "
         "-Wall -Werror "
         "-Wno-error=deprecated-declarations "
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
@@ -217,9 +216,6 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
-        if (rtoptions.get_use_device_print()) {
-            this->defines_ += "-DUSE_DEVICE_PRINT ";
-        }
     }
 
     if (rtoptions.get_checkpoint_enabled()) {
@@ -269,6 +265,34 @@ void JitBuildEnv::init(
     if (!rtoptions.get_watcher_enabled() && !rtoptions.get_lightweight_kernel_asserts() &&
         rtoptions.get_llk_asserts()) {
         this->defines_ += "-DENABLE_LLK_ASSERT_ONLY ";
+    }
+
+    const auto& san = rtoptions.get_sanitizer_settings();
+
+    // sanitizer and checkpoint can't both be enabled because they overlap.
+    TT_ASSERT(!san.enabled || !rtoptions.get_checkpoint_enabled());
+
+    if (san.enabled) {
+        this->defines_ += "-DLLK_SAN_ENABLE ";
+
+        if (san.method == tt::llrt::SanitizerReportMethod::Assert) {
+            this->defines_ += "-DLLK_SAN_SETTING_ASSERT ";
+        } else if (san.method == tt::llrt::SanitizerReportMethod::Print) {
+            this->defines_ += "-DLLK_SAN_SETTING_PRINT ";
+        }
+
+        auto add_sanitizer_toggle = [&](const std::optional<bool>& opt, std::string_view name) {
+            if (opt.has_value()) {
+                this->defines_ += "-DLLK_SAN_SETTING_" + std::string(name) + "=" + std::to_string(*opt) + " ";
+            }
+        };
+
+        add_sanitizer_toggle(san.pedantic, "PEDANTIC");
+        add_sanitizer_toggle(san.warn, "WARN");
+        add_sanitizer_toggle(san.error, "ERROR");
+        add_sanitizer_toggle(san.info, "INFO");
+        add_sanitizer_toggle(san.fault, "FAULT");
+        add_sanitizer_toggle(san.internal, "INTERNAL");
     }
 
     if (rtoptions.get_disable_sfploadmacro()) {
@@ -502,6 +526,8 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     }
 
     if (settings) {
+        defines += fmt::format(R"(-DFULL_KERNEL_NAME="\"{}\"" )", settings->get_full_kernel_name());
+
         // Append user args
         if (process_defines_at_compile_) {
             settings->process_defines([&defines](const string& define, const string& value) {

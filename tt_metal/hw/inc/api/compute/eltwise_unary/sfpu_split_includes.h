@@ -192,6 +192,10 @@
 #include "api/compute/eltwise_unary/digamma.h"
 #endif
 
+#if SFPU_OP_TANHSHRINK_INCLUDE
+#include "api/compute/eltwise_unary/tanhshrink.h"
+#endif
+
 #if SFPU_OP_POLYGAMMA_INCLUDE
 #include "api/compute/eltwise_unary/polygamma.h"
 #endif
@@ -202,4 +206,24 @@
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "api/compute/compute_kernel_api.h"
+#endif
+
+#if SFPU_OP_BINARY_DIV_INCLUDE
+#include "api/compute/eltwise_binary_sfpu.h"
+#endif
+
+#if SFPU_OP_BINARY_ADD_INT_INCLUDE
+#include "api/compute/add_int_sfpu.h"
+#endif
+
+#if SFPU_OP_BINARY_MUL_INT_INCLUDE
+#include "api/compute/mul_int_sfpu.h"
+#endif
+
+#if SFPU_OP_BINARY_GT_INT_INCLUDE
+#include "api/compute/binary_comp.h"
+#endif
+
+#if SFPU_OP_BINARY_MAX_MIN_INCLUDE
+#include "api/compute/binary_max_min.h"
 #endif

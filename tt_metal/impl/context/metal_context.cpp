@@ -18,6 +18,7 @@
 
 #include "metal_context.hpp"
 #include "context_types.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "dispatch_core_common.hpp"
@@ -42,7 +43,7 @@
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
 #include <experimental/fabric/control_plane.hpp>
-#include <experimental/mock_device.hpp>
+#include <experimental/mock_device/mock_device.hpp>
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
@@ -213,11 +214,13 @@ void MetalContext::initialize(
     // Initialize inspector
     if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         std::optional<int> rank;
-        auto world_context = distributed::multihost::DistributedContext::get_world_context();
-        if (*(world_context->size()) > 1) {
-            rank = *world_context->rank();
+        if (distributed::multihost::DistributedContext::is_initialized()) {
+            auto world_context = distributed::multihost::DistributedContext::get_world_context();
+            if (*(world_context->size()) > 1) {
+                rank = *world_context->rank();
+            }
         }
-        inspector_data_ = Inspector::initialize(rank);
+        inspector_data_ = Inspector::initialize(rank, get_context_id());
         // Set fw_compile_hash for Inspector RPC build environment info
         Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
     }
@@ -230,25 +233,20 @@ void MetalContext::initialize(
         dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions());
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs, hal(), is_galaxy_cluster, rtoptions());
+    bool are_fd_kernels_on_same_core = get_cluster().arch() == tt::ARCH::QUASAR && num_hw_cqs == 1;
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
+        CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster, are_fd_kernels_on_same_core, rtoptions());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
+        CoreType::ETH,
+        num_hw_cqs,
+        hal(),
+        is_galaxy_cluster,
+        /*are_fd_kernels_on_same_core=*/false,
+        rtoptions());
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        if (!rtoptions().get_use_device_print()) {
-            log_warning(
-                tt::LogMetal,
-                "DPRINT is deprecated and will be removed in a future release. "
-                "Please migrate to DEVICE_PRINT by:\n"
-                "  1. Replace #include \"api/debug/dprint.h\" with #include \"api/debug/device_print.h\" in your "
-                "kernels\n"
-                "  2. Replace DPRINT << ... << ENDL() with DEVICE_PRINT(\"...\\n\", args)\n"
-                "  3. Set TT_METAL_DEVICE_PRINT=1 to enable the new DEVICE_PRINT system\n"
-                "For more information, see the DEVICE_PRINT documentation.");
-        }
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
@@ -432,10 +430,10 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     instance->env_owned_ = true;
 
     g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
-    // Seed the process-wide BuildEnvManager singleton with this context's HAL on first call,
+    // Seed the per-context BuildEnvManager slot with this context's HAL on first call,
     // no-op thereafter. Using the by-HAL form (rather than get_instance(ContextId)) avoids
     // re-entering MetalContext::instance() while we hold g_instance_mutex.
-    BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
+    BuildEnvManager::seed_if_unseeded_with_hal(DEFAULT_CONTEXT_ID, instance->hal());
     return DEFAULT_CONTEXT_ID;
 }
 
@@ -450,16 +448,16 @@ ContextId MetalContext::create_instance(MetalEnv& env_to_use) {
         }
         MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, env_to_use);
         g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
-        // Seed the process-wide BuildEnvManager with this context's HAL on first call.
+        // Seed the per-context BuildEnvManager slot with this context's HAL on first call.
         // By-HAL form avoids re-entering MetalContext::instance() while holding g_instance_mutex.
-        BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
+        BuildEnvManager::seed_if_unseeded_with_hal(DEFAULT_CONTEXT_ID, instance->hal());
         return DEFAULT_CONTEXT_ID;
     }
 
     ContextId context_id = find_free_context_id_locked();
     MetalContext* instance = new MetalContext(context_id, env_to_use);
     g_instances[context_id.get()].store(instance, std::memory_order_release);
-    BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
+    BuildEnvManager::seed_if_unseeded_with_hal(context_id, instance->hal());
     return context_id;
 }
 
@@ -480,6 +478,8 @@ void MetalContext::destroy_instance(bool check_device_count, ContextId context_i
     // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
     // return the old instance.
     g_instances[index].store(nullptr, std::memory_order_release);
+    // Free the slot so a recycled context_id reseeds fresh.
+    BuildEnvManager::destroy_for_context(context_id);
 }
 
 void MetalContext::destroy_all_instances(bool check_device_count) {
@@ -513,6 +513,9 @@ void MetalContext::teardown_dispatch_state() {
 MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env) :
     env_(&metal_env), context_id_(context_id) {
     check_context_id(context_id);
+    // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
+    // claimed service cores from the FD pool.
+    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl());
     device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
@@ -562,6 +565,11 @@ const Hal& MetalContext::hal() const {
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
+}
+
+internal::ServiceCoreManager& MetalContext::get_service_core_manager() {
+    TT_FATAL(service_core_manager_, "Trying to get service_core_manager before initializing it.");
+    return *service_core_manager_;
 }
 
 DispatchQueryManager& MetalContext::get_dispatch_query_manager() {

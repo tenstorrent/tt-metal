@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
@@ -13,6 +15,7 @@
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
+#include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -163,6 +166,9 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
 
     // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
+    if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return experimental::make_mock_allocator(config);
+    }
     return std::make_unique<L1BankingAllocator>(config);
 }
 
@@ -215,8 +221,18 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
 
                 if (this->sysmem_manager_->is_dram_backed()) {
+                    // With DRAM-backed CQs, each device stores its command queue in its own DRAM. The CQ
+                    // pointers for a serviced device must therefore be written into that device's DRAM, not
+                    // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
+                    // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
+                    const uint32_t dram_channel =
+                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
-                        pointers.data(), pointers.size() * sizeof(uint32_t), this->id(), 0, cq_offset);
+                        pointers.data(),
+                        pointers.size() * sizeof(uint32_t),
+                        serviced_device_id,
+                        dram_channel,
+                        cq_offset);
                 } else {
                     MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
                         pointers.data(),
@@ -314,7 +330,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-        for (const auto& dram_core : cluster.get_soc_desc(id_).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = cluster.get_soc_desc(id_);
+        for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
         }
     }
@@ -539,6 +556,8 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
+    tt::tt_metal::MetalContext::instance().get_service_core_manager().impl().on_device_close(this->id_);
+
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
@@ -591,7 +610,14 @@ CoreCoord Device::dram_grid_size() const {
 
 CoreCoord Device::compute_with_storage_grid_size() const {
     const auto& dispatch_core_config = context_->get_dispatch_core_manager().get_dispatch_core_config();
-    return tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
+    auto grid = tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
+    // Cap to FD-mode grid when service cores are claimed — prevents SD workloads
+    // from targeting dispatch-column cores running persistent service kernels.
+    if (auto safe = MetalContext::instance().get_service_core_manager().impl().get_safe_compute_grid(id_)) {
+        grid.x = std::min(grid.x, safe->x);
+        grid.y = std::min(grid.y, safe->y);
+    }
+    return grid;
 }
 
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {

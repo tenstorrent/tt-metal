@@ -33,9 +33,9 @@ template <
     uint32_t MeshCols,
     ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
-                                         : (Axis == ReplicateGroup::COLS) ? MeshRows
-                                                                          : MeshCols;
+    [[maybe_unused]] constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
+                                                          : (Axis == ReplicateGroup::COLS) ? MeshRows
+                                                                                           : MeshCols;
     const uint32_t device_in_group = t / TokensPerDevice;
 
     if constexpr (Axis == ReplicateGroup::NONE) {
@@ -55,26 +55,10 @@ void print_tile_rows(
     uint16_t end_row = 32,
     uint8_t start_col = 0,
     uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
-    DPRINT << "======" << ENDL();
-    DEVICE_PRINT("======\n");
+    DPRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
+    DPRINT("======\n");
     for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-        DEVICE_PRINT(
+        DPRINT(
             "{} : {}\n",
             r,
             TileSlice(
@@ -90,8 +74,7 @@ void print_tile_rows(
                 true,
                 untilize));
     }
-    DPRINT << "++++++" << ENDL();
-    DEVICE_PRINT("++++++\n");
+    DPRINT("++++++\n");
 }
 
 // Initialize the expert activation buffer with default values:
@@ -201,11 +184,8 @@ FORCE_INLINE void print_expert_activation_buffer(
 
     volatile tt_l1_ptr uint32_t* buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id));
 
-    DPRINT << "=== Expert Activation Buffer ===" << ENDL();
-    DEVICE_PRINT("=== Expert Activation Buffer ===\n");
-    DPRINT << "Row format: [token_id | act_0..act_" << (experts_per_device - 1) << " | score_0..score_"
-           << (experts_per_device - 1) << "]" << ENDL();
-    DEVICE_PRINT(
+    DPRINT("=== Expert Activation Buffer ===\n");
+    DPRINT(
         "Row format: [token_id | act_0..act_{} | score_0...score_{}]\n",
         experts_per_device - 1,
         experts_per_device - 1);
@@ -215,36 +195,27 @@ FORCE_INLINE void print_expert_activation_buffer(
 
         // Token ID (stored as uint32_t, but -1 means unset)
         uint32_t token_id = buffer[base];
-        DPRINT << "T" << t << ": [";
-        DEVICE_PRINT("T{}: [", t);
+        DPRINT("T{}: [", t);
         if (token_id == static_cast<uint32_t>(-1)) {
-            DPRINT << "-1";
-            DEVICE_PRINT("-1");
+            DPRINT("-1");
         } else {
-            DPRINT << token_id;
-            DEVICE_PRINT("{}", token_id);
+            DPRINT("{}", token_id);
         }
-        DPRINT << " |";
-        DEVICE_PRINT(" |");
+        DPRINT(" |");
 
         // Expert activations (k+1 means not activated, 0..k-1 means activated with that k-index)
         for (uint32_t e = 0; e < experts_per_device; e++) {
-            DPRINT << " " << buffer[base + 1 + e];
-            DEVICE_PRINT(" {}", buffer[base + 1 + e]);
+            DPRINT(" {}", buffer[base + 1 + e]);
         }
-        DPRINT << " |";
-        DEVICE_PRINT(" |");
+        DPRINT(" |");
 
         // Scores
         for (uint32_t e = 0; e < experts_per_device; e++) {
-            DPRINT << " " << BF16(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e]));
-            DEVICE_PRINT(" {}", bf16_t(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e])));
+            DPRINT(" {}", bf16_t(static_cast<uint16_t>(buffer[base + 1 + experts_per_device + e])));
         }
-        DPRINT << "]" << ENDL();
-        DEVICE_PRINT("]\n");
+        DPRINT("]\n");
     }
-    DPRINT << "================================" << ENDL();
-    DEVICE_PRINT("================================\n");
+    DPRINT("================================\n");
 }
 
 // Print the E-T buffer (Expert-Token buffer)
@@ -253,31 +224,25 @@ template <uint32_t experts_per_device, uint32_t tokens, uint32_t entry_size>
 void print_e_t_buffer(uint32_t cb_id) {
     uint32_t buffer_base = get_read_ptr(cb_id);
 
-    DPRINT << "=== E-T Buffer (Expert -> Tokens) ===" << ENDL();
-    DEVICE_PRINT("=== E-T Buffer (Expert -> Tokens) ===\n");
+    DPRINT("=== E-T Buffer (Expert -> Tokens) ===\n");
     for (uint32_t e = 0; e < experts_per_device; e++) {
-        DPRINT << "Expert " << e << ": [";
-        DEVICE_PRINT("Expert {}: [", e);
+        DPRINT("Expert {}: [", e);
         uint32_t expert_base = buffer_base + e * tokens * entry_size;
         bool first = true;
         for (uint32_t i = 0; i < tokens; i++) {
             uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(expert_base + i * entry_size);
             if (token_id == static_cast<uint32_t>(-1)) {
-                DPRINT << " -1]" << ENDL();
-                DEVICE_PRINT(" -1]\n");
+                DPRINT(" -1]\n");
                 break;
             }
             if (!first) {
-                DPRINT << ", ";
-                DEVICE_PRINT(", ");
+                DPRINT(", ");
             }
-            DPRINT << token_id;
-            DEVICE_PRINT("{}", token_id);
+            DPRINT("{}", token_id);
             first = false;
         }
     }
-    DPRINT << "======================================" << ENDL();
-    DEVICE_PRINT("======================================\n");
+    DPRINT("======================================\n");
 }
 
 void kernel_main() {
@@ -306,7 +271,7 @@ void kernel_main() {
     constexpr uint32_t mapping_pages = get_named_compile_time_arg_val("mapping_pages");
 
     // Page sizes
-    constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
+    [[maybe_unused]] constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
     constexpr uint32_t per_expert_total_tokens_output_page_size =
         get_named_compile_time_arg_val("per_expert_total_tokens_output_page_size");
     constexpr uint32_t expert_activation_output_page_size =
@@ -322,13 +287,15 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
 
     // Mesh
-    constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
+    [[maybe_unused]] constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
     constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
     constexpr uint32_t mesh_cols = get_named_compile_time_arg_val("mesh_cols");
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
@@ -348,7 +315,7 @@ void kernel_main() {
     constexpr uint32_t tilize_bounding_box_num_cores = get_named_compile_time_arg_val("tilize_bounding_box_num_cores");
 
     // Multicast coordinates for signalling MM cores
-    constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
+    [[maybe_unused]] constexpr uint32_t num_matmul_cores = get_named_compile_time_arg_val("num_matmul_cores");
 
     constexpr uint32_t matmul_mcast_start_x = get_named_compile_time_arg_val("matmul_mcast_start_x");
     constexpr uint32_t matmul_mcast_start_y = get_named_compile_time_arg_val("matmul_mcast_start_y");
@@ -429,7 +396,7 @@ void kernel_main() {
     // indices not used by reader
     // scores not used by reader
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
-    const auto per_expert_total_tokens_output_tensor_addr_gen =
+    [[maybe_unused]] const auto per_expert_total_tokens_output_tensor_addr_gen =
         TensorAccessor(per_expert_total_tokens_output_args, per_expert_total_tokens_output_tensor_address);
     const auto expert_activation_output_tensor_addr_gen =
         TensorAccessor(expert_activation_output_args, expert_activation_output_address);
@@ -438,14 +405,12 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_page = 1;
 
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
-
     // Size of e_t buffer for all experts (for multicast)
     constexpr uint32_t e_t_buffer_total_size = experts_per_device * (tokens + 1) * e_t_entry_size;
 
     constexpr ReplicateGroup axis = ReplicateGroup(cluster_axis);
     constexpr uint32_t dispatch_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
-    constexpr uint32_t dispatch_index =
+    [[maybe_unused]] constexpr uint32_t dispatch_index =
         axis == ReplicateGroup::COLS ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
     constexpr uint32_t tokens_per_device = tokens / dispatch_devices;
 
@@ -522,15 +487,11 @@ void kernel_main() {
         uint16_t expert_mesh_coord = expert_to_device_map[i];
         if (expert_mesh_coord == linearized_mesh_coord) {
             if (local_expert_count >= experts_per_device) {
-                // DEBUG: DPRINT << "Error: more than " << experts_per_device << " experts on device " <<
-                // linearized_mesh_coord << ENDL();
-                // DEBUG: DEVICE_PRINT("Error: more than {} experts on device {}\n", experts_per_device,
+                // DEBUG: DPRINT("Error: more than {} experts on device {}\n", experts_per_device,
                 // linearized_mesh_coord);
                 ASSERT(false);
             }
-            // DEBUG: DPRINT << "Device " << linearized_mesh_coord << " : Local expert " << local_expert_count << " is "
-            // << i << ENDL();
-            // DEBUG: DEVICE_PRINT("Device {} : Local expert {} is {}\n", linearized_mesh_coord, local_expert_count, i);
+            // DEBUG: DPRINT("Device {} : Local expert {} is {}\n", linearized_mesh_coord, local_expert_count, i);
 
             local_expert_ids[local_expert_count] = i;
             local_expert_count++;
@@ -793,7 +754,7 @@ void kernel_main() {
         // ========== Write expert_activation buffer to DRAM ==========
         // Write to DRAM: activated rows (num_activated_tokens) rows
         uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
-        uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
+        uint64_t expert_activation_dram_addr = expert_activation_output_tensor_addr_gen.get_noc_addr(0);
         if (num_activated_tokens > 0) {
             noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         }
@@ -991,7 +952,7 @@ void kernel_main() {
                 uint32_t token_id = *reinterpret_cast<uint32_t*>(e_t_expert_addr + (chunk_start + i) * e_t_entry_size);
                 // read the token from the input tensor at the tilize subtoken offset and size
                 noc_async_read(
-                    get_noc_addr(token_id, input_tensor_addr_gen) + global_subtoken_offset,
+                    input_tensor_addr_gen.get_noc_addr(token_id) + global_subtoken_offset,
                     get_write_ptr(tilize_input_cb_id) + i * subtoken_size,
                     subtoken_size);
             }

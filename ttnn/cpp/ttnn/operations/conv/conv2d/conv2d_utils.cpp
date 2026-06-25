@@ -455,20 +455,15 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
         if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
             act_block_h_ntiles = act_block_h_override_ntiles;
         } else {
-            uint32_t act_block_h_override_ntiles = act_block_h_override / tt::constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles_per_core % act_block_h_override_ntiles == 0) {
-                act_block_h_ntiles = act_block_h_override_ntiles;
-            } else {
-                act_block_h_ntiles =
-                    find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-                log_warning(
-                    tt::LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
-                    "instead {} was selected as closest valid option!",
-                    act_block_h_override_ntiles,
-                    padded_output_height_ntiles_per_core,
-                    act_block_h_ntiles);
-            }
+            act_block_h_ntiles =
+                find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
+            log_info(
+                tt::LogOp,
+                "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
+                "instead {} was selected as closest valid option!",
+                act_block_h_override,
+                padded_output_height_ntiles_per_core,
+                act_block_h_ntiles * tt::constants::TILE_HEIGHT);
         }
     }
 
@@ -559,6 +554,13 @@ bool should_coalesce_1d_depthwise_conv_reads(
     DataType input_datatype) {
     if (!is_1d_depthwise_conv || input_tensor_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED ||
         kernel_width <= 1 || dilation_w != 1) {
+        return false;
+    }
+
+    // Coalesced depthwise reads lay out all kernel-width channel sticks as one contiguous activation block. The
+    // coalesced compute kernel then indexes that block as kernel_width groups of channel tiles, so each stick must
+    // contain an integral number of tiles.
+    if (input_channels_padded % tt::constants::TILE_WIDTH != 0) {
         return false;
     }
 
@@ -872,9 +874,10 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                     // In case we need to run Interleaved2Sharded, adjust the shard spec,
                     // in order to get smaller allocation size of sharded buffer.
                     const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
-                    input_tensor_sharded_memory_config_to_layout =
-                        input_tensor_sharded_memory_config_to_layout.with_shard_spec(
-                            tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
+                    input_tensor_sharded_memory_config_to_layout = tt::tt_metal::MemoryConfig(
+                        input_tensor_sharded_memory_config_to_layout.memory_layout(),
+                        input_tensor_sharded_memory_config_to_layout.buffer_type(),
+                        tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
                     alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
                 }
                 Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(

@@ -22,11 +22,14 @@ class Unpacker:
     and override methods to emit the C++ LLK calls that configure and
     drive the Unpack thread, plus a Python golden function for test validation.
 
-    The lifecycle called by ComputeNode.unpack() is:
+    The lifecycle called by the pipeline is:
         init() -> loop.unpack_loop() [which calls unpack()] -> uninit()
 
     Override `loop` with an appropriate FusedLoop subclass to control
     the tile iteration pattern used by the unpack phases.
+
+    Set `per_block_init = True` if init() needs block dimensions and must
+    be called per-block inside the batch loop rather than hoisted out.
 
     To create a new unpacker:
         1. Subclass Unpacker
@@ -39,6 +42,7 @@ class Unpacker:
 
     # Controls the tile iteration pattern for unpack and math loops.
     loop: FusedLoop = FusedLoop()
+    per_block_init: bool = False
 
     def init(
         self,
@@ -47,7 +51,7 @@ class Unpacker:
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code that initializes the unpacker before the tile loop.
+        """Return C++ code that initializes the unpacker.
 
         Called once per block before the unpack loop begins. Override to emit
         the _llk_unpack_*_init_<>() call with the appropriate parameters

@@ -16,27 +16,6 @@ run_mid_run_data_dump() {
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 }
 
-run_async_test() {
-    remove_default_log_locations
-    #Some tests here do not skip grayskull
-    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        mkdir -p $PROFILER_ARTIFACTS_DIR
-        python -m tracy -v -r -p --op-support-count 2000 -m "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
-
-        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-        then
-            echo "No verification as test was skipped"
-        else
-            echo "Verifying test results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/)
-            LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
-            res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
-            echo $res
-            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
-        fi
-    fi
-}
-
 run_async_tracing_T3000_test() {
     remove_default_log_locations
     #Some tests here do not skip grayskull
@@ -167,6 +146,20 @@ run_trace_only_resnet() {
     fi
 }
 
+run_tracy_wasm_gui_http_integration() {
+    echo "Tracy WASM web GUI HTTP integration (python -m tracy capture + serve_wasm probe)"
+    # Free default Tracy WASM ports in case a prior step left serve_wasm listening.
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k 8080/tcp 2>/dev/null || true
+        fuser -k 8081/tcp 2>/dev/null || true
+    fi
+    # Shared CI runners: kill listeners after assertions (see test module docstring).
+    export TRACY_WASM_HTTP_TEST_TEARDOWN=1
+    TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}' pytest \
+        tests/ttnn/tracy/test_tracy_wasm_http_integration.py \
+        -v --tb=short
+}
+
 run_multi_host_tracy_smoke() {
     remove_default_log_locations
     echo "Multi-host tracy smoke test (2 ranks via tt-run)"
@@ -226,7 +219,6 @@ run_process_ops_logs_test() {
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
-    run_async_test
     run_ccl_T3000_test
     run_async_tracing_T3000_test
     run_async_tracing_mid_run_dump_T3000_test
@@ -236,6 +228,7 @@ run_profiling_test() {
     run_device_profiler_test
     run_perf_op_report_test
     run_process_ops_logs_test
+    run_tracy_wasm_gui_http_integration
 }
 
 main() {

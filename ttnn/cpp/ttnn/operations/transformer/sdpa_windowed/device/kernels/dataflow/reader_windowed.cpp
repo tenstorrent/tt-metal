@@ -4,6 +4,11 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/transformer/sdpa_windowed/device/kernels/array_view.hpp"
@@ -11,20 +16,11 @@
 
 #if defined(WATCHER_OVERHEAD_OK)
 template <bool is_output_cb, bool is_wr_ptr>
-void dprint_cb_tile(uint32_t cb_id, uint32_t tile_id) {
-    noc_async_read_barrier();
-    noc_async_write_barrier();
+void dprint_cb_tile(Noc noc, uint32_t cb_id, uint32_t tile_id) {
+    noc.async_read_barrier();
+    noc.async_write_barrier();
     for (uint8_t i = 0; i < 32; ++i) {
-        DPRINT << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{.h0 = i, .h1 = (uint8_t)(i + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                      is_output_cb ? TSLICE_OUTPUT_CB : TSLICE_INPUT_CB,
-                      is_wr_ptr ? TSLICE_WR_PTR : TSLICE_RD_PTR,
-                      true,
-                      true)
-               << ENDL();
-        DEVICE_PRINT(
+        DPRINT(
             "{}",
             TileSlice(
                 cb_id,
@@ -122,7 +118,8 @@ inline void fill_diag_subtile_zeros_bfp4(
         uint32_exp_per_face * 4 + uint32_datums_per_face * 2,
         uint32_exp_per_face * 4 + uint32_datums_per_face * 3};
 
-    auto uint32_arr = ArrayView<uint32_t, CBAccessType::CB_BACK_RW>(cb_id, tile_id);
+    CircularBuffer cb(cb_id);
+    auto uint32_arr = ArrayView<uint32_t, CBAccessType::CB_BACK_RW>(cb, tile_id);
 
     // fill face 0 with both cases where the subtile is contained completely in the face or partially in the face
     if (row_start_idx < tt::constants::FACE_HEIGHT && col_start_idx < tt::constants::FACE_WIDTH) {
@@ -190,6 +187,8 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(9);
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);
 
+    Noc noc;
+
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(argidx++);
@@ -249,10 +248,15 @@ void kernel_main() {
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
 
     // load the entire cu_window_seqlens tensor into a circular buffer
-    cb_reserve_back(cb_cu_window_seqlens_in, 1);
-    uint64_t cu_window_noc_addr = cu_window_seqlens_reader.get_noc_addr(0);
-    noc_async_read(cu_window_noc_addr, get_write_ptr(cb_cu_window_seqlens_in), cu_window_seqlens_tile_bytes);
-    auto cb_cu_window_seqlens_ptr = ArrayView<uint32_t, CBAccessType::CB_BACK_RO>(cb_cu_window_seqlens_in);
+    CircularBuffer cb_cu_window_seqlens(cb_cu_window_seqlens_in);
+    cb_cu_window_seqlens.reserve_back(1);
+    noc.async_read(
+        cu_window_seqlens_reader,
+        CoreLocalMem<uint32_t>(cb_cu_window_seqlens.get_write_ptr()),
+        cu_window_seqlens_tile_bytes,
+        {.page_id = 0},
+        {});
+    auto cb_cu_window_seqlens_ptr = ArrayView<uint32_t, CBAccessType::CB_BACK_RO>(cb_cu_window_seqlens);
     auto get_cu_window_seqlens = [&](uint32_t idx) -> uint32_t {
         if constexpr (cu_window_seqlens_data_format == DataFormat::UInt32) {
             return cb_cu_window_seqlens_ptr[idx];
@@ -278,13 +282,11 @@ void kernel_main() {
         std::min((local_q_start + q_chunks_per_core) * Sq_chunk_t, valid_Sqt) * tt::constants::TILE_HEIGHT;
     uint32_t mask_windows_low_idx = 0;
     bool found_mask_windows = false;
-    noc_async_read_barrier();  // Wait until reads are done
-    cb_push_back(cb_cu_window_seqlens_in, 1);
+    noc.async_read_barrier();  // Wait until reads are done
+    cb_cu_window_seqlens.push_back(1);
     DPRINT_ARRAY_VIEW({
-        DPRINT << "cu_window_seqlens_eles: " << cu_window_seqlens_eles << ENDL();
-        DEVICE_PRINT("cu_window_seqlens_eles: {}\n", cu_window_seqlens_eles);
-        DPRINT << "cu_window_seqlens: " << ENDL();
-        DEVICE_PRINT("cu_window_seqlens:\n");
+        DPRINT("cu_window_seqlens_eles: {}\n", cu_window_seqlens_eles);
+        DPRINT("cu_window_seqlens:\n");
         cb_cu_window_seqlens_ptr.print();
     });
     // [INFO] all windows are diagonal
@@ -298,6 +300,8 @@ void kernel_main() {
             break;
         }
     }
+
+    CircularBuffer cb_mask(cb_mask_in);
 
     uint32_t q_high_idx_in_tiles = Skt;
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
@@ -341,9 +345,8 @@ void kernel_main() {
 
                     // [INFO] Generate windowed attention mask on-the-fly for q_row_tile_count x k_row_tile_count tiles
                     // [INFO] q_chunk_size and k_chunk_size can differ
-                    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-                    uint32_t mask_write_ptr_base = get_write_ptr(cb_mask_in);
-                    uint64_t noc_write_addr_base = get_noc_addr(mask_write_ptr_base);
+                    cb_mask.reserve_back(mask_chunk_tiles);
+                    uint32_t mask_write_ptr_base = cb_mask.get_write_ptr();
 
                     int zero_tile_idx = -1;
                     int inf_tile_idx = -1;
@@ -378,10 +381,10 @@ void kernel_main() {
                             if (q_start_idx >= window_low_idx && q_end_idx <= window_high_idx &&
                                 k_start_idx >= window_low_idx && k_end_idx <= window_high_idx) {
                                 if (zero_tile_idx == -1) {
-                                    fill_tile_zeros<mask_tile_bytes, false>(cb_mask_in, in_mask_tile_id);
+                                    fill_tile_zeros<mask_tile_bytes, false>(noc, cb_mask_in, in_mask_tile_id);
                                 } else {
                                     copy_tile<mask_tile_bytes>(
-                                        noc_write_addr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
+                                        noc, mask_write_ptr_base, mask_write_ptr_base, zero_tile_idx, in_mask_tile_id);
                                 }
                                 // save most recent zero'ed tile as the source of copy_tile in the future
                                 zero_tile_idx = in_mask_tile_id;
@@ -395,7 +398,7 @@ void kernel_main() {
                                 fill_neginf_tile<mask_tile_bytes>(cb_mask_in, in_mask_tile_id);
                             } else {
                                 copy_tile<mask_tile_bytes>(
-                                    noc_write_addr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);
+                                    noc, mask_write_ptr_base, mask_write_ptr_base, inf_tile_idx, in_mask_tile_id);
                             }
                             if (!found_mask_windows || k_end_idx <= window_low_idx || k_start_idx >= window_high_idx ||
                                 window_low_idx >= window_high_idx) {
@@ -438,16 +441,16 @@ void kernel_main() {
                                      covered_window_k_end_idx < k_end_idx);
 
                             DPRINT_ARRAY_VIEW({
-                                DPRINT << "  [COL ITER] WINDOW tile: in_mask_tile_id: " << in_mask_tile_id << ENDL();
-                                DEVICE_PRINT("  [COL ITER] WINDOW tile: in_mask_tile_id: {}\n", in_mask_tile_id);
-                                (dprint_cb_tile<true, true>(cb_mask_in, in_mask_tile_id));
+                                DPRINT("  [COL ITER] WINDOW tile: in_mask_tile_id: {}\n", in_mask_tile_id);
+                                (dprint_cb_tile<true, true>(noc, cb_mask_in, in_mask_tile_id));
                             });
                         }
                     }
                     // sync up the read and writes, push back the mask cb, after processing each chunk
-                    noc_async_read_barrier();  // syncs up the reads of k_chunk and the ones used by mask generation
-                    cb_push_back(cb_k_in, k_chunk_ntiles);
-                    cb_push_back(cb_mask_in, mask_chunk_tiles);
+                    noc.async_read_barrier();  // syncs up the reads of k_chunk and the ones used by mask generation
+                    CircularBuffer cb_k(cb_k_in);
+                    cb_k.push_back(k_chunk_ntiles);
+                    cb_mask.push_back(mask_chunk_tiles);
 
                     // Read V chunk
                     read_chunk_with_padding<v_tile_bytes>(

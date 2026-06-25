@@ -12,9 +12,11 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
+from models.tt_dit.utils.vbench import assert_vbench_quality
 
 from ....utils.test import line_params, ring_params
 
@@ -83,18 +85,28 @@ def test_pipeline_inference(
     num_frames = 81
     num_inference_steps = 40
 
-    pipeline = WanPipeline.create_pipeline(
-        mesh_device=mesh_device,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
-        checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        height=height,
-        width=width,
-        num_frames=num_frames,
+    h_factor = tuple(mesh_device.shape)[tp_axis]
+    w_factor = tuple(mesh_device.shape)[sp_axis]
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
+    vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
+    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+
+    pipeline = WanPipeline(
+        device=mesh_device,
+        config=WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            num_links=num_links,
+            dynamic_load=dynamic_load,
+            topology=topology,
+            is_fsdp=is_fsdp,
+            checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            height=height,
+            width=width,
+            num_frames=num_frames,
+        ),
     )
 
     if quant_config_name is not None:
@@ -108,22 +120,14 @@ def test_pipeline_inference(
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
         with torch.no_grad():
-            result = pipeline(
-                prompt=prompt,
-                height=height,
-                width=width,
-                num_frames=num_frames,
+            frames = pipeline(
+                prompts=[prompt],
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
                 output_type="uint8",
             )
-
-        if hasattr(result, "frames"):
-            frames = result.frames
-        else:
-            frames = result[0] if isinstance(result, tuple) else result
 
         logger.info(f"Inference completed successfully")
         logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
@@ -176,9 +180,33 @@ def test_pipeline_inference(
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
+    vbench_thresholds_by_height = {
+        720: {
+            "subject_consistency": 0.92,
+            "background_consistency": 0.93,
+            "motion_smoothness": 0.955,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.645,
+        },
+        480: {
+            "subject_consistency": 0.94,
+            "background_consistency": 0.96,
+            "motion_smoothness": 0.97,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.545,
+        },
+    }
+
+    def check_output_with_vbench(prompt, number):
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
+            thresholds = vbench_thresholds_by_height[height]
+            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+
     if no_prompt:
         frames = run(prompt=prompt, number=0, seed=42)
         check_output_with_clip(prompt, frames)
+        check_output_with_vbench(prompt, 0)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -188,3 +216,4 @@ def test_pipeline_inference(
                 break
             frames = run(prompt=prompt, number=i, seed=i)
             check_output_with_clip(prompt, frames)
+            check_output_with_vbench(prompt, i)

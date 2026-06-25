@@ -35,6 +35,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -56,7 +57,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            ./.github/blackhole_demo_systems.yaml
       - name: Apply model filters
         id: apply-filters
         run: |
@@ -89,14 +91,31 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        HF_HUB_OFFLINE: 1
+        # Only the per-runner BH cache modes (local-disk, lfc) need HF online
+        # so first-use can populate the cache. Shared NFS modes (cloud-mlperf
+        # for BH and the implicit WH mount) keep HF offline — those are :ro
+        # and HF would try to write metadata (refs/main, .no_exist markers)
+        # on every HEAD call even when the cache already has the model,
+        # crashing with `OSError [Errno 30] Read-only file system`.
+        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        # Mount the HF / tt_cache root so it always appears inside the container
+        # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
+        # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
+        # (populated from .github/blackhole_demo_systems.yaml by prepare_test_matrix.py):
+        #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
+        #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
+        #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
+        #   (no mode → WH SKU)      → host /mnt/MLPerf (whole tree; preserves access to
+        #                             /mnt/MLPerf/tt_dnn-models still used by one WH entry)
+        # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
+        # shared NFS honors mlperf-read-only.
+        - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
@@ -105,6 +124,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -124,17 +144,12 @@ jobs:
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports generated/test_logs
-          # tee combined stdout+stderr to a per-leg .log for ai-summary.
-          # Brace group: cmd may be multiple shell statements.
-          # PIPESTATUS: preserve real exit code (tee would mask it).
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit ${PIPESTATUS[0]}
       - name: Merge test reports
         id: generate-device-perf-report
         if: ${{ !cancelled() }}
@@ -224,6 +239,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main

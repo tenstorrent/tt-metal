@@ -31,20 +31,19 @@
 
 namespace ttnn::experimental::prim {
 
-tt::tt_metal::ProgramDescriptor RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+namespace {
+
+// Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
+// create_workload_descriptor() can loop coords and reuse this body verbatim. The
+// op-specific name suffix avoids Unity-build collisions across sibling factories.
+tt::tt_metal::ProgramDescriptor build_ring_attention_all_gather_program_descriptor(
+    const RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::operation_attributes_t& operation_attributes,
+    const RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::tensor_args_t& tensor_args,
+    RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinate& mesh_coordinate) {
     tt::tt_metal::ProgramDescriptor desc;
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-    log_debug(tt::LogOp, "DEBUG: create_descriptor is called");
-
-    TT_FATAL(
-        mesh_dispatch_coordinate.has_value(),
-        "RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_descriptor requires "
-        "mesh_dispatch_coordinate to be provided");
-    const auto& mesh_coordinate = mesh_dispatch_coordinate.value();
+    log_debug(tt::LogOp, "DEBUG: build_ring_attention_all_gather_program_descriptor is called");
 
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
         tensor_args.input_tensor[0], mesh_coordinate, operation_attributes.cluster_axis);
@@ -82,6 +81,28 @@ tt::tt_metal::ProgramDescriptor RingAttentionAllGatherAsyncMultiCoreWithWorkersP
     return desc;
 }
 
+}  // namespace
+
+// Returns a WorkloadDescriptor with one ProgramDescriptor per coord: device_index /
+// forward_coord / backward_coord all depend on the mesh coordinate, so descriptors
+// cannot be shared across coords.
+tt::tt_metal::WorkloadDescriptor
+RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_workload_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_ring_attention_all_gather_program_descriptor(
+            operation_attributes, tensor_args, tensor_return_value, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
@@ -102,7 +123,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<uint32_t> input_batch_slice_idx,
+    std::optional<uint32_t> gather_valid_Ht) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -137,6 +160,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::vector<Tensor> input_tensors = input_tensor;
     const std::vector<Tensor>& output_tensors = output_tensor;
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        target_device_coord, forward_device_coord, backward_device_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
     if (topology == ttnn::ccl::Topology::Ring && ring_index % 2 == 0) {
@@ -291,6 +316,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tiles_to_write_per_packet,                // contig_pages_advanced
         num_inputs,                               // num_inputs
         1,                                        // direction
+        unicast_backward_args[0],                 // unicast route arg0 (dst_mesh_id or 0)
+        unicast_backward_args[1],                 // unicast route arg1 (dst_chip_id or distance_in_hops)
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -357,6 +384,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         tiles_to_write_per_packet,                 // contig_pages_advanced
         num_inputs,                                // num_inputs
         0,                                         // direction
+        unicast_forward_args[0],                   // unicast route arg0 (dst_mesh_id or 0)
+        unicast_forward_args[1],                   // unicast route arg1 (dst_chip_id or distance_in_hops)
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -412,28 +441,56 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             const auto input_tensor_num_pages = input_tensor[i].buffer()->num_pages();
             const auto input_tensor_shape = input_tensor[i].padded_shape();
             const auto output_tensor_shape = output_tensor[i].padded_shape();
-            const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+            const uint32_t num_heads = input_tensor_shape[1];
+            // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
+            const uint32_t full_batch_head_size = input_tensor_shape[0] * num_heads;
 
-            uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+            uint32_t single_batch_head_num_pages = input_tensor_num_pages / full_batch_head_size;
             const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
             const uint32_t remainder = single_batch_head_num_pages % num_links;
             const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
             const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
 
             const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
             const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
-            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_HEIGHT;
             TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
             TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
+
+            // Single-slot gather: read only slot `input_batch_slice_idx`'s `num_heads` blocks (from
+            // `input_batch_base`); the writer emits them to output slot 0. A batch-1 output suffices,
+            // but a full-batch output also works (only slot 0 written). std::nullopt => full batch.
+            uint32_t batch_head_size = full_batch_head_size;
+            uint32_t input_batch_base = 0;
+            if (input_batch_slice_idx.has_value()) {
+                TT_FATAL(
+                    *input_batch_slice_idx < input_tensor_shape[0],
+                    "input_batch_slice_idx={} out of range for input batch={}",
+                    *input_batch_slice_idx,
+                    input_tensor_shape[0]);
+                batch_head_size = num_heads;
+                input_batch_base = ring_attention_all_gather_async_detail::input_batch_base_pages(
+                    *input_batch_slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
+            }
 
             tensor_descriptor_args.push_back(input_tensor_Wt);      // 0 == input_tensor_Wt
             tensor_descriptor_args.push_back(input_tensor_Ht);      // 1 == input_tensor_Ht
             tensor_descriptor_args.push_back(output_tensor_Wt);     // 2 == output_tensor_Wt
             tensor_descriptor_args.push_back(output_tensor_Ht);     // 3 == output_tensor_Ht
-            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size
+            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size (bh-loop count)
             tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
             tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
+            tensor_descriptor_args.push_back(input_batch_base);     // 7 == input_batch_base (phase-1 input page offset)
+            // 8 == valid pages per (batch,head) to gather. Default: full input slab (no clamp). When
+            // gather_valid_Ht is set (fused ring_joint_sdpa with an oversized cache), bound it to the
+            // first gather_valid_Ht tile-rows so only kv_actual-sized data moves. The fused path also
+            // re-patches this per dispatch on cache hits (apply_ring_joint_scalar_runtime_args); setting
+            // it here makes the cache-miss (first) dispatch bounded too.
+            const uint32_t valid_pages_per_batch_head =
+                gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
+                                            : single_batch_head_num_pages;
+            tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 8 == valid_pages_per_batch_head
         }
 
         KernelDescriptor::RTArgList reader_forward_rt_args;

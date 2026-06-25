@@ -8,14 +8,23 @@
 #include "api/compute/transpose_wh.h"
 #include "api/dataflow/circular_buffer.h"
 
-// DeepSeek Top32 headers (repo-relative; JIT adds -I only for this file's directory).
+// DeepSeek Top32 headers — Blackhole only; no WH B0 port exists yet.
 #if defined(TRISC_UNPACK)
+#if defined(ARCH_BLACKHOLE)
 #include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#else
+#error "top32_rm_dev_compute_v2: unsupported architecture (Blackhole only)"
+#endif
 #endif
 
 #if defined(TRISC_MATH)
-#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_top32_rm.h"
+#if defined(ARCH_BLACKHOLE)
+#include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
 #include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#else
+#error "top32_rm_dev_compute_v2: unsupported architecture (Blackhole only)"
+#endif
 #endif
 
 void kernel_main() {
@@ -46,7 +55,7 @@ void kernel_main() {
     cb16.reserve_back(num_output_tiles);
     cb17.reserve_back(num_output_tiles);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     /*
     Algorithm implementation:
@@ -78,8 +87,15 @@ void kernel_main() {
     // step 2
     const uint32_t decreasing = 0;
     const uint32_t increasing = 1;
-    MATH((llk_math_deepseek_top32_rm_init<false>()));
-    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, decreasing>(value_offset_tiles)));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_of_1024_rm_pre_sorted_prep_,
+        (false, DST_ACCUM_MODE, decreasing),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        value_offset_tiles));
 
     // loop for number of remaining chunks:
     for (uint32_t i = 1; i < num_chunks; i++) {
@@ -93,14 +109,34 @@ void kernel_main() {
         transpose_wh_tile(cb_in1, i, index_offset_tiles + 1);
 
         // step 4
-        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, increasing>(
-            value_offset_tiles + 1)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_of_1024_rm_pre_sorted_prep_,
+            (false, DST_ACCUM_MODE, increasing),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            value_offset_tiles + 1));
 
         // step 5
-        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine<false, DST_ACCUM_MODE>(value_offset_tiles)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_of_1024_rm_pre_sorted_combine_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            value_offset_tiles));
     }
     // step 6
-    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_final<false, DST_ACCUM_MODE>(value_offset_tiles)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_of_1024_rm_pre_sorted_final_,
+        (false, DST_ACCUM_MODE),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        value_offset_tiles));
 
     uint32_t num_faces = 4;
     // loop for number of remaining values:
@@ -127,16 +163,51 @@ void kernel_main() {
         MATH((llk_math_top32_rm(cb_in1, index_offset_tiles + 1, num_faces)));
 
         // step 8
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
-            value_offset_tiles + 1, decreasing, /*skip_second*/ false)));
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, /*across_tiles*/ false)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
-            value_offset_tiles + 1, increasing, /*skip_second*/ true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            decreasing,
+            false /*skip_second*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            false /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            increasing,
+            true /*skip_second*/));
 
         // step 9
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, /*across_tiles*/ true)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
-            value_offset_tiles, decreasing, /*skip_second*/ true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            true /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            decreasing,
+            true /*skip_second*/));
     }
 
     // tensix_sync();
@@ -148,22 +219,25 @@ void kernel_main() {
 
     // #if defined(TRISC_MATH)
     // volatile uint32_t* dst32 = reinterpret_cast<volatile uint32_t*>(0xFFBD8000U);
-    // DPRINT << "DEST[row][col] raw INT32 (hex):" << ENDL();
+    // DPRINT("DEST[row][col] raw INT32 (hex):\n");
     // for (int row = 0; row < 2*64; row++) {
     //     for (int col = 0; col < 16; col++) {
     //         uint32_t val = dst32[row * 16 + col];
     //         float f;
     //         std::memcpy(&f, &val, sizeof(f));
-    //         DPRINT << f << " ";
-    //         // DPRINT << HEX() << val << " ";
+    //         DPRINT("{} ", f);
+    //         // DPRINT("{:#X} ", val);
     //     }
-    //     DPRINT << ENDL();
+    //     DPRINT("\n");
     //     if ((row+1) % 32 == 0) {
-    //         DPRINT << ENDL();
+    //         DPRINT("\n");
     //         // row += 32;
     //     }
     // }
     // #endif
+
+    tile_regs_commit();
+    tile_regs_wait();
 
     // step 10
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
@@ -171,7 +245,7 @@ void kernel_main() {
     ckernel::pack_reconfig_data_format(cb_out0, cb_out1);
     ckernel::pack_tile(index_offset_tiles, cb_out1);
 
-    release_dst();
+    tile_regs_release();
 
     cb0.pop_front(num_input_tiles);
     cb1.pop_front(num_input_tiles);

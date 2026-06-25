@@ -19,8 +19,9 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file
 
+import ttnn
 from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.utils import cache
 
@@ -288,13 +289,16 @@ def _lora_stack_cache_namespace(specs_by_expert: dict[int, list[LoRASpec]]) -> s
 class WanPipelineI2VLora(WanPipelineI2V):
     """Wan2.2 I2V with LoRA stacks fused into the base PyTorch weights."""
 
+    BASE_DIFFUSERS_REPO = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+
     def __init__(
         self,
-        *args,
+        *,
+        device: ttnn.MeshDevice,
+        config: WanPipelineConfig,
         lora_high: LoRAArg = None,
         lora_low: LoRAArg = None,
-        **kwargs,
-    ):
+    ) -> None:
         high_specs = _normalize_lora_arg(lora_high)
         low_specs = _normalize_lora_arg(lora_low)
 
@@ -314,7 +318,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
         self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
 
-        super().__init__(*args, **kwargs)
+        super().__init__(device=device, config=config)
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         # guidance_scale=1.0 → encoder returns None for negative embeds; combined_step
@@ -326,14 +330,15 @@ class WanPipelineI2VLora(WanPipelineI2V):
     def _build_fused_state_dict(self, idx: int) -> dict[str, torch.Tensor] | None:
         specs = self._lora_specs[idx]
         state = self.transformer_states[idx]
+        subfolder = state.checkpoint.subfolder
         if not specs:
-            logger.info(f"No LoRA for expert idx={idx} ('{state.subfolder}') -- using base weights")
+            logger.info(f"No LoRA for expert idx={idx} ('{subfolder}') -- using base weights")
             return None
 
-        base_sd = state.torch_model.state_dict()
+        base_sd = state.checkpoint.state_dict()
         fused_sd = base_sd
         for spec in specs:
-            logger.info(f"Loading LoRA for '{state.subfolder}' from {spec.path} (scale={spec.scale})")
+            logger.info(f"Loading LoRA for '{subfolder}' from {spec.path} (scale={spec.scale})")
             lora_sd = load_file(str(spec.path))
             if not _has_lora_keys(lora_sd):
                 raise RuntimeError(
@@ -341,7 +346,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
                 )
             previous_sd = fused_sd
             fused_sd, stats = fuse_lora_state_dict(previous_sd, lora_sd, scale=spec.scale, return_stats=True)
-            label = f"{state.subfolder}: {Path(spec.path).name}"
+            label = f"{subfolder}: {Path(spec.path).name}"
             if stats.applied == 0:
                 raise RuntimeError(
                     f"LoRA fusion applied no tensors for '{label}'. "
@@ -369,7 +374,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
         cache.load_model(
             state.model,
             model_name=self._cache_namespace,
-            subfolder=state.subfolder,
+            subfolder=state.checkpoint.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
@@ -377,7 +382,38 @@ class WanPipelineI2VLora(WanPipelineI2V):
         )
         self._fused_state_dicts[idx] = None
 
-    @staticmethod
-    def create_pipeline(*args, **kwargs):
-        kwargs["checkpoint_name"] = kwargs.get("checkpoint_name") or "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-        return WanPipeline.create_pipeline(*args, pipeline_class=WanPipelineI2VLora, **kwargs)
+    @classmethod
+    def create_pipeline(
+        cls,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        height: int = 480,
+        width: int = 832,
+        num_frames: int = 81,
+        num_links: int | None = None,
+        dynamic_load: bool | None = None,
+        topology: ttnn.Topology | None = None,
+        is_fsdp: bool | None = None,
+        boundary_ratio: float | None = 0.875,
+        lora_high: LoRAArg = None,
+        lora_low: LoRAArg = None,
+    ) -> WanPipelineI2VLora:
+        config = WanPipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            checkpoint_name=cls.BASE_DIFFUSERS_REPO,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            num_links=num_links,
+            topology=topology,
+            dynamic_load=dynamic_load,
+            is_fsdp=is_fsdp,
+            boundary_ratio=boundary_ratio,
+            model_type="i2v",
+        )
+        return cls(
+            device=mesh_device,
+            config=config,
+            lora_high=lora_high,
+            lora_low=lora_low,
+        )

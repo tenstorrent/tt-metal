@@ -89,16 +89,6 @@ TensorSpec SliceWriteDeviceOperation::compute_output_specs(
     return tensor_args.output.tensor_spec();
 }
 
-ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "SliceWriteDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<SliceWriteDeviceOperation>(
-        args, tensor_args, program_factory.index());
-}
-
 Tensor SliceWriteDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output;

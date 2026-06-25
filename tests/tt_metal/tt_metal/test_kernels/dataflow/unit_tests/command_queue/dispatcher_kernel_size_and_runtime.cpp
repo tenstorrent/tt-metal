@@ -32,9 +32,7 @@ void kernel_main() {
         const uint32_t rt_arg = get_arg_val<uint32_t>(i);
         const uint32_t expected = i + unique_rt_args_vals_offset;
         if (rt_arg != expected) {
-            DPRINT << "Actual runtime argument value: " << rt_arg << " Expected runtime argument value: " << expected
-                   << ENDL();
-            DEVICE_PRINT("Actual runtime argument value: {} Expected runtime argument value: {}\n", rt_arg, expected);
+            DPRINT("Actual runtime argument value: {} Expected runtime argument value: {}\n", rt_arg, expected);
             ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
@@ -45,9 +43,7 @@ void kernel_main() {
         const uint32_t actual_sem_val =
             *(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<sem_core_type>(sem_id)));
         if (expected_sem_val != actual_sem_val) {
-            DPRINT << "Actual semaphore value: " << actual_sem_val << " Expected semaphore value: " << expected_sem_val
-                   << ENDL();
-            DEVICE_PRINT("Actual semaphore value: {} Expected semaphore value: {}\n", actual_sem_val, expected_sem_val);
+            DPRINT("Actual semaphore value: {} Expected semaphore value: {}\n", actual_sem_val, expected_sem_val);
             ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
@@ -58,9 +54,7 @@ void kernel_main() {
         const uint32_t expected_cb_page_size = get_arg_val<uint32_t>(i);
         const uint32_t actual_cb_page_size = get_local_cb_interface(cb_idx).fifo_page_size;
         if (expected_cb_page_size != actual_cb_page_size) {
-            DPRINT << cb_idx << " Actual circular buffer page size: " << actual_cb_page_size
-                   << " Expected circular buffer page size: " << expected_cb_page_size << ENDL();
-            DEVICE_PRINT(
+            DPRINT(
                 "{} Actual circular buffer page size: {} Expected circular buffer page size: {}\n",
                 cb_idx,
                 actual_cb_page_size,
@@ -75,9 +69,7 @@ void kernel_main() {
         const uint32_t common_rt_arg = get_common_arg_val<uint32_t>(i);
         uint32_t expected = i + common_rt_args_vals_offset;
         if (common_rt_arg != expected) {
-            DPRINT << "Actual common runtime argument value: " << common_rt_arg
-                   << " Expected common runtime argument value: " << expected << ENDL();
-            DEVICE_PRINT(
+            DPRINT(
                 "Actual common runtime argument value: {} Expected common runtime argument value: {}\n",
                 common_rt_arg,
                 expected);

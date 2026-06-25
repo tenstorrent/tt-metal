@@ -25,13 +25,19 @@ namespace {
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& current_cores) {
-    // Build a set from previous_cores only, then probe with current_cores directly.
-    std::unordered_set<tt::tt_metal::CoreCoord> previous_cores_set;
-    for (const auto& core_group : previous_cores) {
-        previous_cores_set.insert(core_group.begin(), core_group.end());
-    }
-    for (const auto& core_group : current_cores) {
-        for (const auto& core : core_group) {
+    // The outer index is the programmable_core_type (TENSIX, DRAM, ETH, ...). Two CoreCoords
+    // with the same (x, y) but different programmable core types refer to physically distinct
+    // cores (e.g., DRAM (0,0) is bank 0; WORKER (0,0) is the bottom-left compute core), so we
+    // must only consider intersection WITHIN the same programmable core type.
+    const size_t shared = std::min(previous_cores.size(), current_cores.size());
+    for (size_t pct = 0; pct < shared; ++pct) {
+        const auto& prev_group = previous_cores[pct];
+        const auto& curr_group = current_cores[pct];
+        if (prev_group.empty() || curr_group.empty()) {
+            continue;
+        }
+        std::unordered_set<tt::tt_metal::CoreCoord> previous_cores_set(prev_group.begin(), prev_group.end());
+        for (const auto& core : curr_group) {
             if (previous_cores_set.contains(core)) {
                 return true;
             }
@@ -64,7 +70,9 @@ SDMeshCommandQueue::SDMeshCommandQueue(
 }
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
-    TT_THROW("Trace not supported for slow dispatch");
+    // Slow dispatch never records traces, so no trace is ever in progress. Return nullopt
+    // ("not recording") rather than throwing, so callers can query trace state unconditionally
+    // (e.g. QueueTensorPrefetcherRequest deciding capture-vs-send) under slow dispatch.
     return std::nullopt;
 }
 
@@ -297,6 +305,37 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
     auto lock = lock_api_function_();
     wait_for_cores_idle();
+}
+
+void SDMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> targets,
+    uint32_t value,
+    bool /*blocking*/,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
+    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
+    TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
+
+    // Slow-dispatch analog of the fast-dispatch leading dispatch wait: ensure any
+    // prior program touching this address space (and prior synchronous buffer
+    // writes) is complete before the counter is bumped.
+    wait_for_cores_idle();
+
+    for (const auto& target : targets) {
+        if (!mesh_device_->impl().is_local(target.device_coord)) {
+            continue;
+        }
+        IDevice* device = mesh_device_->impl().get_device(target.device_coord);
+        // target.address is the full device destination (caller pre-applies the
+        // DRAM L1 NOC offset). write_core is synchronous, so `blocking` is moot.
+        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
+            .get_cluster()
+            .write_core(&value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
+    }
 }
 
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {

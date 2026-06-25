@@ -517,10 +517,6 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
-        .def(
-            "with_shard_spec",
-            &MemoryConfig::with_shard_spec,
-            "Returns a new MemoryConfig with the shard spec set to the given value")
         .def_prop_ro(
             "interleaved",
             [](const MemoryConfig& memory_config) {

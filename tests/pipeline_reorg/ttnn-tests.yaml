@@ -1,9 +1,10 @@
 # =============================================================================
 # Shared TTNN Test Definitions
 # =============================================================================
-# This file defines all TTNN unit test groups used by both:
-#   - ttnn-post-commit.yaml (hardware CI)
+# This file defines TTNN unit test groups used by:
+#   - ttnn-post-commit.yaml (hardware CI, test-category sanity)
 #   - ttsim.yaml (simulator CI)
+# Merge-gate tests live in ttnn_smoke_merge_gate_tests.yaml (test-category smoke).
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # Optional: merge_gate (filter in workflow), fast_runtime_mode_off.
@@ -44,19 +45,6 @@
   team: ttnn
   owner_id: U05ACKAJTHS # Naif Tarafdar
   merge_gate: false
-
-- name: "ttnn example tests"
-  cmd: "./tests/scripts/run_ttnn_examples.sh"
-  skus:
-    wh_n300_civ2:
-      timeout: 40
-    bh_p100:
-      timeout: 40
-    bh_p150b_civ2:
-      timeout: 40
-  team: ttnn
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  merge_gate: true
 
 - name: "ttnn eltwise group 1"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 1 -m "not disable_fast_runtime_mode"'
@@ -176,7 +164,7 @@
   merge_gate: false
 
 - name: "ttnn misc ops group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/deepseek tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
@@ -197,6 +185,20 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+
+# indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
+# test's sp_rank-7 GLM5.1/DSv32 deployment cases (8h/16h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
+# sanity catches deployment regressions and the op gets watcher coverage, without re-running them nightly.
+- name: "ttnn indexer_score group"
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k "accuracy and rank7" -xv'
+  skus:
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
   merge_gate: false

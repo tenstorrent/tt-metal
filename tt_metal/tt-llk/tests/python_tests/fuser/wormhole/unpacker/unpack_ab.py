@@ -39,8 +39,17 @@ class UnpackerAB(Unpacker):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t_matrix = get_golden_generator(TransposeGolden)
         if compute_unit.broadcast_type != BroadcastType.None_:
+            src_b_tile_dims = (
+                compute_unit.src_b.tile_shape.total_row_dim(),
+                compute_unit.src_b.tile_shape.total_col_dim(),
+            )
+            src_b_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
             tilized_b = tilize_block(
-                tensor_b, compute_unit.src_b.dimensions, compute_unit.src_b.data_format
+                tensor_b,
+                compute_unit.src_b.dimensions,
+                compute_unit.src_b.data_format,
+                num_faces=src_b_num_faces,
+                tile_dimensions=src_b_tile_dims,
             )
             broadcast_golden = get_golden_generator(BroadcastGolden)
             broadcast_result = broadcast_golden(
@@ -55,6 +64,8 @@ class UnpackerAB(Unpacker):
                 broadcast_result,
                 compute_unit.src_b.data_format,
                 compute_unit.src_b.dimensions,
+                tile_dimensions=src_b_tile_dims,
+                num_faces=src_b_num_faces,
             )
 
         if compute_unit.unpack_transpose_faces == Transpose.Yes:
@@ -173,5 +184,4 @@ class UnpackerAB(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        shape_var = f"tensor_shape_stage_{operation.stage_id}"
-        return f"_llk_unpack_AB_uninit_({shape_var}, {shape_var});\n"
+        return f"_llk_unpack_AB_uninit_();\n"

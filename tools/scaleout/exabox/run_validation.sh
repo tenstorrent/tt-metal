@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -23,13 +27,25 @@ Optional:
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
     --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
-                                            /data/scaleout_configs is mounted by default; each host path
-                                            is mounted at the same path inside the container
-    --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
-    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
+                                            /data/scaleout_configs is mounted by default when it exists on
+                                            the host; each host path is mounted at the same path inside
+                                            the container
+    --mpi-if <interface>                    Network interface for MPI TCP transport
+                                            (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
+    --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
+                                            e.g. --validation-args "--min-connections 2 --hard-fail"
+                                            Use this for any run_cluster_validation flag (relaxed validation, strict
+                                            failure, connectivity prints, metrics logging, etc.)
     --help                                  Display this help message and exit
+
+================================================================================
+To see the full list of run_cluster_validation flags forwardable via
+--validation-args, run (no cluster needed, --hosts is not required):
+
+    $0 --image <image> --validation-args "--help"
+================================================================================
 
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \\
@@ -47,10 +63,17 @@ ITERATIONS=50
 
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
-EXTRA_VOLUMES=(/data/scaleout_configs)
-RERUN_ON_RETRAIN=false
-MPI_IF="ens5f0np0"
+# /data/scaleout_configs is a Markham-cluster convention. Only mount it when it
+# actually exists locally; otherwise Docker fails trying to auto-create the
+# missing bind-mount source path (mkdir: permission denied) and every rank dies
+# before run_cluster_validation starts. Sites that keep configs elsewhere just
+# pass them via --volume / the descriptor path flags.
+EXTRA_VOLUMES=()
+[[ -d /data/scaleout_configs ]] && EXTRA_VOLUMES+=(/data/scaleout_configs)
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
+VALIDATION_EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -122,20 +145,13 @@ while [[ $# -gt 0 ]]; do
             EXTRA_VOLUMES+=("$2")
             shift 2
             ;;
-        --rerun-on-retrain)
-            if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
-                echo "Error: --rerun-on-retrain does not accept a value"
-                exit 1
-            fi
-            RERUN_ON_RETRAIN=true
-            shift
-            ;;
         --mpi-if)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
                 echo "Error: --mpi-if requires a non-empty value"
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -145,6 +161,15 @@ while [[ $# -gt 0 ]]; do
             fi
             read -ra _extra <<< "$2"
             MPI_EXTRA_ARGS+=("${_extra[@]}")
+            shift 2
+            ;;
+        --validation-args)
+            if [[ -z "$2" ]]; then
+                echo "Error: --validation-args requires a non-empty value"
+                exit 1
+            fi
+            read -ra _extra <<< "$2"
+            VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
         --help)
@@ -160,6 +185,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# If the operator forwarded --help / -h through --validation-args, just print
+# run_cluster_validation --help from the docker image and exit. Short-circuits
+# before --hosts validation since no cluster operation is performed.
+for _arg in "${VALIDATION_EXTRA_ARGS[@]}"; do
+    if [[ "$_arg" == "--help" || "$_arg" == "-h" ]]; then
+        if [[ -z "$DOCKER_IMAGE" ]]; then
+            echo "Error: --validation-args \"--help\" requires --image <docker-image>"
+            echo "Example: $0 --image <ghcr-image> --validation-args \"--help\""
+            exit 1
+        fi
+        exec docker run --rm --entrypoint='' "$DOCKER_IMAGE" \
+            ./build/tools/scaleout/run_cluster_validation --help
+    fi
+done
+
 # Validate required arguments
 if [[ -z "$HOSTS" ]]; then
     echo "Error: --hosts is required"
@@ -173,6 +213,19 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     echo ""
     show_help
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    # Check if validation failed (command substitution only exits subshell, not parent)
+    if [[ -z "$MPI_IF" ]]; then
+        echo "Error: MPI interface auto-detection failed" >&2
+        exit 1
+    fi
 fi
 
 run_cluster_validation() {
@@ -196,6 +249,7 @@ run_cluster_validation() {
             --tag-output \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
             --output-path "$validation_output_path"
@@ -208,6 +262,7 @@ run_cluster_validation() {
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
+            "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
             --output-path "$validation_output_path"
@@ -284,6 +339,9 @@ if [[ "${#MPI_EXTRA_ARGS[@]}" -gt 0 ]]; then
 fi
 echo "Number of iterations: $ITERATIONS"
 echo "Output directory: $OUTPUT_DIR"
+if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
+    echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
+fi
 echo ""
 
 # Create output directory if it doesn't exist and resolve to an absolute path so
@@ -334,6 +392,14 @@ for ((i=1; i<=ITERATIONS; i++)); do
             echo ""
             echo "Running cluster validation..."
             run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
+            VALIDATION_EXIT_CODE=$?
+            # Surface validation failures explicitly. Without this, a container
+            # that dies before run_cluster_validation starts (e.g. a bad bind
+            # mount -> docker exit 126) produces no output yet the loop still
+            # prints "completed", masking the failure.
+            if [[ $VALIDATION_EXIT_CODE -ne 0 ]]; then
+                echo "ERROR: cluster validation FAILED (exit code $VALIDATION_EXIT_CODE)"
+            fi
         else
             echo "Skipping validation due to mpirun failure"
         fi
@@ -342,36 +408,15 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
 
-    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
-        # Keep all retry artifacts (log + per-iteration retrain CSV) under the same base
-        # output directory so the end-of-run aggregation finds everything in one scan.
-        ITER_RETRY_DIR="$OUTPUT_DIR/iteration_${i}_retry"
-        mkdir -p "$ITER_RETRY_DIR"
-        LOG_FILE_RETRY="$ITER_RETRY_DIR/cluster_validation_iteration_${i}_retry.log"
-
-        {
-            echo "=========================================="
-            echo "Iteration: $i - retry due to retrained links"
-            echo "Timestamp: $(date)"
-            echo "=========================================="
-            echo ""
-
-            echo "Re-running cluster validation..."
-            run_cluster_validation "$ITER_RETRY_DIR"
-            echo "Iteration $i retry completed at $(date)"
-            echo "=========================================="
-        } 2>&1 | tee "$LOG_FILE_RETRY"
-    fi
-
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
 done
 
 # ----------------------------------------------------------------------------
 # End-of-run aggregation: produce a single CSV with one row per retrained link
-# and the total number of retrains observed across the entire run (all
-# iterations + retries). Per-iteration link_retrain_report.csv files are
-# written by the C++ tool inside each iteration's output directory.
+# and the total number of retrains observed across the entire run. Per-iteration
+# link_retrain_report.csv files are written by the C++ tool inside each iteration's
+# output directory.
 # ----------------------------------------------------------------------------
 RETRAIN_SUMMARY="$OUTPUT_DIR/link_retrain_summary.csv"
 
@@ -391,7 +436,7 @@ if [[ ${#retrain_csvs[@]} -eq 0 ]]; then
     exit 0
 fi
 
-echo "Iterations (incl. retries) with retraining: ${#retrain_csvs[@]}"
+echo "Iterations with retraining: ${#retrain_csvs[@]}"
 echo ""
 
 # Sum Retrain_Count per (Host,Tray,ASIC,Channel,Unique_ID) across all CSVs.

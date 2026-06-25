@@ -33,6 +33,7 @@
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_build/kernel_signature_parser.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -124,7 +125,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
-    //  - TensorBindings are emitted into the ta namespace
+    //  - TensorBindings are emitted into the tensor namespace
     //
     // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
@@ -134,7 +135,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
     //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
-    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArg.
+    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArgument.
     //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
     //       added automatically by the Metal 2.0 host API machinery.
     ostringstream content;
@@ -178,13 +179,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
-            content << "namespace ta {\n";
+            content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
                         << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
-            content << "}  // namespace ta\n";
+            content << "}  // namespace tensor\n";
         }
     }
     write_file(path, content.str());
@@ -201,8 +202,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const fs::path path = out_dir / "kernel_args_generated.h";
 
     // Named RTAs/CRTAs come straight from the settings as ordered vectors.
-    const vector<string>& rta_names = settings.get_named_runtime_args();
-    const vector<string>& crta_names = settings.get_named_common_runtime_args();
+    const vector<string>& rta_names = settings.get_runtime_arg_names();
+    const vector<string>& crta_names = settings.get_common_runtime_arg_names();
 
     // The kernel's CRTA buffer is laid out as three back-to-back sections:
     //   [ user-named CRTAs | TensorBinding section | varargs ]
@@ -277,6 +278,51 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     write_file(path, content.str());
 }
 
+// Scan a kernel source for a TT_KERNEL entry and, if present, return the generated kernel_main()
+// shim text (validated against the host-registered arg schema). Returns "" when the source has no
+// TT_KERNEL marker (a legacy / hand-written kernel_main() — fully backward compatible). Fail-fasts
+// if a TT_KERNEL entry appears in a non-Metal 2.0 kernel: it would have no kernel_main() and fail
+// to link with a confusing error (TT_KERNEL is defined only in the Metal 2.0 header
+// experimental/kernel_args.h). Shared by the data-movement/eth path and the compute (TRISC) path
+// so both author styles behave identically — the compute entry symbol is kernel_main() too
+// (run_kernel() calls it), which is exactly what the shim defines.
+std::string generate_tt_kernel_shim_if_present(
+    const JitBuildSettings& settings, const KernelSource& kernel_src, bool is_metal2) {
+    auto sig = parse_kernel_main_signature(kernel_src.get_content());
+    if (!sig) {
+        return {};
+    }
+    const std::string source_desc =
+        kernel_src.source_type_ == KernelSource::FILE_PATH ? kernel_src.path_.string() : std::string("<inline>");
+    log_debug(
+        tt::LogBuildKernels,
+        "TT_KERNEL entry '{}': CTAs=[{}] runtime=[{}] (source: {})",
+        sig->name,
+        fmt::join(sig->template_param_names, ", "),
+        fmt::join(sig->fn_param_names, ", "),
+        source_desc);
+    if (!is_metal2) {
+        TT_FATAL(
+            false,
+            "TT_KERNEL entry '{}' found in a non-Metal 2.0 kernel. Named kernel arguments (the TT_KERNEL "
+            "marker with template/function parameters) require the Metal 2.0 host API.",
+            sig->name);
+    }
+    // Cross-check the kernel's declared parameters against the host-registered schema before
+    // generating the shim, so a name typo or schema drift fails here with a clear message rather
+    // than as a compile error buried in generated code (kernel param the host never registered) or
+    // a silently-unused arg (registered name the kernel never takes).
+    std::vector<std::string> cta_names;
+    settings.process_named_compile_time_args([&cta_names](const std::unordered_map<std::string, uint32_t>& named) {
+        for (const auto& entry : named) {
+            cta_names.push_back(entry.first);
+        }
+    });
+    validate_signature_against_schema(
+        *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
+    return generate_kernel_main_shim(*sig);
+}
+
 }  // namespace
 
 void jit_build_genfiles_kernel_include(
@@ -297,6 +343,11 @@ void jit_build_genfiles_kernel_include(
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
     kernel_header_content += get_kernel_source_to_include(kernel_src);
+
+    // For a TT_KERNEL-tagged entry, append the generated kernel_main() shim that fetches every arg
+    // by name and calls the user entry. It must follow the user source (so the entry is declared)
+    // and the args:: header (emitted above for Metal 2.0). Empty for legacy kernels.
+    kernel_header_content += generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
 
     string kernel_header = out_dir + "kernel_includes.hpp";
     write_file(kernel_header, kernel_header_content);
@@ -330,11 +381,18 @@ void jit_build_genfiles_triscs_src(
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
+    // For a TT_KERNEL-tagged compute entry, append the generated kernel_main() shim after the user
+    // source (same as the data-movement path). The compute entry symbol is kernel_main() —
+    // run_kernel() calls it — so the generated shim is compiled into each TRISC just like a
+    // hand-written kernel_main(). Computed once and reused for all TRISC variants; empty for legacy
+    // kernels and for kernels that don't use the named-arg entry syntax.
+    const string tt_kernel_shim = generate_tt_kernel_shim_if_present(settings, kernel_src, is_metal2);
+
     // Generate the four TRISC source files (fourth only used on Quasar)
-    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include);
-    write_file(math_cpp, math_prolog + kernel_src_to_include);
-    write_file(pack_cpp, pack_prolog + kernel_src_to_include);
-    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include);
+    write_file(unpack_cpp, unpack_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(math_cpp, math_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(pack_cpp, pack_prolog + kernel_src_to_include + tt_kernel_shim);
+    write_file(isolate_sfpu_cpp, isolate_sfpu_prolog + kernel_src_to_include + tt_kernel_shim);
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
@@ -366,20 +424,33 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
+// Quasar HW DataFormat codes (mirror of the relevant entries in
+// tensix_types.h. A few host DataFormat
+// enumerators use a value that differs from the HW encoding to keep host enum
+// values unique / avoid collisions, so device compilation needs the real HW
+// code. Keep these in sync with tensix_types.h.
+using hw_format_t = std::underlying_type_t<DataFormat>;
+constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
+constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
+constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
+constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
+constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
+
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    // Remap host-only enum values to HW values for device compilation.
-    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
-    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
-    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
-        if (f == DataFormat::Int16) {
-            return 9;  // HW value from tensix_types.h
+    auto as_int = [](DataFormat f) -> hw_format_t {
+        switch (f) {
+            case DataFormat::Int16: return kHwInt16;
+            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+            case DataFormat::MxInt8: return kHwMxInt8;
+            case DataFormat::MxInt4: return kHwMxInt4;
+            case DataFormat::MxInt2: return kHwMxInt2;
+            default: return static_cast<hw_format_t>(f);
         }
-        return static_cast<std::underlying_type_t<DataFormat>>(f);
     };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
@@ -389,11 +460,17 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    bool enable_2x_src_format,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
-        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
+        desc.buf_dataformat_arr,
+        unpack_conditional_dst_format,
+        fp32_dest_acc_en,
+        std::move(unpack_to_dest_mode),
+        /*int_fpu_en=*/false,
+        enable_2x_src_format);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -406,9 +483,11 @@ void emit_unpack_data_formats(
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_cbs) {
-    // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
+    // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
+    // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
+    // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -514,14 +593,19 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     }
 
     if (std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), [](DataFormat f) {
-            return f == DataFormat::MxFp4;
+            return tt::is_mx_format(f);
         })) {
-        TT_FATAL(arch == tt::ARCH::QUASAR, "MxFp4 format is only supported on Quasar");
+        TT_FATAL(arch == tt::ARCH::QUASAR, "Mx formats are only supported on Quasar");
     }
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
+        desc,
+        unpack_conditional_dst_format,
+        options.fp32_dest_acc_en,
+        options.unpack_to_dest_mode,
+        options.enable_2x_src_format,
+        max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
@@ -542,13 +626,15 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         std::move(pack_dst_formats_all_cbs)};
 }
 
-// Decomposes tile dimensions into (num_faces_r_dim, num_faces_c_dim) per CB.
-// Derived directly from tile_r_dim / face_r_dim and tile_c_dim / face_c_dim.
+// Decomposes logical faces into (num_faces_r_dim, num_faces_c_dim) per CB.
+// Some kernels use a compact row geometry that does not evenly divide the
+// default tile height, so derive the row-face count from total logical faces.
 // Runs on host at JIT time so division is fine.
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dims(
     const std::vector<uint32_t>& tile_r_dim_arr,
     const std::vector<uint32_t>& tile_c_dim_arr,
-    const std::vector<uint32_t>& face_r_dim_arr) {
+    const std::vector<uint32_t>& face_r_dim_arr,
+    const std::vector<uint32_t>& num_faces_arr) {
     TT_FATAL(
         tile_r_dim_arr.size() == tile_c_dim_arr.size(),
         "tile_r_dim_arr size ({}) must match tile_c_dim_arr size ({})",
@@ -559,23 +645,46 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
         "tile_r_dim_arr size ({}) must match face_r_dim_arr size ({})",
         tile_r_dim_arr.size(),
         face_r_dim_arr.size());
+    TT_FATAL(
+        tile_r_dim_arr.size() == num_faces_arr.size(),
+        "tile_r_dim_arr size ({}) must match num_faces_arr size ({})",
+        tile_r_dim_arr.size(),
+        num_faces_arr.size());
     const size_t n = tile_r_dim_arr.size();
     std::vector<uint32_t> r_dims(n);
     std::vector<uint32_t> c_dims(n);
     for (size_t i = 0; i < n; ++i) {
         TT_FATAL(face_r_dim_arr[i] > 0, "face_r_dim must be > 0 at index {}", i);
-        TT_FATAL(
-            tile_r_dim_arr[i] % face_r_dim_arr[i] == 0,
-            "tile_r_dim ({}) must be a multiple of face_r_dim ({})",
-            tile_r_dim_arr[i],
-            face_r_dim_arr[i]);
+        TT_FATAL(num_faces_arr[i] > 0, "num_faces must be > 0 at index {}", i);
         TT_FATAL(
             tile_c_dim_arr[i] % constants::FACE_WIDTH == 0,
             "tile_c_dim ({}) must be a multiple of FACE_WIDTH ({})",
             tile_c_dim_arr[i],
             constants::FACE_WIDTH);
-        r_dims[i] = tile_r_dim_arr[i] / face_r_dim_arr[i];
-        c_dims[i] = tile_c_dim_arr[i] / constants::FACE_WIDTH;
+        const uint32_t tile_c_faces = tile_c_dim_arr[i] / constants::FACE_WIDTH;
+        TT_FATAL(tile_c_faces > 0, "tile_c_dim ({}) must include at least one face", tile_c_dim_arr[i]);
+        c_dims[i] = std::min(tile_c_faces, num_faces_arr[i]);
+        TT_FATAL(
+            num_faces_arr[i] % c_dims[i] == 0,
+            "num_faces ({}) must be divisible by num_faces_c_dim ({})",
+            num_faces_arr[i],
+            c_dims[i]);
+        r_dims[i] = num_faces_arr[i] / c_dims[i];
+        // Guard against bogus (face_r_dim, num_faces) combos: the logical face grid must fit
+        // within the tile rows. e.g. (face_r_dim=9, num_faces=8) on a 32x32 tile would produce
+        // r_dims=4 -> 36 rows, overflowing the tile and corrupting downstream face addressing.
+        TT_FATAL(
+            r_dims[i] * face_r_dim_arr[i] <= tile_r_dim_arr[i],
+            "face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile_r_dim ({}) at "
+            "index {} (num_faces={}, num_faces_c_dim={}, tile_c_dim={})",
+            r_dims[i],
+            face_r_dim_arr[i],
+            r_dims[i] * face_r_dim_arr[i],
+            tile_r_dim_arr[i],
+            i,
+            num_faces_arr[i],
+            c_dims[i],
+            tile_c_dim_arr[i]);
     }
     return {r_dims, c_dims};
 }
@@ -590,7 +699,7 @@ void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t 
     emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -605,7 +714,7 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -664,7 +773,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
     out << "#endif\n";   // if pack
     out << "#endif\n\n"; // if not math and not unpack
 

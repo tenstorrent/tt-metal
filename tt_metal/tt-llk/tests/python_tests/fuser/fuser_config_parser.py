@@ -9,8 +9,11 @@ from typing import Annotated, List, Optional, Tuple
 
 import pytest
 import yaml
+from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
+from helpers.logger import logger
+from helpers.tile_constants import validate_tile_dimensions
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -24,7 +27,7 @@ from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig, GlobalConfig
 
 FUSER_CONFIG_DIR = (
-    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_config"
+    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
 )
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -67,6 +70,9 @@ class OperandDefinition(BaseModel):
     name: str = Field(..., min_length=1)
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
+    tile_dims: Optional[
+        Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
+    ] = None
     const_value: Optional[float] = None
 
     @field_validator("dims")
@@ -75,9 +81,29 @@ class OperandDefinition(BaseModel):
         for dim in v:
             if dim <= 0:
                 raise ValueError(f"must be positive, got {dim}")
-            if dim % 32 != 0:
-                raise ValueError(f"must be multiple of 32, got {dim}")
         return tuple(v)
+
+    @field_validator("tile_dims", mode="before")
+    @classmethod
+    def validate_tile_dims(cls, v):
+        if v is None:
+            return v
+        v = tuple(v)
+        validate_tile_dimensions(v)
+        return v
+
+    @model_validator(mode="after")
+    def validate_dims_align_to_tiles(self) -> "OperandDefinition":
+        tile_r, tile_c = self.tile_dims if self.tile_dims is not None else (32, 32)
+        if self.dims[0] % tile_r != 0:
+            raise ValueError(
+                f"dims[0]={self.dims[0]} must be a multiple of tile row dimension {tile_r}"
+            )
+        if self.dims[1] % tile_c != 0:
+            raise ValueError(
+                f"dims[1]={self.dims[1]} must be a multiple of tile column dimension {tile_c}"
+            )
+        return self
 
     @field_validator("format", mode="before")
     @classmethod
@@ -102,19 +128,45 @@ class FuserConfigSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_config(self) -> "FuserConfigSchema":
+        formats = {op_def.name: op_def.format for op_def in self.operands}
         seen_operands: set[str] = set()
 
         for op in self.operations:
+            src_a_name = None
             for node in op.math:
                 if hasattr(node, "src_a"):
+                    if src_a_name is None:
+                        src_a_name = node.src_a
                     seen_operands.add(node.src_a)
                 if hasattr(node, "src_b"):
                     seen_operands.add(node.src_b)
 
-            if op.output in seen_operands:
-                raise ValueError("output already used")
+            for pack_entry in op.pack:
+                if pack_entry.output in seen_operands:
+                    raise ValueError(
+                        f"cannot use '{pack_entry.output}' as output twice"
+                    )
+                seen_operands.add(pack_entry.output)
 
-            seen_operands.add(op.output)
+                if src_a_name is not None:
+                    input_fmt = formats[src_a_name]
+                    output_fmt = formats[pack_entry.output]
+                    if is_format_combination_outlier(
+                        input_fmt, output_fmt, self.dest_acc
+                    ):
+                        raise ValueError(
+                            f"Dest Accumulation must be enabled for {input_fmt.name} input and {output_fmt.name} output"
+                        )
+
+            if len(op.pack) > 1:
+                pack_formats = [formats[e.output] for e in op.pack]
+                first_exp_b = pack_formats[0].is_exponent_B()
+                if any(f.is_exponent_B() != first_exp_b for f in pack_formats[1:]):
+                    names = [e.output for e in op.pack]
+                    logger.warning(
+                        f"Pack outputs {names} have mixed exponent families, "
+                        f"unpack/math format inference will use {op.pack[0].output} as reference",
+                    )
 
         return self
 
@@ -127,9 +179,13 @@ class FuserConfigSchema(BaseModel):
                 dimensions=op_def.dims,
                 data_format=op_def.format,
                 const_value=op_def.const_value,
+                tile_dims=op_def.tile_dims,
             )
 
-        pipeline = [op.to_fused_operation(operands) for op in self.operations]
+        pipeline = [
+            op.to_fused_operation(operands, dest_acc=self.dest_acc.value)
+            for op in self.operations
+        ]
 
         return FuserConfig(
             pipeline=pipeline,

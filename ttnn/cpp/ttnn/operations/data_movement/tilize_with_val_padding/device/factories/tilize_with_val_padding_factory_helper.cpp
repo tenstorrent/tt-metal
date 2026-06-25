@@ -30,9 +30,11 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 if (tensor.dtype() == DataType::FLOAT32) {
                     return std::bit_cast<uint32_t>(static_cast<float>(pad_value));
                 }
+                if (tensor.dtype() == DataType::INT32) {
+                    return std::bit_cast<uint32_t>(static_cast<int32_t>(pad_value));
+                }
                 TT_FATAL(
-                    tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::INT32,
-                    "only supporting bfloat16, float32, and uint32/int32/uint16");
+                    tensor.dtype() == DataType::UINT32, "only supporting bfloat16, float32, and uint32/int32/uint16");
                 return static_cast<uint32_t>(pad_value);
             }
             if constexpr (std::is_same_v<T, uint32_t>) {

@@ -11,9 +11,9 @@ namespace ckernel::math
 {
 
 // Number of rows for MATH functions
-constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for trinity
-constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
-constexpr static unsigned int SFP_ROWS           = 2;
+constexpr static std::uint32_t ELTWISE_MATH_ROWS       = MATH_ROWS; // 8 for quasar, 4 for trinity
+constexpr static std::uint32_t MOVE_MATH_ROWS[3]       = {8, 4, 1};
+constexpr static unsigned int SFP_ROWS                 = 2;
 
 // SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
 constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
@@ -63,6 +63,14 @@ typedef union
     alu_config_t f;
 } alu_config_u;
 
+// List of possible data format config states
+enum class DataFormatConfigSet : std::uint8_t
+{
+    UNCONFIGURED          = 0,
+    DEFAULT               = 1,
+    MOV_OPS_EXPLICIT_FMT  = 2
+};
+
 // /**
 // * @brief Helper function to calculate log2,
 // * only works for 32 bit unsigned inputs
@@ -71,29 +79,6 @@ typedef union
 // inline uint32_t trisc_log2(const uint32_t val) {
 //     return 31 - __builtin_clz(val);
 // }
-
-/**
- * @brief Helper function to calculate log2 for FPU rows
- * since FPU rows are <=16, and are power of 2, can use
- * simplified higher perf method
- * @param val: Input value to log2 operation
- */
-inline std::uint32_t math_rows_log2(const std::uint32_t math_rows)
-{
-    switch (math_rows)
-    {
-        case 16:
-            return 4;
-        case 8:
-            return 3;
-        case 4:
-            return 2;
-        case 2:
-            return 1;
-        default:
-            return 0;
-    }
-}
 
 /**
  * @brief Increments given counters

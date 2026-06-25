@@ -175,6 +175,9 @@ TEST_F(MeshWatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
     if (this->slow_dispatch_) {
         GTEST_SKIP();
     }
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
 
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

@@ -31,7 +31,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<uint32_t> num_links = 1,
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_dispatch = false);
+    bool use_fp8_dispatch = false,
+    uint32_t num_untilizers_per_sender = 2);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch
 

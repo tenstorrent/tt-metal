@@ -35,9 +35,13 @@
   team: runtime
 
 # --- Core API Tests (includes kernel path validation) ---
+# Runtime tensor tests were split out of unit_tests_api into their own
+# unit_tests_tensor binary; run it here so this group's coverage (and its
+# already-budgeted runtime) is unchanged by the split.
 - name: runtime_api
   cmd: |
     ./build/test/tt_metal/unit_tests_api
+    ./build/test/tt_metal/unit_tests_tensor
     rm -rf /tmp/kernels && mkdir -p /tmp/kernels
     TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter='CompileProgramWithKernelPathEnvVarFixture.*'
   skus:
@@ -59,8 +63,7 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Context, Device, Misc, JIT Build ---
-# NOTE: unit_tests_noc dropped.
+# --- Context, Device, Misc, JIT Build, NOC ---
 - name: runtime_core
   # MetalContextIntegrationTest.Legacy disabled by #44767.
   cmd: |
@@ -68,6 +71,7 @@
     ./build/test/tt_metal/unit_tests_device
     ./build/test/tt_metal/unit_tests_misc
     ./build/test/tt_metal/unit_tests_jit_build
+    ./build/test/tt_metal/unit_tests_noc
   skus:
     wh_n150_civ2:
       timeout: 12
@@ -77,24 +81,8 @@
   team: runtime
 
 # --- Integration Tests ---
-# NOTE: unit_tests_integration disabled (matmul JIT + SFPU device hang). Re-add when fixed.
-# - name: runtime_integration
-#   cmd: ./build/test/tt_metal/unit_tests_integration
-#   skus:
-#     wh_n150_civ2:
-#       timeout: 8
-#     bh_p150b_civ2:
-#       timeout: 8
-#   owner_id: U099A7FMKL2 # Manish Sudumbrekar
-#   team: runtime
-
-# --- LLK + SFPI Tests ---
-- name: runtime_llk
-  # 4 tests disabled by #44767.
-  disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
-  cmd: |
-    ./build/test/tt_metal/unit_tests_llk --gtest_filter='-{disabled_llk_filter}'
-    ./build/test/tt_metal/unit_tests_sfpi
+- name: runtime_integration
+  cmd: ./build/test/tt_metal/unit_tests_integration
   skus:
     wh_n150_civ2:
       timeout: 8
@@ -103,8 +91,23 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Debug Tools (DPrint, Watcher, Inspector, Clean Init) ---
-# NOTE: unit_tests_noc_debugging disabled (NOC debug detection broken); re-enable once owner fixes.
+# --- LLK + SFPI Tests ---
+# WH timeout raised from 8→12 min: full LLK+SFPI suite exceeds 8 min wall clock on wh_n150_civ2.
+- name: runtime_llk
+  # 4 tests disabled by #44767.
+  disabled_llk_filter: &disabled_llk 'LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3:MeshDeviceFixture.Top32RmDevPipelineCompletes'
+  cmd: |
+    ./build/test/tt_metal/unit_tests_llk --gtest_filter='-{disabled_llk_filter}'
+    ./build/test/tt_metal/unit_tests_sfpi
+  skus:
+    wh_n150_civ2:
+      timeout: 12
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Debug Tools (DPrint, Watcher, Inspector, Clean Init, NOC Debugging) ---
 - name: runtime_debug_tools
   # 60 tests disabled by #44767.
   disabled_debug_tools_filter: &disabled_debug_tools 'MeshWatcherDelayFixture.TensixTestWatcherSanitizeInsertDelays:MeshWatcherFixture.ActiveEthTestWatcherDetectLinkUp:MeshWatcherFixture.ActiveEthTestWatcherEthLinkCheck:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthDestL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeEthSrcL1Overflow:MeshWatcherFixture.ActiveEthTestWatcherSanitizeL1Overflow:MeshWatcherFixture.HostMcastWrapAroundXY_DownRight:MeshWatcherFixture.HostMcastWrapAroundXY_UpLeft:MeshWatcherFixture.HostMcastWrapAroundX_Left:MeshWatcherFixture.HostMcastWrapAroundX_Right:MeshWatcherFixture.HostMcastWrapAroundY_Down:MeshWatcherFixture.HostMcastWrapAroundY_Up:MeshWatcherFixture.IdleEthTestWatcherSanitizeNOCInlineWriteDram:MeshWatcherFixture.QuasarTestWatcherSanitizeMultiDMRace:MeshWatcherFixture.TensixDramTestWatcherRingBufferDrisc:MeshWatcherFixture.TensixTestWatcherPause:MeshWatcherFixture.TensixTestWatcherSanitizeL1Overflow:MeshWatcherFixture.TensixTestWatcherSanitizeMulticastSemaphoreInc:MeshWatcherFixture.TestWatcherRingBufferBrisc:MeshWatcherFixture.TestWatcherRingBufferErisc:MeshWatcherFixture.TestWatcherRingBufferIErisc:MeshWatcherFixture.TestWatcherRingBufferNCrisc:MeshWatcherFixture.TestWatcherRingBufferTrisc0:MeshWatcherFixture.TestWatcherRingBufferTrisc1:MeshWatcherFixture.TestWatcherRingBufferTrisc2:MeshWatcherFixture.TestWatcherWaypoints:RTATestFixture.CorrectArgDispatchAndPayloadValidation:RTATestFixture.QuasarMultiDMOutOfBoundsArgDetection:RTATestFixture.SentinelPatternHandlingAndMissingRTADetection:WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/IErisc:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/RTA_DM0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/RTA_TRISC0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/CRTA_DM0:WatcherArgAsserts/RTAAssertTest.OutOfBoundsArgAccessDetection/CRTA_TRISC0:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Brisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM3:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/DM7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Drisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Erisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault4:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault5:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault6:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/HWFault7:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/IErisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCrisc:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/NCriscPacketTag:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc0:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc1:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc2:WatcherNonDefaultAssertTests/WatcherAssertTest.TestWatcherAssert/Trisc3:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage0_QuasarMultiKernel:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16:WatcherStackUsageTests/StackUsageTest.TestWatcherStackUsage/StackUsage16_QuasarMultiKernel'
@@ -117,6 +120,16 @@
       timeout: 12
     bh_p150b_civ2:
       timeout: 12
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+- name: runtime_noc_debugging
+  cmd: ./build/test/tt_metal/unit_tests_noc_debugging
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -194,7 +207,7 @@
       TT_METAL_SLOW_DISPATCH_MODE=1 \
         TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
         ./build/test/tt_metal/unit_tests_api \
-        --gtest_filter='*.DramKernel*'
+        --gtest_filter='*.DramKernel*:DramSenderGCBFixture.*:DramSubchannelHelperFixture.*'
     fi
   skus:
     wh_n150_civ2:
@@ -202,9 +215,9 @@
     wh_n300_civ2:
       timeout: 20
     bh_p150b_civ2:
-      timeout: 20
+      timeout: 15
     bh_p100a_civ2_viommu:
-      timeout: 20
+      timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -299,7 +312,7 @@
   team: runtime
 
 # =============================================================================
-# Multi-Card Unit Tests (BH + Galaxy)
+# Multi-Card Unit Tests (Galaxy)
 # =============================================================================
 
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
@@ -310,8 +323,8 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
   skus:
-    bh_quietbox:
-      timeout: 10
+    bh_loudbox:
+      timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -321,7 +334,7 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
   skus:
-    bh_quietbox:
+    bh_loudbox:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
@@ -366,5 +379,18 @@
   skus:
     wh_galaxy:
       timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# Service Core Manager Tests (BH only, SD + FD)
+- name: service_core_manager
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='ServiceCoreSdFixture.*'
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='ServiceCoreFdFixture.*'
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+    bh_p100a_civ2_viommu:
+      timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

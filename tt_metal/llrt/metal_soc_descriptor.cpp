@@ -20,6 +20,35 @@ CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_
     return this->dram_view_worker_cores.at(dram_view).at(noc);
 };
 
+bool metal_SocDescriptor::is_noc0_dram_endpoint(const CoreCoord& translated_coord) const {
+    // dram_view_worker_cores (and thus get_preferred_worker_core_for_dram_view) holds TRANSLATED
+    // coords, so this compares like-for-like against a TRANSLATED argument. See the header note.
+    for (size_t dram_view = 0; dram_view < this->dram_view_worker_cores.size(); ++dram_view) {
+        if (get_preferred_worker_core_for_dram_view(static_cast<int>(dram_view), /*noc=*/0) == translated_coord) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
+    // Blackhole reserves each DRAM view's NOC0 worker endpoint for the syseng firmware; no other
+    // architecture has that restriction (and future ones won't), so the exclusion is confined to this
+    // one spot rather than every DRAM loop in Metal.
+    const bool exclude_noc0_endpoints = (this->arch == tt::ARCH::BLACKHOLE);
+    std::vector<CoreCoord> dram_cores;
+    for (const tt::umd::CoreCoord& core : get_cores(tt::CoreType::DRAM, coord_system)) {
+        if (exclude_noc0_endpoints) {
+            const tt::umd::CoreCoord translated = translate_coord_to(core, tt::CoordSystem::TRANSLATED);
+            if (is_noc0_dram_endpoint({translated.x, translated.y})) {
+                continue;
+            }
+        }
+        dram_cores.push_back({core.x, core.y});
+    }
+    return dram_cores;
+}
+
 CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
         dram_view < this->dram_view_eth_cores.size(),
@@ -99,6 +128,29 @@ CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoo
         dram_bank_endpoint_coords.size(),
         dram_bank_endpoint_coords.empty() ? 0 : dram_bank_endpoint_coords[0].size());
     return dram_bank_endpoint_coords[logical_coord.x][logical_coord.y];
+}
+
+CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const {
+    const int channel = static_cast<int>(get_channel_for_dram_view(dram_view));
+    const tt::umd::CoreCoord phys_umd = get_dram_core_for_channel(channel, subchannel, tt::CoordSystem::TRANSLATED);
+    const CoreCoord phys{phys_umd.x, phys_umd.y};
+    TT_FATAL(
+        dram_view >= 0 && static_cast<size_t>(dram_view) < dram_bank_endpoint_coords.size(),
+        "dram_view {} out of range (num_views={})",
+        dram_view,
+        dram_bank_endpoint_coords.size());
+    const auto& endpoints = dram_bank_endpoint_coords[static_cast<size_t>(dram_view)];
+    for (size_t idx = 0; idx < endpoints.size(); ++idx) {
+        if (endpoints[idx] == phys) {
+            return CoreCoord{static_cast<uint32_t>(dram_view), static_cast<uint32_t>(idx)};
+        }
+    }
+    TT_THROW(
+        "DRAM subchannel {} on view {} (physical {}, {}) not found in dram_bank_endpoint_coords",
+        subchannel,
+        dram_view,
+        phys.x,
+        phys.y);
 }
 
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(

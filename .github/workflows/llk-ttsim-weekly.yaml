@@ -122,11 +122,12 @@ jobs:
                             Path("reports/wormhole/ttsim-version")):
               if candidate.is_file():
                   for line in candidate.read_text().splitlines():
-                      m = re.match(r"ttsim_version=['\"]?([\w.]+)['\"]?", line.strip())
+                      m = re.match(r"ttsim_version=['\"]?([\w.-]+)['\"]?", line.strip())
                       if m:
                           TTSIM_VERSION = m.group(1)
                           break
-                  break
+                  if TTSIM_VERSION != "unknown":
+                      break
 
           def summarize(xml_path: Path):
               if not xml_path.is_file():
@@ -138,9 +139,10 @@ jobs:
                   total   += int(s.attrib.get("tests",    0) or 0)
                   failed  += int(s.attrib.get("failures", 0) or 0)
                   skipped += int(s.attrib.get("skipped",  0) or 0)
-              passed = max(total - failed - skipped, 0)
-              pct = (100.0 * passed / total) if total else 0.0
-              return dict(total=total, passed=passed, failed=failed,
+              ran = max(total - skipped, 0)
+              passed = max(ran - failed, 0)
+              pct = (100.0 * passed / ran) if ran else 0.0
+              return dict(total=total, ran=ran, passed=passed, failed=failed,
                           skipped=skipped, pass_pct=pct)
 
           archs = [
@@ -156,7 +158,7 @@ jobs:
               else:
                   lines.append(
                       f"• *{label}*: "
-                      f"✅ {s['passed']}/{s['total']} passing "
+                      f"✅ {s['passed']}/{s['ran']} passing "
                       f"({s['pass_pct']:.1f}%) · "
                       f"❌ {s['failed']} failed · "
                       f"⏩ {s['skipped']} skipped"
@@ -190,7 +192,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Send Slack digest
-        uses: slackapi/slack-github-action@v2.1.1
+        uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           method: chat.postMessage
           token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}

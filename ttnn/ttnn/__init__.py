@@ -205,6 +205,24 @@ from ttnn._ttnn.hd_socket import (
     H2DMode,
 )
 
+from ttnn._ttnn.h2d_stream_service import (
+    H2DStreamService,
+)
+
+from ttnn._ttnn.d2h_stream_service import (
+    D2HStreamService,
+)
+
+from ttnn._ttnn.d2d_stream_service import (
+    D2DStreamService,
+    D2DStreamServiceSender,
+    D2DStreamServiceReceiver,
+)
+
+from ttnn._ttnn.counter_channel import (
+    InterProcessCounterChannel,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -284,6 +302,7 @@ from ttnn.types import (
     cb_descriptor_from_sharded_tensor,
     get_cb_address,
     UnpackToDestMode,
+    FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
 )
@@ -457,6 +476,7 @@ from ttnn.operations.matmul import (
     MatmulDeviceOperation,
     MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
+    matmul_select_program_factory,
 )
 
 from ttnn.operations.normalization import (
@@ -535,6 +555,8 @@ experimental.disaggregation = disaggregation
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
+
+IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
 

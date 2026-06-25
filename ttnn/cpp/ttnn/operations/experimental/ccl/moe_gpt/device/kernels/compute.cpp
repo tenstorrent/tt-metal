@@ -4,6 +4,7 @@
 
 #include "moe_gpt_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
@@ -130,6 +131,8 @@ void kernel_main() {
     tile_regs_release();
     cb_push_back(cb_c2c_ones_tile, 1);
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2);
 
@@ -140,7 +143,7 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w0_w1);
 
     // Initialize matmul for W0
-    mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+    matmul_block_init(cb_s2c_in, cb_r2c_w0_w1, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
     // Initialize SFPU for GPT-OSS SwiGLU activation
     PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));

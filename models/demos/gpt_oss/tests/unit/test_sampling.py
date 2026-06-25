@@ -13,6 +13,7 @@ vocab dimensions (201088, TP=8) to verify:
 - Sampled token IDs are always < vocab_size (no padding tokens leak through)
 """
 
+import os
 from collections import Counter
 
 import pytest
@@ -23,6 +24,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gpt_oss.tt.model import compute_per_device_vocab
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Every test in this module is pinned to a 4×8 Galaxy mesh with FABRIC_1D_RING
 # (see GPT_OSS_DEVICE_PARAMS below). On systems with fewer devices — e.g. the
@@ -88,11 +90,17 @@ VOCAB_SIZE = 201088
 MAX_TOP_K = 32
 BATCH_SIZE = 32
 
+
+def _gpt_oss_trace_model_key() -> str:
+    hf = os.getenv("HF_MODEL", "").lower()
+    return "gpt-oss-120b" if "120b" in hf else "gpt-oss-20b"
+
+
 # GPT-OSS device params: FABRIC_1D_RING + large trace region.
 # NOT Llama Galaxy's dispatch_core_axis/worker_l1_size/small trace.
 GPT_OSS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-    "trace_region_size": 30000000,
+    TRACE_MODEL_KEY_PARAM: _gpt_oss_trace_model_key(),
 }
 
 
@@ -294,7 +302,7 @@ def test_gpt_oss_stochastic_sampling(sampling_params, batch_size, mesh_device, d
     # SamplingGenerator manages seeds between iterations (TTSampling re-seeds
     # from seeds_tt_tensor each forward call, so seeds must be updated via
     # SeedManager.get_new_values() to get different random samples).
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(
         SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p, seed=seed),
         batch_size,
@@ -386,7 +394,7 @@ def test_gpt_oss_penalties(penalty_params, mesh_device, device_params, reset_see
     # Shard and create SamplingGenerator with penalties
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     params = format_sampling_params(
         SamplingParams(
@@ -448,7 +456,7 @@ def test_gpt_oss_logprobs(mesh_device, device_params, reset_seeds):
 
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     seed = 42
     params = format_sampling_params(
@@ -515,7 +523,7 @@ def test_gpt_oss_topk_logprobs(mesh_device, device_params, reset_seeds):
     tt_input = make_sharded_logits(torch_input, mesh_device, args.cluster_shape, dtype=ttnn.bfloat16)
 
     # Create SamplingGenerator with use_topk_logprobs enabled
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
 
     num_logprobs = 5
     params = format_sampling_params(
@@ -588,7 +596,7 @@ def _make_seeded_generator(args, mesh_device, batch_size, per_user_seeds):
     caller is responsible for calling it before each sample() to advance the
     RNG state and copy fresh seeds to the device.
     """
-    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(
         SamplingParams(temperature=1.0, top_k=32, top_p=0.95, seed=0),
         batch_size,

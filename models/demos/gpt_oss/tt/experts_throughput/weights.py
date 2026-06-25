@@ -8,6 +8,7 @@ the all_to_all-based throughput experts implementation.
 """
 
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -871,12 +872,30 @@ def create_fused_moe_gpt_config(
     N = config.intermediate_size
     E = experts_per_device
 
+    # If the cached fused weights for this layer already exist on disk,
+    # ``ttnn.as_tensor`` below will load them via ``load_tensor_flatbuffer``
+    # and the torch_w0_w1 / torch_w2 inputs are discarded. Skip the
+    # expensive state_dict prep (bfloat16→float32 expansion + per-device
+    # permute/cat across 32 chips × 128 experts) in that case — for
+    # gpt-oss-120b this saves ~15-20s per layer on a warm cache.
+    def _tensor_cache_file_path(cache_base, dtype, layout):
+        return f"{cache_base}_dtype_{dtype.name}_layout_{layout.name}.tensorbin"
+
+    def _tensor_cache_exists(cache_base, dtype, layout):
+        return cache_base is not None and os.path.isfile(_tensor_cache_file_path(cache_base, dtype, layout))
+
+    _w0_w1_base = get_cache_file_name(tensor_cache_path, f"fused_w0_w1_dtype{weight_dtype}")
+    _w2_base = get_cache_file_name(tensor_cache_path, f"fused_w2_dtype{weight_dtype}")
+    _fused_caches_exist = _tensor_cache_exists(_w0_w1_base, weight_dtype, ttnn.TILE_LAYOUT) and _tensor_cache_exists(
+        _w2_base, weight_dtype, ttnn.TILE_LAYOUT
+    )
+
     # --- Extract ALL expert weights from state_dict ---
     # Each device owns E = experts_per_device unique experts.
     # Device d (row-major: d = row * mesh_cols + col) owns experts [d*E : (d+1)*E].
     # Weights are organized as [rows*num_cores, cols*L, ...] and sharded via
     # ShardTensor2dMesh(dims=(0, 1)) so each device gets [num_cores, L, ...].
-    if state_dict:
+    if state_dict and not _fused_caches_exist:
         if "gate_up_proj" in state_dict:
             gate_up_all = state_dict["gate_up_proj"]  # [num_experts, K, 2N]
             w0_all = gate_up_all[..., ::2].contiguous().float()  # [num_experts, K, N]
@@ -925,7 +944,7 @@ def create_fused_moe_gpt_config(
     # ShardTensor2dMesh(dims=(0, 1)) gives each device [num_cores, L, E, groups, K, tile].
     mesh_cols = total_devices // ring_devices
     experts_per_cluster = config.num_experts // mesh_cols
-    if state_dict:
+    if state_dict and not _fused_caches_exist:
         w0_w1_rows = []
         w2_rows = []
         for r in range(ring_devices):

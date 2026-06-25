@@ -18,8 +18,7 @@ TEST_PADDING_VALUE = -42
 @pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), None])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
+def test_std(device, batch_size, h, w, dim, correction, keepdim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
@@ -27,7 +26,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
+    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
@@ -38,10 +37,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
     atol = 0.01
     frobenius = 0.005
     pcc = 0.9999
-    if use_legacy:
-        # Legacy implementation is even less accurate.
-        pcc = 0.975
-    elif dim == (-2, -1):
+    if dim == (-2, -1):
         # For 2D reduction, all output values are close to 1, and we're using bfloat16,
         # so a rounding error of even 1 ULP impacts PCC.
         # ATOL/RTOL/Frobenius should catch any significant errors.
@@ -68,8 +64,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
 @pytest.mark.parametrize("dim", [None, [], -1, -2, (-2, -1)])
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
+def test_var(device, batch_size, h, w, dim, keepdim, correction):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
@@ -77,7 +72,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
+    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
@@ -91,11 +86,6 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
     pcc = 0.99999
     frobenius = 0.007
 
-    if use_legacy:
-        # Legacy implementation is less accurate.
-        pcc = 0.993
-        frobenius = 0.0085
-
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -103,6 +93,102 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
         rtol=rtol,
         atol=atol,
         frobenius_threshold=frobenius,
+    )
+
+
+# Regression test for fp32 Welford variance precision under large mean offsets.
+# Uses a bit-exact integer input where the true variance is known analytically:
+# variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
+# correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
+# translation-invariant *and* sign-invariant, so neither adding a large offset to every
+# element nor flipping its sign should change the answer.the scalar is applied after the
+# reduction as var(s*x) = s^2 * var(x).
+# test covers all three reduction kernels (H, W, HW) and both code paths
+@pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
+@pytest.mark.parametrize("offset", [0.0, 1e6])
+@pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
+def test_var_fp32_translation_invariance(device, dim, offset, scalar):
+    correction = True
+    # The input is read at full fp32 and reduced unscaled; scalar is now applied after the (unscaled, precise) Welford reduction
+    # as var(s*x) = s^2 * var(x), so this case is accurate regardless of offset.
+    N = 32
+    seq = torch.arange(N, dtype=torch.float32) + offset
+    # Lay out the input so the reduction axis is the integer sequence.
+    if dim == -1:
+        # Each row of the tile is the sequence; reducing along W gives var of [offset..offset+31].
+        torch_input = seq.unsqueeze(0).expand(N, N).contiguous()
+    else:
+        # dim=-2 or dim=(-2,-1): each column is the sequence so H-reduce
+        # (or HW-reduce of a rank-deficient tile) sees the sequence.
+        torch_input = seq.unsqueeze(-1).expand(N, N).contiguous()
+    torch_input = torch_input.unsqueeze(0).unsqueeze(0)  # (1, 1, 32, 32)
+
+    # Reference computed in fp64 so it isn't itself contaminated by any fp32 precision loss.
+    torch_ref = torch.var((torch_input * scalar).to(torch.float64), dim=dim, keepdim=True, correction=correction)
+
+    tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.var(tt_in, dim=dim, scalar=scalar, keepdim=True, correction=correction)
+    actual = ttnn.to_torch(ttnn.from_device(tt_out))
+
+    # Tight tolerances: the unscaled fp32 reduction is essentially exact, so we only allow
+    # small accumulation noise from the SFPU Welford recurrence.
+    assert_numeric_metrics(
+        torch_ref,
+        actual,
+        rtol=1e-5,
+        atol=1e-4,
+        frobenius_threshold=1e-5,
+        pcc_threshold=0.9999,
+        check_ulp=False,
+    )
+
+
+# Regression test for fp32 Welford variance precision when do_scale=true (non-unity scalar)
+# AND the reduction dimension crosses a tile boundary (Wt>1).
+# Unlike test_var_fp32_translation_invariance above, which tests whether inputs preserve
+# FP32 precision by using a large offset, this test checks that the FPU MUL result
+# is preserved in FP32, which requires UnpackToDestFp32 on cb_scaled.
+#
+# Variance of N consecutive integers 0..N-1 is (N^2 - 1) / 12 (population); with Bessel's
+# correction (sample variance) it is N * (N^2 - 1) / (12 * (N - 1)) = N * (N + 1) / 12. The
+# torch.var below in fp64 computes the ground truth for any N; the formula is noted only to
+# make the smallest case (N=33, sample variance 93.5; scaled by 2.0 -> 374.0) easy to verify
+# by inspection.
+#
+# Parametrized across two N values to cover two Wt regimes of the wt-inner loop in
+# welford_reduce_w with do_scale=true:
+#   - N=33  -> Wt = ceil(33/32)  = 2   (smallest multi-tile case; original regression target)
+#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop, exercises the per-iter UNPACK
+#                                       hw_configure flip between cb_in's Default mode and
+#                                       cb_scaled's UnpackToDestFp32 mode across many
+#                                       iterations rather than just one boundary crossing)
+@pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
+@pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
+def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
+    correction = True
+    seq = torch.arange(N, dtype=torch.float32)
+    # Each row of the input tile is the sequence; reducing along W (dim=-1) gives per-row var.
+    # Shape (1, 1, 32, N): one H tile (Ht=1), Wt = ceil(N/32) W tiles.
+    torch_input = seq.unsqueeze(0).expand(32, N).contiguous().unsqueeze(0).unsqueeze(0)
+
+    # Reference in fp64 so it isn't contaminated by fp32 precision loss in torch.
+    torch_ref = torch.var((torch_input * scalar).to(torch.float64), dim=-1, keepdim=True, correction=correction)
+
+    tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.var(tt_in, dim=-1, keepdim=True, correction=correction, scalar=scalar)
+    actual = ttnn.to_torch(ttnn.from_device(tt_out))
+
+    # Tolerances tighter than the BF16 floor: the FPU mul + cb_scaled UnpackToDest path
+    # should preserve enough precision to land well within 0.5 ULP-relative of the exact
+    # reference at this magnitude.
+    assert_numeric_metrics(
+        torch_ref,
+        actual,
+        rtol=1e-3,
+        atol=1e-2,
+        frobenius_threshold=1e-3,
+        pcc_threshold=0.9999,
+        check_ulp=False,
     )
 
 
@@ -172,9 +258,12 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim_6", [6])
 @pytest.mark.parametrize("dim_7", [7])
 @pytest.mark.parametrize("dim_8", [8, 32, 63])
-@pytest.mark.parametrize("dim", [[3, 7]])
+@pytest.mark.parametrize("dim", [[3, 7], [6, 7]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
+    if dim == [6, 7]:
+        pytest.xfail("Sum op on HW reduction with BF16 input exceeds allclose threshold. Issue #46472")
+
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8), dtype=torch.bfloat16)
@@ -832,8 +921,7 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
         ([32, 32, 32, 0], False, 3, "var"),
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy):
+def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -842,8 +930,6 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
     Note: We do not enforce the same exception type or message.
     """
     torch.manual_seed(42)
-    if op not in ("std", "var") and use_legacy:
-        pytest.skip("use_legacy only applies to std and var")
 
     rank = len(tensor_shape)
 
@@ -852,10 +938,6 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
     ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
-
-    ttnn_extra_kwargs = {}
-    if op in ("std", "var"):
-        ttnn_extra_kwargs["use_legacy"] = use_legacy
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -866,7 +948,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
 
     ttnn_errored = False
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, **ttnn_extra_kwargs)
+        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
     except RuntimeError:
         ttnn_errored = True
 

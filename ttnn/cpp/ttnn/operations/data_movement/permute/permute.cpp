@@ -16,19 +16,46 @@
 
 namespace ttnn::operations::data_movement::detail {
 
+inline bool is_rm_block_or_width_sharded(const ttnn::Tensor& t) {
+    if (t.layout() != Layout::ROW_MAJOR || !t.is_sharded()) {
+        return false;
+    }
+    auto ml = t.memory_config().memory_layout();
+    return ml == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+           ml == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
+}
+
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& output_mem_config,
     float pad_value = 0.0f) {
-    // Get the device
     uint32_t rank = a.logical_shape().rank();
+
+    // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
+    // Input-side guard only; irregular output shapes are safe (writers emit full rows, compute_output_specs synthesises
+    // a valid spec).
+    const auto& input_logical = a.logical_shape();
+    const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
+                                                            input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
+    if (is_rm_block_or_width_sharded(a) && irregular_hw) {
+        const auto interleaved_l1 =
+            MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        auto x = ttnn::to_memory_config(a, interleaved_l1, std::nullopt);
+        return permute_impl(x, dims, output_mem_config, pad_value);
+    }
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_config.value_or(a.memory_config()), std::nullopt, pad_value);
     };
 
     if (rank > 4) {
+        if (a.is_sharded()) {
+            // Preserve input's shard layout; compute_output_specs derives a valid spec.
+            auto effective_config = output_mem_config.value_or(
+                MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type()));
+            return ttnn::prim::permute(a, dims, effective_config, std::nullopt, pad_value);
+        }
         return prim_permute(a);
     }
 
@@ -36,7 +63,7 @@ ttnn::Tensor permute_impl(
     uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];
 
     auto formatted_input_tensor = a;
-    // WH and CN should be supported without typecast
+    // WH and CN should be supported without typecast.
     bool wh = N == 0 && C == 1 && H == 3 && W == 2;
     bool cn = N == 1 && C == 0 && H == 2 && W == 3;
     bool cnwh = N == 1 && C == 0 && H == 3 && W == 2;
@@ -60,7 +87,7 @@ ttnn::Tensor permute_impl(
         return ttnn::transpose(input, 0, 1, output_mem_config, 0.0f);
     };
 
-    // Keep limited sharding support with recursive calls
+    // Sharded: decompose into transpose chains or fall back to prim::permute.
     if (a.is_sharded()) {
         if (N == 0 && C == 1 && H == 2 && W == 3) {
             output = formatted_input_tensor;
@@ -74,8 +101,13 @@ ttnn::Tensor permute_impl(
             output = transpose_hc(transpose_wh(formatted_input_tensor), output_mem_config);
         } else if (N == 0 && C == 3 && H == 2 && W == 1) {
             output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)), output_mem_config);
+        } else if (N == 1 && C == 0 && H == 2 && W == 3) {
+            output = transpose_cn(formatted_input_tensor);
         } else {
-            output = prim_permute(formatted_input_tensor);
+            // Preserve input's shard layout; compute_output_specs derives a valid spec.
+            auto effective_config = output_mem_config.value_or(
+                MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type()));
+            output = ttnn::prim::permute(formatted_input_tensor, dims, effective_config, std::nullopt, pad_value);
         }
     } else {
         if (N == 0 && C == 1 && H == 2 && W == 3) {
@@ -90,7 +122,7 @@ ttnn::Tensor permute_impl(
             output = prim_permute(formatted_input_tensor);
         }
     }
-    // Convert tensor back to original dtype if typecast was performed
+    // Convert back to original dtype if typecast was performed.
     output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
     return output;
 }
@@ -104,52 +136,44 @@ ttnn::Tensor permute_launch(
 }
 
 bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
-    // 1) Trivial early-out for rank <= 1
+    // Rank <= 1 is always a no-op.
     const auto rank = a.logical_shape().rank();
     if (rank <= 1) {
         return true;
     }
 
-    // 2) Check for identity permutation
+    // Identity permutation.
     ttnn::SmallVector<uint32_t> seq_dims(rank);
     std::iota(seq_dims.begin(), seq_dims.end(), 0);
     if (dims == seq_dims) {
         return true;
     }
 
-    // 3) Otherwise, when the input is tiled, it is never a NOP if the last two dimensions are permuted. When it is row
-    // major, it is never a NOP if the last dimension is permuted.
+    // TILE: last two dims must stay; RM: last dim must stay.
     if ((a.layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) ||
         (a.layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1)) {
         return false;
     }
 
-    // Build permuted shape
+    // Shape change → not a no-op.
     const auto& shape = a.logical_shape();
     ttnn::SmallVector<uint32_t> perm_shape(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         perm_shape[i] = shape[dims[i]];
     }
 
-    // 4) If the shape changed, definitely not a no-op
     if (perm_shape != shape) {
         return false;
     }
 
-    // 5) If the shape stayed the same, ensure we didn't
-    //    relocate a dimension with size > 1
+    // Moving a dim with size > 1 changes physical layout.
     for (uint32_t i = 0; i < rank; ++i) {
         const uint32_t j = dims[i];
         if (i != j && shape[i] > 1) {
-            // Moved a dimension that has > 1 elements
-            // => layout changed => not a no-op.
             return false;
         }
     }
 
-    // If we made it here, we either
-    //    - only moved dimensions of size 1, or
-    //    - didn't move anything at all
     return true;
 }
 
@@ -193,11 +217,11 @@ ttnn::Tensor permute(
 
     const auto input_layout = input_tensor.layout();
 
-    if (input_layout == Layout::ROW_MAJOR && memory_config.has_value()) {
+    if (input_layout == Layout::ROW_MAJOR && memory_config.has_value() && memory_config->is_sharded() &&
+        memory_config->shard_spec().has_value()) {
         uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
         TT_FATAL(
-            !memory_config.value().is_sharded() ||
-                (*memory_config.value().shard_spec()).shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
+            memory_config->shard_spec()->shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
             "Shard page size must be aligned to {}B for L1 Tensor",
             l1_alignment);
     }

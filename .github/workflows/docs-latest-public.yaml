@@ -47,6 +47,7 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
@@ -59,6 +60,16 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           uv pip install $WHEEL_FILENAME
+      - name: Check TTNN ops are documented
+        # Verifies every registered ttnn op has an entry in docs/source/ttnn/ttnn/api.rst.
+        # Runs here (no hardware needed) rather than in nightly — catches missing docs on the PR that adds the op.
+        # ASan builds require LD_PRELOAD of the ASan runtime so Python can import the instrumented ttnn extension.
+        run: |
+          if [ "${{ inputs.build-type }}" = "ASan" ]; then
+            export LD_PRELOAD="$(clang-20 -print-resource-dir)/lib/linux/libclang_rt.asan-x86_64.so"
+            export ASAN_OPTIONS="detect_leaks=0"
+          fi
+          python3 scripts/detect_undocumented_ttnn_ops.py
       - name: Build Docs
         timeout-minutes: 15
         env:
@@ -87,7 +98,10 @@ jobs:
 
   deploy-docs:
     needs: build-docs
-    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+    # Only deploy from main/stable or a final release tag (vX.Y.Z). Pre-release tags
+    # like v0.69.0-rc1 or v0.68.0-dev20260319 are excluded so they don't accumulate on
+    # gh-pages and inflate the Pages artifact past the 10 GB limit. See #45440.
+    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-'))) }}
     runs-on: ubuntu-latest
     concurrency:
       # Note that people may spam the post-commit pipeline on their branch, and
@@ -104,6 +118,7 @@ jobs:
         # This is needed by the pages-deploy action so
         # that the folder is initialized for .git
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
@@ -128,9 +143,46 @@ jobs:
         continue-on-error: true
         with:
           name: github-pages
+      - name: Regenerate versions.json on gh-pages
+        # The Sphinx version-selector template (docs/source/common/_templates/versions.html)
+        # fetches /tt-metal/versions.json on every docs page load. Regenerating it from the
+        # current gh-pages tree after each successful deploy keeps the dropdown perfectly
+        # in sync with what's served. See #45572.
+        if: ${{ steps.deployment.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DEPLOYED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Build versions.json from the current gh-pages tree: 'latest' first, then final
+          # release dirs (vX.Y.Z) sorted descending. RC/dev tags are filtered out.
+          payload=$(gh api "repos/${REPO}/git/trees/gh-pages" --jq '
+            [.tree[] | select(.type == "tree") | .path
+              | select(test("^(latest|v\\d+\\.\\d+\\.\\d+)$"))]
+            | sort_by(
+                if . == "latest" then [9999, 9999, 9999]
+                else (capture("^v(?<a>\\d+)\\.(?<b>\\d+)\\.(?<c>\\d+)$")
+                      | [(.a | tonumber), (.b | tonumber), (.c | tonumber)])
+                end)
+            | reverse
+            | {versions: .}
+          ')
+          echo "Computed versions.json:"; echo "$payload" | jq .
+
+          # The Contents API PUT requires the existing file's sha when updating, and rejects
+          # it when creating. Look it up once; pass it only if the file already exists.
+          existing_sha=$(gh api "repos/${REPO}/contents/versions.json?ref=gh-pages" \
+            --jq '.sha // empty' 2>/dev/null || true)
+          extra_args=()
+          [ -n "$existing_sha" ] && extra_args+=(-f "sha=${existing_sha}")
+          gh api --method PUT "repos/${REPO}/contents/versions.json" \
+            -f message="Update versions.json after ${DEPLOYED_VERSION} deploy" \
+            -f content="$(echo "$payload" | base64 -w0)" \
+            -f branch=gh-pages "${extra_args[@]}"
       - name: Check the docs deployment is up
         if: ${{ github.ref == 'refs/heads/main' }}
-        # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
         run: |
           set -eu # basic shell hygiene
           curl --fail -LI https://docs.tenstorrent.com/tt-metal/latest/ttnn/index.html -o /dev/null -s

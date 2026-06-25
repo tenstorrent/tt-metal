@@ -343,7 +343,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=None,
                 enable_trace=False,
                 can_sample_on_device=False,
-                non_greedy_decoding_on_device=False,
                 min_token_len=min_token_len,
                 max_token_len=max_token_len,
                 sample_on_device=self.sample_on_device,
@@ -462,15 +461,16 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         previous_sampling_params = getattr(self, "sampling_params", None)
 
         # sampling params of all users are assumed to be the same default values if not provided.
-        normalized_sampling_params = (
+        local_sampling_params = (
             self._to_local_sampling_params(new_sampling_params)
             if new_sampling_params is not None
             else SamplingParams(
-                temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
-                top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
-                top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
+                temperature=DEFAULT_SAMPLING_TEMPERATURE,
+                top_p=DEFAULT_SAMPLING_TOP_P,
+                top_k=DEFAULT_SAMPLING_TOP_K,
             )
         )
+        normalized_sampling_params = self._normalize_sampling_params_for_batch(local_sampling_params, self.batch_size)
 
         if self.sample_on_device:
             params_same = previous_sampling_params is not None and self._are_sampling_params_same(
@@ -488,7 +488,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
             else:
                 # create new sampling generator
-                enable_internal_trace_sampling = enable_trace
                 self.sampling_args = make_deepseek_sampling_args(
                     self.mesh_device,
                     self.hf_config.vocab_size,
@@ -499,7 +498,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     args=self.sampling_args,
                     mesh_device=self.mesh_device,
                     tt_ccl=self.ccl,
-                    enable_internal_trace=enable_internal_trace_sampling,
                 )
                 self._reset_sampling_state(normalized_sampling_params, self.batch_size, self.batch_size_per_row)
 
@@ -516,6 +514,55 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             repetition_penalty=getattr(params_obj, "repetition_penalty", 1.0),
             seed=getattr(params_obj, "seed", None),
             enable_log_probs=getattr(params_obj, "enable_log_probs", False),
+            num_logprobs=getattr(params_obj, "num_logprobs", 0),
+        )
+
+    @staticmethod
+    def _normalize_sampling_params_for_batch(sampling_params: SamplingParams, batch_size: int) -> SamplingParams:
+        """Convert scalar/tensor/list sampling params to batch-sized python lists.
+
+        Singleton values are broadcast across the full batch. Multi-value lists
+        shorter than batch_size are padded with the last provided value.
+        """
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be > 0, got {batch_size}")
+
+        def _to_list(value):
+            if isinstance(value, torch.Tensor):
+                tensor_value = value.detach().cpu().tolist()
+                return tensor_value if isinstance(tensor_value, list) else [tensor_value]
+            if isinstance(value, (list, tuple)):
+                return list(value)
+            return [value]
+
+        def _normalize_field(value, *, fallback_if_none, allow_none: bool = False):
+            values = _to_list(value)
+            if not values:
+                raise ValueError("Sampling parameter list cannot be empty.")
+            if all(v is None for v in values):
+                if allow_none:
+                    values = [None]
+                else:
+                    values = [fallback_if_none]
+            elif not allow_none:
+                values = [fallback_if_none if v is None else v for v in values]
+            if len(values) == 1:
+                return values * batch_size
+            if len(values) < batch_size:
+                pad_value = values[-1]  # pad with the last value
+                return values + [pad_value] * (batch_size - len(values))
+            return values[:batch_size]
+
+        return SamplingParams(
+            temperature=_normalize_field(sampling_params.temperature, fallback_if_none=DEFAULT_SAMPLING_TEMPERATURE),
+            top_k=_normalize_field(sampling_params.top_k, fallback_if_none=DEFAULT_SAMPLING_TOP_K),
+            top_p=_normalize_field(sampling_params.top_p, fallback_if_none=DEFAULT_SAMPLING_TOP_P),
+            presence_penalty=_normalize_field(sampling_params.presence_penalty, fallback_if_none=0.0),
+            frequency_penalty=_normalize_field(sampling_params.frequency_penalty, fallback_if_none=0.0),
+            repetition_penalty=_normalize_field(sampling_params.repetition_penalty, fallback_if_none=1.0),
+            seed=_normalize_field(sampling_params.seed, fallback_if_none=None, allow_none=True),
+            enable_log_probs=_normalize_field(sampling_params.enable_log_probs, fallback_if_none=False),
+            num_logprobs=_normalize_field(sampling_params.num_logprobs, fallback_if_none=0),
         )
 
     def _are_sampling_params_same(self, new_sampling_params, current_sampling_params) -> bool:
@@ -950,6 +997,11 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         user_slots: list[int] | None = None,
         skip_precompile: bool = False,
     ) -> ttnn.Tensor:
+        assert getattr(self, "sampling_generator", None) is not None, (
+            "_sample_tokens_device called before the sampling generator was created "
+            "_sample_tokens_device requires sampling_generator to be initialized first. "
+            "Call _validate_and_initialize_sampling(..., sample_on_device=True) before sampling."
+        )
         sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
         sampling_logits = logits
         if logits.shape[2] != sampling_batch_size:
@@ -992,7 +1044,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sampling_logits = padded_logits
 
         self.sampling_generator.seed_manager.get_new_values(self._sampling_device_slots(user_slots))
-        self.sampling_generator.enable_internal_trace = enable_trace
         try:
             tt_out = self.sampling_generator.sample(
                 sampling_logits, enable_trace=enable_trace, skip_precompile=skip_precompile
@@ -1010,6 +1061,42 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             tt_out = tt_tokens
 
         return tt_out
+
+    def sample_decode_on_device(
+        self,
+        tt_logits,
+        sampling_params=None,
+        reset_batch=False,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        enable_trace=False,
+        user_slots=None,
+    ):
+        """Public on-device decode-sampling entry point.
+
+        Matches the ``tt_transformers.Generator.sample_decode_on_device`` method
+        name/signature so a model-agnostic caller (e.g. vLLM running forward and
+        sampling as separate steps) can sample uniformly: given the decode logits
+        returned by ``decode_forward(sample_on_device=True)``, return sampled
+        token ids on device.
+
+        Contract differences vs the tt_transformers base (deferred reconciliation):
+        - Deepseek applies sampling *state* (params/seeds, lazy generator
+          creation) in :meth:`_validate_and_initialize_sampling`, gated on
+          param change — not unconditionally per step. Passing ``sampling_params``
+          here refreshes that state (idempotent when unchanged); the vLLM bridge
+          already initialises it before the forward, so it passes ``None``.
+        - ``prompt_tokens`` / ``output_tokens`` / ``slot_remap`` are not yet
+          threaded into deepseek's penalty/seed state (see
+          :meth:`_reset_sampling_state` TODO); accepted for signature
+          compatibility and currently ignored.
+        """
+        if sampling_params is not None:
+            self._validate_and_initialize_sampling(sampling_params, sample_on_device=True, enable_trace=enable_trace)
+        return self._sample_tokens_device(
+            tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True
+        )
 
     def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
         composed = ttnn.to_torch(
@@ -1967,16 +2054,24 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         profiler.end("tokenizing")
 
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
-        padded_seq_len = int(tokens_batched.shape[-1])
+        padded_prefill_seq_len = int(tokens_batched.shape[-1])
+        model_max_seq_len = int(self.hf_config.max_seq_len)
         # For demo the entire batch of prompts are padded to the same max length,
         # so we warmup the model with only one prefill length i.e. min and max are the same.
         # Once https://github.com/tenstorrent/tt-metal/issues/43099 is fixed, we can use the actual min lengths of the prompts
-        min_token_len = padded_seq_len
-        max_token_len = padded_seq_len
+        min_token_len = padded_prefill_seq_len
+        max_token_len = padded_prefill_seq_len
 
         if max_token_len > self.hf_config.max_seq_len:
             raise ValueError(
                 f"Max prompt length {max_token_len} exceeds model max seq len {self.hf_config.max_seq_len}"
+            )
+        if padded_prefill_seq_len + max_new_tokens > model_max_seq_len:
+            raise ValueError(
+                "Prompt/decode budget exceeds model context length: "
+                f"prefill_seq_len ({padded_prefill_seq_len}) + decode_seq_len ({max_new_tokens}) > "
+                f"context_length ({model_max_seq_len}). "
+                "Reduce prefill lengths or decode lengths."
             )
         # Warmup is expensive and only depends on runtime mode + prefill length bounds.
         # Cache completed warmups per configuration so repeated generate() calls can skip it.
@@ -2440,7 +2535,21 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ids = self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": prompt}], add_generation_prompt=True, tokenize=True
             )
-            return list(ids)
+            # transformers 5.x may return a BatchEncoding/dict or a tokenizers.Encoding
+            # from apply_chat_template(tokenize=True) instead of a plain List[int];
+            # `list(ids)` on a mapping would yield its keys (['input_ids', ...]).
+            # BatchEncoding subclasses UserDict (NOT dict), so isinstance(ids, dict) is
+            # False — use mapping membership instead.
+            if hasattr(ids, "keys") and "input_ids" in ids:  # BatchEncoding / dict / UserDict
+                ids = ids["input_ids"]
+            if hasattr(ids, "ids"):  # tokenizers.Encoding
+                ids = ids.ids
+            elif hasattr(ids, "tolist"):  # tensor / ndarray
+                ids = ids.tolist()
+            ids = list(ids)
+            if len(ids) == 1 and isinstance(ids[0], (list, tuple)):  # unwrap single-batch nesting
+                ids = list(ids[0])
+            return ids
 
         # Fallback: deterministic dummy tokenization for random-weights mode
         vocab = int(getattr(self.hf_config, "vocab_size", 32768))
@@ -3127,10 +3236,10 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         kv_cache,
         enable_trace,
         can_sample_on_device,
-        non_greedy_decoding_on_device,
         min_token_len: int = 0,
         max_token_len: int = 0,
         sample_on_device: bool | None = None,
+        greedy_only: bool = False,
     ) -> None:
         if enable_trace:
             logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator; skipping warmup.")

@@ -248,20 +248,6 @@ tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
-ttsl::hash::hash_t SDPAForwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& query_tensor = tensor_args.query;
-    const auto& query_logical_shape = query_tensor.logical_shape();
-    const auto& key_tensor = tensor_args.key;
-    const auto& key_logical_shape = key_tensor.logical_shape();
-    const auto& value_tensor = tensor_args.value;
-    const auto& value_logical_shape = value_tensor.logical_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SDPAForwardDeviceOperation>(
-        args, query_tensor.dtype(), query_logical_shape, key_logical_shape, value_logical_shape);
-
-    return hash;
-}
-
 }  // namespace ttml::metal::ops::sdpa_fw::device
 
 namespace ttnn::prim {

@@ -49,11 +49,6 @@ class EnqueueProgramCommand;
 
 class Kernel;
 
-// Metal 2.0 type aliases
-using KernelSpecName = std::string;
-using DFBSpecName = std::string;
-using SemaphoreSpecName = std::string;
-
 namespace distributed {
 class MeshWorkload;
 class MeshWorkloadImpl;
@@ -300,6 +295,16 @@ public:
 
     std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
 
+    // A single DFB size override request, resolved to a DFB id. Overrides are applied as a batch
+    // so an alias group can be validated for agreement before any mutation.
+    struct DfbSizeOverride {
+        uint32_t dfb_id;
+        std::optional<uint32_t> entry_size;
+        std::optional<uint32_t> num_entries;
+    };
+
+    void apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides);
+
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
     void validate_dataflow_buffer_region(const IDevice* device);
@@ -340,16 +345,20 @@ public:
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
     // Metal 2.0: Add name -> handle mappings (temporary indirection)
-    void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
-    void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
-    void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
+    void register_kernel_spec_name(const std::string& name, KernelHandle handle);
+    void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
+    void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
     void register_tensor_parameter(
-        const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only);
+        const std::string& name,
+        const TensorSpec& spec,
+        bool dynamic_tensor_shape,
+        bool match_padded_shape_only,
+        bool enqueue_invariant);
 
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
-    KernelHandle get_kernel_handle(const KernelSpecName& name) const;
-    uint32_t get_dfb_handle(const DFBSpecName& name) const;
-    uint32_t get_semaphore_handle(const SemaphoreSpecName& name) const;
+    KernelHandle get_kernel_handle(const std::string& name) const;
+    uint32_t get_dfb_handle(const std::string& name) const;
+    uint32_t get_semaphore_handle(const std::string& name) const;
     // Returns nullptr if name is not registered (caller validates).
     const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
     // Returns false if the parameter was not registered with dynamic_tensor_shape=true,
@@ -358,6 +367,9 @@ public:
     // Returns false if the parameter was not registered with match_padded_shape_only=true,
     // or if the name is unknown. (The caller validates known-ness separately.)
     bool get_tensor_parameter_match_padded_shape_only(const std::string& name) const;
+    // Returns false if the parameter was not registered enqueue-invariant, or if the name is
+    // unknown. (The caller validates known-ness separately.)
+    bool get_tensor_parameter_enqueue_invariant(const std::string& name) const;
     std::vector<std::string> get_registered_tensor_parameter_names() const;
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
@@ -366,31 +378,46 @@ public:
     const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
-    std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
+    std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
         return get_kernel(get_kernel_handle(name));
     }
 
     // Metal 2.0: Runtime argument schema for validation.
     // Includes both the named args (declaration-order name lists) and the vararg counts.
     struct KernelRTASchema {
-        // Named arg names, in declaration order. Used to serialize ProgramRunParams values
+        // Named arg names, in declaration order. Used to serialize ProgramRunArgs values
         // into the dispatch buffer and to validate that every declared name is supplied.
-        std::vector<std::string> named_runtime_args;
-        std::vector<std::string> named_common_runtime_args;
+        std::vector<std::string> runtime_arg_names;
+        std::vector<std::string> common_runtime_arg_names;
+
+        // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
+        // position within its dispatch-buffer section). Built once at Program construction so the
+        // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
+        // that path is not bypassable via skip_validation, so per-call construction would be pure
+        // host overhead on the inner re-enqueue loop.
+        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
+        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
         // broadcast count.
         std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
         size_t num_common_runtime_varargs = 0;
+
+        // Names (each a subset of runtime_arg_names / common_runtime_arg_names) declared
+        // enqueue-loop invariant via KernelAdvancedOptions. These named args may be omitted
+        // from a partial UpdateProgramRunArgs call, in which case the value installed by the
+        // most recent SetProgramRunArgs is retained. (Varargs cannot be marked invariant.)
+        std::unordered_set<std::string> enqueue_invariant_runtime_arg_names;
+        std::unordered_set<std::string> enqueue_invariant_common_runtime_arg_names;
     };
 
     // Metal 2.0: Runtime argument schema registration and lookup
-    void register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema);
-    const KernelRTASchema* get_kernel_rta_schema(const KernelSpecName& name) const;
+    void register_kernel_rta_schema(const std::string& name, const KernelRTASchema& schema);
+    const KernelRTASchema* get_kernel_rta_schema(const std::string& name) const;
 
     // Metal 2.0: Get all registered kernel names (for completeness validation)
-    std::vector<KernelSpecName> get_registered_kernel_names() const;
+    std::vector<std::string> get_registered_kernel_names() const;
 
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -468,18 +495,21 @@ private:
     // Initial Metal 2.0 implementation uses a name registry to map names to handles.
     // This indirection is simple and non-invasive, but less efficient than a direct mapping.
     struct Metal2NameRegistry {
-        std::unordered_map<KernelSpecName, KernelHandle> kernel_handles;
-        std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
-        std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
-        std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
+        std::unordered_map<std::string, KernelHandle> kernel_handles;
+        std::unordered_map<std::string, uint32_t> dfb_handles;
+        std::unordered_map<std::string, uint32_t> semaphore_handles;
+        std::unordered_map<std::string, KernelRTASchema> kernel_rta_schemas;
         // TensorParameter name -> the parameter's declared layout + loosening opt-ins.
-        // Used by ValidateProgramRunParams to check that the supplied MeshTensor's spec matches
+        // Used by ValidateProgramRunArgs to check that the supplied MeshTensor's spec matches
         // the parameter's declared layout (with relaxations applied per the opt-in flags), and as
         // the per-parameter lookup for completeness checks.
         struct RegisteredTensorParameter {
             TensorSpec spec;
             bool dynamic_tensor_shape = false;
             bool match_padded_shape_only = false;
+            // Declared enqueue-loop invariant: the TensorArgument may be omitted from a partial
+            // UpdateProgramRunArgs call (the previously-bound MeshTensor is retained).
+            bool enqueue_invariant = false;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
