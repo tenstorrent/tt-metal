@@ -161,6 +161,32 @@ std::string get_ubb_id_str(ChipId chip_id) {
     return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
 }
 
+bool are_chips_on_same_tray(ChipId chip_a, ChipId chip_b) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    tt::umd::ClusterDescriptor& cluster_desc = (*(cluster.get_cluster_desc()));
+    const auto ubb_id_a = tt::tt_fabric::get_ubb_id(cluster_desc, chip_a);
+    const auto ubb_id_b = tt::tt_fabric::get_ubb_id(cluster_desc, chip_b);
+    return ubb_id_a.tray_id != 0 && ubb_id_a.tray_id == ubb_id_b.tray_id;
+}
+
+std::uint32_t get_expected_connections_per_chip_pair(
+    ChipId chip,
+    ChipId other_chip,
+    tt::tt_metal::ClusterType cluster_type,
+    std::uint32_t num_internal_connections_per_side,
+    std::uint32_t num_external_connections_per_side) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
+        cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        // BH QSFP port channels overlap with intra-UBB TRACE channels, so is_external_cable() cannot
+        // distinguish cross-tray vs intra-tray links. Use tray IDs instead.
+        if (are_chips_on_same_tray(chip, other_chip)) {
+            return num_internal_connections_per_side;
+        }
+        return num_external_connections_per_side;
+    }
+    return num_internal_connections_per_side;
+}
+
 std::string get_pcie_device_id_str(ChipId chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& chips_with_mmio = cluster.get_chips_with_mmio();
@@ -562,29 +588,15 @@ TEST(Cluster, TestMeshFullConnectivity) {
                     << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
                     << ", expected at least " << num_target_connections;
             } else {
-                if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
-                    cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
-                    const auto internal_count_it = num_internal_connections_to_chip.find(other_chip);
-                    const auto external_count_it = num_external_connections_to_chip.find(other_chip);
-                    const std::uint32_t internal_count =
-                        internal_count_it != num_internal_connections_to_chip.end() ? internal_count_it->second : 0;
-                    const std::uint32_t external_count =
-                        external_count_it != num_external_connections_to_chip.end() ? external_count_it->second : 0;
-                    if (internal_count > 0) {
-                        EXPECT_EQ(internal_count, num_internal_connections_per_side)
-                            << chip_ss.str() << " has " << internal_count << " internal connections to "
-                            << other_chip_ss.str() << ", expected " << num_internal_connections_per_side;
-                    }
-                    if (external_count > 0) {
-                        EXPECT_EQ(external_count, num_external_connections_per_side)
-                            << chip_ss.str() << " has " << external_count << " external connections to "
-                            << other_chip_ss.str() << ", expected " << num_external_connections_per_side;
-                    }
-                } else {
-                    EXPECT_EQ(count, num_internal_connections_per_side)
-                        << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
-                        << ", expected " << num_internal_connections_per_side;
-                }
+                const std::uint32_t expected_connections_per_side = get_expected_connections_per_chip_pair(
+                    chip,
+                    other_chip,
+                    cluster_type,
+                    num_internal_connections_per_side,
+                    num_external_connections_per_side);
+                EXPECT_EQ(count, expected_connections_per_side)
+                    << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str() << ", expected "
+                    << expected_connections_per_side;
             }
         }
     }
