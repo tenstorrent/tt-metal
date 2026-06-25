@@ -392,6 +392,13 @@ class TtnnDiffusionDriveModel:
         if features is None:
             features = self._dummy_features(batch_size)
         with torch.no_grad():
+            # Warm up the FULL eager forward TWICE before capture so every kernel
+            # (stem, FPN, perception, heads — and all variants) is JIT-compiled and
+            # program-cached first. Compiling a NEW device program while a trace is
+            # active hangs the device; execute_compiled's eager tail still allocates
+            # buffers per forward (only a warning), but must never trigger a JIT.
+            self._forward_ttnn(features)
+            self._forward_ttnn(features)
             bb.capture_backbone_trace(features["camera_feature"], features["lidar_feature"])
         self._compiled = True
 
