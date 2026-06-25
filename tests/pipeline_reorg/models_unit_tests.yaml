@@ -698,7 +698,7 @@
   model: voxtral-tts
   skus:
     bh_p150:
-      timeout: 20
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -721,7 +721,7 @@
   model: voxtral-tts
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
