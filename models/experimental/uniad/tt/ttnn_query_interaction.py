@@ -52,14 +52,10 @@ class TtQueryInteractionModule:
 
         if q.shape[0] > 0 and k.shape[0] > 0:
             tgt2 = self.self_attn(q, k, value=value)[0]
-
-            tgt2 = ttnn.to_torch(tgt2)
-            tgt = ttnn.to_torch(tgt)
-
+            # Pure ttnn slice instead of to_torch/from_torch round-trip.
+            # tgt is unchanged in this branch — the original code was a
+            # to_torch/from_torch no-op.
             tgt2 = tgt2[:, 0]
-
-            tgt = ttnn.from_torch(tgt, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            tgt2 = ttnn.from_torch(tgt2, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
             tgt = ttnn.layer_norm(
                 tgt,
@@ -91,9 +87,10 @@ class TtQueryInteractionModule:
                     epsilon=self.eps,
                 )
 
-                track_instances.query = ttnn.to_torch(track_instances.query)
-                track_instances.query[:, : dim // 2] = ttnn.to_torch(query_pos)
-                track_instances.query = ttnn.from_torch(track_instances.query, device=self.device)
+                # Replaced torch slice-assignment round-trip with pure ttnn
+                # slice + concat. Same pattern as the decoder reg_branches fix.
+                second_half = track_instances.query[:, dim // 2 :]
+                track_instances.query = ttnn.concat([query_pos, second_half], dim=1)
 
             x = ttnn.linear(tgt, self.params.linear_feat1.weight, bias=self.params.linear_feat1.bias)
             x = ttnn.relu(x)
@@ -106,9 +103,10 @@ class TtQueryInteractionModule:
                 epsilon=self.eps,
             )
 
-            track_instances.query = ttnn.to_torch(track_instances.query)
-            track_instances.query[:, dim // 2 :] = ttnn.to_torch(query_feat)
-            track_instances.query = ttnn.from_torch(track_instances.query, device=self.device)
+            # Replaced torch slice-assignment round-trip with pure ttnn
+            # slice + concat. Same pattern as above.
+            first_half = track_instances.query[:, : dim // 2]
+            track_instances.query = ttnn.concat([first_half, query_feat], dim=1)
 
         return track_instances
 

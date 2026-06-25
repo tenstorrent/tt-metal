@@ -154,7 +154,6 @@ struct ProgramRunArgsView {
     };
     // TODO: Better to just expose the multi-dim dispatch vectors directly?
     //       Would eliminate the lookup indirection.
-    //       ...But would mess up all the implicit RTAs....
     //       Look into this when implementing.
     Group<KernelRunArgsView> kernel_run_args;
 

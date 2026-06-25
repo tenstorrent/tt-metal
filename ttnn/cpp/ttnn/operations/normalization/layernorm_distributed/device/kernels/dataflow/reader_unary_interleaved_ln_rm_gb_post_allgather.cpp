@@ -102,7 +102,7 @@ void kernel_main() {
         reduce_factor,
         /*compute_uses_reduce_tile=*/true>();
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(cb_eps, eps);
+    generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
 
     Noc noc;
     CircularBuffer cb_inp_buf(cb_inp);

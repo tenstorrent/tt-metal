@@ -321,9 +321,15 @@ def pytest_configure(config):
         config.getoption("--speed-of-light", default=False),
     )
 
+    worker_id = getattr(config, "workerinput", {}).get("workerid", "master")
+
+    if worker_id != "master":
+        import torch
+
+        torch.set_num_threads(1)
+
     TestConfig.setup_mode(
-        # Pass worker id here, so TestConfig can calculate Tensix tile it will run on
-        getattr(config, "workerinput", {}).get("workerid", "master"),
+        worker_id,
         config.getoption("--compile-consumer", default=False),
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),

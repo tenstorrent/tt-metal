@@ -145,10 +145,17 @@ inline void DataflowBuffer::finish_impl() {
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
             dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+            // TRISC drain: finish() must not return until this TC is empty (posted == 0) -
+            // covers the consumer (UNPACK), the Tensix->DM producer (PACK), and both sides of
+            // an INTRA self-loop. The consumer also skips TCs this TRISC doesn't own via
+            // tensix_trisc_mask, which exists only in the UNPACK-side LocalDFBInterface, so the
+            // gate sits under an inner UNPACK guard (the PACK struct has no such member).
+#ifdef UCK_CHLKC_UNPACK
             if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
             }
+#endif
             all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);

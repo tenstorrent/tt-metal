@@ -41,10 +41,19 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        expected_ns_8x1=36_272_143,
+        # Recalibrated 2026-06-24 on BH LoudBox 8x1 after unified_routed_expert_moe
+        # switched to in-place direct-write (the FFN writes its results back into the
+        # dispatched buffer; no separate output allocation and no per-layer full-buffer
+        # device fill). The 8x1 proxy (perf-host-64) is fill-dominated — it filled the
+        # full capacity buffer for only 64 active tokens — so it drops the most:
+        # 35.08 ms -> 27.59 ms. Was 35_082_637.
+        expected_ns_8x1=27_587_332,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=39_194_517,
+        # Recalibrated 2026-06-24 on BH LoudBox 2x4 for the same in-place direct-write
+        # change (no full-buffer device fill per layer): 35.13 ms -> 32.31 ms. UP_SPLIT
+        # was already baked in (39_194_517 -> 35_127_772). Was 35_127_772.
+        expected_ns_2x4=32_308_487,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

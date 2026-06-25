@@ -24,7 +24,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
+from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
@@ -59,6 +59,11 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     for layer_type in set(hf_config.layer_types):
         cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
         # cos, sin: [1, max_seq_len, head_dim]
+        # Cast to bfloat16 on host so from_torch's requested dtype matches the
+        # source: a dtype conversion inside from_torch queries tile metadata on
+        # the row-major host intermediate and emits the #18536 warning.
+        cos = cos.to(torch.bfloat16)
+        sin = sin.to(torch.bfloat16)
 
         # 4D for prefill: [1, 1, max_seq_len, head_dim]
         cos_4d = ttnn.from_torch(
@@ -252,7 +257,7 @@ class Gemma4Model:
                 embed_mapper = replicate
             embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
             self.embedding_weight = ttnn.as_tensor(
-                embed_weight.unsqueeze(0).unsqueeze(0),
+                cast_host_for_ttnn(embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
                 device=mesh_device,
                 dtype=embedding_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -991,7 +996,21 @@ class Gemma4Model:
             return
         persistent = getattr(self, "_persistent_per_layer_page_tables", None)
         if persistent is None or len(persistent) != len(page_tables_per_layer):
-            return
+            # First call (warmup) — the persistent buffers don't exist yet.
+            # Allocate them *now*, while we're still out-of-trace. The bridge
+            # invokes this method before ``Generator.{prefill,decode}_forward``,
+            # which is what captures the trace; deferring allocation to
+            # ``_page_tables_to_ttnn`` inside the traced forward would create
+            # the buffers *during* an active trace capture (the "Allocating
+            # device buffers is unsafe due to the existence of an active trace"
+            # case). The captured paged-attention reads would then bind to
+            # buffers whose backing memory the trace can invalidate, so replay
+            # reads stale block IDs and decode emits garbage. Pre-allocating
+            # here binds capture to stable addresses; later calls just do the
+            # in-place host->device copy below.
+            persistent = self._page_tables_to_ttnn(page_tables_per_layer)
+            if persistent is None:
+                return
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
@@ -1263,8 +1282,11 @@ class Gemma4Model:
         # Stage token IDs (not embeddings): embed_tokens runs on device in
         # ttnn_decode_forward. One device embedding op handles all B users —
         # the host-embedding path was hardcoded single-token. [1, batch] uint32.
+        # int64 (not int32) source: ttnn downcasts int64 to uint32 host-side, so the
+        # C++ to_dtype path is skipped. An int32->uint32 conversion would instead query
+        # tile metadata on a row-major host buffer and emit the #18536 warning.
         tokens_tt = ttnn.from_torch(
-            tok_flat.to(torch.int32).reshape(1, batch),
+            tok_flat.to(torch.int64).reshape(1, batch),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
             mesh_mapper=replicate,
@@ -1273,8 +1295,10 @@ class Gemma4Model:
         # Position: [1, 32] uint32 padded — per-user positions in the first
         # `batch` entries. The decode RoPE embedding lookup gathers one cos/sin
         # row per user, so different users can sit at different positions.
-        pos_i32 = pos_flat.to(torch.int32).reshape(1, batch)
-        pos_padded = F.pad(pos_i32, (0, 32 - batch), "constant", 0) if batch < 32 else pos_i32
+        # int64 source for the uint32 tensor (see tokens above): avoids the int32->uint32
+        # host conversion that triggers the #18536 row-major get_tile() warning.
+        pos_i64 = pos_flat.to(torch.int64).reshape(1, batch)
+        pos_padded = F.pad(pos_i64, (0, 32 - batch), "constant", 0) if batch < 32 else pos_i64
         pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
 
         # int32 positions [batch] for KV cache update + SDPA (per user).

@@ -210,6 +210,10 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
     profiler_control_buffer[PROFILER_DONE] = !condition;
 }
 
+inline __attribute__((always_inline)) bool get_profiler_zone_valid() {
+    return profiler_control_buffer[PROFILER_DONE] == 1;
+}
+
 inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
@@ -261,7 +265,17 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
 FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
+#if !defined(KERNEL_BUILD)
+    constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
+#endif
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+    } else {
+        while (!ncrisc_noc_posted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NPPD");
 }
 
