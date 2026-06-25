@@ -127,7 +127,7 @@ jobs:
         if: ${{ !inputs.dry-run }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.calculate-version.outputs.final_version }}
         run: |
           echo "Dispatching upstream-tests.yaml on tag ${VERSION}"
