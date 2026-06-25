@@ -1108,6 +1108,7 @@ class Gemma4Model:
         input_ids_torch=None,
         embeds_torch=None,
         page_tables_per_layer=None,
+        kv_phase=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1151,6 +1152,7 @@ class Gemma4Model:
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
             user_id=user_id,
+            kv_phase=kv_phase,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -1292,6 +1294,7 @@ class Gemma4Model:
         on_device_logits=False,
         pli_combined=None,
         page_tables_per_layer=None,
+        kv_phase=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -1351,6 +1354,7 @@ class Gemma4Model:
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
             page_tables_per_layer=page_tables_per_layer,
+            kv_phase=kv_phase,
         )
 
         if on_device_logits:
