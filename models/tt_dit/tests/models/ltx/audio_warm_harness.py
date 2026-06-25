@@ -30,9 +30,10 @@ import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils.ltx import default_ltx_checkpoint, default_ltx_gemma
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
-from models.tt_dit.utils.test import line_params
+from models.tt_dit.utils.test import line_params, ring_params
 
 line_trace_params = {**line_params, "trace_region_size": 300_000_000}
+ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
 
 
 def _stage_decode(pipeline, latent, num_frames):
@@ -121,15 +122,23 @@ def _avg_leg(pipeline, latent, num_frames, reps, warmups, label):
         [(4, 8), (1, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
         [(4, 8), (4, 8), 1, 0, 2, False, line_trace_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
     ],
-    ids=["bh_1x4sp1tp0", "bh_2x4sp1tp0", "bh_4x8sp1tp0"],
+    ids=["bh_1x4sp1tp0", "bh_2x4sp1tp0", "bh_4x8sp1tp0", "bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
 )
 def test_warm_harness(
     mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp
 ):
     parent_mesh = mesh_device
-    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    # The real pipeline only create_submesh's when the requested audio shape is SMALLER than
+    # the parent (pipeline_ltx.py LTX_AUDIO_SUBMESH). A full-size create_submesh((4,8)) child is
+    # an artifact the production path never does — so when mesh_shape == parent shape, run on the
+    # PARENT mesh directly to measure the same thing e2e does.
+    if tuple(mesh_shape) != tuple(parent_mesh.shape):
+        mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    else:
+        mesh_device = parent_mesh
 
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     height = int(os.environ.get("HEIGHT", "1088"))
@@ -183,17 +192,23 @@ def test_warm_harness(
 
     # ---- EAGER leg ----
     pipeline._traced = False
+    pipeline.tt_vocoder_with_bwe.use_trace = False
+    pipeline.tt_vocoder_with_bwe.use_trace_bwe = False
+    pipeline.tt_audio_decoder.use_trace = False
     eager_total, _ = _avg_leg(pipeline, latent, num_frames, eager_reps, warmups, "EAGER")
     if probe:
         _probe_split(pipeline, latent, num_frames, max(eager_reps, 3), "EAGER")
 
-    # ---- TRACED leg ---- (in-process switch: release any traces, flip flag, re-prime flags)
+    # ---- TRACED leg ----
     if traced_reps > 0:
         pipeline.release_traces()
         pipeline._traced = True
-        # _prepare_audio_decoder re-reads self._traced + env each call, so the next decode
-        # lazily captures the vocoder/VAE trace per LTX_VOC_TRACE/LTX_BWE_TRACE/LTX_VAE_TRACE.
-        # Use extra warmups so the lazy capture cost isn't counted in the timed reps.
+        # use_trace is baked once in _new_audio_decoder from the build-time `traced` flag (False
+        # here), and the _stage_decode path never re-syncs it — so set it directly or the "traced"
+        # reps silently run eager. Mirrors _new_audio_decoder's env gating.
+        pipeline.tt_vocoder_with_bwe.use_trace = os.environ.get("LTX_VOC_TRACE", "1") != "0"
+        pipeline.tt_vocoder_with_bwe.use_trace_bwe = os.environ.get("LTX_BWE_TRACE", "0") == "1"
+        pipeline.tt_audio_decoder.use_trace = os.environ.get("LTX_VAE_TRACE", "0") == "1"
         traced_total, _ = _avg_leg(pipeline, latent, num_frames, traced_reps, max(warmups, 2), "TRACED")
         if probe:
             _probe_split(pipeline, latent, num_frames, max(traced_reps, 3), "TRACED")
