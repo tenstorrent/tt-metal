@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """CCL device-kernel latency for TP=8 prefill: reduce_scatter + all_gather (Ring topology).
 
-Shapes match pi0.5 prefill MLP (seq=768, hidden=1024, mlp_dim=4096, TP=8):
-  hidden   [1,1,768,1024]  — down-proj all_reduce target
-  mlp_mid  [1,1,768,4096]  — gate/up scatter target
+Shapes match pi0.5 prefill VLM (seq=768, hidden=2048, TP=8):
+  RS input:  [1,1,768,2048]  — full hidden partial sum (down_proj / o_proj output)
+  AG input:  [1,1,768,256]   — scattered slice (2048/tp=8), AG reassembles to [1,1,768,2048]
+
+RS and AG are tested separately with their correct individual input shapes.
 
 Run once and capture device-kernel duration via tracy:
 
   python -m tracy -p -r -n ccl_prefill_tp8 -o /tmp/tracy_ccl_tp8 \
-    pytest models/experimental/pi0_5/tests/perf/test_ccl_prefill_tp8_perf.py -s
+    $(which pytest) models/experimental/pi0_5/tests/perf/test_ccl_prefill_tp8_perf.py -s
 
 Parse ops_perf_results CSV: filter OP TYPE reduce_scatter / all_gather,
 read DEVICE KERNEL DURATION [ns] — that is the authoritative prefill budget.
@@ -29,6 +31,14 @@ from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_m
 # opens a 1×8 logical mesh over these physical chips under FABRIC_1D.
 _VISIBLE_DEVICES = ",".join(str(i) for i in range(24, 32))
 
+_TP = 8
+_SEQ = 768
+_HIDDEN = 2048
+
+# RS input: full hidden partial sum; AG input: scattered slice after RS.
+_RS_SHAPE = (1, 1, _SEQ, _HIDDEN)
+_AG_SHAPE = (1, 1, _SEQ, _HIDDEN // _TP)  # [1,1,768,256]
+
 
 @contextmanager
 def _open_8chip_mesh():
@@ -44,11 +54,6 @@ def _open_8chip_mesh():
         else:
             os.environ["TT_VISIBLE_DEVICES"] = prev
 
-
-_SHAPES = {
-    "hidden": (1, 1, 768, 1024),
-    "mlp_mid": (1, 1, 768, 4096),
-}
 
 # CCL kwargs matching stage_prefill_tp4.py exactly.
 _RS = {
@@ -67,30 +72,32 @@ _AG = {
 }
 
 
-def _run_all(shape_name):
-    shape = _SHAPES[shape_name]
-    scatter_dim = len(shape) - 1
+def _make_tensor(mesh, shape):
+    return ttnn.from_torch(
+        torch.randn(*shape).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+
+def test_ccl_prefill_tp8_rs():
+    """reduce_scatter at RS input [1,1,768,2048] on TP=8 Ring. Run under tracy for DK duration."""
     with _open_8chip_mesh() as mesh:
-        x = ttnn.from_torch(
-            torch.randn(*shape).bfloat16(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        scattered = ttnn.reduce_scatter(x, scatter_dim, **_RS)
-        out = ttnn.all_gather(scattered, scatter_dim, **_AG)
+        x = _make_tensor(mesh, _RS_SHAPE)
+        out = ttnn.reduce_scatter(x, dim=3, **_RS)
         ttnn.synchronize_device(mesh)
         ttnn.ReadDeviceProfiler(mesh)
-        print(f"\n  shape={shape_name} {list(shape)}  RS+AG done — check tracy for device kernel duration")
+        print(f"\n  RS  input={list(_RS_SHAPE)}  output={list(out.shape)}  — check tracy for DK duration")
 
 
-def test_ccl_prefill_tp8_hidden():
-    """RS + AG at hidden shape [1,1,768,1024] on TP=8 Ring. Run under tracy for DK duration."""
-    _run_all("hidden")
-
-
-def test_ccl_prefill_tp8_mlp_mid():
-    """RS + AG at MLP-intermediate shape [1,1,768,4096] on TP=8 Ring. Run under tracy for DK duration."""
-    _run_all("mlp_mid")
+def test_ccl_prefill_tp8_ag():
+    """all_gather at AG input [1,1,768,256] on TP=8 Ring. Run under tracy for DK duration."""
+    with _open_8chip_mesh() as mesh:
+        x = _make_tensor(mesh, _AG_SHAPE)
+        out = ttnn.all_gather(x, dim=3, **_AG)
+        ttnn.synchronize_device(mesh)
+        ttnn.ReadDeviceProfiler(mesh)
+        print(f"\n  AG  input={list(_AG_SHAPE)}  output={list(out.shape)}  — check tracy for DK duration")

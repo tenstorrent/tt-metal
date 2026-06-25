@@ -15,16 +15,17 @@ Parse `ops_perf_results.csv` → filter `ReduceScatterDeviceOperation` / `AllGat
 
 ## Latency numbers (chips 24-31, sane devices 2/5/6/7)
 
-Each VLM layer has **2 all-reduces** at hidden shape `[1,1,768,1024]`:
+Each VLM layer has **2 all-reduces** (MLP down_proj + attention o_proj). RS and AG operate on
+different shapes — RS takes the full hidden partial sum, AG takes the scattered slice:
 
-| Location        | Op             | Shape          | DK duration |
-|-----------------|----------------|----------------|-------------|
-| MLP down_proj   | reduce_scatter | [1,1,768,1024] | ~55 µs      |
-| MLP down_proj   | all_gather     | [1,1,768,1024] | ~39 µs      |
-| Attention o_proj| reduce_scatter | [1,1,768,1024] | ~55 µs      |
-| Attention o_proj| all_gather     | [1,1,768,1024] | ~39 µs      |
+| Op             | Shape          | DK duration |
+|----------------|----------------|-------------|
+| reduce_scatter | [1,1,768,2048] | ~71 µs      |
+| all_gather     | [1,1,768,256]  | ~54 µs      |
 
-Gate/up projections (mlp_mid [1,1,768,4096]) are column-parallel and stay local — no CCL at that shape.
+Gate/up projections are column-parallel and stay local — no CCL between gate/up and down_proj.
+
+Per layer: 2 × (71 + 54) = **~250 µs CCL** out of ~472 µs total DK = **~53% of prefill**.
 
 ## 1-layer production prefill (chips 8-15)
 
@@ -37,12 +38,4 @@ python -m tracy -p -r -n prefill_tp8_ccl -o /tmp/tracy_prefill_ccl \
   models/experimental/pi0_5/tests/perf/_bench_prefill_tp8_ccl.py
 ```
 
-Result (sane devices 1/5/6 for chips 8-15):
-
-| Op             | DK duration |
-|----------------|-------------|
-| reduce_scatter | ~55 µs      |
-| all_gather     | ~38 µs      |
-| **CCL/layer**  | **~186 µs** (2 all-reduces × 93 µs) |
-
-18-layer prefill DK ≈ 8.5 ms → per layer ≈ 472 µs → CCL ≈ **39% of prefill**.
+18-layer prefill DK ≈ 8.5 ms → per layer ≈ 472 µs → CCL ≈ **53% of prefill**.
