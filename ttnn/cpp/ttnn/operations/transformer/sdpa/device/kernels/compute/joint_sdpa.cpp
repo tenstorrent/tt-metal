@@ -9,65 +9,70 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "compute_common.hpp"
 
+// Metal 2.0 joint SDPA compute kernel. Owned exclusively by JointSDPAProgramFactory, so ported in
+// place: named CTAs/RTAs (args::) and DFB handles (dfb::) replace the legacy positional CTAs and
+// CBIndex constants. On Gen1 dfb::name is the framework-allocated physical CB id (constexpr), so it
+// flows unchanged into the compute_common.hpp template helpers. Behavior is identical.
 void kernel_main() {
-    constexpr uint32_t B = get_compile_time_arg_val(0);
-    constexpr uint32_t NH = get_compile_time_arg_val(1);
-    constexpr uint32_t Skt = get_compile_time_arg_val(2);
-    constexpr uint32_t DHt = get_compile_time_arg_val(3);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(6);
+    constexpr uint32_t B = get_arg(args::B);
+    constexpr uint32_t NH = get_arg(args::NH);
+    constexpr uint32_t Skt = get_arg(args::Skt);
+    constexpr uint32_t DHt = get_arg(args::DHt);
+    constexpr uint32_t Sq_chunk_t = get_arg(args::Sq_chunk_t);
+    constexpr uint32_t Sk_chunk_t = get_arg(args::Sk_chunk_t);
+    constexpr uint32_t k_num_chunks = get_arg(args::k_num_chunks);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(7);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(8);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(9);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(10);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(11);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(12);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(15);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(16);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(17);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(18);
+    constexpr uint32_t qk_in0_block_w = get_arg(args::qk_in0_block_w);
+    constexpr uint32_t qk_subblock_w = get_arg(args::qk_subblock_w);
+    constexpr uint32_t qk_subblock_h = get_arg(args::qk_subblock_h);
+    constexpr uint32_t qk_in0_num_subblocks = get_arg(args::qk_in0_num_subblocks);
+    constexpr uint32_t qk_in1_num_subblocks = get_arg(args::qk_in1_num_subblocks);
+    constexpr uint32_t qk_num_blocks = get_arg(args::qk_num_blocks);
+    constexpr uint32_t out_in0_block_w = get_arg(args::out_in0_block_w);
+    constexpr uint32_t out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr uint32_t out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr uint32_t out_in0_num_subblocks = get_arg(args::out_in0_num_subblocks);
+    constexpr uint32_t out_in1_num_subblocks = get_arg(args::out_in1_num_subblocks);
+    constexpr uint32_t out_num_blocks = get_arg(args::out_num_blocks);
 
-    constexpr bool use_joint_mask = get_compile_time_arg_val(19) == 1;
-    constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(20);
-    constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(21);
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(22);
+    constexpr bool use_joint_mask = get_arg(args::use_joint_mask) == 1;
+    constexpr uint32_t mask_chunk_0 = get_arg(args::mask_chunk_0);
+    constexpr uint32_t mask_chunk_1 = get_arg(args::mask_chunk_1);
+    constexpr uint32_t scale_fp32 = get_arg(args::scale_fp32);
 
-    uint32_t argidx = 0;
-    const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_nh_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t local_batch_start = get_arg(args::local_batch_start);
+    const uint32_t local_batch_end = get_arg(args::local_batch_end);
+    const uint32_t local_nh_start = get_arg(args::local_nh_start);
+    const uint32_t local_nh_end = get_arg(args::local_nh_end);
+    const uint32_t local_q_start = get_arg(args::local_q_start);
+    const uint32_t local_q_end = get_arg(args::local_q_end);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
 
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
+    constexpr uint32_t cb_q_in = dfb::q_in;
+    constexpr uint32_t cb_k_in = dfb::k_in;
+    constexpr uint32_t cb_v_in = dfb::v_in;
+    constexpr uint32_t cb_mask_in = dfb::mask;
+    constexpr uint32_t cb_identity_scale_in = dfb::scale;
+    constexpr uint32_t cb_col_identity = dfb::col_identity;
 
-    constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
-    constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
-    constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
-    constexpr uint32_t cb_max_A = tt::CBIndex::c_27;
-    constexpr uint32_t cb_max_B = tt::CBIndex::c_28;
-    constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
-    constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
-    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
+    constexpr uint32_t cb_qk_im = dfb::qk_im;
+    constexpr uint32_t cb_out_im_A = dfb::out_im_a;
+    constexpr uint32_t cb_out_im_B = dfb::out_im_b;
+    constexpr uint32_t cb_max_A = dfb::max_a;
+    constexpr uint32_t cb_max_B = dfb::max_b;
+    constexpr uint32_t cb_sum_A = dfb::sum_a;
+    constexpr uint32_t cb_sum_B = dfb::sum_b;
+    constexpr uint32_t cb_exp_max_diff = dfb::exp_max_diff;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out = dfb::out;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
