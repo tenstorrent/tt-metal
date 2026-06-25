@@ -104,6 +104,15 @@ def load_model(
     if cache_dir is None:
         assert get_torch_state_dict is not None
 
+        # cache_dir is None only when TT_DIT_CACHE_DIR is unset and the caller made the cache
+        # optional (get_torch_state_dict provided). That silently turns the one-time weight
+        # conversion into a per-run tax: nothing is ever persisted, so every process reconverts
+        # from the raw checkpoint. Warn loudly — the info-level breadcrumb below is easy to miss.
+        logger.warning(
+            f"{model_name}/{subfolder}: TT_DIT_CACHE_DIR is unset — converting weights from the raw "
+            f"checkpoint and NOT caching them; every run reconverts. Set TT_DIT_CACHE_DIR to persist "
+            f"converted device weights."
+        )
         logger.info(f"{subfolder}: no device cache (set TT_DIT_CACHE_DIR to cache converted weights).")
         _load_torch_with_logging(tt_model, get_torch_state_dict, subfolder)
         ttnn.distributed_context_barrier()
