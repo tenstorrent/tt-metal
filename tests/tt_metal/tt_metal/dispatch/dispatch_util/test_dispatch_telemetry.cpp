@@ -907,7 +907,8 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchSTelemetryDoesNotOvercountComple
             return std::nullopt;
         }
 
-        return while_working->workers_per_sub_device[0];
+        const uint32_t worker_count = while_working->workers_per_sub_device[0];
+        return worker_count;
     };
 
     reset_worker_l1_state(worker_core);
