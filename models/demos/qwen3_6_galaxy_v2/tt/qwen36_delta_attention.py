@@ -522,7 +522,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             z_row = Z_w_T[:, i * 768 : (i + 1) * 768]
             QKVZ_rows.append(torch.cat([q_row, k_row, v_row, z_row], dim=-1))  # [5120, 2048]
         QKVZ_w_T_interleaved = torch.cat(QKVZ_rows, dim=-1)  # [5120, 16384]
-        self.w_qkvz = self._to_device(QKVZ_w_T_interleaved, row_shard_out)
+        self.w_qkvz = self._to_device(QKVZ_w_T_interleaved, row_shard_out, dtype=ttnn.bfloat16)
 
         # B+A (per-row 6+6=12, NOT tile-multiple but matmul pads internally)
         BA_rows = []
@@ -531,7 +531,7 @@ class TtQwen36DeltaAttention(LightweightModule):
             a_row = a_w_T[:, i * self.n_v_per_row : (i + 1) * self.n_v_per_row]
             BA_rows.append(torch.cat([b_row, a_row], dim=-1))  # [5120, 12]
         BA_w_T_interleaved = torch.cat(BA_rows, dim=-1)  # [5120, 96]
-        self.w_ba = self._to_device(BA_w_T_interleaved, row_shard_out)
+        self.w_ba = self._to_device(BA_w_T_interleaved, row_shard_out, dtype=ttnn.bfloat16)
 
         # -- Conv1d weight: pre-interleave by row (Bug1 fix from v1) --
         conv_w_src = self._resolve_weight(sd, "linear_attn.conv1d.weight", "conv1d.weight")
@@ -570,8 +570,8 @@ class TtQwen36DeltaAttention(LightweightModule):
         A_log_3d = A_log.reshape(1, 1, n_v)
         dt_bias_3d = dt_bias.reshape(1, 1, n_v)
         row_shard_3d = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(2, None), mesh_shape=self.cluster_shape)
-        self.A_log = self._to_device(A_log_3d, row_shard_3d, layout=ttnn.TILE_LAYOUT)
-        self.dt_bias = self._to_device(dt_bias_3d, row_shard_3d, layout=ttnn.TILE_LAYOUT)
+        self.A_log = self._to_device(A_log_3d, row_shard_3d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.dt_bias = self._to_device(dt_bias_3d, row_shard_3d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         # V2-11 (lever C) attempted to precompute -exp(A_log) once at init
         # to elide the per-step `exp` + `neg` (saves 2 ops × 48 DeltaNet
         # layers / step). Coherency broke when the precomputed tensor was
@@ -613,7 +613,7 @@ class TtQwen36DeltaAttention(LightweightModule):
         out_proj_w = self._resolve_weight(sd, "linear_attn.out_proj.weight", "out_proj.weight")
         out_proj_w_T = out_proj_w.T.contiguous()
         row_shard_out0 = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=self.cluster_shape)
-        self.w_out = self._to_device(out_proj_w_T, row_shard_out0)  # per-chip [768, 1280]
+        self.w_out = self._to_device(out_proj_w_T, row_shard_out0, dtype=ttnn.bfloat16)  # per-chip [768, 1280]
 
         # ------------------------------------------------------------------
         # Fused-prefill kernel: DEFAULT ON (disable with QWEN36_GDN_FUSED_PREFILL=0).
