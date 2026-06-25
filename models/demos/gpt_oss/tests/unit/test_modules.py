@@ -164,9 +164,18 @@ def run_topk_router_component(
 
     # Extract reference TopK router from reference layer
     reference_router = reference_layer.mlp.router
-    router_scores, router_indices = reference_router(hidden_states)
+    # transformers 5.x GptOssTopKRouter.forward returns (router_logits, router_scores, router_indices);
+    # <5 returned (router_scores_dense, router_indices). Reconstruct the DENSE [num_tokens, num_experts]
+    # router_scores so the comparison below matches the pre-5.x behaviour. (The corrected router-weights
+    # comparison + the fp32 router-gate fix it surfaced are tracked separately in #47970 — kept out of this
+    # unpin PR so it stays at parity with main, which does not validate the router gate weights either.)
+    _router_out = reference_router(hidden_states.reshape(-1, hidden_size))
+    if len(_router_out) == 3:
+        router_logits, _sparse_scores, router_indices = _router_out
+        router_scores = torch.zeros_like(router_logits).scatter_(-1, router_indices, _sparse_scores)
+    else:
+        router_scores, router_indices = _router_out
     if decoder_layer.mlp.use_throughput_experts:
-        # When using throughput experts, we return a dense tensor of router_scores. Convert sparse reference router_scores to dense router_weights (note: this requires reorder the weights to match the order of the indices)
         dense_router_scores = torch.concat(
             [
                 torch.tensor(
@@ -459,17 +468,29 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
 
     router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
     routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+    # transformers 5.x GptOssExperts indexes routing_weights[token_idx, top_k_pos] — i.e. it expects a
+    # by-position [num_tokens, top_k] layout, not the dense [num_tokens, num_experts] by-expert layout.
+    # Build both: the dense one for the TT experts (unchanged), the by-position one for the 5.x reference.
+    routing_weights_topk = torch.zeros(batch_size * seq_len, config.num_experts_per_tok)
 
     for b, s in itertools.product(range(batch_size), range(seq_len)):
         active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
         router_indices[b * seq_len + s, :] = active_experts
         weights = torch.rand(config.num_experts_per_tok)
         weights = weights / weights.sum()  # Normalize
-        routing_weights[b * seq_len + s, active_experts] = weights
+        routing_weights[b * seq_len + s, active_experts] = weights  # dense, by expert id (TT)
+        routing_weights_topk[b * seq_len + s, :] = weights  # by top-k position (5.x reference)
 
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
+    # transformers 5.x GptOssExperts expects flattened [num_tokens, hidden] (GptOssMLP reshapes
+    # (batch,seq,hidden)->(-1,hidden) before calling experts), and indexes hidden_states[token_idx] and
+    # routing_weights[token_idx, top_k_pos]. Flatten hidden_states and pass by-position routing weights;
+    # output is then [batch*seq, hidden], matching the flat tt_output below. For transformers <5 the
+    # reference used the dense by-expert layout — GPT-OSS is now unpinned to 5.x so we target 5.x.
+    reference_output = reference_experts(
+        hidden_states.reshape(-1, hidden_size), router_indices=router_indices, routing_weights=routing_weights_topk
+    )
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(
@@ -549,6 +570,11 @@ def setup_reference_layer(setup, layer_idx=0):
     logger.info("Setting up reference layer...")
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssDecoderLayer
 
+    # transformers 5.x dispatches MoE experts via config._experts_implementation; a standalone layer
+    # leaves it None, so GptOssExperts uses the default flat-token forward that indexes
+    # hidden_states[token_idx] and IndexErrors on batched hidden_states. Pin it to eager (mirrors the
+    # existing _attn_implementation="eager" the decoder setup uses).
+    setup["config"]._experts_implementation = "eager"
     reference_layer = GptOssDecoderLayer(setup["config"], layer_idx=layer_idx)
     with torch.no_grad():
         for name, param in reference_layer.named_parameters():
@@ -684,6 +710,8 @@ def test_decoder(
     # Set attention implementation for transformers compatibility
     config = setup["config"]
     config._attn_implementation = "eager"
+    # transformers 5.x also needs the MoE experts dispatch pinned for standalone reference layers.
+    config._experts_implementation = "eager"
 
     if batch_size > 32:
         if mesh_device.shape[0] == 1:
