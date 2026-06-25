@@ -436,9 +436,9 @@ std::vector<ttnn::Tensor> moe_compute(
 
     auto* mesh_device = tilize_input_tensor.device();
 
-    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
+    // BH ring size: default 8; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
     // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
+    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(8u) : 12u;
     // NOTE: there has been some experimentation with different ring sizes on Blackhole but there are known correctness
     // issues for some model configurations for values other than 8, which is why this is not exposed in the public API
 

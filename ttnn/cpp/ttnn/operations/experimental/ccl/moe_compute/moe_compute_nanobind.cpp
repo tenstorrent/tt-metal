@@ -161,7 +161,10 @@ void bind_moe_compute(nb::module_& mod) {
 
         These arguments configure the cross-device A2A combine that reduces expert
         outputs. They apply only when ``compute_only=False``; with ``compute_only=True``
-        they must be left at their defaults.
+        ``cluster_axis``, ``topology``, ``num_links``, ``mux_core_range_set``,
+        ``optional_output_tensor``, and ``optional_cross_device_semaphore`` must be
+        passed as ``None`` / left at their defaults. An empty ``CoreRangeSet`` still
+        counts as a provided ``mux_core_range_set`` and is rejected in compute-only mode.
 
         - ``cluster_axis`` (**required when** ``compute_only=False``): The mesh axis along
           which the combine reduces. Must be ``None`` when ``compute_only=True``.
@@ -186,7 +189,8 @@ void bind_moe_compute(nb::module_& mod) {
           combine output instead of allocating a new one. Must be ``None`` when
           ``compute_only=True`` (no combine output is produced).
         - ``optional_cross_device_semaphore`` (optional): Global semaphore used to
-          synchronize the cross-device combine.
+          synchronize the cross-device combine. Must be ``None`` when
+          ``compute_only=True``.
 
         **Reference input packer **
 
