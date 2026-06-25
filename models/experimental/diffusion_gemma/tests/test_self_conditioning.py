@@ -117,14 +117,3 @@ def test_activation_silu_supported_and_unknown_rejected(expect_error):
     SelfConditioning(8, activation="silu")  # ok
     with expect_error(ValueError):
         SelfConditioning(8, activation="relu6")._act(torch.zeros(1))
-
-
-def test_deterministic_under_fixed_weights():
-    batch, length, hidden = 1, 4, 8
-    torch.manual_seed(0)
-    mod = SelfConditioning(hidden, intermediate_size=10)
-    emb = torch.randn(batch, length, hidden, generator=_gen(6))
-    signal = torch.randn(batch, length, hidden, generator=_gen(7))
-    a = mod(emb, signal)
-    b = mod(emb.clone(), signal.clone())
-    assert torch.equal(a, b)

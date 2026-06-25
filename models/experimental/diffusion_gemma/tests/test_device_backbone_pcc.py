@@ -186,6 +186,7 @@ def test_diffusiongemma_backbone_logits_pcc(mesh_device, reset_seeds, request):
         )
         _saved = {}
         _hifi_ops = [o.strip() for o in os.getenv("DG_HIFI_OPS", "linear,sparse_matmul").split(",") if o.strip()]
+        request.addfinalizer(lambda: [setattr(ttnn, n, o) for n, o in _saved.items()])
         for _op in _hifi_ops:
             _saved[_op] = getattr(ttnn, _op)
 
@@ -197,7 +198,6 @@ def test_diffusiongemma_backbone_logits_pcc(mesh_device, reset_seeds, request):
                 return _wrapped
 
             setattr(ttnn, _op, _mk(_saved[_op]))
-        request.addfinalizer(lambda: [setattr(ttnn, n, o) for n, o in _saved.items()])
         logger.info(f"HiFi patch: {hifi} + fp32_dest_acc on {_hifi_ops}")
 
     tt_model = Gemma4Model(

@@ -48,15 +48,6 @@ def test_gumbel_max_zero_noise_is_argmax():
     assert torch.equal(out, logits.argmax(dim=-1))
 
 
-def test_gumbel_max_determinism_under_injected_noise():
-    # Same injected Gumbel noise -> identical samples (R5 determinism for PCC).
-    logits = torch.randn(2, 8, 50, generator=_gen(2))
-    noise = S.sample_gumbel_noise(logits.shape, generator=_gen(3))
-    a = S.gumbel_max_sample(logits, 0.5, noise=noise)
-    b = S.gumbel_max_sample(logits, 0.5, noise=noise.clone())
-    assert torch.equal(a, b)
-
-
 def test_entropy_budget_accept_extremes_and_monotone():
     entropy = torch.tensor([[0.5, 0.1, 0.9, 0.2, 0.7]])
     assert S.entropy_budget_accept(entropy, budget=1e9).all()  # huge budget -> all

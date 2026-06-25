@@ -15,9 +15,11 @@ alone.
 """
 
 import importlib.util
+from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.nn as nn
 
 from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.reference.self_conditioning import DiffusionGemmaRMSNorm, SelfConditioning
@@ -79,6 +81,80 @@ def test_stopping_confidence_matches_real_criterion():
     assert torch.equal(ours, real_out)
 
 
+def test_real_denoising_step_uses_temperature_processed_logits_for_decisions():
+    """HF routes processed logits to accept/stop/self-conditioning, not raw logits."""
+
+    from transformers.generation.logits_process import LogitsProcessorList
+    from transformers.models.diffusion_gemma.generation_diffusion_gemma import (
+        DiffusionGemmaGenerationMixin,
+        LinearTemperatureScheduleLogitsProcessor,
+    )
+
+    class _DecoderOutput:
+        def __init__(self, logits):
+            self.logits = logits
+
+    class _Sampler:
+        def __init__(self):
+            self.accept_logits = None
+
+        def accept_canvas(self, current_canvas, denoiser_canvas, logits, cur_step):
+            self.accept_logits = logits.detach().clone()
+            return denoiser_canvas
+
+        def renoise_canvas(self, accepted_canvas, cur_step):
+            return accepted_canvas
+
+    class _Stopping:
+        def __init__(self):
+            self.argmax_canvas = None
+            self.logits = None
+
+        def __call__(self, argmax_canvas, logits):
+            self.argmax_canvas = argmax_canvas.detach().clone()
+            self.logits = logits.detach().clone()
+            return torch.zeros(argmax_canvas.shape[0], dtype=torch.bool)
+
+    batch, length, vocab = 1, 3, 7
+    raw_logits = torch.randn(batch, length, vocab, generator=_gen(10))
+    cur_step = 2
+    processor = LogitsProcessorList(
+        [LinearTemperatureScheduleLogitsProcessor(t_min=0.4, t_max=0.8, max_denoising_steps=4)]
+    )
+    expected_processed = processor(None, raw_logits, cur_step=torch.tensor(cur_step, dtype=torch.int32))
+
+    fake_self = SimpleNamespace(
+        config=SimpleNamespace(text_config=SimpleNamespace(vocab_size=vocab)),
+        model=SimpleNamespace(
+            decoder=SimpleNamespace(embed_tokens=SimpleNamespace(weight=torch.empty(1, dtype=torch.bfloat16)))
+        ),
+    )
+    sampler = _Sampler()
+    stopping = _Stopping()
+
+    _, _, self_conditioning_logits, _ = DiffusionGemmaGenerationMixin._denoising_step(
+        fake_self,
+        lambda **kwargs: _DecoderOutput(raw_logits),
+        current_canvas=torch.zeros(batch, length, dtype=torch.long),
+        argmax_canvas=torch.zeros(batch, length, dtype=torch.long),
+        input_ids=torch.zeros(batch, length, dtype=torch.long),
+        decoder_position_ids=torch.arange(length).unsqueeze(0),
+        self_conditioning_logits=None,
+        mask_mapping={},
+        past_key_values=None,
+        finished_denoising=torch.zeros(batch, dtype=torch.bool),
+        cur_step=cur_step,
+        sampler=sampler,
+        logits_processor=processor,
+        diffusion_stopping_criteria=stopping,
+    )
+
+    assert torch.allclose(sampler.accept_logits, expected_processed)
+    assert torch.allclose(stopping.logits, expected_processed)
+    assert torch.equal(stopping.argmax_canvas, expected_processed.argmax(dim=-1))
+    assert torch.allclose(self_conditioning_logits.float(), expected_processed.to(torch.bfloat16).float())
+
+
 def test_rmsnorm_matches_real():
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaRMSNorm as RealRMS
 
@@ -111,3 +187,51 @@ def test_self_conditioning_matches_real():
     emb = torch.randn(2, 5, hidden, generator=_gen(8))
     sig = torch.randn(2, 5, hidden, generator=_gen(9))
     assert torch.allclose(ours(emb, sig), real(emb, sig), atol=1e-5)
+
+
+def test_decoder_soft_embedding_matches_reference_scale_and_mask():
+    from transformers.models.diffusion_gemma.configuration_diffusion_gemma import (
+        DiffusionGemmaConfig,
+        DiffusionGemmaTextConfig,
+    )
+    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaDecoderModel
+
+    class _CaptureSelfConditioning(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.signal = None
+
+        def forward(self, inputs_embeds, self_conditioning_signal):
+            self.signal = self_conditioning_signal.detach().clone()
+            return inputs_embeds
+
+    batch, length, vocab, hidden = 2, 4, 11, 4
+    text_cfg = DiffusionGemmaTextConfig(
+        vocab_size=vocab,
+        hidden_size=hidden,
+        intermediate_size=8,
+        num_hidden_layers=0,
+        num_attention_heads=1,
+        num_key_value_heads=1,
+        head_dim=hidden,
+        layer_types=[],
+        rms_norm_eps=1e-6,
+    )
+    real = DiffusionGemmaDecoderModel(DiffusionGemmaConfig(text_config=text_cfg)).eval()
+    capture = _CaptureSelfConditioning()
+    real.self_conditioning = capture
+
+    logits = torch.randn(batch, length, vocab, generator=_gen(12))
+    mask = torch.tensor([True, False])
+    real(
+        decoder_input_ids=torch.tensor([[1, 2, 3, 4], [4, 3, 2, 1]]),
+        self_conditioning_logits=logits,
+        self_conditioning_mask=mask,
+        decoder_attention_mask={},
+        decoder_position_ids=torch.arange(length).unsqueeze(0).expand(batch, -1),
+        past_key_values=None,
+    )
+
+    ours = SelfConditioning.soft_embedding(logits, real.embed_tokens.weight, mask=mask)
+    assert torch.allclose(capture.signal, ours, atol=1e-6)
+    assert torch.all(capture.signal[1] == 0)

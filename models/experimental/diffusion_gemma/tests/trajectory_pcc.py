@@ -23,27 +23,14 @@ from typing import List
 
 import torch
 
+from models.common.utility_functions import comp_pcc
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
 
 
 def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Pearson correlation of two 1-D sequences.
-
-    When either side is constant (zero variance) PCC is undefined; we define it as
-    1.0 iff the **original** (pre-centering) sequences are identical, else 0.0.
-    Comparing the *centered* tensors here would be wrong — e.g. all-1.0 vs all-2.0
-    both center to 0 and would false-pass (a constant offset/scale error in the
-    entropy values). Callers should also gate entropy on an absolute tolerance,
-    since PCC is invariant to affine transforms.
-    """
-    a0 = a.flatten().to(torch.float64)
-    b0 = b.flatten().to(torch.float64)
-    a = a0 - a0.mean()
-    b = b0 - b0.mean()
-    denom = a.norm() * b.norm()
-    if denom == 0:  # one (or both) constant: perfect iff the ORIGINALS are identical
-        return 1.0 if torch.equal(a0, b0) else 0.0
-    return float((a @ b) / denom)
+    """Repo-standard PCC wrapper; magnitude drift is gated separately by max |Δ|."""
+    _, pcc = comp_pcc(a.flatten().float(), b.flatten().float(), pcc=0.0)
+    return float(pcc)
 
 
 @dataclass
