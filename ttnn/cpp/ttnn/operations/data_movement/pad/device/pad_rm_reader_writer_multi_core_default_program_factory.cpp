@@ -59,11 +59,8 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_input_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
-        const auto& input_mc = a.memory_config();
-        if (input_mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            input_accessor_page_size = shard_width * a.element_size();
-        }
+        // Use the buffer's per-page size (shard width for W/B/ND sharded; full stick for height sharded).
+        input_accessor_page_size = a.buffer()->aligned_page_size();
     }
 
     // Output page-based addressing
@@ -73,11 +70,7 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         uint32_t output_shard_width = output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
                                                                       : output.nd_shard_spec().value().shard_shape[-1];
         num_output_pages_in_row = tt::div_up(W_padded, output_shard_width);
-        const auto& output_mc = output.memory_config();
-        if (output_mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-            output_mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            output_accessor_page_size = output_shard_width * output.element_size();
-        }
+        output_accessor_page_size = output.buffer()->aligned_page_size();
     }
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
