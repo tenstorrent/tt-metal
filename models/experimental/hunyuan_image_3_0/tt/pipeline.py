@@ -181,6 +181,10 @@ def denoise_loop(
     uncond=None,  # same dict for the unconditional pass; None => no CFG
     guidance_scale: float = 1.0,
     timestep_emb=None,  # host ref TimestepEmbedder for gen_timestep_scatter_index
+    guidance_emb=None,  # host ref TimestepEmbedder for guidance_scatter_index (distil)
+    timestep_r_emb=None,  # host ref TimestepEmbedder for gen_timestep_r_scatter_index (meanflow)
+    cfg_distilled: bool = False,
+    use_meanflow: bool = False,
     mesh_device=None,  # pass the MeshDevice when the backbone is mesh-resident
 ):
     """Run the diffusion denoise loop, returning the final latent (torch NCHW).
@@ -199,7 +203,10 @@ def denoise_loop(
 
     When ``timestep_emb`` is set and ``cond`` carries ``base_embeds_host`` plus
     ``gen_timestep_scatter_index``, the gen-image timestep token is re-scattered
-    on host each step before upload (I2I/T2I gen path).
+    on host each step before upload (I2I/T2I gen path). For Instruct-Distil
+    (``cfg_distilled``), also scatters ``guidance`` at ``1000 * guidance_scale``.
+    For meanflow (``use_meanflow``), scatters ``timestep_r`` from
+    ``scheduler.get_timestep_r(t)`` each step.
 
     Latent representation: the scheduler operates on device NHWC-flat tensors,
     but UNetDown's entry only accepts torch NCHW, so the (small) latent makes one
@@ -212,7 +219,8 @@ def denoise_loop(
 
     B, C, h, w = init_latent.shape
     scheduler.set_begin_index(0)
-    do_cfg = uncond is not None and guidance_scale != 1.0
+    do_cfg = uncond is not None and guidance_scale != 1.0 and not cfg_distilled
+    distill_guidance = 1000.0 * guidance_scale if cfg_distilled else None
     latent = init_latent  # torch NCHW (canonical host form; small tensor)
     timesteps = list(scheduler.timesteps)
     total_steps = len(timesteps)
@@ -243,14 +251,29 @@ def denoise_loop(
         if host is not None:
             emb = host
             idx = c.get("gen_timestep_scatter_index")
-            if idx is not None and timestep_emb is not None:
+            needs_scatter = (
+                (idx is not None and timestep_emb is not None)
+                or (cfg_distilled and c.get("guidance_scatter_index") is not None and guidance_emb is not None)
+                or (use_meanflow and c.get("gen_timestep_r_scatter_index") is not None and timestep_r_emb is not None)
+            )
+            if needs_scatter:
                 from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
-                    scatter_gen_timestep_embeds,
+                    scatter_distill_step_embeds,
                 )
 
-                bsz = emb.shape[0]
-                tvec = torch.tensor([float(t_scalar)] * bsz, dtype=torch.float32)
-                emb = scatter_gen_timestep_embeds(emb, tvec, idx, timestep_emb)
+                t_r = float(scheduler.get_timestep_r(t_scalar)) if use_meanflow else None
+                emb = scatter_distill_step_embeds(
+                    emb,
+                    t_scalar=float(t_scalar),
+                    gen_timestep_scatter_index=idx,
+                    timestep_emb=timestep_emb,
+                    guidance_scalar=distill_guidance,
+                    guidance_scatter_index=c.get("guidance_scatter_index"),
+                    guidance_emb=guidance_emb,
+                    t_r_scalar=t_r,
+                    gen_timestep_r_scatter_index=c.get("gen_timestep_r_scatter_index"),
+                    timestep_r_emb=timestep_r_emb,
+                )
             return _up(emb, ttnn.bfloat16)
         return c.get("base_embeds")
 
