@@ -7,11 +7,11 @@ BUILD_DIR="${1:?Usage: $0 <cmake-build-dir>}"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-ENTRY=$(jq 'map(select(.file == "/work/tt-train/sources/ttml/schedulers/cosine_annealing_scheduler.cpp")) | first' \
+ENTRY=$(jq 'map(select(.file | test("schedulers/scheduler_base\\.cpp$"))) | first' \
   "$BUILD_DIR/compile_commands.json")
 
 if [[ "$ENTRY" == "null" || -z "$ENTRY" ]]; then
-  echo "ERROR: cosine_annealing_scheduler.cpp not found in compile_commands.json"
+  echo "ERROR: scheduler_base.cpp not found in compile_commands.json"
   echo "Nearby entries:"
   jq -r '.[].file' "$BUILD_DIR/compile_commands.json" | grep -i "scheduler\|ttml\|tt-train" || true
   exit 1
