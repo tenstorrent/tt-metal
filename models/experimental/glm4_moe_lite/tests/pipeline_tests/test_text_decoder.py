@@ -51,8 +51,11 @@ def test_text_decoder(
 ):
     """Decode logits PCC: full model vs HF after prefill, for multiple decode steps."""
     apply_correctness_env(monkeypatch)
+    # Decode logits are the direct output of the LM head; its default BFP4 weight caps logits PCC
+    # by ~0.011 (validated by ablation). Use bf16 here for the most faithful logits comparison.
+    monkeypatch.setenv("GLM4_MOE_LITE_LM_HEAD_DTYPE", "bf16")
 
-    pcc_required = 0.97
+    pcc_required = 0.99
     snap = require_snapshot()
     tok = load_tokenizer(snap)
     enc = tok(
@@ -97,10 +100,15 @@ def test_text_decoder(
     hf_outputs = hf_model(hf_input, use_cache=True, return_dict=True)
     hf_past = hf_outputs.past_key_values
 
-    torch.manual_seed(0)
+    # Teacher forcing: feed HF's greedy next token (seeded by the last prefill logit) to both
+    # models each step. This keeps the decoded sequence in-distribution so MoE expert routing
+    # stays consistent between TT and HF; random tokens push activations out-of-distribution and
+    # collapse logits PCC (routing flips amplified by bf4/bf8 expert weights).
+    next_token_id = int(hf_outputs.logits[0, -1, :vocab_size].argmax().item())
+
     all_tests_pass = True
     for step in range(generation_length):
-        token_id = int(torch.randint(0, vocab_size, (1,)).item())
+        token_id = next_token_id
         pos = prefill_len + step
         logger.info(f"[Text Decoder] step={step} pos={pos} token_id={token_id}")
 
@@ -125,5 +133,7 @@ def test_text_decoder(
         if not passing:
             logger.warning(f"GLM text decoder logits failed at step={step} pos={pos}")
             all_tests_pass = False
+
+        next_token_id = int(ref_logits[0, -1, :vocab_size].argmax().item())
 
     assert all_tests_pass, f"Logits PCC below {pcc_required} for one or more decode iterations. Check warnings!"
