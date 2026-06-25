@@ -77,44 +77,22 @@ jobs:
           src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
           out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
           {
-            # === AMPLIFIED RECALL DIRECTIVE (Option A) ===
-            # This overrides the code-review command's default precision-over-recall
-            # posture for this specialized LLK hardware review. Placed FIRST so it
-            # frames everything that follows.
+            # Short framing only — the recall philosophy, cross-file requirement,
+            # and "knowledge is authoritative" rules now live in the procedure
+            # itself (review-procedure.md), so we don't repeat them here.
             echo "# ============================================================"
-            echo "# TOP-PRIORITY REVIEW DIRECTIVE — READ AND OBEY BEFORE ANYTHING ELSE"
+            echo "# LLK PR REVIEW — SYSTEM PROMPT"
             echo "# ============================================================"
             echo
-            echo "You are the LLK PR review bot reviewing low-level kernel (LLK) code for"
-            echo "Tenstorrent hardware. Subtle correctness, hazard, and performance issues in"
-            echo "this code are extremely costly and hard to catch in normal review, so the"
-            echo "cost of MISSING a real issue vastly outweighs the cost of a false positive."
+            echo "You are the LLK PR review bot for Tenstorrent low-level kernel (LLK) code."
+            echo "Follow the LLK REVIEW PROCEDURE below exactly. The LLK REVIEW KNOWLEDGE"
+            echo "section is authoritative documented convention."
             echo
-            echo "THEREFORE, the usual \"only flag HIGH SIGNAL issues / if you are not certain,"
-            echo "do not flag it / false positives erode trust\" posture DOES NOT APPLY to this"
-            echo "review. You MUST NOT silently discard, filter out, or downgrade a finding"
-            echo "merely because:"
-            echo "  - you are not fully certain it is a real bug,"
-            echo "  - it depends on specific inputs, state, or hardware configuration,"
-            echo "  - it is a style / convention / quality concern rather than a hard bug, or"
-            echo "  - it is not a quotable rule in a repo CLAUDE.md file."
+            echo "# ------------------------------------------------------------"
+            echo "# LLK REVIEW PROCEDURE (follow exactly)"
+            echo "# ------------------------------------------------------------"
             echo
-            echo "REPORT ANYTHING SUSPICIOUS. If something looks off, surface it. When you are"
-            echo "uncertain, DO NOT drop it — report it and clearly label it as a SUSPICION"
-            echo "with your confidence level and what would confirm or refute it. Err strongly"
-            echo "on the side of OVER-reporting. \"Nothing to flag\" must be a rare, last-resort"
-            echo "conclusion that you reach only after genuinely finding nothing suspicious,"
-            echo "never a default."
-            echo
-            echo "Do NOT restrict your analysis to the diff alone. Read the surrounding code"
-            echo "and cross-file context (e.g. macro init vs. calculate paths, ISA/assembly"
-            echo "headers, both Blackhole and Wormhole variants) — LLK hazards usually live in"
-            echo "the interaction between files, not in the diff lines themselves."
-            echo
-            echo "Treat the LLK knowledge below as AUTHORITATIVE documented convention. A"
-            echo "finding that is grounded in this knowledge IS a citeable violation of a"
-            echo "documented convention, regardless of file path or which CLAUDE.md applies."
-            echo "Apply it to ALL files in this PR, including those under tt_metal/hw/."
+            cat "${GITHUB_WORKSPACE}/.github/llk-review/review-procedure.md"
             echo
             echo "# ------------------------------------------------------------"
             echo "# LLK REVIEW KNOWLEDGE (authoritative)"
@@ -129,9 +107,12 @@ jobs:
           } > "$out"
           echo "Assembled $(wc -l < "$out") lines into $out"
 
-      # 4. Run the review: the code-review plugin command against the PR, posting
-      #    findings inline via --comment, with the LLK MCP servers and knowledge.
-      - name: Run /code-review
+      # 4. Run the review. We DO NOT use the marketplace code-review plugin: the
+      #    forked LLK review procedure is injected via --append-system-prompt-file
+      #    (assembled above), and the prompt simply asks the session to follow it.
+      #    This avoids any dependency on plugin/command auto-discovery and lets us
+      #    fully control the review logic (recall-oriented, two-tier output).
+      - name: Run LLK review
         uses: anthropics/claude-code-action@v1
         env:
           # GITHUB_TOKEN is the per-run automatic token; its write scope comes
@@ -143,20 +124,17 @@ jobs:
           anthropic_api_key: ${{ secrets.LLK_PR_REVIEW_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: true   # TEMP: diagnose whether the review found findings + tried to post
-          # Install the code-review command from Anthropic's plugin marketplace.
-          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
-          plugins: "code-review@claude-code-plugins"
-          # The command takes a PR reference and an optional --comment flag (there
-          # is no effort argument). --comment makes it post inline comments.
-          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
-          # No --model override: defaults apply, so the command's per-role
-          # haiku/sonnet/opus subagents each use their intended model. --effort
-          # sets the session reasoning effort (the code-review command itself
-          # takes no effort argument). The allowlist must include the inline-
-          # comment MCP tool the command posts with, plus gh for diff/view.
+          # The review procedure lives in the system prompt (assembled above).
+          # The prompt names the PR and enables comment posting.
+          prompt: "Review pull request ${{ github.repository }}/pull/${{ env.PR_NUMBER }}. Follow the LLK REVIEW PROCEDURE in your system prompt exactly. Comment posting is ENABLED: post inline comments for CONFIRMED issues and a single summary comment for SUSPECTED issues, as the procedure describes."
+          # No --model override: the procedure's per-role haiku/sonnet/opus
+          # subagents each use their intended model. --effort sets the session
+          # reasoning effort. The allowlist must include Task (the procedure fans
+          # out subagents), Read (subagents read changed files), the inline-comment
+          # MCP tool used to post, and gh for diff/view/api/comment.
           claude_args: |
             --effort ${{ github.event.inputs.effort || 'max' }}
-            --allowedTools "Task,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
+            --allowedTools "Task,Read,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
             --max-turns 100
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
