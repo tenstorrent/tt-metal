@@ -88,11 +88,34 @@ void setControlBuffer(
     const metal_SocDescriptor& soc_d = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
+
+    // In accumulate mode, tag dispatch cores so their firmware main scope keeps the
+    // classic guaranteed-slot layout + finish (accumulate is worker-core-only).
+    // Computed once here; otherwise the flag stays zero and behavior is unchanged.
+    std::vector<CoreCoord> dispatch_virtual_cores;
+    const bool tag_dispatch_cores = MetalContext::instance(context_id).rtoptions().get_profiler_accumulate();
+    if (tag_dispatch_cores) {
+        const auto& dispatch_core_config = get_dispatch_core_config();
+        for (const CoreCoord& core : tt::get_logical_dispatch_cores(
+                 MetalEnvAccessor(MetalContext::instance(context_id).get_env()).impl(),
+                 device_id,
+                 device->num_hw_cqs(),
+                 dispatch_core_config)) {
+            dispatch_virtual_cores.push_back(
+                device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config)));
+        }
+    }
+
     for (auto core :
          MetalContext::instance(context_id).get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
         const CoreCoord curr_core = core.first;
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
+        control_buffer[kernel_profiler::PROFILER_DISPATCH_CORE] =
+            (std::find(dispatch_virtual_cores.begin(), dispatch_virtual_cores.end(), curr_core) !=
+             dispatch_virtual_cores.end())
+                ? 1
+                : 0;
 
         writeToCoreControlBuffer(mesh_device, device, curr_core, control_buffer, force_slow_dispatch, context_id);
     }
