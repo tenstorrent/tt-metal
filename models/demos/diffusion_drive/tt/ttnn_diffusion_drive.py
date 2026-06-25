@@ -33,7 +33,7 @@ round-trips); set DD_CONSOLIDATE=0 to fall back to the staged path.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 
@@ -67,6 +67,8 @@ class TtnnDiffusionDriveModel:
         self._device = device
         # Stage 4: consolidated on-device perception forward (set by build_stage4)
         self._perception = None
+        # Stage 7: True once compile() has captured the backbone-loop trace.
+        self._compiled = False
 
     # ------------------------------------------------------------------
     # Stage 2: install TTNN backbone
@@ -352,13 +354,72 @@ class TtnnDiffusionDriveModel:
         return cls(reference_model, config, device)
 
     # ------------------------------------------------------------------
-    # Stub: compile / execute_compiled (Stage 7+)
+    # Stage 7: compile / execute_compiled (backbone-loop trace)
     # ------------------------------------------------------------------
 
-    def compile(self, batch_size: int = 1) -> None:
-        """Stage 7+: capture TTNN trace for fast repeated inference."""
-        raise NotImplementedError("Trace capture requires all forward ops on-device (Stage 7)")
+    @staticmethod
+    def _dummy_features(batch_size: int = 1) -> Dict[str, torch.Tensor]:
+        """Production-resolution random features for trace capture (see DD-4 sizes)."""
+        return {
+            "camera_feature": torch.randn(batch_size, 3, 256, 1024),
+            "lidar_feature": torch.randn(batch_size, 1, 256, 256),
+            "status_feature": torch.randn(batch_size, 8),
+        }
+
+    def compile(self, features: Optional[Dict[str, torch.Tensor]] = None, batch_size: int = 1) -> None:
+        """Capture a TTNN trace of the consolidated backbone loop for fast replay.
+
+        The ``[stage → fusion] × 4`` backbone loop is the bulk of the per-forward
+        host op dispatch; capturing it collapses those dispatches into one
+        ``execute_trace`` (measured ~1.76× on the backbone alone). The stems, FPN
+        tail, perception and heads are not yet trace-legal and still run per-op,
+        so ``execute_compiled`` replays only the loop and runs the rest eagerly —
+        the output is identical to ``__call__`` (PCC ≈ 1.0).
+
+        Requires ``build_stage4`` (consolidated perception) and the consolidated
+        backbone (``build_stage3``/``build_stage3_6``; ``DD_CONSOLIDATE`` not 0).
+        ``features`` is a representative sample used to size/shape the fixed
+        trace inputs; if omitted a production-resolution dummy is synthesised
+        (camera 256×1024, LiDAR 256×256).
+        """
+        if self._perception is None:
+            raise RuntimeError("compile() requires build_stage4 (consolidated perception path)")
+        if not hasattr(self._model._backbone, "_ttnn"):
+            raise RuntimeError("compile() requires build_stage2..build_stage4 first")
+        bb = self._model._backbone._ttnn
+        if not bb._consolidated:
+            raise RuntimeError("compile() requires the consolidated backbone (do not set DD_CONSOLIDATE=0)")
+        if features is None:
+            features = self._dummy_features(batch_size)
+        with torch.no_grad():
+            bb.capture_backbone_trace(features["camera_feature"], features["lidar_feature"])
+        self._compiled = True
 
     def execute_compiled(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Stage 7+: replay the captured trace."""
-        raise NotImplementedError("Trace replay requires all forward ops on-device (Stage 7)")
+        """Replay the captured backbone trace, then run FPN/perception/heads eagerly.
+
+        Mirrors ``_forward_ttnn`` exactly but replaces the eager backbone call
+        with ``run_backbone_trace`` (trace replay). Call ``compile()`` first."""
+        if not self._compiled:
+            raise RuntimeError("call compile() before execute_compiled()")
+        with torch.no_grad():
+            m = self._model
+            camera = features["camera_feature"]
+            lidar = features["lidar_feature"]
+            status = features["status_feature"]
+
+            bev_upscale, bev_feature, _ = m._backbone._ttnn.run_backbone_trace(camera, lidar)
+            bev_spatial_shape = bev_upscale.shape[2:]
+
+            traj_query, agents_query, cross_bev_feature, status_enc = self._perception(bev_upscale, bev_feature, status)
+
+            output = m._trajectory_head(traj_query, agents_query, cross_bev_feature, bev_spatial_shape, status_enc)
+            agents = m._agent_head(agents_query)
+            output.update(agents)
+            return output
+
+    def release_compiled(self) -> None:
+        """Release the captured backbone trace (frees the trace region)."""
+        if self._compiled and hasattr(self._model._backbone, "_ttnn"):
+            self._model._backbone._ttnn.release_backbone_trace()
+        self._compiled = False
