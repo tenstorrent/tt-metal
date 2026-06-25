@@ -118,7 +118,7 @@ class TtnnPerceptionForward:
         #    The conv output is row-major NHWC (token = h*wb+w), which already
         #    equals the reference's flatten(-2,-1).permute(0,2,1) ordering.
         xt = _to_ttnn_tile(bev_feature, B, hb, wb, Cf, d)
-        bev_d, _, _, _, _ = _ttnn_conv2d(d, xt, self._bd_w, self._bd_b, B, hb, wb, Cf, D, 1, 1, 0)
+        bev_d, _, _, self._bd_w, self._bd_b = _ttnn_conv2d(d, xt, self._bd_w, self._bd_b, B, hb, wb, Cf, D, 1, 1, 0)
         bev_flat = _clean_tile(ttnn.reshape(_to_rm(bev_d), (B, n_tok, D)))  # (B, n_tok, D)
 
         # 2. status_encoding: linear 8→D → (B,1,D)

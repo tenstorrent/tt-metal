@@ -78,7 +78,9 @@ class TtnnConv1x1(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, Cin, H, W = x.shape
         xt = _to_ttnn_tile(x, B, H, W, Cin, self._d)
-        out, Ho, Wo, _, _ = _ttnn_conv2d(self._d, xt, self._w, self._b, B, H, W, Cin, self._cout, 1, 1, 0)
+        # Reassign self._w/_b to the device-prepared weights so the next forward
+        # skips the host re-upload (perf win + trace-capture requires no H2D writes).
+        out, Ho, Wo, self._w, self._b = _ttnn_conv2d(self._d, xt, self._w, self._b, B, H, W, Cin, self._cout, 1, 1, 0)
         if out.is_sharded():
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         return _from_ttnn_tile(out, B, Ho, Wo, self._cout)

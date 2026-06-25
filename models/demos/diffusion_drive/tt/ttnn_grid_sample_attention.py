@@ -68,7 +68,11 @@ class TtnnGridSampleCrossBEVAttention:
         B, C, H, W = bev_feature.shape
         x_nhwc = bev_feature.permute(0, 2, 3, 1).contiguous().reshape(1, 1, B * H * W, C).to(torch.bfloat16)
         xt = ttnn.from_torch(x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self._device)
-        out, Ho, Wo, _, _ = _ttnn_conv2d(self._device, xt, self._vp_w, self._vp_b, B, H, W, C, self._vp_cout, 3, 1, 1)
+        # Reassign self._vp_w/_b to the device-prepared weights so each per-step
+        # value_proj reuses them (trace-safe; no host re-upload of the conv weights).
+        out, Ho, Wo, self._vp_w, self._vp_b = _ttnn_conv2d(
+            self._device, xt, self._vp_w, self._vp_b, B, H, W, C, self._vp_cout, 3, 1, 1
+        )
         if out.is_sharded():
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.relu(out)
