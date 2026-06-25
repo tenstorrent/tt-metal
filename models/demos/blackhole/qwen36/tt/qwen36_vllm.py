@@ -207,4 +207,7 @@ class Qwen36ForCausalLM(Generator):
         # paged-SDPA + GDN decode trace at position 0 during warmup. Qwen sets
         # _supports_on_device_sampling=False, so the orchestrator passes can_sample_on_device=False
         # and exactly one greedy trace is captured; serving replays it with per-step input updates.
+        #
+        # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
+        kwargs.pop("non_greedy_decoding_on_device", None)
         return super().warmup_model_decode(*args, **kwargs)
