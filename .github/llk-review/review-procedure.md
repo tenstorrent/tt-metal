@@ -25,6 +25,14 @@ merely because the convention lives in this knowledge rather than in a repo
 - Only call a tool if it is required to complete the task. Every tool call should have a clear purpose.
 - Every subagent that reviews code MUST be given the authoritative LLK knowledge framing above and told to apply it to all files.
 
+**Subagent budget (keep the fan-out bounded):**
+- Spawn at most ~16 subagents total across the whole review. Stay well under this.
+- Steps 1-3 use one subagent each (eligibility, CLAUDE.md, summary).
+- Step 4 uses EXACTLY 4 review subagents — no more.
+- Reviewers and validators do their own cross-file reading directly with `gh`/`Read`. They MUST NOT spawn further subagents (no nesting) — depth beyond one level is not allowed.
+- Step 5 launches at most ONE validation subagent per candidate issue, and validates at most the 6 most significant candidates. If more than 6 candidates exist, validate the highest-severity ones and report the remainder directly as SUSPECTED without a dedicated validation subagent.
+- Do not open-endedly spin up extra "investigation" subagents beyond this budget. If you want more depth on one issue, have the single responsible subagent read more files itself rather than fanning out.
+
 The user message names the pull request to review and whether comment posting
 is enabled. To review it, follow these steps precisely:
 
@@ -66,7 +74,7 @@ is enabled. To review it, follow these steps precisely:
 
    In addition to the above, each subagent should be told the PR title and description. This helps provide context regarding the author's intent.
 
-5. For each issue found in step 4, launch a parallel subagent to validate it. Give the subagent the PR title/description, the issue description, and the LLK knowledge framing. Its job is to independently determine the truth of the claim by reading the actual code (cross-file as needed) and the relevant convention. It returns one verdict:
+5. Validate the candidate issues from step 4, but respect the subagent budget: launch at most ONE validation subagent per candidate and validate at most the 6 most significant candidates (highest severity/confidence first). Any remaining candidates are reported directly as SUSPECTED without a dedicated validation subagent. Each validation subagent gets the PR title/description, the issue description, and the LLK knowledge framing. Its job is to independently determine the truth of the claim by reading the actual code (cross-file as needed) and the relevant convention — reading files itself, not spawning more subagents. It returns one verdict:
    - CONFIRMED — independently verified as a real issue with high confidence.
    - SUSPECTED — plausible and worth raising, but could not be confirmed with high confidence (ambiguous, input/state-dependent, or needs author/silicon knowledge to settle).
    - REJECTED — verified to be a non-issue (correct as written, pre-existing, or out of scope).
