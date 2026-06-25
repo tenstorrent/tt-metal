@@ -21,8 +21,18 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
+std::vector<tt::tt_metal::MeshTensor> TransposeWHProgramFactory::get_owned_tensors(
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& /*tensor_args*/,
+    Tensor& /*output_tensor*/) {
+    return {};
+}
+
 ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_program_spec(
-    const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    const TransposeParams& /*operation_attributes*/,
+    const TransposeInputs& tensor_args,
+    Tensor& output_tensor,
+    std::span<const tt::tt_metal::MeshTensor> /*owned_tensors*/) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};        // legacy c_0: input tile stream
     const DFBSpecName CB_OUT0{"cb_out0"};      // legacy c_16: transposed output stream

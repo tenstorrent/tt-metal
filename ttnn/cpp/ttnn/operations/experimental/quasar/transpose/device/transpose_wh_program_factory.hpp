@@ -9,13 +9,24 @@
 #include "ttnn/program_spec_artifacts.hpp"
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+
+#include <span>
+#include <vector>
 
 namespace ttnn::prim::qsr {
 
-// Metal 2.0 (ProgramSpecFactoryConcept) factory for the W<->H transpose path (tiled + row-major).
+// Metal 2.0 (ProgramSpecFactoryWithOwnedTensorsConcept) factory for the W<->H transpose path (tiled + row-major).
 struct TransposeWHProgramFactory {
-    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
+    // Transpose owns no scratch/config tensors; routes through the owned-tensors adapter all the same.
+    static std::vector<tt::tt_metal::MeshTensor> get_owned_tensors(
         const TransposeParams& operation_attributes, const TransposeInputs& tensor_args, Tensor& output_tensor);
+
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
+        const TransposeParams& operation_attributes,
+        const TransposeInputs& tensor_args,
+        Tensor& output_tensor,
+        std::span<const tt::tt_metal::MeshTensor> owned_tensors);
 };
 
 }  // namespace ttnn::prim::qsr
