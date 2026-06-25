@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // So we just set/clear valid bits here - which is unavoidable hardware synchronization.
             // When unpack_to_dest is used, we assume the data is immediately ready in destination register.
             // Otherwise, we assume the data is immediately ready in source A/B registers.
-            if (!unpack_to_dest)
+            if constexpr (!unpack_to_dest)
             {
                 // Set valid for source A always.
                 // Set valid for source B only if dest_acc is enabled.
@@ -146,9 +146,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
 
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(num_faces, formats.math);
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
-        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
         // Program the SFPU for this specific typecast pair, mirroring the
         // functional typecast kernel and production typecast_tile_init<IN, OUT>:
