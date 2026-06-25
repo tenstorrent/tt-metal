@@ -1430,6 +1430,10 @@ void DeviceProfiler::resetControlBuffers(
         core_control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
         core_control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] =
             control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
+        // Preserve the dispatch-core tag across resets (set once in setControlBuffer);
+        // accumulate mode relies on it to keep dispatch cores on the classic path.
+        core_control_buffer_reset[kernel_profiler::PROFILER_DISPATCH_CORE] =
+            control_buffer[kernel_profiler::PROFILER_DISPATCH_CORE];
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = buffer_0_address;
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = buffer_0_address;
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T0_0] = buffer_0_address;
