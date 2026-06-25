@@ -41,6 +41,12 @@ def _assert_regions_equal(before, after):
         assert torch.equal(lhs, rhs), f"cache prompt region changed on device shard {idx}"
 
 
+def _assert_regions_changed(before, after):
+    assert len(before) == len(after)
+    for idx, (lhs, rhs) in enumerate(zip(before, after)):
+        assert not torch.equal(lhs, rhs), f"cache region did not change on device shard {idx}"
+
+
 def _embed_tokens(model, tokens, mesh_device):
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     tt_tokens = ttnn.from_torch(
@@ -175,4 +181,67 @@ def test_commit_append_decode_writes_new_position_without_mutating_prompt(mesh_d
     assert any(
         not torch.equal(before, after)
         for before, after in zip(v_append_before, _cache_region(v_cache, prompt_len, prompt_len + 1, is_mesh=is_mesh))
+    )
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_commit_append_decode_writes_full_256_token_canvas(mesh_device, reset_seeds):
+    torch.manual_seed(2)
+    prompt_len = 32
+    canvas_len = 256
+    vocab_size = 256
+    # SDPA decode requires the allocated K sequence length to be a multiple of
+    # k_chunk_size=64; the verified logical region remains prompt_len+canvas_len.
+    model = _build_tiny_gemma4_model(mesh_device, vocab_size=vocab_size, max_seq_len=320)
+
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
+    prompt_logits = model(
+        _embed_tokens(model, prompt_tokens, mesh_device),
+        is_decode=False,
+        input_ids_torch=prompt_tokens,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    prompt_logits.deallocate(True)
+
+    k_cache, v_cache = model.tt_kv_cache[0]
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    k_prompt_before = _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh)
+    v_prompt_before = _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh)
+    k_canvas_before = _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+    v_canvas_before = _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+
+    for offset in range(canvas_len):
+        position = prompt_len + offset
+        append_tokens = torch.randint(0, vocab_size, (1, 1), dtype=torch.long)
+        pos_u32 = ttnn.from_torch(
+            F.pad(torch.tensor([[position]], dtype=torch.int32), (0, 31), "constant", 0),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=mesh_mapper,
+        )
+        pos_i32 = ttnn.from_torch(
+            torch.tensor([position], dtype=torch.int32),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=mesh_mapper,
+        )
+        append_logits = model(
+            _embed_tokens(model, append_tokens, mesh_device),
+            position_idx=pos_u32,
+            position_idx_cache=pos_i32,
+            is_decode=True,
+            kv_phase=KVCachePhase.COMMIT_APPEND,
+        )
+        append_logits.deallocate(True)
+
+    _assert_regions_equal(k_prompt_before, _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh))
+    _assert_regions_equal(v_prompt_before, _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh))
+    _assert_regions_changed(
+        k_canvas_before, _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+    )
+    _assert_regions_changed(
+        v_canvas_before, _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
     )

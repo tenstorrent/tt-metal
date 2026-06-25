@@ -784,7 +784,14 @@ class Gemma4Model:
         return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
 
     def ttnn_verify_forward(
-        self, x, current_pos, current_pos_cache=None, page_table=None, kv_cache=None, page_tables_per_layer=None
+        self,
+        x,
+        current_pos,
+        current_pos_cache=None,
+        page_table=None,
+        kv_cache=None,
+        page_tables_per_layer=None,
+        kv_phase=None,
     ):
         """Multi-token speculative *verify* forward (batch holds the candidates).
 
@@ -836,6 +843,7 @@ class Gemma4Model:
             # `_verify_seq_kv_write=False` to measure the cost of the per-candidate
             # serialized KV-write loop (KV is corrupted when False — timing only).
             sequential_kv_write=getattr(self, "_verify_seq_kv_write", True),
+            kv_phase=kv_phase,
         )
 
     def compute_host_pli(self, token_id):
