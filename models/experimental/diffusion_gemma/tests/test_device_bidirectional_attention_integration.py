@@ -95,12 +95,23 @@ class _PostNormSelfConditioning:
     def __init__(self, eps=1e-6):
         self.eps = eps
         self.called = False
+        self.saw_prev_logits = False
+        self.saw_embedding_weight = False
 
     def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
-        del embedding_weight_tt, compute_kernel_config
-        assert prev_logits_tt is None
+        del compute_kernel_config
         self.called = True
-        return ttnn.rms_norm(inputs_embeds_tt, epsilon=self.eps)
+        self.saw_prev_logits = prev_logits_tt is not None
+        self.saw_embedding_weight = embedding_weight_tt is not None
+        if prev_logits_tt is None:
+            return ttnn.rms_norm(inputs_embeds_tt, epsilon=self.eps)
+
+        signal = ttnn.multiply(ttnn.sum(prev_logits_tt, dim=-1, keepdim=True), 1.0e-3)
+        conditioned = ttnn.add(inputs_embeds_tt, signal)
+        signal.deallocate(True)
+        out = ttnn.rms_norm(conditioned, epsilon=self.eps)
+        conditioned.deallocate(True)
+        return out
 
 
 def _torch_attention_reference(hf_model, hf_text_config, layer_idx, canvas_hidden, kv_hidden, mask):
@@ -299,9 +310,11 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     tt_model = _build_tt_model(mesh_device, hf_model, hf_text_config, num_layers=1, max_seq_len=total_len)
 
     canvas_tokens = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
+    prev_logits = torch.randn(1, 1, canvas_len, vocab_size)
     with torch.no_grad():
         canvas_hidden = hf_model.embed_tokens(canvas_tokens)
-        conditioned_canvas_hidden = _scaleless_rms_norm(canvas_hidden)
+        conditioning_signal = prev_logits.squeeze(0).sum(dim=-1, keepdim=True) * 1.0e-3
+        conditioned_canvas_hidden = _scaleless_rms_norm(canvas_hidden + conditioning_signal)
     prompt_kv_hidden = torch.randn(1, prompt_len, hf_text_config.hidden_size)
     mask = build_canvas_denoise_mask(
         prompt_len,
@@ -315,17 +328,21 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
 
     tt_canvas_tokens = _to_device_tokens(mesh_device, canvas_tokens)
     tt_prompt_kv_hidden = _to_device(mesh_device, prompt_kv_hidden.unsqueeze(0))
+    tt_prev_logits = _to_device(mesh_device, prev_logits)
     self_conditioning = _PostNormSelfConditioning()
     tt_logits = denoise_logits_from_tokens(
         tt_model,
         prompt_hidden_by_layer=[tt_prompt_kv_hidden],
         canvas_tokens=tt_canvas_tokens,
         self_conditioning=self_conditioning,
-        prev_logits=None,
+        prev_logits=tt_prev_logits,
+        self_conditioning_embedding_weight=tt_model.embedding_weight,
     )
     logits = _to_torch(tt_logits, mesh_device).squeeze(0)
 
     assert self_conditioning.called
+    assert self_conditioning.saw_prev_logits
+    assert self_conditioning.saw_embedding_weight
     # Full logits include the shared bf16 MoE/lm_head/softcap path; this branch's
     # known full-model ceiling is below the attention-only 0.99 acceptance.
     passing, message = assert_with_pcc(golden.float(), logits.float(), 0.98)
