@@ -500,6 +500,7 @@ class Gemma4Model:
         kv_phase=None,
         attn_mask=None,
         kv_hidden_states=None,
+        prefix_kv_by_layer=None,
         q_rope_offset=0,
     ):
         """
@@ -623,6 +624,7 @@ class Gemma4Model:
                 keep_kv = True
 
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
+            prefix_kv = prefix_kv_by_layer[i] if prefix_kv_by_layer is not None else None
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
@@ -643,6 +645,7 @@ class Gemma4Model:
                 kv_phase=kv_phase,
                 attn_mask=attn_mask,
                 kv_hidden_states=kv_hidden_states,
+                prefix_kv=prefix_kv,
                 q_rope_offset=q_rope_offset,
             )
 
@@ -1125,6 +1128,7 @@ class Gemma4Model:
         kv_phase=None,
         attn_mask=None,
         kv_hidden_states=None,
+        prefix_kv_by_layer=None,
         q_rope_offset=0,
         **kwargs,
     ):
@@ -1172,6 +1176,7 @@ class Gemma4Model:
             kv_phase=kv_phase,
             attn_mask=attn_mask,
             kv_hidden_states=kv_hidden_states,
+            prefix_kv_by_layer=prefix_kv_by_layer,
             q_rope_offset=q_rope_offset,
         )
 

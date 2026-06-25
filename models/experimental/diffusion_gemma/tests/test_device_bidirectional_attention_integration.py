@@ -28,7 +28,7 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
-    collect_prompt_hidden_by_layer,
+    collect_prompt_kv_by_layer,
     denoise_attention_forward,
     denoise_logits_from_tokens,
     embed_canvas_tokens,
@@ -260,13 +260,24 @@ def test_real_attention_denoise_mask_covers_prompt_prefix_for_layer_type(mesh_de
 
     tt_canvas_hidden = _to_device(mesh_device, canvas_hidden.unsqueeze(0))
     tt_prompt_hidden = _to_device(mesh_device, prompt_hidden.unsqueeze(0))
+    tt_prompt_out = tt_model.layers[layer_idx].self_attn(
+        tt_prompt_hidden,
+        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=prompt_len),
+        is_decode=False,
+        keep_kv=True,
+        kv_phase=KVCachePhase.DENOISE_READONLY,
+    )
+    tt_prompt_out.deallocate(True)
+    tt_prompt_kv = tt_model.layers[layer_idx].self_attn._last_kv
     tt_out = denoise_attention_forward(
         tt_model,
         layer_idx=layer_idx,
-        prompt_hidden=tt_prompt_hidden,
+        prompt_kv=tt_prompt_kv,
         canvas_hidden=tt_canvas_hidden,
     )
     out = _to_torch(tt_out, mesh_device).squeeze(0)
+    tt_prompt_kv[0].deallocate(True)
+    tt_prompt_kv[1].deallocate(True)
 
     passing, message = assert_with_pcc(golden.float(), out.float(), 0.99)
     assert passing, message
@@ -325,7 +336,7 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     tt_canvas_tokens = _to_device_tokens(mesh_device, canvas_tokens)
     tt_prompt_tokens = _to_device_tokens(mesh_device, prompt_tokens)
     tt_prompt_hidden = embed_canvas_tokens(tt_model, tt_prompt_tokens)
-    tt_prompt_hidden_by_layer = collect_prompt_hidden_by_layer(tt_model, tt_prompt_hidden)
+    tt_prompt_kv_by_layer = collect_prompt_kv_by_layer(tt_model, tt_prompt_hidden)
     tt_prev_logits = _to_device(mesh_device, prev_logits.unsqueeze(0))
     tt_self_conditioning_embedding = _to_device(
         mesh_device,
@@ -340,13 +351,16 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     )
     tt_logits = denoise_logits_from_tokens(
         tt_model,
-        prompt_hidden_by_layer=tt_prompt_hidden_by_layer,
+        prompt_hidden_by_layer=tt_prompt_kv_by_layer,
         canvas_tokens=tt_canvas_tokens,
         self_conditioning=self_conditioning,
         prev_logits=tt_prev_logits,
         self_conditioning_embedding_weight=tt_self_conditioning_embedding,
     )
     logits = _to_torch(tt_logits, mesh_device).squeeze(0)
+    for tt_k, tt_v in tt_prompt_kv_by_layer:
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
 
     # Full logits include the shared bf16 MoE/lm_head/softcap path; this branch's
     # known full-model ceiling is below the attention-only 0.99 acceptance.

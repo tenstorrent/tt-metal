@@ -138,6 +138,7 @@ class Gemma4Attention:
         kv_phase=None,
         attn_mask=None,
         kv_hidden_states=None,
+        prefix_kv=None,
         q_rope_offset=0,
     ):
         """
@@ -199,6 +200,7 @@ class Gemma4Attention:
                 write_kv_cache=write_kv_cache,
                 attn_mask=attn_mask,
                 kv_hidden_states=kv_hidden_states,
+                prefix_kv=prefix_kv,
                 q_rope_offset=q_rope_offset,
             )
             self._last_kv = kept_kv

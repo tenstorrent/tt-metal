@@ -49,6 +49,7 @@ def _prefill_forward_single(
     write_kv_cache=True,
     attn_mask=None,
     kv_hidden_states=None,
+    prefix_kv=None,
     q_rope_offset=0,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations."""
@@ -56,6 +57,8 @@ def _prefill_forward_single(
 
     if kv_hidden_states is not None and (shared_kv is not None or write_kv_cache):
         raise ValueError("kv_hidden_states is only supported for readonly masked denoise prefill")
+    if prefix_kv is not None and (shared_kv is not None or write_kv_cache):
+        raise ValueError("prefix_kv is only supported for readonly masked denoise prefill")
 
     xqkv = apply_qkv_projection(hidden_states, weights)
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
@@ -89,7 +92,22 @@ def _prefill_forward_single(
     if q_sin_cache is not sin_cache:
         q_sin_cache.deallocate(True)
     if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache)
+        k_rope_offset = q_rope_offset if prefix_kv is not None else 0
+        k_cos_cache = _slice_rope_cache(cos_cache, k_rope_offset, tt_k.shape[-2])
+        k_sin_cache = _slice_rope_cache(sin_cache, k_rope_offset, tt_k.shape[-2])
+        tt_k = apply_rope(tt_k, k_cos_cache, k_sin_cache)
+        if k_cos_cache is not cos_cache:
+            k_cos_cache.deallocate(True)
+        if k_sin_cache is not sin_cache:
+            k_sin_cache.deallocate(True)
+
+    if prefix_kv is not None:
+        prefix_k, prefix_v = prefix_kv
+        canvas_k, canvas_v = tt_k, tt_v
+        tt_k = ttnn.concat([prefix_k, canvas_k], dim=2)
+        tt_v = ttnn.concat([prefix_v, canvas_v], dim=2)
+        canvas_k.deallocate(True)
+        canvas_v.deallocate(True)
 
     if write_kv_cache and kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
@@ -201,6 +219,7 @@ def prefill_forward(
     write_kv_cache=True,
     attn_mask=None,
     kv_hidden_states=None,
+    prefix_kv=None,
     q_rope_offset=0,
 ):
     """
@@ -228,11 +247,14 @@ def prefill_forward(
             write_kv_cache=write_kv_cache,
             attn_mask=attn_mask,
             kv_hidden_states=kv_hidden_states,
+            prefix_kv=prefix_kv,
             q_rope_offset=q_rope_offset,
         )
 
     if kv_hidden_states is not None:
         raise ValueError("kv_hidden_states is only supported for single-user prefill")
+    if prefix_kv is not None:
+        raise ValueError("prefix_kv is only supported for single-user prefill")
 
     tp = mesh_config.tp if mesh_config else 1
     hidden_states = ttnn.reshape(

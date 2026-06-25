@@ -214,6 +214,7 @@ class Gemma4DecoderLayer:
         kv_phase=None,
         attn_mask=None,
         kv_hidden_states=None,
+        prefix_kv=None,
         q_rope_offset=0,
     ):
         """
@@ -259,6 +260,7 @@ class Gemma4DecoderLayer:
             kv_phase=kv_phase,
             attn_mask=attn_mask,
             kv_hidden_states=kv_hidden_states,
+            prefix_kv=prefix_kv,
             q_rope_offset=q_rope_offset,
         )
 

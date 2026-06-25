@@ -53,7 +53,8 @@ def denoise_attention_forward(
     tt_model,
     *,
     layer_idx: int,
-    prompt_hidden,
+    prompt_hidden=None,
+    prompt_kv=None,
     canvas_hidden,
     attn_mask=None,
 ):
@@ -63,15 +64,19 @@ def denoise_attention_forward(
         tt_model: `Gemma4Model` carrying the reused DiffusionGemma decoder weights.
         layer_idx: decoder layer to run.
         prompt_hidden: frozen prompt hidden states `[1, 1, P, H]` on device.
+        prompt_kv: optional frozen projected prompt `(K, V)` heads. This is the
+            cache-shaped input used by the eventual paged encoder KV read path.
         canvas_hidden: current canvas hidden states `[1, 1, C, H]` on device.
         attn_mask: optional prebuilt `[1, 1, C, P+C]` additive mask on device.
 
     Returns:
         The attention output for the canvas positions `[1, 1, C, H]`.
     """
-    prompt_len = prompt_hidden.shape[-2]
+    if (prompt_hidden is None) == (prompt_kv is None):
+        raise ValueError("pass exactly one of prompt_hidden or prompt_kv")
+    prompt_len = prompt_kv[0].shape[-2] if prompt_kv is not None else prompt_hidden.shape[-2]
     canvas_len = canvas_hidden.shape[-2]
-    kv_hidden = ttnn.concat([prompt_hidden, canvas_hidden], dim=2)
+    kv_hidden = None if prompt_kv is not None else ttnn.concat([prompt_hidden, canvas_hidden], dim=2)
     created_mask = attn_mask is None
     if created_mask:
         attn_mask = build_device_canvas_denoise_mask(
@@ -87,19 +92,26 @@ def denoise_attention_forward(
         kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
+        prefix_kv=prompt_kv,
         q_rope_offset=prompt_len,
     )
-    kv_hidden.deallocate(True)
+    if kv_hidden is not None:
+        kv_hidden.deallocate(True)
     if created_mask:
         attn_mask.deallocate(True)
     return out
 
 
-def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_kv_hidden, attn_mask, prompt_len):
+def _prompt_source_len(prompt_source):
+    return prompt_source[0].shape[-2] if isinstance(prompt_source, (tuple, list)) else prompt_source.shape[-2]
+
+
+def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, prompt_len):
     layer = tt_model.layers[layer_idx]
     residual = hidden_states
     normed = layer.input_layernorm.forward(hidden_states)
-    kv_hidden = ttnn.concat([prompt_kv_hidden, normed], dim=2)
+    prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list)) else None
+    kv_hidden = None if prefix_kv is not None else ttnn.concat([prompt_source, normed], dim=2)
     attn_output = layer.self_attn(
         normed,
         rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=prompt_len + hidden_states.shape[-2]),
@@ -107,10 +119,12 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_kv_hidden,
         kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
+        prefix_kv=prefix_kv,
         q_rope_offset=prompt_len,
     )
     normed.deallocate(True)
-    kv_hidden.deallocate(True)
+    if kv_hidden is not None:
+        kv_hidden.deallocate(True)
 
     attn_output = layer.post_attention_layernorm.forward(attn_output)
     hidden_states = ttnn.add(residual, attn_output)
@@ -155,11 +169,11 @@ def denoise_logits_forward(
 ):
     """Run a short-prompt DiffusionGemma denoise logits forward.
 
-    ``prompt_hidden_by_layer`` provides the frozen encoder-side attention inputs
-    used as K/V source for each decoder layer. It is a list of `[1, 1, P, H]`
-    device tensors with length matching `tt_model.layers`. The returned logits
-    cover all canvas positions, which the diffusion sampler consumes each denoise
-    step.
+    ``prompt_hidden_by_layer`` provides the frozen encoder-side attention source
+    for each decoder layer. Entries can be either `[1, 1, P, H]` hidden tensors
+    (legacy shim) or projected `(K, V)` prompt heads produced by the encoder KV
+    path. The returned logits cover all canvas positions, which the diffusion
+    sampler consumes each denoise step.
     """
     if len(prompt_hidden_by_layer) != len(tt_model.layers):
         raise ValueError(
@@ -167,7 +181,7 @@ def denoise_logits_forward(
         )
 
     hidden_states = canvas_hidden
-    prompt_len = prompt_hidden_by_layer[0].shape[-2]
+    prompt_len = _prompt_source_len(prompt_hidden_by_layer[0])
     canvas_len = canvas_hidden.shape[-2]
     attn_mask = build_device_canvas_denoise_mask(
         tt_model.mesh_device,
@@ -212,6 +226,32 @@ def collect_prompt_hidden_by_layer(tt_model, prompt_hidden):
         )
     hidden_states.deallocate(True)
     return prompt_hidden_by_layer
+
+
+def collect_prompt_kv_by_layer(tt_model, prompt_hidden):
+    """Collect per-layer frozen prompt K/V heads for denoise prefix attention.
+
+    This uses the existing Gemma4 prefill ``keep_kv`` path to capture K/V after
+    per-head norm and RoPE. Those tensors match the shape carried by KV caches,
+    so this is the narrow interface the future paged encoder-cache read should
+    populate.
+    """
+    hidden_states = prompt_hidden
+    prompt_kv_by_layer = []
+    for layer_idx, layer in enumerate(tt_model.layers):
+        hidden_states = layer(
+            hidden_states,
+            rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=hidden_states.shape[-2]),
+            position_idx=None,
+            page_table=None,
+            kv_cache=None,
+            is_decode=False,
+            keep_kv=True,
+            kv_phase=KVCachePhase.DENOISE_READONLY,
+        )
+        prompt_kv_by_layer.append(layer.self_attn._last_kv)
+    hidden_states.deallocate(True)
+    return prompt_kv_by_layer
 
 
 def embed_canvas_tokens(tt_model, canvas_tokens):
