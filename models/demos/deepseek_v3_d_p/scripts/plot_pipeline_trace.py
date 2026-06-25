@@ -13,7 +13,7 @@ Input is the single combined run log (all ranks, MPI --tag-output interleaved). 
 CHUNK_START epoch and the post-loop E2E_CLOCK; a chunk's bar runs start(r,c) -> start(r,c+1) (the
 last chunk uses last_compute_end), i.e. compute + any idle wait for the next chunk.
 
-    python -m models.demos.deepseek_v3_d_p.tt.runners.plot_pipeline_trace <run.log> [-o out.png]
+    python -m models.demos.deepseek_v3_d_p.scripts.plot_pipeline_trace <run.log> [-o out.png]
 """
 
 import argparse
