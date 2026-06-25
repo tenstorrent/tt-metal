@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
+#include <set>
+#include <utility>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -14,29 +17,22 @@
 
 namespace ttnn::operations::ccl::common {
 
+// All worker-core placement helpers below are implementation details of
+// select_moe_compute_cores() and are confined to this translation unit.
+namespace {
+
+using CoreCoordPairSet = std::set<std::pair<uint32_t, uint32_t>>;
+
+constexpr uint32_t kMoEComputeMaxTilizeCores = 4;
+// Legacy moe_compute combine pool was 2 columns wide (e.g. x=5,6 on WH).
+constexpr uint32_t kMoEComputeCombineStripWidth = 2;
+
 CoreCoordPairSet core_coords_to_pair_set(const std::vector<CoreCoord>& cores) {
     CoreCoordPairSet result;
     for (const auto& core : cores) {
         result.insert({core.x, core.y});
     }
     return result;
-}
-
-std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
-    const CoreCoordPairSet& avoid, const CoreCoord& worker_grid, uint32_t num_cores) {
-    std::vector<CoreCoord> picked;
-    picked.reserve(num_cores);
-
-    for (uint32_t y = 0; y < worker_grid.y && picked.size() < num_cores; ++y) {
-        for (uint32_t x = 0; x < worker_grid.x && picked.size() < num_cores; ++x) {
-            CoreCoord candidate(x, y);
-            if (!avoid.contains({candidate.x, candidate.y})) {
-                picked.push_back(candidate);
-            }
-        }
-    }
-
-    return picked;
 }
 
 std::vector<CoreCoord> pick_worker_cores_row_major_avoiding(
@@ -164,8 +160,6 @@ uint32_t compute_moe_compute_tilize_num_cores(uint32_t hidden_tiles) {
     }
     return std::max(1u, num_cores);
 }
-
-namespace {
 
 // All worker-core selection happens in LOGICAL coordinates. worker_core_from_logical_core() returns
 // VIRTUAL (translated) coordinates, which are contiguous regardless of harvesting, so a logical
@@ -545,7 +539,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
         assert_disjoint_from_mux(tilize_cores, "tilize");
     }
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "moe_compute: placement matmul_mode={} mux={} | matmul={} bbox={} | combine={} bbox={} | tilize={} bbox={}",
         used_compact_matmul ? "compact" : "dram-adjacent",
