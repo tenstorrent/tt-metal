@@ -17,6 +17,7 @@ from models.demos.gemma4.config import MeshConfig, Mode
 
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
+from .kv_phase import KVCachePhase, coerce_kv_cache_phase
 from .decode import decode_forward
 from .prefill import prefill_forward
 
@@ -134,6 +135,7 @@ class Gemma4Attention:
         user_id=0,
         valid_seq_len=None,
         sequential_kv_write=False,
+        kv_phase=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -152,6 +154,8 @@ class Gemma4Attention:
         """
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
+        kv_phase = coerce_kv_cache_phase(kv_phase, is_decode=is_decode)
+        write_kv_cache = kv_phase is not KVCachePhase.DENOISE_READONLY
 
         if is_decode:
             return decode_forward(
@@ -170,6 +174,7 @@ class Gemma4Attention:
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
                 sequential_kv_write=sequential_kv_write,
+                write_kv_cache=write_kv_cache,
             )
         else:
             tt_out, kept_kv = prefill_forward(
@@ -188,6 +193,7 @@ class Gemma4Attention:
                 batch_size=batch_size,
                 user_id=user_id,
                 valid_seq_len=valid_seq_len,
+                write_kv_cache=write_kv_cache,
             )
             self._last_kv = kept_kv
             return tt_out

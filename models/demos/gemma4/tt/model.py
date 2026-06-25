@@ -22,6 +22,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+from models.demos.gemma4.tt.attention.kv_phase import coerce_kv_cache_phase
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -496,6 +497,7 @@ class Gemma4Model:
         user_id=0,
         return_hidden=False,
         sequential_kv_write=False,
+        kv_phase=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -525,10 +527,14 @@ class Gemma4Model:
                 The vLLM hybrid kv-cache manager produces this list so
                 sliding-window layers can index a smaller paged pool than
                 full-attention layers (KV cache groups).
+            kv_phase: optional explicit KV write discipline. Defaults preserve
+                existing Gemma4 behavior; ``DENOISE_READONLY`` forbids writes
+                into the frozen prompt/committed cache.
         """
         seq_len = hidden_states.shape[2]
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
+        kv_phase = coerce_kv_cache_phase(kv_phase, is_decode=is_decode)
 
         # Real (unpadded) prefill length: the prompt is padded up to a power of 2
         # for the single prefill chunk, and bounded sliding layers must NOT write
@@ -631,6 +637,7 @@ class Gemma4Model:
                 user_id=user_id,
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
+                kv_phase=kv_phase,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention

@@ -40,6 +40,7 @@ def _prefill_forward_single(
     shared_kv=None,
     keep_kv=False,
     valid_seq_len=None,
+    write_kv_cache=True,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations."""
     tp = mesh_config.tp if mesh_config else 1
@@ -64,7 +65,7 @@ def _prefill_forward_single(
     if shared_kv is None:
         tt_k = apply_rope(tt_k, cos_cache, sin_cache)
 
-    if kv_cache is not None and shared_kv is None:
+    if write_kv_cache and kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
         if page_table is not None:
             num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
@@ -159,6 +160,7 @@ def prefill_forward(
     keep_kv=False,
     batch_size=1,
     valid_seq_len=None,
+    write_kv_cache=True,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -182,6 +184,7 @@ def prefill_forward(
             shared_kv=shared_kv,
             keep_kv=keep_kv,
             valid_seq_len=valid_seq_len,
+            write_kv_cache=write_kv_cache,
         )
 
     tp = mesh_config.tp if mesh_config else 1
@@ -217,7 +220,7 @@ def prefill_forward(
     if shared_kv is None:
         tt_k = apply_rope(tt_k, cos_cache, sin_cache)
 
-    if kv_cache is not None and shared_kv is None:
+    if write_kv_cache and kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
         if page_table is not None:
             num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp

@@ -57,6 +57,9 @@ We serve via the [tenstorrent/vllm](https://github.com/tenstorrent/vllm) TT plug
 
 ## Hardware staging
 - 26B-A4B is verified to fit + run on **QB2 (`P150x4`, 1×4, TP=4)** — no OOM, experts TP-sharded. **Validate the backbone on QB2.**
+- **QB2 hardware:** 2 liquid-cooled PCIe cards with 2 Blackhole Tensix processors each
+  (4 processors total): 480 Tensix cores, 720 MB SRAM, and 128 GB DDR6 at 16 GT/sec
+  (1024 GB/sec memory bandwidth).
 - Near-term product target: **QB2 only**; **BHG (Galaxy) adapted later**, then broader HW. QB2 fit + Galaxy 4×8 TP enablement tracked in #47487.
 - **A clean short-prompt causal PCC does NOT de-risk the 256K QB2 fit for the diffusion path.** The QB2 memory budget (#47487) must additionally account for the **per-step canvas K/V scratch zone** (#47474 storage class ii) and the **non-causal long-context mask buffers** (#47462) — neither is exercised by the short-prompt causal-backbone run. Size the batch ceiling against weights + 256K KV + canvas scratch + mask.
 
@@ -79,3 +82,6 @@ We serve via the [tenstorrent/vllm](https://github.com/tenstorrent/vllm) TT plug
 
 ## Conventions
 - **Commit messages must NOT include a `Co-Authored-By` trailer.**
+- **Do not skip device tests by default.** For device-facing changes, run the relevant QB2
+  device test whenever hardware/env is available; only skip when the test is genuinely
+  inapplicable or blocked, and record the reason in the progress source.
