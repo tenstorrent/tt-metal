@@ -32,7 +32,7 @@ inline void _calculate_negative_int_()
         sfpi::vInt val = sfpi::dst_reg[0];
         v_if (val != 0)
         {
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vInt>(-sfpi::reinterpret<sfpi::vFloat>(val));
+            sfpi::dst_reg[0] = sfpi::as<sfpi::vInt>(-sfpi::as<sfpi::vFloat>(val));
         }
         v_endif;
         sfpi::dst_reg++;
