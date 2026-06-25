@@ -188,6 +188,32 @@ def denoise_logits_forward(
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
 
 
+def collect_prompt_hidden_by_layer(tt_model, prompt_hidden):
+    """Collect per-layer frozen prompt attention inputs for denoise K/V source.
+
+    The DiffusionGemma decoder reads encoder K/V. Until the real paged encoder
+    cache is threaded into this wrapper, this helper captures the tensor that
+    feeds each layer's K/V projections: the prompt hidden states after that
+    layer's input RMSNorm, while advancing the prompt through the normal causal
+    layer stack. Returned tensors are owned by the caller.
+    """
+    hidden_states = prompt_hidden
+    prompt_hidden_by_layer = []
+    for layer_idx, layer in enumerate(tt_model.layers):
+        prompt_hidden_by_layer.append(layer.input_layernorm.forward(hidden_states))
+        hidden_states = layer(
+            hidden_states,
+            rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=hidden_states.shape[-2]),
+            position_idx=None,
+            page_table=None,
+            kv_cache=None,
+            is_decode=False,
+            kv_phase=KVCachePhase.DENOISE_READONLY,
+        )
+    hidden_states.deallocate(True)
+    return prompt_hidden_by_layer
+
+
 def embed_canvas_tokens(tt_model, canvas_tokens):
     """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
     canvas_len = canvas_tokens.shape[-1]

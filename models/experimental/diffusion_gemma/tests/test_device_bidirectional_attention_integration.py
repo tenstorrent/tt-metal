@@ -26,7 +26,12 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
-from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward, denoise_logits_from_tokens
+from models.experimental.diffusion_gemma.tt.denoise_forward import (
+    collect_prompt_hidden_by_layer,
+    denoise_attention_forward,
+    denoise_logits_from_tokens,
+    embed_canvas_tokens,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
 
@@ -315,7 +320,10 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
         canvas_hidden = hf_model.embed_tokens(canvas_tokens)
         conditioning_signal = prev_logits.squeeze(0).sum(dim=-1, keepdim=True) * 1.0e-3
         conditioned_canvas_hidden = _scaleless_rms_norm(canvas_hidden + conditioning_signal)
-    prompt_kv_hidden = torch.randn(1, prompt_len, hf_text_config.hidden_size)
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
+    with torch.no_grad():
+        prompt_hidden = hf_model.embed_tokens(prompt_tokens)
+        prompt_kv_hidden = hf_model.layers[0].input_layernorm(prompt_hidden)
     mask = build_canvas_denoise_mask(
         prompt_len,
         canvas_len,
@@ -327,12 +335,14 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
         golden = _torch_denoise_logits_reference(hf_model, conditioned_canvas_hidden, [prompt_kv_hidden], mask)
 
     tt_canvas_tokens = _to_device_tokens(mesh_device, canvas_tokens)
-    tt_prompt_kv_hidden = _to_device(mesh_device, prompt_kv_hidden.unsqueeze(0))
+    tt_prompt_tokens = _to_device_tokens(mesh_device, prompt_tokens)
+    tt_prompt_hidden = embed_canvas_tokens(tt_model, tt_prompt_tokens)
+    tt_prompt_hidden_by_layer = collect_prompt_hidden_by_layer(tt_model, tt_prompt_hidden)
     tt_prev_logits = _to_device(mesh_device, prev_logits)
     self_conditioning = _PostNormSelfConditioning()
     tt_logits = denoise_logits_from_tokens(
         tt_model,
-        prompt_hidden_by_layer=[tt_prompt_kv_hidden],
+        prompt_hidden_by_layer=tt_prompt_hidden_by_layer,
         canvas_tokens=tt_canvas_tokens,
         self_conditioning=self_conditioning,
         prev_logits=tt_prev_logits,
