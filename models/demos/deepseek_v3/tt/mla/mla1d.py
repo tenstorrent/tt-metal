@@ -2163,7 +2163,7 @@ class MLA1D(AbstractModule):
         # Parallel Q and KV Norms — persistent Parallel (reuse OpDescriptors + update).
         # Q: 1,1,32,1536, width sharded 4x4 [32,96]
         # KV: 1,1,32,512, width sharded 2x8 [32,32]
-        if sync_for_sim:
+        if os.environ.get("DEEPSEEK_SIM_UNFUSED_QKV_NORM") == "1":
             next_tt_q = RMSNorm._rmsnorm_forward(tt_q, cfg["q_norm"])
             sync_after()
             tt_q = next_tt_q
