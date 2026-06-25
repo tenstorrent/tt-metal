@@ -85,6 +85,24 @@ def _to_device_tokens(mesh_device, value):
     )
 
 
+def _scaleless_rms_norm(hidden_states, eps=1e-6):
+    out = hidden_states.float()
+    out = out * torch.pow(out.pow(2).mean(-1, keepdim=True) + eps, -0.5)
+    return out.type_as(hidden_states)
+
+
+class _PostNormSelfConditioning:
+    def __init__(self, eps=1e-6):
+        self.eps = eps
+        self.called = False
+
+    def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
+        del embedding_weight_tt, compute_kernel_config
+        assert prev_logits_tt is None
+        self.called = True
+        return ttnn.rms_norm(inputs_embeds_tt, epsilon=self.eps)
+
+
 def _torch_attention_reference(hf_model, hf_text_config, layer_idx, canvas_hidden, kv_hidden, mask):
     layer_type = hf_text_config.layer_types[layer_idx]
     attn = hf_model.layers[layer_idx].self_attn
@@ -283,6 +301,7 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     canvas_tokens = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
     with torch.no_grad():
         canvas_hidden = hf_model.embed_tokens(canvas_tokens)
+        conditioned_canvas_hidden = _scaleless_rms_norm(canvas_hidden)
     prompt_kv_hidden = torch.randn(1, prompt_len, hf_text_config.hidden_size)
     mask = build_canvas_denoise_mask(
         prompt_len,
@@ -292,17 +311,21 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
         dtype=torch.float32,
     ).view(1, 1, canvas_len, total_len)
     with torch.no_grad():
-        golden = _torch_denoise_logits_reference(hf_model, canvas_hidden, [prompt_kv_hidden], mask)
+        golden = _torch_denoise_logits_reference(hf_model, conditioned_canvas_hidden, [prompt_kv_hidden], mask)
 
     tt_canvas_tokens = _to_device_tokens(mesh_device, canvas_tokens)
     tt_prompt_kv_hidden = _to_device(mesh_device, prompt_kv_hidden.unsqueeze(0))
+    self_conditioning = _PostNormSelfConditioning()
     tt_logits = denoise_logits_from_tokens(
         tt_model,
         prompt_hidden_by_layer=[tt_prompt_kv_hidden],
         canvas_tokens=tt_canvas_tokens,
+        self_conditioning=self_conditioning,
+        prev_logits=None,
     )
     logits = _to_torch(tt_logits, mesh_device).squeeze(0)
 
+    assert self_conditioning.called
     # Full logits include the shared bf16 MoE/lm_head/softcap path; this branch's
     # known full-model ceiling is below the attention-only 0.99 acceptance.
     passing, message = assert_with_pcc(golden.float(), logits.float(), 0.98)

@@ -204,9 +204,22 @@ def denoise_logits_from_tokens(
     *,
     prompt_hidden_by_layer,
     canvas_tokens,
+    self_conditioning=None,
+    prev_logits=None,
+    self_conditioning_embedding_weight=None,
+    self_conditioning_compute_kernel_config=None,
 ):
-    """Embed canvas token ids, then run the short-prompt denoise logits forward."""
+    """Embed canvas token ids, optionally self-condition, then run denoise logits."""
     canvas_hidden = embed_canvas_tokens(tt_model, canvas_tokens)
+    if self_conditioning is not None:
+        conditioned = self_conditioning.condition(
+            canvas_hidden,
+            prev_logits,
+            self_conditioning_embedding_weight,
+            compute_kernel_config=self_conditioning_compute_kernel_config,
+        )
+        canvas_hidden.deallocate(True)
+        canvas_hidden = conditioned
     return denoise_logits_forward(
         tt_model,
         prompt_hidden_by_layer=prompt_hidden_by_layer,
