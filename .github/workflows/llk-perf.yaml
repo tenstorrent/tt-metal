@@ -93,24 +93,13 @@ jobs:
       - name: Run /code-review
         uses: anthropics/claude-code-action@v1
         env:
-          # Route Claude through the TT-Chat LiteLLM proxy (Anthropic-compatible).
-          # The proxy expects Bearer auth, which Claude Code sends when the token
-          # is given as ANTHROPIC_AUTH_TOKEN (not ANTHROPIC_API_KEY → x-api-key).
-          ANTHROPIC_BASE_URL: ${{ secrets.TT_CHAT_URL }}
-          ANTHROPIC_AUTH_TOKEN: ${{ secrets.TT_CHAT_API_KEY }}
-          # The proxy requires the "anthropic/" model prefix.
-          ANTHROPIC_MODEL: anthropic/claude-opus-4-5-20251101
-          ANTHROPIC_SMALL_FAST_MODEL: anthropic/claude-haiku-4-5-20251001
-          # So the command can detect the PR and post via gh / the inline-comment
-          # MCP tool. GITHUB_TOKEN is the per-run automatic token; its write scope
-          # comes from the job's `permissions:` block (pull-requests/issues:
-          # write), so comments post as github-actions[bot] — no user PAT needed.
+          # GITHUB_TOKEN is the per-run automatic token; its write scope comes
+          # from the job's `permissions:` block (pull-requests/issues: write), so
+          # comments post as github-actions[bot] — no user PAT needed.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Present only to satisfy the action's auth precheck; actual auth +
-          # routing is via the ANTHROPIC_* env vars above (AUTH_TOKEN takes
-          # precedence, so no x-api-key is sent to the proxy).
-          anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
+          # Real Anthropic API key — sent as x-api-key to api.anthropic.com.
+          anthropic_api_key: ${{ secrets.LLK_PR_REVIEW_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: true   # TEMP: diagnose whether the review found findings + tried to post
           # Install the code-review command from Anthropic's plugin marketplace.
@@ -119,11 +108,11 @@ jobs:
           # The command takes a PR reference and an optional --comment flag (there
           # is no effort argument). --comment makes it post inline comments.
           prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
-          # No --model here: the model comes from ANTHROPIC_MODEL (needs the
-          # anthropic/ prefix for the proxy). --effort sets the session reasoning
-          # effort (the code-review command itself takes no effort argument).
-          # The allowlist must include the inline-comment MCP tool the command
-          # posts with, plus gh for diff/view.
+          # No --model override: defaults apply, so the command's per-role
+          # haiku/sonnet/opus subagents each use their intended model. --effort
+          # sets the session reasoning effort (the code-review command itself
+          # takes no effort argument). The allowlist must include the inline-
+          # comment MCP tool the command posts with, plus gh for diff/view.
           claude_args: |
             --effort ${{ github.event.inputs.effort || 'max' }}
             --allowedTools "Task,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
