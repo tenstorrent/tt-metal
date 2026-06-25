@@ -789,6 +789,7 @@ def sharded_decode_norm(
     downstream_mc: ttnn.MemoryConfig,
     return_sharded: bool = False,
     ws_nc_hint: int | None = None,
+    prefer_input_shard_spec: bool = False,
 ):
     """Run a decode RMSNorm width-sharded across cores instead of on a single core.
 
@@ -798,16 +799,26 @@ def sharded_decode_norm(
     gathers the result back to the downstream interleaved format unless
     ``return_sharded=True``.  Falls back to the plain single-core norm if the
     width is not shardable on this grid.
+
+    When ``prefer_input_shard_spec=True`` and ``x`` is already WIDTH_SHARDED in L1
+    (e.g. a matmul that returned its native shards), the norm runs on that existing
+    spec and the InterleavedToSharded staging reshard is skipped entirely.
     """
     m_total = _decode_activation_m_total(x)
     try:
-        norm_cfg = prefill_width_sharded_norm_config(device, m_total, int(width), ws_nc_hint=ws_nc_hint)
-        if _width_shard_mc_matches(x, norm_cfg["sharded_output_config"]):
+        if prefer_input_shard_spec and _is_l1_width_sharded(x):
+            # Run the norm on the upstream matmul's native shard spec — no I2S.
+            norm_cfg = prefill_norm_config_from_width_sharded_tensor(x)
             x_sharded = x
             x_owned = False
         else:
-            x_sharded = ttnn.to_memory_config(x, norm_cfg["sharded_output_config"])
-            x_owned = x_sharded is not x
+            norm_cfg = prefill_width_sharded_norm_config(device, m_total, int(width), ws_nc_hint=ws_nc_hint)
+            if _width_shard_mc_matches(x, norm_cfg["sharded_output_config"]):
+                x_sharded = x
+                x_owned = False
+            else:
+                x_sharded = ttnn.to_memory_config(x, norm_cfg["sharded_output_config"])
+                x_owned = x_sharded is not x
     except Exception:
         return norm_fn(x, mode="decode")
     out_sharded = norm_fn(x_sharded, mode="decode", in_sharded=True, out_sharded=True, norm_config=norm_cfg)
@@ -1300,6 +1311,7 @@ def _tuned_decode_linear(
     cfg: Glm4RuntimeConfig,
     memory_config: ttnn.MemoryConfig | None,
     tuned: _DecodeTuned,
+    return_sharded: bool = False,
 ) -> ttnn.Tensor | None:
     """Run a decode matmul with a swept-optimal 1D config + WIDTH_SHARDED L1 output.
 
@@ -1307,6 +1319,10 @@ def _tuned_decode_linear(
     output shard to local L1 (no NOC hop), then one to_memory_config gathers the
     shards to the downstream format.  Returns None if the grid cannot host the
     config (caller falls back to the default path).
+
+    When ``return_sharded=True`` the WIDTH_SHARDED L1 output is returned without the
+    gather, so a downstream sharded consumer (e.g. a width-sharded RMSNorm running on
+    this matmul's native shard spec) can avoid an InterleavedToSharded reshard.
     """
     grid = device.compute_with_storage_grid_size()
     g = _resolve_grid(tuned.num_cores, int(grid.x), int(grid.y))
@@ -1343,6 +1359,8 @@ def _tuned_decode_linear(
     )
     if act is not a:
         ttnn.deallocate(act, force=False)
+    if return_sharded:
+        return out_sharded
     downstream = memory_config if memory_config is not None else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     out = ttnn.to_memory_config(out_sharded, downstream)
     ttnn.deallocate(out_sharded, force=False)
@@ -1356,11 +1374,15 @@ def mlp_linear(
     device: Any,
     cfg: Glm4RuntimeConfig,
     memory_config: ttnn.MemoryConfig | None = None,
+    return_sharded: bool = False,
 ) -> ttnn.Tensor:
     """General-purpose linear for MLP and small matmuls.
 
     Applies the MLP compute kernel config and optional 1D program config
     for decode-sized (M=1) matmuls.
+
+    ``return_sharded=True`` is honored only on the tuned decode path (``_tuned_decode_linear``);
+    other branches return interleaved as usual, so callers must treat it as best-effort.
     """
     kwargs: dict[str, object] = {}
     mc = memory_config if memory_config is not None else cfg.decode_act_mc
@@ -1400,7 +1422,9 @@ def mlp_linear(
         # Swept-optimal decode config for known (K, N) shapes (q_a, q_b, head-parallel w_o).
         tuned = _DECODE_MATMUL_TUNED.get((int(b.shape[-2]), int(b.shape[-1])))
         if tuned is not None:
-            tuned_out = _tuned_decode_linear(a, b, device=device, cfg=cfg, memory_config=memory_config, tuned=tuned)
+            tuned_out = _tuned_decode_linear(
+                a, b, device=device, cfg=cfg, memory_config=memory_config, tuned=tuned, return_sharded=return_sharded
+            )
             if tuned_out is not None:
                 return tuned_out
         if cfg.explicit_prog_cfg and m_total <= ttnn.TILE_SIZE:
@@ -1744,10 +1768,14 @@ def attn_linear(
     device: Any,
     cfg: Glm4RuntimeConfig,
     force_no_tp: bool = False,
+    return_sharded: bool = False,
 ) -> ttnn.Tensor:
     """Attention projection linear. Routes to DRAM-sharded or standard path based on config.
 
     When force_no_tp=True, skip mesh_partition and all_reduce (weight is replicated).
+
+    ``return_sharded=True`` is best-effort and only honored on the non-TP / non-DRAM-sharded
+    path (``mlp_linear``); other routes return interleaved.
     """
     use_tp = cfg.tp_enabled and not force_no_tp
     if cfg.dram_sharded_attn:
@@ -1770,7 +1798,7 @@ def attn_linear(
         if use_tp:
             return tp_row_parallel_linear(a, b, device=device, cfg=cfg)
         else:
-            return mlp_linear(a, b, device=device, cfg=cfg)
+            return mlp_linear(a, b, device=device, cfg=cfg, return_sharded=return_sharded)
 
 
 # w_kv_a decode tuning: 21 cores (7×3), per_core_N=2, out_subblock_w=2, WIDTH_SHARDED L1 output.

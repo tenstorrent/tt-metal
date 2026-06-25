@@ -274,10 +274,15 @@ def q_projection(
     t0 = time.perf_counter() if profile is not None else 0.0
     kvpe_dim = int(hparams.kv_lora_rank + hparams.qk_rope_head_dim)
 
+    # Keep w_q_a's WIDTH_SHARDED output and norm it on that native spec (drops the
+    # InterleavedToSharded reshard before q_a_layernorm). Self-guards: returns interleaved
+    # on TP/DRAM-sharded routes, and sharded_decode_norm only uses the native spec when the
+    # input actually arrives width-sharded.
+    fuse_q_a_norm = cfg.fuse_q_a_norm and cfg.sharded_decode_norm and q_a_from_kv is None
     if q_a_from_kv is not None:
         q_a = q_a_from_kv
     else:
-        q_a = attn_linear(x, w.w_q_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
+        q_a = attn_linear(x, w.w_q_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp, return_sharded=fuse_q_a_norm)
 
     if cfg.sharded_decode_norm:
         q_a = sharded_decode_norm(
@@ -286,6 +291,7 @@ def q_projection(
             device=device,
             width=int(hparams.q_lora_rank),
             downstream_mc=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG,
+            prefer_input_shard_spec=fuse_q_a_norm,
         )
     else:
         q_a = w.q_a_layernorm(q_a, mode="decode")
