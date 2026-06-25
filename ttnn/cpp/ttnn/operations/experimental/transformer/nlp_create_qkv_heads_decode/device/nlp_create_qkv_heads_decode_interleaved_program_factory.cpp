@@ -144,7 +144,8 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeInterleavedProgramFactory
         num_q_heads,
         num_kv_heads,
         head_tiles,
-        1,  // read the first phase
+        0,  // read all phases on a single RISC -> single producer per output CB (SPSC pre-port fix;
+            // the former two-RISC phase split was an L1/NOC-bandwidth optimization, deferred)
         static_cast<uint32_t>(use_aligned_path),
         dram_alignment,
         reader_scratch_cb_index,
@@ -160,18 +161,12 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeInterleavedProgramFactory
     reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> writer_compile_time_args = reader_compile_time_args;
-    writer_compile_time_args[9] = 2;  // read the second phase
-    writer_compile_time_args[12] = writer_scratch_cb_index;
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
-        "reader_interleaved_tm_tile_layout_nlp_create_qkv_heads_decode.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = q_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    // SPSC pre-port fix: the output CBs c_16/c_17/c_18 are borrowed-memory output CBs; the former
+    // design ran this kernel on two RISCs (phase 1 / phase 2) that BOTH wrote the same output CBs
+    // -> two producers per node. Collapse to a single reader RISC reading all phases (CTA[9]=0
+    // above) so each output CB has exactly one producer. (void) the now-unused writer scratch CB
+    // index to keep the aligned-path allocation harmless.
+    (void)writer_scratch_cb_index;
 
     uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
     auto core_grid = q_cores.bounding_box();
@@ -184,11 +179,9 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeInterleavedProgramFactory
 
         const auto& core = cores[i];
         reader_desc.emplace_runtime_args(core, {in_tile_offset_by_batch, in_buffer});
-        writer_desc.emplace_runtime_args(core, {in_tile_offset_by_batch, in_buffer});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
 
     return desc;
 }

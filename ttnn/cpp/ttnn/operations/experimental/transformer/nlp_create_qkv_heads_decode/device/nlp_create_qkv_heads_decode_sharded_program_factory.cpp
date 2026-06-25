@@ -31,9 +31,10 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
     ProgramDescriptor desc;
 
     IDevice* device = input_tensor.device();
-    // Create CBs for reader/writer for batch_offset
+    // Single batch_offset CB: the op now reads all phases on one RISC per q/k (SPSC pre-port fix),
+    // so only the reader's batch_offset CB is needed. (The former design allocated a second CB
+    // (c_14) for the phase-2 writer RISC; that RISC is gone, so c_14 is dropped.)
     uint32_t batch_offset_cb_index_reader = CBIndex::c_15;
-    uint32_t batch_offset_cb_index_writer = CBIndex::c_14;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -71,16 +72,6 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
             .core_ranges = qk_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(batch_offset_cb_index_reader),
-                .data_format = cb_batch_offset_data_format,
-                .page_size = 1,
-            }}},
-        });
-
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = single_batch_offset_tile_size,
-            .core_ranges = qk_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(batch_offset_cb_index_writer),
                 .data_format = cb_batch_offset_data_format,
                 .page_size = 1,
             }}},
@@ -166,8 +157,11 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
         process_k = 0;
     }
 
-    // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2
-    // of a tile respectively)
+    // SPSC pre-port fix: read all phases on a single RISC per q/k so each output CB (c_16/c_17/c_18)
+    // has exactly one producer. The former design split phase1/phase2 across two RISCs (reader +
+    // writer) that both wrote the same output CBs -> two producers per node. The split was an
+    // L1/NOC-bandwidth optimization; it is deferred until the framework supports multi-producer DFB
+    // endpoints.
     std::vector<uint32_t> q_reader_compile_time_args = {
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
@@ -178,7 +172,7 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
         num_q_heads,
         num_kv_heads,
         head_tiles,
-        1,  // read the first phase
+        0,  // read all phases on this single RISC
         in_num_cores_x,
         in_num_cores_y,
         process_qv,                        // read and write q and v heads
@@ -197,20 +191,7 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
     q_reader_desc.compile_time_args = q_reader_compile_time_args;
     q_reader_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> q_writer_compile_time_args = q_reader_compile_time_args;
-    q_writer_compile_time_args[9] = 2;  // read the second phase
-
-    KernelDescriptor q_writer_desc;
-    q_writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp";
-    q_writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    q_writer_desc.core_ranges = q_cores;
-    q_writer_desc.compile_time_args = std::move(q_writer_compile_time_args);
-    q_writer_desc.config = WriterConfigDescriptor{};
-
     KernelDescriptor k_reader_desc;
-    KernelDescriptor k_writer_desc;
     if (!overlap_qk_coregrid) {
         // Switch process_qv and process_k for k kernels
         process_qv = 0;
@@ -226,17 +207,6 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
         k_reader_desc.core_ranges = k_cores;
         k_reader_desc.compile_time_args = k_reader_compile_time_args;
         k_reader_desc.config = ReaderConfigDescriptor{};
-
-        std::vector<uint32_t> k_writer_compile_time_args = k_reader_compile_time_args;
-        k_writer_compile_time_args[9] = 2;  // read the second phase
-
-        k_writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
-            "reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp";
-        k_writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        k_writer_desc.core_ranges = k_cores;
-        k_writer_desc.compile_time_args = std::move(k_writer_compile_time_args);
-        k_writer_desc.config = WriterConfigDescriptor{};
     }
 
     auto push_batch_offset = [&](KernelDescriptor::RTArgList& rt) {
@@ -258,7 +228,6 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
         rt.append(noc_y_coords);
 
         q_reader_desc.emplace_runtime_args(core, rt);
-        q_writer_desc.emplace_runtime_args(core, rt);
     }
 
     if (!overlap_qk_coregrid) {
@@ -273,15 +242,12 @@ tt::tt_metal::ProgramDescriptor NLPCreateQKVHeadsDecodeShardedProgramFactory::cr
             rt.append(noc_y_coords);
 
             k_reader_desc.emplace_runtime_args(core, rt);
-            k_writer_desc.emplace_runtime_args(core, rt);
         }
     }
 
     desc.kernels.push_back(std::move(q_reader_desc));
-    desc.kernels.push_back(std::move(q_writer_desc));
     if (!overlap_qk_coregrid) {
         desc.kernels.push_back(std::move(k_reader_desc));
-        desc.kernels.push_back(std::move(k_writer_desc));
     }
 
     return desc;
