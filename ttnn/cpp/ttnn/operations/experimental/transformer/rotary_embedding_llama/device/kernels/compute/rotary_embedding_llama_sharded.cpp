@@ -9,7 +9,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -22,26 +23,26 @@ ALWI void REL() {
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
+    constexpr auto in_cb = dfb::in;
+    constexpr auto cos_cb = dfb::cos;
+    constexpr auto sin_cb = dfb::sin;
+    constexpr auto trans_mat_cb = dfb::trans_mat;
 
-    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // How many rows (tiles) in n_heads dimension
+    constexpr auto rotated_in_interm_cb = dfb::rotated_in_interm;
+    constexpr auto cos_interm_cb = dfb::cos_interm;
+    constexpr auto sin_interm_cb = dfb::sin_interm;
+    constexpr auto out_cb = dfb::out;
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t Ht = get_arg(args::Ht);  // How many rows (tiles) in n_heads dimension
 
-    CircularBuffer in_cb_obj(in_cb);
-    CircularBuffer cos_cb_obj(cos_cb);
-    CircularBuffer sin_cb_obj(sin_cb);
-    CircularBuffer trans_mat_cb_obj(trans_mat_cb);
-    CircularBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
-    CircularBuffer cos_interm_cb_obj(cos_interm_cb);
-    CircularBuffer sin_interm_cb_obj(sin_interm_cb);
-    CircularBuffer out_cb_obj(out_cb);
+    DataflowBuffer in_cb_obj(in_cb);
+    DataflowBuffer cos_cb_obj(cos_cb);
+    DataflowBuffer sin_cb_obj(sin_cb);
+    DataflowBuffer trans_mat_cb_obj(trans_mat_cb);
+    DataflowBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
+    DataflowBuffer cos_interm_cb_obj(cos_interm_cb);
+    DataflowBuffer sin_interm_cb_obj(sin_interm_cb);
+    DataflowBuffer out_cb_obj(out_cb);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
     matmul_init(in_cb, trans_mat_cb);
