@@ -1168,6 +1168,9 @@ static std::string get_extra_include_flags() {
     const std::string project_src = TT_EMULE_PROJECT_SOURCE_DIR;
     std::string extra_inc;
     extra_inc += "-I\"" + project_src + "/ttnn/cpp\"";
+    // Resolves headers included with the repo-rooted `cpp/ttnn/...` prefix
+    // (e.g. the SDPA dataflow helper chain pulled in by the sampling writer).
+    extra_inc += " -I\"" + project_src + "/ttnn\"";
     extra_inc += " -I\"" + project_src + "\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";
