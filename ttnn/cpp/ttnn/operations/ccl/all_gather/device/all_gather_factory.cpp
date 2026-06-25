@@ -232,7 +232,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // the cb_read_ptr and cb_write_ptr cleanly.
     const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
     uint32_t cb_page_size = input_page_size * pages_per_packet;
-    uint32_t cb_depth = 3;  // NOTE: reader's txn ID push/pop scheme has only been tested with depth=3
+    uint32_t cb_depth = 3;
 
     // Perf hack: for tile layout, pack multiple pages into a single CB page to reduce CB sync
     // frequency between reader and writer. Note this increases effective CB depth.
@@ -256,17 +256,18 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // input_pages_per_stripe = num input pages along [gather_dim .. rank-1] this
     // device contributes per stripe. For RM gather_dim=-1 this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
+    auto tile = (input_tensor.layout() == Layout::TILE) ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
     uint32_t input_pages_per_stripe = 1;
     for (int32_t i = gather_dim; i < rank; i++) {
         uint32_t extent;
         if (i == rank - 1) {
             if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-                extent = input_shape[i] / tt::constants::TILE_WIDTH;
+                extent = input_shape[i] / tile.get_width();
             } else {
                 extent = (input_shape[i] * input_tensor.element_size()) / input_page_size;
             }
         } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == rank - 2) {
-            extent = input_shape[i] / tt::constants::TILE_HEIGHT;
+            extent = input_shape[i] / tile.get_height();
         } else {
             extent = input_shape[i];
         }
