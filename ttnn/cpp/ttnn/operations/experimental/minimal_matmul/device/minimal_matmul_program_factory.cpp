@@ -22,6 +22,116 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
+// Largest divisor of n that is <= cap (always >= 1). Used to snap a desired parallelism factor onto the
+// actual row count so num_slices / num_k_slices divide grid.y on any (incl. non-pow2) grid.
+uint32_t largest_divisor_leq(uint32_t n, uint32_t cap) {
+    if (n == 0) {
+        return 1;
+    }
+    cap = std::max(1u, std::min(cap, n));
+    for (uint32_t d = cap; d > 1; --d) {
+        if (n % d == 0) {
+            return d;
+        }
+    }
+    return 1;
+}
+
+// Joint (S, Pk) auto-partition heuristic: pick the number of N-slices (S = num_slices) and K-par bands
+// (Pk = num_k_slices) from the output tile shape, under the row budget S*Pk <= grid.y. Back-tested
+// against the joint sweep oracle (geomean regret 1.05 over 1224 shapes / 1.02 on FLUX-LTX, vs 1.21 for
+// the previous split sqrt(aspect)-S + D-score-Pk heuristics). Two orthogonal drivers:
+//   * S (slice the big output dim) <- skew = max/min(Mt,Nt) AND a row-underfilled small dim (min<grid.y);
+//     a balanced/large-small-dim shape fills the grid from output alone and is left at S=1.
+//   * Pk (split the K reduction) <- output-starvation x K-depth: shallow K can't K-par at all, deep K
+//     wants aggressive Pk (it also shortens the per-core K-loop, not just fills idle cores).
+// GRID-GENERIC: the ladder picks a "level" (8=max, 4=half, 2=quarter row budget) fit on WH 8x8, then
+// maps it onto grid.y's DIVISORS so S/Pk are valid on any grid (odd/non-pow2: 8x7, 12x9, 12x10, 11x10).
+// On grid.y==8 the levels map back to {8,4,2,1} exactly => identical to the back-tested 8x8 heuristic.
+// Output-starvation thresholds scale with cores=grid.x*grid.y (cores/4, cores, 4*cores, 8*cores reduce
+// to 16/64/256/512 on 8x8); row-underfill scales with grid.y. The per-grid threshold VALUES are not
+// re-fit here (a per-grid sweep is a follow-up); this only makes the existing fit grid-portable.
+// NOTE: orientation-agnostic (uses max/min) — the factory's transpose canonicalization maps S onto the
+// big dim either way. Returned (S, Pk) already satisfy: S*Pk | grid.y, K_tiles % Pk == 0, K/Pk >= 2.
+std::pair<uint32_t, uint32_t> auto_pick_s_pk(
+    uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles, uint32_t grid_x, uint32_t grid_y) {
+    const uint32_t small = std::min(M_tiles, N_tiles);
+    const uint32_t big = std::max(M_tiles, N_tiles);
+    const uint32_t out = M_tiles * N_tiles;
+    const uint32_t cores = grid_x * grid_y;
+    const double skew = small ? static_cast<double>(big) / static_cast<double>(small) : 1.0;
+    // Levels: 8 = max (grid.y), 4 = ~half, 2 = ~quarter, 1 = none. Mapped to grid.y divisors below.
+    uint32_t Slvl = 1, Pklvl = 1;
+    if (K_tiles <= 4) {  // shallow K: K-par useless; slice only when rows are underfilled and skewed
+        Slvl = (skew >= 6.0 && small < grid_y) ? 8u : 1u;
+    } else if (K_tiles >= 64) {  // deep K: K-par primary, scaled by the output deficit (vs cores)
+        if (out < cores / 4) {
+            Pklvl = 8;
+        } else if (out <= cores) {
+            Pklvl = (skew >= 2.5) ? 8u : (small >= grid_y ? 1u : 4u);
+        } else if (out < 4 * cores) {
+            Pklvl = (skew >= 6.0) ? 4u : 2u;
+        } else {
+            Pklvl = (out < 8 * cores) ? 2u : 1u;
+        }
+        if (skew >= 12.0 && small < grid_y) {  // very skewed + starved: trade some Pk for a slice
+            Slvl = 2;
+            Pklvl = std::min(Pklvl, 4u);
+        }
+    } else {  // medium K (8..32)
+        if (out >= 4 * cores) {
+            Slvl = (skew >= 24.0 && small < grid_y) ? 8u : (skew >= 2.5 ? 2u : 1u);
+        } else if (out >= cores) {
+            if (skew >= 24.0) {
+                Slvl = 8;
+            } else if (skew >= 12.0) {
+                Slvl = 4;
+                Pklvl = 2;
+            } else if (skew >= 6.0) {
+                Slvl = 2;
+            }
+        } else if (out >= cores / 4) {
+            if (skew >= 12.0) {
+                Slvl = 4;
+                Pklvl = 2;
+            } else if (skew >= 6.0) {
+                Slvl = 2;
+                Pklvl = 4;
+            } else if (skew >= 2.5) {
+                Slvl = 2;
+            }
+        } else {  // very starved
+            if (skew >= 6.0) {
+                Slvl = 4;
+                Pklvl = 2;
+            } else {
+                Pklvl = 4;
+            }
+        }
+    }
+    // Map a level to a row-count target, snapped to a divisor of grid.y (8=max, 4=half, 2=quarter).
+    auto level_to_count = [grid_y](uint32_t lvl) -> uint32_t {
+        if (lvl >= 8) {
+            return grid_y;  // max parallelism
+        }
+        if (lvl >= 4) {
+            return largest_divisor_leq(grid_y, (grid_y + 1) / 2);  // ~half
+        }
+        if (lvl >= 2) {
+            return largest_divisor_leq(grid_y, (grid_y + 3) / 4);  // ~quarter
+        }
+        return 1;
+    };
+    // Pk first (snap to divisor, then step down to a divisor with K_tiles % Pk == 0 and >= 2 K-tiles/band).
+    uint32_t Pk = level_to_count(Pklvl);
+    while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < 2)) {
+        Pk = largest_divisor_leq(grid_y, Pk - 1);
+    }
+    // S in the remaining row budget: a divisor of grid.y/Pk => S*Pk divides grid.y by construction.
+    uint32_t S = largest_divisor_leq(grid_y / std::max(1u, Pk), level_to_count(Slvl));
+    return {S, Pk};
+}
+
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
     uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
     (void)K;  // K not used for determining defaults currently
@@ -260,154 +370,52 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // S=1 reduces exactly to the un-sliced partition. (Step 1: partition only; S>1 also needs the
     // per-group forwarding change before it is correct. Auto-derivation of S is deferred to step 5.)
     uint32_t num_slices = 1;
-    // Auto-derive S from the M:N aspect ratio. Engage on the same delivery-bound condition as the
-    // prefetch gate — min(M,N) tiles-per-core <= 2 at S=1, i.e. min(M_tiles,N_tiles) <= 2*grid.y — and
-    // pick S = nearest power-of-two to sqrt(max/min) so each sub-grid is roughly square. Only when the
-    // caller didn't pin a config and there are no fused ops (matches the gate). Measured: this lifts
-    // skinny shapes by up to ~2.3x (see minimal-matmul-nslicing-plan); near-square shapes get S=1.
-    if (!config.has_value() && !fuse_op && !fuse_srs) {
-        const uint32_t mn = std::min(M_tiles, N_tiles);
-        const uint32_t mx = std::max(M_tiles, N_tiles);
-        const uint32_t min_tpc_s1 = (mn + grid_size.y - 1) / grid_size.y;  // ceil(min_tiles / grid.y), S=1
-        if (mn > 0 && min_tpc_s1 <= 2) {
-            const double r = std::sqrt(static_cast<double>(mx) / static_cast<double>(mn));
-            uint32_t best = 1;
-            double best_dist = std::abs(1.0 - r);
-            for (uint32_t c = 2; c <= grid_size.y; c *= 2) {
-                const double d = std::abs(static_cast<double>(c) - r);
-                if (d < best_dist) {
-                    best_dist = d;
-                    best = c;
-                }
-            }
-            num_slices = best;
-        }
-    }
-    // Env override (also enables forcing S for fused-off experiments / sweeps).
-    if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr && !fuse_op && !fuse_srs) {
-        num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
-    }
-    TT_FATAL(
-        grid_size.y % num_slices == 0 && (num_slices & (num_slices - 1)) == 0,
-        "TT_MM_NUM_SLICES ({}) must be a power of 2 dividing grid.y ({})",
-        num_slices,
-        grid_size.y);
+    uint32_t num_k_slices = 1;
+    bool num_k_fused = false;
 
-    // Core-grid K-PARALLELISM (split-K): split the physical rows into `num_k_slices` (Pk) OUTER bands,
-    // each computing the FULL M/N output over a 1/Pk slice of the K reduction. Two ways to engage:
-    //   * EXPLICIT (env): TT_MM_K_SLICES=Pk [+ TT_MM_K_FUSED=1 -> plan B fused [M,N]; else plan A2
-    //     host-summed [Pk*M,N]]. Full manual control, sweepable alongside TT_MM_NUM_SLICES.
-    //   * AUTO (default): when neither TT_MM_NUM_SLICES nor TT_MM_K_SLICES is pinned, a heuristic jointly
-    //     picks (num_slices S, num_k_slices Pk) spending the grid.y row budget S*Pk=grid.y between
-    //     N/M-slicing and K-reduction. Auto K-par ALWAYS uses the fused reduction (plan B -> single
-    //     [M,N]), so the output shape is identical to the no-K-par path and compute_output_specs needs no
-    //     change. S*Pk=grid.y => rows_per_group=1 => no M-padding. Validated on 28 "FLUX" shapes: geomean
-    //     1.30x, 0 regressions, 96.4% of oracle-best (see minimal_matmul_nslice_kpar_flux.md).
     const bool num_slices_pinned = std::getenv("TT_MM_NUM_SLICES") != nullptr;
     const bool k_slices_pinned = std::getenv("TT_MM_K_SLICES") != nullptr;
     // The fused reduction reuses the store-and-forward semaphore protocol, so it's incompatible only with
-    // fused ops. EXPLICIT env K-par works with OR without a pinned blocking config, so blocking and S/Pk
-    // can be swept jointly (they interact). The AUTO heuristic stays on the no-config path (it also owns
-    // the auto block sizer, which a pinned config replaces).
+    // fused ops. EXPLICIT env slicing/K-par works with OR without a pinned blocking config (so blocking
+    // and S/Pk can be swept jointly); the AUTO heuristic stays on the no-config path (it co-owns the auto
+    // block sizer that a pinned config replaces).
     const bool no_fuse_ops = !fuse_op && !fuse_srs;
 
-    uint32_t num_k_slices = 1;
-    bool num_k_fused = false;
+    // AUTO: jointly pick (S = num_slices, Pk = num_k_slices) from the output tile shape. auto_pick_s_pk
+    // returns grid.y-feasible divisors (S*Pk | grid.y, K_tiles % Pk == 0, K/Pk >= 2), so it works on odd /
+    // non-square grids with NO power-of-2 gate. Auto K-par always uses the fused reduction (plan B ->
+    // single [M,N], output shape unchanged); the output writer's logical_d0 guard drops any M-pad rows, so
+    // M not dividing the column axis (S*grid.x, transpose) is supported — no M-padding back-off here.
+    // Replaces the previous split sqrt(aspect)-S + D-score-Pk heuristics (back-test geomean regret 1.21 ->
+    // 1.05; 1.14 -> 1.02 on FLUX/LTX).
+    if (no_fuse_ops && !config.has_value() && !num_slices_pinned && !k_slices_pinned &&
+        std::getenv("TT_MM_NO_AUTO_KPAR") == nullptr) {
+        auto [S, Pk] = auto_pick_s_pk(M_tiles, N_tiles, K_tiles, grid_size.x, grid_size.y);
+        num_slices = S;
+        num_k_slices = Pk;
+        num_k_fused = (Pk > 1);
+        if (num_k_fused) {
+            log_debug(tt::LogOp, "minimal_matmul auto (S,Pk)=({},{}) fused", num_slices, num_k_slices);
+        }
+    }
+
+    // EXPLICIT env overrides (apply even with a pinned config, for joint blocking x S/Pk sweeps).
+    if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr && no_fuse_ops) {
+        num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
+    }
+    TT_FATAL(
+        num_slices >= 1 && grid_size.y % num_slices == 0,
+        "TT_MM_NUM_SLICES ({}) must be a divisor of grid.y ({})",
+        num_slices,
+        grid_size.y);
     if (k_slices_pinned && no_fuse_ops) {
         num_k_slices = std::max(1u, static_cast<uint32_t>(std::atoi(std::getenv("TT_MM_K_SLICES"))));
         const char* kf = std::getenv("TT_MM_K_FUSED");
         num_k_fused = (kf != nullptr && std::atoi(kf) != 0);
-    } else if (
-        no_fuse_ops && !config.has_value() && !num_slices_pinned && std::getenv("TT_MM_NO_AUTO_KPAR") == nullptr) {
-        // Joint (S, Pk) auto heuristic. Fires only where the N-slicer already engages (num_slices>1) —
-        // the delivery-bound/skewed regime the heuristic was fit on. K-dominance score
-        //   D = K_tiles * num_cores / out_tiles
-        // measures deep reduction vs how output-saturated the grid already is; bigger D => more K-bands.
-        // Tunable thresholds (override via env, re-fit per architecture).
-        struct KParParams {
-            uint32_t d8, d4, d2;  // D thresholds selecting Pk = 8 / 4 / 2 (else 1)
-            uint32_t nwide;       // N_tiles >= this -> in1 DRAM-bandwidth bound, disable K-par
-            uint32_t min_kt;      // keep K_tiles/Pk >= this (deep-K availability)
-        };
-        // WH 8x8 back-tested defaults. To make these architecture-specific, branch on device->arch()
-        // here and assign a re-fit KParParams (e.g. BH grid.y=10 changes the row budget and core count);
-        // until then every arch reuses these and can be tuned live via the TT_MM_KPAR_* env vars below.
-        KParParams kp{280u, 40u, 20u, 256u, 8u};
-        auto envov = [](const char* n, uint32_t& f) {
-            if (const char* s = std::getenv(n)) {
-                f = static_cast<uint32_t>(std::atoi(s));
-            }
-        };
-        envov("TT_MM_KPAR_D8", kp.d8);
-        envov("TT_MM_KPAR_D4", kp.d4);
-        envov("TT_MM_KPAR_D2", kp.d2);
-        envov("TT_MM_KPAR_NWIDE", kp.nwide);
-        envov("TT_MM_KPAR_MINKB", kp.min_kt);
-
-        // Safety gate: the budget split sets num_slices = grid.y / Pk, which is only guaranteed to be a
-        // valid power-of-2 slice count when grid.y is a power of 2 (true on WH 8x8). On a non-pow2 grid
-        // (e.g. BH grid.y=10) Pk=2 would give num_slices=5 — untested — so auto K-par stays OFF there
-        // until the heuristic is re-fit and validated for that grid. Explicit TT_MM_K_SLICES still works.
-        const bool grid_y_pow2 = (grid_size.y & (grid_size.y - 1)) == 0;
-        const uint32_t cores = grid_size.x * grid_size.y;
-        const uint32_t out_tiles = M_tiles * N_tiles;
-        // Engage the K-par heuristic when the shape is skewed (the N-slicer already split it, num_slices>1)
-        // OR simply output-starved (out_tiles < cores). The latter is the key addition: square-ish
-        // tiny-output deep-K shapes (e.g. 32x6144x32, out=1 tile) have no aspect skew so num_slices stays
-        // 1, yet are the textbook K-par case — otherwise one core grinds the whole K reduction. The
-        // D-score + deep-K cap still decide whether and how much K-par actually helps.
-        if ((num_slices > 1 || out_tiles < cores) && grid_y_pow2) {
-            const double D = out_tiles ? static_cast<double>(K_tiles) * cores / out_tiles : 0.0;
-            uint32_t Pk = D >= kp.d8 ? 8u : D >= kp.d4 ? 4u : D >= kp.d2 ? 2u : 1u;
-            if (N_tiles >= kp.nwide) {
-                Pk = 1u;  // wide-N DRAM guard
-            }
-            while (Pk > 1 && grid_size.y % Pk != 0) {
-                Pk /= 2;  // fit the row budget
-            }
-            while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < kp.min_kt)) {
-                Pk /= 2;  // deep-K availability
-            }
-            // M-padding handling. The fused reduction sums along M, which maps to rows_per_group=1 for
-            // non-transpose (M on rows -> never pads) or num_slices*grid.x for transpose (M on cols).
-            //   * no padding              -> keep Pk.
-            //   * output-STARVED transpose -> the padded columns are otherwise-idle cores, so padding is
-            //     ~free: engage with S=1 (all row budget to K, M maps to exactly grid.x columns) when K
-            //     is deep enough for the full Pk=grid.y split. The padded fused reduction is PCC-verified
-            //     (padded rows are computed/summed then dropped by the writer's logical_d0 guard).
-            //   * non-starved transpose (padding would steal useful cores) or K too shallow -> disable.
-            auto m_pads = [&](uint32_t pk) {
-                const uint32_t S = grid_size.y / pk;
-                const uint32_t axis = transpose_core_grid ? (S * grid_size.x) : (grid_size.y / (S * pk));
-                return M_tiles % axis != 0;
-            };
-            if (Pk > 1 && m_pads(Pk)) {
-                uint32_t pk_s1 = grid_size.y;  // S=1: max K-par, M -> grid.x columns
-                while (pk_s1 > 1 && (K_tiles % pk_s1 != 0 || K_tiles / pk_s1 < kp.min_kt)) {
-                    pk_s1 /= 2;
-                }
-                // Only force the S=1 padded split when D itself wants maximal K-par (D>=d8). On mildly
-                // starved / moderate-K shapes D wants a smaller Pk; forcing Pk=grid.y there over-splits
-                // K and the reduction overhead regresses (measured), so disable instead.
-                Pk = (transpose_core_grid && out_tiles < cores && pk_s1 == grid_size.y && D >= kp.d8) ? pk_s1 : 1u;
-            }
-            if (Pk > 1) {
-                num_slices = grid_size.y / Pk;  // S*Pk = grid.y (rows_per_group = 1)
-                num_k_slices = Pk;
-                num_k_fused = true;
-                log_debug(
-                    tt::LogOp,
-                    "minimal_matmul auto K-par: D={:.0f} -> num_slices={} num_k_slices={} (fused)",
-                    D,
-                    num_slices,
-                    num_k_slices);
-            }
-        }
     }
     TT_FATAL(
-        grid_size.y % (num_slices * num_k_slices) == 0 && (num_k_slices & (num_k_slices - 1)) == 0,
-        "num_k_slices ({}): must be a power of 2 and num_slices*num_k_slices ({}) must divide grid.y ({})",
-        num_k_slices,
+        num_k_slices >= 1 && grid_size.y % (num_slices * num_k_slices) == 0,
+        "num_slices*num_k_slices ({}) must divide grid.y ({})",
         num_slices * num_k_slices,
         grid_size.y);
     TT_FATAL(K_tiles % num_k_slices == 0, "num_k_slices ({}) must divide K_tiles ({})", num_k_slices, K_tiles);
@@ -877,6 +885,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::map<std::string, std::string> in1_defines = defines;
     if (num_k_fused) {
         (in0_is_output_writer ? in0_defines : in1_defines)["REDUCE_K"] = "1";
+    }
+    // MM_KPAR gates the split-K per-core runtime offsets (k_block_start / out_m_tile_offset /
+    // out_M_tiles_total). Only defined when K-parallelism is actually engaged (num_k_slices > 1, which
+    // also covers plan B since fused requires it). When undefined, the senders compile those offsets to
+    // compile-time 0 so the base-path inner loops keep main's clean affine DRAM addressing (~10% on big
+    // shapes — bisected to de95e3a). The args are still always pushed, so the contract is unchanged.
+    if (num_k_slices > 1) {
+        in0_defines["MM_KPAR"] = "1";
+        in1_defines["MM_KPAR"] = "1";
     }
 
     std::vector<uint32_t> in0_sender_compile_time_args = {

@@ -232,7 +232,9 @@ void write_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
+#if defined(OUTPUT_WRITE_NOC0_PCT)
     uint32_t wnoc_idx = 0;  // counts actual writes, drives output_write_noc() NOC selection
+#endif
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -243,7 +245,13 @@ void write_block_sync(
                 continue;
             }
             uint32_t tile_id = i * shape.logical_d1 + j;
+#if defined(OUTPUT_WRITE_NOC0_PCT)
             noc_async_write_page(tile_id, tensor_accessor, read_ptr, 0, 0, output_write_noc(wnoc_idx++));
+#else
+            // No NOC split configured: bare write on the default NOC -- compiles identically to main
+            // (no per-tile NOC-selection call, no counter).
+            noc_async_write_page(tile_id, tensor_accessor, read_ptr);
+#endif
             read_ptr += tile_size_bytes;
         }
         // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
@@ -364,7 +372,9 @@ void write_block_sync_granular(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#if defined(OUTPUT_WRITE_NOC0_PCT)
     uint32_t wnoc_idx = 0;  // counts actual writes, drives output_write_noc() NOC selection
+#endif
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         cb_wait_front(cb_id_out, N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
@@ -375,7 +385,12 @@ void write_block_sync_granular(
                     break;
                 }
                 uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
+#if defined(OUTPUT_WRITE_NOC0_PCT)
                 noc_async_write_page(tile_id, tensor_accessor, out_read_ptr, 0, 0, output_write_noc(wnoc_idx++));
+#else
+                // No NOC split: bare default-NOC write (no per-tile selection call / counter), == main.
+                noc_async_write_page(tile_id, tensor_accessor, out_read_ptr);
+#endif
                 out_read_ptr += tile_size_bytes;
             }
         }

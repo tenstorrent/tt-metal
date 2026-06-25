@@ -47,10 +47,21 @@ void kernel_main() {
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     // Split-K (plan A2): absolute first K-block this band reduces; M-stripe offset of this band's
     // partial in the [num_k_slices * M, N] output; and that output's total M-tile extent. All 0 / M_tiles
-    // when K-par is off.
-    const uint32_t k_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_m_tile_offset = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_M_tiles_total = get_arg_val<uint32_t>(argidx++);
+    // when K-par is off. Always read (factory always pushes) so the arg contract is K-par-independent.
+    const uint32_t k_block_start_arg = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_m_tile_offset_arg = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_M_tiles_total_arg = get_arg_val<uint32_t>(argidx++);
+#ifdef MM_KPAR
+    const uint32_t k_block_start = k_block_start_arg;
+    const uint32_t out_m_tile_offset = out_m_tile_offset_arg;
+#else
+    // BASE PATH: force compile-time zero (see dm_in0_sender.cpp). Opaque runtime 0s defeat inner-loop
+    // address strength-reduction and cost ~10% on big shapes (bisected to de95e3a).
+    (void)k_block_start_arg;
+    (void)out_m_tile_offset_arg;
+    constexpr uint32_t k_block_start = 0;
+    constexpr uint32_t out_m_tile_offset = 0;
+#endif
 
 #ifdef REDUCE_K
     // Split-K plan B: vertical running-sum reduction (see dm_in0_sender.cpp for the full description).
@@ -112,9 +123,13 @@ void kernel_main() {
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
     // out_shape spans the full [num_k_slices * M, N] partial buffer so the logical_d0 guard in
-    // write_block_sync admits this band's M-stripe (rows out_m_tile_offset .. +M). num_k_slices=1 =>
-    // out_M_tiles_total == M_tiles (identical to before).
-    const TensorShape2D out_shape(out_M_tiles_total, N_tiles, out_M_tiles_total, padded_N_tiles);
+    // write_block_sync admits this band's M-stripe (rows out_m_tile_offset .. +M). Base path uses the
+    // original constexpr (M_tiles, padded_M_tiles) form so codegen matches main.
+#ifdef MM_KPAR
+    const TensorShape2D out_shape(out_M_tiles_total_arg, N_tiles, out_M_tiles_total_arg, padded_N_tiles);
+#else
+    const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+#endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;

@@ -48,9 +48,24 @@ void kernel_main() {
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     // Split-K (plan A2): absolute first K-block this band reduces. The next two args (out M-stripe
     // offset + total) are consumed only by the in1 output-writer; read here to keep arg layout aligned.
-    const uint32_t k_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_m_tile_offset = get_arg_val<uint32_t>(argidx++);
-    const uint32_t out_M_tiles_total = get_arg_val<uint32_t>(argidx++);
+    // Always read (the factory always pushes them) so the arg contract is identical with/without K-par.
+    const uint32_t k_block_start_arg = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_m_tile_offset_arg = get_arg_val<uint32_t>(argidx++);
+    const uint32_t out_M_tiles_total_arg = get_arg_val<uint32_t>(argidx++);
+#ifdef MM_KPAR
+    const uint32_t k_block_start = k_block_start_arg;
+    const uint32_t out_m_tile_offset = out_m_tile_offset_arg;
+#else
+    // BASE PATH (no K-parallelism): force these to COMPILE-TIME zero. Passing them as opaque runtime
+    // values (even when == 0) makes the inner-loop K-block index `k_block_start + f(loop)` and the output
+    // `m_tile + out_m_tile_offset` no longer provably-affine in the loop counter, defeating the DRAM
+    // address strength-reduction in read_in0/in1_block_sync and costing ~10% on big shapes. Bisected to
+    // de95e3a (split-K A2); recovered to main-level by this constexpr-0 gate.
+    (void)k_block_start_arg;
+    (void)out_m_tile_offset_arg;
+    constexpr uint32_t k_block_start = 0;
+    constexpr uint32_t out_m_tile_offset = 0;
+#endif
 
 #ifdef REDUCE_K
     // Split-K plan B: vertical running-sum reduction. up = band above (where we forward our running sum),
@@ -133,8 +148,12 @@ void kernel_main() {
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     // out_shape spans the full [num_k_slices * M, N] partial buffer when this kernel is the output
     // writer (non-transpose), so its band's M-stripe passes the write_block_sync logical_d0 guard.
-    // num_k_slices=1 => out_M_tiles_total == M_tiles (identical to before).
-    const TensorShape2D out_shape(out_M_tiles_total, N_tiles, out_M_tiles_total, padded_N_tiles);
+    // Base path uses the original (M_tiles, padded_M_tiles) constexpr form so codegen matches main.
+#ifdef MM_KPAR
+    const TensorShape2D out_shape(out_M_tiles_total_arg, N_tiles, out_M_tiles_total_arg, padded_N_tiles);
+#else
+    const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+#endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
