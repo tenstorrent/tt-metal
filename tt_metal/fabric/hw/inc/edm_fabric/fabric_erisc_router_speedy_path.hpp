@@ -165,6 +165,10 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
         }
+        if (combine_window_active) {
+            // [debug] Packet drained from the tensix-sender buffer: record into the global detection counters.
+            record_combine_packet(pkt_header->get_payload_size_including_header());
+        }
         sender_state.sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -277,6 +281,11 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
 
         did_something = true;
         progress = true;
+        // [debug] Packet drained from a receiver/forwarding buffer (traffic from another eth-core):
+        // record into the same global detection counters as the tensix-sender path.
+        if (combine_window_active) {
+            record_combine_packet(packet_header->get_payload_size_including_header());
+        }
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(packet_header, local_fabric_telemetry);
         }

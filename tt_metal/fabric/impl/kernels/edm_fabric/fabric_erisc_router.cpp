@@ -545,7 +545,16 @@ struct CombineDebug {
     uint32_t magic;
     // One counter block per sender channel index. Indexed by sender_channel_index at the send sites.
     CombineChannelDebug per_ch[MAX_NUM_SENDER_CHANNELS];
-    uint32_t spare[8];  // room to grow: add per-channel fields above, or global fields here
+    // [debug] Packet-detection telemetry, aggregated across ALL buffers for the window: tensix-sender
+    // channels AND receiver/forwarding channels (packets arriving from other eth-cores). Recorded at the
+    // once-per-packet consume edge (see record_combine_packet). Wall-clock domain (get_timestamp_32b),
+    // same as tight_cycles. Note: window_start_cycles is wall-clock, while *_cycles_at_start above are
+    // BandwidthTelemetry cycles -- different clock domains, do not subtract across them.
+    uint32_t window_start_cycles;  // wall-clock at the start marker (for first-packet latency)
+    uint32_t first_pkt_cycles;     // wall-clock of the first packet seen in the window (set once)
+    uint32_t last_pkt_cycles;      // wall-clock of the most recently seen packet
+    uint32_t total_pkt_bytes;      // running sum of wire bytes (header + payload) over every packet seen
+    uint32_t spare[4];             // room to grow: add per-channel fields above, or global fields here
 };
 // Must not exceed COMBINE_DEBUG_BUFFER_SIZE carved in FabricEriscDatamoverConfig (1024 B).
 static_assert(sizeof(CombineDebug) <= 1024, "CombineDebug exceeds the carved combine_debug_buffer region");
@@ -559,6 +568,25 @@ FORCE_INLINE volatile CombineDebug* combine_dbg() {
 }
 
 bool combine_window_active = false;
+// [debug] Gate so first_pkt_cycles is captured exactly once per window. Reset at the start marker.
+bool combine_first_pkt_seen = false;
+
+// [debug] Record one detected packet into the global packet-detection counters. Called once per packet at
+// the consume edge of any buffer (a tensix-sender channel send, or a receiver/forwarding channel forward),
+// where exactly one buffer slot is drained -- so there is no double counting from the level-triggered
+// "has_unsent_packet"/"unwritten_packets" signals. Caller gates on combine_window_active. `bytes` is the
+// wire size (header + payload) of the packet. first_pkt_cycles is latched once; last_pkt_cycles and
+// total_pkt_bytes update on every packet.
+FORCE_INLINE void record_combine_packet(uint32_t bytes) {
+    volatile CombineDebug* d = combine_dbg();
+    uint32_t now = get_timestamp_32b();
+    if (!combine_first_pkt_seen) {
+        combine_first_pkt_seen = true;
+        d->first_pkt_cycles = now;
+    }
+    d->last_pkt_cycles = now;
+    d->total_pkt_bytes += bytes;
+}
 
 // [debug] Classify a single sender-channel send attempt into exactly one bucket, for channel `ch`. Called
 // only inside the combine window (caller gates on combine_window_active), using the same condition values
@@ -1750,6 +1778,10 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
+        if (combine_window_active) {
+            // [debug] Packet drained from the tensix-sender buffer: record into the global detection counters.
+            record_combine_packet(pkt_header->get_payload_size_including_header());
+        }
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1961,6 +1993,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             progress = true;
+            // [debug] Packet drained from a receiver/forwarding buffer (traffic from another eth-core):
+            // record into the same global detection counters as the tensix-sender path.
+            if (combine_window_active) {
+                record_combine_packet(packet_header->get_payload_size_including_header());
+            }
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
@@ -2682,6 +2719,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         // Snapshot only the low 32 bits; the unsigned 32-bit subtraction at the end marker
                         // gives the correct delta as long as the window is shorter than 2^32 cycles.
                         d->magic = COMBINE_DEBUG_MAGIC;
+                        // [debug] Reset packet-detection counters; latch the wall-clock window start so the
+                        // first-packet latency (first_pkt_cycles - window_start_cycles) is computable.
+                        d->window_start_cycles = get_timestamp_32b();
+                        d->first_pkt_cycles = 0;
+                        d->last_pkt_cycles = 0;
+                        d->total_pkt_bytes = 0;
+                        combine_first_pkt_seen = false;
                         for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
                             volatile CombineChannelDebug* c = &d->per_ch[ch];
                             c->att_total = 0;
@@ -2696,6 +2740,17 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         // END event: close the window, print the loop-level deltas, then one line per
                         // serviced sender channel (idle/unserviced channels are skipped).
                         combine_window_active = false;
+                        // [debug] Packet-detection summary (all buffers). first_delay = cycles from the start
+                        // marker to the first packet; span = first-to-last packet; bytes = total wire bytes.
+                        uint32_t combine_pkt_first_delay =
+                            combine_first_pkt_seen ? (d->first_pkt_cycles - d->window_start_cycles) : 0;
+                        uint32_t combine_pkt_span =
+                            combine_first_pkt_seen ? (d->last_pkt_cycles - d->first_pkt_cycles) : 0;
+                        DEVICE_PRINT(
+                            "[cmb] pkt_first_delay={} pkt_span={} pkt_bytes={}\n",
+                            combine_pkt_first_delay,
+                            combine_pkt_span,
+                            d->total_pkt_bytes);
                         // Per-channel send-attempt breakdown + tight Tx. Sanity per line:
                         //   enq + starved + rxfull + txqbusy + other == att.
                         for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
