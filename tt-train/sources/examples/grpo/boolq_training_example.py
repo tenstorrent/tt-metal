@@ -177,8 +177,8 @@ def parse_args():
         default=2048,
         help="Max sequence length for the qwen3 path (bounds the generation horizon).",
     )
-    # Accept (and ignore) extra flags passed by launch scripts (e.g. --model,
-    # --wandb*) so they don't crash argument parsing.
+    # Accept (and ignore) any extra flags passed by launch scripts so they
+    # don't crash argument parsing.
     args, _ = parser.parse_known_args()
     return args
 
