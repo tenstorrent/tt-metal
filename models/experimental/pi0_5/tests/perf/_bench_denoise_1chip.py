@@ -1,17 +1,45 @@
 # SPDX-License-Identifier: Apache-2.0
 """Single-chip denoise per-layer latency harness (production config).
 
-Default = production denoise: DRAM-resident weights + precomputed modulation
-(TIER A, computed once/step on host). Matches the e2e 2cq denoise layer.
-Use a clean-tracy chip (23, NOT 24) for per-op device-kernel; e.g.:
-  PI0_NUM_CAMERAS context -> --prefix 768 (2 cams), --m-pad 32, --layers 1
-  source _bench_runs/pi05_production.env
-  python -m tracy -p -r ... _bench_denoise_1chip.py --device-id 23 --prefix 768 --layers 1
-Reference: 1 layer = ~195.5 us device-kernel. --weights-l1 moves all weights to L1."""
+Production env flags are applied by default — no need to source pi05_production.env.
+Default config is L1 weights + matmul_decode MLP (fastest). Use --config to switch:
+
+  --config l1_md   L1 weights + matmul_decode MLP  (default)
+  --config l1      L1 weights, standard matmul
+  --config dram    DRAM weights, standard matmul
+
+Run:
+  python _bench_denoise_1chip.py --device-id 23
+  python _bench_denoise_1chip.py --device-id 23 --config dram
+  python -m tracy -p -r -n denoise_l1_md _bench_denoise_1chip.py --device-id 23
+"""
 import argparse
 import os
 import statistics
 import time
+
+# Parse --config early so PI0_MD_DENOISE is set before model imports.
+_pre = argparse.ArgumentParser(add_help=False)
+_pre.add_argument("--config", choices=["dram", "l1", "l1_md"], default="l1_md")
+_pre_args, _ = _pre.parse_known_args()
+
+# Apply production defaults before any model import (env vars must be set early).
+# These mirror _bench_runs/pi05_production.env; individual vars can still be
+# overridden from the shell before running the script.
+_PROD_DEFAULTS = {
+    "PI0_EXPERT_MM_LOFI": "1",
+    "PI0_ROPE_TABLES_L1": "1",
+    "PI0_MM_SWEEP_V2": "1",
+    "PI0_DENOISE_MM_TUNE": "1",
+    "PI0_UPSTREAM_MASKS": "1",
+    "QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT": "1",
+    "QWEN_NLP_CREATE_HEADS_HEAD_SPLIT": "1",
+    "PI0_MQA_HEAD_SPLIT": "1",
+    "PI0_SDPA_DENOISE_K_FORCE": "96",
+    "PI0_MD_DENOISE": "1" if _pre_args.config == "l1_md" else "0",
+}
+for _k, _v in _PROD_DEFAULTS.items():
+    os.environ.setdefault(_k, _v)
 
 import torch
 import ttnn
@@ -82,13 +110,15 @@ def main():
     ap.add_argument("--device-id", type=int, default=1)
     ap.add_argument("--m-pad", type=int, default=32)
     ap.add_argument("--prefix", type=int, default=512)
-    ap.add_argument("--layers", type=int, default=0)  # 0 -> config.depth (18)
+    ap.add_argument("--layers", type=int, default=2)
     ap.add_argument(
-        "--weights-l1",
-        action="store_true",
-        help="Move all projection weights (wqkv/o_proj/gate/up/down/mod) to L1 at init",
+        "--config",
+        choices=["dram", "l1", "l1_md"],
+        default="l1_md",
+        help="dram: DRAM weights+standard matmul; l1: L1 weights+standard matmul; l1_md: L1+matmul_decode (default)",
     )
     args = ap.parse_args()
+    weights_l1 = args.config != "dram"
 
     device = ttnn.CreateDevice(device_id=args.device_id, l1_small_size=24576, trace_region_size=134_217_728)
     config = GemmaConfig.gemma_300m()
@@ -100,7 +130,7 @@ def main():
         config, weights, device, layer_range=(0, n_layers), max_seq_len=args.m_pad + args.prefix + 64
     )
 
-    if args.weights_l1:
+    if weights_l1:
         moved = _move_weights_to_l1(chunk)
         print(
             f"[weights-l1] moved {len(moved)} denoise weights DRAM->L1: {sorted(set(m.split('.',1)[1] for m in moved))}"
@@ -150,8 +180,7 @@ def main():
         precomputed_mods.append(tup)
 
     print(
-        f"[run] {n_layers} layers, M_pad={args.m_pad}, PREFIX={args.prefix}, dev={args.device_id}, "
-        f"weights_l1={args.weights_l1} (precomputed modulation = production default)"
+        f"[run] config={args.config}, {n_layers} layers, M_pad={args.m_pad}, PREFIX={args.prefix}, dev={args.device_id}"
     )
     chunk.forward(hidden, adarms_cond, prefix_kv, precomputed_mods=precomputed_mods)
     ttnn.synchronize_device(device)
