@@ -19,7 +19,7 @@ struct OutboundSocketServiceSyncProgramFactory {
     // sender service core (data-ready counter, metadata L1, NoC coords) is different,
     // so the per-coord runtime args are looked up by coordinate.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const OutboundSocketServiceSyncParams& operation_attributes,
+        const OutboundSocketServiceSyncParams& args,
         const OutboundSocketServiceSyncInputs& tensor_args,
         Tensor& backing_out,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);

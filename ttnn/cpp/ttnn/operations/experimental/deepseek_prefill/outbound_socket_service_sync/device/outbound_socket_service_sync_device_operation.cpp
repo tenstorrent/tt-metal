@@ -44,6 +44,12 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "outbound_socket_service_sync: metadata_size_bytes must be a multiple of 4 (uint32-aligned), got {}",
             args.metadata_size_bytes);
         TT_FATAL(
+            args.metadata_size_bytes <= args.page_size,
+            "outbound_socket_service_sync: metadata_size_bytes ({}) exceeds the per-shard page_size ({}); the metadata "
+            "blob is staged through the page-sized scratch CB and would overrun it",
+            args.metadata_size_bytes,
+            args.page_size);
+        TT_FATAL(
             tensor_args.metadata.has_value() && tensor_args.metadata->buffer() != nullptr,
             "outbound_socket_service_sync: metadata_size_bytes > 0 requires an allocated metadata tensor");
         TT_FATAL(
