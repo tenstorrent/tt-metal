@@ -14,6 +14,7 @@ from PIL import Image
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.multimodal.clip_score import CLIPScore
 from torchvision.transforms import ToTensor
+from transformers import CLIPModel, CLIPProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
@@ -32,6 +33,32 @@ from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae import Vae
+
+CLIP_SCORE_MODEL = "openai/clip-vit-base-patch16"
+
+
+def _build_clip_for_score():
+    """Factory for torchmetrics CLIPScore (passed as its `model_name_or_path`).
+
+    transformers 5.x changed CLIPModel.get_{image,text}_features to return a
+    BaseModelOutputWithPooling (projected embeds in .pooler_output) instead of a Tensor,
+    which breaks torchmetrics 1.9.0 CLIPScore (latest release, no upstream fix). We build
+    the model here and expose the pooled tensor so the metric keeps working. The hasattr
+    guard keeps this a no-op on transformers <5 (Tensor return). See issue #47941.
+    """
+    model = CLIPModel.from_pretrained(CLIP_SCORE_MODEL)
+    processor = CLIPProcessor.from_pretrained(CLIP_SCORE_MODEL)
+
+    def _unwrap_pooled(fn):
+        def wrapped(*args, **kwargs):
+            out = fn(*args, **kwargs)
+            return out.pooler_output if hasattr(out, "pooler_output") else out
+
+        return wrapped
+
+    model.get_image_features = _unwrap_pooled(model.get_image_features)
+    model.get_text_features = _unwrap_pooled(model.get_text_features)
+    return model, processor
 
 
 def load_inputs(input_path):
@@ -523,7 +550,8 @@ def run_demo_inference_diffusiondb(
         logger.info(f"FID Score (Reference vs TTNN): {fid_score_ref_ttnn}")
 
         # calculate Clip score
-        clip_score = CLIPScore(model_name_or_path="openai/clip-vit-base-patch16")
+        # _build_clip_for_score supplies a transformers-5.x-compatible CLIP model (see #47941).
+        clip_score = CLIPScore(model_name_or_path=_build_clip_for_score)
 
         clip_score_ttnn = clip_score(ttnn_images[0], input_prompt)
         clip_score_ttnn = clip_score_ttnn.detach()
