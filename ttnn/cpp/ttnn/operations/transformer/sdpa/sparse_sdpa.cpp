@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include <tt-metalium/hal.hpp>
 #include <cmath>
 
@@ -31,7 +32,18 @@ ttnn::Tensor sparse_sdpa(
         /*default_fp32_acc=*/any_fp8,
         /*default_l1_acc=*/false);
 
-    return ttnn::prim::sparse_sdpa(q, kv, indices, resolved_scale, v_dim, k_chunk_size, kernel_config, cache_batch_idx);
+    // The device op writes a ROW_MAJOR bf16 result. We expose a TILE-layout output: bf16 q -> bf16 TILE,
+    // fp8_e4m3 q -> bfloat8_b TILE (bfloat8_b is block-float, so TILE-only). A SINGLE to_layout does both
+    // the row->tile pack and the dtype downcast (tilize takes an output dtype), so there are no extra
+    // typecasts and no lossy fp8 intermediate — see PLAN_sparse_sdpa_native_tile_output.md. (to_layout packs
+    // row->tile across each head's full [S, v_dim] plane; fusing the tilize into the per-token kernel would
+    // need an S<->H transpose, since compute packs heads as the tile-row axis and loops tokens.)
+    ttnn::Tensor out =
+        ttnn::prim::sparse_sdpa(q, kv, indices, resolved_scale, v_dim, k_chunk_size, kernel_config, cache_batch_idx);
+
+    const ttnn::DataType out_dtype =
+        (q.dtype() == ttnn::DataType::FP8_E4M3) ? ttnn::DataType::BFLOAT8_B : ttnn::DataType::BFLOAT16;
+    return ttnn::to_layout(out, ttnn::Layout::TILE, out_dtype);
 }
 
 }  // namespace ttnn::transformer

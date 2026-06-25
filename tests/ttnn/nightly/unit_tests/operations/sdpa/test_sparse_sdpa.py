@@ -182,8 +182,8 @@ def test_sparse_sdpa_determinism(device, q_dtype, kv_dtype):
     tt_kv = to_dev(kv_host, device, kv_dtype)
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
 
-    def comparable(o):  # ttnn.ne/max need TILE bf16 (fp8 has no eltwise); both casts are deterministic 1:1 maps
-        if o.dtype == ttnn.fp8_e4m3:
+    def comparable(o):  # ttnn.ne/max need bf16 (block-float bfloat8_b has no eltwise); cast is a deterministic
+        if o.dtype != ttnn.bfloat16:  # 1:1 map. Output is already TILE; fp8 q -> bfloat8_b out, bf16 q -> bf16 out.
             o = ttnn.typecast(o, ttnn.bfloat16)
         return ttnn.to_layout(o, ttnn.TILE_LAYOUT)
 

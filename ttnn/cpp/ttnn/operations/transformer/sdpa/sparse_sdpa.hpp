@@ -17,7 +17,9 @@ namespace ttnn::transformer {
 //                                                          the K-gather bytes, tilized in-op to bfp8_b)
 //   indices [1, 1, S, TOPK] uint32 ROW_MAJOR (0xFFFFFFFF = masked; sentinels are a contiguous tail)
 //   v_dim   width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
-// Returns out [1, H, S, v_dim] ROW_MAJOR; the output dtype MATCHES q (bf16 q -> bf16 out, fp8 q -> fp8 out).
+// Returns out [1, H, S, v_dim] TILE layout; the output dtype tracks q: bf16 q -> bf16 TILE, fp8_e4m3 q ->
+// bfloat8_b TILE (bfloat8_b is block-float, so it only exists tiled). The device op produces a ROW_MAJOR
+// result internally and the entry tilizes it (see sparse_sdpa.cpp).
 // (K_DIM is taken from q/kv; scale defaults to K_DIM**-0.5.)
 //
 // cache_batch_idx: when set, kv is a shared [B, 1, T, K_DIM] cache and this selects the batch slot to attend

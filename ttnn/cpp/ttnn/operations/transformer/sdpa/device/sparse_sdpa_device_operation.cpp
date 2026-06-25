@@ -132,13 +132,14 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // Row-byte alignment: each Q/K/index/output row is a DRAM page the reader DMAs from / the writer DMAs
     // to (and tensors are unpadded, so the page == one row). The row byte count must be a multiple of the
     // DRAM access alignment; that also covers the in-L1 row offsets (DRAM alignment >= L1 alignment).
-    // Each Q/K row is one DRAM page in its native dtype (fp8 -> 1 byte, bf16 -> 2). The output dtype
-    // matches q (compute_output_specs), so its row width uses q's element size.
+    // Each Q/K row is one DRAM page in its native dtype (fp8 -> 1 byte, bf16 -> 2). The output is always
+    // bf16 (compute_output_specs), so its row width uses 2 bytes regardless of q.
     const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+    constexpr uint32_t out_elem_bytes = sizeof(uint16_t);  // bf16 output
     TT_FATAL((K_DIM * q.element_size()) % dram_align == 0, "Q row bytes must be {}B aligned", dram_align);
     TT_FATAL((K_DIM * kv.element_size()) % dram_align == 0, "K row bytes must be {}B aligned", dram_align);
     TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
-    TT_FATAL((attrs.v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
+    TT_FATAL((attrs.v_dim * out_elem_bytes) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
 
     // fp8 q/kv tilizes through a 32-bit dest accumulator (fp8 unpacks to fp32 in DEST, packs to bf16/bfp8),
     // so it requires fp32_dest_acc_en. The op factory defaults it on for fp8 inputs (see sparse_sdpa.cpp).
@@ -153,14 +154,19 @@ SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_spe
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
     auto shape = t.q.logical_shape();  // [1, H, S, K_DIM]
     shape[3] = attrs.v_dim;            // [1, H, S, v_dim]
-    // Output dtype matches q (bf16 -> bf16, fp8_e4m3 -> fp8_e4m3): the final untilize packs the bf16
-    // accumulator to the output dtype (fp8 is a regular float8, not block-float, so it untilizes fine).
-    // The output is always DRAM-interleaved ROW_MAJOR — the writer drains it with per-head-row paged
-    // noc writes, so no caller-supplied memory_config is exposed (it could only ever be this).
+    // Output is ALWAYS bf16 (regardless of q dtype): the final untilize packs the bf16 accumulator
+    // straight to bf16. The public entry (sparse_sdpa.cpp) then tilizes this RM result into the caller's
+    // TILE output, converting to bfloat8_b for fp8 q in that SINGLE tilize. Emitting bf16 here (not fp8)
+    // keeps the result lossless for that final pack and lets the entry use one tilize op — an fp8
+    // intermediate would force extra typecasts (and fp8 -> TILE tilize is unsupported on device anyway).
+    // The output is DRAM-interleaved ROW_MAJOR — the writer drains it with per-head-row paged noc writes,
+    // so no caller-supplied memory_config is exposed (it could only ever be this).
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     return TensorSpec(
-        shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+        shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
 }
 
 SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_tensors(

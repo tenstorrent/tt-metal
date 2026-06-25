@@ -344,7 +344,8 @@ void bind_sdpa(nb::module_& mod) {
                 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
 
         Returns:
-            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
+            ttnn.Tensor: [1, H, S, v_dim] TILE layout, DRAM interleaved; dtype tracks q — bf16 q -> bf16,
+            fp8_e4m3 q -> bfloat8_b (block-float, so TILE-only).
         )doc",
         &ttnn::transformer::sparse_sdpa,
         nb::arg("q").noconvert(),

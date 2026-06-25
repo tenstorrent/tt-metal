@@ -31,7 +31,7 @@ V_DIM = 512  # V width / output width (op arg)
 pytestmark = pytest.mark.use_module_device
 
 
-# ---- op runs, output shape/layout correct ----
+# ---- op runs, output shape/layout correct (output is TILE layout) ----
 @run_for_blackhole()
 def test_sparse_sdpa_runs(device):
     H, S, T, TOPK, kc = 32, 64, 256, 64, 32
@@ -40,10 +40,14 @@ def test_sparse_sdpa_runs(device):
     assert tuple(out.shape) == (1, H, S, V_DIM), f"got {tuple(out.shape)}"
 
 
-# ---- output dtype matches q (bf16 q -> bf16 out, fp8 q -> fp8 out) ----
+# ---- output is TILE layout; dtype tracks q (bf16 q -> bf16 TILE, fp8 q -> bfloat8_b TILE) ----
 @run_for_blackhole()
-@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["q_bf16", "q_fp8"])
-def test_sparse_sdpa_output_dtype(device, q_dtype):
+@pytest.mark.parametrize(
+    "q_dtype,out_dtype",
+    [(ttnn.bfloat16, ttnn.bfloat16), (ttnn.fp8_e4m3, ttnn.bfloat8_b)],
+    ids=["q_bf16", "q_fp8"],
+)
+def test_sparse_sdpa_output_dtype(device, q_dtype, out_dtype):
     H, S, T, TOPK, kc = 32, 64, 256, 64, 32
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
     q_host = q.to(torch.bfloat16) if q_dtype == ttnn.bfloat16 else q.to(torch.float32)
@@ -51,7 +55,8 @@ def test_sparse_sdpa_output_dtype(device, q_dtype):
     tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
     out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=K_DIM**-0.5, k_chunk_size=kc)
-    assert out.dtype == q_dtype, f"output dtype {out.dtype} != q dtype {q_dtype}"
+    assert out.layout == ttnn.TILE_LAYOUT, f"output layout {out.layout} != TILE"
+    assert out.dtype == out_dtype, f"output dtype {out.dtype} != expected {out_dtype} for q {q_dtype}"
 
 
 # ---- minimal PCC vs the sparse_mla golden: single chunk + multi chunk, all-valid + a boundary mask ----
@@ -93,8 +98,10 @@ def test_sparse_sdpa_kv_len_no_recompile(device):
         out, scale = run_op(q, kv, indices, device, kc, V_DIM)
         p = pcc(out, golden(q, kv, indices, scale, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (T={T})"
+    # 2 entries = the sparse_sdpa prim + the entry's output-tilize (to_layout); both are T-invariant, so neither
+    # recompiles across the loop. (The tilize program depends only on the [1,H,S,v_dim] output shape, fixed here.)
     n = device.num_program_cache_entries()
-    assert n == 1, f"changing kv length recompiled: {n} program-cache entries (expected 1)"
+    assert n == 2, f"changing kv length recompiled: {n} program-cache entries (expected 2: prim + tilize)"
 
 
 # ---- oversized persistent kv buffer (same idea as ring_mla's reuse_max): one max-size K cache, allocated
@@ -119,7 +126,8 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
         p = pcc(ttnn.to_torch(tt_out), golden(q, kv, indices, scale, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (valid_len={valid_len})"
     n = device.num_program_cache_entries()  # reusing the same oversized buffer must not realloc/recompile
-    assert n == 1, f"oversized persistent kv reuse recompiled: {n} program-cache entries (expected 1)"
+    # 2 entries: sparse_sdpa prim + the entry's output-tilize (both invariant across the two valid_len calls).
+    assert n == 2, f"oversized persistent kv reuse recompiled: {n} program-cache entries (expected 2: prim + tilize)"
 
 
 def _indexed_inputs(H, S, T, TOPK, B, seed=0):
@@ -151,7 +159,8 @@ def test_sparse_sdpa_indexed_kv_cache(device):
         p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))  # golden uses slot cb
         assert p >= 0.99, f"PCC {p:.5f} (cache_batch_idx={cb})"
     n = device.num_program_cache_entries()  # changing the indexed slot must NOT recompile
-    assert n == 1, f"indexing into a different slot recompiled: {n} program-cache entries (expected 1)"
+    # 2 entries: sparse_sdpa prim + the entry's output-tilize (both invariant across the cache_batch_idx slots).
+    assert n == 2, f"indexing into a different slot recompiled: {n} program-cache entries (expected 2: prim + tilize)"
 
 
 # ---- indexed KV cache that is ND-sharded across DRAM banks (each batch slot is one shard). ----
@@ -216,7 +225,9 @@ def test_sparse_sdpa_nd_sharded_kv_len_change(device):
         out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc)
         p = pcc(ttnn.to_torch(out), golden(q, kv, indices, scale, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (nd-sharded, T={T})"
-    assert device.num_program_cache_entries() == 2, "sharded kv must recompile per shape (2 distinct T -> 2 entries)"
+    # 3 entries: one sparse_sdpa prim PER sharded shape (2 distinct T -> 2 prims) + ONE output-tilize shared by
+    # both (the [1,H,S,v_dim] output shape is T-independent, so the tilize program is reused).
+    assert device.num_program_cache_entries() == 3, "sharded kv must recompile per shape (2 prims + 1 shared tilize)"
 
 
 # ---- cache_batch_idx is excluded from the program hash, so an out-of-range slot must be rejected even on a
@@ -231,7 +242,7 @@ def test_sparse_sdpa_indexed_oob_rejected_on_hit(device, expect_error):
     tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
     ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=0)  # miss: builds
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 2  # sparse_sdpa prim + the entry's output-tilize
     # cache HIT, slot B is out of range [0,B) -> rejected by the hit validator
     with expect_error(RuntimeError, "cache_batch_idx"):
         ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=B)
@@ -249,7 +260,7 @@ def test_sparse_sdpa_bad_layout_rejected_on_hit(device, expect_error):
     tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
     ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)  # miss: builds the row-major program
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 2  # sparse_sdpa prim + the entry's output-tilize
     tt_q_tile = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)  # same shape+dtype (same hash) but wrong layout -> HIT
     with expect_error(RuntimeError, "ROW_MAJOR"):
         ttnn.transformer.sparse_sdpa(tt_q_tile, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)

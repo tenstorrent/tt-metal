@@ -86,9 +86,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const bool q_is_fp8 = (q_rm_df == tt::DataFormat::Fp8_e4m3);
     const tt::DataFormat q_in_df = q_is_fp8 ? tt::DataFormat::Bfp8_b : bf;
     const uint32_t q_in_tile_bytes = tt::tile_size(q_in_df);
-    // Output dtype matches q (compute_output_specs). The final untilize packs the bf16 accumulator
-    // (cb_out_im) to this format in cb_out_rm — fp8_e4m3 is a regular float8, not block-float, so it
-    // untilizes fine. cb_out_rm's tile-sized pages use the output format's tile size (fp8 -> 1024, bf16 -> 2048).
+    // Output is always bf16 (compute_output_specs); the final untilize packs the bf16 accumulator
+    // (cb_out_im) into cb_out_rm unchanged. The public entry tilizes this RM bf16 result, downcasting
+    // to bfloat8_b for fp8 q in that single tilize. (out_df derives from the output tensor, == bf16.)
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 

@@ -80,9 +80,8 @@ def run_op(
     tt_out = ttnn.transformer.sparse_sdpa(
         tt_q, tt_kv, tt_idx, v_dim, scale=scale, k_chunk_size=k_chunk_size, compute_kernel_config=compute_kernel_config
     )
-    # Output dtype matches q. fp8 tensors can't be converted directly with to_torch, so typecast to bf16.
-    if tt_out.dtype == ttnn.fp8_e4m3:
-        tt_out = ttnn.typecast(tt_out, ttnn.bfloat16)
+    # Output is TILE layout: bf16 q -> bf16 TILE, fp8 q -> bfloat8_b TILE. Both to_torch directly
+    # (unlike the old fp8_e4m3 row-major output, which needed a typecast first).
     return ttnn.to_torch(tt_out), scale
 
 
