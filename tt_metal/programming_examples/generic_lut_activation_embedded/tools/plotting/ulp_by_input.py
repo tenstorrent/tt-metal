@@ -138,45 +138,6 @@ def series_draw_params(label):
     return 1.8, 0.62, 3
 
 
-def add_low_ulp_inset(ax, series):
-    low = [(label, x, y, color, marker) for label, x, y, color, marker in series if np.any((y >= 0) & (y <= 1.0))]
-    if not low:
-        return
-    ymax = ax.get_ylim()[1]
-    if ymax <= 2.0:
-        return
-
-    inset = ax.inset_axes([0.58, 0.52, 0.35, 0.30])
-    inset.set_facecolor("#F7F7F7")
-    for _, x, y, color, marker in low:
-        mask = (y >= 0) & (y <= 1.0)
-        size, alpha, zorder = series_draw_params(_)
-        kwargs = {}
-        if marker != "x":
-            kwargs["edgecolors"] = "none"
-        inset.scatter(
-            x[mask],
-            y[mask],
-            s=max(1.0, size * 0.75),
-            alpha=alpha,
-            color=color,
-            marker=marker,
-            rasterized=True,
-            zorder=zorder,
-            **kwargs,
-        )
-    xmin, xmax = ax.get_xlim()
-    inset.set_xlim(xmin, xmax)
-    inset.set_ylim(0, 1.02)
-    inset.set_title("0-1 ULP", fontsize=6.5, pad=1.5)
-    inset.tick_params(axis="both", labelsize=6, length=2, pad=1)
-    inset.grid(True, color="#CCCCCC", alpha=0.12, linewidth=0.35)
-    inset.spines["top"].set_visible(False)
-    inset.spines["right"].set_visible(False)
-    inset.spines["left"].set_linewidth(0.45)
-    inset.spines["bottom"].set_linewidth(0.45)
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Plot ULP error over input domain from raw dumps.")
     parser.add_argument("--activation", "-a", required=True)
@@ -266,7 +227,6 @@ def plot_split_series(plt, plotted, precision):
         ax.set_xlim(xmin - xpad, xmax + xpad)
         ax.set_ylim(*ylim)
         finish_axis(ax, precision)
-        add_low_ulp_inset(ax, [(label, x, ulp, color, marker)])
 
     axes[0].set_ylabel(f"ULP error ({precision.upper()})")
     for ax in axes[1:]:
@@ -307,7 +267,6 @@ def main():
         ymin, ymax = ax.get_ylim()
         if ymax > 0:
             ax.set_ylim(0, ymax * 1.04)
-        add_low_ulp_inset(ax, plotted)
         handles = legend_handles(plt, plotted)
         ax.legend(
             handles=handles,

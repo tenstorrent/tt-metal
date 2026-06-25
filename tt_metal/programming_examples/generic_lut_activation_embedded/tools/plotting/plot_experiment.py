@@ -60,6 +60,8 @@ def default_ttnn(frontier, native_vs_embedded):
     candidates = [
         frontier / "data" / "csv" / "ttnn_ref.csv",
     ]
+    if frontier.name == "bf16":
+        candidates.append(frontier.parent.parent / "native_vs_embedded" / "bf16" / "data" / "csv" / "ttnn_ref.csv")
     if native_vs_embedded:
         native_root = existing(native_vs_embedded)
         candidates += [
@@ -124,23 +126,9 @@ def main():
         raise SystemExit(f"plot_experiment: no frontier shard CSVs under {args.frontier / 'data' / 'csv'}")
 
     outdir = args.outdir or (args.frontier / "plots")
-    argv = [str(p) for p in shards] + ["--outdir", str(outdir)]
-    ttnn = args.ttnn or default_ttnn(args.frontier, args.native_vs_embedded)
-    if ttnn:
-        argv += ["--ttnn", str(ttnn)]
-    if args.frontier_subdir:
-        argv += ["--frontier-subdir", args.frontier_subdir]
-    if args.all or args.tiers:
-        argv += tier_args(args.native_vs_embedded)
-
-    old_argv = sys.argv
-    try:
-        sys.argv = ["frontier_scatter.py", *argv]
-        frontier_main()
-    finally:
-        sys.argv = old_argv
-
     manifest = args.pareto_manifest or (args.frontier / "data" / "csv" / "pareto_winners.csv")
+    ttnn = args.ttnn or default_ttnn(args.frontier, args.native_vs_embedded)
+
     if args.select_pareto_winners:
         select_argv = [str(p) for p in shards] + [
             "--frontier",
@@ -162,6 +150,23 @@ def main():
             select_pareto_main()
         finally:
             sys.argv = old_argv
+
+    argv = [str(p) for p in shards] + ["--outdir", str(outdir)]
+    if ttnn:
+        argv += ["--ttnn", str(ttnn)]
+    if manifest.exists():
+        argv += ["--picked", str(manifest)]
+    if args.frontier_subdir:
+        argv += ["--frontier-subdir", args.frontier_subdir]
+    if args.all or args.tiers:
+        argv += tier_args(args.native_vs_embedded)
+
+    old_argv = sys.argv
+    try:
+        sys.argv = ["frontier_scatter.py", *argv]
+        frontier_main()
+    finally:
+        sys.argv = old_argv
 
     if args.ulp_by_input:
         io_argv = ["--manifest", str(manifest)]
