@@ -32,14 +32,26 @@ void kernel_main() {
         uint32_t l1_read_offset = 0;
 
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            const uint32_t stick_id = i_page / num_output_pages_in_row;
-            tt::data_movement::common::noc_async_write_sharded(
-                noc,
-                cb_out0_exp.get_read_ptr() + l1_read_offset,
-                s,
-                stick_id,
-                /*offset=*/0,
-                /*size=*/stick_size_bytes);
+            if (num_output_pages_in_row == 1) {
+                // Width fits in a single page: index the accessor with the flat page id directly.
+                // `noc_async_write_sharded` derives pages-per-row from the (rank-squeezed) dspec
+                // shape, which is wrong when an outer dim is sharded and the width is a single page.
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(cb_out0_exp.get_read_ptr() + l1_read_offset),
+                    s,
+                    stick_size_bytes,
+                    {},
+                    {.page_id = i_page, .offset_bytes = 0});
+            } else {
+                const uint32_t stick_id = i_page / num_output_pages_in_row;
+                tt::data_movement::common::noc_async_write_sharded(
+                    noc,
+                    cb_out0_exp.get_read_ptr() + l1_read_offset,
+                    s,
+                    stick_id,
+                    /*offset=*/0,
+                    /*size=*/stick_size_bytes);
+            }
             l1_read_offset += stick_size_padded_aligned;
             i_page += num_output_pages_in_row;
         }
