@@ -167,36 +167,6 @@ jobs:
               resume_download=True,
           )
           PY
-      - name: Download ACE-Step v1.5 checkpoints to local cache
-        if: ${{ inputs.regenerate-ttnn-cache && contains(matrix.test-group.name, 'ACE-Step') }}
-        timeout-minutes: 60
-        run: |
-          set -e
-          mkdir -p /localdev/blackhole_demos/huggingface_data/hub
-          python3 - <<'PY'
-          import os
-          from huggingface_hub import snapshot_download
-
-          snapshot_download(
-              repo_id="ACE-Step/Ace-Step1.5",
-              local_dir="/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints",
-              token=os.environ.get("HF_TOKEN"),
-              resume_download=True,
-          )
-          PY
-      - name: Verify ACE-Step v1.5 checkpoints
-        if: ${{ contains(matrix.test-group.name, 'ACE-Step') }}
-        run: |
-          set -e
-          CKPT_DIR="${ACE_STEP_CHECKPOINT_DIR:-/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints}"
-          TURBO="$CKPT_DIR/acestep-v15-turbo"
-          if [ -f "$TURBO/model.safetensors" ] || compgen -G "$TURBO/model-*.safetensors" > /dev/null; then
-            echo "ACE-Step checkpoints present at $CKPT_DIR"
-            exit 0
-          fi
-          echo "::error::ACE-Step v1.5 checkpoints not found at $TURBO"
-          echo "::error::Re-run this workflow with workflow_dispatch and enable: Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
-          exit 1
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

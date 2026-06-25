@@ -19,7 +19,7 @@ targets:
             accuracy: {}
             owner_id: D0B8130N4BW # Dalar Vartanians
             team: models
-            note: "Blackhole Demo ACE-Step v1.5; populate after first green CI run"
+            note: "Models tier-3 e2e ACE-Step v1.5; populate after first green CI run"
   distil-whisper-large-v3:
     aliases: ["distil-whisper/distil-large-v3"]
     skus:

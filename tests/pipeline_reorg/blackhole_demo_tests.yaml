@@ -123,23 +123,3 @@
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
-
-# ─── ACE-Step v1.5 ────────────────────────────────────────────────────────────
-
-- name: ACE-Step v1.5 BH QuietBox 2 demo
-  cmd: |
-    set -e
-    uv pip install -r models/experimental/ace_step_v1_5/requirements.txt
-    export MESH_DEVICE=BH_QB ACE_STEP_MESH_DEVICE=BH_QB
-    export HF_MODEL=ACE-Step/Ace-Step1.5
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
-    export ACE_STEP_CHECKPOINT_DIR="${ACE_STEP_CHECKPOINT_DIR:-/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints}"
-    export ACESTEP_CHECKPOINTS_DIR="${ACESTEP_CHECKPOINTS_DIR:-$ACE_STEP_CHECKPOINT_DIR}"
-    pytest --timeout 900 models/experimental/ace_step_v1_5/tests/test_prompt_to_wav_e2e.py -k "15s"
-  skus:
-    bh_quietbox_2:
-      timeout: 25
-  owner_id: D0B8130N4BW # Dalar Vartanians
-  team: models
-  model-name: ace-step-v1.5
