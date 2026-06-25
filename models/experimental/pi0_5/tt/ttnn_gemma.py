@@ -945,9 +945,11 @@ class GemmaMLPTTNN:
             self._gate_md = _md_shard_b(self.gate_proj, device, self._gate_nc)
             self._up_md = _md_shard_b(self.up_proj, device, self._up_nc)
             self._down_md = _md_shard_b(self.down_proj, device, self._down_nc)
-            self._gate_partial = self._gate_nc < self.gate_proj.shape[-1] // 32
-            self._up_partial = self._up_nc < self.up_proj.shape[-1] // 32
-            self._down_partial = self._down_nc < self.down_proj.shape[-1] // 32
+            # K_blocks=1 for all: each B shard holds the full K height → full_width_sharded.
+            # partial_width_sharded=True with K_blocks=1 causes an OOB slab read → inf.
+            self._gate_partial = False
+            self._up_partial = False
+            self._down_partial = False
 
         # PI0_DRAM_SHARDED_MLP_DOWN=1 — DRAM width-sharded weight variant for
         # down_proj. Per PERF_PLAYBOOKS/05 §3b + 08 §2 (decode matmul recipe).
@@ -1145,10 +1147,10 @@ class GemmaMLPTTNN:
             # awkward shapes; we fall back to the default `core_grid` path then.
             m_tiles = padded_chunk_size // 32
 
-            # PI0_MD_DENOISE: tiny-tile matmul_decode path for the M=32 denoise MLP.
+            # PI0_MD_DENOISE: tiny-tile matmul_decode path for M=16 or M=32 denoise MLP.
             # gate/up via partial K-split (N=4096>120c), down full-width; A width-sharded
             # over 2 cores, GeGLU stays sharded, reshard A for down. Additive fast path.
-            if self._md_denoise and m_tiles == 1:
+            if self._md_denoise and padded_chunk_size in (16, 32):
                 _x2d = ttnn.reshape(x_chunk, (padded_chunk_size, self.hidden_size))
                 _a = _md_shard_a(_x2d, self.device)
                 _gate = ttnn.matmul_decode(_a, self._gate_md, partial_width_sharded=self._gate_partial)

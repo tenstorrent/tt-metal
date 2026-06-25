@@ -65,7 +65,7 @@ def _run_mlp_pcc(device, m_pad: int) -> float:
     ref = _torch_ref(x_torch.float(), {k: v.float() for k, v in weights.items()})
 
     pcc = _pcc(out, ref)
-    md_active = mlp._md_denoise and (m_pad // 32) == 1
+    md_active = mlp._md_denoise and m_pad in (16, 32)
     print(f"\n  m_pad={m_pad}  md_active={md_active}  PCC={pcc:.5f}")
     return pcc
 
@@ -81,27 +81,11 @@ def test_denoise_mlp_md_32x32(device):
         os.environ.pop("PI0_MD_DENOISE", None)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "matmul_decode 16×32 tile (M=16) not yet supported: m_tiles=16//32=0 "
-        "so the MD branch is skipped. Engineering ask: extend matmul_decode kernel "
-        "to activate for M=16 (16×32 sub-tile height) so the full denoise MLP can "
-        "be tiny-tiled to 16×32."
-    ),
-    strict=True,
-)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_denoise_mlp_md_16x32(device):
-    """M=16: 16×32 tiles. xfail until matmul_decode kernel supports sub-32 tile height.
-    Remove xfail once forward() activates the MD branch for m_tiles=0 (M=16)."""
+    """M=16: matmul_decode active (16×32 tiles, padded_chunk_size=16). Must pass."""
     os.environ["PI0_MD_DENOISE"] = "1"
     try:
-        cfg = GemmaConfig.gemma_300m()
-        weights = _synthetic_weights(cfg)
-        mlp = GemmaMLPTTNN(cfg, weights, device)
-        # Assert MD path fires for M=16 — currently false (m_tiles=16//32=0).
-        # This assertion will pass once the kernel + forward() support 16×32 tiles.
-        assert mlp._md_denoise and (16 // 32) == 1, f"matmul_decode 16×32 not yet supported: m_tiles={16 // 32}"
         pcc = _run_mlp_pcc(device, m_pad=16)
         assert pcc >= PCC_THRESH, f"PCC {pcc:.5f} < {PCC_THRESH}"
     finally:
