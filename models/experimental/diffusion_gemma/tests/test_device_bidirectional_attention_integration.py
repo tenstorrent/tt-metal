@@ -39,6 +39,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
 )
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block
 from models.experimental.diffusion_gemma.tt.self_conditioning import TtSelfConditioning
+from models.common.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
 
@@ -524,6 +525,7 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
     with torch.no_grad():
         prompt_hidden = hf_model.embed_tokens(prompt_tokens)
         prompt_kv_hidden = hf_model.layers[0].input_layernorm(prompt_hidden)
+    ref_logits_by_step = []
 
     class TorchLogitsAdapter:
         def __init__(self):
@@ -540,6 +542,7 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
                 )
                 logits = _torch_denoise_logits_reference(hf_model, conditioned, [prompt_kv_hidden], mask)
                 self.prev_logits = logits
+                ref_logits_by_step.append(logits)
                 return logits
 
     ref = ref_denoise_block(
@@ -572,12 +575,19 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
         mesh_device,
         hf_model.embed_tokens.weight.detach().unsqueeze(0).unsqueeze(0),
     )
-    tt_adapter = DenoiseLogitsAdapter(
+    tt_adapter_base = DenoiseLogitsAdapter(
         tt_model,
         prompt_hidden_by_layer=tt_prompt_kv_by_layer,
         self_conditioning=self_conditioning,
         self_conditioning_embedding_weight=tt_self_conditioning_embedding,
     )
+    tt_logits_by_step = []
+
+    def tt_adapter(canvas_tokens, step):
+        logits = tt_adapter_base(canvas_tokens, step)
+        tt_logits_by_step.append(_to_torch(logits, mesh_device).squeeze(0).float())
+        return logits
+
     tt = denoise_block(
         tt_adapter,
         _to_device_canvas_ids(mesh_device, init_canvas),
@@ -601,13 +611,22 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
     accept_flips = [int((ra.accept_mask != rb.accept_mask).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
     argmax_flips = [int((ra.argmax != rb.argmax).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
     canvas_flips = [int((ra.canvas != rb.canvas).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
+    logits_pcc = [
+        float(comp_pcc(ref_logits_by_step[i].float(), tt_logits_by_step[i].float(), pcc=0.0)[1])
+        for i in range(max_steps)
+    ]
+    logits_argmax_agreement = [
+        float((ref_logits_by_step[i].argmax(dim=-1) == tt_logits_by_step[i].argmax(dim=-1)).float().mean())
+        for i in range(max_steps)
+    ]
     print(
         "\n[real-logits trajectory] "
         f"accept_flips={accept_flips} argmax_flips={argmax_flips} canvas_flips={canvas_flips} "
-        f"entropy_pcc={comparison.per_step_entropy_pcc}"
+        f"entropy_pcc={comparison.per_step_entropy_pcc} "
+        f"logits_pcc={logits_pcc} logits_argmax_agreement={logits_argmax_agreement}"
     )
 
-    tt_adapter.reset()
+    tt_adapter_base.reset()
     for tt_k, tt_v in tt_prompt_kv_by_layer:
         tt_k.deallocate(True)
         tt_v.deallocate(True)
