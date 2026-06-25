@@ -30,7 +30,6 @@ The `do_restore` toggle makes this a controlled experiment:
 from dataclasses import dataclass
 
 import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
@@ -47,6 +46,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+
+from conftest import skip_for_blackhole
 
 # The matmul victim is always a regular 32x32 (4-face) tile.
 MATMUL_NUM_FACES = 4
@@ -76,11 +77,17 @@ class DO_RESTORE(TemplateParameter):
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
+            DataFormat.Float32,
         ],
-        same=True,
+        same=False,
     ),
-    dest_acc=[DestAccumulation.No],
-    math_fidelity=[MathFidelity.HiFi4],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
     # Polluter (run-0) tilize face row count: 16 == regular (control), <16 == tiny.
     polluter_face_r_dim=[16, 4, 1],
     do_restore=[True, False],
@@ -186,6 +193,10 @@ def test_tilize_polluter_matmul(
         res_tensor,
         formats.output_format,
         L1_to_L1_iterations=L1_to_L1_iterations,
+        # do_restore=False is a negative control that *expects* a mismatch, so
+        # suppress the (otherwise alarming) ERROR-level diff dump for it. The
+        # do_restore=True path keeps it on so an unexpected divergence is shown.
+        print_errors=do_restore,
     )
 
     if do_restore:

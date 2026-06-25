@@ -21,13 +21,12 @@
 //        - UNP0 ch1 Z-stride   (UNP0_ADDR_CTRL_ZW_REG_1_Zstride)
 //        - Tile_x_dim_cntx0     (THCON_SEC0_REG5_Tile_x_dim_cntx0)
 //        - tile-descriptor Z-dim (THCON_SEC0_REG0_TileDescriptor word 1, bits 31:16)
-//   3. LLK_ASSERT each equals the helper value (Z-dim equals num_faces), and
-//      DEVICE_PRINT the (expected, actual) pair so the host can re-verify + diagnose.
+//   3. LLK_ASSERT each equals the helper value (Z-dim equals num_faces) on-device.
 //
 // If a helper ever drifts from `configure_unpack_AB`'s inline programming, the
-// readback diverges from the helper and BOTH the on-device assert and the host
-// comparison fail. There is no actual unpack/datacopy here — the registers are the
-// deliverable, so no stimuli / golden are needed.
+// readback diverges from the helper and the on-device assert fails. There is no
+// actual unpack/datacopy here — the registers are the deliverable, so no stimuli /
+// golden are needed.
 
 #include <cstdint>
 
@@ -41,7 +40,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "dprint.h"
 #include "llk_unpack_common.h"
 #include "params.h"
 
@@ -79,11 +77,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t exp_z_stride   = canonical_unpA_z_stride(dst_format);
     const std::uint32_t exp_tile_x_dim = canonical_unpA_tile_x_dim_cntx(face_r_dim);
     const std::uint32_t exp_z_dim      = num_faces;
-
-    DEVICE_PRINT("C4 ystride exp={} act={}", exp_y_stride, act_y_stride);
-    DEVICE_PRINT("C4 zstride exp={} act={}", exp_z_stride, act_z_stride);
-    DEVICE_PRINT("C4 txdim exp={} act={}", exp_tile_x_dim, act_tile_x_dim);
-    DEVICE_PRINT("C4 zdim exp={} act={}", exp_z_dim, act_z_dim);
 
     LLK_ASSERT(act_y_stride == exp_y_stride, "canonical_unpA_y_stride mismatch vs configure_unpack_AB");
     LLK_ASSERT(act_z_stride == exp_z_stride, "canonical_unpA_z_stride mismatch vs configure_unpack_AB");
