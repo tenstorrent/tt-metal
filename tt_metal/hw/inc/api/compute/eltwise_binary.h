@@ -254,8 +254,12 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __bui
         constexpr bool acc_to_dest = false;
     #endif
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, binary_reuse_dest>(false, false, icb0)));
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
-        icb0, icb0, false /* acc_to_dest */)));
+    // #44602 interim workaround (mirrors @tt-aho 9aceb66f4): the v0.73
+    // llk_math_eltwise_binary_init(operandA, operandB, acc_to_dest) form regressed
+    // dest-reuse eltwise PCC; revert to the pre-#44602 _llk_math_eltwise_binary_init_
+    // with DEFAULT_TENSOR_SHAPE. Remove once the metal LLK #44602 fix lands.
+    MATH((_llk_math_eltwise_binary_init_<eltwise_binary_type, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
+        ckernel::DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */)));
 }
 
 // clang-format off
