@@ -507,7 +507,8 @@ def test_denoise_logits_adapter_threads_prev_logits_for_self_conditioning(mesh_d
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
-def test_denoise_controller_real_logits_records_decision_flips(mesh_device, reset_seeds):
+@pytest.mark.parametrize("enable_moe", [True, False], ids=["moe", "dense"])
+def test_denoise_controller_real_logits_records_decision_flips(mesh_device, reset_seeds, enable_moe):
     torch.manual_seed(8)
     prompt_len = 64
     canvas_len = 256
@@ -516,6 +517,7 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
     max_steps = 2
 
     hf_text_config = _create_hf_text_config(vocab_size=vocab_size, num_layers=1)
+    hf_text_config.enable_moe_block = enable_moe
     if getattr(hf_text_config, "enable_moe_block", False):
         hf_text_config.num_experts = 4
         hf_text_config.top_k_experts = 2
@@ -670,6 +672,7 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
     ]
     print(
         "\n[real-logits trajectory] "
+        f"mode={'moe' if enable_moe else 'dense'} "
         f"accept_flips={accept_flips} argmax_flips={argmax_flips} canvas_flips={canvas_flips} "
         f"entropy_pcc={comparison.per_step_entropy_pcc} "
         f"logits_pcc={logits_pcc} logits_argmax_agreement={logits_argmax_agreement} "
@@ -687,4 +690,5 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
     assert ref.num_steps == tt.num_steps == max_steps
     assert not ref.halted and not tt.halted
     assert len(accept_flips) == max_steps
-    assert sum(accept_flips) == 0
+    if enable_moe:
+        assert sum(accept_flips) == 0
