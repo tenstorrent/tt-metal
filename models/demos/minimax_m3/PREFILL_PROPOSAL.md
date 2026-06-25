@@ -107,8 +107,9 @@ locally (not deferred). All vs self-authored torch refs, random weights, full-GQ
 > but with **M2-shaped serving mechanics**: full-GQA-everywhere, **single-shot non-cached** SDPA, TP=4
 > (+ DP across rows). This is **exact for S ≤ ~2048** (one prompt fits a chip) — the regime the golden
 > runs in. The **SP=8 + chunked-KV + MSA** rearchitecture (1M context) is the remaining work; its two
-> hardest pieces (the SP attn op + the GQA chunked cache) are de-risked above but **NOT wired into
-> `tt/attention/prefill.py`** (still the baseline SDPA, see [prefill.py:124]). Integration is next.
+> hardest pieces (the SP attn op + the GQA chunked cache) are de-risked above. **UPDATE 2026-06-25 (§0.2e):
+> SP=8 IS now wired into `tt/attention/prefill.py` and validated whole-model (dense + MSA + EP MoE);
+> single-chunk done, multi-chunk KV-cache (§5.1) is next.**
 
 ### 0.2e SP=8 INTEGRATED into the model + MSA-under-SP + cleanup — 2026-06-25
 The §0.2d building blocks are now **wired into the whole-model prefill** (the rearchitecture the BASELINE
@@ -154,21 +155,25 @@ swigluoai against this source.
   ran via CPU offload of the real checkpoint, not a branch-local transformers — simpler and direct.)
 - **Per-module PCC track (§0.2b/§0.2c) is vs SELF-AUTHORED refs + random weights** at reduced configs
   (2 layers, small experts/vocab). The full 60L×128E runs only on real weights (the golden path).
-- **Full-GQA placeholder** is exact for prompts ≤ ~2K tokens; >2K needs MSA.
-- **MSA sparse attention:** GQA torch golden delivered (`reference/sparse_gqa_prefill.py`, verified);
-  the on-device GQA `sparse_sdpa` kernel + indexer/topk wiring are NOT done (external dep — the merged
-  `sparse_sdpa` is the DSA/MLA op, the GQA variant is WIP). Parallel track; only matters for >~2K context.
-- **KV cache / SP — DE-RISKED but NOT INTEGRATED:** the model still runs **full non-cached SDPA on
-  fresh Q/K/V** (baseline). The **GQA chunked-KV cache** and the **SP `ring_joint` op** are each
-  validated standalone (§0.2d) but **not wired into `tt/attention/prefill.py`**. Chunked KV is
-  DeepSeek-style (§5), NOT vLLM paged. Integration (SP + chunked-cache into `prefill_forward`) is the
-  next build. Depends on the local `ring_joint` grouped-V kernel fix (PR pending).
+- ✅ **DONE 2026-06-25 (see §0.2e) — supersedes the stale "NOT integrated" bullets below:** SP=8×TP=4×EP=32
+  WIRED into the whole-model prefill + validated at real shapes (dense/MoE/full-token-path); MSA runs
+  under SP (single-chunk, indexer `chunk_offset`); repo cleaned to mirror `deepseek_v3_d_p`.
+- **Full-GQA placeholder** is exact for prompts ≤ ~2K tokens; >2K uses MSA — now available under SP.
+- **MSA sparse attention — INTEGRATED (single-chunk).** `sparse_sdpa_msa` + indexer/topk wired into
+  `tt/attention/msa.py`; validated chunked at SP=8×TP=4 (`test_msa_sp_chunked_vs_ref`). Remaining: the
+  multi-chunk cache lifecycle (§5.1) and the `chunk_offset`→mesh-coords swap (§0.2e).
+- **KV cache / SP — SINGLE-CHUNK INTEGRATED; MULTI-CHUNK is the next gap.** SP=8 + the SP attention forwards
+  are wired into `prefill.py` and validated whole-model (§0.2e). What's NOT done: the **multi-chunk
+  chunked-KV cache lifecycle** (per-layer SP-sharded cache, chunk loop, cache-read) — design decided in
+  §5.1, not yet built. Chunked KV is DeepSeek-style (§5), NOT vLLM paged.
+- ⚠️ **Real-weights full-60L SP run BLOCKED** on an intermittent expert-upload `SIGBUS` (§0.2e) — infra/UMD
+  escalation with `tests/ep_upload_repro.py`. Reduced-config model tests are green, so functional work
+  (multi-chunk) proceeds in parallel.
+- **Perf (tok/s) — not yet measured.** Pairs with the chunk loop (mirror DS's `[prefill timing]`).
 - **Fused MoE expert kernel** for clamped swigluoai — perf task (copy+modify; activation ≠ M2/DS).
-  Functional EP uses the composite per-expert loop (§0.2c #11), correct but slower.
-- **Parallelism:** TP=4 (#10) + EP=32 (#11/#12) VALIDATED. **SP=8** building blocks de-risked
-  standalone (§0.2d) but NOT integrated into the model; needed once context >2K (at S<2048 the
-  sequence fits one chip, so SP buys nothing yet).
-- **Runner / pipeline / scheduler / KV migration** — still scaffold (inherited from M2.7).
+  Functional EP uses the composite per-expert loop (`CompositeRoutedExpert`), correct but slower.
+- **Runner / pipeline / scheduler / KV migration** — still scaffold (`runners/prefill_runner.py`); the
+  multi-chunk loop (§5.1) is what fills it in.
 - **Multimodal** — out of scope for now.
 
 ---
@@ -557,20 +562,23 @@ TP/SP/EP decision ─► Phase 0 ─► Phase 1 (dense) ─► Phase 2 (MoE) ─
 ---
 
 ## 9. Open decisions (close with the team)
-1. **TP=4 × SP × EP layout on 4×8** — blocking Phase 0 (§6). *Recommendation: SP over DP
-   (Config A: DP=1/TP=4/SP=8), multi-user via galaxy replication, not DP=4 (§6.3/§6b).* Confirm
-   the program's priority (1M-context latency vs 4-user throughput) and validate w/ the batch=1-vs-4
-   MFU experiment (§6b).
+1. ~~TP=4 × SP × EP layout on 4×8?~~ **RESOLVED 2026-06-25 — Config A: TP=4 / SP=8 / EP=32, DP
+   eliminated** (§0.2e), validated whole-model at real shapes. Multi-user via galaxy replication.
+   (Still worth the batch=1-vs-4 MFU experiment in §6b once perf numbers land.)
 2. ~~Is a GQA `sparse_sdpa` planned?~~ **CLOSED** — GQA is being added; shapes (§3.1) + torch golden
    (`reference/sparse_gqa_prefill.py`) delivered. Remaining for the kernel owner: K/V packing (two
    tensors vs packed `[1,4,T,256]`) and the index head-axis the op consumes (per-group `[1,4,..]` vs
    per-q-head `[1,64,..]`).
-3. Does `indexer_score`'s `chunk_start_idx` causality compose with our block-pool, or should
-   pooling live inside the indexer op?
+3. ~~Does `indexer_score`'s `chunk_start_idx` causality compose with our block-pool?~~ **RESOLVED
+   2026-06-25** — yes; per-device `chunk_offset` extends it for SP-sharded queries, pooling/sink+local
+   stay in the wrapper (`tt/attention/msa.py`), MSA chunked validated at SP=8×TP=4 (§0.2e). To migrate to
+   the DeepSeek mesh-coordinate variant once upstream `indexer_msa` carries per-device coords.
 4. ~~shared vs per-group selection?~~ **RESOLVED — per GQA group** (4 lists; §3.2, verified vs config +
    paper + MSA reference). Still open: the `w` gating term in STEP 1, and whether RoPE applies to the
    index heads — confirm vs modeling code.
-5. Chunked-KV chunk size + SP shard order for 1M context (reference DeepSeek `_chunked_attn`).
+5. Chunked-KV chunk size + SP shard order for 1M context — **design decided §5.1** (SP shard order
+   contiguous / `is_balanced=False`; persistent cache SP-sharded; dense=ring_joint, MSA=sharded+transient-AG).
+   Chunk size itself still TBD by profiling (§5.1).
 
 ---
 
