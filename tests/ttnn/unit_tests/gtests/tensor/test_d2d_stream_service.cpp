@@ -937,7 +937,7 @@ std::unique_ptr<H2DStreamService> make_h2d_service(
         .mapper = create_mesh_mapper(*sender_mesh, MeshMapperConfig{.placements = replicate_all(*sender_mesh)}),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = fifo_bytes,
-        .scratch_cb_size_bytes = fifo_bytes,
+        .max_socket_page_size_bytes = fifo_bytes,
         .worker_cores = worker_cores,
         .metadata_size_bytes = metadata_size_bytes,
     };
