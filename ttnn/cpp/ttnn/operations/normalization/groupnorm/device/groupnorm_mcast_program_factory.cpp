@@ -91,13 +91,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     tt::DataFormat in_mask_cb_data_format =
         input_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(input_mask.value().dtype())
                                : tt::DataFormat::Float16_b;
-    uint32_t datum_size_bytes = 2;
-
     TT_FATAL(
         out_data_format == in_data_format,
         "input: {} and output: {} must be the same data format",
         in_data_format,
         out_data_format);
+    // output datum size (out==in format, enforced above) — must follow the dtype, not a bf16
+    // hardcode, or FP32 output byte strides (page_size / per_core_N_bytes) would be halved.
+    uint32_t datum_size_bytes = output.element_size();
 
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

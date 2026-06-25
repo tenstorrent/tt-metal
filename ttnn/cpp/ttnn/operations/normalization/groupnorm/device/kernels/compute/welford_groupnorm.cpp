@@ -385,7 +385,12 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
+        // SrcA must be reconfigured to cb_ex_global's format (bf16). On the FP32 welford path the
+        // prior transpose_wh_tile configured SrcA for the FP32 input CB; without resetting it here,
+        // add_tiles would read the bf16 variance tile (cb_ex_global) as FP32 -> garbage var ->
+        // garbage rsqrt. reconfig_data_format_srcb already handles SrcB (eps).
         add_tiles_init(cb_ex_global_id, cb_eps_id);
+        reconfig_data_format_srca(cb_ex_global_id);
         reconfig_data_format_srcb(cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
@@ -444,7 +449,12 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
+                        // SrcA must be reconfigured to cb_in0's format. On the FP32 path cb_in0 is
+                        // FP32 while the preceding add_tiles(var,eps) / accumulate left SrcA as the
+                        // bf16 stats/intermediate format; without this, sub_tiles_bcast_scalar would
+                        // read the FP32 input as bf16 -> garbage (x - mean). (bf16 path: no-op.)
                         sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                        reconfig_data_format_srca(cb_in0_id);
                         reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
 
                         tile_regs_acquire();
@@ -458,7 +468,10 @@ void kernel_main() {
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
+                        // SrcA was set to the FP32 cb_in0 by the (x - mean) step above; restore it
+                        // to the mask format before reading cb_input_mask on SrcA. (bf16 path: no-op.)
                         mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
+                        reconfig_data_format_srca(cb_in0_id, cb_input_mask_id);
                         reconfig_data_format_srcb(cb_ex_global_id, cb_ex2pe_id);
                         tile_regs_acquire();
                         mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
@@ -590,7 +603,17 @@ void kernel_main() {
                     cb_x.pop_front(1);
                     cb_out.reserve_back(1);
                     tile_regs_wait();
+#ifndef UNTILIZE_OUT
+                    // TILE output path: the packer was last configured for the bf16 intermediate
+                    // (cb_x). cb_out_id can be a different (e.g. FP32) format, so reconfigure the
+                    // packer to it before packing; otherwise an FP32 output tile is packed with
+                    // bf16 packer config -> corrupt output. Restore to cb_x afterwards.
+                    pack_reconfig_data_format(cb_out_id);
+#endif
                     pack_tile(dst0, cb_out_id);
+#ifndef UNTILIZE_OUT
+                    pack_reconfig_data_format(cb_x_id);
+#endif
                     tile_regs_release();
                     cb_out.push_back(1);
                 }
