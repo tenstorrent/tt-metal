@@ -210,7 +210,7 @@ private:
         std::vector<std::unique_ptr<distributed::H2DSocket>> sockets,
         uint32_t socket_page_size,
         uint32_t num_socket_pages,
-        std::string completion_shm_name,
+        const std::string& completion_shm_name,
         uint64_t completion_shm_size,
         uint32_t completion_issued_offset,
         uint32_t completion_completed_offset,
@@ -241,11 +241,11 @@ private:
         std::exception_ptr error;
     };
 
-    size_t effective_host_push_thread_count() const;
-    void start_parallel_host_push_workers();
-    void stop_parallel_host_push_workers();
-    void parallel_write_payload(const std::vector<std::byte*>& bases);
-    void parallel_write_metadata();
+    size_t effective_host_push_worker_count() const;
+    void start_host_push_workers();
+    void stop_host_push_workers();
+    void write_payload_with_host_push_workers(const std::vector<std::byte*>& bases);
+    void write_metadata_with_host_push_workers();
     void submit_host_push_job(
         size_t worker_index, HostPushJobKind job, const std::vector<std::byte*>* payload_bases = nullptr);
     void wait_host_push_jobs();

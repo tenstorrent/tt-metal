@@ -289,7 +289,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     const std::string& case_name = cs.label;
 
     // The benchmark covers both FullShard2D and SP-shard/TP-replicate cases, so it needs a 2D mesh.
-    const auto mesh_shape = g_mesh_device->shape();
+    const auto& mesh_shape = g_mesh_device->shape();
     if (mesh_shape.dims() != 2 || mesh_shape[0] < 2 || mesh_shape[1] < 2) {
         state.SkipWithMessage("H2DStreamService benchmark requires a 2D mesh with >= 2 devices on each axis");
         return;
@@ -538,7 +538,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
 }
 
 std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
-    const auto mesh_shape = mesh_device.shape();
+    const auto& mesh_shape = mesh_device.shape();
     if (mesh_shape.dims() != 2 || mesh_shape[0] < 2 || mesh_shape[1] < 2) {
         log_warning(
             tt::LogTest,
@@ -681,7 +681,7 @@ void register_benchmarks() {
     for (const auto& cs : make_benchmark_cases(*g_mesh_device)) {
         const std::string benchmark_name = "BM_H2DStreamService/" + cs.label;
         benchmark::RegisterBenchmark(
-            benchmark_name.c_str(), [cs](benchmark::State& state) { run_h2d_stream_service_benchmark(state, cs); })
+            benchmark_name, [cs](benchmark::State& state) { run_h2d_stream_service_benchmark(state, cs); })
             ->Unit(benchmark::kMillisecond)
             ->UseManualTime()
             ->Iterations(1);

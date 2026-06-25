@@ -732,7 +732,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     }
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
-    start_parallel_host_push_workers();
+    start_host_push_workers();
 }
 
 H2DStreamService::H2DStreamService(
@@ -740,7 +740,7 @@ H2DStreamService::H2DStreamService(
     std::vector<std::unique_ptr<distributed::H2DSocket>> sockets,
     uint32_t socket_page_size,
     uint32_t num_socket_pages,
-    std::string completion_shm_name,
+    const std::string& completion_shm_name,
     uint64_t completion_shm_size,
     uint32_t completion_issued_offset,
     uint32_t completion_completed_offset,
@@ -789,14 +789,14 @@ H2DStreamService::H2DStreamService(
         preprocess_scratch_.assign(cfg_.global_spec.compute_packed_buffer_size_bytes(), std::byte{0});
     }
 
-    start_parallel_host_push_workers();
+    start_host_push_workers();
 }
 
 H2DStreamService::~H2DStreamService() {
     // try/catch so a teardown failure (e.g. mesh device already gone) never
     // escapes the destructor.
     try {
-        stop_parallel_host_push_workers();
+        stop_host_push_workers();
 
         if (!is_owner_) {
             // Connector owns no device-side resources; sockets free their own SHM.
@@ -882,7 +882,7 @@ H2DStreamService::~H2DStreamService() {
     }
 }
 
-size_t H2DStreamService::effective_host_push_thread_count() const {
+size_t H2DStreamService::effective_host_push_worker_count() const {
     if (sockets_.size() <= 1 || !cfg_.parallel_host_push) {
         return 0;
     }
@@ -895,8 +895,8 @@ size_t H2DStreamService::effective_host_push_thread_count() const {
     return std::min<size_t>(cfg_.host_push_thread_count, sockets_.size());
 }
 
-void H2DStreamService::start_parallel_host_push_workers() {
-    const size_t worker_count = effective_host_push_thread_count();
+void H2DStreamService::start_host_push_workers() {
+    const size_t worker_count = effective_host_push_worker_count();
     if (worker_count == 0 || !host_push_workers_.empty()) {
         return;
     }
@@ -918,7 +918,7 @@ void H2DStreamService::start_parallel_host_push_workers() {
     }
 }
 
-void H2DStreamService::stop_parallel_host_push_workers() {
+void H2DStreamService::stop_host_push_workers() {
     for (auto& state_ptr : host_push_worker_states_) {
         auto& state = *state_ptr;
         {
@@ -938,10 +938,10 @@ void H2DStreamService::stop_parallel_host_push_workers() {
     host_push_worker_states_.clear();
 }
 
-void H2DStreamService::parallel_write_payload(const std::vector<std::byte*>& bases) {
+void H2DStreamService::write_payload_with_host_push_workers(const std::vector<std::byte*>& bases) {
     TT_FATAL(
         bases.size() == sockets_.size(),
-        "H2DStreamService::parallel_write_payload: bases size {} does not match sockets size {}",
+        "H2DStreamService::write_payload_with_host_push_workers: bases size {} does not match sockets size {}",
         bases.size(),
         sockets_.size());
 
@@ -951,8 +951,10 @@ void H2DStreamService::parallel_write_payload(const std::vector<std::byte*>& bas
     wait_host_push_jobs();
 }
 
-void H2DStreamService::parallel_write_metadata() {
-    TT_FATAL(!host_push_worker_states_.empty(), "H2DStreamService::parallel_write_metadata: no host push workers");
+void H2DStreamService::write_metadata_with_host_push_workers() {
+    TT_FATAL(
+        !host_push_worker_states_.empty(),
+        "H2DStreamService::write_metadata_with_host_push_workers: no host push workers");
 
     for (size_t worker_index = 0; worker_index < host_push_worker_states_.size(); ++worker_index) {
         submit_host_push_job(worker_index, HostPushJobKind::Metadata);
@@ -1363,7 +1365,7 @@ void H2DStreamService::forward_to_tensor(const Tensor& host_tensor, ttsl::Span<c
     }
 
     if (!host_push_worker_states_.empty()) {
-        parallel_write_payload(bases);
+        write_payload_with_host_push_workers(bases);
     } else {
         // Page-major: send page `i` to every socket before `i+1` so every kernel can progress.
         for (uint32_t i = 0; i < num_socket_pages_; ++i) {
@@ -1379,7 +1381,7 @@ void H2DStreamService::forward_to_tensor(const Tensor& host_tensor, ttsl::Span<c
     if (cfg_.metadata_size_bytes > 0) {
         std::memcpy(metadata_scratch_.data(), metadata.data(), metadata.size());
         if (!host_push_worker_states_.empty()) {
-            parallel_write_metadata();
+            write_metadata_with_host_push_workers();
         } else {
             for (auto& s : sockets_) {
                 s->write(metadata_scratch_.data(), /*num_pages=*/1);

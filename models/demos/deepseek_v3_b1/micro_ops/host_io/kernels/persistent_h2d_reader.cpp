@@ -12,21 +12,25 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/socket_api.h"
 #include "../../../unified_kernels/termination.hpp"
 
 constexpr uint32_t socket_page_size = get_compile_time_arg_val(0);
 constexpr uint32_t num_socket_pages = get_compile_time_arg_val(1);
-constexpr uint32_t data_cb_index = get_compile_time_arg_val(2);
+constexpr uint32_t data_cbuf_index = get_compile_time_arg_val(2);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(3);
-constexpr uint32_t metadata_cb_index = get_compile_time_arg_val(4);
+constexpr uint32_t metadata_cbuf_index = get_compile_time_arg_val(4);
 // L1 bytes to stage per metadata page. The metadata travels as a full socket page on the wire, but
 // only the leading metadata_read_size bytes are meaningful, so the reader stages just those into the
 // (smaller) metadata CB slot and still pops the whole socket page from the FIFO.
 constexpr uint32_t metadata_read_size = get_compile_time_arg_val(5);
 
 // Reads one socket page from PCIe host RAM into L1; caller must barrier afterward.
-inline void noc_read_page_chunked(uint32_t pcie_xy_enc, uint64_t src_pcie, uint32_t dst_l1, uint32_t size) {
+inline void read_pcie_page_chunked(uint32_t pcie_xy_enc, uint64_t src_pcie, uint32_t dst_l1, uint32_t size) {
+    // Device 2.0 migration: legacy primitive retained. The H2D socket carries a 64-bit host-pinned
+    // PCIe address; UnicastEndpoint currently exposes a 32-bit address field and would truncate it.
     while (size) {
         uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;
         noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
@@ -38,6 +42,7 @@ inline void noc_read_page_chunked(uint32_t pcie_xy_enc, uint64_t src_pcie, uint3
 }
 
 void kernel_main() {
+    Noc noc;
     const uint32_t socket_config_addr = get_arg_val<uint32_t>(0);
     const uint32_t termination_semaphore_addr = get_arg_val<uint32_t>(1);
 
@@ -51,32 +56,38 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
-    // Stage one socket page into `cb`: wait for the page and a free slot (both terminable), read
+    // Stage one socket page into `cbuf`: wait for the page and a free slot (both terminable), read
     // `read_size` bytes into the slot, push it to the writer, then ack the socket page. `read_size`
     // is the full socket page for data; for metadata it is the smaller meaningful prefix while the
     // whole socket page is still popped from the FIFO. The ack is still before the DRAM write, but
     // never before the writer can observe the staged page. Returns false on termination while waiting.
-    auto stage_one_page = [&](uint32_t cb, uint32_t read_size) -> bool {
+    auto stage_one_page = [&](CircularBuffer& cbuf, uint32_t read_size) -> bool {
         if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             return false;
         }
-        if (!deepseek_b1_ops::cb_reserve_for_pages_with_termination(cb, 1, termination_semaphore)) {
-            return false;
+        while (!cbuf.pages_reservable_at_back(1)) {
+            invalidate_l1_cache();
+            if (termination_semaphore[0] == 1) {
+                return false;
+            }
         }
-        const uint32_t dst = get_write_ptr(cb);
-        noc_read_page_chunked(
+        const uint32_t dst = cbuf.get_write_ptr();
+        read_pcie_page_chunked(
             pcie_xy_enc, base_pinned + receiver_socket.read_ptr - receiver_socket.fifo_addr, dst, read_size);
-        noc_async_read_barrier();
-        cb_push_back(cb, 1);
+        noc.async_read_barrier();
+        cbuf.push_back(1);
         socket_pop_pages(receiver_socket, 1);
         socket_notify_sender(receiver_socket);
         return true;
     };
 
+    CircularBuffer data_cbuf(data_cbuf_index);
+    CircularBuffer metadata_cbuf(metadata_cbuf_index);
+
     bool terminated = false;
     while (!terminated) {
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            if (!stage_one_page(data_cb_index, socket_page_size)) {
+            if (!stage_one_page(data_cbuf, socket_page_size)) {
                 terminated = true;
                 break;
             }
@@ -85,7 +96,7 @@ void kernel_main() {
             break;
         }
         if constexpr (metadata_enabled) {
-            if (!stage_one_page(metadata_cb_index, metadata_read_size)) {
+            if (!stage_one_page(metadata_cbuf, metadata_read_size)) {
                 break;
             }
         }

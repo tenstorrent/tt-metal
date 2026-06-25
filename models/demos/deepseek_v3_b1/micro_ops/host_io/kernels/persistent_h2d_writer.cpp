@@ -11,15 +11,19 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
-#include "../../../unified_kernels/termination.hpp"
+#include "api/tensor/noc_traits.h"
 
 constexpr uint32_t num_socket_pages = get_compile_time_arg_val(0);
 constexpr uint32_t output_tensor_page_size = get_compile_time_arg_val(1);
 constexpr uint32_t pages_per_chunk = get_compile_time_arg_val(2);
-constexpr uint32_t data_cb_index = get_compile_time_arg_val(3);
+constexpr uint32_t data_cbuf_index = get_compile_time_arg_val(3);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(4);
-constexpr uint32_t metadata_cb_index = get_compile_time_arg_val(5);
+constexpr uint32_t metadata_cbuf_index = get_compile_time_arg_val(5);
 constexpr uint32_t worker_sync_enabled = get_compile_time_arg_val(6);
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<7>();
 
@@ -42,20 +46,23 @@ inline void push_completion_counter(
     *src = value;
     const uint64_t pcie_addr =
         (static_cast<uint64_t>(completion_pcie_addr_hi) << 32) | static_cast<uint64_t>(completion_pcie_addr_lo);
+    // Device 2.0 migration: legacy primitive retained. The completion slot is a 64-bit host-pinned
+    // PCIe address; UnicastEndpoint currently exposes a 32-bit address field and would truncate it.
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
     noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
         NOC_INDEX, completion_src_l1_addr, completion_pcie_xy_enc, pcie_addr, sizeof(uint32_t));
 }
 
 void kernel_main() {
+    Noc noc;
     const uint32_t termination_semaphore_addr = get_arg_val<uint32_t>(0);
     const uint32_t output_tensor_addr = get_arg_val<uint32_t>(1);
     const uint32_t data_ready_sem_addr = get_arg_val<uint32_t>(2);
     const uint32_t consumed_counter_addr = get_arg_val<uint32_t>(3);
-    const uint32_t worker_mcast_noc_x_start = get_arg_val<uint32_t>(4);
-    const uint32_t worker_mcast_noc_y_start = get_arg_val<uint32_t>(5);
-    const uint32_t worker_mcast_noc_x_end = get_arg_val<uint32_t>(6);
-    const uint32_t worker_mcast_noc_y_end = get_arg_val<uint32_t>(7);
+    const uint32_t worker_mcast_x_start = get_arg_val<uint32_t>(4);
+    const uint32_t worker_mcast_y_start = get_arg_val<uint32_t>(5);
+    const uint32_t worker_mcast_x_end = get_arg_val<uint32_t>(6);
+    const uint32_t worker_mcast_y_end = get_arg_val<uint32_t>(7);
     const uint32_t num_workers = get_arg_val<uint32_t>(8);
     const uint32_t metadata_size_bytes = get_arg_val<uint32_t>(9);
     const uint32_t metadata_l1_addr = get_arg_val<uint32_t>(10);
@@ -65,31 +72,31 @@ void kernel_main() {
     const uint32_t completion_src_l1_addr = get_arg_val<uint32_t>(14);
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_accessor_args, output_tensor_addr);
+    CircularBuffer data_cbuf(data_cbuf_index);
+    CircularBuffer metadata_cbuf(metadata_cbuf_index);
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
+
+    auto wait_front_with_termination = [&](CircularBuffer& cbuf) -> bool {
+        while (!cbuf.pages_available_at_front(1)) {
+            invalidate_l1_cache();
+            if (termination_semaphore[0] == 1) {
+                return false;
+            }
+        }
+        return true;
+    };
 
     uint64_t worker_mcast_addr = 0;
     volatile tt_l1_ptr uint32_t* consumed_ptr = nullptr;
     uint32_t last_consumed = 0;
     if constexpr (worker_sync_enabled) {
+        // Device 2.0 migration: legacy address helper retained because noc_semaphore_inc_multicast
+        // still takes a raw multicast NoC address.
         worker_mcast_addr = get_noc_multicast_addr(
-            worker_mcast_noc_x_start,
-            worker_mcast_noc_y_start,
-            worker_mcast_noc_x_end,
-            worker_mcast_noc_y_end,
-            data_ready_sem_addr);
+            worker_mcast_x_start, worker_mcast_y_start, worker_mcast_x_end, worker_mcast_y_end, data_ready_sem_addr);
         consumed_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_counter_addr);
-    }
-
-    uint64_t metadata_mcast_addr = 0;
-    if constexpr (metadata_enabled) {
-        metadata_mcast_addr = get_noc_multicast_addr(
-            worker_mcast_noc_x_start,
-            worker_mcast_noc_y_start,
-            worker_mcast_noc_x_end,
-            worker_mcast_noc_y_end,
-            metadata_l1_addr);
     }
 
     uint32_t transfers_completed = 0;
@@ -99,39 +106,53 @@ void kernel_main() {
         // Drain one full transfer's worth of socket pages from the data CB and scatter each
         // into the backing tensor.
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            if (!deepseek_b1_ops::cb_wait_for_pages_with_termination(data_cb_index, 1, termination_semaphore)) {
+            if (!wait_front_with_termination(data_cbuf)) {
                 terminated = true;
                 break;
             }
-            const uint32_t cb_l1_addr = get_read_ptr(data_cb_index);
+            const uint32_t cbuf_l1_addr = data_cbuf.get_read_ptr();
             const uint32_t base_page = chunk * pages_per_chunk;
-            uint32_t src = cb_l1_addr;
+            uint32_t src = cbuf_l1_addr;
             for (uint32_t i = 0; i < pages_per_chunk; ++i) {
-                const uint64_t noc_dst = output_tensor_accessor.get_noc_addr(base_page + i);
-                noc_async_write<output_tensor_page_size>(src, noc_dst, output_tensor_page_size);
+                noc.async_write<NocOptions::DEFAULT, output_tensor_page_size>(
+                    CoreLocalMem<uint32_t>(src),
+                    output_tensor_accessor,
+                    output_tensor_page_size,
+                    {},
+                    {.page_id = base_page + i});
                 src += output_tensor_page_size;
             }
-            noc_async_writes_flushed();
-            cb_pop_front(data_cb_index, 1);
+            noc.async_writes_flushed();
+            data_cbuf.pop_front(1);
         }
         if (terminated) {
             break;
         }
 
         if constexpr (metadata_enabled) {
-            if (!deepseek_b1_ops::cb_wait_for_pages_with_termination(metadata_cb_index, 1, termination_semaphore)) {
+            if (!wait_front_with_termination(metadata_cbuf)) {
                 break;
             }
-            const uint32_t meta_l1_addr = get_read_ptr(metadata_cb_index);
-            noc_async_write_multicast(
-                meta_l1_addr, metadata_mcast_addr, metadata_size_bytes, /*num_dests=*/num_workers);
-            noc_async_writes_flushed();
-            cb_pop_front(metadata_cb_index, 1);
+            const uint32_t meta_l1_addr = metadata_cbuf.get_read_ptr();
+            MulticastEndpoint metadata_dst;
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(meta_l1_addr),
+                metadata_dst,
+                metadata_size_bytes,
+                /*num_dsts=*/num_workers,
+                {},
+                {.noc_x_start = worker_mcast_x_start,
+                 .noc_y_start = worker_mcast_y_start,
+                 .noc_x_end = worker_mcast_x_end,
+                 .noc_y_end = worker_mcast_y_end,
+                 .addr = metadata_l1_addr});
+            noc.async_writes_flushed();
+            metadata_cbuf.pop_front(1);
         }
 
         // Publish the completion counter only after the barrier so a host barrier()
         // that observes it can safely read the backing tensor
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         push_completion_counter(
             ++transfers_completed,
             completion_pcie_xy_enc,
@@ -140,6 +161,8 @@ void kernel_main() {
             completion_src_l1_addr);
 
         if constexpr (worker_sync_enabled) {
+            // Device 2.0 migration: legacy primitive retained. data_ready_sem_addr is a GlobalSemaphore
+            // L1 address, not a local semaphore id, so Semaphore<> cannot target it.
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
 
             while (true) {
@@ -153,6 +176,6 @@ void kernel_main() {
         }
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }
