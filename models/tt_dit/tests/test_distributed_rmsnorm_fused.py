@@ -97,7 +97,12 @@ _LTX_V, _LTX_A, _LTX_HV, _LTX_HA = 4096, 2048, 128, 64
 # both per_head_norm=False (full-row norm + TP all-gather) and True (per-head RMSNorm
 # over head_dim, no AG -> is_tp_1). Per-device rows given per (TP, SP).
 _FLUX_DIM, _FLUX_HD, _FLUX_HEADS = 6144, 128, 48
-_FLUX_ROWS = {8: (1024, 128, 4096, 16384), 4: (512, 64, 2048, 8192)}  # SP4/TP8, SP8/TP4
+_FLUX_ROWS = {
+    8: (1024, 128, 4096, 16384),  # SP4/TP8
+    4: (512, 64, 2048, 8192),  # SP8/TP4
+    2: (512, 2048),  # TP=2 line (small + medium probe)
+    1: (512, 2048),  # TP=1 line (local norm, no AG)
+}
 
 
 @dataclass(frozen=True)
@@ -146,7 +151,8 @@ class Cfg:
 def _ltx_rows(kind: str, tp: int, stage: int = 0) -> int:
     """Per-device row count. TP=2<->SP=4, TP=4<->SP=8 (distributed_rmsnorm_av.md §0)."""
     if kind == "video":
-        return {(2, 1): 2432, (2, 2): 9696, (4, 1): 1216, (4, 2): 4864}[(tp, stage)]
+        # TP=1 line mirrors the TP=2 per-device rows (same tile geometry, 2x feat).
+        return {(1, 1): 2432, (1, 2): 9696, (2, 1): 2432, (2, 2): 9696, (4, 1): 1216, (4, 2): 4864}[(tp, stage)]
     if kind == "audio":  # audio N_local (stage-independent)
         return 64 if tp == 2 else 32
     if kind == "text":  # Gemma prompt length L, replicated across SP
@@ -643,6 +649,12 @@ _CORR_PARAMS = [
     ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
     # TP=2 (1x2 LINE submesh): per-device feat is 2x the TP=4 case (Wan 2560, LTX video 2048).
     ((4, 8), _DP_GAL, WAN, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, FLUX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    # TP=1 (1x1 LINE submesh): local norm, no all-gather (ring_size==1). Exercises the
+    # else-branch matmul reduce — the path the TP=1 JIT-compile fix unblocked.
+    ((4, 8), _DP_GAL, WAN, 1, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, LTX, 1, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, FLUX, 1, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
     # TP=4 RING on the full-mesh 4-axis (replicate axis 1).
     ((4, 8), _DP_GAL_RING, WAN, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
     ((4, 8), _DP_GAL_RING, LTX, 4, ttnn.Topology.Ring, GALAXY_LINKS, 0, False),
@@ -655,6 +667,10 @@ _CORR_IDS = [
     "ltx_tp2",
     "ltx_tp4",
     "wan_tp2",
+    "flux_tp2",
+    "wan_tp1",
+    "ltx_tp1",
+    "flux_tp1",
     "wan_tp4_ring",
     "ltx_tp4_ring",
     "flux_tp4_ring",
@@ -691,7 +707,14 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             inp = _build(submesh, cfg, tp_axis)
             pob = _make_pob(inp, submesh, cfg, links, tp_axis)
             ref = _torch_ref(cfg)
-            comp = _gather(_run_baseline(inp, submesh, ag, cfg, topology, tp_axis, op_override), tp_axis)
+            # Composite baseline is best-effort: the production distributed-rmsnorm op may
+            # not support every shape (e.g. ring_size==1 at TP=1). A baseline that can't run
+            # must not abort the fused-vs-torch correctness check, so swallow its failure.
+            try:
+                comp = _gather(_run_baseline(inp, submesh, ag, cfg, topology, tp_axis, op_override), tp_axis)
+            except Exception as be:  # noqa: BLE001
+                comp = None
+                logger.warning(f"  baseline unavailable for {cfg.cid}: {type(be).__name__}: {str(be)[:120]}")
             out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
 
             ndiff, maxdelta, worst_oi = 0, 0.0, None
@@ -714,7 +737,9 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
                     f"  LOCALIZE {cfg.cid}: {len(bad)}/{out0.shape[0]} tokens differ; first10={bad[:10]} span={span}"
                 )
 
-            pcc_ft, pcc_ct, pcc_fc = _pcc(out0, ref), _pcc(comp, ref), _pcc(out0, comp)
+            pcc_ft = _pcc(out0, ref)
+            pcc_ct = _pcc(comp, ref) if comp is not None else float("nan")
+            pcc_fc = _pcc(out0, comp) if comp is not None else float("nan")
             denom = ref.abs().mean().clamp_min(1e-6)
             maxabs = (out0 - ref).abs().max().item()
             ratio = (out0.abs().mean() / denom).item()
