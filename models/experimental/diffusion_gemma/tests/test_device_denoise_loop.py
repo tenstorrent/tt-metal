@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from models.experimental.diffusion_gemma.reference import sampling as S
-from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_step, temperature_at_step
+from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_step, renoise, temperature_at_step
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [
@@ -29,7 +29,7 @@ def _to_device(device, value, *, dtype=ttnn.float32):
 def _structured_logits(length: int, vocab_size: int):
     """Logits with stable argmax and well-separated entropy ordering."""
     logits = torch.full((1, length, vocab_size), -4.0, dtype=torch.float32)
-    token_ids = torch.zeros(length, dtype=torch.long)
+    token_ids = torch.arange(length) % vocab_size
     sharpness = torch.full((length,), 0.25, dtype=torch.float32)
     sharpness[-8:] = torch.linspace(1.8, 2.0, 8)
     logits[0, torch.arange(length), token_ids] = sharpness
@@ -74,7 +74,6 @@ def test_single_denoise_step_matches_reference(device):
         entropy_budget=budget,
         gumbel_noise=_to_device(device, gumbel_noise.unsqueeze(1)),
         noise_tokens=_to_device(device, noise_tokens.view(1, 1, length, 1).to(torch.int32), dtype=ttnn.uint32),
-        token_ids_fit_bf16=True,
     )
 
     out_entropy = ttnn.to_torch(tt.entropy).squeeze(1).squeeze(-1).float()
@@ -90,3 +89,18 @@ def test_single_denoise_step_matches_reference(device):
     assert torch.equal(out_argmax, ref.argmax)
     assert torch.equal(out_canvas, ref.canvas)
     assert int(out_accept.sum()) == accept_count
+
+
+def test_uint32_renoise_preserves_full_vocab_token_ids(device):
+    sampled = torch.tensor([0, 1, 65535, 65536, 131071, 131072, 262143, 17], dtype=torch.int32).view(1, 1, 8, 1)
+    noise_tokens = torch.tensor([262143, 131072, 131071, 65536, 65535, 1, 0, 2048], dtype=torch.int32).view(1, 1, 8, 1)
+    accept = torch.tensor([1, 0, 1, 0, 1, 0, 1, 0], dtype=torch.float32).view(1, 1, 8, 1)
+    ref = torch.where(accept.bool(), sampled, noise_tokens).view(1, 8).to(torch.long)
+
+    out = renoise(
+        _to_device(device, accept, dtype=ttnn.bfloat16),
+        _to_device(device, sampled, dtype=ttnn.uint32),
+        _to_device(device, noise_tokens, dtype=ttnn.uint32),
+    )
+
+    assert torch.equal(ttnn.to_torch(out).squeeze(1).squeeze(-1).to(torch.long), ref)

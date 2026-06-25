@@ -61,6 +61,28 @@ def entropy_budget_accept(entropy, budget: float):
     return accept
 
 
+def renoise(accept_mask, sampled, noise_tokens):
+    """Select sampled tokens where accepted, otherwise random renoise tokens."""
+    accept_u32 = ttnn.typecast(accept_mask, ttnn.uint32)
+    ones = ttnn.full(
+        list(sampled.shape),
+        1,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=sampled.device(),
+    )
+    reject_u32 = ttnn.subtract(ones, accept_u32)
+    accepted = ttnn.multiply(sampled, accept_u32)
+    rejected = ttnn.multiply(noise_tokens, reject_u32)
+    canvas = ttnn.add(accepted, rejected)
+    accept_u32.deallocate(True)
+    ones.deallocate(True)
+    reject_u32.deallocate(True)
+    accepted.deallocate(True)
+    rejected.deallocate(True)
+    return canvas
+
+
 def denoise_step(
     logits,
     *,
@@ -68,21 +90,15 @@ def denoise_step(
     entropy_budget: float,
     gumbel_noise,
     noise_tokens,
-    token_ids_fit_bf16: bool = False,
 ):
     """Run one device denoise decision step with injected noise.
 
     Returns token id tensors in `uint32` TILE layout except `accept_mask` and
     `entropy`, which are bf16/fp32 decision tensors.
 
-    `ttnn.where` currently corrupts `uint32` TILE token tensors in this path.
-    The bf16 where fallback is exact only for small-vocab smoke tests whose token
-    ids fit in bf16 exactly; full-vocab DiffusionGemma needs a uint32-safe
-    renoise path before this helper is production-ready.
+    The renoise select is written as uint32 arithmetic because `ttnn.where`
+    currently corrupts `uint32` TILE token tensors in this path.
     """
-    if not token_ids_fit_bf16:
-        raise ValueError("set token_ids_fit_bf16=True only for small-vocab smoke tests")
-
     sampled = TS.gumbel_max(logits, temperature, gumbel_noise)
     sampled = ttnn.typecast(sampled, ttnn.uint32)
     argmax = ttnn.argmax(logits, dim=-1, keepdim=True)
@@ -92,16 +108,10 @@ def denoise_step(
     accept_flat = entropy_budget_accept(entropy_for_accept, entropy_budget)
     accept_mask = ttnn.reshape(accept_flat, (entropy.shape[0], entropy.shape[1], 1, entropy.shape[2]))
     accept_for_where = ttnn.reshape(accept_mask, sampled.shape)
-    sampled_bf = ttnn.typecast(sampled, ttnn.bfloat16)
-    noise_tokens_bf = ttnn.typecast(noise_tokens, ttnn.bfloat16)
-    canvas_bf = ttnn.where(accept_for_where, sampled_bf, noise_tokens_bf)
-    canvas = ttnn.typecast(canvas_bf, ttnn.uint32)
+    canvas = renoise(accept_for_where, sampled, noise_tokens)
     entropy_for_accept.deallocate(True)
     accept_flat.deallocate(True)
     accept_for_where.deallocate(True)
-    sampled_bf.deallocate(True)
-    noise_tokens_bf.deallocate(True)
-    canvas_bf.deallocate(True)
     return TtDenoiseStepResult(
         canvas=canvas,
         accept_mask=accept_mask,
