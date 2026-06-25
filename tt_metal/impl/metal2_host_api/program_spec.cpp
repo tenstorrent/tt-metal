@@ -1208,23 +1208,39 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 guidance);
         }
 
-        // Self-loop interplay with multi-binding: when ANY kernel self-loops a DFB (appears in
-        // both producers and consumers), the producer set must equal the consumer set as sets
-        // of KernelSpec*. This permits the natural pattern of multiple same-source KernelSpecs
-        // each self-looping the DFB on their disjoint node ranges, while rejecting the case
-        // where a self-looping kernel shares the DFB with an unrelated kernel (which would
-        // make per-instance tensix-scope semantics ambiguous).
-        const bool has_self_loop = [&] {
-            for (const auto& p : endpoints.producers) {
-                for (const auto& c : endpoints.consumers) {
-                    if (p.kernel == c.kernel) {
-                        return true;
-                    }
+        // Find a self-loop participant: a kernel bound to this DFB as both producer and consumer.
+        // Stays nullptr if the DFB is not self-looped. Iterating producers in vector order keeps the
+        // pick — and any resulting error message — deterministic across runs.
+        const KernelSpec* self_loop_kernel = nullptr;
+        for (const auto& p : endpoints.producers) {
+            for (const auto& c : endpoints.consumers) {
+                if (p.kernel == c.kernel) {
+                    self_loop_kernel = p.kernel;
+                    break;
                 }
             }
-            return false;
-        }();
-        if (has_self_loop) {
+            if (self_loop_kernel != nullptr) {
+                break;
+            }
+        }
+
+        if (self_loop_kernel != nullptr) {
+            // DFB supports self-loop for compute kernels, but NOT for DM kernels.
+            // Catch this here (and emit a clear error message), rather than let it slip through and cause
+            // a much more confusing downstream error in the DFB backend code.
+            TT_FATAL(
+                !self_loop_kernel->is_data_movement_kernel(),
+                "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
+                "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels. Consider using a "
+                "scratchpad or LocalTensorAccessor instead.",
+                dfb.unique_id,
+                self_loop_kernel->unique_id);
+
+            // Self-loop interplay with multi-binding: the producer set must equal the consumer set
+            // as sets of KernelSpec*. This permits the natural pattern of multiple same-source
+            // KernelSpecs each self-looping the DFB on their disjoint node ranges, while rejecting
+            // the case where a self-looping kernel shares the DFB with an unrelated kernel (which
+            // would make per-instance tensix-scope semantics ambiguous).
             std::unordered_set<const KernelSpec*> producer_kernels;
             std::unordered_set<const KernelSpec*> consumer_kernels;
             for (const auto& p : endpoints.producers) {
@@ -2027,12 +2043,24 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 //
 // extra_crta_words: additional CRTA words (beyond the always-present base address
 // slot) that this binding occupies, used by the device-side accessor to read
-// runtime-resolved fields. Non-zero only when the TensorParameter opts into a
-// dynamic field that lives in CRTAs (currently: sharded + dynamic_tensor_shape,
-// which puts `rank` shape words in CRTAs).
+// runtime-resolved fields. Non-zero when the TensorParameter opts into a dynamic
+// field that lives in CRTAs: either sharded + dynamic_tensor_shape (which puts
+// `rank` shape words in CRTAs), or interleaved row-major + dynamic_tensor_shape (one
+// page-size word). The two are mutually exclusive per binding -- see runtime_field_is_page_size.
 struct ResolvedTensorParameter {
     std::vector<uint32_t> cta_payload;
+
+    // How many CRTA words (beyond the base address) does this binding consume?
+    // This is only used if TensorParameter relaxations have been requested.
     uint32_t extra_crta_words = 0;
+
+    // What info the runtime field CRTA words actually contain depends on the relaxation.
+    // Currently, there are only two mutually exclusive possibilities (though more may be added):
+    //  1. The interleaved row-major page-size (one CRTA only)
+    //  2. The sharded dynamic_tensor_shape shape (one CRTA per tensor dim)
+    // For now, since there are only two mutually exclusive possibilities, it's sufficient to
+    // distinguish them with a boolean.
+    bool runtime_field_is_page_size = false;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2064,6 +2092,17 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     // the device-side accessor doesn't read it), so the flag is a pure host-side
     // validation loosening and has no effect on the CTA/CRTA layout.
     const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape && is_sharded;
+    // dynamic_tensor_shape lets the bound tensor's logical shape vary. For an interleaved ROW-MAJOR
+    // tensor the page size (= last_dim_width * elem_size) is part of that varying shape, so it must
+    // ride a runtime CRTA word too -- otherwise it goes stale on a program-cache hit and the
+    // accessor strides by the wrong number of bytes. We fold that in here rather than expose a
+    // separate flag: a useful page-size change is ALWAYS a shape change on row-major (you can't vary
+    // the width without varying the logical shape), so there is no "page size varies but shape
+    // doesn't" case to give a flag to. Tiled page size is dtype-fixed and sharded page size is
+    // spec-fixed, so neither triggers this; sharded dynamic_tensor_shape carries shape-in-pages
+    // words instead (dyn_shape above). dyn_shape and dyn_page are mutually exclusive by layout.
+    const bool dyn_page =
+        tensor_parameter.advanced_options.dynamic_tensor_shape && !is_sharded && spec.layout() == Layout::ROW_MAJOR;
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -2074,6 +2113,9 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     }
     if (dyn_shape) {
         args_config.set(tensor_accessor::ArgConfig::RuntimeTensorShape);
+    }
+    if (dyn_page) {
+        args_config.set(tensor_accessor::ArgConfig::RuntimePageSize);
     }
 
     // aligned_page_size: align the unaligned page size up to the buffer-type alignment.
@@ -2092,13 +2134,28 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 
     // Common header (always emitted, sharded or not):
     cta_payload.push_back(args_config.raw());
-    cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
+    // If the page size is static, it rides as a CTA.
+    // (If it's dynamic, it will live in a CRTA word instead.)
+    if (!dyn_page) {
+        cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
+    } else {
+        TT_FATAL(!is_sharded, "Internal error: dynamic page size should not occur on a sharded tensor parameter");
 
+        // One runtime field: the page size, re-derived from the bound buffer each dispatch
+        // and emitted immediately after the base-address word (see EmitBindingCrtaValues).
+        result.extra_crta_words = 1;
+        result.runtime_field_is_page_size = true;
+    }
+
+    // The rest of the logic in this function pertains to sharded tensors only.
+    // Early return for a non-sharded tensor.
     if (!is_sharded) {
-        // Interleaved tensors don't carry shape / bank-coord data: the device-side accessor
-        // computes addresses from page id + num_banks alone.
         return result;
     }
+
+    //////////////////////////////////
+    // Sharded tensor handling
+    //////////////////////////////////
 
     // Sharded: emit rank, num_banks, tensor_shape_in_pages (CTA only when static),
     // shard_shape_in_pages, bank_coords.
@@ -2199,6 +2256,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
+        handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());

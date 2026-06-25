@@ -188,13 +188,24 @@ class TtBEVFormerTrackHead:
             self.past_traj_reg_branches = [past_traj_reg_branch for _ in range(num_pred)]
         if not self.as_two_stage:
             self.bev_embedding = ttnn.embedding
+        # bev_mask is a constant zeros tensor consumed by positional_encoding.
+        # Lazy-cache it on first call (shape depends on bs/dtype from the
+        # first mlvl_feats); subsequent calls reuse the device buffer.
+        self._bev_mask_cache = None
+        self._bev_mask_cache_key = None
 
     def get_bev_features(self, mlvl_feats, img_metas, prev_bev=None):
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         dtype = mlvl_feats[0].dtype
         bev_queries = self.parameters.bev_embedding["weight"]
 
-        bev_mask = ttnn.zeros((bs, self.bev_h, self.bev_w), device=self.device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+        cache_key = (bs, dtype)
+        if self._bev_mask_cache_key != cache_key:
+            self._bev_mask_cache = ttnn.zeros(
+                (bs, self.bev_h, self.bev_w), device=self.device, dtype=dtype, layout=ttnn.TILE_LAYOUT
+            )
+            self._bev_mask_cache_key = cache_key
+        bev_mask = self._bev_mask_cache
         bev_pos = self.positional_encoding(bev_mask)
         bev_embed = self.transformer.get_bev_features(
             mlvl_feats,

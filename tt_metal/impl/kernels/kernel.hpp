@@ -103,13 +103,20 @@ struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
-    uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+    uint32_t addr_crta_offset;          // byte offset of this binding's base-address slot within the kernel's CRTA buffer
     // Count of runtime accessor field words that immediately follow the address slot
-    // in this binding's CRTA section. Non-zero only when the TensorParameter has
-    // dynamic_tensor_shape=true and is sharded: the runtime tensor's shape-in-pages
-    // is written here at enqueue time. The first runtime field word lives at byte
-    // offset addr_crta_offset + sizeof(uint32_t).
+    // in this binding's CRTA section.
+    // Non-zero when the TensorParameter opts into a CRTA-resident dynamic field.
+    // The first runtime field word lives at byte offset addr_crta_offset + sizeof(uint32_t).
     uint32_t num_runtime_field_crta_words = 0;
+    // What info the runtime field CRTA words actually contain depends on the relaxation chosen.
+    // Currently, there are only two mutually exclusive possibilities (though more may be added):
+    //  1. The interleaved row-major page-size (one CRTA only)
+    //  2. The sharded dynamic_tensor_shape shape (one CRTA per tensor dim)
+    // For now, since there are only two mutually exclusive possibilities, it's sufficient to
+    // distinguish them with a boolean.
+    // (We'll need to extend this to something more flexible if additional possibilities are added.)
+    bool runtime_field_is_page_size = false;
 };
 
 class Kernel : public JitBuildSettings {

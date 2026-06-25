@@ -2,10 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
+import sys
+
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
+
+# Redirect datasets library logging to stdout (non-error) / stderr (error)
+# to avoid all messages going to stderr by default.
+_datasets_logger = logging.getLogger("datasets")
+_datasets_logger.handlers.clear()
+_datasets_logger.propagate = False
+_ds_stdout_handler = logging.StreamHandler(sys.stdout)
+_ds_stdout_handler.setLevel(logging.DEBUG)
+_ds_stdout_handler.addFilter(lambda r: r.levelno < logging.ERROR)
+_ds_stderr_handler = logging.StreamHandler(sys.stderr)
+_ds_stderr_handler.setLevel(logging.ERROR)
+_datasets_logger.addHandler(_ds_stdout_handler)
+_datasets_logger.addHandler(_ds_stderr_handler)
 
 
 def load_shakespeare_text():
