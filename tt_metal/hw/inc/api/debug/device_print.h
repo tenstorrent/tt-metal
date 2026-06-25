@@ -23,6 +23,13 @@
 #include "dprint_tile.h"
 #endif
 
+#ifndef PROCESSOR_INDEX
+#define PROCESSOR_INDEX_DEFINED 0
+#define PROCESSOR_INDEX internal_::get_hw_thread_idx()
+#else
+#define PROCESSOR_INDEX_DEFINED 1
+#endif
+
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
@@ -181,7 +188,9 @@ struct dp_typed_array_t {
                 constexpr auto message_size = device_print_detail::serialization::get_total_message_size(args...); \
                 device_print_detail::structures::DevicePrintHeader header = {};                                    \
                 header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                                         \
-                header.risc_id = PROCESSOR_INDEX;                                                                  \
+                if constexpr (PROCESSOR_INDEX_DEFINED) {                                                           \
+                    header.risc_id = PROCESSOR_INDEX;                                                              \
+                }                                                                                                  \
                 header.message_payload =                                                                           \
                     message_size - sizeof(header); /* Payload size does not include header itself */               \
                 return header;                                                                                     \
@@ -797,30 +806,16 @@ template <>
 struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
-        if constexpr (sizeof(char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument);
-        } else if constexpr (sizeof(char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument);
-        } else {
-            static_assert(sizeof(char*) == 4 || sizeof(char*) == 8, "Unsupported pointer size");
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 template <>
 struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
-        if constexpr (sizeof(const char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument);
-        } else if constexpr (sizeof(const char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument);
-        } else {
-            static_assert(sizeof(const char*) == 4 || sizeof(const char*) == 8, "Unsupported pointer size");
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 
@@ -830,13 +825,8 @@ template <>
 struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
-        if constexpr (sizeof(const char*) == 4) {
-            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint32_t>(argument.ptr);
-        } else if constexpr (sizeof(const char*) == 8) {
-            *reinterpret_cast<device_print_buffer_ptr<uint64_t>>(device_print_buffer + offset) =
-                reinterpret_cast<uint64_t>(argument.ptr);
-        }
+        *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
+                reinterpret_cast<std::uintptr_t>(argument.ptr);
     }
 };
 
@@ -1306,6 +1296,19 @@ namespace locking {
 uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer, uint32_t message_size);
 void release_lock();
 
+#if !defined(ARCH_WORMHOLE)
+volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
+#if !defined(ARCH_QUASAR)
+    return get_device_print_buffer()->aux.lock;
+#else
+    std::uintptr_t buffer_address = reinterpret_cast<std::uintptr_t>(get_device_print_buffer());
+    auto cached_address = buffer_address - MEM_L1_UNCACHED_BASE;
+    auto* print_buffer = reinterpret_cast<volatile tt_l1_ptr DevicePrintMemoryLayout*>(cached_address);
+    return print_buffer->aux.lock;
+#endif
+}
+#endif
+
 // Takes lock unconditionally. Prints kernel id message if needed.
 void acquire_lock() {
     // We need to acquire lock only if we have more than 1 processor, otherwise there is no contention.
@@ -1341,7 +1344,7 @@ void acquire_lock() {
             }
         }
 #else
-        auto& lock_atomic = get_device_print_buffer()->aux.lock;
+        auto& lock_atomic = get_lock_atomic();
 
         while (lock_atomic.exchange(1) != 0) {
             // Failed to acquire lock, wait and try again
@@ -1356,18 +1359,24 @@ void acquire_lock() {
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
 
+#if defined(KERNEL_BUILD)
     // Check if we should print kernel id
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
     if (device_print_buffer->aux.wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-        auto risc_state = device_print_buffer->aux.risc_state[PROCESSOR_INDEX];
+#if PROCESSOR_INDEX_DEFINED
+        constexpr auto processor_index = PROCESSOR_INDEX;
+#else
+        auto processor_index = internal_::get_hw_thread_idx();
+#endif
+        auto risc_state = device_print_buffer->aux.risc_state[processor_index];
         if (risc_state != DevicePrintRiscCoreState::PrintingDisabled) {
             if (risc_state == DevicePrintRiscCoreState::KernelNotPrinted) {
                 uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
                 tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_idx]);
-                auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[PROCESSOR_INDEX];
+                auto kernel_id = launch_msg->kernel_config.watcher_kernel_ids[processor_index];
                 structures::DevicePrintHeader new_kernel_message = {};
                 new_kernel_message.is_kernel = 1;
-                new_kernel_message.risc_id = PROCESSOR_INDEX;
+                new_kernel_message.risc_id = processor_index;
                 new_kernel_message.message_payload = structures::DevicePrintHeader::max_message_payload_size;
                 new_kernel_message.info_id = kernel_id;
                 auto header_value = new_kernel_message.value;
@@ -1377,16 +1386,22 @@ void acquire_lock() {
                 formatting::device_print_type<decltype(header_value)>::serialize(
                     device_print_buffer_ptr, 0, header_value);
                 device_print_buffer->aux.wpos += sizeof(new_kernel_message);
-                device_print_buffer->aux.risc_state[PROCESSOR_INDEX] = DevicePrintRiscCoreState::KernelPrinted;
+                device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelPrinted;
             }
         }
     }
+#endif
 }
 
 void update_kernel_finished() {
     volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();
-    if (device_print_buffer->aux.risc_state[PROCESSOR_INDEX] != DevicePrintRiscCoreState::PrintingDisabled) {
-        device_print_buffer->aux.risc_state[PROCESSOR_INDEX] = DevicePrintRiscCoreState::KernelNotPrinted;
+#if PROCESSOR_INDEX_DEFINED
+    constexpr auto processor_index = PROCESSOR_INDEX;
+#else
+    auto processor_index = internal_::get_hw_thread_idx();
+#endif
+    if (device_print_buffer->aux.risc_state[processor_index] != DevicePrintRiscCoreState::PrintingDisabled) {
+        device_print_buffer->aux.risc_state[processor_index] = DevicePrintRiscCoreState::KernelNotPrinted;
     }
 }
 
@@ -1398,7 +1413,7 @@ void release_lock() {
     *lock_ptr = 0;  // Release lock by setting to 0
     asm volatile("" ::: "memory");
 #else
-    auto& lock_atomic = get_device_print_buffer()->aux.lock;
+    auto& lock_atomic = get_lock_atomic();
     lock_atomic = 0;
 #endif
 }
@@ -1410,7 +1425,7 @@ void initialize_lock() {
     *lock_ptr = 0;  // Ensure lock starts in free state
     asm volatile("" ::: "memory");
 #else
-    auto& lock_atomic = get_device_print_buffer()->aux.lock;
+    auto& lock_atomic = get_lock_atomic();
     lock_atomic = 0;
 #endif
 }
@@ -1630,6 +1645,10 @@ begin_message_write(structures::DevicePrintHeader header, std::uintptr_t string_
     } else {
         header.info_id = static_cast<uint32_t>(string_info_index);
     }
+
+#if !PROCESSOR_INDEX_DEFINED
+    header.risc_id = internal_::get_hw_thread_idx();
+#endif
 
     // Serialize header
     auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;

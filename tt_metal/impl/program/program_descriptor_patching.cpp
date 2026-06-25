@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -23,7 +24,7 @@
 namespace tt::tt_metal {
 
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, const std::vector<Buffer*>& tensor_buffers) {
+    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers) {
     ResolvedBindings result;
 
     // If the same Buffer* appears in tensor_buffers more than once (e.g. matmul(X, X),
@@ -114,19 +115,60 @@ ResolvedBindings resolve_bindings(
         }
     }
 
+    // Sort rt_args by (is_common, kernel_idx, core, arg_idx) so that bindings sharing
+    // the same (kernel, core) RuntimeArgsData are contiguous.  apply_resolved_bindings
+    // amortises the GetRuntimeArgs lookup across each group instead of doing one
+    // lookup per binding — significant win on multi-core ops with several Buffer*
+    // slots per core.
+    std::sort(result.rt_args.begin(), result.rt_args.end(), [](const auto& a, const auto& b) {
+        if (a.is_common != b.is_common) {
+            return !a.is_common;  // per-core first, then common
+        }
+        if (a.kernel_idx != b.kernel_idx) {
+            return a.kernel_idx < b.kernel_idx;
+        }
+        if (!a.is_common) {
+            if (a.core.x != b.core.x) {
+                return a.core.x < b.core.x;
+            }
+            if (a.core.y != b.core.y) {
+                return a.core.y < b.core.y;
+            }
+        }
+        return a.arg_idx < b.arg_idx;
+    });
+
     return result;
 }
 
 void apply_resolved_bindings(
-    Program& program, const ResolvedBindings& bindings, const std::vector<Buffer*>& current_buffers) {
+    Program& program, const ResolvedBindings& bindings, std::span<Buffer* const> current_buffers) {
+    // bindings.rt_args is sorted by (is_common, kernel_idx, core, arg_idx) at resolve
+    // time, so consecutive entries share the same RuntimeArgsData reference whenever
+    // they target the same (is_common, kernel_idx, core).  Cache the live reference
+    // across that run instead of re-deriving it via GetRuntimeArgs per binding.
+    //
+    // The reference is re-derived on every apply call (not stored across calls) so
+    // first-enqueue retargeting of rt_args_data to the command-sequence buffer is
+    // observed correctly.
+    RuntimeArgsData* current_data = nullptr;
+    uint32_t prev_kernel_idx = 0;
+    CoreCoord prev_core{};
+    bool prev_is_common = false;
+    bool first = true;
+
     for (const auto& b : bindings.rt_args) {
-        // Re-derive the RuntimeArgsData reference on every call via GetRuntimeArgs /
-        // GetCommonRuntimeArgs rather than storing a cross-call raw pointer.  This is
-        // safe across first-enqueue (when the dispatch path retargets rt_args_data to
-        // the command-sequence buffer) because we look up the live struct each time.
-        RuntimeArgsData& data =
-            b.is_common ? GetCommonRuntimeArgs(program, b.kernel_idx) : GetRuntimeArgs(program, b.kernel_idx, b.core);
-        data[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
+        const bool group_changed = first || b.is_common != prev_is_common || b.kernel_idx != prev_kernel_idx ||
+                                   (!b.is_common && b.core != prev_core);
+        if (group_changed) {
+            current_data = b.is_common ? &GetCommonRuntimeArgs(program, b.kernel_idx)
+                                       : &GetRuntimeArgs(program, b.kernel_idx, b.core);
+            prev_is_common = b.is_common;
+            prev_kernel_idx = b.kernel_idx;
+            prev_core = b.core;
+            first = false;
+        }
+        (*current_data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
         UpdateDynamicCircularBufferAddress(

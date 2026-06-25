@@ -101,9 +101,9 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo) {
 
     if (curr == 0) {
         if (use_b) {
-            return lltt::replay_insn(22, 3);
+            return lltt::replay_insn(22, 2);
         } else {
-            return lltt::replay_insn(24, 1);
+            return TT_OP_NOP;
         }
     }
 

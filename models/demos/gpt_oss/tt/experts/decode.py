@@ -113,7 +113,9 @@ def decode_forward(
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.gate_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(
+            hidden_states.shape[2], weights.gate_proj.shape[3], k=hidden_states.shape[-1]
+        ),
         dtype=activation_dtype,
     )
     _debug_sync(mesh_device, "gate_sparse_matmul")
@@ -132,7 +134,9 @@ def decode_forward(
         nnz=num_experts_per_tok,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=program_config.get_decode_gate_up_config(hidden_states.shape[2], weights.up_proj.shape[3]),
+        program_config=program_config.get_decode_gate_up_config(
+            hidden_states.shape[2], weights.up_proj.shape[3], k=hidden_states.shape[-1]
+        ),
         dtype=activation_dtype,
     )
     _debug_sync(mesh_device, "up_sparse_matmul")
@@ -160,7 +164,9 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         is_input_a_sparse=True,
-        program_config=program_config.get_decode_down_config(down_input.shape[2], weights.down_proj.shape[-1]),
+        program_config=program_config.get_decode_down_config(
+            down_input.shape[2], weights.down_proj.shape[-1], k=down_input.shape[-1]
+        ),
         dtype=activation_dtype,
     )
     _debug_sync(mesh_device, "down_sparse_matmul")
@@ -175,11 +181,7 @@ def decode_forward(
     _debug_sync(mesh_device, "down_output_view")
     next_states = ttnn.add(next_states, weights.down_proj_bias, output_tensor=next_states)
     _debug_sync(mesh_device, "down_bias")
-    if (
-        os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_PRETILIZE_RESHAPE") == "1"
-        and batch_size == 1
-        and seq_len == 1
-    ):
+    if os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_PRETILIZE_RESHAPE") == "1" and batch_size == 1 and seq_len == 1:
         routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, 1))
     elif (
         os.environ.get("GPT_OSS_EXPERT_DECODE_ROUTING_PRETILIZE_FINAL_SHAPE") == "1"

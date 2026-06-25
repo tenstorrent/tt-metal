@@ -24,6 +24,7 @@
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/isclose.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
@@ -35,7 +36,7 @@ ALWI void process_tile(
     tt::CBIndex cb_out,
     uint32_t freq,
     uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
+    uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
     using namespace ckernel;
 
 #if BCAST_INPUT
@@ -74,7 +75,11 @@ ALWI void process_tile(
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
+#if ISCLOSE_OP
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();
@@ -95,6 +100,10 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
+#ifdef ISCLOSE_OP
+    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+#endif
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
@@ -123,7 +132,14 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
+            cb_pre_lhs,
+            cb_post_lhs,
+            cb_pre_rhs,
+            cb_post_rhs,
+            cb_out,
+            tile_freq,
+            tile_start,
+            num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
     }
 
     if (remaining_iterations > 0) {
@@ -135,6 +151,6 @@ void kernel_main() {
             cb_out,
             remaining_iterations,
             tile_start,
-            num_tiles_per_cycle);
+            num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
     }
 }

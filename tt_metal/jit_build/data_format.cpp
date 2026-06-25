@@ -129,6 +129,10 @@ std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_
 
 DataFormat get_single_unpack_dst_format(
     const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
+    // NOTE: DataFormat::UInt8 is intentionally not remapped to Int8 here. The unpacker's 4-bit
+    // OutDataFormat register field has no UInt8 encoding; the LLK applies masked_data_format()
+    // at the register-write site so UInt8 (=30) lands as INT8 (=14) in the bitfield. We preserve
+    // UInt8 in the dst format because downstream LLK paths (e.g. math-MOP selection) key off the original dtype value.
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32) {
         TT_FATAL(

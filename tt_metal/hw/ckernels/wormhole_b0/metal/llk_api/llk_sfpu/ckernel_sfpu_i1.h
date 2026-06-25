@@ -98,6 +98,7 @@ inline void calculate_i1() {
 
         const sfpi::vFloat abs_x = sfpi::setsgn(x, 0);
 
+        sfpi::vFloat val;
         // ─── Polynomial path (always; valid for |x| ≤ 10) ────────────────
         // Computed unconditionally and stored — its LRegs are then free
         // for the asymptotic block to use.
@@ -129,26 +130,16 @@ inline void calculate_i1() {
             sfpi::vFloat denom =
                 PolynomialEvaluator::eval(t, sfpi::vConst1, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
 #endif
-#ifdef INP_FLOAT32
-            sfpi::dst_reg[0] = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
-#else
-            // SFPSTORE truncates FP32->BF16 (round-toward-zero). Explicit
-            // round-to-nearest-even halves the worst-case BF16 ULP error.
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(
-                numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom), sfpi::RoundMode::NearestEven);
-#endif
+            val = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }
 
         // ─── Asymptotic overwrite for OOD lanes (|x| > 10) ───────────────
-        v_if(abs_x > I1_THRESHOLD) {
-#ifdef INP_FLOAT32
-            sfpi::dst_reg[0] = calculate_i1_asymptotic_(abs_x, x);
-#else
-            sfpi::dst_reg[0] = sfpi::float_to_fp16b(calculate_i1_asymptotic_(abs_x, x), sfpi::RoundMode::NearestEven);
-#endif
-        }
+        v_if(abs_x > I1_THRESHOLD) { val = calculate_i1_asymptotic_(abs_x, x); }
         v_endif;
-
+#ifndef INP_FLOAT32
+        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::NearestEven);
+#endif
+        sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
     }
 }

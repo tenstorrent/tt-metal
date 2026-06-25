@@ -64,16 +64,6 @@ def test_unpack_tilize_comprehensive(
     # Get architecture for architecture-specific skips
     arch = get_chip_architecture()
 
-    # Wormhole unpack_tilize has 0-loop for num_faces=1
-    # File: tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h:220
-    # num_loops = num_faces / 2 → when num_faces=1, this is 1/2=0 (integer division)
-    # Result: for (n=0; n<0; n++) never executes, no data unpacked, packer timeout
-    if arch == ChipArchitecture.WORMHOLE and num_faces == 1:
-        pytest.skip(
-            "Wormhole LLK: num_loops = num_faces/2 = 0 when num_faces=1 "
-            "(tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h:220)"
-        )
-
     # BFP8_b input format not supported by tilize unpacker
     # Tilize unpacker cannot correctly read row-major BFP8_b data with shared exponents
     # Note: BFP8_b input works in regular unpack mode (test_eltwise_unary_datacopy with tilize_en=false)

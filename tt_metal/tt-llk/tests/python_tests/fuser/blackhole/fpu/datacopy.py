@@ -58,7 +58,7 @@ class DatacopyFpu(Fpu):
     ) -> str:
         stage = operation.stage_id
         dest_acc = config.dest_acc.cpp_enum_value
-        tilize_en = operation.bh_tilize.cpp_enum_value
+        pack_mode = operation.bh_tilize.pack_mode_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
         num_faces = operation.output.tile_shape.total_num_faces()
@@ -80,7 +80,7 @@ class DatacopyFpu(Fpu):
 
         return (
             f"    // Operation {stage}: Datacopy FPU\n"
-            f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {tilize_en}, {is_int_fpu_en}>(\n"
+            f"    _llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {dest_acc}, {broadcast_type}, {is_int_fpu_en}, {pack_mode}>(\n"
             f"        {num_faces}, {config.sentinel.math_format}\n"
             f"    );\n"
         )

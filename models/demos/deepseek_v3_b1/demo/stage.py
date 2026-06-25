@@ -326,6 +326,9 @@ class PassthroughStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,
+            # Second core for the exit-send kernel when a forwarding stage's entry and exit
+            # land on the same chip (e.g. snake turns on a 1x2 submesh).
+            second_pipeline_core_coord=SECOND_PIPELINE_CORE_COORD,
         )
 
 
@@ -348,7 +351,7 @@ class SpecLMHeadStage(StageKind):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        spec_weights: DeepSeekV3SpecWeights | None = None,
+        spec_weights: DeepSeekV3SpecWeights | DeepSeekV3LMHeadWeights | None = None,
     ) -> None:
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
@@ -1180,7 +1183,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        spec_weights: DeepSeekV3SpecWeights | None = None,
+        spec_weights: DeepSeekV3SpecWeights | DeepSeekV3LMHeadWeights | None = None,
         loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(

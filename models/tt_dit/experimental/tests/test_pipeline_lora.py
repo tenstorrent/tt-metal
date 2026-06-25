@@ -1,0 +1,151 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""End-to-end test for Wan2.2 I2V with a LoRA adapter fused into the base.
+
+Reads ``LORA_HIGH_PATH`` (required) and ``LORA_LOW_PATH`` (optional) from the
+environment. All inference parameters (steps, guidance scale, boundary ratio)
+are configurable via env vars to support different LoRA types.
+"""
+from __future__ import annotations
+
+import itertools
+import os
+
+import numpy as np
+import PIL
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.tt_dit.experimental.pipelines.pipeline_wan_lora import WanLoraPipelineI2V
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt
+from models.tt_dit.utils.test import ring_params
+
+
+@pytest.mark.parametrize(
+    "no_prompt",
+    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        # BH Galaxy 4x8 Ring -- canonical config for the LoRA bringup.
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+    ],
+    ids=["bh_4x8sp1tp0_ring"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (832, 480),
+        (1280, 720),
+    ],
+    ids=[
+        "resolution_480p",
+        "resolution_720p",
+    ],
+)
+def test_pipeline_inference(
+    mesh_device,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    num_links,
+    dynamic_load,
+    topology,
+    width,
+    height,
+    is_fsdp,
+    no_prompt,
+):
+    if not os.environ.get("LORA_HIGH_PATH"):
+        pytest.skip("LORA_HIGH_PATH env var is required for this test (LORA_LOW_PATH is optional).")
+
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    pil_image = PIL.Image.open(os.environ.get("PROMPT_IMAGE", "./prompt_image.png"))
+    image_prompt = [ImagePrompt(image=pil_image, frame_pos=0)]
+    negative_prompt = ""
+
+    num_frames = 81
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "40"))
+    guidance_scale = float(os.environ.get("GUIDANCE_SCALE", "3.5"))
+    guidance_scale_2 = float(os.environ.get("GUIDANCE_SCALE_2", str(guidance_scale)))
+    lora_scale = float(os.environ.get("LORA_SCALE", "1.0"))
+
+    pipeline = WanLoraPipelineI2V.create_pipeline(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        height=height,
+        width=width,
+        num_frames=num_frames,
+    )
+
+    prompt = "A golden retriever running on a sandy beach, waves in the background"
+
+    def run(*, prompt, number, seed):
+        logger.info(f"Running LoRA inference with prompt: '{prompt}'")
+        logger.info(
+            f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps, "
+            f"lora_scale={lora_scale}"
+        )
+
+        with torch.no_grad():
+            result = pipeline(
+                prompt=prompt,
+                image_prompt=image_prompt,
+                negative_prompt=negative_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+                output_type="uint8",
+            )
+
+        if hasattr(result, "frames"):
+            frames = result.frames
+        else:
+            frames = result[0] if isinstance(result, tuple) else result
+
+        logger.info("LoRA inference completed successfully")
+        logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
+        logger.info(f"  Output type: {type(frames)}")
+
+        if isinstance(frames, np.ndarray):
+            logger.info(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
+        elif isinstance(frames, torch.Tensor):
+            logger.info(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
+
+        frames = frames[0]
+        output_filename = f"wan_lora_i2v_{width}x{height}_{number}.mp4"
+        try:
+            from models.tt_dit.utils.video import export_to_video
+
+            export_to_video(frames, output_filename, fps=16)
+            logger.info(f"Saved video to: {output_filename}")
+        except ImportError:
+            logger.info("Could not export video - imageio_ffmpeg not available")
+
+    if no_prompt:
+        run(prompt=prompt, number=0, seed=42)
+    else:
+        for i in itertools.count():
+            new_prompt = input("Enter the input prompt, or q to exit: ")
+            if new_prompt:
+                prompt = new_prompt
+            if prompt[0] == "q":
+                break
+            run(prompt=prompt, number=i, seed=i)

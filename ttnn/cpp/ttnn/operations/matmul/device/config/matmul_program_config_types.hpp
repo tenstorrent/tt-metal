@@ -19,6 +19,7 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
@@ -33,6 +34,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 // 1D mcast matmul program config.
@@ -63,6 +65,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -79,7 +82,9 @@ struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
 };
 
-struct MatmulMultiCoreProgramConfig {};
+struct MatmulMultiCoreProgramConfig {
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+};
 
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
@@ -88,5 +93,34 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
+
+// Ensures allowed_worker_cores is populated on every config variant that supports it.
+// If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is
+// synthesized from compute_with_storage_grid_size (or from the device grid for
+// MatmulMultiCoreProgramConfig).  After this call, factories can read
+// config.allowed_worker_cores.value() unconditionally.
+inline void normalize_program_config(MatmulProgramConfig& config, const CoreCoord& device_grid) {
+    auto make_crs = [](const CoreCoord& grid) {
+        return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
+    };
+    std::visit(
+        [&](auto& c) {
+            using T = std::decay_t<decltype(c)>;
+            if constexpr (
+                std::is_same_v<T, MatmulMultiCoreReuseProgramConfig> ||
+                std::is_same_v<T, MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                std::is_same_v<T, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                if (!c.allowed_worker_cores.has_value()) {
+                    c.allowed_worker_cores = make_crs(c.compute_with_storage_grid_size);
+                }
+            } else if constexpr (std::is_same_v<T, MatmulMultiCoreProgramConfig>) {
+                if (!c.allowed_worker_cores.has_value()) {
+                    c.allowed_worker_cores = make_crs(device_grid);
+                }
+            }
+            // DRAM-sharded configs have no grid fields to normalize.
+        },
+        config);
+}
 
 }  // namespace ttnn::operations::matmul

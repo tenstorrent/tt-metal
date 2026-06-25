@@ -582,6 +582,74 @@ Tensor invoke_binary_ng(
         sub_device_id);
 }
 
+Tensor invoke_binary_ng_isclose(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const auto fa = lhs.dtype() == DataType::INT32 ? ttnn::typecast(lhs, DataType::FLOAT32) : lhs;
+    const auto fb = rhs.dtype() == DataType::INT32 ? ttnn::typecast(rhs, DataType::FLOAT32) : rhs;
+
+    const auto input_a_rm = fa.layout() == Layout::ROW_MAJOR;
+    const auto input_b_rm = fb.layout() == Layout::ROW_MAJOR;
+    const auto input_a_sharded = fa.memory_config().is_sharded();
+    const auto input_b_sharded = fb.memory_config().is_sharded();
+
+    using BinaryOpType = ttnn::operations::binary_ng::BinaryOpType;
+
+    if (input_a_rm && input_b_rm && !input_a_sharded && !input_b_sharded) {
+        return ttnn::prim::binary_ng(
+            fa,
+            fb,
+            BinaryOpType::ISCLOSE,
+            std::nullopt,
+            memory_config,
+            output,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            std::nullopt,
+            rtol,
+            atol,
+            equal_nan);
+    }
+
+    const auto input_a = operations::binary::detail::to_layout(fa, Layout::TILE);
+    const auto input_b = operations::binary::detail::to_layout(fb, Layout::TILE);
+    auto result = ttnn::prim::binary_ng(
+        input_a,
+        input_b,
+        BinaryOpType::ISCLOSE,
+        std::nullopt,
+        memory_config,
+        output,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt,
+        sub_core_grids,
+        std::nullopt,
+        rtol,
+        atol,
+        equal_nan);
+
+    // if both inputs are in row major, convert the output to row major
+    // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
+    // since it leads to better perf
+    if (input_a_rm && input_b_rm) {
+        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
+    }
+    return result;
+}
+
 }  // namespace ttnn::detail
 
 namespace ttnn::operations::binary {
@@ -1327,6 +1395,17 @@ Tensor hypot(
         {},
         /*fast_and_approximate_mode*/ false,
         std::nullopt);
+}
+
+Tensor isclose(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::detail::invoke_binary_ng_isclose(
+        input_a, input_b, rtol, atol, equal_nan, output_mem_config, std::nullopt);
 }
 
 }  // namespace ttnn

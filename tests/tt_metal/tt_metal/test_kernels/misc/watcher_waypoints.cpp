@@ -13,6 +13,7 @@
 #endif
 
 #if defined(ARCH_QUASAR)
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 #endif
 
@@ -23,11 +24,16 @@ void kernel_main() {
 #if defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)
     // Active ERISC: timed wait to give watcher time to capture waypoint,
     // then exit to resume tunneling duties. Can't block for sync signal.
+    // Active ETH never runs through Metal 2.0 today, so the legacy positional accessor stays.
     uint32_t delay_cycles = get_common_arg_val<uint32_t>(0);
     riscv_wait(delay_cycles);
 #else
     // TENSIX / idle ERISC: block until host signals
+#if defined(ARCH_QUASAR)
+    uint32_t sync_flag_addr = get_arg(args::sync_flag_addr);
+#else
     uint32_t sync_flag_addr = get_common_arg_val<uint32_t>(0);
+#endif
     volatile uint32_t* sync_flag =
         reinterpret_cast<volatile uint32_t*>(sync_flag_addr);
 

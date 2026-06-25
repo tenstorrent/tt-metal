@@ -39,7 +39,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -115,15 +115,19 @@ void RunTestOnCore(
     }
 
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
-    uint32_t dm_id = use_ncrisc ? 1 : 0;
+    // On Quasar, DM0/DM1 are reserved for internal use; map brisc/ncrisc onto the first two user DMs.
+    uint32_t dm_id = 0;
+    if (is_quasar) {
+        dm_id = use_ncrisc ? 3 : 2;
+    } else {
+        dm_id = use_ncrisc ? 1 : 0;
+    }
 
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -177,8 +181,9 @@ void RunTestOnCore(
     log_info(tt::LogTest, "Local scratch buffer addr: {:#x}", buffer_addr);
 
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
-    KernelHandle dram_copy_kernel;
+    KernelHandle dram_copy_kernel = 0;
     int noc = 0;
+    constexpr const char* DRAM_COPY_KERNEL_NAME = "dram_copy";
     if (is_eth_core) {
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
         if (is_idle_eth_core) {
@@ -186,13 +191,14 @@ void RunTestOnCore(
         }
         eth_test_common::set_arch_specific_eth_config(config);
         noc = static_cast<int>(config.noc);
-        dram_copy_kernel = tt_metal::CreateKernel(program_, kernel, core, config);
+        dram_copy_kernel = tt_metal::CreateKernel(program, kernel, core, config);
     } else {
         if (is_quasar) {
-            // Quasar: all DMs run kernel; multi_dm_race syncs them to race, else only dm_id executes
-            uint32_t num_dms =
-                MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig config{.num_threads_per_cluster = num_dms};
+            // Quasar: user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
+            // DM0/DM1 are reserved for internal use, so the test exercises 6 user DMs.
+            constexpr uint32_t num_dms = 6;
+            experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings;
+            experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
             if (multi_dm_race) {
                 constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
                 constexpr uint32_t multi_dm_base_size = 0x1000;
@@ -204,18 +210,65 @@ void RunTestOnCore(
                 uint32_t l1_sync_addr = sync_buf->address();
                 std::vector<uint32_t> init{0, 0};  // 8 bytes: Quasar barrier uses 64-bit atomics
                 tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_sync_addr, init);
-                config.compile_args = {num_dms, multi_dm_base_addr, multi_dm_base_size, l1_sync_addr};
-                config.defines = {{"TEST_MULTI_DM_SANITIZE_RACE", "1"}};
+                cta_bindings = {
+                    {"num_dms", num_dms},
+                    {"multi_dm_base_addr", multi_dm_base_addr},
+                    {"multi_dm_base_size", multi_dm_base_size},
+                    {"l1_sync_addr", l1_sync_addr},
+                };
+                defines = {{"TEST_MULTI_DM_SANITIZE_RACE", "1"}};
             } else {
-                config.compile_args = {dm_id};
+                cta_bindings = {{"dm_id", dm_id}};
             }
-            dram_copy_kernel = tt::tt_metal::experimental::quasar::CreateKernel(program_, kernel, core, config);
+            experimental::metal2_host_api::KernelSpec dm_spec{
+                .unique_id = DRAM_COPY_KERNEL_NAME,
+                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
+                .num_threads = static_cast<uint8_t>(num_dms),
+                .compiler_options = {.defines = defines},
+                .compile_time_arg_bindings = cta_bindings,
+                .runtime_arguments_schema =
+                    {.named_runtime_args =
+                         {"local_buffer_addr",
+                          "buffer_src_addr",
+                          "src_noc_x",
+                          "src_noc_y",
+                          "buffer_dst_addr",
+                          "dst_noc_x",
+                          "dst_noc_y",
+                          "buffer_size",
+                          "use_inline_dw_write",
+                          "bad_linked_transaction",
+                          "l1_overflow_addr",
+                          "eth_src_overflow_addr",
+                          "eth_dest_overflow_addr",
+                          "use_multicast_semaphore_inc",
+                          "mcast_dst_end_x",
+                          "mcast_dst_end_y"}},
+                .config_spec =
+                    experimental::metal2_host_api::DataMovementConfiguration{
+                        .gen2_data_movement_config =
+                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            };
+            experimental::metal2_host_api::WorkUnitSpec wu{
+                .unique_id = "main",
+                .kernels = {DRAM_COPY_KERNEL_NAME},
+                .target_nodes = experimental::metal2_host_api::NodeCoord{core},
+            };
+            experimental::metal2_host_api::ProgramSpec spec{
+                .program_id = "watcher_sanitize",
+                .kernels = {dm_spec},
+                .work_units = {wu},
+            };
+            program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+            // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
+            // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
+            noc = 0;
         } else {
             tt_metal::DataMovementConfig config{
                 .processor =
                     (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default};
-            dram_copy_kernel = tt_metal::CreateKernel(program_, kernel, core, config);
+            dram_copy_kernel = tt_metal::CreateKernel(program, kernel, core, config);
             noc = static_cast<int>(config.noc);
         }
     }
@@ -296,26 +349,53 @@ void RunTestOnCore(
             break;
     }
 
-    tt_metal::SetRuntimeArgs(
-        program_,
-        dram_copy_kernel,
-        core,
-        {buffer_addr,
-         input_buffer_addr,
-         input_buf_noc_xy.x,
-         input_buf_noc_xy.y,
-         output_buffer_addr,
-         output_buf_noc_xy.x,
-         output_buf_noc_xy.y,
-         buffer_size,
-         use_inline_dw_write,
-         bad_linked_transaction,
-         l1_overflow_addr,
-         eth_src_overflow_addr_words,
-         eth_dest_overflow_addr_words,
-         use_multicast_semaphore_inc,
-         mcast_dst_end_x,
-         mcast_dst_end_y});
+    const std::vector<uint32_t> rta_values = {
+        buffer_addr,
+        input_buffer_addr,
+        input_buf_noc_xy.x,
+        input_buf_noc_xy.y,
+        output_buffer_addr,
+        output_buf_noc_xy.x,
+        output_buf_noc_xy.y,
+        buffer_size,
+        use_inline_dw_write,
+        bad_linked_transaction,
+        l1_overflow_addr,
+        eth_src_overflow_addr_words,
+        eth_dest_overflow_addr_words,
+        use_multicast_semaphore_inc,
+        mcast_dst_end_x,
+        mcast_dst_end_y};
+
+    if (is_quasar) {
+        experimental::metal2_host_api::ProgramRunParams params;
+        params.kernel_run_params = {{
+            .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
+            .named_runtime_args =
+                {{.node = experimental::metal2_host_api::NodeCoord{core},
+                  .args =
+                      {{"local_buffer_addr", buffer_addr},
+                       {"buffer_src_addr", input_buffer_addr},
+                       {"src_noc_x", input_buf_noc_xy.x},
+                       {"src_noc_y", input_buf_noc_xy.y},
+                       {"buffer_dst_addr", output_buffer_addr},
+                       {"dst_noc_x", output_buf_noc_xy.x},
+                       {"dst_noc_y", output_buf_noc_xy.y},
+                       {"buffer_size", buffer_size},
+                       {"use_inline_dw_write", use_inline_dw_write},
+                       {"bad_linked_transaction", bad_linked_transaction},
+                       {"l1_overflow_addr", l1_overflow_addr},
+                       {"eth_src_overflow_addr", eth_src_overflow_addr_words},
+                       {"eth_dest_overflow_addr", eth_dest_overflow_addr_words},
+                       {"use_multicast_semaphore_inc", use_multicast_semaphore_inc},
+                       {"mcast_dst_end_x", mcast_dst_end_x},
+                       {"mcast_dst_end_y", mcast_dst_end_y}}}},
+        }};
+        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    } else {
+        tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
+    }
+    workload.add_program(device_range, std::move(program));
 
     // Run the kernel, expect an exception here
     try {

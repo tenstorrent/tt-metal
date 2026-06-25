@@ -35,7 +35,6 @@
 #endif
 
 #ifdef TRISC_PACK
-#include "llk_pack_api.h"
 #include "llk_io_pack.h"
 #ifndef ARCH_QUASAR
 #include "llk_math_eltwise_unary_sfpu_silu.h"

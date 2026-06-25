@@ -196,8 +196,17 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
 
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    const uint32_t state_idx =
-        get_firmware_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
+    // `processor_id` is indexed in the per-processor-type space (0..get_processor_types_count-1),
+    // which on Quasar can span replicated NEOs (e.g. COMPUTE has 16 entries: 4 NEOs x 4 TRISCs).
+    // Firmware binaries are built per TRISC type only (num_fw_binaries == 4 for COMPUTE), and the
+    // processor layout is {NEO0 TR0..3, NEO1 TR0..3, ...}, so the type index is processor_id % num_fw_binaries.
+    const auto [base, num_fw_binaries] = get_firmware_build_index_and_state_count(programmable_core, processor_class);
+    TT_ASSERT(
+        num_fw_binaries > 0,
+        "No firmware binaries for programmable_core={} processor_class={}",
+        programmable_core,
+        processor_class);
+    const uint32_t state_idx = base + (static_cast<uint32_t>(processor_id) % num_fw_binaries);
     return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
 

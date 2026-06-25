@@ -5,9 +5,12 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal::experimental::blitz {
 

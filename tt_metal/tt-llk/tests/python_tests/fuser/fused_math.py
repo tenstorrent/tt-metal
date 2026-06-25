@@ -283,7 +283,7 @@ class ComputePipeline:
     def _pack_reduce_mask_config(self) -> str:
         reduce_dim = self.get_reduce_pack_mask()
         if reduce_dim is not None:
-            return f"_llk_pack_reduce_mask_config_<false, {reduce_dim}>();\n"
+            return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
         return ""
 
     def _pack_reduce_mask_clear(self) -> str:

@@ -118,6 +118,7 @@ enum class SfpuType {
     remainder,
     fmod,
     ceil,
+    isclose,
     unused,
     reshuffle_rows,
     cumsum,

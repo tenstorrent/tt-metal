@@ -13,6 +13,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include <cstdint>
 
@@ -21,8 +22,8 @@ constexpr uint32_t elem_size = 8;
 constexpr uint32_t total_bytes = num_elements * elem_size;  // 128
 
 void kernel_main() {
-    const uint32_t src_addr = get_compile_time_arg_val(0);
-    const uint32_t dst_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t src_addr = get_arg(args::src_addr);
+    constexpr uint32_t dst_addr = get_arg(args::dst_addr);
 
     reset_cmdbuf_0();
 

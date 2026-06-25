@@ -260,7 +260,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     this->initialize_ethernet_cores_router_mode();
 
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
-    auto & cluster_desc = (*(this->driver_->get_cluster_description()));
+    auto& cluster_desc = (*(this->driver_->get_cluster_description()));
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
     if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
@@ -1103,7 +1103,7 @@ uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
     TT_FATAL(driver_, "UMD cluster object must be initialized and available");
-    auto & cluster_desc = (*(driver_->get_cluster_description()));
+    auto& cluster_desc = (*(driver_->get_cluster_description()));
     return llrt::get_devices_controlled_by_mmio_device(cluster_desc, mmio_device_id);
 }
 

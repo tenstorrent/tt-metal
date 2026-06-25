@@ -51,7 +51,7 @@
 #undef REDUCE_DIM
 #endif
 #include "../../unified_kernels/rmsnorm.hpp"
-#include "../../unified_kernels/dram_streaming_matmul.hpp"
+#include "../../unified_kernels/matmul_expert_compressed_dram.hpp"
 #include "../../unified_kernels/eltwise_mul.hpp"
 #include "../../unified_kernels/eltwise_add.hpp"
 #include "../../unified_kernels/kn_sliced_matmul.hpp"
@@ -74,6 +74,17 @@ struct Core {
     struct Routed {
         static constexpr bool is_gate_mm_core = get_named_compile_time_arg_val("is_gate_mm_core") == 1;
         static constexpr bool is_gate_proj_core = get_named_compile_time_arg_val("is_gate_proj_core") == 1;
+        // 16-core gate_proj grid (8 primaries + 8 secondaries) when K-split is on for
+        // gate_proj (cores_per_dram_bank=2, k_parallel_per_bank=2). Both senders (= K-slice 0)
+        // and the K-reducer (= primary, K-slice 1) must be active so partials reduce on the
+        // primary. Falls back to is_gate_proj_core (8 cores) when K-split is off.
+        static constexpr bool is_gate_proj_streamer_core =
+            get_named_compile_time_arg_val("is_gate_proj_streamer_core") == 1;
+        // 16-core down_proj grid (8 primaries + 8 secondaries) when primary_at_last_offset=True;
+        // 8 cores otherwise. Senders (post-swap = secondaries) MUST be active so they
+        // NOC-write their accum onto the receiver/primary.
+        static constexpr bool is_down_proj_streamer_core =
+            get_named_compile_time_arg_val("is_down_proj_streamer_core") == 1;
     };
     struct Shared {
         static constexpr bool is_compute_core = get_named_compile_time_arg_val("is_shared_compute_core") == 1;
@@ -83,9 +94,11 @@ struct Core {
         static constexpr bool is_mcast_receiver_core =
             get_named_compile_time_arg_val("is_shared_mcast_receiver_core") == 1;
     };
-    // Combined: cores that receive the input mcast
+    // Combined: cores that receive the input mcast. is_gate_proj_streamer_core is a
+    // superset of is_gate_proj_core (16 cores vs 8 in K-split mode) so it must consume
+    // the input mcast for matmul to have its activation.
     static constexpr bool is_input_mcast_receiver =
-        Routed::is_gate_mm_core || Routed::is_gate_proj_core || Shared::is_compute_core;
+        Routed::is_gate_mm_core || Routed::is_gate_proj_streamer_core || Shared::is_compute_core;
 
     // Reduce-to-one core roles
     static constexpr bool is_reduce_worker_core = get_named_compile_time_arg_val("is_reduce_worker_core") == 1;
@@ -142,43 +155,91 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::DMArgs expert_scale_mcast_args{.sender = {}, .receiver = {}};
 #endif  // ENABLE_ROUTING
 
-            // gate_proj DRAM Streaming Matmul (reader)
-            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+            // gate_proj DRAM Matmul Expert Compressed (reader) — pr42896 36-param shape
+            using GateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
+                get_named_compile_time_arg_val("gate_proj_cb_in0"),
                 get_named_compile_time_arg_val("gate_proj_cb_in1"),
                 get_named_compile_time_arg_val("gate_proj_cb_out"),
-                get_named_compile_time_arg_val("gate_proj_in1_tensor_addr"),
-                get_named_compile_time_arg_val("gate_proj_in1_page_size"),
-                get_named_compile_time_arg_val("gate_proj_in1_num_pages"),
+                get_named_compile_time_arg_val("gate_proj_cb_index"),
+                get_named_compile_time_arg_val("gate_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("gate_proj_subblock_k"),
-                get_named_compile_time_arg_val("gate_proj_per_core_n"),
-                get_named_compile_time_arg_val("gate_proj_in1_block_size_bytes"),
-                get_named_compile_time_arg_val("gate_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("gate_proj_subblock_n"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),
                 get_named_compile_time_arg_val("gate_proj_bank_id"),
                 get_named_compile_time_arg_val("gate_proj_vc"),
-                get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
-                get_named_compile_time_arg_val("gate_proj_cb_index"),
+                get_named_compile_time_arg_val("gate_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_block_sizes_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_in1_size_bytes"),
+                get_named_compile_time_arg_val("gate_proj_noc_max_page_size"),
+                get_named_compile_time_arg_val("gate_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("gate_proj_pipeline_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("gate_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("gate_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("gate_proj_num_active_experts"),
+                get_named_compile_time_arg_val("gate_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_fmt"),
+                get_named_compile_time_arg_val("gate_proj_fmt_dram_addr"),
+                get_named_compile_time_arg_val("gate_proj_fmt_per_expert_bytes"),
+                get_named_compile_time_arg_val("gate_proj_fmt_per_core_bytes"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_1"),
+                get_named_compile_time_arg_val("gate_proj_accum_experts"),
                 get_named_compile_time_arg_val("gate_proj_index_offset"),
-                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+                get_named_compile_time_arg_val("gate_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("gate_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
+                get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
-            // up_proj DRAM Streaming Matmul (reader) — shares CB with gate_proj
-            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+            // up_proj DRAM Matmul Expert Compressed (reader) — shares weight CB with gate_proj
+            using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
+                get_named_compile_time_arg_val("up_proj_cb_in0"),
                 get_named_compile_time_arg_val("up_proj_cb_in1"),
                 get_named_compile_time_arg_val("up_proj_cb_mm_out"),
-                get_named_compile_time_arg_val("up_proj_in1_tensor_addr"),
-                get_named_compile_time_arg_val("up_proj_in1_page_size"),
-                get_named_compile_time_arg_val("up_proj_in1_num_pages"),
+                get_named_compile_time_arg_val("up_proj_cb_index"),
+                get_named_compile_time_arg_val("up_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("up_proj_subblock_k"),
-                get_named_compile_time_arg_val("up_proj_per_core_n"),
-                get_named_compile_time_arg_val("up_proj_in1_block_size_bytes"),
-                get_named_compile_time_arg_val("up_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("up_proj_subblock_n"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("up_proj_per_core_n"),
                 get_named_compile_time_arg_val("up_proj_bank_id"),
                 get_named_compile_time_arg_val("up_proj_vc"),
-                get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
-                get_named_compile_time_arg_val("up_proj_cb_index"),
+                get_named_compile_time_arg_val("up_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_block_sizes_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_in1_size_bytes"),
+                get_named_compile_time_arg_val("up_proj_noc_max_page_size"),
+                get_named_compile_time_arg_val("up_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("up_proj_pipeline_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("up_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("up_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("up_proj_num_active_experts"),
+                get_named_compile_time_arg_val("up_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_fmt"),
+                get_named_compile_time_arg_val("up_proj_fmt_dram_addr"),
+                get_named_compile_time_arg_val("up_proj_fmt_per_expert_bytes"),
+                get_named_compile_time_arg_val("up_proj_fmt_per_core_bytes"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_1"),
+                get_named_compile_time_arg_val("up_proj_accum_experts"),
                 get_named_compile_time_arg_val("up_proj_index_offset"),
-                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+                get_named_compile_time_arg_val("up_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("up_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
+                get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Mul (reader — no-op)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ReaderCTArgs;
@@ -196,24 +257,48 @@ void kernel_main() {
             // down_proj Mcast (no-op on NCRISC — receiver moved to BRISC)
             deepseek_b1_ops::Mcast::DMArgs down_proj_mcast_args{.sender = {}, .receiver = {}};
 
-            // down_proj DRAM Streaming Matmul (reader)
-            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ReaderCTArgs<
+            // down_proj DRAM Matmul Expert Compressed (reader) — pr42896 36-param shape
+            using DownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ReaderCTArgs<
+                get_named_compile_time_arg_val("down_proj_cb_in0"),
                 get_named_compile_time_arg_val("down_proj_cb_in1"),
                 get_named_compile_time_arg_val("down_proj_cb_out"),
-                get_named_compile_time_arg_val("down_proj_in1_tensor_addr"),
-                get_named_compile_time_arg_val("down_proj_in1_page_size"),
-                get_named_compile_time_arg_val("down_proj_in1_num_pages"),
+                get_named_compile_time_arg_val("down_proj_cb_index"),
+                get_named_compile_time_arg_val("down_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("down_proj_subblock_k"),
-                get_named_compile_time_arg_val("down_proj_per_core_n"),
-                get_named_compile_time_arg_val("down_proj_in1_block_size_bytes"),
-                get_named_compile_time_arg_val("down_proj_out_num_tiles"),
+                get_named_compile_time_arg_val("down_proj_subblock_n"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
+                get_named_compile_time_arg_val("down_proj_per_core_n"),
                 get_named_compile_time_arg_val("down_proj_bank_id"),
                 get_named_compile_time_arg_val("down_proj_vc"),
-                get_named_compile_time_arg_val("enable_routing"),  // enable_indexing
-                get_named_compile_time_arg_val("down_proj_cb_index"),
+                get_named_compile_time_arg_val("down_proj_expert_offsets_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_block_sizes_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_in1_size_bytes"),
+                get_named_compile_time_arg_val("down_proj_noc_max_page_size"),
+                get_named_compile_time_arg_val("down_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("down_proj_pipeline_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_next_core_noc_x"),
+                get_named_compile_time_arg_val("down_proj_next_core_noc_y"),
+                get_named_compile_time_arg_val("down_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("down_proj_num_active_experts"),
+                get_named_compile_time_arg_val("down_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_fmt"),
+                get_named_compile_time_arg_val("down_proj_fmt_dram_addr"),
+                get_named_compile_time_arg_val("down_proj_fmt_per_expert_bytes"),
+                get_named_compile_time_arg_val("down_proj_fmt_per_core_bytes"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_1"),
+                get_named_compile_time_arg_val("down_proj_accum_experts"),
                 get_named_compile_time_arg_val("down_proj_index_offset"),
-                get_named_compile_time_arg_val("use_hardcoded_expert_index")>;
+                get_named_compile_time_arg_val("down_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("down_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
+                get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Add (reader — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ReaderCTArgs;
@@ -346,8 +431,8 @@ void kernel_main() {
         }
 #endif
         if constexpr (Core::Routed::is_gate_proj_core) {
-            unified_kernels::setup_sharded_buffer(
-                get_named_compile_time_arg_val("mul_cb_in1"), get_named_compile_time_arg_val("mul_num_tiles"));
+            // mul_cb_in1 == gate_proj_cb_out is filled dynamically by gate_proj TRISC;
+            // pre-loading it would fill CB capacity and deadlock gate_proj at expert 7.
             unified_kernels::setup_sharded_buffer(
                 get_named_compile_time_arg_val("add_cb_in0"), get_named_compile_time_arg_val("add_cb_in0_wait_tiles"));
         }
@@ -402,6 +487,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gather_row_major"),
                 get_named_compile_time_arg_val("gather_receiver_data_addr"),
                 0,  // sender_idx (unused when UsePerCoreSenderIdx=false)
+                1,  // num_experts (single write)
+                0,  // src_page_size (unused)
+                0,  // expert_dst_stride (unused)
             };
 
             // Gate (writer)
@@ -454,9 +542,9 @@ void kernel_main() {
                 }};
 #endif  // ENABLE_ROUTING
 
-            // DRAM Streaming Matmul (writer — no-op for BRISC)
-            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
-            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
+            // DRAM Matmul Expert Compressed (writer — empty, BRISC is no-op)
+            using GateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::WriterCTArgs;
+            using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::WriterCTArgs;
 
             // Eltwise Mul (writer)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::WriterCTArgs<
@@ -465,7 +553,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("mul_cb_scalar"),
                 get_named_compile_time_arg_val("mul_cb_scalar_src"),
                 get_named_compile_time_arg_val("mul_scalar_index_offset"),
-                get_named_compile_time_arg_val("enable_routing")>;  // enable_scalar
+                get_named_compile_time_arg_val("enable_routing"),  // enable_scalar
+                get_named_compile_time_arg_val("mul_num_experts")>;
 
             // down_proj Gather (receiver)
             // down_proj Gather (sender — MoeGather: sender on BRISC)
@@ -483,6 +572,9 @@ void kernel_main() {
                 get_named_compile_time_arg_val("down_proj_gather_row_major"),
                 get_named_compile_time_arg_val("down_proj_gather_receiver_data_addr"),
                 get_named_compile_time_arg_val("down_proj_gather_sender_idx"),
+                get_named_compile_time_arg_val("down_proj_gather_num_experts"),
+                get_named_compile_time_arg_val("down_proj_gather_src_page_size"),
+                get_named_compile_time_arg_val("down_proj_gather_expert_dst_stride"),
             };
 
             // down_proj Mcast (sender + receiver on BRISC)
@@ -507,8 +599,8 @@ void kernel_main() {
                     get_named_compile_time_arg_val("down_proj_mcast_dst_num_pages"),
                 }};
 
-            // down_proj DRAM Matmul (writer — no-op for BRISC)
-            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::WriterCTArgs;
+            // down_proj DRAM Matmul Expert Compressed (writer — empty, BRISC is no-op)
+            using DownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::WriterCTArgs;
 
             // Eltwise Add (writer — no-op)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::WriterCTArgs;
@@ -585,6 +677,9 @@ void kernel_main() {
                 0,  // row_major (unused)
                 get_named_compile_time_arg_val("shared_ag_receiver_data_addr"),
                 get_named_compile_time_arg_val("shared_ag_sender_idx"),
+                1,  // num_experts (single write per sender)
+                0,  // src_page_size (unused for num_experts=1)
+                0,  // expert_dst_stride (unused for num_experts=1)
             };
 
             // Up Gather (B) sender (MoeGather: sender on BRISC)
@@ -602,6 +697,9 @@ void kernel_main() {
                 0,
                 get_named_compile_time_arg_val("shared_bg_receiver_data_addr"),
                 get_named_compile_time_arg_val("shared_bg_sender_idx"),
+                1,  // num_experts (single write per sender)
+                0,  // src_page_size (unused for num_experts=1)
+                0,  // expert_dst_stride (unused for num_experts=1)
             };
 
             // Gated Reduce (writer — no-op for BRISC)
@@ -650,6 +748,9 @@ void kernel_main() {
                 0,  // row_major (unused)
                 get_named_compile_time_arg_val("shared_og_receiver_data_addr"),
                 get_named_compile_time_arg_val("shared_residual_add_core_idx"),  // reuse matmul core index
+                1,  // num_experts (single write per sender)
+                0,  // src_page_size (unused for num_experts=1)
+                0,  // expert_dst_stride (unused for num_experts=1)
             };
 
             // Output Mcast — sender + receiver on BRISC (sender core → 130 cores)
@@ -747,31 +848,79 @@ void kernel_main() {
             deepseek_b1_ops::Mcast::ComputeArgs expert_scale_mcast_args{};
 #endif  // ENABLE_ROUTING
 
-            // gate_proj DRAM Streaming Matmul (compute)
-            using GateProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+            // gate_proj DRAM Matmul Expert Compressed (compute) — pr42896 28-param shape
+            using GateProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
                 get_named_compile_time_arg_val("gate_proj_cb_in0"),
                 get_named_compile_time_arg_val("gate_proj_cb_in1"),
                 get_named_compile_time_arg_val("gate_proj_cb_out"),
+                get_named_compile_time_arg_val("gate_proj_cb_index"),
+                get_named_compile_time_arg_val("gate_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("gate_proj_subblock_k"),
-                get_named_compile_time_arg_val("gate_proj_per_core_n"),
-                get_named_compile_time_arg_val("gate_proj_subblock_w"),
+                get_named_compile_time_arg_val("gate_proj_subblock_n"),
                 get_named_compile_time_arg_val("gate_proj_num_subblocks_k"),
-                get_named_compile_time_arg_val("gate_proj_tile_r_dim"),
+                get_named_compile_time_arg_val("gate_proj_per_core_n"),
+                get_named_compile_time_arg_val("gate_proj_dram_fmt_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_num_active_experts"),
+                get_named_compile_time_arg_val("gate_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_fmt"),
+                get_named_compile_time_arg_val("gate_proj_dram_meta_words_per_block"),
+                get_named_compile_time_arg_val("gate_proj_in0_page_size"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("gate_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("gate_proj_fmt_sem_addr_1"),
+                get_named_compile_time_arg_val("gate_proj_accum_experts"),
                 get_named_compile_time_arg_val("gate_proj_fuse_silu"),
-                get_named_compile_time_arg_val("gate_proj_fp32_dest_acc_en")>;
+                get_named_compile_time_arg_val("gate_proj_index_offset"),
+                get_named_compile_time_arg_val("gate_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("gate_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("gate_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("gate_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_out_silu"),
+                get_named_compile_time_arg_val("gate_proj_silu_tile_h"),
+                get_named_compile_time_arg_val("gate_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("gate_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("gate_proj_primary_at_last_offset"),
+                get_named_compile_time_arg_val("gate_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("gate_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
-            // up_proj DRAM Streaming Matmul (compute) — shares CB with gate_proj
-            using UpProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+            // up_proj DRAM Matmul Expert Compressed (compute) — shares weight CB with gate_proj
+            using UpProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
                 get_named_compile_time_arg_val("up_proj_cb_in0"),
                 get_named_compile_time_arg_val("up_proj_cb_in1"),
                 get_named_compile_time_arg_val("up_proj_cb_mm_out"),
+                get_named_compile_time_arg_val("up_proj_cb_index"),
+                get_named_compile_time_arg_val("up_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("up_proj_subblock_k"),
-                get_named_compile_time_arg_val("up_proj_per_core_n"),
-                get_named_compile_time_arg_val("up_proj_subblock_w"),
+                get_named_compile_time_arg_val("up_proj_subblock_n"),
                 get_named_compile_time_arg_val("up_proj_num_subblocks_k"),
-                get_named_compile_time_arg_val("up_proj_tile_r_dim"),
+                get_named_compile_time_arg_val("up_proj_per_core_n"),
+                get_named_compile_time_arg_val("up_proj_dram_fmt_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_num_active_experts"),
+                get_named_compile_time_arg_val("up_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_fmt"),
+                get_named_compile_time_arg_val("up_proj_dram_meta_words_per_block"),
+                get_named_compile_time_arg_val("up_proj_in0_page_size"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("up_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("up_proj_fmt_sem_addr_1"),
+                get_named_compile_time_arg_val("up_proj_accum_experts"),
                 get_named_compile_time_arg_val("up_proj_fuse_silu"),
-                get_named_compile_time_arg_val("up_proj_fp32_dest_acc_en")>;
+                get_named_compile_time_arg_val("up_proj_index_offset"),
+                get_named_compile_time_arg_val("up_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("up_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("up_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("up_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_out_silu"),
+                get_named_compile_time_arg_val("up_proj_silu_tile_h"),
+                get_named_compile_time_arg_val("up_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("up_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("up_proj_primary_at_last_offset"),
+                get_named_compile_time_arg_val("up_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("up_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Mul (compute)
             using MulCTArgs = deepseek_b1_ops::EltwiseMul::ComputeCTArgs<
@@ -785,7 +934,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("gate_proj_per_core_n"),  // cb_in1_wait_tiles
                 get_named_compile_time_arg_val("mul_cb_scalar"),
                 get_named_compile_time_arg_val("mul_fp32_dest_acc_en"),
-                get_named_compile_time_arg_val("enable_routing")>;  // enable_scalar
+                get_named_compile_time_arg_val("enable_routing"),  // enable_scalar
+                get_named_compile_time_arg_val("mul_num_experts")>;
 
             // down_proj Gather (compute — no-op)
             deepseek_b1_ops::MoeGather::ComputeArgs down_proj_gather_args{};
@@ -793,18 +943,42 @@ void kernel_main() {
             // down_proj Mcast (compute — no-op)
             deepseek_b1_ops::Mcast::ComputeArgs down_proj_mcast_args{};
 
-            // down_proj DRAM Streaming Matmul (compute)
-            using DownProjCTArgs = deepseek_b1_ops::DRAMStreamingMatmul::ComputeCTArgs<
+            // down_proj DRAM Matmul Expert Compressed (compute) — pr42896 28-param shape
+            using DownProjCTArgs = deepseek_b1_ops::MatmulExpertCompressedDRAM::ComputeCTArgs<
                 get_named_compile_time_arg_val("down_proj_cb_in0"),
                 get_named_compile_time_arg_val("down_proj_cb_in1"),
                 get_named_compile_time_arg_val("down_proj_cb_out"),
+                get_named_compile_time_arg_val("down_proj_cb_index"),
+                get_named_compile_time_arg_val("down_proj_num_tiles_k"),
                 get_named_compile_time_arg_val("down_proj_subblock_k"),
-                get_named_compile_time_arg_val("down_proj_per_core_n"),
-                get_named_compile_time_arg_val("down_proj_subblock_w"),
+                get_named_compile_time_arg_val("down_proj_subblock_n"),
                 get_named_compile_time_arg_val("down_proj_num_subblocks_k"),
-                get_named_compile_time_arg_val("down_proj_tile_r_dim"),
+                get_named_compile_time_arg_val("down_proj_per_core_n"),
+                get_named_compile_time_arg_val("down_proj_dram_fmt_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_num_active_experts"),
+                get_named_compile_time_arg_val("down_proj_index_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_fmt"),
+                get_named_compile_time_arg_val("down_proj_dram_meta_words_per_block"),
+                get_named_compile_time_arg_val("down_proj_in0_page_size"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_l1_addr"),
+                get_named_compile_time_arg_val("down_proj_fmt_cb_page_size"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_0"),
+                get_named_compile_time_arg_val("down_proj_fmt_sem_addr_1"),
+                get_named_compile_time_arg_val("down_proj_accum_experts"),
                 get_named_compile_time_arg_val("down_proj_fuse_silu"),
-                get_named_compile_time_arg_val("down_proj_fp32_dest_acc_en")>;
+                get_named_compile_time_arg_val("down_proj_index_offset"),
+                get_named_compile_time_arg_val("down_proj_k_parallel_per_bank"),
+                get_named_compile_time_arg_val("down_proj_k_slice_idx"),
+                get_named_compile_time_arg_val("down_proj_num_subblocks_k_local"),
+                get_named_compile_time_arg_val("down_proj_partial_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_out_silu"),
+                get_named_compile_time_arg_val("down_proj_silu_tile_h"),
+                get_named_compile_time_arg_val("down_proj_cores_per_bank"),
+                get_named_compile_time_arg_val("down_proj_core_in_bank_idx"),
+                get_named_compile_time_arg_val("down_proj_primary_at_last_offset"),
+                get_named_compile_time_arg_val("down_proj_gather_sync_sem_addr"),
+                get_named_compile_time_arg_val("down_proj_cb_internal_acc"),
+                get_named_compile_time_arg_val("enable_routing")>;  // → enable_indexing
 
             // Eltwise Add (compute)
             using AddCTArgs = deepseek_b1_ops::EltwiseAdd::ComputeCTArgs<
@@ -812,8 +986,11 @@ void kernel_main() {
                 get_named_compile_time_arg_val("add_cb_in1"),
                 get_named_compile_time_arg_val("add_cb_out"),
                 get_named_compile_time_arg_val("add_num_tiles"),
-                get_named_compile_time_arg_val("down_proj_cb_out"),      // cb_in0_wait (actual producer)
-                get_named_compile_time_arg_val("down_proj_per_core_n"),  // cb_in0_wait_tiles
+                get_named_compile_time_arg_val("down_proj_cb_out"),  // cb_in0_wait (actual producer)
+                // Full per-primary N after gather: per_core_n × cores_per_bank.
+                // gather=False keeps cores_per_bank=1 → equals per_core_n (gate/up unchanged).
+                get_named_compile_time_arg_val("down_proj_per_core_n") *
+                    get_named_compile_time_arg_val("down_proj_cores_per_bank"),  // cb_in0_wait_tiles
                 get_named_compile_time_arg_val("add_cb_in1_wait_tiles"),
                 get_named_compile_time_arg_val("add_sender_index"),
                 get_named_compile_time_arg_val("add_slice_size_bytes")>;
@@ -1082,15 +1259,18 @@ void kernel_main() {
 #endif  // ENABLE_ROUTING
 
         // 3. Shared Expert: Gate/Up KN-sliced matmul on 128 compute cores
-        //     CB 1 (act) is shared: on gate_proj cores it is also consumed by gate_proj (step 6)
-        //     and up_proj (step 7, which pops it). So we only pop here on non-gate_proj cores.
+        //     CB 1 (act) is shared: on gate_proj_streamer cores (16 in K-split: primaries +
+        //     K-senders) it is also consumed by gate_proj (step 6) and up_proj (step 7,
+        //     which pops it on all streamers). So we only pop here on non-streamer cores.
+        //     Using is_gate_proj_streamer_core (not is_gate_proj_core) — otherwise K-senders
+        //     pop cb_in0 here, leaving gate_proj_mm's cb_wait_front waiting on empty CB.
         {
             DeviceZoneScopedN("SHARED_GU_MATMUL");
             deepseek_b1_ops::KNSlicedMatmul::Op<
                 Moe::Shared::GUMatmulCTArgs,
                 Core::Shared::is_compute_core,
-                !Core::Routed::is_gate_proj_core,  // pop_act
-                false>                             // pop_weights
+                !Core::Routed::is_gate_proj_streamer_core,  // pop_act
+                false>                                      // pop_weights
                 shared_gu_matmul;
             shared_gu_matmul(moe.shared.gu_matmul_args);
         }
@@ -1123,16 +1303,20 @@ void kernel_main() {
             gate();
         }
 
-        // 5. Mcast Index: Broadcast expert indices to gate_proj cores only
-        // Uses dedicated mcast with IsReceiverCore=is_gate_proj_core so only gate_proj
-        // cores push to CB 10. Other grid cores just drain the semaphore (no CB ops).
+        // 5. Mcast Index: Broadcast expert indices to all matmul-streamer cores.
+        // IsReceiverCore=is_down_proj_streamer_core (16 cores in down gather mode, 8 otherwise).
+        // Invariant: down gather and gate K-split are configured together (both use the same
+        // primary_worker_cores + cores_per_dram_bank=2), so is_down_proj_streamer_core's
+        // 16-core set IS the same set as is_gate_proj_streamer_core. Both gate/up matmul
+        // (16 cores in K-split) and down (16 cores in gather) need the index for weight reads.
+        // Other grid cores just drain the semaphore (no CB ops).
         {
             DeviceZoneScopedN("MCAST_INDEX");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
                 Core::is_mcast_grid_core,
-                Core::Routed::is_gate_proj_core,
+                Core::Routed::is_down_proj_streamer_core,
                 true,
                 /*ReceiverOnBrisc=*/true>
                 index_mcast;
@@ -1175,23 +1359,59 @@ void kernel_main() {
             gated_reduce(moe.shared.gated_reduce_args);
         }
 
-        // 6. gate_proj: DRAM Streaming Matmul + SiLU (PopIn0=false, keep input for up_proj)
+        // 6. gate_proj: DRAM Matmul Expert Compressed + SiLU (PopIn0=false: keep input for up_proj).
+        //    ResetCBIn1=true so the kernel's SW write-ptr wrap aligns with the CB's
+        //    physical wrap — required because GP and UP share cb_in1 back-to-back.
+        //    IsActiveCore = is_gate_proj_streamer_core (16 cores in K-split mode = both
+        //    K-senders and the K-reducer/primary; 8 cores = primaries only otherwise).
         {
             DeviceZoneScopedN("GATE_PROJ");
-            constexpr uint32_t gate_proj_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-            deepseek_b1_ops::DRAMStreamingMatmul::
-                Op<Moe::Routed::GateProjCTArgs, Core::Routed::is_gate_proj_core, false, true, gate_proj_cb_in1_addr>
-                    gate_proj_mm;
+            constexpr uint32_t gp_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+            // pop_out=true on secondary streamer cores only (= streamer && !primary).
+            // Senders' cb_out is internal (their NCRISC NOC-wrote real bytes to the
+            // primary; no downstream op reads sender's cb_out), so they must drain
+            // for multi-iter. Primaries' cb_out is consumed by mul → don't pop.
+            constexpr bool gp_secondary_pop =
+                Core::Routed::is_gate_proj_streamer_core && !Core::Routed::is_gate_proj_core;
+            deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+                Moe::Routed::GateProjCTArgs,
+                Core::Routed::is_gate_proj_streamer_core,
+                /*pop_in0=*/false,
+                /*pop_index=*/false,
+                /*ResetCBIn1=*/true,
+                gp_cb_in1_addr,
+                /*pop_out=*/gp_secondary_pop>
+                gate_proj_mm;
             gate_proj_mm();
         }
 
-        // 7. up_proj: DRAM Streaming Matmul (PopIn0=true, ResetCBIn1=true, WaitForOutput=true)
+        // 7. up_proj: DRAM Matmul Expert Compressed (PopIn0=true: last consumer of gate input; PopIndex=false).
+        //    Same cb_in1 as gate_proj → use gate_proj_in1_buf_addr as CBIn1ResetAddr.
+        //    SkipNocTridReset=true: gate's leftover NCRISC writes (incl. atomic
+        //    sem_inc on dynamic NOC where atomic shares cmd buf with reads) carry
+        //    a non-zero trid; calling reset_noc_trid_barrier_counter at up's entry
+        //    would clear those counters mid-flight and the late ack would wrap them,
+        //    making up's read barriers hang. Skip the reset → counters drain naturally.
         {
             DeviceZoneScopedN("UP_PROJ");
-            constexpr uint32_t cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
-            deepseek_b1_ops::DRAMStreamingMatmul::
-                Op<Moe::Routed::UpProjCTArgs, Core::Routed::is_gate_proj_core, true, true, cb_in1_addr>
-                    up_proj;
+            constexpr uint32_t up_cb_in1_addr = get_named_compile_time_arg_val("gate_proj_in1_buf_addr");
+            // IsActiveCore = is_gate_proj_streamer_core (matches gate_proj). Up_proj
+            // shares cb_in1 with gate_proj (same L1 buf addr) so it must run on the same
+            // 16-core grid in K-split mode. pop_in0=true fires on all 16 cores → cb_in0
+            // (activation) is freed so the next iter's mcast can land.
+            // pop_out: same rationale as gate_proj — drain secondary streamer cores' cb_out.
+            constexpr bool up_secondary_pop =
+                Core::Routed::is_gate_proj_streamer_core && !Core::Routed::is_gate_proj_core;
+            deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
+                Moe::Routed::UpProjCTArgs,
+                Core::Routed::is_gate_proj_streamer_core,
+                /*pop_in0=*/true,
+                /*pop_index=*/false,
+                /*ResetCBIn1=*/true,
+                up_cb_in1_addr,
+                /*pop_out=*/up_secondary_pop,
+                /*SkipNocTridReset=*/true>
+                up_proj;
             up_proj();
         }
 
@@ -1281,31 +1501,49 @@ void kernel_main() {
             down_proj_gather(moe.routed.down_proj_gather_args);
         }
 
-        // 11. down_proj Mcast: Broadcast gathered fused output to gate_proj cores
+        // 11. down_proj Mcast: Broadcast gathered fused output to all down_proj streamer cores
+        // (16 cores in gather mode, 8 otherwise) so secondaries' cb_in0 is also pushed.
         {
             DeviceZoneScopedN("DOWN_PROJ_MCAST");
             deepseek_b1_ops::Mcast::Op<
                 Moe::Routed::McastCTArgs,
                 Core::is_sender_core,
                 Core::is_mcast_grid_core,
-                Core::Routed::is_gate_proj_core,
+                Core::Routed::is_down_proj_streamer_core,
                 true,
                 /*ReceiverOnBrisc=*/true>
                 down_proj_mcast;
             down_proj_mcast(moe.routed.down_proj_mcast_args);
         }
 
-        // 12. down_proj: DRAM Streaming Matmul (PopIndex=true: last consumer of expert index CB)
+        // 12. down_proj: DRAM Matmul Expert Compressed (PopIndex=true: last consumer of expert index)
+        //     Active on `is_down_proj_streamer_core` (16 cores when primary_at_last_offset=True,
+        //     8 cores otherwise) so senders (= secondaries post-swap) NOC-write their
+        //     accum onto the receiver/primary.
+        //     SkipNocTridReset=true: same rationale as up_proj — up's leftover NCRISC
+        //     writes (incl. atomic sem_inc) carry trid from earlier reads; resetting
+        //     trid counters here would wrap them when late acks arrive.
+        //     ResetCBIn1=true: required for multi-iter — without it, kernel-managed
+        //     l1_write_addr_in1 wraps at (drifted_wr_ptr + size) while framework wr_ptr
+        //     wraps at the CB's physical end, so iter 2's writes land at a different
+        //     L1 region than the framework's tracked rd_ptr → UNPACK reads stale bytes.
         {
             DeviceZoneScopedN("DOWN_PROJ");
-            constexpr uint32_t down_proj_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
-            deepseek_b1_ops::DRAMStreamingMatmul::Op<
+            constexpr uint32_t dp_cb_in1_addr = get_named_compile_time_arg_val("down_proj_in1_buf_addr");
+            // pop_out=true on secondary streamer cores only. Senders' cb_out is
+            // internal (their gather NOC write went to the primary's cb_out slot 0);
+            // primaries' cb_out is consumed by eltwise_add → don't pop on primary.
+            constexpr bool dp_secondary_pop =
+                Core::Routed::is_down_proj_streamer_core && !Core::Routed::is_gate_proj_core;
+            deepseek_b1_ops::MatmulExpertCompressedDRAM::Op<
                 Moe::Routed::DownProjCTArgs,
-                Core::Routed::is_gate_proj_core,
-                true,
-                true,
-                down_proj_cb_in1_addr,
-                true>
+                Core::Routed::is_down_proj_streamer_core,
+                /*pop_in0=*/true,
+                /*pop_index=*/true,
+                /*ResetCBIn1=*/true,
+                dp_cb_in1_addr,
+                /*pop_out=*/dp_secondary_pop,
+                /*SkipNocTridReset=*/true>
                 down_proj;
             down_proj();
         }

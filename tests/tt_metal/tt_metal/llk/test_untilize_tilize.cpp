@@ -44,8 +44,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-#include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -528,7 +527,7 @@ Following tests are for Quasar
 enum class QuasarTestMode { TILIZE, UNTILIZE, UNTILIZE_DST };
 
 static void run_quasar_tilize_untilize_test(
-    IDevice* dev,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_tiles_r,
     uint32_t num_tiles_c,
     QuasarTestMode mode,
@@ -537,8 +536,8 @@ static void run_quasar_tilize_untilize_test(
     tt::DataFormat data_format = tt::DataFormat::Float16_b) {
     bool is_tilize = (mode == QuasarTestMode::TILIZE);
 
-    Program program = CreateProgram();
-    CoreCoord core = {0, 0};
+    IDevice* dev = mesh_device->get_devices()[0];
+    const experimental::metal2_host_api::NodeCoord node{0, 0};
 
     bool is_8bit_integer = (data_format == tt::DataFormat::Int8 || data_format == tt::DataFormat::UInt8);
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
@@ -577,75 +576,137 @@ static void run_quasar_tilize_untilize_test(
         output_data_format = tt::DataFormat::Float32;
     }
 
-    tt_metal::experimental::dfb::DataflowBufferConfig l1_input_dfb_config = {
+    constexpr const char* INPUT_DFB = "input_dfb";
+    constexpr const char* OUTPUT_DFB = "output_dfb";
+    constexpr const char* READER = "reader";
+    constexpr const char* WRITER = "writer";
+    constexpr const char* COMPUTE = "compute";
+
+    experimental::metal2_host_api::DataflowBufferSpec input_dfb_spec{
+        .unique_id = INPUT_DFB,
         .entry_size = input_single_tile_size,
         .num_entries = dfb_num_entries,
-        .num_producers = 1,
-        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true,
-        .data_format = data_format};
-
-    tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+        .data_format_metadata = data_format,
+    };
+    experimental::metal2_host_api::DataflowBufferSpec output_dfb_spec{
+        .unique_id = OUTPUT_DFB,
         .entry_size = output_single_tile_size,
         .num_entries = dfb_num_entries,
-        .num_producers = 1,
-        .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true,
-        .data_format = output_data_format};
+        .data_format_metadata = output_data_format,
+    };
 
-    uint32_t l1_input_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_input_dfb_config);
-    uint32_t l1_output_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program, core, l1_output_dfb_config);
+    experimental::metal2_host_api::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source =
+            experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp"},
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = INPUT_DFB,
+            .local_accessor_name = "out",
+            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+        }},
+        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .config_spec =
+            experimental::metal2_host_api::DataMovementConfiguration{
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+    };
 
-    KernelHandle reader = tt_metal::experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
-        core,
-        tt_metal::experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {l1_input_dfb, 1}});
-
-    KernelHandle writer = tt_metal::experimental::quasar::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
-        core,
-        tt_metal::experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {l1_output_dfb, 1}});
+    experimental::metal2_host_api::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source =
+            experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp"},
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = OUTPUT_DFB,
+            .local_accessor_name = "in",
+            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+        }},
+        .compile_time_arg_bindings = {{"use_dfbs", 1u}},
+        .runtime_arguments_schema =
+            {.named_runtime_args = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .config_spec =
+            experimental::metal2_host_api::DataMovementConfiguration{
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+    };
 
     std::string compute_kernel;
-    std::vector<uint32_t> compute_args;
+    experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings compute_cta_bindings;
     switch (mode) {
         case QuasarTestMode::TILIZE:
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
-            compute_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb};
+            compute_cta_bindings = {
+                {"per_core_block_cnt", num_tiles_r},
+                {"per_core_block_tile_cnt", num_tiles_c},
+            };
             break;
         case QuasarTestMode::UNTILIZE:
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize.cpp";
-            compute_args = {num_tiles_r, num_tiles_c, l1_input_dfb, l1_output_dfb};
+            compute_cta_bindings = {
+                {"per_core_block_cnt", num_tiles_r},
+                {"per_core_block_tile_cnt", num_tiles_c},
+            };
             break;
         case QuasarTestMode::UNTILIZE_DST: {
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize.cpp";
             uint32_t num_faces = 4;
             uint32_t face_r_dim = 16;
-            compute_args = {num_tiles_r, num_tiles_c, num_faces, face_r_dim, l1_input_dfb, l1_output_dfb};
+            compute_cta_bindings = {
+                {"per_core_block_cnt", num_tiles_r},
+                {"per_core_block_tile_cnt", num_tiles_c},
+                {"num_faces", num_faces},
+                {"num_rows_per_face", face_r_dim},
+            };
             break;
         }
     }
 
-    KernelHandle compute = CreateKernel(
-        program,
-        compute_kernel,
-        core,
-        tt_metal::experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = 1,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .compile_args = compute_args});
+    experimental::metal2_host_api::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{compute_kernel},
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = INPUT_DFB,
+                 .local_accessor_name = "in",
+                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUTPUT_DFB,
+                 .local_accessor_name = "out",
+                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_arg_bindings = compute_cta_bindings,
+        .config_spec =
+            experimental::metal2_host_api::ComputeConfiguration{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en,
+            },
+    };
 
-    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_input_dfb, reader, compute);
-    tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, l1_output_dfb, compute, writer);
+    experimental::metal2_host_api::WorkUnitSpec wu{
+        .unique_id = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "quasar_tilize_untilize",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
 
     std::vector<uint32_t> src_vec;
     if (data_format == tt::DataFormat::Int8) {
@@ -672,8 +733,34 @@ static void run_quasar_tilize_untilize_test(
     // Compute the real per-tile DRAM stride directly from the buffer size.
     const uint32_t src_tile_stride_bytes = src_dram_buffer_size / num_tiles;
     const uint32_t dst_tile_stride_bytes = dst_dram_buffer_size / num_tiles;
-    SetRuntimeArgs(program, reader, core, {dram_buffer_src_addr, (uint32_t)0, num_tiles, src_tile_stride_bytes});
-    SetRuntimeArgs(program, writer, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles, dst_tile_stride_bytes});
+
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = READER,
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"src_addr", dram_buffer_src_addr},
+                       {"src_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"dram_page_stride", src_tile_stride_bytes}}}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = WRITER,
+            .named_runtime_args =
+                {{.node = node,
+                  .args =
+                      {{"dst_addr", dram_buffer_dst_addr},
+                       {"dst_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"dram_page_stride", dst_tile_stride_bytes}}}},
+        },
+        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = COMPUTE,
+        },
+    };
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
     detail::LaunchProgram(dev, program, true);
 
@@ -733,7 +820,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilize) {
                         continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
                     }
                     run_quasar_tilize_untilize_test(
-                        this->devices_.at(0)->get_devices()[0],
+                        this->devices_.at(0),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::UNTILIZE,
@@ -758,7 +845,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDst) {
                         continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
                     }
                     run_quasar_tilize_untilize_test(
-                        this->devices_.at(0)->get_devices()[0],
+                        this->devices_.at(0),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::UNTILIZE_DST,
@@ -783,7 +870,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
                         continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
                     }
                     run_quasar_tilize_untilize_test(
-                        this->devices_.at(0)->get_devices()[0],
+                        this->devices_.at(0),
                         cfg[0],
                         cfg[1],
                         QuasarTestMode::TILIZE,
@@ -805,7 +892,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt32) {
                 continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
             }
             run_quasar_tilize_untilize_test(
-                this->devices_.at(0)->get_devices()[0],
+                this->devices_.at(0),
                 cfg[0],
                 cfg[1],
                 QuasarTestMode::UNTILIZE,
@@ -825,7 +912,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
                 continue;  // TODO (#38092): Remove when we can run back to back tests on Quasar
             }
             run_quasar_tilize_untilize_test(
-                this->devices_.at(0)->get_devices()[0],
+                this->devices_.at(0),
                 cfg[0],
                 cfg[1],
                 QuasarTestMode::UNTILIZE_DST,

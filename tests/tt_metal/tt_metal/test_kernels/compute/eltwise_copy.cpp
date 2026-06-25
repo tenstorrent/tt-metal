@@ -14,8 +14,13 @@
 #endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t per_core_tile_cnt = get_arg(args::per_core_tile_cnt);
+    constexpr bool use_dfbs = get_arg(args::use_dfbs) == 1;
+#else
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     constexpr bool use_dfbs = get_compile_time_arg_val(1) == 1;
+#endif
 
 #ifdef ARCH_QUASAR
     static_assert(use_dfbs, "DFBs need to be used for Quasar!");
@@ -29,15 +34,20 @@ void kernel_main() {
 
 #ifdef PACK_RELU
 #ifdef ARCH_QUASAR
-    pack_relu_config(ReluConfig::from_packed(get_arg_val<uint32_t>(0)));
+    pack_relu_config(ReluConfig::from_packed(get_arg(args::relu_config)));
 #else
     pack_relu_config(get_arg_val<uint32_t>(0));
 #endif
 #endif
 
     if constexpr (use_dfbs) {
+#ifdef ARCH_QUASAR
+        DataflowBuffer dfb_in(dfb::in);
+        DataflowBuffer dfb_out(dfb::out);
+#else
         DataflowBuffer dfb_in(0);
         DataflowBuffer dfb_out(1);
+#endif
         for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
             acquire_dst();
 

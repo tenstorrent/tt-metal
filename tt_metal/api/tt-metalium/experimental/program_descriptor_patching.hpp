@@ -31,6 +31,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -84,7 +85,7 @@ struct ResolvedBindings {
 //
 // Call immediately after Program{desc} on cache miss; store in shared_variables.
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, const std::vector<Buffer*>& tensor_buffers);
+    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers);
 
 // Apply resolved bindings to the cached program on a cache hit.
 // current_buffers must be the output of collect_tensor_buffers() for the
@@ -94,6 +95,6 @@ ResolvedBindings resolve_bindings(
 // reference on each call, so the write targets the correct storage (pre- or
 // post-first-enqueue) without any cross-call pointer state.
 void apply_resolved_bindings(
-    Program& program, const ResolvedBindings& bindings, const std::vector<Buffer*>& current_buffers);
+    Program& program, const ResolvedBindings& bindings, std::span<Buffer* const> current_buffers);
 
 }  // namespace tt::tt_metal

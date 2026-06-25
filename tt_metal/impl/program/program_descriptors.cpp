@@ -203,8 +203,14 @@ static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& cor
     values.reserve(args.size());
     for (const auto& arg : args) {
         if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
-            kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
-            values.push_back((*buf)->address());
+            // nullptr Buffer* represents an absent optional tensor.  Emit 0u with no
+            // binding so the fast cache-hit path is not invalidated by optional inputs.
+            if (*buf == nullptr) {
+                values.push_back(0u);
+            } else {
+                kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), *buf});
+                values.push_back((*buf)->address());
+            }
         } else {
             values.push_back(std::get<uint32_t>(arg));
         }
@@ -217,8 +223,12 @@ static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& 
     kd.common_runtime_args.reserve(args.size());
     for (const auto& arg : args) {
         if (const auto* buf = std::get_if<tt::tt_metal::Buffer*>(&arg)) {
-            kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), *buf});
-            kd.common_runtime_args.push_back((*buf)->address());
+            if (*buf == nullptr) {
+                kd.common_runtime_args.push_back(0u);
+            } else {
+                kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), *buf});
+                kd.common_runtime_args.push_back((*buf)->address());
+            }
         } else {
             kd.common_runtime_args.push_back(std::get<uint32_t>(arg));
         }

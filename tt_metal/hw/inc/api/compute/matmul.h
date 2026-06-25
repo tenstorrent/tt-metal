@@ -101,7 +101,7 @@ ALWI void mm_init(
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
     PACK((llk_pack_init(out_cb_id)));
 #else
     ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
@@ -254,8 +254,8 @@ ALWI void mm_block_init(
 #endif
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
-    PACK((llk_pack_init<false, false>(out_cb_id)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 #else
     ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));

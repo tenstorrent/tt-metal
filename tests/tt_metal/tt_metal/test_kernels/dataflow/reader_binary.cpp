@@ -8,16 +8,25 @@
 
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #else
 #include "api/dataflow/circular_buffer.h"
 #endif
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    uint32_t src0_addr = get_arg(args::src0_addr);
+    uint32_t src0_bank_id = get_arg(args::src0_bank_id);
+    uint32_t src1_addr = get_arg(args::src1_addr);
+    uint32_t src1_bank_id = get_arg(args::src1_bank_id);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+#else
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src0_bank_id = get_arg_val<uint32_t>(1);
     uint32_t src1_addr = get_arg_val<uint32_t>(2);
     uint32_t src1_bank_id = get_arg_val<uint32_t>(3);
     uint32_t num_tiles = get_arg_val<uint32_t>(4);
+#endif
 
     Noc noc;
     AllocatorBank<AllocatorBankType::DRAM> dram_src;
@@ -25,10 +34,8 @@ void kernel_main() {
 
 // single-tile ublocks
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
-    DataflowBuffer dfb0(dfb_in0_id);
-    DataflowBuffer dfb1(dfb_in1_id);
+    DataflowBuffer dfb0(dfb::in0);
+    DataflowBuffer dfb1(dfb::in1);
     uint32_t ublock_size_bytes_0 = dfb0.get_entry_size() * ublock_size_tiles;
     uint32_t ublock_size_bytes_1 = dfb1.get_entry_size() * ublock_size_tiles;
 #else
@@ -70,12 +77,16 @@ void kernel_main() {
     // executes, this is used to test eltwise binary with dest re-use
     // and eltwise binary with dest accumulation
 #if defined(DST_ACCUM_MODE) || defined(LOAD_BUF2_DATA) || defined(ELTWISE_DEST_REUSE_TYPE)
+#ifdef ARCH_QUASAR
+    uint32_t src2_addr = get_arg(args::src2_addr);
+    uint32_t src2_bank_id = get_arg(args::src2_bank_id);
+#else
     uint32_t src2_addr = get_arg_val<uint32_t>(5);
     uint32_t src2_bank_id = get_arg_val<uint32_t>(6);
+#endif
 
 #ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_in2_id = get_compile_time_arg_val(2);
-    DataflowBuffer dfb2(dfb_in2_id);
+    DataflowBuffer dfb2(dfb::in2);
     uint32_t ublock_size_bytes_2 = dfb2.get_entry_size() * ublock_size_tiles;
 #else
     constexpr uint32_t cb_id_in2 = 2;

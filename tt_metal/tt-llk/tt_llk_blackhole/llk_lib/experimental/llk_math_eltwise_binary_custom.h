@@ -8,7 +8,6 @@
 
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"

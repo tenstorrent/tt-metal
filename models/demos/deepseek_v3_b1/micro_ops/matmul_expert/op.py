@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op i
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _CB_ADDR_SHIFT
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 _KERNEL_SOURCE = "models/demos/deepseek_v3_b1/micro_ops/matmul_expert/kernels/matmul_expert_kernel.cpp"
 
@@ -327,6 +328,8 @@ def _build_program_for_device(
     partial_sem_addr: int = 0,
     pipeline_sem_addr: int = 0,
     num_loop_iters: int = 1,
+    primary_at_last_offset: bool = False,
+    gather_sync_sem_addr: int = 0,
 ) -> ttnn.ProgramDescriptor:
     """Build a ProgramDescriptor for one device — handles SRAM-only, DRAM-only, and hybrid.
 
@@ -357,13 +360,20 @@ def _build_program_for_device(
     # [num_active_experts * dram_per_core_n, tile_w] so the silu post-pass can
     # treat all expert outputs as ONE tile (single copy_tile / silu / pack_tile).
     cb_out_silu = 7
+    # cb_internal_acc: aliases cb_out's L1 region. The kernel routes per-expert
+    # cb_reserve_back/cb_push_back/cb_wait_front/cb_pop_front through this CB so
+    # the wraparound bookkeeping doesn't update cb_out's metadata. Consumers of
+    # cb_out (eltwise_add downstream) only see a single cb_push_back at the very
+    # end (after the gather sync) and so cannot observe transient state.
+    cb_internal_acc = 8
 
     # CB descriptors.
     cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
     cb1_descs = sram_cts[0].cb_descriptor_from_compressed_tensor(cb_in1, device_coord=coord) if sram_cts else []
     cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, out_tensor)
     cb3_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, index_tensor)
-    cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc]
+    cb_internal_acc_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_internal_acc, out_tensor)
+    cbs = [cb0_desc, *cb1_descs, cb2_desc, cb3_desc, cb_internal_acc_desc]
     if sram_out_tensor is not None:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(cb_out_sram, sram_out_tensor))
 
@@ -496,6 +506,18 @@ def _build_program_for_device(
         # Ops also drain their own cb_out pushes via a pop_out template flag.
         ("num_loop_iters", num_loop_iters),
         ("cb_in1_dram_buf_addr", in1_backing_tensor.buffer_address()),
+        # primary_at_last_offset (accum mode only): when 1, sender NOC-writes its accum
+        # result onto the next core in the bank so the bank's full N output ends
+        # up on the receiver (last core in bank). Output tensor's per-core shard
+        # must be sized cores_per_dram_bank * per_core_n when this is enabled.
+        ("primary_at_last_offset", 1 if primary_at_last_offset else 0),
+        # Global L1 sem for sender TRISC → NCRISC sync (gather mode only).
+        # TRISC inc(1) once after the per-expert accum loop, NCRISC spins on
+        # load >= 1 then dec(1). See kernel hpp for full rationale.
+        ("gather_sync_sem_addr", gather_sync_sem_addr),
+        # cb_internal_acc: aliases cb_out's L1; per-expert push/pop bookkeeping
+        # routes through it so cb_out's metadata only updates once at the end.
+        ("cb_internal_acc", cb_internal_acc),
     ]
 
     # Per-core descriptors.
@@ -852,6 +874,8 @@ def _assemble_dram_results(
     pipeline_sem_addr,
     partial_sem,
     pipeline_sem,
+    gather_sync_sem_addr,
+    gather_sync_sem,
 ):
     """Phase 3: assemble per-device result tuples.
 
@@ -884,6 +908,8 @@ def _assemble_dram_results(
                 pipeline_sem_addr,
                 partial_sem,
                 pipeline_sem,
+                gather_sync_sem_addr,
+                gather_sync_sem,
             )
     logger.info("  All device metadata created")
     return result
@@ -901,11 +927,26 @@ def create_dram_expert_tensors_multi_device(
     num_in1_buffers: int = 3,
     subblock_n: int = 1,
     k_parallel_per_bank: int = 1,
+    allocate_in1_backing: bool = True,
+    primary_worker_cores=None,
+    primary_at_last_offset: bool = False,
 ) -> dict:
     """Create per-device tensors for ExpertKernel.mesh_op.
 
     Calls create_dram_expert_metadata once per device in the mesh.
     Assumes homogeneous DRAM bank topology across all devices.
+    ``primary_worker_cores`` can override the canonical bank-worker order; callers
+    that pass per-core bank IDs must use the same order here.
+
+    ``primary_at_last_offset``: when True, place the primary core at the LAST in-bank
+    offset of compute_cores_list so it gets ``core_in_bank_idx = cores_per_bank-1``
+    and matches the kernel's ``is_in_bank_primary`` derivation. The bank's
+    gathered N output then lands on the primary's L1 — invisible to downstream
+    consumers, which still see ``primary_cores_list`` unchanged.
+
+    When ``allocate_in1_backing=False`` the L1 backing tensor for cb_in1 is NOT
+    allocated (caller provides their own — e.g. the fused MoE kernel overlays
+    cb_in1 on the SDPA KV buffer). The returned tuple has ``in1_backing=None``.
 
     Returns:
         {MeshCoordinate: (in1_backing, meta_tensors, fmt_tensors,
@@ -917,11 +958,21 @@ def create_dram_expert_tensors_multi_device(
     logger.info(
         f"create_dram_expert_tensors_multi_device: {num_devices} devices, {num_total_experts} total experts, {len(cts)} DRAM CTs"
     )
-    primary_cores_list = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    if primary_worker_cores is None:
+        primary_cores_list = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, ttnn.NOC.NOC_0)
+    else:
+        primary_cores_list = list(primary_worker_cores)
+    expected_num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
+    assert len(primary_cores_list) == expected_num_banks, (
+        f"primary_worker_cores length ({len(primary_cores_list)}) must match " f"DRAM bank count ({expected_num_banks})"
+    )
     compute_cores_list = []
     for primary_core in primary_cores_list:
         for offset in range(cores_per_dram_bank):
-            compute_cores_list.append(ttnn.CoreCoord(primary_core.x + offset, primary_core.y))
+            # primary_at_last_offset: reverse the in-bank offset so the primary lands at
+            # the LAST position (= core_in_bank_idx cores_per_bank-1 = receiver).
+            x_offset = (cores_per_dram_bank - 1) - offset if primary_at_last_offset else offset
+            compute_cores_list.append(ttnn.CoreCoord(primary_core.x + x_offset, primary_core.y))
     compute_core_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores_list]
     )
@@ -950,19 +1001,27 @@ def create_dram_expert_tensors_multi_device(
     fmt_region_bytes = 2 * cb_fmt_dram_page_size
 
     total_shard_bytes = in1_region_bytes + fmt_region_bytes
-    backing_shard_spec = ttnn.ShardSpec(compute_core_grid, [1, total_shard_bytes], ttnn.ShardOrientation.ROW_MAJOR)
-    backing_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, backing_shard_spec
-    )
-    dram_backing_tensor = ttnn.from_torch(
-        torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
-        dtype=ttnn.uint8,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=backing_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    # When allocate_in1_backing=False (caller overlays cb_in1 + cb_fmt on its own
+    # buffer like the SDPA KV in MoE), skip this private L1 region — the helper-side
+    # allocation is invisible to the CB allocator and can be silently stomped when
+    # external CBs are placed nearby. Caller must override fmt_cb_l1_addr post-hoc.
+    if allocate_in1_backing:
+        backing_shard_spec = ttnn.ShardSpec(compute_core_grid, [1, total_shard_bytes], ttnn.ShardOrientation.ROW_MAJOR)
+        backing_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, backing_shard_spec
+        )
+        dram_backing_tensor = ttnn.from_torch(
+            torch.zeros((num_cores, total_shard_bytes), dtype=torch.uint8),
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=backing_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        cb_in1_base_shifted = (dram_backing_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
+    else:
+        dram_backing_tensor = None
+        cb_in1_base_shifted = 0
     max_subblock_bytes_shifted = (subblock_k * subblock_n * max_tile_size) >> _CB_ADDR_SHIFT
 
     # fmt metadata sync: 2 global sems as atomic counters (0..2).
@@ -980,13 +1039,22 @@ def create_dram_expert_tensors_multi_device(
     # Pipeline ring sem (per-core, cores_per_bank > 1) — global so we pass L1 addr.
     pipeline_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
     pipeline_sem_addr = ttnn.get_global_semaphore_address(pipeline_sem)
+    # Gather TRISC → NCRISC sync (sender side, primary_at_last_offset mode only). Replaces
+    # the 1-page cb_gather_sync; same protocol shape but a raw L1 sem.
+    gather_sync_sem = ttnn.create_global_semaphore(mesh_device, compute_core_grid, 0)
+    gather_sync_sem_addr = ttnn.get_global_semaphore_address(gather_sync_sem)
     ttnn.synchronize_device(mesh_device)
-    fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
-
-    logger.info(
-        f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
-        f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
-    )
+    if dram_backing_tensor is not None:
+        fmt_cb_l1_addr = dram_backing_tensor.buffer_address() + in1_region_bytes
+        logger.info(
+            f"  dram_backing created, addr={dram_backing_tensor.buffer_address()}, "
+            f"in1={in1_region_bytes}B, fmt_offset={in1_region_bytes}, fmt={fmt_region_bytes}B"
+        )
+    else:
+        fmt_cb_l1_addr = 0  # placeholder; caller overlays cb_fmt on its own buffer
+        logger.info(
+            f"  dram_backing SKIPPED (caller will overlay); " f"in1={in1_region_bytes}B, fmt={fmt_region_bytes}B"
+        )
 
     # --- Phase 1: compute per-device metadata and pack fmt bank data ---
     # K-split: each core's fmt describes only its K-slice's blocks.
@@ -1065,6 +1133,8 @@ def create_dram_expert_tensors_multi_device(
         pipeline_sem_addr,
         partial_sem,
         pipeline_sem,
+        gather_sync_sem_addr,
+        gather_sync_sem,
     )
 
 
@@ -1139,6 +1209,7 @@ class ExpertKernel:
         tp_expert: bool = True,
         subblock_n: int = 1,
         num_loop_iters: int = 1,
+        primary_at_last_offset: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -1241,6 +1312,8 @@ class ExpertKernel:
                     pipeline_sem_addr,
                     _partial_sem,
                     _pipeline_sem,
+                    gather_sync_sem_addr,
+                    _gather_sync_sem,
                 ) = dram_meta_tensors[coord]
                 # Per-core active flags — each core runs only the path it belongs to.
                 all_cores_dev = ttnn.corerange_to_cores(a_dev.memory_config().shard_spec.grid)
@@ -1283,6 +1356,8 @@ class ExpertKernel:
                     partial_sem_addr=partial_sem_addr,
                     pipeline_sem_addr=pipeline_sem_addr,
                     num_loop_iters=num_loop_iters,
+                    primary_at_last_offset=primary_at_last_offset,
+                    gather_sync_sem_addr=gather_sync_sem_addr,
                 )
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 

@@ -62,7 +62,7 @@ bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t s
 
 HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
-    auto& device = device_tensor.device();
+    const auto& device = device_tensor.device();
 
     auto distributed_host_buffer = DistributedHostBuffer::create(device.get_view());
 
