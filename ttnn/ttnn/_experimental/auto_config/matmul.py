@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import inspect
 import io
 import importlib
 import importlib.metadata as importlib_metadata
@@ -1493,6 +1494,14 @@ def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0
     return _benchmark_candidate_eager(candidate, device)
 
 
+def _callable_accepts_keyword(function: Callable[..., Any], keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(function).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(parameter.kind == inspect.Parameter.VAR_KEYWORD or parameter.name == keyword for parameter in parameters)
+
+
 def _make_recommendations(signature: AutoMatmulSignature, prepared: PreparedMatmulInputs) -> list[str]:
     recommendations: list[str] = []
     if prepared.staged_rhs_from_host:
@@ -1620,12 +1629,15 @@ def _select_candidate(
     candidate_timings: list[dict[str, Any]] = []
     winner: Candidate | None = None
     winner_avg_us: float | None = None
+    queue_id = int(kwargs.get("queue_id") or kwargs.get("cq_id") or 0)
+    benchmark_accepts_queue_id = _callable_accepts_keyword(_benchmark_candidate, "queue_id")
 
     for candidate in candidates:
         try:
-            avg_us, samples_us, benchmark_mode = _benchmark_candidate(
-                candidate, device, queue_id=int(kwargs.get("queue_id") or kwargs.get("cq_id") or 0)
-            )
+            if benchmark_accepts_queue_id:
+                avg_us, samples_us, benchmark_mode = _benchmark_candidate(candidate, device, queue_id=queue_id)
+            else:
+                avg_us, samples_us, benchmark_mode = _benchmark_candidate(candidate, device)
         except Exception as exc:
             candidate_timings.append(
                 {
