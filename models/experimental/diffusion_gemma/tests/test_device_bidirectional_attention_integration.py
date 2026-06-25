@@ -26,7 +26,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
-from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward, denoise_logits_forward
+from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward, denoise_logits_from_tokens
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
 
@@ -71,6 +71,16 @@ def _to_device(mesh_device, value):
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
+        mesh_mapper=_mesh_mapper(mesh_device),
+    )
+
+
+def _to_device_tokens(mesh_device, value):
+    return ttnn.from_torch(
+        value.to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
         mesh_mapper=_mesh_mapper(mesh_device),
     )
 
@@ -270,7 +280,9 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     hf_model = _create_hf_model(hf_text_config)
     tt_model = _build_tt_model(mesh_device, hf_model, hf_text_config, num_layers=1, max_seq_len=total_len)
 
-    canvas_hidden = torch.randn(1, canvas_len, hf_text_config.hidden_size)
+    canvas_tokens = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
+    with torch.no_grad():
+        canvas_hidden = hf_model.embed_tokens(canvas_tokens)
     prompt_kv_hidden = torch.randn(1, prompt_len, hf_text_config.hidden_size)
     mask = build_canvas_denoise_mask(
         prompt_len,
@@ -282,12 +294,12 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     with torch.no_grad():
         golden = _torch_denoise_logits_reference(hf_model, canvas_hidden, [prompt_kv_hidden], mask)
 
-    tt_canvas_hidden = _to_device(mesh_device, canvas_hidden.unsqueeze(0))
+    tt_canvas_tokens = _to_device_tokens(mesh_device, canvas_tokens)
     tt_prompt_kv_hidden = _to_device(mesh_device, prompt_kv_hidden.unsqueeze(0))
-    tt_logits = denoise_logits_forward(
+    tt_logits = denoise_logits_from_tokens(
         tt_model,
         prompt_hidden_by_layer=[tt_prompt_kv_hidden],
-        canvas_hidden=tt_canvas_hidden,
+        canvas_tokens=tt_canvas_tokens,
     )
     logits = _to_torch(tt_logits, mesh_device).squeeze(0)
 

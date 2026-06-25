@@ -186,3 +186,29 @@ def denoise_logits_forward(
     attn_mask.deallocate(True)
     hidden_states = tt_model.norm.forward(hidden_states)
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
+
+
+def embed_canvas_tokens(tt_model, canvas_tokens):
+    """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
+    canvas_len = canvas_tokens.shape[-1]
+    canvas_hidden = tt_model.embed_tokens(canvas_tokens)
+    if len(canvas_hidden.shape) == 3:
+        canvas_hidden = ttnn.reshape(canvas_hidden, (1, 1, canvas_len, tt_model.hidden_size))
+    elif canvas_hidden.shape[-2] != canvas_len:
+        canvas_hidden = ttnn.reshape(canvas_hidden, (1, 1, canvas_len, tt_model.hidden_size))
+    return ttnn.to_layout(canvas_hidden, ttnn.TILE_LAYOUT)
+
+
+def denoise_logits_from_tokens(
+    tt_model,
+    *,
+    prompt_hidden_by_layer,
+    canvas_tokens,
+):
+    """Embed canvas token ids, then run the short-prompt denoise logits forward."""
+    canvas_hidden = embed_canvas_tokens(tt_model, canvas_tokens)
+    return denoise_logits_forward(
+        tt_model,
+        prompt_hidden_by_layer=prompt_hidden_by_layer,
+        canvas_hidden=canvas_hidden,
+    )
