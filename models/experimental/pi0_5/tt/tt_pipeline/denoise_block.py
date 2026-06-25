@@ -120,17 +120,12 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
 
         m_t = s // 32
         qkv = self._proj(hidden_states, self.tt_wqkv, ttnn.bfloat8_b, m_t, _g, _expert_ck)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_kv_heads,
-            transpose_k_heads=False,
-            memory_config=_L1,
+        # Fused create-qkv-heads + q/k RoPE in ONE dispatch (custom op; byte-identical to
+        # nlp_create_qkv_heads + 2x rotary_embedding, PCC 1.0). Replaces 3 launches with 1.
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_rope(
+            qkv, cos, sin, self.num_heads, self.num_kv_heads, memory_config=_L1
         )
         ttnn.deallocate(qkv)
-
-        q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=_L1)
-        k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=_L1)
 
         if past_key_value is not None:
             past_k, past_v = past_key_value
@@ -156,8 +151,15 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         )
         ttnn.deallocate(q)
 
-        attn_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=_L1)
-        out = self._proj(attn_out, self.tt_o, ttnn.bfloat16, m_t, _g, _expert_ck)
+        # Fused concat-heads + O-projection (custom op wrapping the tuned 1D-mcast matmul): attn_out
+        # is consumed directly as in0 (concat = contiguous tiles for seq<=1 tile, PCC ~1.0); the
+        # [.,32,K] view is build-time-only so it is trace-replay-safe. 2 launches -> 1. Pass the
+        # SAME tuned program config _proj uses for the O-matmul so the matmul stays as fast.
+        _o_k, _o_n = self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32
+        _o_pc = _denoise_tuned_pcfg(m_t, _o_k, _o_n, _g.x, _g.y) or matmul_pcfg(
+            m_t, _o_k, _o_n, _g.x, _g.y, in0_block_w=8
+        )
+        out = ttnn.experimental.concat_heads_matmul(attn_out, self.tt_o, memory_config=_L1, program_config=_o_pc)
         ttnn.deallocate(attn_out)
         if len(out.shape) == 4:
             out = ttnn.reshape(out, (b, s, out.shape[-1]))
@@ -204,18 +206,15 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         normed = self._apply_ada(hidden_states, sa1, sha, self._eps)
         attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache)
         ttnn.deallocate(normed)
-        gated_attn = ttnn.multiply(ga, attn_out, memory_config=_L1)
+        # Fused gated residual: hidden + ga*attn_out in one addcmul (was multiply + add).
+        hidden_states = ttnn.addcmul(hidden_states, ga, attn_out, memory_config=_L1)
         ttnn.deallocate(attn_out)
-        hidden_states = ttnn.add(hidden_states, gated_attn, memory_config=_L1)
-        ttnn.deallocate(gated_attn)
 
         normed = self._apply_ada(hidden_states, sf1, shf, self._eps)
         mlp_out = self.mlp(normed)
         ttnn.deallocate(normed)
-        gated_ffw = ttnn.multiply(gf, mlp_out, memory_config=_L1)
+        hidden_states = ttnn.addcmul(hidden_states, gf, mlp_out, memory_config=_L1)
         ttnn.deallocate(mlp_out)
-        hidden_states = ttnn.add(hidden_states, gated_ffw, memory_config=_L1)
-        ttnn.deallocate(gated_ffw)
 
         if owned:
             for ten in (sa1, sha, ga, sf1, shf, gf):
