@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, skip_with_llk_assert
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_b1.micro_ops.sampling.op import SamplingOp
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
@@ -261,7 +261,6 @@ def _run_sampling_argmax_single_device_101_cores(device, seed: int, final_core_i
     )
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT in sampling kernel. Issue: #47805")
 @pytest.mark.parametrize(
     "seed, final_core_idx",
     [
