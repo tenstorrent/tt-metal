@@ -1406,17 +1406,14 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
 
     input_topology = tt_input.tensor_topology()
 
-    # Create expected topology based on which all-gather path was used
-    if is_tile_padded:
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), list(input_topology.placements()), input_topology.mesh_coords()
-        )
-    else:
-        expected_placements = list(input_topology.placements())
-        expected_placements[cluster_axis] = ttnn.PlacementReplicate()
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
-        )
+    # After all-gather the gathered (cluster) axis is replicated across that axis. This holds for
+    # both the native path and the tile-padded composite path (all_broadcast + concat), which since
+    # #44019 also reports Replicate on the cluster axis, so a single expected topology covers both.
+    expected_placements = list(input_topology.placements())
+    expected_placements[cluster_axis] = ttnn.PlacementReplicate()
+    expected_topology = ttnn.TensorTopology(
+        input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
+    )
 
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.all_gather(
