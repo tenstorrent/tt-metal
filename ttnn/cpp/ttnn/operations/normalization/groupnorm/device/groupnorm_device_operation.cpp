@@ -119,8 +119,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
-                gamma.value().dtype() == DataType::BFLOAT16,
-                "Gamma tensor must be BFLOAT16, got: {}",
+                gamma.value().dtype() == DataType::BFLOAT16 || gamma.value().dtype() == DataType::FLOAT32,
+                "Gamma tensor must be BFLOAT16 or FLOAT32, got: {}",
                 gamma.value().dtype());
         }
         if (beta.has_value()) {
@@ -161,8 +161,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
-                beta.value().dtype() == DataType::BFLOAT16,
-                "Beta tensor must be BFLOAT16, got: {}",
+                beta.value().dtype() == DataType::BFLOAT16 || beta.value().dtype() == DataType::FLOAT32,
+                "Beta tensor must be BFLOAT16 or FLOAT32, got: {}",
                 beta.value().dtype());
         }
     }
