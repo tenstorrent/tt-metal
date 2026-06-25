@@ -493,12 +493,12 @@ void launch_operation_with_adapter(
     }
 
     // Spec ops take the dedicated spec-as-key path (build the spec, key on it, apply or build).
+    // The generic mesh-adapter body below is in an `else` (not just guarded by an early return) so
+    // it is not *instantiated* for spec ops -- its visitor has no ProgramSpecFactoryConcept overload.
     if constexpr (is_program_spec_mesh_op_v<mesh_device_operation_t>) {
         launch_mesh_program_spec<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device);
-        return;
-    }
-
+    } else {
     auto& program_cache = mesh_device->get_program_cache();
     // The cache key is the 64-bit hash plus an exact canonical encoding; a hash collision is
     // resolved by std::unordered_map's own operator== on the canonical part (issue #45821).
@@ -531,6 +531,7 @@ void launch_operation_with_adapter(
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
+    }
     }
 }
 
