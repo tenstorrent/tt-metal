@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 # ISL (input sequence length) in tokens - replicate prompt to reach these
-ISL_VALUES = [2000, 4000, 8000, 16000, 32000, 64000, 128000]
+ISL_VALUES = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
 
 # Short prompt; script will use --simulate-context-len to repeat to target ISL
@@ -38,6 +38,13 @@ PREFILL_CHUNK_SIZE = 128
 SCRIPT_PATH = "models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py"
 
 
+def _kv_cache_dtype_for_batch(batch_size: int, *, override: str = "auto") -> str:
+    """Pick KV cache dtype for sweep runs. bf8 halves KV DRAM vs bf16 (needed at batch>=32 on 1×4)."""
+    if override in {"bf16", "bf8"}:
+        return override
+    return "bf8" if int(batch_size) >= 32 else "bf16"
+
+
 def run_one(
     isl: int,
     batch_size: int,
@@ -46,9 +53,11 @@ def run_one(
     timeout_s: int,
     mesh_rows: int = MESH_ROWS,
     mesh_cols: int = MESH_COLS,
+    kv_cache_dtype: str = "auto",
 ) -> dict:
     """Run one (ISL, batch_size) combination; return metrics or error."""
     min_cache = isl + MAX_NEW_TOKENS
+    kv_dtype = _kv_cache_dtype_for_batch(batch_size, override=kv_cache_dtype)
     cmd = [
         sys.executable,
         str(repo_root / SCRIPT_PATH),
@@ -67,7 +76,7 @@ def run_one(
         "--mesh-cols",
         str(mesh_cols),
         "--kv-cache-dtype",
-        "bf16",
+        kv_dtype,
         "--phase",
         "both",
         "--enable-trace",
@@ -79,7 +88,11 @@ def run_one(
     env["GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES"] = "1"
     env["GLM4_MOE_LITE_FUSE_QKV_A"] = "1"
     env["GLM4_MOE_LITE_FUSE_SHARED_GATE_UP"] = "1"
-    env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
+    # Batched prefill concatenates B×S tokens (no chunking); use sequential chunked prefill for batch>1.
+    if int(batch_size) > 1:
+        env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "0"
+    else:
+        env.setdefault("GLM4_MOE_LITE_BATCHED_PREFILL", "1")
     env["GLM4_MOE_LITE_DECODE_L1_ACT"] = "1"
     env["GLM4_MOE_LITE_EP_L1"] = "1"
     env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
@@ -92,7 +105,7 @@ def run_one(
     env["GLM4_MOE_LITE_HEAD_PARALLEL_KVB2"] = "1"
     env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
     env["GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED"] = "1"
-    env["GLM4_MOE_LITE_MOE_SPARSE_DEBUG"] = "1"
+    # env["GLM4_MOE_LITE_MOE_SPARSE_DEBUG"] = "1"
     env["GLM4_MOE_LITE_MOE_DISPATCH_IMPL"] = "all_to_all"
     env["GLM4_MOE_LITE_SHARDED_DECODE_NORM"] = "1"
     env["GLM4_MOE_LITE_HEAD_PARALLEL_ATTN"] = "1"
@@ -591,6 +604,12 @@ def main() -> int:
     )
     ap.add_argument("--mesh-rows", type=int, default=MESH_ROWS, help="Mesh rows (default %(default)s)")
     ap.add_argument("--mesh-cols", type=int, default=MESH_COLS, help="Mesh cols (default %(default)s)")
+    ap.add_argument(
+        "--kv-cache-dtype",
+        choices=("auto", "bf16", "bf8"),
+        default="auto",
+        help="KV cache dtype passed to debug_run_full_tt_greedy (default auto: bf16 for batch<32, bf8 for batch>=32)",
+    )
     args = ap.parse_args()
 
     if args.recover_from_log is not None:
@@ -653,7 +672,10 @@ def main() -> int:
                     }
                 results.append(r)
                 continue
-            print(f"[{idx}/{total}] ISL={isl} batch={batch_size} ...", flush=True)
+            print(
+                f"[{idx}/{total}] ISL={isl} batch={batch_size} kv={_kv_cache_dtype_for_batch(batch_size, override=args.kv_cache_dtype)} ...",
+                flush=True,
+            )
             r = run_one(
                 isl,
                 batch_size,
@@ -662,6 +684,7 @@ def main() -> int:
                 args.timeout,
                 mesh_rows=args.mesh_rows,
                 mesh_cols=args.mesh_cols,
+                kv_cache_dtype=args.kv_cache_dtype,
             )
             results.append(r)
             # Write CSV after each run so partial results survive if the process is killed
