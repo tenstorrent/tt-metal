@@ -85,9 +85,7 @@ _REPO = os.environ.get("TT_METAL_HOME") or os.path.abspath(
 # gated checkpoint cached.
 DG_CKPT = os.getenv("DG_CKPT", "google/diffusiongemma-26B-A4B-it")
 # Arch config only (Gemma4ModelArgs.load_hf_config) — default to the in-repo config.
-GEMMA_CONFIG_DIR = os.getenv(
-    "GEMMA_CONFIG_DIR", os.path.join(_REPO, "models/demos/gemma4/configs/gemma-4-26B-A4B-it")
-)
+GEMMA_CONFIG_DIR = os.getenv("GEMMA_CONFIG_DIR", os.path.join(_REPO, "models/demos/gemma4/configs/gemma-4-26B-A4B-it"))
 PROMPT = os.getenv("DG_PROMPT", "The capital of France is")
 PCC_THRESHOLD = float(os.getenv("DG_BACKBONE_PCC", "0.99"))
 KNOWN_QB2_PCC_FLOOR = float(os.getenv("DG_BACKBONE_KNOWN_QB2_PCC_FLOOR", "0.83"))
