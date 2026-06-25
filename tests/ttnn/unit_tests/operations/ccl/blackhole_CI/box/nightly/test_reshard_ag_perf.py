@@ -92,13 +92,34 @@ CONFIGS = [
     ("trace_persist", True, True, False),
 ]
 
+# (dtype, pcc_threshold). bfp8 is the deployment ("end game") dtype: ~half the bytes per tile vs bf16
+# (1B mantissa/elem + shared exponent per 16-elem block), so PM IDEAL and time roughly halve. all_gather
+# is pure data movement, so the only precision loss is the bf16->bfp8 quantization at from_torch -> a
+# slightly looser PCC bar.
+AG_DTYPES = [
+    (ttnn.bfloat16, 0.999),
+    (ttnn.bfloat8_b, 0.99),
+]
+AG_DTYPE_IDS = ["bf16", "bfp8"]
+
 
 def _make_sems(mesh_device, cores, n):
     return [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(n)]
 
 
 def _run_reshard_ag(
-    mesh_device, *, gather_dim, full_shape, topology, trace_mode, use_persistent, use_barrier, warmup_iters, num_iters
+    mesh_device,
+    *,
+    gather_dim,
+    full_shape,
+    topology,
+    trace_mode,
+    use_persistent,
+    use_barrier,
+    warmup_iters,
+    num_iters,
+    ag_dtype=ttnn.bfloat16,
+    pcc_threshold=0.999,
 ):
     tp_axis = 1
     sp, tp = list(mesh_device.shape)
@@ -124,7 +145,7 @@ def _run_reshard_ag(
     in_dims[tp_axis] = gather_dim
     tt_in = ttnn.from_torch(
         torch_full,
-        dtype=ttnn.bfloat16,
+        dtype=ag_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -135,7 +156,7 @@ def _run_reshard_ag(
     if use_persistent:
         persist_out = ttnn.from_torch(
             torch.zeros(*full_shape, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=ag_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -199,10 +220,10 @@ def _run_reshard_ag(
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(sp, tp), dims=(0, gather_dim)),
         )[0:1]
         out_torch = out_torch.narrow(gather_dim, 0, full_shape[gather_dim])
-        passed, msg = comp_pcc(out_torch, torch_full, 0.999)
+        passed, msg = comp_pcc(out_torch, torch_full, pcc_threshold)
         logger.info(
-            f"reshard AG dim={gather_dim} full={full_shape} trace={trace_mode} persist={use_persistent} "
-            f"bar={use_barrier} mesh={sp}x{tp} {topology} PCC: {msg}"
+            f"reshard AG dim={gather_dim} full={full_shape} dtype={ag_dtype} trace={trace_mode} "
+            f"persist={use_persistent} bar={use_barrier} mesh={sp}x{tp} {topology} PCC: {msg}"
         )
         assert passed, f"reshard AG dim={gather_dim} full={full_shape} FAILED: {msg}"
     finally:
@@ -211,6 +232,7 @@ def _run_reshard_ag(
 
 
 @pytest.mark.parametrize("ag_id, gather_dim, full_shape", RESHARD_AG_OPS, ids=[c[0] for c in RESHARD_AG_OPS])
+@pytest.mark.parametrize("ag_dtype, pcc_threshold", AG_DTYPES, ids=AG_DTYPE_IDS)
 @pytest.mark.parametrize(
     "device_params, topology", DEVICE_PARAMS_TOPOLOGY, indirect=["device_params"], ids=DEVICE_PARAMS_TOPOLOGY_IDS
 )
@@ -225,6 +247,8 @@ def test_reshard_ag(
     ag_id,
     gather_dim,
     full_shape,
+    ag_dtype,
+    pcc_threshold,
     warmup_iters,
     num_iters,
     cfg_id,
@@ -233,8 +257,8 @@ def test_reshard_ag(
     use_barrier,
 ):
     """One reshard TP all-gather, run by hand on the full mesh over the TP cluster axis. Run one
-    (op, config, mesh, topology) at a time under tracy so each produces its own ops_perf CSV; read
-    PM IDEAL [ns] vs DEVICE KERNEL DURATION [ns] for AllGatherAsyncDeviceOperation."""
+    (op, dtype, config, mesh, topology) at a time under tracy so each produces its own ops_perf CSV;
+    read PM IDEAL [ns] vs DEVICE KERNEL DURATION [ns] for AllGatherAsyncDeviceOperation."""
     if not is_blackhole():
         pytest.skip("Reshard AG perf targets Blackhole")
     _run_reshard_ag(
@@ -247,4 +271,6 @@ def test_reshard_ag(
         use_barrier=use_barrier,
         warmup_iters=warmup_iters,
         num_iters=num_iters,
+        ag_dtype=ag_dtype,
+        pcc_threshold=pcc_threshold,
     )
