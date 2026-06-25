@@ -281,6 +281,23 @@ def get_gen_image_grid(bundle: GenImageHostInputs, row: int = 0) -> tuple[int, i
     raise ValueError(f"gen-image grid not found for slice {gen_slice!r}")
 
 
+def _scatter_indices_for_row(bundle: GenImageHostInputs, row: int) -> dict[str, torch.Tensor | None]:
+    """Per-row scatter indices for gen timestep / distill guidance / meanflow timestep_r."""
+    return dict(
+        gen_timestep_scatter_index=(
+            bundle.gen_timestep_scatter_index[row : row + 1] if bundle.gen_timestep_scatter_index is not None else None
+        ),
+        guidance_scatter_index=(
+            bundle.guidance_scatter_index[row : row + 1] if bundle.guidance_scatter_index is not None else None
+        ),
+        gen_timestep_r_scatter_index=(
+            bundle.gen_timestep_r_scatter_index[row : row + 1]
+            if bundle.gen_timestep_r_scatter_index is not None
+            else None
+        ),
+    )
+
+
 def bundle_to_denoise_cond(
     bundle: GenImageHostInputs,
     wte_weight: torch.Tensor,
@@ -305,15 +322,12 @@ def bundle_to_denoise_cond(
     mask_add = to_additive(bundle.attention_mask[row : row + 1], dtype=torch.float32)
     image_infos = [bundle.rope_image_info[row]]
 
+    scatter = _scatter_indices_for_row(bundle, row)
     if bundle.inputs_embeds is not None:
         return dict(
             base_embeds_host=bundle.inputs_embeds[row : row + 1].to(dtype=dtype),
             base_embeds=bundle.inputs_embeds[row : row + 1].to(dtype=dtype),
-            gen_timestep_scatter_index=(
-                bundle.gen_timestep_scatter_index[row : row + 1]
-                if bundle.gen_timestep_scatter_index is not None
-                else None
-            ),
+            **scatter,
             image_infos=image_infos,
             attention_mask=mask_add,
             batch=1,
@@ -327,9 +341,7 @@ def bundle_to_denoise_cond(
     return dict(
         text_pre=emb[:, : gen_slice.start, :],
         text_post=text_post,
-        gen_timestep_scatter_index=(
-            bundle.gen_timestep_scatter_index[row : row + 1] if bundle.gen_timestep_scatter_index is not None else None
-        ),
+        **scatter,
         image_infos=image_infos,
         attention_mask=mask_add,
         batch=1,
@@ -350,6 +362,48 @@ def scatter_gen_timestep_embeds(
     if scatter_index is None:
         return embeds
     return instantiate_continuous_tokens(embeds.clone(), timesteps, scatter_index, timestep_emb)
+
+
+def scatter_distill_step_embeds(
+    embeds: torch.Tensor,
+    *,
+    t_scalar: float,
+    gen_timestep_scatter_index: torch.Tensor | None,
+    timestep_emb,
+    guidance_scalar: float | None = None,
+    guidance_scatter_index: torch.Tensor | None = None,
+    guidance_emb=None,
+    t_r_scalar: float | None = None,
+    gen_timestep_r_scatter_index: torch.Tensor | None = None,
+    timestep_r_emb=None,
+) -> torch.Tensor:
+    """Re-scatter gen timestep + optional distill guidance / meanflow timestep_r each denoise step."""
+    from models.experimental.hunyuan_image_3_0.ref.image_gen.input_instantiate import instantiate_continuous_tokens
+
+    needs_clone = any(
+        x is not None
+        for x in (
+            gen_timestep_scatter_index,
+            guidance_scatter_index if guidance_scalar is not None else None,
+            gen_timestep_r_scatter_index if t_r_scalar is not None else None,
+        )
+    )
+    hidden = embeds.clone() if needs_clone else embeds
+    bsz = hidden.shape[0]
+
+    if gen_timestep_scatter_index is not None and timestep_emb is not None:
+        tvec = torch.tensor([float(t_scalar)] * bsz, dtype=torch.float32)
+        hidden = instantiate_continuous_tokens(hidden, tvec, gen_timestep_scatter_index, timestep_emb)
+
+    if guidance_scalar is not None and guidance_scatter_index is not None and guidance_emb is not None:
+        gvec = torch.tensor([float(guidance_scalar)] * bsz, dtype=torch.float32)
+        hidden = instantiate_continuous_tokens(hidden, gvec, guidance_scatter_index, guidance_emb)
+
+    if t_r_scalar is not None and gen_timestep_r_scatter_index is not None and timestep_r_emb is not None:
+        rvec = torch.tensor([float(t_r_scalar)] * bsz, dtype=torch.float32)
+        hidden = instantiate_continuous_tokens(hidden, rvec, gen_timestep_r_scatter_index, timestep_r_emb)
+
+    return hidden
 
 
 def build_i2i_cfg_conds(
