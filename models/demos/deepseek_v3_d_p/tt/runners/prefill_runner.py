@@ -59,17 +59,14 @@ def _apply_manifest_env():
     sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
     sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u["kv_cache"] for u in users))
 
-    # Mode: explicit must match user count; otherwise derive (1 user => burst, else pairwise).
-    mode = mig.get("mode")
-    if mode in ("burst", "pairwise"):
-        if mode == "burst" and N != 1:
-            raise ValueError(f"manifest migration.mode 'burst' requires exactly 1 user, got {N}")
-        if mode == "pairwise" and N < 2:
-            raise ValueError(f"manifest migration.mode 'pairwise' requires more than 1 user, got {N}")
-    elif mode is None:
-        mode = "burst" if N == 1 else "pairwise"
-    else:
-        raise ValueError(f"manifest migration.mode must be 'pairwise' or 'burst', got: {mode}")
+    # Mode: default to pairwise
+    mode = mig.get("mode") or "pairwise"
+    # Loud failure for incorrect mode
+    if mode != "pairwise":
+        raise ValueError(f"manifest migration.mode must be 'pairwise', got: {mode}")
+    # Loud failure for empty users
+    if N < 1:
+        raise ValueError(f"manifest migration.mode 'pairwise' requires at least 1 user, got {N}")
     sd("PREFILL_MIGRATE", mode)
 
     # Each non-empty kv_cache must exist on disk.
