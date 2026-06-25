@@ -43,6 +43,7 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(3);  // absolute first row of this core's stream
     uint32_t num_rows = get_arg_val<uint32_t>(4);   // rows owned by this core
     uint32_t width = get_arg_val<uint32_t>(5);      // H (elements per row)
+    uint32_t block_ht = get_arg_val<uint32_t>(6);   // tile-rows batched per block
 
     constexpr uint32_t cb_output_e4m3 = get_compile_time_arg_val(0);
     constexpr uint32_t output_e4m3_block_bytes = get_compile_time_arg_val(1);  // 128 (1 byte/elem)
@@ -56,7 +57,9 @@ void kernel_main() {
     constexpr uint32_t face_h = get_compile_time_arg_val(8);
     constexpr uint32_t face_w = get_compile_time_arg_val(9);
     constexpr uint32_t block_w = 128;
-    constexpr uint32_t tiles_per_block = block_w / tile_w;
+    constexpr uint32_t block_wt = block_w / tile_w;                   // tiles across the 128-wide block
+    constexpr uint32_t tile_elems = tile_h * tile_w;                  // fp32 elems per scale tile
+    const uint32_t tiles_per_block = block_ht * block_wt;             // BlockHt * BlockWt (e4m3 pages per block)
     constexpr uint32_t face_elems = face_h * face_w;                  // fp32 per face
     constexpr uint32_t faces_per_row = tile_w / face_w;               // face columns per tile
     constexpr uint32_t FACE_ROWS = tile_h / face_h;                   // face rows per tile
@@ -84,49 +87,59 @@ void kernel_main() {
     uint32_t current_col = 0;  // element offset within the current row
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        const uint32_t base = blk * tile_h;
-        const uint32_t remaining = total_blocks - base;
-        const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
-
+        // The compute produces block_ht tile-rows per block: tiles_per_block e4m3 pages (in row order)
+        // and block_ht scale tiles. Walk the block_ht tile-row sub-batches sharing one CB wait/pop.
         cb_output_e4m3_obj.wait_front(tiles_per_block);
-        cb_scale_tiles_obj.wait_front(1);
-        extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_tiles_obj.get_read_ptr()), block_scales);
+        cb_scale_tiles_obj.wait_front(block_ht);
 
-        uint32_t br = 0;  // block-local row
-        while (br < real_in_block && current_row < end_row) {
-            uint32_t block_idx_in_row = current_col >> 7;  // block index within the row (block_w = 128)
-            uint32_t blocks_left_in_row = blocks_per_row - block_idx_in_row;
-            uint32_t blocks_left_in_batch = real_in_block - br;
-            uint32_t run = blocks_left_in_row < blocks_left_in_batch ? blocks_left_in_row : blocks_left_in_batch;
-
-            // output_e4m3: write `run` contiguous 128-element blocks back to (current_row, current_col).
-            noc.async_write(
-                cb_output_e4m3_obj,
-                output_e4m3,
-                run * output_e4m3_block_bytes,
-                {.offset_bytes = br * output_e4m3_block_bytes},
-                {.page_id = current_row, .offset_bytes = current_col});
-            // scale: stage this run's per-block scales into the token's scratch row.
-            for (uint32_t g = 0; g < run; ++g) {
-                tok[block_idx_in_row + g] = block_scales[br + g];
+        for (uint32_t sub = 0; sub < block_ht; ++sub) {
+            const uint32_t base = (blk * block_ht + sub) * tile_h;
+            if (base >= total_blocks) {
+                break;  // trailing sub-batches of the last (partial) block hold no real data
             }
-            br += run;
-            current_col += run * block_w;
-            if (current_col >= width) {  // token complete -> flush its full scale row (aligned)
+            const uint32_t remaining = total_blocks - base;
+            const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
+
+            extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_tiles_obj.get_read_ptr()) + sub * tile_elems,
+                block_scales);
+
+            uint32_t br = 0;  // block-local row within this tile-row sub-batch
+            while (br < real_in_block && current_row < end_row) {
+                uint32_t block_idx_in_row = current_col >> 7;  // block index within the row (block_w = 128)
+                uint32_t blocks_left_in_row = blocks_per_row - block_idx_in_row;
+                uint32_t blocks_left_in_batch = real_in_block - br;
+                uint32_t run = blocks_left_in_row < blocks_left_in_batch ? blocks_left_in_row : blocks_left_in_batch;
+
+                // output_e4m3: write `run` contiguous 128-element blocks back to (current_row, current_col).
+                // The sub-batch's untilized rows start at page offset sub*tile_h within cb_output_e4m3.
                 noc.async_write(
-                    use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
-                    scale,
-                    scale_row_bytes,
-                    {.offset_bytes = 0},
-                    {.page_id = current_row});
-                noc.async_write_barrier();  // scratch is reused by the next token
-                current_col = 0;
-                ++current_row;
+                    cb_output_e4m3_obj,
+                    output_e4m3,
+                    run * output_e4m3_block_bytes,
+                    {.offset_bytes = (sub * tile_h + br) * output_e4m3_block_bytes},
+                    {.page_id = current_row, .offset_bytes = current_col});
+                // scale: stage this run's per-block scales into the token's scratch row.
+                for (uint32_t g = 0; g < run; ++g) {
+                    tok[block_idx_in_row + g] = block_scales[br + g];
+                }
+                br += run;
+                current_col += run * block_w;
+                if (current_col >= width) {  // token complete -> flush its full scale row (aligned)
+                    noc.async_write(
+                        use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
+                        scale,
+                        scale_row_bytes,
+                        {.offset_bytes = 0},
+                        {.page_id = current_row});
+                    noc.async_write_barrier();  // scratch is reused by the next token
+                    current_col = 0;
+                    ++current_row;
+                }
             }
         }
         noc.async_write_barrier();  // drain this block's output_e4m3 writes before the CB page is reused
         cb_output_e4m3_obj.pop_front(tiles_per_block);
-        cb_scale_tiles_obj.pop_front(1);
+        cb_scale_tiles_obj.pop_front(block_ht);
     }
 }

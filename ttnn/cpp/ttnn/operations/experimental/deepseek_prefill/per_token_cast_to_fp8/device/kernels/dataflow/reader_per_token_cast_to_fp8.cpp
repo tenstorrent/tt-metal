@@ -23,6 +23,7 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(2);  // absolute first row of this core's stream
     uint32_t num_rows = get_arg_val<uint32_t>(3);   // rows owned by this core
     uint32_t width = get_arg_val<uint32_t>(4);      // H (elements per row)
+    uint32_t block_ht = get_arg_val<uint32_t>(5);   // tile-rows batched per block
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t input_block_bytes = get_compile_time_arg_val(1);  // 128 * elem_size
@@ -36,9 +37,10 @@ void kernel_main() {
     constexpr uint32_t face_elems = face_h * face_w;                       // fp32 elements per face
     constexpr uint32_t num_faces = (tile_h / face_h) * (tile_w / face_w);  // faces per tile
     constexpr uint32_t block_w = 128;                                      // BlockW
-    constexpr uint32_t tiles_per_block = block_w / tile_w;                 // BlockWt (BlockHt = 1)
+    constexpr uint32_t block_wt = block_w / tile_w;                        // BlockWt: tiles across the block
+    const uint32_t tiles_per_block = block_ht * block_wt;                  // BlockHt * BlockWt
     constexpr uint32_t elem_bytes = input_block_bytes / block_w;           // input element size
-    constexpr uint32_t block_capacity = tile_h * block_w;                  // 4096 elems per block
+    const uint32_t block_capacity = block_ht * tile_h * block_w;           // elems per block
     constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto src = TensorAccessor(src_args, src_addr);
