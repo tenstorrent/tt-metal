@@ -44,6 +44,11 @@ on:
         type: string
         default: "tt-ubuntu-2204-medium-stable"
         description: "Runner label for medium CPU jobs (e.g. Harbor prewarm)"
+      check-harbor-runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-light"
+        description: "Runner label for the Harbor health check job"
     outputs:
       # Ubuntu 22.04 images (from build-docker-artifact platform=Ubuntu 22.04)
       ubuntu-2204-ci-build-light-tag:
@@ -135,6 +140,8 @@ jobs:
   # Check Harbor availability via reusable workflow
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ inputs.check-harbor-runs-on || 'tt-ubuntu-light' }}
 
   # Preflight: compute tool and platform data on a single runner
   # Outputs raw JSON blobs that downstream workflows parse with fromJson()
