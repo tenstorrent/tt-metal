@@ -149,37 +149,22 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x55555555);
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x55555555);
     }
-    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
+    else
     {
-        // The below mask mean all datums in a row preserve their value
         cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0x0000);
 
-        if (tensor_shape.face_r_dim <= (FACE_R_DIM >> 1))
+        if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
         {
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x00010001);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x00010001);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x00010001);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x00010001);
+            // The below mask mean all datums in a row preserve their value
+            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0x0000);
         }
         else
         {
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x1);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x1);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, 0x1);
-            cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE3_RMW, 0x1);
+            // 0xFFFE below means datum[0] preserves its values, datums[1:15] = 0
+            cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0xFFFE);
         }
-    }
-    else
-    {
-        // 0xFFFE below means datum[0] preserves its values, datums[1:15] = 0
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, 0xFFFF);
-        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, 0xFFFE);
 
-        // For face 0, only row 0 will have mask1 applied
-        // Mask1 is configured to only have datum[0] preserved
-        // rows[1-16] will have all of their datums masked to 0
-        if (tensor_shape.face_r_dim <= (FACE_R_DIM >> 1))
+        if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
             cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, 0x00010001);
             cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, 0x00010001);

@@ -441,15 +441,16 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 /**
  * @brief Perform a reduce operation.
  *
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
  * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
  */
-inline void _llk_math_reduce_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_idx)
+inline void _llk_math_reduce_(const TensorShape& tensor_shape, const std::uint32_t tile_idx)
 {
     // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
     // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
-    _set_dst_write_addr_by_rows_(find_max(FACE_R_DIM, num_rows_per_tile), tile_idx);
+    _set_dst_write_addr_by_rows_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()), tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
