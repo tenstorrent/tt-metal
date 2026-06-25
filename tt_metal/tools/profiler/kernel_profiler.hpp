@@ -317,8 +317,8 @@ __attribute__((noinline)) void signal_host_buffer_full(uint32_t control_buffer_i
     } while (profiler_control_buffer[control_buffer_index_for_dram] == DRAM_PROFILER_ADDRESS_STALLED);
 }
 
-__attribute__((noinline)) void finish_profiler() {
-    if constexpr (DO_ACCUMULATE) {
+__attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULATE) {
+    if (do_accumulate) {
         // Accumulate mode: do NOT reset wIndex or push every iteration. Each RISC
         // pads its own buffer to NOC alignment and publishes its current fill
         // level; the aggregating RISC then flushes ALL RISCs to DRAM only when at
@@ -753,10 +753,15 @@ struct profileScopeMainAccumulate {
             stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
         }
         if constexpr (index == 0) {
-            // Publish this RISC's fill level and let the aggregating RISC (BRISC /
-            // idle-ERISC) flush ALL RISCs to DRAM iff any one of them is full.
-            // No quick_push: the only DRAM push path in this mode is finish.
-            finish_profiler();
+            // Accumulate is worker-core-only. On dispatch cores (tagged by the host
+            // in the control buffer) take the classic finish path so their realtime
+            // quick_push feed is unaffected; these cores enter the main scope once,
+            // so a single classic finish is all they need. Worker cores publish
+            // their fill level and let the aggregating RISC (BRISC / idle-ERISC)
+            // flush ALL RISCs to DRAM iff any one of them is full -- no quick_push,
+            // the only DRAM push path in accumulate mode is finish.
+            const bool is_dispatch_core = profiler_control_buffer[PROFILER_DISPATCH_CORE] != 0;
+            finish_profiler(/*do_accumulate=*/!is_dispatch_core);
         }
     }
 };

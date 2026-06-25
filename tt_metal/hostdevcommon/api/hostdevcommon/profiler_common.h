@@ -65,6 +65,11 @@ enum ControlBuffer {
     DROPPED_ZONES,
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
+    // Per-core runtime flag set by the host: non-zero on dispatch cores. Accumulate
+    // mode is worker-core-only; in accumulate builds the firmware main scope reads
+    // this to fall back to the classic (non-accumulate) finish path on dispatch
+    // cores, leaving their realtime quick_push feed intact.
+    PROFILER_DISPATCH_CORE,
     // Used for device debug dump mode. Needs to come last in the control buffer
     // because we first update the host buffer end index and then the DRAM buffer address
     DRAM_PROFILER_ADDRESS_BR_ER_0,
