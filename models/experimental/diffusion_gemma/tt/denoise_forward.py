@@ -317,3 +317,51 @@ def denoise_logits_from_tokens(
         prompt_hidden_by_layer=prompt_hidden_by_layer,
         canvas_hidden=canvas_hidden,
     )
+
+
+class DenoiseLogitsAdapter:
+    """Stateful W2 logits callback for the W3 denoise controller.
+
+    The controller calls ``logits_fn(canvas_tokens, step)``. This adapter turns
+    that narrow callback into the real W2 path: token embedding, optional
+    self-conditioning from the previous step's logits, and denoise logits forward.
+    """
+
+    def __init__(
+        self,
+        tt_model,
+        *,
+        prompt_hidden_by_layer,
+        self_conditioning=None,
+        self_conditioning_embedding_weight=None,
+        self_conditioning_compute_kernel_config=None,
+        logits_from_tokens=denoise_logits_from_tokens,
+    ):
+        self.tt_model = tt_model
+        self.prompt_hidden_by_layer = prompt_hidden_by_layer
+        self.self_conditioning = self_conditioning
+        self.self_conditioning_embedding_weight = self_conditioning_embedding_weight
+        self.self_conditioning_compute_kernel_config = self_conditioning_compute_kernel_config
+        self.logits_from_tokens = logits_from_tokens
+        self.prev_logits = None
+
+    def __call__(self, canvas_tokens, step: int):
+        old_prev_logits = self.prev_logits
+        logits = self.logits_from_tokens(
+            self.tt_model,
+            prompt_hidden_by_layer=self.prompt_hidden_by_layer,
+            canvas_tokens=canvas_tokens,
+            self_conditioning=self.self_conditioning,
+            prev_logits=old_prev_logits,
+            self_conditioning_embedding_weight=self.self_conditioning_embedding_weight,
+            self_conditioning_compute_kernel_config=self.self_conditioning_compute_kernel_config,
+        )
+        self.prev_logits = logits
+        if old_prev_logits is not None:
+            old_prev_logits.deallocate(True)
+        return logits
+
+    def reset(self):
+        if self.prev_logits is not None:
+            self.prev_logits.deallocate(True)
+            self.prev_logits = None

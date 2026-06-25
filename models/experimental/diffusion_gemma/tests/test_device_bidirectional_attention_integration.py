@@ -28,6 +28,7 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
+    DenoiseLogitsAdapter,
     denoise_attention_forward,
     denoise_logits_from_tokens,
     embed_canvas_tokens,
@@ -372,4 +373,89 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     # Full logits include the shared bf16 MoE/lm_head/softcap path; this branch's
     # known full-model ceiling is below the attention-only 0.99 acceptance.
     passing, message = assert_with_pcc(golden.float(), logits.float(), 0.98)
+    assert passing, message
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_denoise_logits_adapter_threads_prev_logits_for_self_conditioning(mesh_device, reset_seeds):
+    torch.manual_seed(7)
+    prompt_len = 64
+    canvas_len = 256
+    total_len = prompt_len + canvas_len
+    vocab_size = 256
+
+    hf_text_config = _create_hf_text_config(vocab_size=vocab_size, num_layers=1)
+    if getattr(hf_text_config, "enable_moe_block", False):
+        hf_text_config.num_experts = 4
+        hf_text_config.top_k_experts = 2
+    hf_model = _create_hf_model(hf_text_config)
+    tt_model = _build_tt_model(mesh_device, hf_model, hf_text_config, num_layers=1, max_seq_len=total_len)
+
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
+    canvas_tokens_step0 = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
+    canvas_tokens_step1 = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
+    tt_prompt_tokens = _to_device_tokens(mesh_device, prompt_tokens)
+    tt_canvas_tokens_step0 = _to_device_tokens(mesh_device, canvas_tokens_step0)
+    tt_canvas_tokens_step1 = _to_device_tokens(mesh_device, canvas_tokens_step1)
+
+    tt_prompt_hidden = embed_canvas_tokens(tt_model, tt_prompt_tokens)
+    tt_prompt_logits = tt_model(
+        tt_prompt_hidden,
+        is_decode=False,
+        input_ids_torch=prompt_tokens,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    tt_prompt_logits.deallocate(True)
+    tt_prompt_kv_by_layer = [read_prompt_kv_cache_slice(tt_model.tt_kv_cache[0], prompt_len=prompt_len)]
+
+    self_conditioning_ref = SelfConditioning(
+        hf_text_config.hidden_size,
+        intermediate_size=hf_text_config.intermediate_size,
+        eps=hf_text_config.rms_norm_eps,
+        activation=hf_text_config.hidden_activation,
+    ).eval()
+    self_conditioning_state = {
+        "pre_norm.weight": self_conditioning_ref.pre_norm.weight.data.clone(),
+        "gate_proj.weight": self_conditioning_ref.gate_proj.weight.data.clone(),
+        "up_proj.weight": self_conditioning_ref.up_proj.weight.data.clone(),
+        "down_proj.weight": self_conditioning_ref.down_proj.weight.data.clone(),
+    }
+    self_conditioning = TtSelfConditioning(
+        mesh_device,
+        self_conditioning_state,
+        hidden_size=hf_text_config.hidden_size,
+        intermediate_size=hf_text_config.intermediate_size,
+        eps=hf_text_config.rms_norm_eps,
+    )
+    tt_self_conditioning_embedding = _to_device(
+        mesh_device,
+        hf_model.embed_tokens.weight.detach().unsqueeze(0).unsqueeze(0),
+    )
+
+    adapter = DenoiseLogitsAdapter(
+        tt_model,
+        prompt_hidden_by_layer=tt_prompt_kv_by_layer,
+        self_conditioning=self_conditioning,
+        self_conditioning_embedding_weight=tt_self_conditioning_embedding,
+    )
+    step0_logits = adapter(tt_canvas_tokens_step0, 0)
+    expected_step1_logits = denoise_logits_from_tokens(
+        tt_model,
+        prompt_hidden_by_layer=tt_prompt_kv_by_layer,
+        canvas_tokens=tt_canvas_tokens_step1,
+        self_conditioning=self_conditioning,
+        prev_logits=step0_logits,
+        self_conditioning_embedding_weight=tt_self_conditioning_embedding,
+    )
+    step1_logits = adapter(tt_canvas_tokens_step1, 1)
+
+    expected = _to_torch(expected_step1_logits, mesh_device).squeeze(0)
+    actual = _to_torch(step1_logits, mesh_device).squeeze(0)
+    adapter.reset()
+    expected_step1_logits.deallocate(True)
+    for tt_k, tt_v in tt_prompt_kv_by_layer:
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+
+    passing, message = assert_with_pcc(expected.float(), actual.float(), 0.999)
     assert passing, message
