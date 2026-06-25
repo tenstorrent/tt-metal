@@ -350,6 +350,15 @@ class Transformer(TTTransformer):
     # Generator._decode_token_feedback_buffer returns None for this model.
     _tt_vllm_always_refresh_decode_trace_inputs = True
 
+    # Run the on-device sampling op eagerly instead of from its own captured trace.
+    # The force-argmax path all-gathers logits via all_gather_async, whose
+    # multi_device_global_semaphore is acquired from get_and_cycle_*() at capture time
+    # and then frozen into the sampling trace. Replaying that trace reuses the stale
+    # semaphore, so the gather corrupts from the 2nd decode step -> correct first token
+    # then gibberish (#48037). Eager sampling re-acquires a fresh semaphore each step.
+    # The heavy decode forward stays traced, so decode throughput is preserved.
+    _tt_disable_sampling_trace = True
+
     def __init__(
         self,
         args,
