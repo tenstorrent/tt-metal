@@ -637,7 +637,7 @@ def _run_cb_heavy_noop_program(io_tensors, cb_core_grid, cb_total_size_bytes):
 
 @pytest.mark.parametrize("use_from_torch", [False, True], ids=["experimental_to_single_device", "from_torch_replicate"])
 @pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
-def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch):
+def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch, expect_error):
     """CB validation should reject a program whose CBs land on cores already filled by a per-core tensor."""
     same_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     # Allocate I/O first so lockstep places them at top of L1 (no per-core ranges to avoid yet).
@@ -646,7 +646,7 @@ def test_per_core_cb_collision_errors_on_same_cores(mesh_device, use_from_torch)
     assert _per_core_tensor is not None  # keep alive until CB validation runs
 
     # Huge CB on the SAME cores as the per-core tensor: should trip validate_circular_buffer_region.
-    with pytest.raises(RuntimeError, match=r"clash|circular buffer|L1"):
+    with expect_error(RuntimeError, r"clash|circular buffer|L1"):
         _run_cb_heavy_noop_program(io_tensors, same_grid, cb_total_size_bytes=1024 * 1024)
 
 
