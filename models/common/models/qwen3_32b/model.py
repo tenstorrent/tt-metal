@@ -609,6 +609,10 @@ class Qwen3_32B(LightweightModule):
         self.n_layers = cfg.num_hidden_layers
         self.num_devices = mesh_device.get_num_devices()
         self.tt_ccl = get_tt_ccl(mesh_device) if self.num_devices > 1 else None
+        # Same padded width the LM head uses (weight_utils is the single source of truth). The
+        # sampler runs per-device top-k on the LM head's tile-aligned shards, so it MUST share this
+        # width or its index_offsets (device_id * vocab // num_devices) miss the real shard boundary.
+        self.padded_vocab_size = weight_utils.lm_head_padded_vocab_size(self.vocab_size, self.num_devices)
 
         # The model owns its sampler (replacing the self.sampling = None placeholder); callers pick
         # behavior per request via sampling_params. Buffers are lazy (nothing materializes until the
@@ -618,7 +622,10 @@ class Qwen3_32B(LightweightModule):
         self.supports_on_device_sampling = self.num_devices >= 1
         self.sampling = (
             Sampling1D(
-                vocab_size=self.vocab_size,
+                # Padded width for the per-device top-k offset math; valid_vocab_size carries the
+                # real tokenizer vocab so #47021's mask zeroes out the trailing pad logits.
+                vocab_size=self.padded_vocab_size,
+                valid_vocab_size=self.vocab_size,
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
                 max_batch_size=_nearest_32(cfg.max_batch_size),

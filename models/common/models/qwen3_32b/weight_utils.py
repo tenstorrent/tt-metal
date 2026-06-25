@@ -153,6 +153,21 @@ def embed_tokens_torch(embed: Any) -> torch.Tensor:
     return w.unsqueeze(0).unsqueeze(0)
 
 
+def lm_head_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
+    """Vocab width padded so each device's LM-head column shard is tile-aligned.
+
+    Single source of truth for the padded vocab: ``build_lm_head_lazy_weights`` pads the
+    LM head to this width, and the on-device sampler (``Sampling1D``) must use the SAME
+    width so its per-device ``index_offsets`` (``device_id * vocab // num_devices``) line up
+    with the real shard boundaries. Pass ``vocab_size=lm_head_padded_vocab_size(...)`` and
+    ``valid_vocab_size=<real vocab>`` to ``Sampling1D``; the real vocab drives the padding mask.
+
+    Qwen3-32B: 151936 → 152064 (size_per_device 19008, a multiple of TILE_SIZE=32).
+    """
+    align = 32 * num_devices
+    return math.ceil(vocab_size / align) * align
+
+
 def build_lm_head_lazy_weights(
     mesh_device: ttnn.MeshDevice,
     lm_head_weight: torch.Tensor,
@@ -180,8 +195,7 @@ def build_lm_head_lazy_weights(
     # makes size_per_device tile-aligned (19008) so the gather is gap-free; the trailing pad
     # columns are zeros at the very end of the vocab. Coder-32B's 152064 was already aligned and
     # never hit this. See the qwen3_32b debugging notes.
-    align = 32 * num_devices
-    padded_vocab_size = math.ceil(vocab_size / align) * align
+    padded_vocab_size = lm_head_padded_vocab_size(vocab_size, num_devices)
     if vocab_size < padded_vocab_size:
         pad = padded_vocab_size - vocab_size
         torch_w = torch.cat([torch_w, torch.zeros(torch_w.shape[0], pad, dtype=torch_w.dtype)], dim=-1)
