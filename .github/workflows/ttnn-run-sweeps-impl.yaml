@@ -96,16 +96,9 @@ jobs:
           # Sweep CI default of 5s is too aggressive for traced multi-device
           # configs on Galaxy: linear/multiply/matmul with sharded I/O can
           # exceed 5s during reshard + dispatch bring-up, producing false-
-          # positive op-timeouts. 30s still wasn't enough for the heavy 1024x1024
-          # conv2d configs (full conv per chip) in the long sequential suite: their
-          # dispatch stall intermittently exceeds 30s once device state accumulates,
-          # tripping system_memory_manager.cpp:757 and aborting the conv2d suite --
-          # even though the SAME configs complete on a clean device and the WHOLE
-          # conv2d suite passes clean when this is 300s (verified on T3K 1x8). It's a
-          # too-tight hang-detector, not a real hang (op-timeout is read once at
-          # startup, so it can't be raised per-op at runtime). Raise to 300s job-wide;
-          # the per-module TIMEOUT (e.g. conv2d=900s) remains the genuine-hang backstop.
-          hang-detection-timeout: 300
+          # positive op-timeouts. Raise to 30s for the whole sweep job so
+          # every op benefits without per-module env-var overrides.
+          hang-detection-timeout: 30
       - name: 📋 Display parallel sweep configuration
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"

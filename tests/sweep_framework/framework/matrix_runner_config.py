@@ -185,6 +185,13 @@ LEAD_MODELS_SUITE_NAME = "model_traced"
 LEAD_MODELS_BATCH_POLICY = {
     "solo_modules": [
         "model_traced.all_gather_async_model_traced",
+        # conv2d runs in its own batch (own process): its heavy 1024x1024 convs
+        # intermittently deadlock the dispatch hang-detector once device state
+        # accumulates from OTHER modules in a shared batch (CI run 28150416165:
+        # 1df14794 stalled >300s twice, even on a clean-device retry). conv2d run
+        # ALONE passes (verified T3K 1x8), so isolating it avoids the cross-module
+        # accumulation that triggers the hang.
+        "model_traced.conv2d_model_traced",
     ],
 }
 
