@@ -7,7 +7,7 @@
 Where prefill_h2d_producer.py pushes one user's chunks back-to-back, this drives a realistic mixed
 workload against the running request pipeline: many concurrent user slots, chunks arriving interleaved
 across users, occasional bursts of consecutive chunks for one user, and idle gaps where nothing is
-pushed (the runner blocks in h2d_socket_sync). Finished requests recycle their slot as a fresh request
+pushed (the runner blocks in inbound_socket_service_sync). Finished requests recycle their slot as a fresh request
 to sustain load. PCC is not meaningful here (users replay the same trace tokens) — the goal is
 throughput and stability under load, not correctness.
 

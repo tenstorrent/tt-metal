@@ -33,8 +33,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.d2d_socket_push_op import d2d_socket_push
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -168,7 +166,7 @@ def _socket_next(h2d_service) -> tuple:
     decoded from the 12-byte PrefillMetadata. Used only by the unbounded request loop (rank 0 input)."""
     import torch
 
-    tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+    tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
@@ -229,7 +227,9 @@ def _d2d_recv(inbound) -> tuple:
     import torch
 
     t0 = time.perf_counter()
-    act, md = h2d_socket_sync(inbound, SYNC_WORKER_CORES, metadata_size_bytes=METADATA_SIZE_BYTES)
+    act, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+        inbound, metadata_size_bytes=METADATA_SIZE_BYTES
+    )
     m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
     logger.info(
@@ -248,8 +248,22 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     if activation.memory_config() != backing.memory_config() or activation.layout != backing.layout:
         activation = ttnn.to_layout(activation, backing.layout)
         activation = ttnn.to_memory_config(activation, backing.memory_config())
+    import torch
+
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
-    d2d_socket_push(outbound, activation, SYNC_WORKER_CORES, metadata=words)
+    # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
+    md_tensor = ttnn.from_torch(
+        torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=backing.device(),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            backing.device(),
+            ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+        ),
+    )
+    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     ttnn.deallocate(activation)
     logger.info(
         f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
