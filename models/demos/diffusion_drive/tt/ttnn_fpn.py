@@ -97,7 +97,7 @@ class TtnnFPN:
         B, C_in, H, W = x.shape
         C_out = w.shape[0]
         x_tt = _to_ttnn_tile(x, B, H, W, C_in, self._device)
-        out_tt, H_out, W_out = _ttnn_conv2d(self._device, x_tt, w, b, B, H, W, C_in, C_out, ksize, stride, pad)
+        out_tt, H_out, W_out, _, _ = _ttnn_conv2d(self._device, x_tt, w, b, B, H, W, C_in, C_out, ksize, stride, pad)
         if out_tt.is_sharded():
             out_tt = ttnn.sharded_to_interleaved(out_tt, ttnn.DRAM_MEMORY_CONFIG)
         out_tt = ttnn.relu(out_tt)

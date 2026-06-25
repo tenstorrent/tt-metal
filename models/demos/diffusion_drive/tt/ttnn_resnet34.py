@@ -136,14 +136,17 @@ def _ttnn_conv2d(
     kernel_size: int,
     stride: int,
     padding: int,
-) -> Tuple[ttnn.Tensor, int, int]:
-    """Run ttnn.conv2d and return (output_tensor, out_H, out_W).
+) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
+    """Run ttnn.conv2d and return (output, out_H, out_W, prepared_w, prepared_b).
 
-    ``w_ttnn`` / ``b_ttnn`` are pre-converted TTNN host tensors (see
-    :func:`prep_conv_weights`) — no per-call host conversion happens here.
+    ``w_ttnn`` / ``b_ttnn`` may be host tensors (first call) or the device-prepared
+    tensors returned by a previous call. Returning the prepared (device-resident)
+    weights lets the caller cache them and skip the per-forward host upload — which
+    is both a small perf win and **required for trace capture** (host->device writes
+    are illegal between begin/end_trace_capture).
     """
     conv_config = _make_conv_config()
-    [out, [out_H, out_W], [_, _]] = ttnn.conv2d(
+    [out, [out_H, out_W], [prep_w, prep_b]] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=w_ttnn,
         bias_tensor=b_ttnn,
@@ -161,7 +164,7 @@ def _ttnn_conv2d(
         return_weights_and_bias=True,
         return_output_dim=True,
     )
-    return out, out_H, out_W
+    return out, out_H, out_W, prep_w, prep_b
 
 
 class TtnnBasicBlock:
@@ -209,7 +212,9 @@ class TtnnBasicBlock:
         C_mid = self._C_mid
         identity = x
 
-        out, H1, W1 = _ttnn_conv2d(
+        # Reassign self._w1/_b1 to the device-prepared weights conv2d returns, so the
+        # next forward reuses them instead of re-uploading host weights (trace-safe).
+        out, H1, W1, self._w1, self._b1 = _ttnn_conv2d(
             self._device, x, self._w1, self._b1, B, H, W, C_in, C_mid, kernel_size=3, stride=self._stride, padding=1
         )
         # Move to interleaved DRAM + TILE for reliable add/relu
@@ -219,14 +224,14 @@ class TtnnBasicBlock:
         # Conv2: 3×3, stride=1, BN-folded (no activation)
         C_out = self._C_out
 
-        out, H2, W2 = _ttnn_conv2d(
+        out, H2, W2, self._w2, self._b2 = _ttnn_conv2d(
             self._device, out, self._w2, self._b2, B, H1, W1, C_mid, C_out, kernel_size=3, stride=1, padding=1
         )
         out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG) if out.is_sharded() else out
 
         # Shortcut
         if self._has_downsample:
-            identity, _, _ = _ttnn_conv2d(
+            identity, _, _, self._w_ds, self._b_ds = _ttnn_conv2d(
                 self._device,
                 identity,
                 self._w_ds,
