@@ -180,7 +180,25 @@ fitting-CB positive control).
 but inside no live buffer — scribbling on memory it never legitimately addressed.
 **How it works:** at launch the host snapshots every live buffer's extent
 (`LiveL1Ranges` / `LiveDramRanges`, fed from `Buffer::allocate`/`deallocate`) into
-per-kernel range arrays. On each access the kernel first **normalizes the address
+per-kernel range arrays. Each L1 buffer is registered with its **per-core
+footprint** (`aligned_size_per_bank()`, what the allocator reserves on one core),
+not the aggregate `size_`: `size_` spans all banks, so a sharded buffer's full size
+at a single core's local offset would register a range many times the core's L1
+(e.g. a 64-core shard → a 4.6 MB range on a 1.5 MB L1). That over-permits this OOB
+check and makes the Object Intent (§12) snapshot read past the core's L1 into
+adjacent memory, false-positiving unrelated cores' writes.
+
+Both buffer-creation paths must register the extent: owning buffers in
+`allocate_impl()`/`deallocate_impl()`, and **explicit-address (non-owning)** buffers —
+e.g. the per-physical-device L1 buffers `MeshBuffer::initialize_device_buffers` builds,
+which never run `allocate_impl()` — in the `Buffer::create(address, …)` overload and
+`Buffer::deallocate()`. Without the latter, the runner's physical-`device->id()`
+snapshot is empty for every mesh sharded-L1 buffer and each legitimate access
+false-positives. The non-owning `deallocate()` removes the range under an
+`allocation_status_` guard so the explicit-call + destructor double-deallocate drops it
+exactly once.
+
+On each access the kernel first **normalizes the address
 to a buffer-relative offset** via `__emule_addr_to_offset` — necessary because
 sharded / CB / `l1_alloc` accesses arrive as absolute bridge pointers, not
 offsets, and a raw absolute value would never match a relative range — then checks
@@ -289,10 +307,25 @@ computes the accessed page's distance from `write_idx`/`read_idx` and compares
 against the pages currently `reserved`/`waited` (`__emule_cb_reserved_pages` /
 `__emule_cb_waited_pages`, maintained by `cb_reserve_back`/`cb_wait_front`). It
 fires **only when a window is active** (`reserved > 0 || waited > 0`) and the page
-is outside both — so legitimate raw `get_write_ptr`/`get_read_ptr` addressing with
-no active handshake (globally-allocated/sharded CBs, single-buffered scratch,
-output CBs written then DMA'd) is not flagged. A write *past* the CB's allocated
-region is caught by the OOB check (§4) instead.
+is outside both. Two classes of legitimate raw `get_write_ptr`/`get_read_ptr`
+addressing are exempt so they are not false-positived:
+- **No active handshake** (`reserved == 0 && waited == 0`) — single-buffered
+  scratch, output CBs written then DMA'd.
+- **Globally-allocated / sharded CBs** (`set_globally_allocated_address`) — these
+  are addressed across the whole backing buffer via computed offsets and only call
+  `reserve_back` *nominally* (e.g. matmul `cb_in0_sharded` reserves 1 but reads the
+  full shard). The `CBSyncState::globally_allocated` flag (set in
+  `init_core_cb_sync` from `cb_impl->globally_allocated()`) skips the window
+  sub-check for them even when a nominal window is active.
+- **Reuse of produced data** — an access into the already-produced-but-unconsumed
+  region `[read_idx, write_idx)` holds valid data the kernel may legitimately
+  re-read or re-derive (e.g. conv `activation_reuse` writes back into earlier rows
+  at `cb_start + pixel_row*reuse_offset`). Only an access outside the active window
+  **and** outside this produced region reaches not-yet-produced free space — the
+  real over-reach hazard (#46843). This is what keeps the genuine catch alive while
+  dropping the reuse false positive.
+
+A write *past* the CB's allocated region is caught by the OOB check (§4) instead.
 *Diagnostic:* `CB Boundary Violation: Attempted to access CB <id> at offset 0x… outside the write/read window`.
 *Exercised by:* `test_write_beyond_res_pages.cpp` (write side, read side, a
 wraparound positive control + a wraparound violation that confirms the modular

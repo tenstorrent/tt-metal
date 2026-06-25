@@ -271,4 +271,53 @@ TEST_F(MeshDeviceFixture, CB_Boundary_NoActiveWindow_NoViolation) {
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
+// Produced-region reuse control: a write back into an already-produced page
+// [read_idx, write_idx), outside the active reserve window, must NOT abort (the
+// conv activation-reuse pattern). See SANITIZER_CHECKS.md §7.
+TEST_F(MeshDeviceFixture, CB_Boundary_ProducedRegionReuse_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    // 4-page CB so the produced region and the fresh reservation are distinct.
+    constexpr uint32_t cb_id = 0;
+    constexpr uint32_t page_size = 1024;
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(4 * page_size, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, page_size);
+    CreateCircularBuffer(program, logical_core, cb_config);
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            // Produce 3 pages: write_idx advances to 3, read_idx stays 0
+            // (producer never pops), so [0,3) is the produced region.
+            cb_reserve_back(0, 3);
+            cb_push_back(0, 3);
+            // Fresh reservation: window covers only page 3.
+            cb_reserve_back(0, 1);
+            uint32_t write_addr = get_write_ptr(0);    // page 3 = cb.base + 3*1024
+            uint64_t src_noc = get_noc_addr(write_addr);
+            // Reuse: write back into page 1 — a PRODUCED page, behind write_idx and
+            // outside the reserved window. Must be accepted.
+            noc_async_read(src_noc, write_addr - 2048, 1024);
+            noc_async_read_barrier();
+            cb_push_back(0, 1);                         // flush: reserved -> 0
+        }
+    )";
+
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    // Reuse of produced data is legal and the kernel exits flushed → no abort.
+    detail::LaunchProgram(device, program);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
+}
+
 }  // namespace tt::tt_metal

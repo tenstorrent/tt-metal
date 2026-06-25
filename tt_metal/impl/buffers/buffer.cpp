@@ -368,6 +368,17 @@ std::shared_ptr<Buffer> Buffer::create(
     buffer->address_ = address;
     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
 
+#ifdef TT_METAL_USE_EMULE
+    // Explicit-address (non-owning) L1 buffers skip allocate_impl(), so register their
+    // per-core extent here (removed in deallocate()). Rationale: SANITIZER_CHECKS.md §4.
+    if (buffer->size_ != 0 && (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL)) {
+        tt::tt_metal::emule::LiveL1Ranges::add(
+            device->id(),
+            static_cast<uint32_t>(address),
+            static_cast<uint32_t>(address + buffer->aligned_size_per_bank()));
+    }
+#endif
+
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
         buffer,
@@ -434,10 +445,11 @@ void Buffer::allocate_impl() {
 
 #ifdef TT_METAL_USE_EMULE
         if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
+            // Per-core footprint, not the aggregate size_ (spans all banks). See SANITIZER_CHECKS.md §4.
             tt::tt_metal::emule::LiveL1Ranges::add(
                 device_->id(),
                 static_cast<uint32_t>(address_),
-                static_cast<uint32_t>(address_ + size_));
+                static_cast<uint32_t>(address_ + aligned_size_per_bank()));
         } else if (buffer_type_ == BufferType::DRAM) {
             tt::tt_metal::emule::LiveDramRanges::add(
                 device_->id(),
@@ -464,6 +476,15 @@ void Buffer::allocate_impl() {
 
 void Buffer::deallocate() {
     if (!owns_data_) {
+#ifdef TT_METAL_USE_EMULE
+        // Mirror the Buffer::create registration; non-owning buffers skip deallocate_impl().
+        // Guard on status: the explicit-call + destructor double-deallocate must remove once.
+        if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0 &&
+            (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL)) {
+            tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+        }
+        allocation_status_ = AllocationStatus::DEALLOCATED;
+#endif
         return;
     }
     this->deallocate_impl();

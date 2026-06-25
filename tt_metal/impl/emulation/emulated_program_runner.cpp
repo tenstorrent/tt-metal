@@ -1886,7 +1886,7 @@ static void init_core_cb_sync(
             uint32_t page_size = cb_impl->page_size(idx);
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
-            core->init_cb_sync(idx, base, page_size, num_pages);
+            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated());
             configured[idx] = true;
             log_debug(
                 tt::LogMetal,
