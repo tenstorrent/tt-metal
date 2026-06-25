@@ -275,6 +275,15 @@ inline constexpr uint32_t NO_PREV_DFB = 0xFFFFFFFFu;
 
 enum class Side : uint8_t { SrcA, SrcB, Pack };
 
+// Compile-time membership test: is `V` one of `Set...`? Empty set → false. Collapses the
+// repeated `X == A || X == B || ...` equality ladders into `is_one_of_v<X, A, B, ...>`.
+// `auto V` + `decltype(V)...` lets one definition serve every enum (InputLifecycle,
+// OutputLifecycle, OperandKind, reconfig enums, …); the fold is a constant expression, usable in
+// `if constexpr`, `static_assert`, and `static constexpr` members. Requires V and Set... to be
+// constant expressions — it does NOT apply to runtime values or function parameters.
+template <auto V, decltype(V)... Set>
+inline constexpr bool is_one_of_v = ((V == Set) || ...);
+
 namespace detail {
 
 // =============================================================================
@@ -287,8 +296,7 @@ namespace detail {
 // =============================================================================
 
 template <OperandKind M>
-inline constexpr bool is_bcast_mode_v =
-    (M == OperandKind::Row) || (M == OperandKind::Col);
+inline constexpr bool is_bcast_mode_v = is_one_of_v<M, OperandKind::Row, OperandKind::Col>;
 
 template <OperandKind M>
 ALWI constexpr uint32_t idx(
@@ -312,7 +320,7 @@ ALWI constexpr uint32_t window([[maybe_unused]] uint32_t Ht, [[maybe_unused]] ui
 // `binary_op_helpers` static_assert (ROW/SCALAR require InputLifecycle::Bulk-family or NoWait*).
 template <InputLifecycle P, OperandKind M>
 inline constexpr bool valid_policy_mode_v =
-    !(is_bcast_mode_v<M> && (P == InputLifecycle::Streaming || P == InputLifecycle::Chunked));
+    !(is_bcast_mode_v<M> && is_one_of_v<P, InputLifecycle::Streaming, InputLifecycle::Chunked>);
 
 // =============================================================================
 // A. Chain typed-list machinery
@@ -432,6 +440,143 @@ constexpr bool chain_requests_no_reconfig() {
 }  // namespace detail
 
 // =============================================================================
+// 0. Operand streams — the shared CB-lifecycle hook providers
+//
+// Every CB-reader element's wait/pop hooks are a function of exactly one operand
+// tuple (Cb, Policy, IndexMode, Offset, tile_base); every CB-writer's reserve/push
+// hooks of one (Cb, Policy, Offset, tile_base). `InputStream` / `OutputStream`
+// define each hook ONCE. Single-stream elements (CopyTile / DestReuseBinary /
+// UnaryBcast) inherit `InputStream`; BinaryFpu HOLDS two and fans out with a
+// `same_dfb` dedup; PackTile inherits `OutputStream`. The driver calls the same
+// hook names either way (inherited member, or the element's own fan-out override).
+//
+// All policy gates below are a verbatim transcription of the per-element bodies —
+// a wrong gate is a hang or a PCC failure, never benign.
+// =============================================================================
+
+template <uint32_t Cb,
+          InputLifecycle Policy,
+          OperandKind IndexMode = OperandKind::Block,
+          TileOffset Offset = TileOffset::Unset>
+struct InputStream {
+    uint32_t tile_base = 0;
+
+    constexpr InputStream() noexcept = default;
+    constexpr explicit InputStream(uint32_t base) noexcept : tile_base(base) {}
+
+    // Upfront (Bulk-family) window count: the index-mode window plus the runtime base.
+    // (UnaryBcast uses IndexMode=Block + Offset=Unset, which yields exactly Ht*Wt.)
+    ALWI uint32_t window_count(uint32_t Ht, uint32_t Wt) const {
+        return detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base);
+    }
+
+    // Gate-free count primitives — reused by BinaryFpu's same_dfb branch, which
+    // collapses both sides' bases into the single shared CB's window.
+    ALWI void wait_n(uint32_t n) const { DataflowBuffer(Cb).wait_front(n); }
+    ALWI void pop_n(uint32_t n) const { DataflowBuffer(Cb).pop_front(n); }
+
+    ALWI void wait_per_tile(uint32_t cumulative_count) const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::Streaming, InputLifecycle::HeldStream>) {
+            DataflowBuffer(Cb).wait_front(1);
+        } else if constexpr (is_one_of_v<Policy, InputLifecycle::Pipelined, InputLifecycle::HeldCumulative>) {
+            DataflowBuffer(Cb).wait_front(cumulative_count);
+        }
+    }
+    ALWI void wait_per_block(uint32_t inner_count) const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::Chunked>) {
+            DataflowBuffer(Cb).wait_front(inner_count);
+        }
+    }
+    ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::BulkDrain>) {
+            DataflowBuffer(Cb).wait_front(window_count(Ht, Wt));
+        }
+    }
+    ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::Pipelined, InputLifecycle::DeferredPop>) {
+            DataflowBuffer(Cb).pop_front(window_count(Ht, Wt));
+        }
+    }
+    ALWI void pop_per_tile(uint32_t /*i*/) const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::Streaming, InputLifecycle::NoWaitPop, InputLifecycle::BulkDrain>) {
+            DataflowBuffer(Cb).pop_front(1);
+        }
+    }
+    ALWI void pop_per_block(uint32_t inner_count) const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::Chunked>) {
+            DataflowBuffer(Cb).pop_front(inner_count);
+        }
+    }
+    ALWI void wait_per_row() const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::OuterStream>) {
+            DataflowBuffer(Cb).wait_front(1);
+        }
+    }
+    ALWI void pop_per_row() const {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::OuterStream>) {
+            DataflowBuffer(Cb).pop_front(1);
+        }
+    }
+};
+
+template <uint32_t Cb,
+          OutputLifecycle Policy,
+          TileOffset Offset = TileOffset::Unset>
+struct OutputStream {
+    uint32_t tile_base = 0;
+
+    constexpr OutputStream() noexcept = default;
+    constexpr explicit OutputStream(uint32_t base) noexcept : tile_base(base) {}
+
+    // Walk vs pinned output addressing is DERIVED from the OutputLifecycle (no caller knob):
+    // upfront-reserve policies reserve the whole window once and write distinct tiles into it
+    // (walk); per-tile/per-chunk-reserve policies advance the CB front, so the index stays pinned.
+    static constexpr bool walk =
+        is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::BulkReservePerTile, OutputLifecycle::BulkReservePerChunk>;
+
+    ALWI void reserve_per_tile(uint32_t /*i*/) const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Streaming, OutputLifecycle::HeldReserve>) {
+            DataflowBuffer(Cb).reserve_back(1);
+        }
+    }
+    ALWI void reserve_per_block(uint32_t inner_count) const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Chunked>) {
+            DataflowBuffer(Cb).reserve_back(inner_count);
+        }
+    }
+    ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::BulkReservePerTile, OutputLifecycle::BulkReservePerChunk>) {
+            DataflowBuffer(Cb).reserve_back((Ht * Wt) + tile_base_value<Offset>(tile_base));
+        }
+    }
+    ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::DeferredReserve, OutputLifecycle::Bulk>) {
+            DataflowBuffer(Cb).push_back((walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
+        }
+    }
+    ALWI void push_per_tile(uint32_t /*i*/) const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Streaming, OutputLifecycle::BulkReservePerTile>) {
+            DataflowBuffer(Cb).push_back(1);
+        }
+    }
+    ALWI void push_per_block(uint32_t inner_count) const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Chunked, OutputLifecycle::BulkReservePerChunk>) {
+            DataflowBuffer(Cb).push_back(inner_count);
+        }
+    }
+    ALWI void reserve_per_row() const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::OuterStream>) {
+            DataflowBuffer(Cb).reserve_back(1);
+        }
+    }
+    ALWI void push_per_row() const {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::OuterStream>) {
+            DataflowBuffer(Cb).push_back(1);
+        }
+    }
+};
+
+// =============================================================================
 // 1. CopyTile chain element
 // =============================================================================
 
@@ -441,7 +586,10 @@ template <uint32_t Cb,
           CopyTileReconfig Reconfig,
           OperandKind IndexMode,
           TileOffset Offset>
-struct CopyTile : CopyTileTag {
+struct CopyTile : InputStream<Cb, Policy, IndexMode, Offset>, CopyTileTag {
+    using Base = InputStream<Cb, Policy, IndexMode, Offset>;
+    using Base::tile_base;
+
     // ---- compile-time validation ----
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -467,56 +615,19 @@ struct CopyTile : CopyTileTag {
     static constexpr uint32_t       dfb_a_id()       { return Cb; }
     // CopyTile reads one CB front (srcA via dfb_a_id); dfb_b / b_policy absent -> defaults apply.
     static constexpr InputLifecycle a_policy()      { return Policy; }
-    static constexpr bool           is_upfront      = (Policy == InputLifecycle::Bulk) ||
-                                                      (Policy == InputLifecycle::HeldBulk) ||
-                                                      (Policy == InputLifecycle::Pipelined);
+    static constexpr bool           is_upfront      =
+        is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
 
     // Prev-CB fold: CopyTile loads CbA only. srcb/pack sides are absent -> dfb_for_side
     // defaults them to NO_PREV_DFB.
     static constexpr uint32_t       reconfig_srca_dfb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_DFB;
 
-    uint32_t tile_base = 0;
-
     constexpr CopyTile() noexcept = default;
-    constexpr explicit CopyTile(uint32_t base) noexcept : tile_base(base) {}
+    constexpr explicit CopyTile(uint32_t base) noexcept : Base(base) {}
 
     // ---- chain pipeline hooks ----
     static ALWI void init() {
         copy_tile_init(Cb);
-    }
-
-    /// Per-iter wait. Element fires at its own granularity — streaming policies wait 1
-    /// per iter, Cumulative grows wait count with i (i+1), Upfront fires once via
-    /// wait_upfront with full n_tiles. None scale by chain block_size — block_size
-    /// only drives the inner DEST-lane loop and slot_offset.
-    ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
-            DataflowBuffer(Cb).wait_front(1);
-        } else if constexpr (Policy == InputLifecycle::Pipelined ||
-                             Policy == InputLifecycle::HeldCumulative) {
-            DataflowBuffer(Cb).wait_front(cumulative_count);
-        }
-    }
-
-    /// Per-outer-iter wait of `inner_count` tiles (chunked streaming).
-    /// inner_count == BlockSize for steady iters, == tail size for the last iter.
-    ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == InputLifecycle::Chunked) {
-            DataflowBuffer(Cb).wait_front(inner_count);
-        }
-    }
-
-
-
-    // 2D variants — Ht/Wt-aware. Routes through `idx` and `window`; TileBase
-    // adds the runtime offset on top. InputLifecycle::Streaming policies handled by the same
-    // `wait_per_tile` / `pop_per_tile` as 1D.
-    ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == InputLifecycle::Bulk ||
-                      Policy == InputLifecycle::HeldBulk ||
-                      Policy == InputLifecycle::BulkDrain) {
-            DataflowBuffer(Cb).wait_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
-        }
     }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
@@ -524,46 +635,10 @@ struct CopyTile : CopyTileTag {
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
-    ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == InputLifecycle::Bulk ||
-                      Policy == InputLifecycle::Pipelined ||
-                      Policy == InputLifecycle::DeferredPop) {
-            DataflowBuffer(Cb).pop_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
-        }
-    }
-
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
-    ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == InputLifecycle::Streaming ||
-                      Policy == InputLifecycle::NoWaitPop ||
-                      Policy == InputLifecycle::BulkDrain) {
-            DataflowBuffer(Cb).pop_front(1);
-        }
-    }
-
-    /// Per-outer-iter pop of `inner_count` tiles (chunked streaming).
-    ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == InputLifecycle::Chunked) {
-            DataflowBuffer(Cb).pop_front(inner_count);
-        }
-    }
-
-    /// Per-outer-row wait/pop for a streamed broadcast (InputLifecycle::OuterStream): one
-    /// operand tile per row, re-read at the front across the row's cols. No-op otherwise.
-    /// (is_legal_kind_lifecycle restricts OuterStream to OperandKind::Scalar, so the exec
-    /// index is the front (0) — no special index handling needed here.)
-    ALWI void wait_per_row() const {
-        if constexpr (Policy == InputLifecycle::OuterStream) {
-            DataflowBuffer(Cb).wait_front(1);
-        }
-    }
-    ALWI void pop_per_row() const {
-        if constexpr (Policy == InputLifecycle::OuterStream) {
-            DataflowBuffer(Cb).pop_front(1);
-        }
-    }
-
+    // wait_per_tile / wait_per_block / wait_upfront / pop_upfront_end / pop_per_tile /
+    // pop_per_block / wait_per_row / pop_per_row inherited from InputStream.
 };
 
 // =============================================================================
@@ -575,7 +650,11 @@ template <uint32_t Cb,
           PackTileReconfig Reconfig,
           Dst DstSlot,
           TileOffset Offset>
-struct PackTile : PackTileTag {
+struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
+    using Base = OutputStream<Cb, Policy, Offset>;
+    using Base::tile_base;
+    using Base::walk;
+
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     // TileBase != None on pack side requires caller-managed-style lifecycle on the
@@ -591,14 +670,8 @@ struct PackTile : PackTileTag {
     static constexpr Dst               pack_dst_slot       = DstSlot;
     static constexpr bool              is_upfront          = (Policy == OutputLifecycle::Bulk);
     static constexpr bool              uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
-    // Walk vs pinned output addressing is DERIVED from the OutputLifecycle (no caller knob):
-    // the upfront-reserve policies (Bulk, BulkReservePerTile, BulkReservePerChunk) reserve the
-    // whole window once and write distinct tiles into it (walk); every per-tile/per-chunk-reserve
-    // policy advances the CB front itself, so the write index stays pinned at base. (For a 1-tile
-    // output, walk and pinned are identical: base + 0 == base.)
-    static constexpr bool              walk                = (Policy == OutputLifecycle::Bulk) ||
-                                                             (Policy == OutputLifecycle::BulkReservePerTile) ||
-                                                             (Policy == OutputLifecycle::BulkReservePerChunk);
+    // `walk` (walk vs pinned output addressing) is derived from the OutputLifecycle and
+    // inherited from OutputStream (see `using Base::walk;` above).
 
     // Prev-CB fold: PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
@@ -607,10 +680,8 @@ struct PackTile : PackTileTag {
     static constexpr uint32_t          reconfig_pack_dfb    =
         (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_DFB;
 
-    uint32_t tile_base = 0;
-
     constexpr PackTile() noexcept = default;
-    constexpr explicit PackTile(uint32_t base) noexcept : tile_base(base) {}
+    constexpr explicit PackTile(uint32_t base) noexcept : Base(base) {}
 
     static ALWI void init() {
         // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
@@ -618,22 +689,6 @@ struct PackTile : PackTileTag {
         // element runs; init() here is a no-op for reconfig.
         // Retained empty so trait-dispatch stays uniform.
     }
-
-    ALWI void reserve_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == OutputLifecycle::Streaming ||
-                      Policy == OutputLifecycle::HeldReserve) {
-            DataflowBuffer(Cb).reserve_back(1);
-        }
-    }
-
-    /// Per-outer-iter reserve of `inner_count` tiles (chunked streaming).
-    ALWI void reserve_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == OutputLifecycle::Chunked) {
-            DataflowBuffer(Cb).reserve_back(inner_count);
-        }
-    }
-
-
 
     // Pack exec — walk the reserved output window (base + i_flat) for OutputLifecycle::Bulk, or stay pinned
     // at base for per-tile/chunk policies whose CB front already advanced. TileOffset adds base.
@@ -653,56 +708,10 @@ struct PackTile : PackTileTag {
         pack_tile</*out_of_order_output=*/Offset == TileOffset::Set>(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
-    // Upfront reserve/push — OutputLifecycle::Bulk walks the full window (Ht*Wt); OutputLifecycle::DeferredReserve is pinned (1).
-    // Reserve the full output window once (Ht*Wt tiles). Shared by every upfront-reserve
-    // policy: Bulk (push the whole window at end), BulkReservePerTile (push 1 per tile) and
-    // BulkReservePerChunk (push inner_count per chunk). Called once before the outer loop.
-    ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == OutputLifecycle::Bulk ||
-                      Policy == OutputLifecycle::BulkReservePerTile ||
-                      Policy == OutputLifecycle::BulkReservePerChunk) {
-            DataflowBuffer(Cb).reserve_back((Ht * Wt) + tile_base_value<Offset>(tile_base));
-        }
-    }
-    ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == OutputLifecycle::DeferredReserve ||
-                      Policy == OutputLifecycle::Bulk) {
-            DataflowBuffer(Cb).push_back((walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
-        }
-    }
-
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
-    ALWI void push_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == OutputLifecycle::Streaming ||
-                      Policy == OutputLifecycle::BulkReservePerTile) {
-            DataflowBuffer(Cb).push_back(1);
-        }
-    }
-
-    /// Per-outer-iter push of `inner_count` tiles. Used by Chunked (reserve+push per chunk)
-    /// and BulkReservePerChunk (reserve the whole window upfront, push it out one chunk at a time).
-    ALWI void push_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == OutputLifecycle::Chunked ||
-                      Policy == OutputLifecycle::BulkReservePerChunk) {
-            DataflowBuffer(Cb).push_back(inner_count);
-        }
-    }
-
-    /// Per-outer-row reserve/push for OutputLifecycle::OuterStream: one output tile per row,
-    /// written at the front (walk == false for OuterStream → out_idx = base). The output-side
-    /// counterpart of InputLifecycle::OuterStream. No-op for every other policy.
-    ALWI void reserve_per_row() const {
-        if constexpr (Policy == OutputLifecycle::OuterStream) {
-            DataflowBuffer(Cb).reserve_back(1);
-        }
-    }
-    ALWI void push_per_row() const {
-        if constexpr (Policy == OutputLifecycle::OuterStream) {
-            DataflowBuffer(Cb).push_back(1);
-        }
-    }
-
+    // reserve_per_tile / reserve_per_block / reserve_upfront / push_at_end / push_per_tile /
+    // push_per_block / reserve_per_row / push_per_row inherited from OutputStream.
 };
 
 // =============================================================================
@@ -760,12 +769,9 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr uint32_t      dfb_b_id()  { return CbB; }
     static constexpr InputLifecycle a_policy(){ return APolicy; }
     static constexpr InputLifecycle b_policy(){ return BPolicy; }
-    static constexpr bool          is_upfront = (APolicy == InputLifecycle::Bulk) ||
-                                                (APolicy == InputLifecycle::HeldBulk) ||
-                                                (APolicy == InputLifecycle::Pipelined) ||
-                                                (BPolicy == InputLifecycle::Bulk) ||
-                                                (BPolicy == InputLifecycle::HeldBulk) ||
-                                                (BPolicy == InputLifecycle::Pipelined);
+    static constexpr bool          is_upfront =
+        is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined> ||
+        is_one_of_v<BPolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
     static constexpr bool          same_dfb    = (CbA == CbB);
 
     // Per-side local-vs-absolute index resolution. When the two operands declare
@@ -784,26 +790,24 @@ struct BinaryFpu : BinaryFpuTag {
     // fold when the other side is already programmed (by a previous chain element on
     // the same side, or by external init).
     static constexpr uint32_t      reconfig_srca_dfb =
-        (Reconfig == BinaryDataFormatReconfig::Input ||
-         Reconfig == BinaryDataFormatReconfig::SrcA) ? CbA : NO_PREV_DFB;
+        is_one_of_v<Reconfig, BinaryDataFormatReconfig::Input, BinaryDataFormatReconfig::SrcA> ? CbA : NO_PREV_DFB;
     static constexpr uint32_t      reconfig_srcb_dfb =
-        (Reconfig == BinaryDataFormatReconfig::Input ||
-         Reconfig == BinaryDataFormatReconfig::SrcB) ? CbB : NO_PREV_DFB;
+        is_one_of_v<Reconfig, BinaryDataFormatReconfig::Input, BinaryDataFormatReconfig::SrcB> ? CbB : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
 
-    uint32_t tile_base_a = 0;
-    uint32_t tile_base_b = 0;
+    InputStream<CbA, APolicy, AIndex, OffsetA> a;
+    InputStream<CbB, BPolicy, BIndex, OffsetB> b;
 
     constexpr BinaryFpu() noexcept = default;
-    constexpr BinaryFpu(uint32_t a, uint32_t b) noexcept : tile_base_a(a), tile_base_b(b) {}
-    constexpr explicit BinaryFpu(uint32_t a) noexcept : tile_base_a(a) {}
+    constexpr BinaryFpu(uint32_t base_a, uint32_t base_b) noexcept : a(base_a), b(base_b) {}
+    constexpr explicit BinaryFpu(uint32_t base_a) noexcept : a(base_a) {}
 
     // Helper: when same_dfb, both bases live in the single shared wait window.
     // Wait/pop count uses max(base_a, base_b) — caller must stage that many tiles
     // in front of both reads.
     ALWI uint32_t same_dfb_base_max() const noexcept {
-        const uint32_t bA = tile_base_value<OffsetA>(tile_base_a);
-        const uint32_t bB = tile_base_value<OffsetB>(tile_base_b);
+        const uint32_t bA = tile_base_value<OffsetA>(a.tile_base);
+        const uint32_t bB = tile_base_value<OffsetB>(b.tile_base);
         return bA > bB ? bA : bB;
     }
 
@@ -835,52 +839,30 @@ struct BinaryFpu : BinaryFpuTag {
         }
     }
 
-    // ---- CB lifecycle (per-tile) ----
-    // InputLifecycle::Streaming policies (WaitAndPop / WaitNoPop) always wait 1 — they are incompatible
-    // with BlockSize > 1 per-iter consumption. Cumulative scales `(i+1) * block_size`
-    // — caller passes `cumulative_count = (i_outer + 1) * block_size`.
+    // ---- CB lifecycle ----
+    // Each hook fans out per side: A always, B only when !same_dfb (when CbA == CbB the
+    // B-side wait/pop is deduped). The per-side body lives in InputStream.
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (APolicy == InputLifecycle::Streaming || APolicy == InputLifecycle::HeldStream) {
-            DataflowBuffer(CbA).wait_front(1);
-        } else if constexpr (APolicy == InputLifecycle::Pipelined ||
-                             APolicy == InputLifecycle::HeldCumulative) {
-            DataflowBuffer(CbA).wait_front(cumulative_count);
-        }
-        if constexpr (!same_dfb) {
-            if constexpr (BPolicy == InputLifecycle::Streaming || BPolicy == InputLifecycle::HeldStream) {
-                DataflowBuffer(CbB).wait_front(1);
-            } else if constexpr (BPolicy == InputLifecycle::Pipelined ||
-                                 BPolicy == InputLifecycle::HeldCumulative) {
-                DataflowBuffer(CbB).wait_front(cumulative_count);
-            }
-        }
+        a.wait_per_tile(cumulative_count);
+        if constexpr (!same_dfb) b.wait_per_tile(cumulative_count);
     }
 
-    /// Per-outer-iter chunked wait. Per-side: A waits `inner_count` if APolicy is
-    /// per-block; same for B (same_dfb dedup).
     ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (APolicy == InputLifecycle::Chunked) {
-            DataflowBuffer(CbA).wait_front(inner_count);
-        }
-        if constexpr (!same_dfb && BPolicy == InputLifecycle::Chunked) {
-            DataflowBuffer(CbB).wait_front(inner_count);
-        }
+        a.wait_per_block(inner_count);
+        if constexpr (!same_dfb) b.wait_per_block(inner_count);
     }
-
 
     // 2D: per-side upfront wait — A uses AIndex's window, B uses BIndex's window.
-    // Same `same_dfb` dedup as 1D (skip B side when CbA == CbB).
+    // When same_dfb, both bases collapse into A's single shared window (max base) and the
+    // B side is skipped; otherwise each side delegates to its own InputStream.
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (APolicy == InputLifecycle::Bulk ||
-                      APolicy == InputLifecycle::HeldBulk ||
-                      APolicy == InputLifecycle::BulkDrain) {
-            const uint32_t a_base = same_dfb ? same_dfb_base_max() : tile_base_value<OffsetA>(tile_base_a);
-            DataflowBuffer(CbA).wait_front(detail::window<AIndex>(Ht, Wt) + a_base);
-        }
-        if constexpr (!same_dfb && (BPolicy == InputLifecycle::Bulk ||
-                                   BPolicy == InputLifecycle::HeldBulk ||
-                                   BPolicy == InputLifecycle::BulkDrain)) {
-            DataflowBuffer(CbB).wait_front(detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
+        if constexpr (same_dfb) {
+            if constexpr (is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::BulkDrain>) {
+                a.wait_n(detail::window<AIndex>(Ht, Wt) + same_dfb_base_max());
+            }
+        } else {
+            a.wait_upfront(Ht, Wt);
+            b.wait_upfront(Ht, Wt);
         }
     }
 
@@ -895,46 +877,26 @@ struct BinaryFpu : BinaryFpuTag {
 
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
-    ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (APolicy == InputLifecycle::Streaming ||
-                      APolicy == InputLifecycle::NoWaitPop ||
-                      APolicy == InputLifecycle::BulkDrain) {
-            DataflowBuffer(CbA).pop_front(1);
-        }
-        if constexpr (!same_dfb && (BPolicy == InputLifecycle::Streaming ||
-                                   BPolicy == InputLifecycle::NoWaitPop ||
-                                   BPolicy == InputLifecycle::BulkDrain)) {
-            DataflowBuffer(CbB).pop_front(1);
-        }
+    ALWI void pop_per_tile(uint32_t i) const {
+        a.pop_per_tile(i);
+        if constexpr (!same_dfb) b.pop_per_tile(i);
     }
 
     ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (APolicy == InputLifecycle::Chunked) {
-            DataflowBuffer(CbA).pop_front(inner_count);
-        }
-        if constexpr (!same_dfb && BPolicy == InputLifecycle::Chunked) {
-            DataflowBuffer(CbB).pop_front(inner_count);
-        }
+        a.pop_per_block(inner_count);
+        if constexpr (!same_dfb) b.pop_per_block(inner_count);
     }
 
     /// Per-outer-row wait/pop for streamed broadcasts (InputLifecycle::OuterStream) — per side,
     /// same_dfb-deduped. One operand tile per row, re-read at the front across the row's cols.
     /// OuterStream is restricted to OperandKind::Scalar, so exec reads the front (0) already.
     ALWI void wait_per_row() const {
-        if constexpr (APolicy == InputLifecycle::OuterStream) {
-            DataflowBuffer(CbA).wait_front(1);
-        }
-        if constexpr (!same_dfb && BPolicy == InputLifecycle::OuterStream) {
-            DataflowBuffer(CbB).wait_front(1);
-        }
+        a.wait_per_row();
+        if constexpr (!same_dfb) b.wait_per_row();
     }
     ALWI void pop_per_row() const {
-        if constexpr (APolicy == InputLifecycle::OuterStream) {
-            DataflowBuffer(CbA).pop_front(1);
-        }
-        if constexpr (!same_dfb && BPolicy == InputLifecycle::OuterStream) {
-            DataflowBuffer(CbB).pop_front(1);
-        }
+        a.pop_per_row();
+        if constexpr (!same_dfb) b.pop_per_row();
     }
 
 
@@ -953,8 +915,8 @@ struct BinaryFpu : BinaryFpuTag {
         const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
         const uint32_t a_wt   = a_uses_local_idx ? wt_local     : wt_abs;
         const uint32_t b_wt   = b_uses_local_idx ? wt_local     : wt_abs;
-        const uint32_t a_idx  = tile_base_value<OffsetA>(tile_base_a) + detail::idx<AIndex>(a_flat, ht, a_wt);
-        const uint32_t b_idx  = tile_base_value<OffsetB>(tile_base_b) + detail::idx<BIndex>(b_flat, ht, b_wt);
+        const uint32_t a_idx  = tile_base_value<OffsetA>(a.tile_base) + detail::idx<AIndex>(a_flat, ht, a_wt);
+        const uint32_t b_idx  = tile_base_value<OffsetB>(b.tile_base) + detail::idx<BIndex>(b_flat, ht, b_wt);
         const uint32_t dst    = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
@@ -973,16 +935,13 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (APolicy == InputLifecycle::Bulk ||
-                      APolicy == InputLifecycle::Pipelined ||
-                      APolicy == InputLifecycle::DeferredPop) {
-            const uint32_t a_base = same_dfb ? same_dfb_base_max() : tile_base_value<OffsetA>(tile_base_a);
-            DataflowBuffer(CbA).pop_front(detail::window<AIndex>(Ht, Wt) + a_base);
-        }
-        if constexpr (!same_dfb && (BPolicy == InputLifecycle::Bulk ||
-                                   BPolicy == InputLifecycle::Pipelined ||
-                                   BPolicy == InputLifecycle::DeferredPop)) {
-            DataflowBuffer(CbB).pop_front(detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
+        if constexpr (same_dfb) {
+            if constexpr (is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::Pipelined, InputLifecycle::DeferredPop>) {
+                a.pop_n(detail::window<AIndex>(Ht, Wt) + same_dfb_base_max());
+            }
+        } else {
+            a.pop_upfront_end(Ht, Wt);
+            b.pop_upfront_end(Ht, Wt);
         }
     }
 };
@@ -1000,7 +959,10 @@ template <uint32_t Cb,
           Dst DstOut,
           OperandKind IndexMode,
           TileOffset Offset>
-struct DestReuseBinary : DestReuseBinaryTag {
+struct DestReuseBinary : InputStream<Cb, Policy, IndexMode, Offset>, DestReuseBinaryTag {
+    using Base = InputStream<Cb, Policy, IndexMode, Offset>;
+    using Base::tile_base;
+
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
@@ -1016,9 +978,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr uint32_t       dfb_a_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : INVALID_DFB; }
     static constexpr uint32_t       dfb_b_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : INVALID_DFB; }
     static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
-                                                        (Policy == InputLifecycle::HeldBulk) ||
-                                                        (Policy == InputLifecycle::Pipelined);
+    static constexpr bool           is_upfront        =
+        is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
 
     // Prev-CB fold: DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
     // (when DEST → srca). Reconfig only fires when opted in.
@@ -1035,10 +996,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
          Reconfig == DestReuseReconfig::SrcB) ? Cb : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
-    uint32_t tile_base = 0;
-
     constexpr DestReuseBinary() noexcept = default;
-    constexpr explicit DestReuseBinary(uint32_t base) noexcept : tile_base(base) {}
+    constexpr explicit DestReuseBinary(uint32_t base) noexcept : Base(base) {}
 
     // srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
@@ -1052,28 +1011,6 @@ struct DestReuseBinary : DestReuseBinaryTag {
         binary_dest_reuse_tiles_init<et, reuse>(Cb);
     }
 
-    ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
-            DataflowBuffer(Cb).wait_front(1);
-        } else if constexpr (Policy == InputLifecycle::Pipelined ||
-                             Policy == InputLifecycle::HeldCumulative) {
-            DataflowBuffer(Cb).wait_front(cumulative_count);
-        }
-    }
-    ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == InputLifecycle::Chunked) {
-            DataflowBuffer(Cb).wait_front(inner_count);
-        }
-    }
-
-    // 2D variants
-    ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == InputLifecycle::Bulk ||
-                      Policy == InputLifecycle::HeldBulk ||
-                      Policy == InputLifecycle::BulkDrain) {
-            DataflowBuffer(Cb).wait_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
-        }
-    }
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
                             (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
@@ -1084,40 +1021,12 @@ struct DestReuseBinary : DestReuseBinaryTag {
         const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
-    ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == InputLifecycle::Bulk ||
-                      Policy == InputLifecycle::Pipelined ||
-                      Policy == InputLifecycle::DeferredPop) {
-            DataflowBuffer(Cb).pop_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
-        }
-    }
 
     static constexpr uint32_t lane_width =
         (to_u32(DstIn) > to_u32(DstOut)) ? (to_u32(DstIn) + 1) : (to_u32(DstOut) + 1);
-    ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == InputLifecycle::Streaming ||
-                      Policy == InputLifecycle::NoWaitPop ||
-                      Policy == InputLifecycle::BulkDrain) {
-            DataflowBuffer(Cb).pop_front(1);
-        }
-    }
-    ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == InputLifecycle::Chunked) {
-            DataflowBuffer(Cb).pop_front(inner_count);
-        }
-    }
-    /// Per-outer-row wait/pop for a streamed broadcast (InputLifecycle::OuterStream). OuterStream
-    /// is restricted to OperandKind::Scalar, so exec reads the front (0). No-op otherwise.
-    ALWI void wait_per_row() const {
-        if constexpr (Policy == InputLifecycle::OuterStream) {
-            DataflowBuffer(Cb).wait_front(1);
-        }
-    }
-    ALWI void pop_per_row() const {
-        if constexpr (Policy == InputLifecycle::OuterStream) {
-            DataflowBuffer(Cb).pop_front(1);
-        }
-    }
+
+    // wait_per_tile / wait_per_block / wait_upfront / pop_upfront_end / pop_per_tile /
+    // pop_per_block / wait_per_row / pop_per_row inherited from InputStream.
 };
 
 // =============================================================================
@@ -1129,16 +1038,17 @@ template <BroadcastDim Dim,
           InputLifecycle Policy,
           UnaryBcastReconfig Reconfig,
           Dst DstSlot>
-struct UnaryBcast : UnaryBcastTag {
+struct UnaryBcast
+    : InputStream<Cb, Policy, OperandKind::Block, TileOffset::Unset>,
+      UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
 
     // UnaryBcast reads one CB front (dfb_a); dfb_b is absent -> dfb_b_of defaults to INVALID_DFB.
     static constexpr uint32_t       dfb_a_id()         { return Cb; }
     static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
-                                                        (Policy == InputLifecycle::HeldBulk) ||
-                                                        (Policy == InputLifecycle::Pipelined);
+    static constexpr bool           is_upfront        =
+        is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::Pipelined>;
 
     // Prev-CB fold: UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
     // drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb must be reprogrammed too — a
@@ -1189,56 +1099,16 @@ struct UnaryBcast : UnaryBcastTag {
 #endif
     }
 
-    ALWI void wait_per_tile(uint32_t cumulative_count) const {
-        if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
-            DataflowBuffer(Cb).wait_front(1);
-        } else if constexpr (Policy == InputLifecycle::Pipelined ||
-                             Policy == InputLifecycle::HeldCumulative) {
-            DataflowBuffer(Cb).wait_front(cumulative_count);
-        }
-    }
-    ALWI void wait_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == InputLifecycle::Chunked) {
-            DataflowBuffer(Cb).wait_front(inner_count);
-        }
-    }
-
-    // 2D variants — UnaryBcast always reads tile 0 (intra-tile bcast LLK), no per-iter
-    // tile index. Upfront window in 2D = Ht * Wt (every (ht, wt) iter consumes one tile).
-    ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == InputLifecycle::Bulk ||
-                      Policy == InputLifecycle::HeldBulk ||
-                      Policy == InputLifecycle::BulkDrain) {
-            DataflowBuffer(Cb).wait_front(Ht * Wt);
-        }
-    }
     ALWI void exec(uint32_t /*i_flat*/, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
         unary_bcast<bt>(Cb, /*in_tile_index=*/0, to_u32(DstSlot) + slot_offset);
     }
-    ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == InputLifecycle::Bulk ||
-                      Policy == InputLifecycle::Pipelined ||
-                      Policy == InputLifecycle::DeferredPop) {
-            DataflowBuffer(Cb).pop_front(Ht * Wt);
-        }
-    }
-
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
-    ALWI void pop_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == InputLifecycle::Streaming ||
-                      Policy == InputLifecycle::NoWaitPop ||
-                      Policy == InputLifecycle::BulkDrain) {
-            DataflowBuffer(Cb).pop_front(1);
-        }
-    }
-    ALWI void pop_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == InputLifecycle::Chunked) {
-            DataflowBuffer(Cb).pop_front(inner_count);
-        }
-    }
-    // UnaryBcast has no OperandKind (always reads tile 0), so it can't be a streamed
-    // outer-axis broadcast — the per-row hooks are inert.
+
+    // wait_per_tile / wait_per_block / wait_upfront / pop_upfront_end / pop_per_tile /
+    // pop_per_block inherited from InputStream (IndexMode=Block + Offset=Unset → Ht*Wt window).
+    // UnaryBcast always reads tile 0, so it can't be a streamed outer-axis broadcast — the
+    // per-row hooks are explicitly inert, overriding InputStream's OuterStream-gated versions.
     ALWI void wait_per_row() const {}
     ALWI void pop_per_row() const {}
 };
