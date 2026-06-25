@@ -1,0 +1,338 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Prefill logits PCC test for Mistral-Small-4 — TTNN vs HF reference.
+
+Runs a real tokenized prompt through:
+  - HF Mistral4ForCausalLM (CPU, bfloat16, N layers)
+  - TtMistral4TextModel     (device, bfloat16, same N layers)
+
+and compares the prefill logits at every position.
+
+PCC note:
+  MoE top-k routing in float32 (HF) vs bfloat16 (TTNN) may select
+  different experts when scores are close.  A routing disagreement at
+  any layer propagates to downstream layers, so full-stack PCC is lower
+  than per-layer attention PCC.  A healthy run typically gives 0.90+;
+  values below 0.80 suggest a real bug (wrong weights, wrong norm,
+  wrong attention, etc.).
+
+ISL sweep:
+  Parametrized over input sequence length (``isl``): ids ``base`` (the real 5-token
+  prompt — the documented PCC point), ``128``, ``512``, ``2k``, ``4k``, ``16k``,
+  ``64k``, ``128k``, ``256k``. The non-base cases pad the prompt with coherent English
+  filler tokenized to exactly ``isl`` tokens (real English, not random ids, so MoE
+  routing matches between the HF reference and the TTNN bf16 path). Select one with
+  ``-k``, e.g. ``-k 16k``.
+
+  Both sides are chunked so they scale: the TTNN side uses the chunked prefill path
+  (bounded L1), and the HF reference runs chunked too (MISTRAL4_PREFILL_HF_CHUNK,
+  default 2048, DynamicCache) so its attention memory is O(chunk × past) instead of
+  O(seq²). The practical ceiling is the HF CPU reference *wall-clock*: it grows ~linearly
+  in the number of chunks, so 64k+ takes hours and 256k may be infeasible on a CPU host
+  (a large-RAM machine is needed even to hold the bf16 reference). Run long points
+  individually with ``--timeout=0``.
+
+Run manually::
+
+    export MESH_DEVICE=P150x8
+    pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -v -s --timeout=0
+    # one ISL point:
+    pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -v -s --timeout=0 -k 2k
+
+Override layer count for faster local iteration::
+
+    MISTRAL4_PREFILL_N_LAYERS=2 pytest ...
+"""
+
+from __future__ import annotations
+
+import gc
+import os
+
+import psutil
+import pytest
+import torch
+from loguru import logger
+
+
+def _log_mem(tag: str) -> None:
+    proc = psutil.Process()
+    rss_gb = proc.memory_info().rss / 1e9
+    sys = psutil.virtual_memory()
+    used_gb = (sys.total - sys.available) / 1e9
+    avail_gb = sys.available / 1e9
+    logger.info(f"[MEM {tag}] process RSS={rss_gb:.1f} GB  sys used={used_gb:.1f} GB  sys avail={avail_gb:.1f} GB")
+
+
+import ttnn
+from models.common.utility_functions import comp_pcc, run_for_wormhole_b0_or_blackhole
+from models.experimental.mistral_small_4_119b.constants import (
+    HF_MODEL_ID,
+    text_decoder_layer_state_dict_prefix,
+)
+from models.experimental.mistral_small_4_119b.tests.mesh_param import mesh_device_request_param
+from models.experimental.mistral_small_4_119b.tt.mistral4_text_model import TtMistral4TextModel
+from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+pytest.importorskip("transformers")
+pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mistral4 required")
+
+_N_LAYERS = int(os.environ.get("MISTRAL4_PREFILL_N_LAYERS", "36"))
+_PCC_FLOOR = 0.90  # strict gate for the verified range (ISL <= 16k)
+# Looser characterization gate for long ISL (> 16k). Accumulated bf4/bf8 quantization over very
+# long high-entropy filler lowers the flattened PCC ~linearly in log(ISL), so > 16k is
+# characterized, not strictly verified. 0.80 still flags a real bug (which collapses PCC toward
+# ~0.5); it matches the multimodal test's floor.
+_PCC_FLOOR_LONG = 0.80
+_LONG_ISL = 16384  # ISL beyond this uses _PCC_FLOOR_LONG
+# HF reference prefill chunk: chunking with a DynamicCache bounds attention memory to
+# O(chunk × past) instead of O(seq²), so the CPU reference can reach long ISL.
+_HF_CHUNK = int(os.environ.get("MISTRAL4_PREFILL_HF_CHUNK", "2048"))
+
+_REAL_PROMPT = "The capital of France is"
+# Coherent English filler for the ISL sweep. Real text (not random ids) keeps the MoE
+# router selecting the same experts in the HF fp32 reference and the TTNN bf16 path —
+# random ids make routing scores near-tied and collapse PCC without a real regression.
+_FILLER = (
+    "The history of science is a long and winding road full of unexpected turns. "
+    "Researchers across many fields have built upon each other's work for centuries, "
+    "and every careful measurement adds another small piece to the larger picture. "
+)
+
+
+def _build_prompt_ids(tokenizer, target_len: int) -> torch.Tensor:
+    """Return [1, target_len] input_ids: the real prompt for target_len==0, else
+    coherent English filler tokenized and sliced to exactly target_len tokens."""
+    if target_len == 0:
+        return tokenizer(_REAL_PROMPT, return_tensors="pt").input_ids
+    per = max(1, len(tokenizer(_FILLER, add_special_tokens=False).input_ids))
+    reps = target_len // per + 1
+    ids = tokenizer(_FILLER * reps, return_tensors="pt").input_ids
+    return ids[:, :target_len]
+
+
+def _chunked_hf_forward(hf_model, input_ids: torch.Tensor, chunk_size: int) -> torch.Tensor:
+    """Run the HF reference forward in chunks with a DynamicCache so attention memory
+    stays O(chunk × past) instead of O(seq²) — required to reach long ISL on a CPU host.
+    Returns full float32 logits [seq, vocab]. Mirrors the chunked reference in
+    test_multimodal_pcc_unified.py (text-only: no pixel inputs). Numerically identical
+    to a single forward (causal attention + KV cache); a single chunk (seq ≤ chunk_size)
+    is exactly the old single-pass path."""
+    from transformers.cache_utils import DynamicCache
+
+    seq_len = input_ids.shape[-1]
+    chunk_logits: list[torch.Tensor] = []
+    cache = DynamicCache()
+    for s in range(0, seq_len, chunk_size):
+        e = min(s + chunk_size, seq_len)
+        kwargs = dict(input_ids=input_ids[:, s:e], past_key_values=cache, use_cache=True)
+        if s > 0:
+            kwargs["position_ids"] = torch.arange(s, e, dtype=torch.long).unsqueeze(0)
+        with torch.inference_mode():
+            out = hf_model(**kwargs)
+        chunk_logits.append(out.logits[0].float().clone())
+        del out
+        gc.collect()
+        logger.info(f"HF chunked prefill: {e}/{seq_len} tokens")
+    return torch.cat(chunk_logits, dim=0)
+
+
+def _state_dict_prefixes(n_layers: int) -> tuple:
+    p = ["language_model.model.embed_tokens."]
+    for i in range(n_layers):
+        p.append(text_decoder_layer_state_dict_prefix(i))
+    p.append("language_model.model.norm.")
+    p.append("language_model.lm_head.")
+    return tuple(p)
+
+
+def _mesh_params():
+    shape = mesh_device_request_param()
+    base = {"trace_region_size": 30000000, "num_command_queues": 1}
+    fabric = ttnn.FabricConfig.DISABLED if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D
+    return [pytest.param(shape, {**base, "fabric_config": fabric}, id=f"mesh{shape[0]}x{shape[1]}")]
+
+
+def _build_hf_ref(text_config, state_dict, n_layers: int) -> torch.nn.Module:
+    """Instantiate N-layer HF model on CPU (bfloat16) using streaming weight assignment.
+
+    Uses accelerate.init_empty_weights so the model shell costs ~0 RAM, then assigns
+    each parameter individually (FP8 → bfloat16) without ever holding two full copies
+    of the weights in memory simultaneously.  Peak overhead above the FP8 state dict
+    is only the size of one parameter tensor at a time (~MB), compared to +238 GB if
+    load_state_dict were called on a fully-allocated bfloat16 model.
+    """
+    from accelerate import init_empty_weights
+    from accelerate.utils import set_module_tensor_to_device
+    from transformers.models.mistral4.modeling_mistral4 import Mistral4ForCausalLM
+
+    import copy
+
+    cfg = copy.deepcopy(text_config)
+    cfg.num_hidden_layers = n_layers
+
+    # Create model shell on meta device — zero RAM allocated for parameters.
+    _log_mem("before HF model shell (meta device)")
+    with init_empty_weights():
+        model = Mistral4ForCausalLM(cfg)
+    _log_mem("after HF model shell (meta device, ~0 GB extra)")
+
+    # Stream weights in one parameter at a time: FP8 → bfloat16 → CPU.
+    logger.info("Streaming FP8 → bfloat16 weights into HF model...")
+    missing_keys = []
+    for param_name, _ in model.named_parameters():
+        sd_key = "language_model." + param_name
+        if sd_key not in state_dict:
+            missing_keys.append(param_name)
+            continue
+        v = state_dict[sd_key]
+        if v.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+            scale_key = sd_key + "_scale_inv"
+            if scale_key not in state_dict:
+                scale_key = sd_key.replace(".weight", ".weight_scale_inv")
+            scale_inv = state_dict.get(scale_key)
+            v_cast = v.to(torch.float32)
+            if scale_inv is not None:
+                s = scale_inv.to(torch.float32)
+                while s.dim() < v_cast.dim():
+                    s = s.unsqueeze(-1)
+                v_cast = v_cast * s
+            tensor = v_cast.to(torch.bfloat16)
+            del v_cast
+        else:
+            tensor = v.to(torch.bfloat16)
+        set_module_tensor_to_device(model, param_name, "cpu", value=tensor)
+        del tensor
+
+    if missing_keys:
+        logger.warning(f"HF model missing keys (first 5): {missing_keys[:5]}")
+    _log_mem("after streaming all weights into HF model")
+
+    try:
+        from optimum.quanto import quantize, qint4
+
+        logger.info("Applying quanto int4 quantization to Linear weights (CPU)...")
+        quantize(model, weights=qint4)
+        _log_mem("after quanto int4 quantization (~60 GB vs 238 GB bfloat16)")
+    except ImportError:
+        logger.warning(
+            "optimum-quanto not installed — keeping bfloat16 weights (~238 GB). "
+            "Run `pip install optimum-quanto` to reduce to ~60 GB."
+        )
+
+    return model.eval()
+
+
+@torch.no_grad()
+@run_for_wormhole_b0_or_blackhole()
+@pytest.mark.slow
+@pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
+@pytest.mark.parametrize(
+    "isl",
+    [0, 128, 512, 2048, 4096, 16384, 65536, 131072, 262144],
+    ids=["base", "128", "512", "2k", "4k", "16k", "64k", "128k", "256k"],
+)
+def test_mistral_small_4_prefill_pcc(reset_seeds, mesh_device, isl):
+    """Compare TTNN prefill logits to HF float32 reference across an ISL sweep."""
+    from transformers import AutoConfig, AutoTokenizer
+    from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
+
+    try:
+        cfg = AutoConfig.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+    except Exception as exc:
+        pytest.skip(f"Could not load HF config: {exc}")
+
+    text = cfg.text_config
+    for attr in ("attn_implementation", "_attn_implementation"):
+        if hasattr(text, attr):
+            setattr(text, attr, "eager")
+
+    _log_mem("start — before state dict load")
+    try:
+        state_dict = load_hf_state_dict_filtered(HF_MODEL_ID, _state_dict_prefixes(_N_LAYERS))
+    except (FileNotFoundError, OSError) as exc:
+        pytest.skip(f"Checkpoint load failed: {exc}")
+    _log_mem("after state dict load")
+
+    # ── Tokenize a real prompt ────────────────────────────────────────────
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
+    except Exception as exc:
+        pytest.skip(f"Tokenizer load failed: {exc}")
+
+    input_ids = _build_prompt_ids(tokenizer, isl)  # [1, seq_len]
+    seq_len = input_ids.shape[1]
+    floor = _PCC_FLOOR if seq_len <= _LONG_ISL else _PCC_FLOOR_LONG
+    if isl == 0:
+        logger.info(f"ISL=base — prompt {_REAL_PROMPT!r} → {seq_len} tokens: {input_ids.tolist()}")
+    else:
+        logger.info(f"ISL={isl} — filler prompt → {seq_len} tokens (PCC floor {floor})")
+
+    # ── HF reference (CPU, bfloat16, streamed weights) ───────────────────
+    logger.info(f"Building HF reference ({_N_LAYERS} layers, CPU, bfloat16)...")
+    _log_mem("before _build_hf_ref")
+    hf_model = _build_hf_ref(text, state_dict, _N_LAYERS)
+    _log_mem("after _build_hf_ref — before forward pass")
+    logger.info(f"Running HF reference forward (chunked, {_HF_CHUNK}-tok chunks)...")
+    ref_logits = _chunked_hf_forward(hf_model, input_ids, _HF_CHUNK)  # [seq_len, vocab] float32
+    _log_mem("after HF forward pass")
+    del hf_model
+    gc.collect()
+    _log_mem("after del hf_model + gc")
+    logger.info(f"HF reference logits shape: {tuple(ref_logits.shape)}")
+
+    # ── TTNN model ────────────────────────────────────────────────────────
+    logger.info(f"Building TtMistral4TextModel ({_N_LAYERS} layers)...")
+    _log_mem("before TtMistral4TextModel construction")
+    model = TtMistral4TextModel(
+        mesh_device=mesh_device,
+        state_dict=state_dict,
+        text_config=text,
+        num_decoder_layers=_N_LAYERS,
+        max_seq_len=seq_len + 64,
+    )
+    _log_mem("after TtMistral4TextModel construction")
+
+    rotary = Mistral4RotaryEmbedding(text).eval().to(torch.bfloat16)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    dummy = torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16)  # rotary uses position_ids; x is only a dtype carrier
+    cos_full, sin_full = rotary(dummy, position_ids)
+    model.cache_rope_tables(cos_full, sin_full)
+
+    logger.info(f"Running TTNN prefill (seq_len={seq_len})...")
+    _log_mem("before TTNN prefill")
+    ttnn_logits_host = model.prefill(input_ids)  # [1, seq_len, vocab]
+    _log_mem("after TTNN prefill")
+    ttnn_logits = ttnn_logits_host[0].to(torch.float32)  # [seq_len, vocab]
+
+    # ── PCC check at each position ─────────────────────────────────────────
+    pccs = []
+    for pos in range(seq_len):
+        _, pcc_val = comp_pcc(ref_logits[pos], ttnn_logits[pos], _PCC_FLOOR)
+        # comp_pcc returns (passing, message); extract the float
+        pcc_float = float(pcc_val.split("=")[-1].strip() if "=" in str(pcc_val) else pcc_val)
+        pccs.append(pcc_float)
+
+    mean_pcc = sum(pccs) / len(pccs)
+    min_pcc = min(pccs)
+    logger.info(f"Logits PCC across {seq_len} positions: mean={mean_pcc:.4f}, min={min_pcc:.4f}")
+    logger.info(f"Per-position PCCs: {[f'{p:.3f}' for p in pccs]}")
+
+    # Also compare greedy predictions
+    ref_tokens = ref_logits.argmax(dim=-1).tolist()
+    ttnn_tokens = ttnn_logits.argmax(dim=-1).tolist()
+    match = sum(r == t for r, t in zip(ref_tokens, ttnn_tokens))
+    logger.info(f"Greedy token match: {match}/{seq_len}")
+    logger.info(f"  HF   tokens: {ref_tokens}")
+    logger.info(f"  TTNN tokens: {ttnn_tokens}")
+
+    passing, pcc_msg = comp_pcc(ref_logits.flatten(), ttnn_logits.flatten(), floor)
+    logger.info(f"Overall flattened logits PCC: {pcc_msg}")
+    assert passing, (
+        f"Prefill logits PCC below floor {floor} (seq_len={seq_len}).\n"
+        f"mean per-position PCC={mean_pcc:.4f}, greedy match={match}/{seq_len}\n"
+        f"{pcc_msg}"
+    )
+    logger.info(f"PASSED — TTNN prefill logits PCC >= {floor} (seq_len={seq_len})")
