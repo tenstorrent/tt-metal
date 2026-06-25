@@ -47,24 +47,21 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-# H2D socket service config (request mode, rank 0 input). One worker core copies the pushed chunk into
-# a fresh tensor; the producer packs a 12-byte PrefillMetadata (slot_id, actual_start, actual_end)
-# alongside each push.
-H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-H2D_METADATA_SIZE_BYTES = 12
-H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
+# Both socket transports (H2D input on rank 0, D2D between ranks) share a 1x1 push/sync worker grid and
+# the same 3-word PrefillMetadata (slot_id, actual_start, actual_end). The 1x1 grid is the cheapest
+# footprint with no penalty: a grid sweep showed compute + handoff gap flat from 1x1 to 4x4 (the
+# per-chunk overhead is the persistent service's fabric/NoC presence, not the push workers).
+SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
+METADATA_SIZE_BYTES = 12
 
+# H2D socket service (request mode, rank 0 input): one worker core copies each pushed chunk into a fresh
+# tensor; the producer packs the PrefillMetadata alongside each push.
+H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
 # D2D socket transport (>1 rank): one persistent sender/receiver pair per rank boundary carries the
 # sharded hidden state over inter-galaxy fabric. The activation is sharded [seq across SP rows, emb
 # across TP cols] — the same layout the embedding output uses — so the receiver backing feeds the
-# downstream model with no reshard. The per-chunk metadata (slot/start/end) rides inline as
-# three uint32 words.
-# A 1x1 push/sync worker grid is the cheapest footprint with no penalty: a grid sweep showed compute +
-# handoff gap are flat from 1x1 to 4x4 (the per-chunk overhead is the persistent service's fabric/NoC
-# presence, not the push workers).
-D2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-D2D_METADATA_SIZE_BYTES = 12
+# downstream model with no reshard.
 D2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementShard(3)])
 D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 64 * 1024))
 
@@ -83,7 +80,6 @@ NUM_CHUNKS = int(os.environ.get("PREFILL_STANDALONE_NCHUNKS", 4))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * NUM_CHUNKS))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
-# Gate-mode default comes from the active variant (DEVICE_FP32 for deepseek_v3_d_p; HOST_ALL is slower).
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
@@ -161,8 +157,8 @@ def _load_token_ids() -> list[int]:
 
 
 def _first_rank_chunk_tokens(runtime: TtPrefillRuntime, token_ids: list[int], kv_actual: int) -> ttnn.Tensor:
-    # Same SP-sharded chunk tensor the runtime builds for its own forward — delegate so the input
-    # format has one source of truth.
+    """Slice this chunk's tokens and build the SP-sharded input tensor. Delegates to the runtime's own
+    builder so the input format has one source of truth."""
     cfg = runtime.config
     return runtime._make_chunk_input(token_ids[kv_actual : kv_actual + cfg.chunk_size])
 
@@ -173,7 +169,7 @@ def _socket_next(h2d_service) -> tuple:
     import torch
 
     tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
-        h2d_service, metadata_size_bytes=H2D_METADATA_SIZE_BYTES
+        h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
     return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
@@ -199,9 +195,9 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
             global_spec=global_spec,
             mapper=ttnn.create_mesh_mapper(mesh_device, D2D_MAPPER_CONFIG),
             fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
-            sender_worker_cores=D2D_SYNC_WORKER_CORES,
-            receiver_worker_cores=D2D_SYNC_WORKER_CORES,
-            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
+            sender_worker_cores=SYNC_WORKER_CORES,
+            receiver_worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
             share_fabric_links=True,
             # The service asserts L1-only (d2d_stream_service.cpp:260).
             socket_buffer_type=ttnn.BufferType.L1,
@@ -221,7 +217,7 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
         )
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'} "
-        f"outbound={'yes' if outbound else 'no'}, workers={D2D_SYNC_WORKER_CORES}, fifo={D2D_FIFO_SIZE_BYTES}B)"
+        f"outbound={'yes' if outbound else 'no'}, workers={SYNC_WORKER_CORES}, fifo={D2D_FIFO_SIZE_BYTES}B)"
     )
     return inbound, outbound
 
@@ -233,7 +229,7 @@ def _d2d_recv(inbound) -> tuple:
     import torch
 
     t0 = time.perf_counter()
-    act, md = h2d_socket_sync(inbound, D2D_SYNC_WORKER_CORES, metadata_size_bytes=D2D_METADATA_SIZE_BYTES)
+    act, md = h2d_socket_sync(inbound, SYNC_WORKER_CORES, metadata_size_bytes=METADATA_SIZE_BYTES)
     m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
     logger.info(
@@ -253,7 +249,7 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
         activation = ttnn.to_layout(activation, backing.layout)
         activation = ttnn.to_memory_config(activation, backing.memory_config())
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
-    d2d_socket_push(outbound, activation, D2D_SYNC_WORKER_CORES, metadata=words)
+    d2d_socket_push(outbound, activation, SYNC_WORKER_CORES, metadata=words)
     ttnn.deallocate(activation)
     logger.info(
         f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) "
@@ -568,8 +564,8 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
             mesh_shape=GLOBAL_MESH_SHAPE,
             chunk_size=CHUNK_SIZE,
             mapper_config=H2D_MAPPER_CONFIG,
-            worker_cores=H2D_SYNC_WORKER_CORES,
-            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+            worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
         )
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         descriptor_path = h2d_service.export_descriptor(service_id)
