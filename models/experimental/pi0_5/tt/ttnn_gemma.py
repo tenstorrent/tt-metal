@@ -844,6 +844,46 @@ class GemmaAttentionTTNN:
 # ============================================================================
 
 
+# ---- matmul_decode (tiny-tile) helpers for the M=32 denoise MLP ----
+def _md_n_cores(N, device):
+    """Width-shard core count for a weight with N columns: N//32, halved until it
+    fits the grid. partial mode iff result < N//32 (op can't do N//32 output cores)."""
+    grid = device.compute_with_storage_grid_size()
+    maxc = grid.x * grid.y
+    c = N // 32
+    while c > maxc:
+        c //= 2
+    return c
+
+
+def _md_shard_b(w, device, n_cores):
+    """Move weight [K,N] to L1 WIDTH_SHARDED over n_cores ([K, N/n_cores] per core)."""
+    grid = device.compute_with_storage_grid_size()
+    K, N = w.shape[-2], w.shape[-1]
+    cfg = ttnn.create_sharded_memory_config(
+        (K, N // n_cores),
+        core_grid=ttnn.num_cores_to_corerangeset(n_cores, grid, True),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.to_memory_config(w, cfg)
+
+
+def _md_shard_a(a2d, device):
+    """Width-shard activation [M,K] over 2 cores ([M, K/2] each) for matmul_decode."""
+    grid = device.compute_with_storage_grid_size()
+    m, k = a2d.shape[-2], a2d.shape[-1]
+    cfg = ttnn.create_sharded_memory_config(
+        (m, k // 2),
+        core_grid=ttnn.num_cores_to_corerangeset(2, grid, True),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.to_memory_config(a2d, cfg)
+
+
 class GemmaMLPTTNN:
     """
     Gemma MLP with GeGLU activation using TTNN.
@@ -891,6 +931,23 @@ class GemmaMLPTTNN:
         self.down_proj = to_ttnn(weights["mlp.down_proj.weight"])
         self.hidden_size = config.width
         self.intermediate_size = config.mlp_dim
+
+        # PI0_MD_DENOISE: pre-shard gate/up/down to L1 for ttnn.matmul_decode (tiny-tile).
+        # gate/up N=mlp_dim (4096) -> N//32=128 > 120 cores -> partial K-split mode;
+        # down N=hidden (1024) -> 32 cores -> full-width. Built once at init (L1-resident).
+        import os as _os_md
+
+        self._md_denoise = _os_md.environ.get("PI0_MD_DENOISE", "").lower() in ("1", "true", "yes", "on")
+        if self._md_denoise:
+            self._gate_nc = _md_n_cores(self.gate_proj.shape[-1], device)
+            self._up_nc = _md_n_cores(self.up_proj.shape[-1], device)
+            self._down_nc = _md_n_cores(self.down_proj.shape[-1], device)
+            self._gate_md = _md_shard_b(self.gate_proj, device, self._gate_nc)
+            self._up_md = _md_shard_b(self.up_proj, device, self._up_nc)
+            self._down_md = _md_shard_b(self.down_proj, device, self._down_nc)
+            self._gate_partial = self._gate_nc < self.gate_proj.shape[-1] // 32
+            self._up_partial = self._up_nc < self.up_proj.shape[-1] // 32
+            self._down_partial = self._down_nc < self.down_proj.shape[-1] // 32
 
         # PI0_DRAM_SHARDED_MLP_DOWN=1 — DRAM width-sharded weight variant for
         # down_proj. Per PERF_PLAYBOOKS/05 §3b + 08 §2 (decode matmul recipe).
@@ -1087,6 +1144,34 @@ class GemmaMLPTTNN:
             # across all 18 layers per MLP shape. The pcfg helper returns None for
             # awkward shapes; we fall back to the default `core_grid` path then.
             m_tiles = padded_chunk_size // 32
+
+            # PI0_MD_DENOISE: tiny-tile matmul_decode path for the M=32 denoise MLP.
+            # gate/up via partial K-split (N=4096>120c), down full-width; A width-sharded
+            # over 2 cores, GeGLU stays sharded, reshard A for down. Additive fast path.
+            if self._md_denoise and m_tiles == 1:
+                _x2d = ttnn.reshape(x_chunk, (padded_chunk_size, self.hidden_size))
+                _a = _md_shard_a(_x2d, self.device)
+                _gate = ttnn.matmul_decode(_a, self._gate_md, partial_width_sharded=self._gate_partial)
+                _gate = ttnn.gelu(_gate, fast_and_approximate_mode=True, memory_config=_gate.memory_config())
+                _up = ttnn.matmul_decode(_a, self._up_md, partial_width_sharded=self._up_partial)
+                ttnn.deallocate(_a)
+                _h = ttnn.multiply(_gate, _up, memory_config=_gate.memory_config())
+                ttnn.deallocate(_gate)
+                ttnn.deallocate(_up)
+                _h_il = ttnn.sharded_to_interleaved(_h, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(_h)
+                _a_down = _md_shard_a(_h_il, self.device)
+                ttnn.deallocate(_h_il)
+                _out = ttnn.matmul_decode(_a_down, self._down_md, partial_width_sharded=self._down_partial)
+                ttnn.deallocate(_a_down)
+                _out_il = ttnn.sharded_to_interleaved(_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(_out)
+                output_chunk = ttnn.reshape(_out_il, (batch_size, 1, padded_chunk_size, self.hidden_size))
+                if needs_chunk_padding:
+                    output_chunk = ttnn.slice(output_chunk, [0, 0, 0, 0], [batch_size, 1, actual_chunk_size, hidden])
+                output_chunks.append(output_chunk)
+                continue
+
             k_to_intermediate = self.hidden_size // 32
             k_to_hidden = self.intermediate_size // 32
             n_intermediate = self.intermediate_size // 32

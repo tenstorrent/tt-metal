@@ -60,6 +60,7 @@
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
+#include "ttnn/operations/matmul_decode/matmul_decode_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
 #include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
@@ -149,6 +150,7 @@ void py_module(nb::module_& mod) {
 
     auto m_matmul = mod.def_submodule("matmul", "matmul operations");
     matmul::py_module(m_matmul);
+    ttnn::operations::matmul_decode::bind_matmul_decode_operation(mod);
 
     auto m_data_movement = mod.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
