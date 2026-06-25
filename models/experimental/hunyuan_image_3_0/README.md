@@ -65,10 +65,60 @@ hidden 4096). They differ only at the edges:
 |---|---|---|
 | **HunyuanImage-3.0** (base, text→image) | — | runs end-to-end on the 2×2 mesh (`demo/demo.py`); accuracy/scale hardening remains |
 | **HunyuanImage-3.0-Instruct** (image→image, reasoning) | SigLIP2 vision encoder, image-input preprocessing, recaption/think token generation | **large** — net-new vision + AR-text path |
-| **HunyuanImage-3.0-Instruct-Distil** | 8-step sampling schedule only | **small** — config/scheduler reuse |
+| **HunyuanImage-3.0-Instruct-Distil** | 8-step meanflow + cfg_distilled (no CFG) | **small** — distill embedders + scheduler reuse |
 
 **Strategy:** finish base T2I end-to-end first (it unblocks all three), add Distil
 (nearly free), then build the Instruct I2I stack.
+
+---
+
+## Running demos
+
+Run from the `tt-metal` repo root (`cd ~/tt-ign/tt-metal`). All three use the 2×2 mesh
+and default to 32 backbone layers (`HY_NUM_LAYERS=32`).
+
+| Variant | Demo | Steps | CFG | Checkpoint env / default path |
+|---|---|---:|---|---|
+| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | hardcoded in `demo.py` → `/home/iguser/Christy/HunyuanImage-3` |
+| **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` → `…/HunyuanImage-3-Instruct` |
+| **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` → `…/HunyuanImage-3-Instruct-Distil` |
+
+### Base text-to-image
+
+```bash
+HY_STEPS=8 HY_NUM_LAYERS=32 HY_GUIDANCE=5.0 python_env/bin/python \
+  models/experimental/hunyuan_image_3_0/demo/demo.py \
+  "a photo of a cat, studio lighting"
+```
+
+### Instruct image-to-image (50-step CFG)
+
+Replace `/path/to/input.png` with your cond image. `--bot-task image` skips the AR
+recaption stage; use `think_recaption` for the full upstream flow.
+
+```bash
+HY_STEPS=50 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
+  models/experimental/hunyuan_image_3_0/demo/demo_i2i.py \
+  --prompt "make the sky more dramatic" \
+  --cond /path/to/input.png \
+  --bot-task image \
+  --out hy_instruct.png
+```
+
+### Instruct-Distil image-to-image (8-step meanflow)
+
+```bash
+HY_DISTIL=1 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
+  models/experimental/hunyuan_image_3_0/demo/demo_i2i.py \
+  --distil \
+  --prompt "make the sky sunset orange" \
+  --cond /path/to/input.png \
+  --bot-task image \
+  --out hy_instruct_distil.png
+```
+
+Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each checkpoint's
+`generation_config.json` when present).
 
 ---
 
@@ -138,8 +188,10 @@ hidden 4096). They differ only at the edges:
 9. **Device-resident experts** (stop re-uploading per forward) + **sparse top-8 routed
    MoE** (replace the dense-over-64 correctness path) — `tt/moe/moe.py`.
 
-### Phase 3 — Distil variant
-10. 8-step sampling schedule + config plumbing (`--diff-infer-steps 8`). Reuses Phase 1.
+### Phase 3 — Distil variant — DONE
+10. ~~8-step meanflow sampling + cfg_distilled plumbing~~ — DONE:
+    `scatter_distill_step_embeds`, `denoise_loop` guidance/timestep_r scatter,
+    `demo/demo_i2i.py --distil` / `HY_DISTIL=1` with `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR`.
 
 ### Phase 4 — Instruct (I2I) variant
 Vision input path — device pieces + host glue DONE; full on-box AR decode remains:

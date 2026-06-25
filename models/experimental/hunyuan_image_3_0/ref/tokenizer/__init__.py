@@ -42,6 +42,7 @@ from .gen_image_inputs import (
     prepare_recaption_ar_bundle,
     print_recaption_inputs_report,
     scatter_gen_timestep_embeds,
+    scatter_distill_step_embeds,
     tokenizer_output_from_bundle,
 )
 from .hunyuan_tokenizer import (
@@ -93,6 +94,7 @@ __all__ = [
     "prepare_recaption_ar_bundle",
     "print_recaption_inputs_report",
     "scatter_gen_timestep_embeds",
+    "scatter_distill_step_embeds",
     "tokenizer_output_from_bundle",
     "validate_special_tokens",
 ]

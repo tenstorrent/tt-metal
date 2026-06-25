@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,10 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     enrich_bundle_attention,
     prepare_gen_image_inputs,
     prepare_i2i_inputs,
+    scatter_distill_step_embeds,
 )
+from models.experimental.hunyuan_image_3_0.ref.tokenizer.hunyuan_tokenizer import HunyuanTokenizer
+from models.experimental.hunyuan_image_3_0.ref.weights import INSTRUCT_MODEL_DIR
 
 PROMPT = "a cat on a mat"
 IMAGE_SIZE = 1024
@@ -110,3 +114,58 @@ def test_bundle_to_denoise_cond_matches_manual_build(hunyuan_tokenizer, processo
     manual = build_attention_mask(bundle.seq_len, spans, bsz=1)
     auto = build_attention_mask_for_bundle(bundle, processor)
     assert torch.equal(manual, auto)
+
+
+@pytest.mark.skipif(
+    not (INSTRUCT_MODEL_DIR / "tokenizer.json").is_file(),
+    reason="Instruct tokenizer (with <timestep_r>) not available",
+)
+def test_distill_i2i_bundle_has_guidance_and_timestep_r_indices(processor, rgb_image):
+    """Distil adds <guidance> and <timestep_r> placeholders with scatter indices."""
+    base_tok = HunyuanTokenizer.from_model_dir(INSTRUCT_MODEL_DIR, sequence_template="instruct")
+    distill_tok = HunyuanTokenizer(
+        replace(base_tok.config, cfg_distilled=True, use_meanflow=True),
+        base_tok.tokenizer,
+        base_tok.special,
+        sequence_template="instruct",
+    )
+    cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
+    bundle = prepare_i2i_inputs(distill_tok, PROMPT, cond, image_size=IMAGE_SIZE, cfg_factor=1)
+    assert bundle.guidance_scatter_index is not None
+    assert bundle.gen_timestep_r_scatter_index is not None
+    assert bundle.guidance_scatter_index.numel() == 1
+    assert bundle.gen_timestep_r_scatter_index.numel() == 1
+
+
+def test_scatter_distill_step_embeds_updates_three_slots():
+    from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder
+
+    hidden = 8
+    emb = TimestepEmbedder(hidden_size=hidden)
+    bsz, seq, _ = 1, 6, hidden
+    base = torch.randn(bsz, seq, hidden)
+    ref = base.clone()
+    idx_t = torch.tensor([[2]], dtype=torch.long)
+    idx_g = torch.tensor([[3]], dtype=torch.long)
+    idx_r = torch.tensor([[4]], dtype=torch.long)
+
+    out = scatter_distill_step_embeds(
+        base,
+        t_scalar=100.0,
+        gen_timestep_scatter_index=idx_t,
+        timestep_emb=emb,
+        guidance_scalar=2500.0,
+        guidance_scatter_index=idx_g,
+        guidance_emb=emb,
+        t_r_scalar=50.0,
+        gen_timestep_r_scatter_index=idx_r,
+        timestep_r_emb=emb,
+    )
+
+    with torch.no_grad():
+        assert not torch.allclose(out[0, 2], ref[0, 2])
+        assert not torch.allclose(out[0, 3], ref[0, 3])
+        assert not torch.allclose(out[0, 4], ref[0, 4])
+        assert torch.allclose(out[0, 0], ref[0, 0])
+        assert torch.allclose(out[0, 1], ref[0, 1])
+        assert torch.allclose(out[0, 5], ref[0, 5])
