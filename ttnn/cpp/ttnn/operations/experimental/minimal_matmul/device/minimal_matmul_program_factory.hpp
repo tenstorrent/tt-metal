@@ -22,6 +22,7 @@ struct MinimalMatmulProgramFactory {
         bool transpose_core_grid{};
         bool read_local_slice_from_input{};
         uint32_t rows_per_group{1};  // core-grid slicing: physical rows per group (grid.y / num_slices)
+        bool num_k_fused{};          // split-K plan B (REDUCE_K): adds 8 reduce RT args on the output-writer DM
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

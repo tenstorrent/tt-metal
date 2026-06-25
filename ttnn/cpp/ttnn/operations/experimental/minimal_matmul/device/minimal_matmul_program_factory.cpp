@@ -1453,7 +1453,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         compute_kernels_id,
         transpose_core_grid,
         fuse_op && fused_op_signaler->read_local_slice_from_input,
-        rows_per_group};
+        rows_per_group,
+        num_k_fused};
 }
 
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
@@ -1536,20 +1537,33 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
-    constexpr uint32_t in0_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (index 13) for in0
-    constexpr uint32_t in0_ternary_b_addr_idx = 15;
-
     constexpr uint32_t in1_in0_addr_idx = 0;
     constexpr uint32_t in1_bias_addr_idx = 1;
-    constexpr uint32_t in1_ternary_a_addr_idx = 13;  // After max_defer_write_k_block (index 12) for in1
-    constexpr uint32_t in1_ternary_b_addr_idx = 14;
 
-    // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-    // Output addresses start after max_defer_write_k_block and optional ternary addresses
-    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 17 : 14;
-    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 16 : 13;
+
+    // The kernel RT-arg layout after the base args (in0 ends at idx 13, in1 at 12) is, IN ORDER and
+    // matching the factory push + the kernel's argidx reads:
+    //   split-K (3: k_block_start, out_m_tile_offset, out_M_tiles_total)  -- ALWAYS present
+    //   reduce  (8) -- ONLY on the fused split-K OUTPUT-WRITER DM (#ifdef REDUCE_K; in0 if !transpose)
+    //   ternary (3) -- ONLY if FUSE_TERNARY
+    //   output addresses (N)
+    // The override MUST reproduce this argidx exactly, else cached replay writes addresses to the wrong
+    // slots: the fused-K-par cache bug was the output address landing in a stale slot -> replay zeros.
+    constexpr uint32_t kSplitK = 3;
+    const bool fused = override_variables.num_k_fused;
+    const bool in0_is_writer = !override_variables.transpose_core_grid;  // matches create(): in0 writes when !transpose
+    const bool in1_is_writer = override_variables.transpose_core_grid;
+    const uint32_t in0_reduce = (fused && in0_is_writer) ? 8u : 0u;
+    const uint32_t in1_reduce = (fused && in1_is_writer) ? 8u : 0u;
+    const uint32_t tern = has_fused_ternary ? 3u : 0u;
+    const uint32_t in0_ternary_a_addr_idx = 14 + kSplitK + in0_reduce;
+    const uint32_t in0_ternary_b_addr_idx = in0_ternary_a_addr_idx + 1;
+    const uint32_t in1_ternary_a_addr_idx = 13 + kSplitK + in1_reduce;
+    const uint32_t in1_ternary_b_addr_idx = in1_ternary_a_addr_idx + 1;
+    const uint32_t in0_out_addr_start_idx = 14 + kSplitK + in0_reduce + tern;
+    const uint32_t in1_out_addr_start_idx = 13 + kSplitK + in1_reduce + tern;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
