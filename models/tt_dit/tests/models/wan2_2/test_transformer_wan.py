@@ -16,6 +16,7 @@ from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.golden import load_golden, save_golden
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
@@ -43,6 +44,22 @@ ROPE_MAX_SEQ_LEN = 1024
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _register_block_hooks(model):
+    """Register forward hooks on each transformer block to log when it is called."""
+    hooks = []
+    logger.info(type(model))
+    for idx, block in enumerate(model.blocks):
+
+        def _make_hook(block_idx):
+            def hook(module, input, output):
+                logger.info(f"Torch transformer block {block_idx} called")
+
+            return hook
+
+        hooks.append(block.register_forward_hook(_make_hook(idx)))
+    return hooks
+
+
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
     return DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
@@ -129,12 +146,64 @@ def test_wan_transformer_block(
     p_t, p_h, p_w = PATCH_SIZE
     spatial_seq_len = (T // p_t) * (H // p_h) * (W // p_w)
 
-    # Load Wan2.2-T2V-14B model from HuggingFace
+    # Try loading golden data (inputs + reference output)
+    param_id = f"B{B}_T{T}_H{H}_W{W}_P{prompt_seq_len}"
+    golden = load_golden("wan_transformer_block", param_id)
+
+    # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
     parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
         MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
     )
+    hooks = _register_block_hooks(parent_torch_model)
     torch_model = parent_torch_model.blocks[0]
     torch_model.eval()
+    state_dict = torch_model.state_dict()
+
+    if golden is not None:
+        spatial_input = golden["spatial_input"]
+        prompt_input = golden["prompt_input"]
+        temb_input = golden["temb_input"]
+        rope_cos = golden["rope_cos"]
+        rope_sin = golden["rope_sin"]
+        torch_rope_cos = golden["torch_rope_cos"]
+        torch_rope_sin = golden["torch_rope_sin"]
+        torch_spatial_out = golden["torch_spatial_out"]
+    else:
+        # Generate inputs with fixed seed
+        torch.manual_seed(0)
+        spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
+        prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
+        temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
+        rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+        rope_sin = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
+        torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
+
+        logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+        with torch.no_grad():
+            torch_spatial_out = torch_model(
+                hidden_states=spatial_input,
+                encoder_hidden_states=prompt_input,
+                temb=temb_input,
+                rotary_emb=[torch_rope_cos, torch_rope_sin],
+            )
+        for h in hooks:
+            h.remove()
+        del parent_torch_model, torch_model
+
+        save_golden(
+            "wan_transformer_block",
+            param_id,
+            {
+                "spatial_input": spatial_input,
+                "prompt_input": prompt_input,
+                "temb_input": temb_input,
+                "rope_cos": rope_cos,
+                "rope_sin": rope_sin,
+                "torch_rope_cos": torch_rope_cos,
+                "torch_rope_sin": torch_rope_sin,
+                "torch_spatial_out": torch_spatial_out,
+            },
+        )
 
     # Create TT model
     tt_model = WanTransformerBlock(
@@ -148,18 +217,11 @@ def test_wan_transformer_block(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(state_dict)
 
-    # Create input tensors
-    torch.manual_seed(0)
-    spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
-    temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
-
-    # Create ROPE embeddings
-    rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
-    rope_sin = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
-    torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
+    # Prepare ROPE embeddings
+    if golden is not None:
+        torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
 
     rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
     rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
@@ -201,16 +263,6 @@ def test_wan_transformer_block(
     )
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
 
-    # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    with torch.no_grad():
-        torch_spatial_out = torch_model(
-            hidden_states=spatial_input,
-            encoder_hidden_states=prompt_input,
-            temb=temb_input,
-            rotary_emb=[torch_rope_cos, torch_rope_sin],
-        )
-
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
@@ -228,6 +280,7 @@ def test_wan_transformer_block(
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -264,18 +317,57 @@ def test_wan_transformer_model(
 
     if dit_unit_test:
         num_layers = 1
-        torch_model = TorchWanTransformer3DModel(num_layers=num_layers)
     else:
-        torch_model = TorchWanTransformer3DModel.from_pretrained(
-            MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-        )
         num_layers = NUM_LAYERS
-    torch_model.eval()
 
-    torch.manual_seed(0)
-    spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
-    timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+    # Try loading golden data (inputs + reference output + state_dict)
+    param_id = f"B{B}_T{T}_H{H}_W{W}_P{prompt_seq_len}_L{num_layers}"
+    golden = load_golden("wan_transformer_model", param_id)
+
+    # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
+    torch_model = TorchWanTransformer3DModel.from_pretrained(
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+    )
+    hooks = _register_block_hooks(torch_model)
+    torch_model.eval()
+    state_dict = torch_model.state_dict()
+
+    if golden is not None:
+        spatial_input = golden["spatial_input"]
+        prompt_input = golden["prompt_input"]
+        timestep_input = golden["timestep_input"]
+        torch_spatial_out = golden["torch_spatial_out"]
+    else:
+        # Generate inputs with fixed seed
+        torch.manual_seed(0)
+        spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
+        prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
+        timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+
+        logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+        with torch.no_grad():
+            torch_spatial_out = torch_model(
+                hidden_states=spatial_input,
+                encoder_hidden_states=prompt_input,
+                timestep=timestep_input,
+                return_dict=False,
+            )
+        torch_spatial_out = torch_spatial_out[0]
+        for h in hooks:
+            h.remove()
+        del torch_model
+
+        save_golden(
+            "wan_transformer_model",
+            param_id,
+            {
+                "spatial_input": spatial_input,
+                "prompt_input": prompt_input,
+                "timestep_input": timestep_input,
+                "torch_spatial_out": torch_spatial_out,
+            },
+        )
+
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
     tt_timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
@@ -288,7 +380,7 @@ def test_wan_transformer_model(
     )
 
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(state_dict)
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
 
@@ -302,17 +394,6 @@ def test_wan_transformer_model(
         timestep=tt_timestep,
     )
     del tt_model
-
-    # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    with torch.no_grad():
-        torch_spatial_out = torch_model(
-            hidden_states=spatial_input,
-            encoder_hidden_states=prompt_input,
-            timestep=timestep_input,
-            return_dict=False,
-        )
-    torch_spatial_out = torch_spatial_out[0]
 
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
@@ -350,12 +431,56 @@ def test_wan_transformer_inner_step(
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
-    # Load pretrained torch model and truncate to 1 layer
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-    )
-    torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
-    torch_model.eval()
+    # Try loading golden data
+    param_id = f"B{B}_T{T}_H{H}_W{W}_P{prompt_seq_len}_inner_step"
+    golden = load_golden("wan_transformer_inner_step", param_id)
+
+    if golden is not None:
+        spatial_input = golden["spatial_input"]
+        prompt_input = golden["prompt_input"]
+        timestep_input = golden["timestep_input"]
+        torch_output = golden["torch_output"]
+        state_dict = golden["state_dict"]
+    else:
+        # Generate inputs with fixed seed
+        torch.manual_seed(0)
+        spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
+        prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
+        timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
+
+        # Load pretrained torch model and truncate to 1 layer
+        torch_model = TorchWanTransformer3DModel.from_pretrained(
+            MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+        )
+        torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
+        torch_model.eval()
+        hooks = _register_block_hooks(torch_model)
+        state_dict = torch_model.state_dict()
+
+        logger.info(f"Running torch reference with spatial shape {spatial_input.shape}")
+        with torch.no_grad():
+            torch_output = torch_model(
+                hidden_states=spatial_input,
+                encoder_hidden_states=prompt_input,
+                timestep=timestep_input,
+                return_dict=False,
+            )
+        torch_output = torch_output[0]
+        for h in hooks:
+            h.remove()
+        del torch_model
+
+        save_golden(
+            "wan_transformer_inner_step",
+            param_id,
+            {
+                "spatial_input": spatial_input,
+                "prompt_input": prompt_input,
+                "timestep_input": timestep_input,
+                "torch_output": torch_output,
+                "state_dict": state_dict,
+            },
+        )
 
     # Create 1-layer TT model with matching weights
     tt_model = _make_wan_transformer(
@@ -366,15 +491,9 @@ def test_wan_transformer_inner_step(
         num_layers=1,
     )
     start = time.time()
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(state_dict)
     end = time.time()
     logger.info(f"Time taken to load state dict: {end - start} seconds")
-
-    # Create inputs
-    torch.manual_seed(0)
-    spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
-    timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
 
     # Prepare cached inputs on device (like the pipeline does once before the denoising loop)
     spatial_host, N = tt_model.preprocess_spatial_input_host(spatial_input)
@@ -399,16 +518,5 @@ def test_wan_transformer_inner_step(
     tt_output_1BNI = local_device_to_torch(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
     del tt_model
-
-    # Run torch reference
-    logger.info(f"Running torch reference with spatial shape {spatial_input.shape}")
-    with torch.no_grad():
-        torch_output = torch_model(
-            hidden_states=spatial_input,
-            encoder_hidden_states=prompt_input,
-            timestep=timestep_input,
-            return_dict=False,
-        )
-    torch_output = torch_output[0]
 
     assert_quality(torch_output, tt_output, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
