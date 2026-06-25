@@ -39,6 +39,14 @@ def fnum(x):
         return None
 
 
+def percentile(values, pct):
+    if not values:
+        return None
+    ordered = sorted(values)
+    idx = int(round((len(ordered) - 1) * pct))
+    return ordered[max(0, min(idx, len(ordered) - 1))]
+
+
 def slug(s):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(s)).strip("_")
 
@@ -219,6 +227,84 @@ def pareto(points):
     return front
 
 
+def add_one_ulp_inset(ax, comp, front, tus, tulp, method_color, method_marker, pick=None):
+    low_ulp = [r for r in comp if r["_us"] is not None and r["_ulp"] is not None and 0 <= r["_ulp"] <= 1.0]
+    ttnn_in_band = tus is not None and tulp is not None and 0 <= tulp <= 1.0
+    picked_in_band = pick is not None and pick["_us"] is not None and pick["_ulp"] is not None and 0 <= pick["_ulp"] <= 1.0
+    if not low_ulp and not ttnn_in_band and not picked_in_band:
+        return
+
+    xs = [r["_us"] for r in low_ulp]
+    if ttnn_in_band:
+        xs.append(tus)
+    if picked_in_band:
+        xs.append(pick["_us"])
+    if not xs:
+        return
+
+    q90 = percentile(xs, 0.90) or max(xs)
+    x_max = max(q90, tus * 1.15 if tus else q90)
+    x_max = max(x_max, min(xs) + 0.25)
+
+    inset = ax.inset_axes([0.58, 0.52, 0.34, 0.28])
+    inset.set_facecolor("#F7F7F7")
+    for r in low_ulp:
+        if r["_us"] > x_max:
+            continue
+        method = r.get("method") or "unknown"
+        marker = method_marker.get(method, "o")
+        inset.scatter(
+            r["_us"],
+            r["_ulp"],
+            c=method_color.get(method, "gray"),
+            marker=marker,
+            s=11,
+            alpha=0.75,
+            edgecolors="none",
+            clip_on=False,
+        )
+
+    front_low = [(us, ulp) for us, ulp, _ in front if 0 <= ulp <= 1.0 and us <= x_max]
+    if front_low:
+        inset.plot(
+            [p[0] for p in front_low],
+            [p[1] for p in front_low],
+            color="#333333",
+            ls="--",
+            lw=0.7,
+            alpha=0.65,
+            clip_on=False,
+        )
+
+    if ttnn_in_band and tus <= x_max:
+        inset.scatter([tus], [tulp], c="#D62728", s=64, marker="*", zorder=5, clip_on=False)
+        inset.axhline(tulp, color="#D62728", ls=":", lw=0.7, alpha=0.5)
+        inset.axvline(tus, color="#D62728", ls=":", lw=0.7, alpha=0.5)
+
+    if picked_in_band and pick["_us"] <= x_max:
+        inset.scatter(
+            [pick["_us"]],
+            [pick["_ulp"]],
+            s=42,
+            marker="P",
+            facecolor="#F1C232",
+            edgecolor="#222222",
+            linewidth=0.45,
+            zorder=6,
+            clip_on=False,
+        )
+
+    inset.set_xlim(0, x_max)
+    inset.set_ylim(0, 1.02)
+    inset.set_title("0-1 ULP inset", fontsize=8, pad=2)
+    inset.tick_params(axis="both", labelsize=7, length=2, pad=1)
+    inset.grid(True, color="#CCCCCC", alpha=0.12, linewidth=0.4)
+    inset.spines["top"].set_visible(False)
+    inset.spines["right"].set_visible(False)
+    inset.spines["left"].set_linewidth(0.5)
+    inset.spines["bottom"].set_linewidth(0.5)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Plot frontier_sweep shard CSVs as per-activation scatters."
@@ -375,7 +461,7 @@ def main():
                 edgecolor="#222222",
                 linewidth=0.65,
                 zorder=6,
-                label="picked IO",
+                label="picked",
                 clip_on=False,
             )
         if tus:
@@ -383,6 +469,7 @@ def main():
             ax.scatter([tus], [tulp], c="#D62728", s=90, marker="*", zorder=5, label="TTNN", clip_on=False)
             ax.axhline(tulp, color="#D62728", ls=":", lw=0.7, alpha=0.55)
             ax.axvline(tus, color="#D62728", ls=":", lw=0.7, alpha=0.55)
+        add_one_ulp_inset(ax, comp, front, tus, tulp, METHOD_COLOR, METHOD_MARKER, pick)
         ax.set_xlabel("Tracy runtime (us)")
         ax.set_ylabel(f"Maximum ULP error ({dtype_label(dtype)})")
         ax.set_ylim(bottom=0)
