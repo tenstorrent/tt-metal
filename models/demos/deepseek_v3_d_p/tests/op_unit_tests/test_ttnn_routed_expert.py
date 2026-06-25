@@ -414,6 +414,15 @@ def run_routed_expert(
                     ttnn_expert = ttnn_chip[inter_chip_offset : inter_chip_offset + token_count]
                     _, pcc = comp_pcc(torch_expert, ttnn_expert)
                     pcc_values.append(pcc)
+                    # NaN/Inf is checked on the WRITTEN rows only (same slice as PCC).
+                    # The unified op writes each expert's ceil_tile(count) rows and leaves
+                    # the rest of the dispatch-shaped buffer (zero-count regions, the tail
+                    # of the capacity-padded buffer) uninitialized — that padding is never
+                    # read by `combine`, which is bounded by expert_token_counts/offsets.
+                    # Asserting over the full buffer would flag harmless uninitialized
+                    # padding (the op allocates the output with ttnn::empty).
+                    assert not torch.isnan(ttnn_expert).any(), f"NaN in written rows of expert {global_expert_idx}"
+                    assert not torch.isinf(ttnn_expert).any(), f"Inf in written rows of expert {global_expert_idx}"
                     logger.debug(
                         f"Chip (dg={dg},ds={ds}), Local Expert {expert_idx} (Global {global_expert_idx}) PCC: {pcc:.6f}"
                     )
@@ -428,9 +437,10 @@ def run_routed_expert(
     pcc_threshold = 0.97
     assert min_pcc >= pcc_threshold, f"PCC {min_pcc:.6f} below threshold {pcc_threshold}"
 
-    # Verify no NaN/Inf
-    assert not torch.isnan(ttnn_outputs_torch).any(), "Output contains NaN"
-    assert not torch.isinf(ttnn_outputs_torch).any(), "Output contains Inf"
+    # NaN/Inf is verified per-expert on the written rows above (the op's actual
+    # output contract). The padding rows of the capacity-sized buffer are
+    # uninitialized by design (ttnn::empty) and not part of the contract — see the
+    # per-expert check above and the comment in unified_routed_expert_ffn.cpp.
 
     # Print timing summary
     profiler.end("test_ttnn_routed_expert")
