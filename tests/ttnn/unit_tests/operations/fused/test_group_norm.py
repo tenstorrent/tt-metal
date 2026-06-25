@@ -107,7 +107,10 @@ OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS = [
 OPTIONAL_WEIGHT_BIAS_AFFINE_IDS = ["no_affine", "weight_only", "bias_only"]
 
 NEGATIVE_TESTS_PARAMS = [
-    ((2, 1, 16, 32), 8, "must be a multiple of the tile height"),
+    # ttnn.empty produces a ROW_MAJOR interleaved input, which the non-sharded path
+    # rejects up front (it is unsupported there); this fires before the tile-height
+    # check that this shape would otherwise trip.
+    ((2, 1, 16, 32), 8, "interleaved \\(non-sharded\\) input must be in TILE layout"),
 ]
 
 
@@ -1258,9 +1261,10 @@ def test_group_norm_negative_tests(
     num_groups,
     msg_pattern,
     device,
+    expect_error,
 ):
     input_tensor = ttnn.empty(input_shape, device=device)
-    with pytest.raises(RuntimeError, match=msg_pattern):
+    with expect_error(RuntimeError, msg_pattern):
         ttnn.group_norm(
             input_tensor,
             num_groups=num_groups,
@@ -1269,11 +1273,14 @@ def test_group_norm_negative_tests(
         )
 
 
-def test_group_norm_rejects_host_input_mask(device):
-    input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
+def test_group_norm_rejects_host_input_mask(device, expect_error):
+    # TILE layout: a ROW_MAJOR interleaved input is rejected earlier (it is unsupported
+    # on the non-sharded path), which would pre-empt the host-input-mask check this test
+    # targets.
+    input_tensor = ttnn.empty((1, 1, 32, 320), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
 
-    with pytest.raises(RuntimeError, match="Input mask must be on device"):
+    with expect_error(RuntimeError, "Input mask must be on device"):
         ttnn.group_norm(
             input_tensor,
             num_groups=32,
@@ -1283,7 +1290,7 @@ def test_group_norm_rejects_host_input_mask(device):
         )
 
 
-def test_group_norm_rejects_host_negative_mask(device):
+def test_group_norm_rejects_host_negative_mask(device, expect_error):
     grid_size = ttnn.CoreGrid(y=1, x=1)
     torch_input_tensor = torch.rand((1, 320, 32, 32), dtype=torch.bfloat16)
     input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(1, 1, 32 * 32, 320)
@@ -1306,7 +1313,7 @@ def test_group_norm_rejects_host_negative_mask(device):
     )
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
 
-    with pytest.raises(RuntimeError, match="Negative mask must be on device"):
+    with expect_error(RuntimeError, "Negative mask must be on device"):
         ttnn.group_norm(
             input_tensor,
             num_groups=32,
