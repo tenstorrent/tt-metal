@@ -162,3 +162,11 @@ Q1/Q2 FYI-U; Q3/Q4/Q6 are all "none," so nothing mirrors to a (non-existent) bri
 The SPSC prerequisite was resolved (single-producer collapse, **PR #48151**, validated 205/39/0). The port was then attempted and **gated** on a **second blocker this audit missed**: after the collapse, the op is **compute-less** — the single DM reader writes the borrowed output CBs **`c_16`/`c_17`/`c_18`** via raw `get_write_ptr()`, **producer-only, with no consumer kernel**. A DM-producer-only CB cannot pair (no consumer) and cannot self-loop (self-loop is compute-kernel-only). 
 
 **Corrected status: RED, framework-blocked** (wait-for-feature: sync-free/scratch DFB or DM-kernel self-loop). See [[metal2-port-portability-predictor]]. The #48151 SPSC prereq cleared the producer-count gate but the op is still not portable until the DM-output-CB feature lands.
+
+---
+
+## 🔄 Revision (2026-06-25, supersedes the correction above) — workaround found; NOT framework-blocked
+
+The "framework-blocked / wait-for-feature" verdict above is **overstated**. A workaround exists with **no framework change**: the **cross-kernel DFB bridge**. Only a DM-kernel *self*-loop FATALs; a DM kernel paired *cross-kernel* with a different co-located kernel (DM↔DM or DM↔compute) is fully legal. **Proven in shipped code:** the landed JointSDPA port (PR #48175, 160 passed/0 failed) binds `mask`/`scale`/`col_identity` as PRODUCER on the **writer (DM)** → CONSUMER on **compute** (`joint_sdpa_program_factory.cpp:359-451`); the SPSC validator accepts and runs them.
+
+**This op — partial exception:** after the #48151 SPSC collapse it is **single-kernel (reader-only)** — no co-located compute/writer kernel exists to host the missing bridge endpoint for the producer-only borrowed output CBs `c_16`/`c_17`/`c_18`. The cross-kernel bridge therefore needs a **trivial second kernel added** (more invasive than the other ops). This is the one DM-sync-free case where a framework feature (or a second-kernel restructure) is still warranted. Not as cleanly portable as sampling/embedding.

@@ -170,3 +170,11 @@ Neither is a permanent blocker. (1) resolves by an op-owner pre-port functional 
 This audit graded the op YELLOW and noted sync-free CBs **`c_19`** (`cb_intermed_out` tree-reduction scratch, **writer-only**) and **`c_9`** (`cb_id_page_table`, "self-loop workaround"). The self-loop prescription does **not** apply: the self-loop workaround is **compute-kernel-only**; `c_19` is owned by the (DM) writer, so it cannot self-loop and cannot pair (no consumer), and Metal 2.0 has no scratch/sync-free DFB. This is the same framework wall that blocks sampling/embedding/create_qkv_decode.
 
 **Corrected status: framework-blocked** on the DM-kernel sync-free CB (in addition to the tree-reduction CB `c_16` SPSC ceiling for `num_cores_per_head > 2`, which remains an op-owner item). Wait-for-feature: sync-free/scratch DFB or DM-kernel self-loop. See [[metal2-port-portability-predictor]].
+
+---
+
+## 🔄 Revision (2026-06-25, supersedes the correction above) — workaround found; NOT framework-blocked
+
+The "framework-blocked / wait-for-feature" verdict above is **overstated**. A workaround exists with **no framework change**: the **cross-kernel DFB bridge**. Only a DM-kernel *self*-loop FATALs; a DM kernel paired *cross-kernel* with a different co-located kernel (DM↔DM or DM↔compute) is fully legal. **Proven in shipped code:** the landed JointSDPA port (PR #48175, 160 passed/0 failed) binds `mask`/`scale`/`col_identity` as PRODUCER on the **writer (DM)** → CONSUMER on **compute** (`joint_sdpa_program_factory.cpp:359-451`); the SPSC validator accepts and runs them.
+
+**This op:** the writer-only sync-free `c_19` (tree-reduction scratch) → bridge to a co-located compute CONSUMER (cross-kernel bridge; high-confidence). **The sync-free CB is NOT a framework blocker.** The *remaining* real constraint is the separate, config-scoped **tree-reduction CB `c_16` SPSC ceiling** for `num_cores_per_head > 2` (an op-owner functional item), plus the raw-semaphore-poll holdover — neither is the sync-free-CB issue.

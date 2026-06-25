@@ -191,3 +191,11 @@ None — no custom hash to mine.
 The Device-2.0 donor prerequisite (`generate_bcast_scalar.hpp`) was resolved (**PR #48148**, validated). The port was then attempted and **gated**: this audit prescribed "the sanctioned self-loop workaround" for the writer's sync-free CBs **`c_13`** (output staging: `cb_out.get_write_ptr()` → `noc.async_write`, no FIFO partner) and **`c_14`/`c_15`** (writer `reserve_back`/`push_back` + raw `CoreLocalMem` self-read, no consumer). That prescription is **wrong**: the self-loop workaround is **compute-kernel-only**; binding it on the (DM) writer FATALs, and Metal 2.0 has no scratch/sync-free DFB. `c_14`/`c_15` could be salvaged by hoisting their DRAM read writer→reader (PRODUCER→CONSUMER), but **`c_13` has no escape**.
 
 **Corrected status: RED, framework-blocked** (wait-for-feature: sync-free/scratch DFB or DM-kernel self-loop). See [[metal2-port-portability-predictor]]. The #48148 prereq is necessary but not sufficient.
+
+---
+
+## 🔄 Revision (2026-06-25, supersedes the correction above) — workaround found; NOT framework-blocked
+
+The "framework-blocked / wait-for-feature" verdict above is **overstated**. A workaround exists with **no framework change**: the **cross-kernel DFB bridge**. Only a DM-kernel *self*-loop FATALs; a DM kernel paired *cross-kernel* with a different co-located kernel (DM↔DM or DM↔compute) is fully legal. **Proven in shipped code:** the landed JointSDPA port (PR #48175, 160 passed/0 failed) binds `mask`/`scale`/`col_identity` as PRODUCER on the **writer (DM)** → CONSUMER on **compute** (`joint_sdpa_program_factory.cpp:359-451`); the SPSC validator accepts and runs them.
+
+**This op:** `cb_k`/`cb_p` are **read-staging** → relocate to the reader (reader PRODUCER → writer CONSUMER; proven-class). `cb_out` is **write-staging** (writer assembles output, DMAs to DRAM) → bridge PRODUCER-on-writer + a TERMINAL no-op CONSUMER on compute. The no-op-consumer variant is high-confidence (validator only counts endpoints; terminal consume after producer push → no deadlock) but **not yet hardware-verified** — confirm by completing the port. **PORTABLE via cross-kernel bridge**; no framework feature needed.

@@ -216,3 +216,11 @@ The Device-2.0 donor prerequisite called out above was resolved (`writer_unary_s
 Metal 2.0 requires one producer + one consumer per local DFB, has **no scratch/sync-free DFB** (`DataflowBufferSpec` = `borrowed_from`/`alias_with` only), and the single-ended **self-loop workaround is compute-kernel-only** — binding it on a data-movement kernel FATALs (`"self-looped by data-movement kernel"`). A DM-kernel sync-free CB is therefore **framework-inexpressible today**. See [[metal2-port-portability-predictor]].
 
 **Corrected status: RED, framework-blocked** (wait-for-feature: a sync-free/scratch DFB or DM-kernel self-loop). The #48147 prereq is necessary but **not sufficient**; do not attempt the port until the sync-free-CB feature lands.
+
+---
+
+## 🔄 Revision (2026-06-25, supersedes the correction above) — workaround found; NOT framework-blocked
+
+The "framework-blocked / wait-for-feature" verdict above is **overstated**. A workaround exists with **no framework change**: the **cross-kernel DFB bridge**. Only a DM-kernel *self*-loop FATALs; a DM kernel paired *cross-kernel* with a different co-located kernel (DM↔DM or DM↔compute) is fully legal. **Proven in shipped code:** the landed JointSDPA port (PR #48175, 160 passed/0 failed) binds `mask`/`scale`/`col_identity` as PRODUCER on the **writer (DM)** → CONSUMER on **compute** (`joint_sdpa_program_factory.cpp:359-451`); the SPSC validator accepts and runs them.
+
+**This op:** the RM reader's `cb_in1` is **read-staging** (reads a DRAM chunk, indexes via `CoreLocalMem`). Relocate the read to a producer endpoint paired with the consumer — a real data dependency, directly analogous to the proven JointSDPA reader→compute bindings. **PORTABLE via cross-kernel bridge** (proven-class); no framework feature needed. The #48147 D2.0 prereq remains a real prerequisite.
