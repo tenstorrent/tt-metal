@@ -19,7 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import get_variant
-from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import TtDeepSeekPrefillPipeline
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime as TtDeepSeekPrefillPipeline
 
 # Variant-aware golden trace dir, used only when DEEPSEEK_PREFILL_TRACE_{PT,DIR} are unset.
 DEFAULT_PREFILL_TRACE_DIR = get_variant(
