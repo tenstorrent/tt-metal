@@ -9,6 +9,7 @@
 #include <functional>
 #include <numeric>
 #include <ostream>
+#include <type_traits>
 
 #include <tt_stl/assert.hpp>
 #include "constants.hpp"
@@ -261,6 +262,11 @@ std::vector<T> to_tile_major_layout_nfaces(
     const bool transpose_face,
     const bool transpose_face_order) {
     ZoneScoped;
+    // The face copies below move raw object bytes (insert/push_back of trivial T compile to
+    // memmove), which is only well-defined for trivially-copyable T. All instantiations
+    // (float, int, uint8/16/32, bfloat16) satisfy this; enforce it so a future non-trivial T fails
+    // loudly at compile time instead of silently doing element-wise copies.
+    static_assert(std::is_trivially_copyable_v<T>, "to_tile_major_layout_nfaces requires trivially-copyable T");
 
     size_t H = shape[0];
     size_t W = shape[1];
@@ -283,21 +289,25 @@ std::vector<T> to_tile_major_layout_nfaces(
     TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
+    // Append each face by constructing its elements directly into the reserved (uninitialized)
+    // storage, instead of resize()-ing first (which value-initializes every element before the
+    // copy overwrites it). The reserve() above is an upper bound on the output size, so these
+    // appends never reallocate -- each element is written exactly once.
     auto write_face = [&](size_t face_idx, size_t face_height, size_t face_width, size_t stride) {
-        size_t offset = tilized_input.size();
-        tilized_input.resize(offset + (face_height * face_width));
-        T* dst = tilized_input.data() + offset;
         const T* src = in_row_major.data() + face_idx;
         if (!transpose_face) {
             for (size_t row = 0; row < face_height; row++) {
-                std::memcpy(dst, src, face_width * sizeof(T));
-                dst += face_width;
+                // Contiguous run: for trivially-copyable T this is the same memmove the prior
+                // memcpy did, but constructs in place (no preceding zero-fill).
+                tilized_input.insert(tilized_input.end(), src, src + face_width);
                 src += stride;
             }
         } else {
-            for (size_t row = 0; row < face_height; row++) {
-                for (size_t col = 0; col < face_width; col++) {
-                    dst[(col * face_height) + row] = src[(row * stride) + col];
+            // Transposed face: append in destination order (col-major within the face), matching
+            // the original dst[(col * face_height) + row] layout.
+            for (size_t col = 0; col < face_width; col++) {
+                for (size_t row = 0; row < face_height; row++) {
+                    tilized_input.push_back(src[(row * stride) + col]);
                 }
             }
         }
