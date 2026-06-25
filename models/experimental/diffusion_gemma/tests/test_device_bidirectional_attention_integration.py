@@ -26,12 +26,14 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
+from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     collect_prompt_hidden_by_layer,
     denoise_attention_forward,
     denoise_logits_from_tokens,
     embed_canvas_tokens,
 )
+from models.experimental.diffusion_gemma.tt.self_conditioning import TtSelfConditioning
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
 
@@ -88,35 +90,6 @@ def _to_device_tokens(mesh_device, value):
         dtype=ttnn.uint32,
         mesh_mapper=_mesh_mapper(mesh_device),
     )
-
-
-def _scaleless_rms_norm(hidden_states, eps=1e-6):
-    out = hidden_states.float()
-    out = out * torch.pow(out.pow(2).mean(-1, keepdim=True) + eps, -0.5)
-    return out.type_as(hidden_states)
-
-
-class _PostNormSelfConditioning:
-    def __init__(self, eps=1e-6):
-        self.eps = eps
-        self.called = False
-        self.saw_prev_logits = False
-        self.saw_embedding_weight = False
-
-    def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
-        del compute_kernel_config
-        self.called = True
-        self.saw_prev_logits = prev_logits_tt is not None
-        self.saw_embedding_weight = embedding_weight_tt is not None
-        if prev_logits_tt is None:
-            return ttnn.rms_norm(inputs_embeds_tt, epsilon=self.eps)
-
-        signal = ttnn.multiply(ttnn.sum(prev_logits_tt, dim=-1, keepdim=True), 1.0e-3)
-        conditioned = ttnn.add(inputs_embeds_tt, signal)
-        signal.deallocate(True)
-        out = ttnn.rms_norm(conditioned, epsilon=self.eps)
-        conditioned.deallocate(True)
-        return out
 
 
 def _torch_attention_reference(hf_model, hf_text_config, layer_idx, canvas_hidden, kv_hidden, mask):
@@ -315,11 +288,26 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     tt_model = _build_tt_model(mesh_device, hf_model, hf_text_config, num_layers=1, max_seq_len=total_len)
 
     canvas_tokens = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
-    prev_logits = torch.randn(1, 1, canvas_len, vocab_size)
+    prev_logits = torch.randn(1, canvas_len, vocab_size)
+    self_conditioning_ref = SelfConditioning(
+        hf_text_config.hidden_size,
+        intermediate_size=hf_text_config.intermediate_size,
+        eps=hf_text_config.rms_norm_eps,
+        activation=hf_text_config.hidden_activation,
+    ).eval()
+    self_conditioning_state = {
+        "pre_norm.weight": self_conditioning_ref.pre_norm.weight.data.clone(),
+        "gate_proj.weight": self_conditioning_ref.gate_proj.weight.data.clone(),
+        "up_proj.weight": self_conditioning_ref.up_proj.weight.data.clone(),
+        "down_proj.weight": self_conditioning_ref.down_proj.weight.data.clone(),
+    }
     with torch.no_grad():
         canvas_hidden = hf_model.embed_tokens(canvas_tokens)
-        conditioning_signal = prev_logits.squeeze(0).sum(dim=-1, keepdim=True) * 1.0e-3
-        conditioned_canvas_hidden = _scaleless_rms_norm(canvas_hidden + conditioning_signal)
+        conditioned_canvas_hidden = self_conditioning_ref.condition(
+            canvas_hidden,
+            prev_logits,
+            hf_model.embed_tokens.weight,
+        )
     prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
     with torch.no_grad():
         prompt_hidden = hf_model.embed_tokens(prompt_tokens)
@@ -338,21 +326,28 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     tt_prompt_tokens = _to_device_tokens(mesh_device, prompt_tokens)
     tt_prompt_hidden = embed_canvas_tokens(tt_model, tt_prompt_tokens)
     tt_prompt_hidden_by_layer = collect_prompt_hidden_by_layer(tt_model, tt_prompt_hidden)
-    tt_prev_logits = _to_device(mesh_device, prev_logits)
-    self_conditioning = _PostNormSelfConditioning()
+    tt_prev_logits = _to_device(mesh_device, prev_logits.unsqueeze(0))
+    tt_self_conditioning_embedding = _to_device(
+        mesh_device,
+        hf_model.embed_tokens.weight.detach().unsqueeze(0).unsqueeze(0),
+    )
+    self_conditioning = TtSelfConditioning(
+        mesh_device,
+        self_conditioning_state,
+        hidden_size=hf_text_config.hidden_size,
+        intermediate_size=hf_text_config.intermediate_size,
+        eps=hf_text_config.rms_norm_eps,
+    )
     tt_logits = denoise_logits_from_tokens(
         tt_model,
         prompt_hidden_by_layer=tt_prompt_hidden_by_layer,
         canvas_tokens=tt_canvas_tokens,
         self_conditioning=self_conditioning,
         prev_logits=tt_prev_logits,
-        self_conditioning_embedding_weight=tt_model.embedding_weight,
+        self_conditioning_embedding_weight=tt_self_conditioning_embedding,
     )
     logits = _to_torch(tt_logits, mesh_device).squeeze(0)
 
-    assert self_conditioning.called
-    assert self_conditioning.saw_prev_logits
-    assert self_conditioning.saw_embedding_weight
     # Full logits include the shared bf16 MoE/lm_head/softcap path; this branch's
     # known full-model ceiling is below the attention-only 0.99 acceptance.
     passing, message = assert_with_pcc(golden.float(), logits.float(), 0.98)

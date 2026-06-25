@@ -15,10 +15,11 @@ transformers ``DiffusionGemmaSelfConditioning``::
 RMSNorm uses the weight **directly** (NOT the Gemma2/3 ``1+weight`` convention) —
 matches both `ttnn.rms_norm` and the reference, so weights load verbatim.
 
-Single-device (no TP): the module is small (2816→2112→2816); the QB2 PCC test uses
-the single ``device`` fixture. Weights come from a ``weight_mapping.remap_state_dict``
+The module is small (2816→2112→2816) and is kept replicated for the current QB2
+integration path. Weights come from a ``weight_mapping.remap_state_dict``
 self-conditioning sub-dict (short keys ``{pre_norm,gate_proj,up_proj,down_proj}.weight``).
-Validated on QB2 vs the reference oracle by ``tests/test_device_self_conditioning.py``.
+Validated on QB2 vs the reference oracle by ``tests/test_device_self_conditioning.py`` and
+as part of the mesh denoise logits wrapper in ``tests/test_device_bidirectional_attention_integration.py``.
 """
 
 from __future__ import annotations
