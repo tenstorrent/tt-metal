@@ -106,12 +106,21 @@ class TtSpatialCrossAttention:
                 ttnn.deallocate(index_query_per_img)
 
                 no_of_non_zero_indices = output_tensor[0][..., 0].item()
-                index_query_per_img = output_tensor[1][:, :, :, :no_of_non_zero_indices]
-
-                for _ in range(3):  # squeeze back
-                    index_query_per_img = ttnn.squeeze(index_query_per_img, 0)
+                # ttnn.nonzero mirrors torch.nonzero(as_tuple=False): out[1] holds
+                # `count` 4-tuples (b, n, h, w) of the multi-dim coordinates of the
+                # non-zero elements, laid out as a flat count*4 buffer. The input
+                # here is (1, 1, 1, num_query), so the meaningful coordinate is the
+                # last (w) column; the first three are always 0. Reshape to
+                # (count, 4) and take column 3 to get the flat BEV-query indices,
+                # all on device. (The old code sliced out[1][:count], which
+                # interleaves the b/n/h zeros into the index list and silently
+                # drops 3/4 of the indices.)
+                coords = ttnn.reshape(output_tensor[1], (output_tensor[1].shape[-1],))
+                coords = ttnn.reshape(coords[: no_of_non_zero_indices * 4], (no_of_non_zero_indices, 4))
+                index_query_per_img = coords[:, 3]
                 indexes.append(index_query_per_img)
                 ttnn.deallocate(output_tensor[0])
+                ttnn.deallocate(output_tensor[1])
 
             max_len = max([each.shape[0] for each in indexes])
 

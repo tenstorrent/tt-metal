@@ -727,28 +727,23 @@ def test_vadv2(
         "ego_fut_preds",
     ]
 
-    # Per-key PCC floors pinned to the values observed on the perf-vadv2 branch
-    # at HEAD `cd355a3e19e` (warm call#3, fixed torch.randn seed). The original
-    # test used a `pcc=0.0` threshold which let any non-negative correlation
-    # pass — that hid the fact that several outputs (bev_embed, all_cls_scores,
-    # map_all_cls_scores) have inherently low PCC against the PyTorch reference
-    # on this branch. We don't try to fix the absolute correlation here; we
-    # only want a regression gate that fires if any perf change makes a key
-    # drop below its current value.
-    #
-    # Tolerance: 0.02 absolute. For keys whose nominal PCC is already low
-    # (~0.15), this is roughly a 10-15% relative slack — wide enough to
-    # absorb BF16 noise across runs but tight enough to catch real regressions.
+    # Per-key PCC floors against the PyTorch reference. Earlier these were pinned
+    # to a degenerate ~0.14-0.6 regime caused by two coupled bugs: ttnn.div(bf16,
+    # uint32) returning inf (fixed upstream by #47203) and ttnn.nonzero's 4*W
+    # sparse output being mis-extracted in TtSpatialCrossAttention (fixed here).
+    # With both fixed the model genuinely matches the reference, so the floors are
+    # re-pinned to the real correlations (observed value in the comment, floor set
+    # ~0.02-0.04 below to absorb BF16 run-to-run noise).
     pcc_floors = {
-        "bev_embed": 0.14,  # observed 0.163
-        "all_cls_scores": 0.21,  # observed 0.234
-        "all_bbox_preds": 0.97,  # observed 0.989
-        "all_traj_preds": 0.55,  # observed 0.62-0.63 (varies by run)
-        "all_traj_cls_scores": 0.45,  # observed 0.51-0.53 (varies by run)
-        "map_all_cls_scores": 0.13,  # observed 0.149
-        "map_all_bbox_preds": 0.95,  # observed 0.967
-        "map_all_pts_preds": 0.96,  # observed 0.985
-        "ego_fut_preds": 0.94,  # observed 0.96
+        "bev_embed": 0.96,  # observed 0.980
+        "all_cls_scores": 0.92,  # observed 0.956
+        "all_bbox_preds": 0.99,  # observed 0.999
+        "all_traj_preds": 0.93,  # observed 0.960
+        "all_traj_cls_scores": 0.93,  # observed 0.965
+        "map_all_cls_scores": 0.92,  # observed 0.960
+        "map_all_bbox_preds": 0.98,  # observed 0.996
+        "map_all_pts_preds": 0.99,  # observed 0.998
+        "ego_fut_preds": 0.99,  # observed 0.999
     }
     for key in keys_to_check:
         a = torch.load(f"models/experimental/vadv2/reference/dumps/{key}.pt")
