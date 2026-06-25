@@ -131,29 +131,67 @@ def _attach_migration_client(strict: bool):
     return client, cmd_q, table_q, resp_q
 
 
+def _chip_unique_ids_by_logical() -> dict[int, int]:
+    """Return UMD chip unique ids in the same logical index space as ttnn.
+
+    The migration worker opens UMD devices and keys ``dram_by_umd`` by
+    ``UmdDevice::unique_id()``. Sending physical PCIe indices here can produce a
+    complete-looking device map that resolves to zero local DeviceDram objects,
+    then fails at MIGRATE with an unknown FabricNodeId.
+    """
+    try:
+        import tt_umd  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "[migration] tt_umd is required to publish the device map: the migration worker "
+            "expects UMD chip unique ids, not physical device indices."
+        ) from exc
+
+    cluster_descriptor = tt_umd.TopologyDiscovery.create_cluster_descriptor()
+    unique_by_chip = {int(chip): int(unique) for chip, unique in cluster_descriptor.get_chip_unique_ids().items()}
+    visible_env = os.environ.get("TT_VISIBLE_DEVICES")
+    if not visible_env:
+        return unique_by_chip
+
+    visible_physical = sorted(int(x) for x in visible_env.split(",") if x != "")
+    remapped: dict[int, int] = {}
+    for logical, physical in enumerate(visible_physical):
+        if physical in unique_by_chip:
+            remapped[logical] = unique_by_chip[physical]
+        elif logical in unique_by_chip:
+            # Some UMD discovery paths already apply the TT_VISIBLE_DEVICES
+            # constraint and return remapped logical keys.
+            remapped[logical] = unique_by_chip[logical]
+        else:
+            raise RuntimeError(
+                f"[migration] TT_VISIBLE_DEVICES contains physical chip {physical}, but UMD unique-id "
+                f"discovery returned chips {sorted(unique_by_chip)}."
+            )
+    return remapped
+
+
 def _enumerate_devices(mesh_device) -> list[tuple[int, int, int]]:
-    """Row-major ``(umd_physical_chip_id, fabric_mesh_id, fabric_chip_id)`` for
+    """Row-major ``(umd_unique_chip_id, fabric_mesh_id, fabric_chip_id)`` for
     this rank's local mesh — ported from the decode demo's migration_table_hook.
 
-    UMD chip ids must be PHYSICAL. ``mesh_device.get_device_id`` returns the
-    LOGICAL id, which equals the physical id only when no TT_VISIBLE_DEVICES
-    remap is in effect. Under a remap, logical d is the d-th smallest visible
-    physical id (UMD parses the env into an unordered set and renumbers in
-    ascending-physical order), so we re-resolve via the sorted env list.
+    The device map's third field must match the worker's ``dram_by_umd`` key,
+    which is UMD's stable ASIC unique id.
     """
-    visible_env = os.environ.get("TT_VISIBLE_DEVICES")
-    phys_by_logical = None
-    if visible_env:
-        phys_by_logical = sorted(int(x) for x in visible_env.split(",") if x != "")
+    unique_by_logical = _chip_unique_ids_by_logical()
     rows, cols = mesh_device.shape[0], mesh_device.shape[1]
     out: list[tuple[int, int, int]] = []
     for r in range(rows):
         for c in range(cols):
             coord = ttnn.MeshCoordinate(r, c)
             logical = int(mesh_device.get_device_id(coord))
-            phys = phys_by_logical[logical] if phys_by_logical is not None else logical
+            if logical not in unique_by_logical:
+                raise RuntimeError(
+                    f"[migration] mesh coordinate ({r}, {c}) resolved to logical chip {logical}, but "
+                    f"UMD unique-id discovery returned chips {sorted(unique_by_logical)}."
+                )
+            unique_id = unique_by_logical[logical]
             fnid = mesh_device.get_fabric_node_id(coord)
-            out.append((phys, int(fnid.mesh_id), int(fnid.chip_id)))
+            out.append((unique_id, int(fnid.mesh_id), int(fnid.chip_id)))
     return out
 
 
@@ -177,6 +215,7 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
             f"[migration] fabric-node collision inside the mesh: {len(device_map)} entries but only "
             f"{len(unique_fnids)} unique (mesh_id, chip_id) pairs. Device map: {device_map}."
         )
+    logger.info(f"[migration] built device map: {len(device_map)} chips; first entries={device_map[:4]}")
     return device_map
 
 
