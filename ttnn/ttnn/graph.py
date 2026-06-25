@@ -32,6 +32,13 @@ from ttnn._ttnn.graph import (
     track_function_start as _cpp_track_function_start,
     track_function_end as _cpp_track_function_end,
     unwind_open_functions as _cpp_unwind_open_functions,
+    # Tier-1 up-front parallel precompile (ttnn/up_front_compile.hpp)
+    up_front_begin_collect,
+    up_front_end_collect,
+    up_front_num_unique,
+    up_front_num_collected,
+    up_front_clear,
+    up_front_compile,
 )
 
 from ttnn.graph_report import (
