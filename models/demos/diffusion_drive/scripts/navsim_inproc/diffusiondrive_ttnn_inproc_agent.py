@@ -22,10 +22,13 @@ or ``worker=sequential``.  Do **not** use ``worker=ray_distributed``: each ray
 worker is a separate process and would try to open device 0 concurrently.
 
 Performance note: switching from the bridge to in-process is an operational
-simplification, not a throughput win — the IPC it removes (~pickle + socket
-round-trip of the feature payload) is <1% of per-scenario time, and the device
-forward serialises either way.  The real throughput lever is trace capture
-(01_plan.md §10.4 #1).
+simplification, not by itself a throughput win — the IPC it removes (~pickle +
+socket round-trip of the feature payload) is <1% of per-scenario time, and the
+device forward serialises either way.  The throughput lever is **trace capture**
+(01_plan.md §10.4 #1): this agent captures the consolidated backbone-loop trace
+once in ``initialize()`` and replays it per scene via ``execute_compiled()``
+(~1.34× full-model forward, traced-vs-eager trajectory PCC 1.0).  Set
+``DD_TRACE=0`` to fall back to the eager forward (for A/B).
 
 Wire-up (see scripts/navsim_inproc/README.md for the full recipe + caveats):
   1. ``conda activate navsim310``
@@ -41,6 +44,8 @@ Wire-up (see scripts/navsim_inproc/README.md for the full recipe + caveats):
 from __future__ import annotations
 
 import atexit
+import logging
+import os
 import threading
 from typing import Any, Dict, List
 
@@ -75,6 +80,8 @@ class DiffusionDriveTtnnInprocAgent(AbstractAgent):
         # Serialises the single device across threads (single_machine_thread_pool);
         # uncontended under worker=sequential.
         self._lock = threading.Lock()
+        # Stage 7: True once the backbone-loop trace is captured (set in initialize()).
+        self._traced = False
 
     # -- required hooks --------------------------------------------------
     def name(self) -> str:
@@ -93,8 +100,13 @@ class DiffusionDriveTtnnInprocAgent(AbstractAgent):
             from models.demos.diffusion_drive.tt.config import ModelConfig
             from models.demos.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
 
+            trace_enabled = os.environ.get("DD_TRACE", "1").strip().lower() not in ("0", "false", "no", "off")
             # DD-1: ttnn.conv2d allocates from the L1_SMALL bank; default 0 → OOM.
-            self._device = ttnn.open_device(device_id=self._device_id, l1_small_size=32768)
+            # Trace capture additionally needs a trace region (256 MB validated).
+            open_kwargs = {"device_id": self._device_id, "l1_small_size": 32768}
+            if trace_enabled:
+                open_kwargs["trace_region_size"] = 256 * 1024 * 1024
+            self._device = ttnn.open_device(**open_kwargs)
             atexit.register(self._close)
 
             cfg = ModelConfig()
@@ -117,6 +129,21 @@ class DiffusionDriveTtnnInprocAgent(AbstractAgent):
                 .build_stage4(self._device)
             )
             self._model = model
+
+            # Stage 7: capture the backbone-loop trace once for fast replay
+            # (~1.34× full-model vs eager, traced-vs-eager trajectory PCC 1.0).
+            # A capture failure falls back gracefully rather than aborting the eval.
+            if trace_enabled:
+                try:
+                    model.compile()
+                    self._traced = True
+                    logging.getLogger(__name__).info(
+                        "DiffusionDrive backbone-loop trace captured — using execute_compiled() path"
+                    )
+                except Exception as exc:  # never let trace capture break the eval
+                    logging.getLogger(__name__).warning(
+                        "DiffusionDrive trace capture failed (%s); falling back to eager forward", exc
+                    )
 
     def get_sensor_config(self) -> SensorConfig:
         return SensorConfig.build_all_sensors(include=[3])
@@ -144,7 +171,7 @@ class DiffusionDriveTtnnInprocAgent(AbstractAgent):
         }
         with self._lock:  # one device → one forward at a time
             with torch.no_grad():
-                out = self._model(feats)
+                out = self._model.execute_compiled(feats) if self._traced else self._model(feats)
         return {"trajectory": out["trajectory"].float().cpu()}
 
     # -- cleanup ---------------------------------------------------------
