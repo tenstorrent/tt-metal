@@ -1046,6 +1046,58 @@ def prefill_linear_ws_out(
                 memory_config=ttnn.L1_MEMORY_CONFIG if return_sharded else memory_config,
             )
             return out
+        # w_q_b (K=768 N=1280, BFP4): 2D 10×4 ibw8 pcN4 bs — 6.35µs vs 11.3µs for the
+        # 20-core 1D ws baseline (1.77×).  Wins by spreading N over 40 cores (vs 20) and
+        # using a K-block of 8 (the generic _auto_in0_block_w caps at 4).  Sweep winner
+        # on Blackhole p300c (sweep_attn_matmul.py).
+        if kt == 24 and nt == 40:
+            mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+            out = prefill_linear_2d_bs_out(
+                a,
+                b,
+                device=device,
+                grid_x=10,
+                grid_y=4,
+                in0_block_w=8,
+                per_core_M=max(1, mt // 4),
+                per_core_N=4,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG if return_sharded else memory_config,
+            )
+            return out
+        # w_o (K=1280 N=2048, BFP8): 1D 8×4 ws, same 32-core grid as the generic path but
+        # in0_block_w=8 (auto caps at 4, missing this) — 14.74µs vs 18.0µs (1.23×).  Sweep
+        # winner on Blackhole p300c (sweep_attn_matmul.py).  Falls through to the generic
+        # path when mt exceeds the 1D ws L1 budget (chunked prefill).
+        if kt == 40 and nt == 64 and mt <= max_ws_mt:
+            prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=mt,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            ws_mc = ttnn.create_sharded_memory_config(
+                shape=(1, 1, mt * ttnn.TILE_SIZE, 2 * ttnn.TILE_SIZE),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            a_l1, copied = _to_l1_if_needed(a)
+            out_sharded = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=ws_mc, compute_kernel_config=ckc)
+            if copied:
+                ttnn.deallocate(a_l1, force=False)
+            if return_sharded:
+                return out_sharded
+            downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+            out = ttnn.to_memory_config(out_sharded, downstream_mc)
+            ttnn.deallocate(out_sharded, force=False)
+            return out
         # L1 shared expert down: 1D 8×4 ibw4 ws (mt must fit L1 budget).
         if kt == 12 and nt == 16:
             if mt > max_ws_mt:

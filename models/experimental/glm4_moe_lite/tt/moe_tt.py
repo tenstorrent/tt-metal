@@ -1564,6 +1564,7 @@ def moe_sparse_experts_forward_tt(
     skip_final_reduce: bool = False,
     _precomputed_local_weights: ttnn.Tensor | None = None,
     _precomputed_sparsity: ttnn.Tensor | None = None,
+    _return_unreduced: bool = False,
 ) -> ttnn.Tensor:
     """Run routed experts and return routed output [1,1,T,H] TILE.
 
@@ -1734,6 +1735,14 @@ def moe_sparse_experts_forward_tt(
             _hs_pre = hidden_states
             hidden_states = ttnn.typecast(hidden_states, dtype=ttnn.bfloat8_b, memory_config=memory_config)
             ttnn.deallocate(_hs_pre, force=False)
+        # Hoist the routing-weight multiply + reduce-over-experts out of the chunk
+        # loop: each chunk returns its raw per-expert output [E,1,T_chunk,H], we
+        # concat across chunks, then apply weights + reduce ONCE for all tokens.
+        # This replaces 4×(mul + reduce) with 1×(mul + reduce). PCC-neutral: the
+        # weighting is token-local and the reduction is over experts (not tokens),
+        # so concat-then-combine == combine-then-concat. Requires the replicated
+        # routing weights, which the chunked path always computes (local_weights_full).
+        hoist_combine = local_weights_full is not None and _env_bool("GLM4_MOE_LITE_MOE_HOIST_COMBINE", default=True)
         out_chunks: list[ttnn.Tensor] = []
         for start in range(0, tokens_per_device, per_device_chunk):
             end = min(start + per_device_chunk, tokens_per_device)
@@ -1754,7 +1763,10 @@ def moe_sparse_experts_forward_tt(
                 # SliceDeviceOperation materializes an owned copy (not an aliasing
                 # view) for these DRAM tensors, so the recursive call may deallocate
                 # it without corrupting local_weights_full for later chunks.
-                lw_chunk = ttnn.slice(local_weights_full, [0, 0, start, 0], [1, 1, end, experts_per_device])
+                # When hoisting the combine, the per-chunk weight slice is unused
+                # (weights are applied once below), so skip it entirely.
+                if not hoist_combine:
+                    lw_chunk = ttnn.slice(local_weights_full, [0, 0, start, 0], [1, 1, end, experts_per_device])
                 sp_chunk = ttnn.slice(
                     sparsity_full,
                     [0, 0, start // block, 0],
@@ -1773,16 +1785,55 @@ def moe_sparse_experts_forward_tt(
                     skip_defensive_clones=skip_defensive_clones,
                     _precomputed_local_weights=lw_chunk,
                     _precomputed_sparsity=sp_chunk,
+                    _return_unreduced=hoist_combine,
                 )
             )
 
         # The chunked calls consume their own slice inputs; we still own the base tensors.
-        if local_weights_full is not None:
-            ttnn.deallocate(local_weights_full, force=False)
+        # sparsity_full is fully consumed by the per-chunk slices; local_weights_full is
+        # still needed below when hoisting the combine.
+        if sparsity_full is not None:
             ttnn.deallocate(sparsity_full, force=False)
+        if local_weights_full is not None and not hoist_combine:
+            ttnn.deallocate(local_weights_full, force=False)
         ttnn.deallocate(hidden_states, force=False)
         ttnn.deallocate(topk_expert_indices, force=False)
         ttnn.deallocate(topk_expert_weights, force=False)
+
+        if hoist_combine:
+            # Concat raw per-expert outputs [E,1,T_chunk,H] -> [E,1,T,H].
+            if len(out_chunks) == 1:
+                expert_output_all = out_chunks[0]
+            else:
+                expert_output_all = ttnn.concat(out_chunks, dim=2)
+                for c in out_chunks:
+                    ttnn.deallocate(c, force=False)
+
+            # Apply routing weights once: local_weights_full [1,1,T,E] -> [E,1,T,1].
+            local_weights_rm = local_weights_full
+            if local_weights_rm.layout != ttnn.ROW_MAJOR_LAYOUT:
+                local_weights_rm = ttnn.to_layout(local_weights_rm, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(local_weights_full, force=False)
+            local_weights_rm = ttnn.permute(local_weights_rm, (3, 1, 2, 0))  # [E,1,T,1]
+            local_weights_tiled = ttnn.to_layout(local_weights_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(local_weights_rm, force=False)
+
+            weighted = ttnn.mul(expert_output_all, local_weights_tiled, memory_config=memory_config)
+            ttnn.deallocate(expert_output_all, force=False)
+            ttnn.deallocate(local_weights_tiled, force=False)
+            out = ttnn.sum(weighted, dim=0, keepdim=True)  # [1,1,T,H]
+            ttnn.deallocate(weighted, force=False)
+
+            # Sum contributions across devices (experts are sharded across the mesh).
+            if num_devices > 1 and not skip_final_reduce:
+                out = _moe_all_reduce_across_mesh(
+                    out,
+                    device=device,
+                    num_links=rt.num_links,
+                    topology=rt.topology,
+                    memory_config=memory_config,
+                )
+            return out
 
         if len(out_chunks) == 1:
             return out_chunks[0]
@@ -1854,13 +1905,15 @@ def moe_sparse_experts_forward_tt(
         # Replicated-token + all-reduce path:
         # - Tokens are replicated across devices, and experts are sharded.
         # - Each device computes its local expert contributions and we sum across the mesh.
-        if _precomputed_local_weights is not None:
+        if _precomputed_sparsity is not None:
             # Routing (scatter + moe_expert_token_remap) was computed once over the
             # full token range by the chunking caller and sliced per chunk. Both
             # outputs are token-/block-wise independent, so the slice is exact and we
             # skip re-running the remap (the per-chunk hot op) here.
-            local_weights = _precomputed_local_weights
+            # local_weights may be None when the caller hoists the weight+reduce out
+            # of the chunk loop (_return_unreduced); it is then unused below.
             sparsity = _precomputed_sparsity
+            local_weights = _precomputed_local_weights
         else:
             local_weights, sparsity = _moe_scatter_and_remap_local(
                 device=device,
@@ -2092,6 +2145,15 @@ def moe_sparse_experts_forward_tt(
         ttnn.deallocate(expert_output_view, force=False)
         ttnn.deallocate(expert_output_sparse, force=False)
         expert_output = ttnn.reshape(expert_output, _target_eo_shape)
+
+    if _return_unreduced:
+        # Hoisted-combine path: return the raw per-expert output [E,1,T,H]. The
+        # chunking caller concats across chunks, then applies routing weights and
+        # reduces over experts once for all tokens. Skips the per-chunk weight
+        # multiply, expert-reduce, and cross-mesh all-reduce. For num_blocks==1
+        # (the chunked case) expert_output is a view of expert_output_sparse and
+        # shares its buffer, which stays alive via the returned tensor.
+        return expert_output
 
     if use_all_to_all:
         # Convert expert output to row-major for all_to_all_combine.
