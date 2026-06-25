@@ -55,7 +55,11 @@ ALWI void transpose_wh_dest_init_short([[maybe_unused]] uint32_t operand) {
 template <bool is_32bit = false, bool transpose_of_faces = true>
 ALWI void transpose_wh_dest(uint32_t idst) {
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
+#ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest<transpose_of_faces, is_32bit>(idst)));
+#else
+    MATH((llk_math_transpose_dest(idst)));
+#endif
 }
 
 }  // namespace ckernel

@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <bit>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <random>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
@@ -118,13 +120,10 @@ void validate_transpose_wh(
             convert_layout<uint32_t>(gold_lin, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
 
         ASSERT_EQ(result_vec.size(), gold_tiled.size());
-        pass = true;
-        for (size_t i = 0; i < result_vec.size(); ++i) {
-            if (result_vec[i] != gold_tiled[i]) {
-                pass = false;
-                argfail = static_cast<int>(i);
-                break;
-            }
+        const auto res_it = std::mismatch(result_vec.begin(), result_vec.end(), gold_tiled.begin()).first;
+        pass = (res_it == result_vec.end());
+        if (!pass) {
+            argfail = static_cast<int>(std::distance(result_vec.begin(), res_it));
         }
     } else {
         // 16-bit datum (bfloat16): two datums packed per uint32, tolerant float compare.
@@ -325,20 +324,19 @@ void run_single_core_transpose(
     constexpr std::uint32_t kRandomSeed = 0x1234;
     vector<uint32_t> src_vec;
     const std::uint32_t n_u32 = dram_buffer_size / sizeof(uint32_t);
+    // Fill src_vec with seeded random words: `dist` draws values and `convert` reinterprets
+    // each draw into its uint32 word representation for the given data format.
+    auto fill_random = [&](auto dist, auto convert) {
+        src_vec.resize(n_u32);
+        std::mt19937 rng(kRandomSeed);
+        std::generate(src_vec.begin(), src_vec.end(), [&]() { return convert(dist(rng)); });
+    };
     if (test_config.data_format == tt::DataFormat::Float32) {
-        src_vec.resize(n_u32);
-        std::mt19937 rng(kRandomSeed);
-        std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
-        for (auto& w : src_vec) {
-            w = std::bit_cast<uint32_t>(dist(rng));
-        }
+        fill_random(
+            std::uniform_real_distribution<float>(-100.0f, 100.0f), [](float v) { return std::bit_cast<uint32_t>(v); });
     } else if (test_config.data_format == tt::DataFormat::Int32) {
-        src_vec.resize(n_u32);
-        std::mt19937 rng(kRandomSeed);
-        std::uniform_int_distribution<int32_t> dist(-10000, 10000);
-        for (auto& w : src_vec) {
-            w = static_cast<uint32_t>(dist(rng));
-        }
+        fill_random(
+            std::uniform_int_distribution<int32_t>(-10000, 10000), [](int32_t v) { return static_cast<uint32_t>(v); });
     } else {
         src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, kRandomSeed);
     }
