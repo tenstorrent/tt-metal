@@ -7,6 +7,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -63,15 +64,9 @@ void kernel_main() {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
 
-                bool is_even_chunk = true;
                 while (tiles_read < total_tiles_to_read) {
-                    uint32_t tiles_to_read = 0;
-                    uint32_t tiles_remaining = total_tiles_to_read - tiles_read;
-                    if (is_even_chunk) {
-                        tiles_to_read = std::min(tiles_remaining / 2, tile_granularity);
-                    } else {
-                        tiles_to_read = std::min(tiles_remaining, tile_granularity);
-                    }
+                    const auto [is_even_chunk, tiles_to_read] =
+                        reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
 
                     if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
                         // Skip this chunk
@@ -121,8 +116,6 @@ void kernel_main() {
                         tiles_read += tiles_to_read;
 
                     }  // if skip or process
-
-                    is_even_chunk = !is_even_chunk;
                 }  // while total_tiles_to_read
             }  // for slice_C
         }  // for num_iters
