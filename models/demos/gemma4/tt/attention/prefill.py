@@ -41,6 +41,7 @@ def _prefill_forward_single(
     keep_kv=False,
     valid_seq_len=None,
     write_kv_cache=True,
+    attn_mask=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations."""
     tp = mesh_config.tp if mesh_config else 1
@@ -114,7 +115,19 @@ def _prefill_forward_single(
     seq_len = tt_q.shape[-2]
     long_seq = seq_len > PREFILL_SDPA_MAX_SEQ
     sliding_window = config.sliding_window if config.is_sliding else None
-    if long_seq and config.is_sliding and sliding_window is not None:
+    if attn_mask is not None:
+        if long_seq:
+            raise ValueError("masked non-causal prefill is only wired for seq_len <= 32768")
+        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            attn_mask=attn_mask,
+            is_causal=False,
+            scale=1.0,
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+        )
+    elif long_seq and config.is_sliding and sliding_window is not None:
         tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
     elif long_seq and not config.is_sliding and page_table is not None and kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
@@ -161,6 +174,7 @@ def prefill_forward(
     batch_size=1,
     valid_seq_len=None,
     write_kv_cache=True,
+    attn_mask=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -185,6 +199,7 @@ def prefill_forward(
             keep_kv=keep_kv,
             valid_seq_len=valid_seq_len,
             write_kv_cache=write_kv_cache,
+            attn_mask=attn_mask,
         )
 
     tp = mesh_config.tp if mesh_config else 1
@@ -260,14 +275,24 @@ def prefill_forward(
                 ttnn.fill_cache(v_cache, tt_v[slot_idx : slot_idx + 1], batch_idx=slot_idx)
 
     sliding_window = config.sliding_window if config.is_sliding else None
-    tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
-        tt_q,
-        tt_k,
-        tt_v,
-        is_causal=True,
-        scale=1.0,
-        sliding_window_size=sliding_window,
-    )
+    if attn_mask is not None:
+        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            attn_mask=attn_mask,
+            is_causal=False,
+            scale=1.0,
+        )
+    else:
+        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=True,
+            scale=1.0,
+            sliding_window_size=sliding_window,
+        )
     tt_q.deallocate(True)
     kept_kv = None
     if shared_kv is None and not keep_kv:

@@ -498,6 +498,7 @@ class Gemma4Model:
         return_hidden=False,
         sequential_kv_write=False,
         kv_phase=None,
+        attn_mask=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -638,6 +639,7 @@ class Gemma4Model:
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
                 kv_phase=kv_phase,
+                attn_mask=attn_mask,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1117,6 +1119,7 @@ class Gemma4Model:
         embeds_torch=None,
         page_tables_per_layer=None,
         kv_phase=None,
+        attn_mask=None,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1161,6 +1164,7 @@ class Gemma4Model:
             batch_size=batch_size,
             user_id=user_id,
             kv_phase=kv_phase,
+            attn_mask=attn_mask,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
