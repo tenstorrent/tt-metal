@@ -1,232 +1,250 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device-perf measurement for the TP-axis all-gathers introduced by the DeepSeek sparse-MLA
+By-hand trace-mode profiling of the TP-axis all-gathers added by the DeepSeek sparse-MLA
 head->sequence reshard (GLM-5.1, 64 q-heads, tp=4). See models/demos/deepseek_v3_d_p/tt/mla.
 
-The reshard gathers run over the TP axis (N=4 devices), 2 links, bf16, DRAM. This is the same
-4-device gather whether the box is an 8-chip LoudBox (opened (4,2)) or a 32-chip 8x4 (opened
-(4,8)) — only the TP axis (size 4) participates; the SP axis just replicates the op.
+Mirrors the CCL-by-hand harness on branch ipotkonjak/ccl_ring_debug
+(models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_mla_ccl_trace_profile.py): run the op
+directly on the full mesh over the TP cluster axis (NO submesh) with the model's sub-device /
+semaphore scaffolding, capture under metal trace, bracket with tracy signposts, and read the
+op's PM IDEAL [ns] / DEVICE KERNEL duration out of the ops_perf CSV.
 
-Two topology variants are parametrized (id "linear" / "ring"):
-  - linear : FABRIC_1D + Topology.Linear  — what MLA runs today (mla.py); works on any box.
-  - ring   : FABRIC_1D_RING + Topology.Ring — needs the 4-axis physically wired as a ring/torus
-             (target 8x4 box). The 8-chip LoudBox is NOT ring-wired on that axis (FABRIC_1D_RING
-             errors "no forwarding direction D0->D3"), so run "ring" only on target HW.
+The reshard runs three TP all-gathers (tp_axis=1; the gather is over whichever tensor dim the
+reshard transposes). feat/seq are the PER-DEVICE shape on the 8x4 Galaxy with a 5120-token chunk
+(sp=8 -> seq_local = 5120/8 = 640). Running on a 2x4 (or 1x4) mesh reproduces the exact per-device
+all-gather shape (the gather is on the TP axis = 4 on all of these; SP just replicates the op).
 
-ISL = 5120 with sp=8 -> 640 rows/device (under reshard the attention op further splits seq
-across tp so the per-op seq is 160; the *gather* input shapes below already encode that).
+    | id          | dim | per-device in -> out (gathered)        | mla.py            |
+    |-------------|-----|----------------------------------------|-------------------|
+    | q_heads     |  1  | [1,16,640,576] -> [1,64,640,576]       | _sparse_mla       |
+    | out_seq     |  2  | [1,64,160,512] -> [1,64,640,512]       | _sparse_mla (inv) |
+    | qdev_heads  |  1  | [1, 8,640,128] -> [1,32,640,128]       | TtIndexer.forward |
 
-Each case = the FULL (gathered) output shape + gather dim; per-device input = output/N along dim.
-  q_heads     attn  _sparse_mla   q-heads gather (dim1):  [1,16,640,576] -> [1,64,640,576]
-  out_seq     attn  _sparse_mla   out-seq gather (dim2):  [1,64,160,512] -> [1,64,640,512]
-  qdev_heads  idx   forward       q_dev heads gather(dim1):[1, 8,640,128] -> [1,32,640,128]
-  wts         idx   _tp_rs_ag     weights all-gather(dim3):[1, 1,640, 8] -> [1, 1,640, 32]
+(The indexer weights all-gather is sub-tile (per-device width 8) -> lowers to AllBroadcast, not
+AllGatherAsync, and is fill-bound/negligible, so it is not profiled here.)
 
-The runner test (test_reshard_ag_run) executes one gather under trace with signposts so the
-profiler can time it. The perf test (test_reshard_ag_perf) re-invokes the runner under the
-device profiler, reads the measured DEVICE KERNEL duration and the op's own PM IDEAL [ns]
-column, and logs the utilization (PM IDEAL / measured).
+Run ONE (op, config, mesh, topology) at a time under tracy so each gets its own CSV, e.g.:
+    pytest .../test_reshard_ag_perf.py -k "q_heads and trace_bar and 8x4 and ring"
+Then read PM IDEAL [ns] vs DEVICE KERNEL DURATION [ns] for OP CODE AllGatherAsyncDeviceOperation
+from generated/profiler/.../ops_perf_results_*.csv.
 """
 
-import math
-
 import pytest
-import ttnn
+import torch
 from loguru import logger
 
-# NOTE: run_all_gather_impl / validate_test live in TEST modules whose module-level @skip_for_*_dev
-# decorators call ttnn.get_num_devices() at IMPORT time (opening the cluster + holding CHIP_IN_USE).
-# They are therefore imported lazily inside the runner body so that merely collecting/importing this
-# file in the outer perf process never opens the device. See the runner for the full rationale.
+import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-# case_id -> (full gathered output shape, gather dim)
-RESHARD_AG_CASES = {
-    "q_heads": ([1, 64, 640, 576], 1),
-    "out_seq": ([1, 64, 640, 512], 2),
-    "qdev_heads": ([1, 32, 640, 128], 1),
-    "wts": ([1, 1, 640, 32], 3),
-}
-CASE_IDS = list(RESHARD_AG_CASES.keys())
+try:
+    from tracy import signpost
+except ImportError:  # tracy not always importable outside the profiler
 
-N_TP = 4  # devices along the gather (TP) axis
-NUM_LINKS = 2
+    def signpost(*_a, **_k):
+        pass
 
-# Mesh shapes to open via the generic `mesh_device` fixture (opens EXACTLY this shape + handles fabric).
-# The TP gather is over whichever axis is size N_TP: (8,4) -> axis1 (target 8x4 GLM layout, sp=8/tp=4);
-# (4,2) -> axis0 (the 8-chip LoudBox). The fixture auto-skips a shape that exceeds available devices.
-MESH_SHAPES = [(8, 4), (4, 2)]
-MESH_IDS = ["8x4", "4x2"]
 
-# (device_params, ttnn.Topology) coupled per topology variant; ids drive `-k` selection + analytic branch.
-TRACE_REGION = 90112
-TOPOLOGIES = [
-    ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION}, ttnn.Topology.Linear),
-    ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": TRACE_REGION}, ttnn.Topology.Ring),
+TP_FACTOR = 4  # production TP; tp_axis size on 1x4 / 2x4 / 8x4
+SEQ_LOCAL = 640  # per-device seq: chunk_size_global(5120) / sp(8) on the 8x4 Galaxy
+
+# (id, gather_dim, FULL gathered shape). Per-device input = full shape with gather_dim // tp.
+# gather_dim=1 -> head gather (heads/tp per device); gather_dim=2 -> sequence gather (seq/tp per device).
+RESHARD_AG_OPS = [
+    ("q_heads", 1, [1, 64, SEQ_LOCAL, 576]),  # attn absorbed-MQA q heads
+    ("out_seq", 2, [1, 64, SEQ_LOCAL, 512]),  # attn output (inverse seq gather)
+    ("qdev_heads", 1, [1, 32, SEQ_LOCAL, 128]),  # indexer q_dev heads
 ]
-TOPOLOGY_IDS = ["linear", "ring"]
 
-# Blackhole fabric constants, mirrored from
-# ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp (lookup_fabric_link_bw / lookup_fabric_hop_latency_ns).
-BH_LINK_BW_GBPS = 50.0  # 400 Gbps per link == 50 B/ns
-BH_HOP_LAT_NS_1D = 515.0
-BH_PEAK_DRAM_GBPS = 512.0
+# (device_params, ttnn.Topology); device_params is consumed by the mesh_device fixture (indirect).
+# fabric_router_config + worker_l1_size mirror the working MLA tests (test_ds_mla / chunked) so the
+# *_erisc fabric kernels build identically to the proven model path.
+DEVICE_PARAMS_TOPOLOGY = [
+    (
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            "trace_region_size": 90000000,
+        },
+        ttnn.Topology.Linear,
+    ),
+    (
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            "trace_region_size": 90000000,
+        },
+        ttnn.Topology.Ring,
+    ),
+]
+DEVICE_PARAMS_TOPOLOGY_IDS = ["line", "ring"]
 
-
-def _tile_pad_bytes(shape, elem_size=2):
-    """Physical (tile-padded) byte size the perf model sees: last two dims rounded up to 32."""
-    *lead, h, w = shape
-    h = math.ceil(h / 32) * 32
-    w = math.ceil(w / 32) * 32
-    vol = w * h
-    for d in lead:
-        vol *= d
-    return vol * elem_size
-
-
-def analytic_pm_ideal_ns(out_shape, dim, is_ring, n=N_TP, num_links=NUM_LINKS):
-    """First-principles all-gather roofline (max of the competing floors), matching
-    AllGatherAsyncDeviceOperation::create_op_performance_model for Blackhole."""
-    in_shape = list(out_shape)
-    in_shape[dim] //= n
-    s = _tile_pad_bytes(in_shape)  # bytes each device contributes
-    if is_ring:
-        bottleneck = math.ceil((n - 1) * s / 2)  # Ring bisection cuts 2 links
-        hops = math.ceil((n - 1) / 2)
-    else:
-        bottleneck = (n - 1) * s  # Line: edge link carries all (N-1) slices
-        hops = n - 1
-    fabric_bw_ns = bottleneck / (BH_LINK_BW_GBPS * num_links)
-    fabric_fill_ns = BH_HOP_LAT_NS_1D * hops
-    dram_ns = _tile_pad_bytes(out_shape) / BH_PEAK_DRAM_GBPS  # coarse output-bandwidth floor
-    return max(fabric_bw_ns, fabric_fill_ns, dram_ns)
+# (cfg_id, trace_mode, use_persistent, use_barrier) — same isolation configs as the ccl_ring_debug harness.
+CONFIGS = [
+    ("untraced_bar", False, False, True),
+    ("trace_bar", True, False, True),
+    ("trace_persist", True, True, False),
+]
 
 
-# --------------------------------------------------------------------------------------------------
-# Runner: executes ONE gather under trace + signposts so the profiler can time it.
-# --------------------------------------------------------------------------------------------------
-# Uses the generic `mesh_device` fixture (NOT bh_2d_mesh_device, which hardcodes the mesh shape and
-# would force a 32-chip box to (4,8)); the shape is parametrized explicitly so the target 8x4 layout
-# is exact. Device gating is IN-BODY, NOT via @skip_for_*_dev decorators: those call get_num_devices()
-# at module-import time, opening the cluster + holding CHIP_IN_USE in whatever process imports this
-# file — including the outer perf test that only spawns a subprocess. In-body checks run only here
-# (the subprocess), the legitimate device owner.
-@pytest.mark.parametrize("case_id", CASE_IDS)
-@pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("device_params, topology", TOPOLOGIES, indirect=["device_params"], ids=TOPOLOGY_IDS)
-@pytest.mark.parametrize("mesh_device", MESH_SHAPES, indirect=True, ids=MESH_IDS)
-@pytest.mark.timeout(900)  # cold JIT kernel compile can take ~5 min; override the 300s default
-def test_reshard_ag_run(mesh_device, case_id, num_iters, topology):
-    from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-    from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
+def _make_sems(mesh_device, cores, n):
+    return [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(n)]
 
-    if ttnn.get_arch_name() == "wormhole_b0":
-        pytest.skip("Reshard AG perf targets Blackhole")
 
-    ag_output_shape, dim = RESHARD_AG_CASES[case_id]
+def _run_reshard_ag(
+    mesh_device, *, gather_dim, full_shape, topology, trace_mode, use_persistent, use_barrier, warmup_iters, num_iters
+):
+    tp_axis = 1
+    sp, tp = list(mesh_device.shape)
+    num_links = 2 if is_blackhole() else 1
+    assert full_shape[gather_dim] % tp == 0, f"gather dim {full_shape[gather_dim]} not divisible by tp={tp}"
 
-    # The TP gather spans N_TP devices: pick whichever mesh axis has that size.
-    # (8,4) -> axis1 (sp=8/tp=4 GLM layout); (4,2) -> axis0 (LoudBox).
-    shape = list(mesh_device.shape)
-    cluster_axis = 0 if shape[0] == N_TP else 1
-    if shape[cluster_axis] != N_TP:
-        pytest.skip(f"No mesh axis of size {N_TP} in shape {tuple(shape)}")
-    submesh_shape = (N_TP, 1) if cluster_axis == 0 else (1, N_TP)
+    grid = mesh_device.compute_with_storage_grid_size()
+    ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    worker_sub_device = ttnn.SubDevice([ccl_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group([worker_sub_device_id])
 
-    validate_test(N_TP, topology, mesh_device.shape, cluster_axis)
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
+    # All semaphores allocated ONCE (trace needs stable addresses). all_gather uses 2 ccl sems/iter.
+    ccl_sems = _make_sems(mesh_device, ccl_crs, num_iters * 2)
+    barrier_sems = _make_sems(mesh_device, ccl_crs, 2) if use_barrier else None
 
-    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-    run_all_gather_impl(
-        submesh_device,
-        N_TP,
-        ag_output_shape,
-        dim,
-        NUM_LINKS,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        dram,
-        dram,
-        all_gather_topology=topology,
-        enable_trace=True,
-        num_iters=num_iters,
-        cluster_axis=cluster_axis,
-        chunks_per_sync=20,
-        num_workers_per_link=2,
-        num_buffers_per_channel=2,
-        allowed_pcc=0.9999,
+    # Build the FULL gathered tensor, shard gather_dim across the TP axis (each chip owns its 1/tp
+    # slice), replicate across SP. all_gather over TP then reassembles the full tensor on every chip.
+    torch_full = torch.randn(*full_shape, dtype=torch.bfloat16)
+    in_dims = [None, None]
+    in_dims[tp_axis] = gather_dim
+    tt_in = ttnn.from_torch(
+        torch_full,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=in_dims),
     )
-    ttnn.ReadDeviceProfiler(submesh_device)
 
+    persist_out = None
+    if use_persistent:
+        persist_out = ttnn.from_torch(
+            torch.zeros(*full_shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=[None, None]),
+        )
 
-# --------------------------------------------------------------------------------------------------
-# Perf: re-invoke the runner under the profiler, read measured DEVICE KERNEL + PM IDEAL, log util.
-# --------------------------------------------------------------------------------------------------
-# NOTE: this outer test MUST NOT touch the device — no ttnn.get_num_devices(), no skip_for_*_dev
-# decorators (they call get_num_devices at collection time, which opens the UMD cluster and holds
-# the CHIP_IN_USE lock for the process lifetime). Its only job is to spawn the profiler subprocess,
-# which is the sole legitimate device owner (test_reshard_ag_run). A held lock here deadlocks that
-# child. The 8-device / arch gating lives entirely in the runner.
-@pytest.mark.parametrize("case_id", CASE_IDS)
-@pytest.mark.parametrize("topo_id, is_ring", [("linear", False), ("ring", True)], ids=["linear", "ring"])
-@pytest.mark.parametrize("mesh_id", MESH_IDS)
-@pytest.mark.parametrize("warmup_iters", [5])
-@pytest.mark.timeout(1200)  # the profiler subprocess re-opens the device + JIT-compiles kernels (~5 min cold)
-@pytest.mark.models_device_performance_bare_metal
-def test_reshard_ag_perf(case_id, topo_id, is_ring, mesh_id, warmup_iters):
-    from models.perf.device_perf_utils import run_device_perf_detailed
-    from tracy.process_model_log import post_process_ops_log
+    def one_call(i):
+        bsem = barrier_sems[i % 2] if use_barrier else None
+        sems = ccl_sems[2 * i : 2 * i + 2]
+        args = [tt_in] + ([persist_out] if use_persistent else [])
+        return ttnn.experimental.all_gather_async(
+            *args,
+            dim=gather_dim,
+            multi_device_global_semaphore=sems,
+            num_links=num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=topology,
+            cluster_axis=tp_axis,
+            barrier_semaphore=bsem,
+            subdevice_id=worker_sub_device_id,
+        )
 
-    if case_id == "wts":
-        # Per-device shard is sub-tile (dim3 = 32/4 = 8 < 32), so this gather does NOT lower to a
-        # single AllGatherAsync — it becomes AllBroadcast + Tilize/Untilize/Permute/Concat, with no
-        # AllGatherAsyncDeviceOperation row to read PM IDEAL from. It is fill-bound (~1.5 us ideal)
-        # and negligible vs the head/seq gathers, so it is not measured as an all-gather here.
-        pytest.skip("wts gather is sub-tile -> lowers to AllBroadcast, not AllGatherAsync; negligible")
-
-    ag_output_shape, dim = RESHARD_AG_CASES[case_id]
-    subdir = "reshard_ag_perf"
-    op_name = "AllGatherAsyncDeviceOperation"
-    cols = ["DEVICE KERNEL"]
-    # Select the matching runner variant: `-k '<case_id> and <topo_id> and <mesh_id>'` — these are the
-    # case_id / topology / mesh parametrize ids on test_reshard_ag_run.
-    command = f"pytest {__file__}::test_reshard_ag_run -k '{case_id} and {topo_id} and {mesh_id}'"
-
-    # The runner self-skips combos invalid on this box (mesh too big, or ring on a non-ring-wired axis →
-    # the gather errors). Then no AllGatherAsync is timed; surface that as a skip, not a confusing error.
     try:
-        results = run_device_perf_detailed(
-            command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters
+        if trace_mode:
+            tt_out = one_call(0)  # compile/allocate once outside capture
+            ttnn.synchronize_device(mesh_device)
+
+            if warmup_iters > 0:
+                trace_warm = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                for i in range(warmup_iters):
+                    tt_out = one_call(i % num_iters)
+                ttnn.end_trace_capture(mesh_device, trace_warm, cq_id=0)
+
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            for i in range(num_iters):
+                tt_out = one_call(i)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+
+            if warmup_iters > 0:
+                ttnn.execute_trace(mesh_device, trace_warm, blocking=False)
+            signpost("start")
+            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            signpost("stop")
+        else:
+            signpost("start")
+            for i in range(num_iters):
+                tt_out = one_call(i)
+            ttnn.synchronize_device(mesh_device)
+            signpost("stop")
+
+        # Flush the device-side profiler buffers to host, else tracy reports "No device logs found"
+        # and the ops_perf CSV has no DEVICE KERNEL DURATION / PM IDEAL rows.
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+        # --- correctness: every chip holds the full gather; the tp concat stacks identical copies
+        #     along gather_dim, so narrow back to the first copy and compare to the full tensor. ---
+        out_torch = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(sp, tp), dims=(0, gather_dim)),
+        )[0:1]
+        out_torch = out_torch.narrow(gather_dim, 0, full_shape[gather_dim])
+        passed, msg = comp_pcc(out_torch, torch_full, 0.999)
+        logger.info(
+            f"reshard AG dim={gather_dim} full={full_shape} trace={trace_mode} persist={use_persistent} "
+            f"bar={use_barrier} mesh={sp}x{tp} {topology} PCC: {msg}"
         )
-        pm_ideal_arr = post_process_ops_log(
-            subdir, ["PM IDEAL [ns]"], sum_vals=False, op_name=op_name, has_signposts=True
-        )["PM IDEAL [ns]"]
-    except (ValueError, IndexError, KeyError) as e:
-        pytest.skip(
-            f"No AllGatherAsync timed for {case_id}/{topo_id}/{mesh_id} on this box (runner skipped/invalid combo): {e}"
-        )
+        assert passed, f"reshard AG dim={gather_dim} full={full_shape} FAILED: {msg}"
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
 
-    measured_avg_ns = results[cols[0]]["AVG"]
-    measured_min_ns = results[cols[0]]["MIN"]
 
-    # The op's own roofline straight from the profiler CSV column the user referenced.
-    pm_ideal_csv_ns = float(sorted(pm_ideal_arr)[len(pm_ideal_arr) // 2])  # median
-    pm_ideal_match_ns = analytic_pm_ideal_ns(ag_output_shape, dim, is_ring=is_ring)  # this topology
-    pm_ideal_other_ns = analytic_pm_ideal_ns(ag_output_shape, dim, is_ring=not is_ring)  # the other, ref
-
-    util_csv = 100.0 * pm_ideal_csv_ns / measured_avg_ns
-    util_match = 100.0 * pm_ideal_match_ns / measured_avg_ns
-    topo_name = "Ring" if is_ring else "Linear"
-    other_name = "Linear" if is_ring else "Ring"
-
-    logger.info(
-        f"\n[reshard AG: {case_id} / {topo_name}] out={ag_output_shape} dim={dim} N={N_TP} links={NUM_LINKS}\n"
-        f"  measured DEVICE KERNEL    : avg {measured_avg_ns/1000:.2f} us | min {measured_min_ns/1000:.2f} us\n"
-        f"  PM IDEAL (csv column)     : {pm_ideal_csv_ns/1000:.2f} us  -> util {util_csv:.1f}%\n"
-        f"  PM IDEAL (analytic {topo_name:6}): {pm_ideal_match_ns/1000:.2f} us  -> util {util_match:.1f}%\n"
-        f"  PM IDEAL (analytic {other_name:6}): {pm_ideal_other_ns/1000:.2f} us  (reference)"
+@pytest.mark.parametrize("ag_id, gather_dim, full_shape", RESHARD_AG_OPS, ids=[c[0] for c in RESHARD_AG_OPS])
+@pytest.mark.parametrize(
+    "device_params, topology", DEVICE_PARAMS_TOPOLOGY, indirect=["device_params"], ids=DEVICE_PARAMS_TOPOLOGY_IDS
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4), (1, 4)], ids=["8x4", "2x4", "1x4"], indirect=True)
+@pytest.mark.parametrize("warmup_iters, num_iters", [(10, 20)], ids=["w10n20"])
+@pytest.mark.parametrize("cfg_id, trace_mode, use_persistent, use_barrier", CONFIGS, ids=[c[0] for c in CONFIGS])
+@pytest.mark.timeout(0)
+def test_reshard_ag(
+    mesh_device,
+    device_params,
+    topology,
+    ag_id,
+    gather_dim,
+    full_shape,
+    warmup_iters,
+    num_iters,
+    cfg_id,
+    trace_mode,
+    use_persistent,
+    use_barrier,
+):
+    """One reshard TP all-gather, run by hand on the full mesh over the TP cluster axis. Run one
+    (op, config, mesh, topology) at a time under tracy so each produces its own ops_perf CSV; read
+    PM IDEAL [ns] vs DEVICE KERNEL DURATION [ns] for AllGatherAsyncDeviceOperation."""
+    if not is_blackhole():
+        pytest.skip("Reshard AG perf targets Blackhole")
+    _run_reshard_ag(
+        mesh_device,
+        gather_dim=gather_dim,
+        full_shape=full_shape,
+        topology=topology,
+        trace_mode=trace_mode,
+        use_persistent=use_persistent,
+        use_barrier=use_barrier,
+        warmup_iters=warmup_iters,
+        num_iters=num_iters,
     )
-
-    assert measured_avg_ns > 0, "No AllGatherAsync op timed — check signposts / op_name"
