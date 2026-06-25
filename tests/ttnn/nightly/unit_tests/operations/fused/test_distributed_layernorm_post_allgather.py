@@ -219,8 +219,8 @@ def test_layernorm_part_2_fp32(inp_shape, n_devices, is_rmsnorm, gamma_beta_dtyp
 
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16],
-    ids=["BFLOAT16"],
+    [ttnn.bfloat16, ttnn.float32],
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "inp_shape",
@@ -241,6 +241,7 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     dummy_tensors = []
 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    fp32_enabled = dtype == ttnn.float32  # FP32 requires fp32_dest_acc_en
 
     for i in range(2):
         if i > 0:
@@ -253,7 +254,7 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
                     tt_memory_config=dram_memcfg,
                 )
             )
-        run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, dtype, device)
+        run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, dtype, device, fp32_enabled=fp32_enabled)
 
     assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
         device.num_program_cache_entries()
@@ -386,7 +387,7 @@ def test_layer_norm_post_all_gather_bias_only_matches_torch(device):
     assert passing, output_str
 
 
-def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(device):
+def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(device, expect_error):
     """Invalid beta width must fail in validate even when weight is absent.
 
     ROW_MAJOR bias uses the physical_volume vs input width check (same as gamma). A TILE
@@ -432,7 +433,7 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
         tt_memory_config=dram_memcfg,
     )
 
-    with pytest.raises(RuntimeError, match="Beta tensor dimensions must align"):
+    with expect_error(RuntimeError, "Beta tensor dimensions must align"):
         ttnn.layer_norm_post_all_gather(
             tt_inp,
             tt_stats,

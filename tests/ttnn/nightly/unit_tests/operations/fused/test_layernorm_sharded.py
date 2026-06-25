@@ -35,8 +35,8 @@ def rms_norm(x, dim, gamma, beta, eps):
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
@@ -303,8 +303,8 @@ def test_layernorm_sharded_mix_precision_rm(
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
