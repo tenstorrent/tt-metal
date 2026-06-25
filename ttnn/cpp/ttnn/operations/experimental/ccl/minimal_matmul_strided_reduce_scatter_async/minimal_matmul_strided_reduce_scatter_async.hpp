@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <variant>
+#include <vector>
+
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
@@ -12,8 +15,13 @@
 
 namespace ttnn::experimental {
 
+// input_tensor: a single activation, or a 2-element list [prefix, suffix] virtually concatenated
+// (concat-free) on the channel (K, last) axis ONLY — the two must be identical on every other axis.
+// Any per-segment channel count is allowed; the weight must be per-segment tile-padded
+// (see prepare_weight_for_concatenated_input in models/tt_dit/layers/linear.py) so that
+// prefix_padded_K + suffix_padded_K == weight_padded_K.
 std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
-    const ttnn::Tensor& input_tensor,
+    const std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>>& input_tensor,
     const ttnn::Tensor& weight_tensor,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,

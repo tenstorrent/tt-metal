@@ -77,7 +77,39 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t K_w = w_logical[-2];
     const uint32_t N = w_logical[-1];
 
-    TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
+    if (tensor_args.optional_input_tensor.has_value()) {
+        // Virtual concat: in0's K = input_tensor (prefix) + optional_input_tensor (suffix); the split
+        // point is input_tensor's K width. The two sources must be concatenable on K (differ only on
+        // the last axis) and their K's must sum to the weight's K (weight stacked [W_prefix; W_suffix]).
+        const auto& opt_logical = tensor_args.optional_input_tensor.value().logical_shape();
+        TT_FATAL(
+            opt_logical.rank() == a_logical.rank(),
+            "minimal_matmul virtual concat: second-input rank ({}) must match input rank ({})",
+            opt_logical.rank(),
+            a_logical.rank());
+        for (int i = 0; i < static_cast<int>(a_logical.rank()) - 1; ++i) {
+            TT_FATAL(
+                opt_logical[i] == a_logical[i],
+                "minimal_matmul virtual concat: inputs must differ only on the K (last) axis; dim {} "
+                "differs (input={}, second={})",
+                i,
+                a_logical[i],
+                opt_logical[i]);
+        }
+        // Seam lands at prefix's padded-K tile boundary: weight must be per-segment tile-padded.
+        const uint32_t prefix_padded_K = act_tensor.padded_shape()[-1];
+        const uint32_t suffix_padded_K = tensor_args.optional_input_tensor.value().padded_shape()[-1];
+        const uint32_t weight_padded_K = weight_tensor.padded_shape()[-2];
+        TT_FATAL(
+            prefix_padded_K + suffix_padded_K == weight_padded_K,
+            "minimal_matmul virtual concat: prefix_padded_K({}) + suffix_padded_K({}) must equal "
+            "weight_padded_K({}) — use prepare_weight_for_concatenated_input to build the weight.",
+            prefix_padded_K,
+            suffix_padded_K,
+            weight_padded_K);
+    } else {
+        TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
+    }
     TT_FATAL(M > 0 && K > 0 && N > 0, "minimal_matmul dimensions must be positive");
 
     // Validate chunks and dim parameters
@@ -295,7 +327,8 @@ std::vector<Tensor> minimal_matmul(
     std::optional<float> fused_ternary_scalar,
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    const std::optional<Tensor>& optional_input_tensor) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -322,7 +355,7 @@ std::vector<Tensor> minimal_matmul(
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,
             .bias_tensor = bias_tensor,
-            .optional_input_tensor = std::nullopt,
+            .optional_input_tensor = optional_input_tensor,
             .fused_ternary_input_a = fused_ternary_input_a,
             .fused_ternary_input_b = fused_ternary_input_b});
 }
