@@ -26,7 +26,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.tt_transformers.tt.generator import Generator
 
 # Multi-device (TP) is selected via MESH_DEVICE. The 27B (default) runs on a P150x4
@@ -303,7 +303,7 @@ def test_demo_text(
     max_seq_len = num_blocks * BLOCK_SIZE
 
     t0 = time.time()
-    model = Qwen35Model.from_pretrained(
+    model = Qwen36Model.from_pretrained(
         device,
         max_batch_size=1,
         max_seq_len=max_seq_len,
@@ -451,7 +451,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     ttnn_decode_forward / process_output_decode). Returns (generated_tokens, perf_dict).
 
     Mirrors the validated TP flow in tests/test_model_tp_contract.py
-    (test_model_tp_long_prefill_traced) and tt/qwen35_vllm.py. prefill_tp / decode_tp /
+    (test_model_tp_long_prefill_traced) and tt/qwen36_vllm.py. prefill_tp / decode_tp /
     generate_tp are left as the bespoke oracle those tests compare against.
     """
     vocab = model.args.vocab_size

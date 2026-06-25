@@ -27,7 +27,7 @@ from pathlib import Path
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
-class Qwen35ModelArgs(ModelArgs):
+class Qwen36ModelArgs(ModelArgs):
     """Model configuration for Qwen3.5-9B on Blackhole P150."""
 
     def __init__(
@@ -256,25 +256,25 @@ class Qwen35ModelArgs(ModelArgs):
 
         HF_MODEL (self.CKPT_DIR) is the single source — a hub name or local path.
         AutoModelForCausalLM resolves to the TEXT-ONLY Qwen3_5ForCausalLM (no vision
-        tower is built), whose state_dict uses the `model.` prefix; remap_qwen35_state_dict
+        tower is built), whose state_dict uses the `model.` prefix; remap_qwen36_state_dict
         normalizes that to the internal key scheme. This OVERRIDES the base meta-key
         (wq/wk/wv) loader — the 9B uses its own scheme.
         """
         from models.demos.blackhole.qwen36.tt.weight_mapping import (
             is_fp8_checkpoint,
-            load_qwen35_state_dict_fp8,
-            remap_qwen35_state_dict,
+            load_qwen36_state_dict_fp8,
+            remap_qwen36_state_dict,
         )
 
         # Block-wise FP8 checkpoints (e.g. Qwen3.5-27B-FP8) cannot go through
         # AutoModelForCausalLM here; dequant + remap to the TP key scheme that
         # the multi-device weight loaders consume.
         if is_fp8_checkpoint(self.CKPT_DIR):
-            return load_qwen35_state_dict_fp8(self.CKPT_DIR)
+            return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
         from transformers import AutoModelForCausalLM
 
         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto", trust_remote_code=True)
-        state_dict = remap_qwen35_state_dict(model.state_dict())
+        state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
         return state_dict

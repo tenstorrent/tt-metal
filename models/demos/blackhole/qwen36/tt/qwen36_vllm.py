@@ -45,7 +45,7 @@ _PREFILL_WARMUP_BUCKET = 4096
 _BLOCK_SIZE = 64
 
 
-class Qwen35ForCausalLM(Generator):
+class Qwen36ForCausalLM(Generator):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
     model_capabilities = {"supports_prefix_caching": False, "supports_async_decode": False}

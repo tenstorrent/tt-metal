@@ -12,7 +12,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import compute_pcc, get_pcc_threshold
-from models.demos.blackhole.qwen36.tt.model_config import Qwen35ModelArgs
+from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
 from .conftest import DEVICE_PARAMS
 
@@ -22,7 +22,7 @@ pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVI
 def test_embedding_pcc(device, request):
     from models.tt_transformers.tt.embedding import Embedding
 
-    args = Qwen35ModelArgs(mesh_device=device, max_batch_size=1, max_seq_len=2048)
+    args = Qwen36ModelArgs(mesh_device=device, max_batch_size=1, max_seq_len=2048)
     args.dummy_weights = True  # random table below; lets Embedding skip the weight cache path
     vocab, dim = args.vocab_size, args.dim
     table = torch.randn(vocab, dim, dtype=torch.bfloat16)

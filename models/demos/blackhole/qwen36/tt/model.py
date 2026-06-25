@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Full Qwen3.5-9B text model for Blackhole P150.
 
-Assembly: tok_embeddings -> 32 x Qwen35DecoderLayer -> RMSNorm -> LM Head
+Assembly: tok_embeddings -> 32 x Qwen36DecoderLayer -> RMSNorm -> LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import math
@@ -13,18 +13,18 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
-from models.demos.blackhole.qwen36.tt.layer import Qwen35DecoderLayer
-from models.demos.blackhole.qwen36.tt.model_config import Qwen35ModelArgs
-from models.demos.blackhole.qwen36.tt.rope import Qwen35RoPESetup
+from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
+from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
-class Qwen35Model:
+class Qwen36Model:
     """Qwen3.5-9B text-only language model on Blackhole P150.
 
     Usage:
         # HF_MODEL env var (hub name or local path) is the single source of truth.
-        model = Qwen35Model.from_pretrained(device)
+        model = Qwen36Model.from_pretrained(device)
         logits = model.prefill(token_ids)
         logits = model.decode(token_id, position)
     """
@@ -60,13 +60,13 @@ class Qwen35Model:
         )
 
         # RoPE setup (for gated attention layers only)
-        self.rope = Qwen35RoPESetup(mesh_device, args)
+        self.rope = Qwen36RoPESetup(mesh_device, args)
 
         # Transformer layers
         logger.info(f"Loading {args.n_layers} transformer layers...")
         self.layers = []
         for i in tqdm(range(args.n_layers), desc="Loading layers"):
-            layer = Qwen35DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
+            layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
 
         # Final norm — framework RMSNorm (mesh-aware; applies the +1 zero-centered
@@ -139,14 +139,14 @@ class Qwen35Model:
     @classmethod
     def from_pretrained(cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, hf_model=None):
         # HF_MODEL (env var) is the single source of truth — a hub name or local path —
-        # resolved by Qwen35ModelArgs via the base ModelArgs. `hf_model` is an optional
+        # resolved by Qwen36ModelArgs via the base ModelArgs. `hf_model` is an optional
         # back-compat convenience: if given, it sets HF_MODEL before constructing args.
         if hf_model is not None:
             import os
 
             os.environ["HF_MODEL"] = hf_model
 
-        args = Qwen35ModelArgs(
+        args = Qwen36ModelArgs(
             mesh_device=device,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
@@ -156,7 +156,7 @@ class Qwen35Model:
             args.n_layers = n_layers
             args.attention_type_list = args.attention_type_list[:n_layers]
 
-        logger.info("Loading + remapping weights via Qwen35ModelArgs.load_state_dict()...")
+        logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
         state_dict = args.load_state_dict()
 
         cache_path = args.weight_cache_path()

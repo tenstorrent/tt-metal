@@ -7,6 +7,6 @@ The orchestrating layer lives in ``gated_deltanet.py``; this package re-exports 
 """
 
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
-from models.demos.blackhole.qwen36.tt.gdn.gated_deltanet import Qwen35GatedDeltaNet
+from models.demos.blackhole.qwen36.tt.gdn.gated_deltanet import Qwen36GatedDeltaNet
 
-__all__ = ["Qwen35GatedDeltaNet", "GDNConfig"]
+__all__ = ["Qwen36GatedDeltaNet", "GDNConfig"]

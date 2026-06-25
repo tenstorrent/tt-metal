@@ -12,7 +12,7 @@ from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, res
 from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 
 
-class Qwen35GatedDeltaNet:
+class Qwen36GatedDeltaNet:
     """Gated DeltaNet (linear attention) layer for Qwen3.5-9B.
 
     Maintains fixed-size recurrent state [B, H, K, V] that replaces the KV cache.
@@ -49,7 +49,7 @@ class Qwen35GatedDeltaNet:
         self.weights = load_gdn_weights(mesh_device, config, state_dict, tensor_cache_path)
 
         # ---- Runtime state (plain instance attributes, exact same names as before;
-        # poked directly by the trace machinery in model.py / qwen35_vllm.py) ----
+        # poked directly by the trace machinery in model.py / qwen36_vllm.py) ----
         self.recurrent_state = None
         # Conv states: ttnn tensors on device [B, kernel_size-1, D]
         self.conv_state_q = None
@@ -64,7 +64,7 @@ class Qwen35GatedDeltaNet:
         # path writes recurrent + conv state into the persistent external buffers IN PLACE
         # (ttnn.copy) instead of reassigning a fresh tensor, so the state carries across
         # execute_trace() replays (each replay re-runs the same baked buffer addresses).
-        # Eager prefill keeps the reassign path. See Qwen35Model.capture_prefill_trace_chunked.
+        # Eager prefill keeps the reassign path. See Qwen36Model.capture_prefill_trace_chunked.
         self._chunk_inplace_state = False
 
     def forward(self, x, mode="recurrent", chunk_size=None, valid_len=None):

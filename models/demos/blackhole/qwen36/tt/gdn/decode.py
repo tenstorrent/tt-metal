@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Recurrent / chunked DeltaNet forward (the `forward` dispatch).
 
-Behavior-preserving extraction of the original `Qwen35GatedDeltaNet.forward` body.
+Behavior-preserving extraction of the original `Qwen36GatedDeltaNet.forward` body.
 Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 `gdn.cfg`, mirrored scalar attrs + runtime state from `gdn`. Every ttnn op,
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.

@@ -29,7 +29,7 @@ LINEAR_Q_DIM = 2048
 LINEAR_K_DIM = 2048
 
 
-def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """Remap HF Qwen3.5-9B state dict to internal format.
 
     Args:
@@ -114,7 +114,7 @@ def is_fp8_checkpoint(model_path) -> bool:
     Detected by a ``*.weight_scale_inv`` entry in the safetensors index (the
     per-block dequant scales that accompany float8_e4m3fn weights). Such a
     checkpoint cannot be loaded via AutoModelForCausalLM here; use
-    ``load_qwen35_state_dict_fp8`` instead.
+    ``load_qwen36_state_dict_fp8`` instead.
     """
     index_path = Path(model_path) / "model.safetensors.index.json"
     if not index_path.is_file():
@@ -127,10 +127,10 @@ def is_fp8_checkpoint(model_path) -> bool:
     return any(k.endswith(".weight_scale_inv") for k in weight_map)
 
 
-def load_qwen35_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
+def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
     """Load Qwen3.5 FP8 weights: block-wise dequant + minimal key remap.
 
-    Produces the SAME internal key scheme as ``remap_qwen35_state_dict`` for the
+    Produces the SAME internal key scheme as ``remap_qwen36_state_dict`` for the
     shared/simple weights (``layers.N.mlp.*``, ``layers.N.self_attn.*``,
     ``input_layernorm`` / ``post_attention_layernorm``, ``tok_embeddings``,
     ``norm``, ``output``) so ``layer.py``'s substate extraction is unchanged.

@@ -4,8 +4,8 @@
 """Tests for Qwen3.5-9B HF -> internal weight remapping."""
 import pytest
 
-from models.demos.blackhole.qwen36.tt.model_config import Qwen35ModelArgs
-from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen35_state_dict
+from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen36_state_dict
 
 HIDDEN_SIZE = 4096
 NUM_LAYERS = 32
@@ -31,13 +31,13 @@ def _load_raw_state_dict(checkpoint_dir):
 
 @pytest.fixture(scope="module")
 def raw_state_dict():
-    args = Qwen35ModelArgs(mesh_device=None)
+    args = Qwen36ModelArgs(mesh_device=None)
     return _load_raw_state_dict(args.CKPT_DIR)
 
 
 @pytest.fixture(scope="module")
 def remapped(raw_state_dict):
-    return remap_qwen35_state_dict(raw_state_dict)
+    return remap_qwen36_state_dict(raw_state_dict)
 
 
 class TestPrefixStripping:

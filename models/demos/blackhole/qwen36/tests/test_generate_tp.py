@@ -19,7 +19,7 @@ Run:
 import os
 
 from models.demos.blackhole.qwen36.tests.test_factory import model_path, parametrize_mesh_tp
-from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 
 @parametrize_mesh_tp()
@@ -27,7 +27,7 @@ def test_generate_tp_stateful(mesh_device, ensure_gc):
     from loguru import logger
 
     os.environ.setdefault("HF_MODEL", model_path())
-    model = Qwen35Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=256)
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=256)
 
     from transformers import AutoTokenizer
 

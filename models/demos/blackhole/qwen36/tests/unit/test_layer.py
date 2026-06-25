@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Single-device decoder-block sanity checks (Qwen35DecoderLayer).
+"""Single-device decoder-block sanity checks (Qwen36DecoderLayer).
 
 Full layers run end-to-end without producing NaN/Inf (and, for the DeltaNet
 prefill block, a non-constant output). These are sanity checks.
@@ -13,13 +13,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.tt.layer import Qwen35DecoderLayer
+from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 
 from .conftest import DEVICE_PARAMS
 
 pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)]
 
-# GDN chunk-seq prefill kernel supports exactly one chunk size (see Qwen35DecoderLayer.forward's
+# GDN chunk-seq prefill kernel supports exactly one chunk size (see Qwen36DecoderLayer.forward's
 # chunk_size default / its docstring). Using anything else (e.g. 64) raises a 64≠128 matmul mismatch.
 GDN_PREFILL_CHUNK = 128
 
@@ -35,7 +35,7 @@ def test_layer0_deltanet_prefill_block(device, setup):
     B, T = 1, GDN_PREFILL_CHUNK
     x = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
 
-    block = Qwen35DecoderLayer(device, args, sd, layer_num=0)
+    block = Qwen36DecoderLayer(device, args, sd, layer_num=0)
     block.attention.reset_state(B)
 
     x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -59,7 +59,7 @@ def test_layer0_deltanet_decode(device, setup):
     args, sd, raw = setup
     device.enable_program_cache()
 
-    layer = Qwen35DecoderLayer(device, args, sd, layer_num=0)
+    layer = Qwen36DecoderLayer(device, args, sd, layer_num=0)
     layer.attention.reset_state(1)
 
     # Prefill to establish GDN recurrent + conv state (the state decode continues from).
@@ -81,15 +81,15 @@ def test_layer3_gated_attention_prefill(device, setup):
     args, sd, raw = setup
     device.enable_program_cache()
 
-    from models.demos.blackhole.qwen36.tt.rope import Qwen35RoPESetup
+    from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 
-    layer = Qwen35DecoderLayer(device, args, sd, layer_num=3)
+    layer = Qwen36DecoderLayer(device, args, sd, layer_num=3)
 
     B, T = 1, 128
     x = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
     x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    rope = Qwen35RoPESetup(device, args)
+    rope = Qwen36RoPESetup(device, args)
     pos_ids = torch.arange(T).unsqueeze(0)
     cos, sin = rope.get_rot_mats(pos_ids)
 

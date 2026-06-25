@@ -25,7 +25,7 @@ the single code base adapts to each checkpoint. The device count alone
 
 ## Architecture
 
-Assembly: `tok_embeddings → N × Qwen35DecoderLayer → RMSNorm → LM Head`.
+Assembly: `tok_embeddings → N × Qwen36DecoderLayer → RMSNorm → LM Head`.
 
 Each model interleaves two attention block types (read from the HF
 `layer_types`): **Gated DeltaNet** (linear-attention, recurrent + causal conv

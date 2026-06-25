@@ -83,7 +83,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
     )
 
 
-class Qwen35MLP:
+class Qwen36MLP:
     """SwiGLU feed-forward network for Qwen3.5."""
 
     def __init__(self, mesh_device, state_dict, tensor_cache_path=None, args=None, tt_ccl=None):

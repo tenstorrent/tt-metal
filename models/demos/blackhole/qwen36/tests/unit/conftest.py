@@ -20,8 +20,8 @@ import os
 
 import pytest
 
-from models.demos.blackhole.qwen36.tt.model_config import Qwen35ModelArgs
-from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen35_state_dict
+from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen36_state_dict
 
 # Single-device component tests run against the 9B checkpoint (27B needs a TP mesh).
 os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
@@ -36,11 +36,11 @@ def setup(device):
     """Load the real checkpoint for the current single device: returns (args, remapped_sd, raw_sd)."""
     from safetensors import safe_open
 
-    args = Qwen35ModelArgs(mesh_device=device)
+    args = Qwen36ModelArgs(mesh_device=device)
     raw = {}
     for path in sorted(glob.glob(f"{args.CKPT_DIR}/model.safetensors-*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:
             for key in f.keys():
                 raw[key] = f.get_tensor(key)
-    sd = remap_qwen35_state_dict(raw)
+    sd = remap_qwen36_state_dict(raw)
     return args, sd, raw

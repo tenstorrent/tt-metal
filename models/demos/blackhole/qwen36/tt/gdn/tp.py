@@ -52,7 +52,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Keys may arrive in three layouts depending on the loader/path:
     #   - raw FP8 loader, unstripped:          linear_attn.in_proj_qkv.weight / linear_attn.conv1d.weight
     #   - raw FP8 loader, substate()-stripped: in_proj_qkv.weight            / conv1d.weight
-    #   - bf16 remap (remap_qwen35_state_dict): qkv_proj.weight (renamed) +
+    #   - bf16 remap (remap_qwen36_state_dict): qkv_proj.weight (renamed) +
     #     q_conv/k_conv/v_conv.weight (conv1d split per Q/K/V stream)
     # The optional `linear_attn.` prefix is detected; the fused QKV tensor is the
     # same under either name, and the fused conv1d is the concat of the three

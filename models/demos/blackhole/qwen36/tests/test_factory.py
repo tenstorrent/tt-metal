@@ -14,7 +14,7 @@ Centralizes what used to be copy-pasted across the per-test files:
 * ``parametrize_mesh_tp()``        — the env-driven (1,4)/(1,1) mesh + FABRIC_1D idiom
 * ``tp_composer`` / ``replicate_to_device`` — shared TP tensor helpers
 
-Heavy imports (ttnn weight loaders, ``Qwen35ModelArgs``) are kept lazy / local so
+Heavy imports (ttnn weight loaders, ``Qwen36ModelArgs``) are kept lazy / local so
 pure-CPU tests (``test_weight_mapping``, ``test_substate``) stay fast at collection.
 """
 

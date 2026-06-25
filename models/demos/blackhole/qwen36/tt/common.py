@@ -5,8 +5,8 @@ import os
 
 from loguru import logger
 
-from models.demos.blackhole.qwen36.tt.model import Qwen35Model
-from models.demos.blackhole.qwen36.tt.model_config import Qwen35ModelArgs
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
 
 def create_tt_model(
@@ -23,7 +23,7 @@ def create_tt_model(
     if hf_model is not None:
         os.environ["HF_MODEL"] = hf_model
 
-    args = Qwen35ModelArgs(
+    args = Qwen36ModelArgs(
         mesh_device=mesh_device,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
@@ -32,8 +32,8 @@ def create_tt_model(
         args.n_layers = n_layers
         args.attention_type_list = args.attention_type_list[:n_layers]
 
-    logger.info("Loading + remapping weights via Qwen35ModelArgs.load_state_dict()...")
+    logger.info("Loading + remapping weights via Qwen36ModelArgs.load_state_dict()...")
     state_dict = args.load_state_dict()
     cache_path = args.weight_cache_path()
-    model = Qwen35Model(mesh_device, args, state_dict, tensor_cache_path=cache_path)
+    model = Qwen36Model(mesh_device, args, state_dict, tensor_cache_path=cache_path)
     return args, model, state_dict

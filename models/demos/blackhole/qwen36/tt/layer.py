@@ -7,14 +7,14 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 """
 import ttnn
 from models.common.rmsnorm import RMSNorm
-from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen35GatedAttention
-from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen35GatedDeltaNet
-from models.demos.blackhole.qwen36.tt.mlp import Qwen35MLP
+from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
+from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
+from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
 
-class Qwen35DecoderLayer:
+class Qwen36DecoderLayer:
     """Single transformer layer with hybrid attention dispatch.
 
     Pattern: x → attention_norm → attention → residual → ff_norm → MLP → residual
@@ -70,15 +70,15 @@ class Qwen35DecoderLayer:
         elif self.is_full_attention:
             attn_state = substate(state_dict, f"layers.{layer_num}.self_attn")
             attn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-            self.attention = Qwen35GatedAttention(mesh_device, AttentionConfig.from_args(args), attn_state, attn_cache)
+            self.attention = Qwen36GatedAttention(mesh_device, AttentionConfig.from_args(args), attn_state, attn_cache)
         else:
             gdn_state = substate(state_dict, f"layers.{layer_num}.linear_attn")
             gdn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-            self.attention = Qwen35GatedDeltaNet(mesh_device, GDNConfig.from_args(args), gdn_state, gdn_cache)
+            self.attention = Qwen36GatedDeltaNet(mesh_device, GDNConfig.from_args(args), gdn_state, gdn_cache)
 
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
         mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-        self.feed_forward = Qwen35MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+        self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
 
     def _make_norm(self, mesh_device, args, state_dict, layer_num, weight_key, tensor_cache_path, tt_ccl, ag_key):
         """Build the per-layer RMSNorm; wrap in DistributedNorm when TP>1.

@@ -47,9 +47,9 @@ STATE_PCC = 0.99
 # --------------------------------------------------------------------------- #
 def test_mask_bucket_rounding():
     """Bucket rounding (no device): every length maps to the smallest fixed bucket >= it."""
-    from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-    f = Qwen35Model._mask_bucket_for  # classmethod — callable without a device/instance
+    f = Qwen36Model._mask_bucket_for  # classmethod — callable without a device/instance
     cases = {
         1: 128,
         50: 128,
@@ -102,10 +102,10 @@ def test_mask_bucket_rounding():
 def test_masked_bucket_matches_reference(device, actual_len, bucket):
     device.enable_program_cache()
 
-    from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
     # 4 layers (pattern G,G,G,F) exercises both chunk-seq GDN and paged attention.
-    model = Qwen35Model.from_pretrained(
+    model = Qwen36Model.from_pretrained(
         device,
         max_batch_size=1,
         max_seq_len=MNB_MASKED * BLOCK_SIZE,
@@ -171,9 +171,9 @@ def test_masked_bucket_after_trace_capture(device):
     """
     device.enable_program_cache()
 
-    from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-    model = Qwen35Model.from_pretrained(device, max_batch_size=1, max_seq_len=MNB_MASKED * BLOCK_SIZE, n_layers=4)
+    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=MNB_MASKED * BLOCK_SIZE, n_layers=4)
     page_table = torch.arange(MNB_MASKED, dtype=torch.int32).unsqueeze(0)
     kv_shape = [MNB_MASKED, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
@@ -224,9 +224,9 @@ def test_traced_chunked_tail_matches_reference(device, actual_len):
     """
     device.enable_program_cache()
 
-    from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-    model = Qwen35Model.from_pretrained(device, max_batch_size=1, max_seq_len=MNB_MASKED * BLOCK_SIZE, n_layers=4)
+    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=MNB_MASKED * BLOCK_SIZE, n_layers=4)
     page_table = torch.arange(MNB_MASKED, dtype=torch.int32).unsqueeze(0)
     kv_shape = [MNB_MASKED, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
@@ -290,10 +290,10 @@ def test_chunked_replay_matches_reference(device, actual_len):
     """
     device.enable_program_cache()
 
-    from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
     # 4 layers (pattern G,G,G,F) exercises both chunk-seq GDN and paged attention.
-    model = Qwen35Model.from_pretrained(
+    model = Qwen36Model.from_pretrained(
         device,
         max_batch_size=1,
         max_seq_len=MNB_CHUNKED * BLOCK_SIZE,

@@ -5,7 +5,7 @@
 Loads the projection / conv / norm weights for one `linear_attn` substate and
 precomputes the derived device tensors (conv taps, fused matmuls, prefill-kernel
 constants, cached chunk masks). Behavior-preserving extraction of the original
-`Qwen35GatedDeltaNet.__init__` weight code — every dtype / layout / memory_config
+`Qwen36GatedDeltaNet.__init__` weight code — every dtype / layout / memory_config
 and every env-var read is preserved verbatim.
 """
 from dataclasses import dataclass

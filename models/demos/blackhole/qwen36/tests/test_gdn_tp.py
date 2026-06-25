@@ -34,7 +34,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     tp_composer,
 )
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
-from models.demos.blackhole.qwen36.tt.model_config import Qwen35ModelArgs
+from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
 
 @torch.no_grad()
@@ -47,12 +47,12 @@ def test_gdn_tp(mesh_device, reset_seeds, ensure_gc, request):
     """
     os.environ.setdefault("HF_MODEL", model_path())
     B = 32
-    args = Qwen35ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} Nk_tp={args.gdn_nk_tp} Nv_tp={args.gdn_nv_tp}")
 
-    # args.CKPT_DIR is the resolved local snapshot dir (Qwen35ModelArgs downloads the hub id).
+    # args.CKPT_DIR is the resolved local snapshot dir (Qwen36ModelArgs downloads the hub id).
     sd = load_gdn_layer(args.CKPT_DIR, li)
     from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -112,7 +112,7 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
-    args = Qwen35ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     logger.info(f"devices={nd} gdn layer={li} T={T}")

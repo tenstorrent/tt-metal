@@ -9,7 +9,7 @@ from models.demos.blackhole.qwen36.tt.attention.prefill import prefill_forward
 from models.demos.blackhole.qwen36.tt.attention.weights import load_attention_weights
 
 
-class Qwen35GatedAttention:
+class Qwen36GatedAttention:
     """Gated Full Attention layer for Qwen3.5-9B with KV cache.
 
     Uses softmax SDPA with GQA (16 Q heads, 4 KV heads, head_dim=256)

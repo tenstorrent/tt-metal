@@ -28,7 +28,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
-from models.demos.blackhole.qwen36.tt.model import Qwen35Model
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 
 @torch.no_grad()
@@ -36,7 +36,7 @@ from models.demos.blackhole.qwen36.tt.model import Qwen35Model
 def test_model_tp_contract(mesh_device, reset_seeds, ensure_gc):
     nd = mesh_device.get_num_devices()
     assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
-    model = Qwen35Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8)
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8)
     args = model.args
     vocab = args.vocab_size
     T, N_DEC = 128, 3
@@ -104,7 +104,7 @@ def test_model_tp_long_prefill(mesh_device, reset_seeds, ensure_gc):
     one full 2048 chunk + a 256 tail, so this exercises the cross-chunk carry."""
     nd = mesh_device.get_num_devices()
     assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
-    model = Qwen35Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=4096, n_layers=8)
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=4096, n_layers=8)
     args = model.args
     vocab = args.vocab_size
     T = 2304  # 1 full 2048 chunk + 256 tail
@@ -147,7 +147,7 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     capture_prefill_trace_chunked, so they never compile at request time."""
     nd = mesh_device.get_num_devices()
     assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
-    model = Qwen35Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=8192, n_layers=8)
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=8192, n_layers=8)
     args = model.args
     vocab = args.vocab_size
     torch.manual_seed(0)

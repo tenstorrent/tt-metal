@@ -3,7 +3,7 @@
 """TP validation for the Qwen3.5/3.6 SwiGLU MLP on a Blackhole mesh.
 
 Loads just one layer's gate/up/down weights from the FP8 checkpoint (fast,
-RAM-light), runs the tensor-parallel Qwen35MLP forward, and compares against a
+RAM-light), runs the tensor-parallel Qwen36MLP forward, and compares against a
 torch SwiGLU reference. Output is fractured along the hidden dim (reduce-scatter)
 so it is gathered with ConcatMeshToTensor(dim=3).
 
@@ -26,25 +26,25 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     replicate_to_device,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.mlp import Qwen35MLP
-from models.demos.blackhole.qwen36.tt.model_config import Qwen35ModelArgs
+from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
+from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
 def test_mlp_tp(mesh_device, reset_seeds, ensure_gc, request):
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen35ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} hidden_dim={args.hidden_dim}")
 
-    # args.CKPT_DIR is the resolved local snapshot dir (Qwen35ModelArgs downloads the hub id).
+    # args.CKPT_DIR is the resolved local snapshot dir (Qwen36ModelArgs downloads the hub id).
     mlp_state = load_mlp_layer(args.CKPT_DIR, 0)
 
     from models.tt_transformers.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
-    mlp = Qwen35MLP(mesh_device, mlp_state, None, args=args, tt_ccl=tt_ccl)
+    mlp = Qwen36MLP(mesh_device, mlp_state, None, args=args, tt_ccl=tt_ccl)
 
     # Torch reference: down(silu(gate(x)) * up(x))
     T = 32

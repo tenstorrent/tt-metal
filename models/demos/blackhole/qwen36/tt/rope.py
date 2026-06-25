@@ -33,11 +33,11 @@ def compute_rope_freqs(head_dim: int, max_seq_len: int, theta: float = 10_000_00
     return cos, sin
 
 
-class Qwen35RoPESetup:
+class Qwen36RoPESetup:
     """Precomputes and stores RoPE cos/sin tensors for Qwen3.5.
 
     Usage:
-        rope = Qwen35RoPESetup(device, args)
+        rope = Qwen36RoPESetup(device, args)
         cos, sin = rope.get_rot_mats(position_ids)
     """
 
