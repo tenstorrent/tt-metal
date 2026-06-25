@@ -27,7 +27,7 @@ on:
       test-category:
         required: false
         type: string
-        default: smoke
+        default: merge_gate
         description: "Time-budget workflow key passed to verify_time_budget.py."
 
 jobs:

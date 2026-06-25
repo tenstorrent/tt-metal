@@ -29,7 +29,7 @@ on:
         type: boolean
         default: false
       run-hang-report-test:
-        description: "Run ONLY the hang report test (test-category unit). Default runs core triage tests (test-category smoke)."
+        description: "Run ONLY the hang report test (test-category unit). Default runs core triage tests (test-category merge_gate)."
         required: false
         type: boolean
         default: false
@@ -85,4 +85,4 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      test-category: ${{ inputs.run-hang-report-test && 'unit' || 'smoke' }}
+      test-category: ${{ inputs.run-hang-report-test && 'unit' || 'merge_gate' }}

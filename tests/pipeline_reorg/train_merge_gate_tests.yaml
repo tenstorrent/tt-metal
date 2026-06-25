@@ -1,4 +1,4 @@
-# Test matrix for smoke tests
+# Test matrix for merge gate tests
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.

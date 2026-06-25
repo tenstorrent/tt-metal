@@ -4,7 +4,7 @@
 # This file defines TTNN unit test groups used by:
 #   - ttnn-post-commit.yaml (hardware CI, test-category sanity)
 #   - ttsim.yaml (simulator CI)
-# Merge-gate tests live in ttnn_smoke_merge_gate_tests.yaml (test-category smoke).
+# Merge-gate tests live in ttnn_merge_gate_tests.yaml (test-category merge_gate).
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # Optional: merge_gate (filter in workflow), fast_runtime_mode_off.

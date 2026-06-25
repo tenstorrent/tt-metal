@@ -14,9 +14,10 @@ on:
         required: true
         type: string
       enabled-skus:
-        required: true
+        required: false
         type: string
-        description: "Comma-separated SKUs to run (must match tests yaml and sku_config.yaml)."
+        default: ALL_SKUS_IN_TESTS
+        description: "Comma-separated SKUs to run, or ALL_SKUS_IN_TESTS to run every SKU in the tests yaml."
       per-test-timeout:
         required: false
         type: string
@@ -39,8 +40,8 @@ on:
       test-category:
         required: false
         type: string
-        default: smoke
-        description: "Time-budget workflow key passed to verify_time_budget.py."
+        default: merge_gate
+        description: "Time-budget workflow key passed to verify_time_budget.py (merge_gate or pr_gate)."
 
 jobs:
   load-test-matrix:
@@ -48,7 +49,14 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ${{ inputs.product == 'tt-metalium' && './tests/pipeline_reorg/runtime_validation_smoke_tests.yaml' || './tests/pipeline_reorg/ttnn_validation_smoke_tests.yaml' }}
+      TESTS_YAML_PATH: >-
+        ${{ inputs.product == 'tt-metalium'
+            && (inputs.test-category == 'pr_gate'
+                && './tests/pipeline_reorg/runtime_validation_pr_gate_tests.yaml'
+                || './tests/pipeline_reorg/runtime_validation_merge_gate_tests.yaml')
+            || (inputs.test-category == 'pr_gate'
+                && './tests/pipeline_reorg/ttnn_validation_pr_gate_tests.yaml'
+                || './tests/pipeline_reorg/ttnn_validation_merge_gate_tests.yaml') }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

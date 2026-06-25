@@ -1,10 +1,11 @@
-# tt-metalium-validation-smoke (deb) for PR and merge gates.
+# tt-nn-validation-smoke (deb) for merge gate.
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
-# For max allowed timeout refer to .github/time_budget.yaml (runtime -> smoke).
+# For max allowed timeout refer to .github/time_budget.yaml (ttnn -> merge_gate).
+# PR gate matrix lives in ttnn_validation_pr_gate_tests.yaml (ttnn -> pr_gate).
 
-- name: metalium validation smoke
-  cmd: /usr/bin/tt-metalium-validation-smoke
+- name: ttnn validation smoke
+  cmd: /usr/bin/tt-nn-validation-smoke
   skus:
     wh_n150_civ2:
       timeout: 15
@@ -18,5 +19,5 @@
       timeout: 15
     bh_p150b_civ2_viommu_prio:
       timeout: 15
-  team: runtime
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev

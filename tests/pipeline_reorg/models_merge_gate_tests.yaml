@@ -1,7 +1,7 @@
-# Models merge-gate smoke matrix (dedicated WH Galaxy runners).
+# Models merge-gate matrix (dedicated WH Galaxy runners).
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id, model (optional).
-# For max allowed timeout refer to .github/time_budget.yaml (models -> smoke).
+# For max allowed timeout refer to .github/time_budget.yaml (models -> merge_gate).
 #
 # Intended first entry:
 # - name: GPT-OSS 120B e2e tests
