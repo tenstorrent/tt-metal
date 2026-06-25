@@ -86,7 +86,7 @@ def test_h2d_socket_sync_8x4_galaxy(mesh_device):
 
         service.forward_to_tensor_bytes(flat_tokens, metadata=meta)
         pre = mesh_device.num_program_cache_entries()
-        tt_tokens, tt_meta = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+        tt_tokens, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
             service, metadata_size_bytes=_METADATA_SIZE_BYTES
         )
         op_cache_delta.append(mesh_device.num_program_cache_entries() - pre)

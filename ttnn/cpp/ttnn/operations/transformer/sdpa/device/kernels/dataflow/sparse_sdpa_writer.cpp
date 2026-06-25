@@ -68,7 +68,7 @@ void kernel_main() {
 
     // Col-identity (column 0 = 1.0): compute matmul-reduces the partial row-sum against it to finalize the
     // within-tile reduction in normalize_row_streaming.
-    generate_bcast_col_scalar(cb_col_identity, one_bf16_packed);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), one_bf16_packed);
 
     // All-(-inf) tile (row 0; compute bcast-adds it to fully-masked key tiles). Only row 0 matters for the
     // row-broadcast add: cols 0-15 -> face0 row0 (offset c), cols 16-31 -> face1 row0 (offset 256+c).

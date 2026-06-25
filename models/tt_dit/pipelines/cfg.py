@@ -63,7 +63,7 @@ class _SingleCombiner:
         split_pos = n // 2
         uncond = prediction[0:split_pos]
         cond = prediction[split_pos:]
-        combined = uncond + cfg_scale * (cond - uncond)
+        combined = ttnn.lerp(uncond, cond, cfg_scale)
 
         return (combined,)
 
@@ -89,8 +89,8 @@ class _HostCombiner:
         received_uncond = received_uncond.to(self._cond_device)
         received_cond = received_cond.to(self._uncond_device)
 
-        combined0 = uncond + cfg_scale * (received_cond - uncond)
-        combined1 = received_uncond + cfg_scale * (cond - received_uncond)
+        combined0 = ttnn.lerp(uncond, received_cond, cfg_scale)
+        combined1 = ttnn.lerp(received_uncond, cond, cfg_scale)
 
         return combined0, combined1
 
@@ -123,8 +123,8 @@ class _SocketCombiner:
         ttnn.experimental.recv_async(received_uncond, self._sockets[0].rx)
         ttnn.experimental.send_async(cond, self._sockets[1].tx)
 
-        combined0 = uncond + cfg_scale * (received_cond - uncond)
-        combined1 = received_uncond + cfg_scale * (cond - received_uncond)
+        combined0 = ttnn.lerp(uncond, received_cond, cfg_scale)
+        combined1 = ttnn.lerp(received_uncond, cond, cfg_scale)
 
         return combined0, combined1
 
