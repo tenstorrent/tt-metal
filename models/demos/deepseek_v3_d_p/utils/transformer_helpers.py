@@ -23,7 +23,10 @@ import psutil
 import torch
 from loguru import logger
 from transformers import DynamicCache
-from transformers.modeling_utils import no_init_weights
+try:  # transformers >= 5 moved no_init_weights to transformers.initialization
+    from transformers.initialization import no_init_weights
+except ImportError:  # transformers < 5
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE
