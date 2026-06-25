@@ -164,9 +164,8 @@ inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_
 /// Extract the offset value stored on an element. Returns 0 (compile-time-folded) when the
 /// element's `Offset` is `Unset`, so the `+base` term and the stored field vanish.
 template <TileOffset Offset>
-ALWI uint32_t tile_base_value(uint32_t stored) noexcept {
+ALWI uint32_t tile_base_value([[maybe_unused]] uint32_t stored) noexcept {
     if constexpr (Offset == TileOffset::Unset) {
-        (void)stored;
         return 0u;
     } else {
         return stored;
@@ -292,19 +291,20 @@ inline constexpr bool is_bcast_mode_v =
     (M == OperandKind::Row) || (M == OperandKind::Col);
 
 template <OperandKind M>
-ALWI constexpr uint32_t idx(uint32_t i_flat, uint32_t ht, uint32_t wt) noexcept {
-    if constexpr (M == OperandKind::Scalar) { (void)i_flat; (void)ht; (void)wt; return 0; }
-    else if constexpr (M == OperandKind::Block) { (void)ht; (void)wt; return i_flat; }
-    else if constexpr (M == OperandKind::Row)  { (void)i_flat; (void)ht; return wt; }
-    else                                       { (void)i_flat; (void)wt; return ht; }  // Col
+ALWI constexpr uint32_t idx(
+    [[maybe_unused]] uint32_t i_flat, [[maybe_unused]] uint32_t ht, [[maybe_unused]] uint32_t wt) noexcept {
+    if constexpr (M == OperandKind::Scalar) return 0;
+    else if constexpr (M == OperandKind::Block) return i_flat;
+    else if constexpr (M == OperandKind::Row) return wt;
+    else return ht;  // Col
 }
 
 template <OperandKind M>
-ALWI constexpr uint32_t window(uint32_t Ht, uint32_t Wt) noexcept {
+ALWI constexpr uint32_t window([[maybe_unused]] uint32_t Ht, [[maybe_unused]] uint32_t Wt) noexcept {
     if constexpr (M == OperandKind::Block) return Ht * Wt;
-    else if constexpr (M == OperandKind::Row) { (void)Ht; return Wt; }
-    else if constexpr (M == OperandKind::Col) { (void)Wt; return Ht; }
-    else                                      { (void)Ht; (void)Wt; return 1u; }  // Scalar
+    else if constexpr (M == OperandKind::Row) return Wt;
+    else if constexpr (M == OperandKind::Col) return Ht;
+    else return 1u;  // Scalar
 }
 
 // Allowed (Policy × Mode) combinations. Row/Col cannot stream per-tile —
@@ -1878,7 +1878,7 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // disjoint from compute cohorts and is always hoisted).
 template <bool HoistMath, bool HoistSfpu, std::size_t... Is, class... Es>
 ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
-    auto run_one = [&](auto idx, auto& elem) {
+    auto run_one = [&](auto idx, [[maybe_unused]] auto& elem) {
         constexpr std::size_t II = decltype(idx)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
         constexpr bool emit =
@@ -1888,7 +1888,6 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
             emit_pre_element_transitions<ElemT, II, Es...>();
             elem.init();  // instance dispatch (see convention note above): a runtime-stateful init reads its members here
         }
-        (void)elem;
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
@@ -1985,11 +1984,11 @@ ALWI void elem_apply_pack(
     uint32_t wt,
     uint32_t inner_count,
     uint32_t chain_lane_width,
-    uint32_t Ht,
-    uint32_t Wt) {
+    [[maybe_unused]] uint32_t Ht,
+    [[maybe_unused]] uint32_t Wt) {
     constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
-        (void)Ht; (void)Wt;  // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
+        // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
         emit_per_stage_pack_reconfig<ElemT, I, Es...>();
         elem.reserve_per_tile(i_flat);
         elem.reserve_per_block(inner_count);
@@ -2001,7 +2000,7 @@ ALWI void elem_apply_pack(
         elem.push_per_block(inner_count);
     } else {
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
-        (void)chain_lane_width; (void)Ht; (void)Wt;
+        (void)chain_lane_width;
     }
 }
 
