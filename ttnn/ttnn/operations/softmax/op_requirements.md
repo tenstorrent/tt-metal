@@ -26,7 +26,7 @@
 - **Compute config**: hard-coded HiFi4 + fp32_dest_acc_en=True + math_approx_mode=False
 - **Golden baseline**: 37 / 1250 cells passing (per verifier CLI); 1053 xfail_expected, 140 invalid_skipped, 12 supported_fail (all OOM on wide shapes)
 
-### [ ] Refinement 1 — Numerical configurability (dtypes + fp32-dest-only policy)
+### [x] Refinement 1 — Numerical configurability (dtypes + fp32-dest-only policy)
 
 **Goal**: add `ttnn.bfloat16` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, and correct intermediate-CB precision (incl. `UnpackToDestFp32` tagging where applicable). The op is fp32-dest-only — `fp32_dest_acc_en=False` is already rejected via EXCLUSIONS for all dtypes and stays there. Cells that fail out of the box (typically `bfloat8_b + non_tile_aligned`) land in `EXCLUSIONS`, not in their own refinement. Pass condition: zero kernel changes when helpers are wired correctly.
 
