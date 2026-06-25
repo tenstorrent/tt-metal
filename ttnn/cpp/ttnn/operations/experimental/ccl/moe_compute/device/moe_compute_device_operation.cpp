@@ -179,6 +179,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "so RING_CORES_PER_COMBINE_COL is integral",
         matmul_num_cores,
         combine_data_parallel_cores);
+    const uint32_t hidden_tiles = hidden_size / 32;
+    TT_FATAL(
+        hidden_tiles % combine_data_parallel_cores == 0,
+        "hidden_tiles ({}) must be divisible by num_data_parallel_cores ({}) "
+        "so output width shards are tile-aligned",
+        hidden_tiles,
+        combine_data_parallel_cores);
 
     // dm1 auto-splits each ring A2A transfer into enough noc_async_write_one_packet calls
     // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step is even

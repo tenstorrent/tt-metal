@@ -25,6 +25,7 @@ import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
+    effective_matmul_ring_size,
     get_weight_core_shard_maps,
     get_weight_mem_configs,
     prepare_w0_w1_tensor_for_moe_compute,
@@ -104,10 +105,11 @@ def run_moe_compute_test(
     combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 3))])
 
     # Drain tilize core where indices and scores are sharded
+    matmul_ring_size = effective_matmul_ring_size(mesh_device)
     drain_core_coord = ttnn.experimental.get_moe_tilize_drain_core(
         mesh_device,
         output_height_shard_dim,
-        auto_output_width_shard_dim(hidden_size),
+        auto_output_width_shard_dim(hidden_size, matmul_ring_size=matmul_ring_size),
         hidden_size,
         mux_core_range_set=combine_mux_cores,
     )

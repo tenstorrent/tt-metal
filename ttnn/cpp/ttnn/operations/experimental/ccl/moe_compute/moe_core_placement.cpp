@@ -335,6 +335,11 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
         return std::nullopt;
     }
     const CoreRange combine_bounding_box = CoreRangeSet(combine_cores).bounding_box();
+    // selective_reduce_combine multicasts across combine_bounding_box as a full rectangle.
+    // Reject sparse fallback placements so destination count and rectangle stay consistent.
+    if (combine_bounding_box.size() != num_combine_cores) {
+        return std::nullopt;
+    }
     if (combine_bounding_box.intersects(matmul_bounding_box)) {
         return std::nullopt;
     }
