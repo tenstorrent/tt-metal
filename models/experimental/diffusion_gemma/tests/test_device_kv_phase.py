@@ -25,6 +25,7 @@ from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 pytestmark = pytest.mark.use_module_device
@@ -47,6 +48,13 @@ def _assert_regions_changed(before, after):
         assert not torch.equal(lhs, rhs), f"cache region did not change on device shard {idx}"
 
 
+def _assert_regions_pcc(lhs_regions, rhs_regions, pcc=0.99):
+    assert len(lhs_regions) == len(rhs_regions)
+    for idx, (lhs, rhs) in enumerate(zip(lhs_regions, rhs_regions)):
+        passing, message = assert_with_pcc(lhs.float(), rhs.float(), pcc)
+        assert passing, f"cache region PCC failed on device shard {idx}: {message}"
+
+
 def _embed_tokens(model, tokens, mesh_device):
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     tt_tokens = ttnn.from_torch(
@@ -61,7 +69,7 @@ def _embed_tokens(model, tokens, mesh_device):
     return ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
 
 
-def _build_tiny_gemma4_model(mesh_device, *, vocab_size=256, max_seq_len=64):
+def _build_tiny_gemma4_state(vocab_size=256):
     hf_text_config = _create_hf_text_config(vocab_size=vocab_size, num_layers=1)
     if getattr(hf_text_config, "enable_moe_block", False):
         hf_text_config.num_experts = 4
@@ -69,13 +77,18 @@ def _build_tiny_gemma4_model(mesh_device, *, vocab_size=256, max_seq_len=64):
     hf_model = _create_hf_model(hf_text_config)
     model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
     model_args._hf_text_config = hf_text_config
+    return model_args, _hf_model_state_to_tt_state(hf_model)
 
+
+def _build_tiny_gemma4_model(mesh_device, *, vocab_size=256, max_seq_len=64, model_args=None, tt_state=None):
+    if model_args is None or tt_state is None:
+        model_args, tt_state = _build_tiny_gemma4_state(vocab_size=vocab_size)
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
     model = Gemma4Model(
         mesh_device=mesh_device,
         hf_config=model_args,
-        state_dict=_hf_model_state_to_tt_state(hf_model),
+        state_dict=tt_state,
         ccl_manager=CCLManager(mesh_device, num_links=1) if tp > 1 else None,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
@@ -244,4 +257,79 @@ def test_commit_append_decode_writes_full_256_token_canvas(mesh_device, reset_se
     )
     _assert_regions_changed(
         v_canvas_before, _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+    )
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_commit_append_canvas_kv_matches_reencode_pcc(mesh_device, reset_seeds):
+    torch.manual_seed(3)
+    prompt_len = 32
+    canvas_len = 256
+    vocab_size = 256
+    max_seq_len = 320
+    model_args, tt_state = _build_tiny_gemma4_state(vocab_size=vocab_size)
+    commit_model = _build_tiny_gemma4_model(
+        mesh_device, vocab_size=vocab_size, max_seq_len=max_seq_len, model_args=model_args, tt_state=tt_state
+    )
+    reencode_model = _build_tiny_gemma4_model(
+        mesh_device, vocab_size=vocab_size, max_seq_len=max_seq_len, model_args=model_args, tt_state=tt_state
+    )
+
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
+    canvas_tokens = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+
+    prompt_logits = commit_model(
+        _embed_tokens(commit_model, prompt_tokens, mesh_device),
+        is_decode=False,
+        input_ids_torch=prompt_tokens,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    prompt_logits.deallocate(True)
+
+    for offset in range(canvas_len):
+        position = prompt_len + offset
+        append_tokens = canvas_tokens[:, offset : offset + 1]
+        pos_u32 = ttnn.from_torch(
+            F.pad(torch.tensor([[position]], dtype=torch.int32), (0, 31), "constant", 0),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=mesh_mapper,
+        )
+        pos_i32 = ttnn.from_torch(
+            torch.tensor([position], dtype=torch.int32),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.int32,
+            mesh_mapper=mesh_mapper,
+        )
+        append_logits = commit_model(
+            _embed_tokens(commit_model, append_tokens, mesh_device),
+            position_idx=pos_u32,
+            position_idx_cache=pos_i32,
+            is_decode=True,
+            kv_phase=KVCachePhase.COMMIT_APPEND,
+        )
+        append_logits.deallocate(True)
+
+    full_tokens = torch.cat([prompt_tokens, canvas_tokens], dim=-1)
+    reencode_logits = reencode_model(
+        _embed_tokens(reencode_model, full_tokens, mesh_device),
+        is_decode=False,
+        input_ids_torch=full_tokens,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    reencode_logits.deallocate(True)
+
+    commit_k, commit_v = commit_model.tt_kv_cache[0]
+    reencode_k, reencode_v = reencode_model.tt_kv_cache[0]
+    _assert_regions_pcc(
+        _cache_region(commit_k, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh),
+        _cache_region(reencode_k, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh),
+    )
+    _assert_regions_pcc(
+        _cache_region(commit_v, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh),
+        _cache_region(reencode_v, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh),
     )
