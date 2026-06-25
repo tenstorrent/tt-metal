@@ -135,9 +135,34 @@ def build_env(topo) -> dict:
     # Sim clock-based hang watchdog (primary). libttsim aborts the process when it fires,
     # which the wall-clock backstop below would otherwise have to wait out.
     env["TTSIM_HANG_WATCHDOG_CLOCKS"] = str(topo["hang_watchdog_clocks"])
+    # Expose this topology's mesh shape + fabric_config so ONE topology-adaptive test can
+    # size its mesh_device fixture per topology — this is what lets `--op` fan a single
+    # confirmation/golden test out across every topology in the matrix (a test that hardcodes
+    # a mesh shape only matches the one topology with that shape; the rest hang fabric init).
+    if topo.get("mesh_shape") is not None:
+        env["MULTIDEV_SIM_MESH_SHAPE"] = ",".join(str(d) for d in topo["mesh_shape"])
+    if topo.get("fabric_config"):
+        env["MULTIDEV_SIM_FABRIC_CONFIG"] = str(topo["fabric_config"])
+    env["MULTIDEV_SIM_TOPOLOGY"] = topo["name"]
     for k, v in (topo.get("extra_env") or {}).items():
         env[str(k)] = str(v)
     return env
+
+
+def _rewrite_junit_path(pytest_args, topo_name):
+    """When fanning one --junitxml grade out over MULTIPLE topologies, give each topology its
+    own junit (PATH.xml -> PATH.<topo>.xml) so they don't overwrite each other. Returns the
+    (possibly) rewritten args + the rewritten junit path (or None if no --junitxml present)."""
+    out, junit = [], None
+    for a in pytest_args:
+        if a.startswith("--junitxml="):
+            path = a[len("--junitxml=") :]
+            stem, dot, ext = path.rpartition(".")
+            junit = f"{stem}.{topo_name}.{ext}" if dot else f"{path}.{topo_name}"
+            out.append(f"--junitxml={junit}")
+        else:
+            out.append(a)
+    return out, junit
 
 
 def validate_paths(topo) -> list[str]:
@@ -169,7 +194,10 @@ def run_one(topo, pytest_args, log_dir) -> tuple[str, str]:
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = log_dir / f"{name}_{stamp}.log"
 
-    print(f"\n{'=' * 78}\n[multidevice-sim] topology: {name}  (arch={topo['arch']}, required={topo['required']})", flush=True)
+    print(
+        f"\n{'=' * 78}\n[multidevice-sim] topology: {name}  (arch={topo['arch']}, required={topo['required']})",
+        flush=True,
+    )
     if problems:
         with log_path.open("w") as lf:
             lf.write(f"CONFIG ERROR for topology {name}:\n" + "\n".join(problems) + "\n")
@@ -191,9 +219,14 @@ def run_one(topo, pytest_args, log_dir) -> tuple[str, str]:
 
     # Own process group so a wall-clock-timeout kill takes pytest + the in-process sim + any orphans.
     proc = subprocess.Popen(
-        cmd, cwd=str(REPO_DIR), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1, start_new_session=True,
+        cmd,
+        cwd=str(REPO_DIR),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
     )
     timed_out = {"v": False}
 
@@ -250,16 +283,17 @@ def run_one(topo, pytest_args, log_dir) -> tuple[str, str]:
 # main
 # --------------------------------------------------------------------------------------
 def main():
-    ap = argparse.ArgumentParser(add_help=True, description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        add_help=True, description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="topology matrix yaml")
     ap.add_argument("--op", help="run under every topology whose applies_to_ops lists this op")
     ap.add_argument("--topology", action="append", default=[], help="run under this named topology (repeatable)")
     ap.add_argument("--list", action="store_true", help="print the resolved matrix and exit")
-    ap.add_argument("--log-dir", type=Path, default=REPO_DIR / "generated" / "multidevice_sim",
-                    help="where per-topology logs go")
-    ap.add_argument("--timeout", type=int, default=None,
-                    help="override the per-topology wall-clock backstop (seconds)")
+    ap.add_argument(
+        "--log-dir", type=Path, default=REPO_DIR / "generated" / "multidevice_sim", help="where per-topology logs go"
+    )
+    ap.add_argument("--timeout", type=int, default=None, help="override the per-topology wall-clock backstop (seconds)")
     args, pytest_args = ap.parse_known_args()
     # Allow an explicit `--` separator before pytest args.
     if pytest_args and pytest_args[0] == "--":
@@ -272,8 +306,12 @@ def main():
         print(f"resolved defaults: {defaults}")
         for t in topologies:
             print(f"\n  {t['name']}  (arch={t['arch']}, required={t['required']}, ops={t['applies_to_ops']})")
-            print(f"    mesh_shape      = {t.get('mesh_shape', '<unset>')}   fabric_config = {t.get('fabric_config', '<unset>')}")
-            print(f"      ^ the op's acceptance test MUST open a mesh_device of this shape + fabric_config (else fabric init hangs)")
+            print(
+                f"    mesh_shape      = {t.get('mesh_shape', '<unset>')}   fabric_config = {t.get('fabric_config', '<unset>')}"
+            )
+            print(
+                f"      ^ the op's acceptance test MUST open a mesh_device of this shape + fabric_config (else fabric init hangs)"
+            )
             print(f"    sim_so          = {t['sim_so']}")
             print(f"    cluster_desc    = {t['cluster_desc']}")
             print(f"    mesh_graph_desc = {t['mesh_graph_desc']}")
@@ -287,12 +325,15 @@ def main():
 
     selected = select_topologies(topologies, args.op, args.topology)
     print(f"[multidevice-sim] running {len(selected)} topology(ies) serially: {[t['name'] for t in selected]}")
+    multi = len(selected) > 1
 
     results = []
     for topo in selected:
         if args.timeout is not None:
             topo = {**topo, "wall_clock_timeout_s": args.timeout}
-        verdict, log_path = run_one(topo, pytest_args, args.log_dir)
+        # Fanning a --junitxml grade over multiple topologies: give each its own junit file.
+        topo_args = _rewrite_junit_path(pytest_args, topo["name"])[0] if multi else pytest_args
+        verdict, log_path = run_one(topo, topo_args, args.log_dir)
         results.append((topo, verdict, log_path))
 
     # Summary + aggregate exit.

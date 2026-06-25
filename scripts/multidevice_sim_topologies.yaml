@@ -51,14 +51,15 @@ topologies:
     mesh_shape: [2, 4]
     fabric_config: FABRIC_1D
     applies_to_ops: [point_to_point]
+    grade_primary: true   # run_eval grades the dashboard subset on THIS topology only (fast, deterministic);
+                          # the other p2p topologies are coverage, exercised by direct `--op` fan-out.
     required: true        # failure of a required topology => non-zero aggregate exit
     extra_env: {}
 
-  # ── Additional BH coverage topology (validated via --topology, not in any --op set) ──
-  # A second BH topology proving the runner/matrix extend beyond 8xP150. applies_to_ops is empty
-  # on purpose: --op grading runs ONE primary topology per op (the grade writes a single junit, so
-  # multiple topologies per --op would overwrite each other — a runner enhancement for later).
-  # Validate directly: run_multidevice_sim_pytest.py --topology bh_galaxy_4x2_p2p -- <a (4,2) test>.
+  # ── BH coverage topology #2: Galaxy 4x2 (8 chips) ────────────────────────────────────
+  # `--op point_to_point` now fans out over EVERY applies_to_ops topology (the runner gives each its
+  # own per-topology junit, so no overwrite); the env-driven confirmation test adapts its mesh shape
+  # per topology. So this is in the p2p coverage set, not just --topology-only.
   - name: bh_galaxy_4x2_p2p
     arch: blackhole
     sim_so: "{sim_bh_so}"
@@ -66,9 +67,38 @@ topologies:
     mesh_graph_desc: "{craqsim_data}/bh/blackhole_8xGalaxy_4x2_torus_x_mesh_graph_descriptor.textproto"
     mesh_shape: [4, 2]    # dims [4,2] (LINE, RING); 8 chips. VALIDATED 2026-06-25: p2p green.
     fabric_config: FABRIC_1D
-    applies_to_ops: []
+    applies_to_ops: [point_to_point]
     required: false
     extra_env: {}
+
+  # ── BH coverage topology #3: bh6u 8x4 (32 chips — Galaxy-class) ───────────────────────
+  # The largest simulatable single-host BH config. host_topology [1,1] => ONE python process sees
+  # all 32 chips (no MPI), so it runs in this single-process runner. dims [8,4] (LINE, RING) torus_x.
+  # Heavier sim (32 chips) => a larger wall-clock backstop.
+  - name: bh_bh6u_8x4_p2p
+    arch: blackhole
+    sim_so: "{sim_bh_so}"
+    cluster_desc: "{craqsim_data}/bh/blackhole_bh6u_8x4_torus_x_cluster_desc.yaml"
+    mesh_graph_desc: "{craqsim_data}/bh/blackhole_bh6u_8x4_torus_x_mesh_graph_descriptor.textproto"
+    mesh_shape: [8, 4]    # dims [8,4] (LINE, RING); 32 chips, single host.
+    fabric_config: FABRIC_1D
+    applies_to_ops: [point_to_point]
+    required: false
+    wall_clock_timeout_s: 1800   # 32-chip sim is ~4x heavier than 8-chip
+    # The 32-chip sim at ~0.9 kHz needs BOTH init timeouts scaled up (8-chip runs at ~3 kHz):
+    #   - FW-init wait defaults to 10s (firmware_wait_timeout_ms) → "Device N init: failed to initialize FW"
+    #   - fabric router ethernet handshake defaults to 15s → "Fabric Router Sync: Timeout"
+    #   - the per-test pytest-timeout (pytest.ini default 300s) is too short for the shard/transfer/
+    #     sync over 32 chips at ~0.8 kHz → PYTEST_TIMEOUT bumps it (stays under wall_clock_timeout_s).
+    extra_env:
+      TT_METAL_FW_INIT_TIMEOUT_MS: 120000
+      TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: 180000
+      PYTEST_TIMEOUT: 1500
+
+  # ── NOT wired (multi-host): bh_2x4_qb ────────────────────────────────────────────────
+  # blackhole_2x4_qb_torus_x_mesh_graph_descriptor has host_topology [1,2] (spans TWO QuietBox
+  # hosts) → it needs an MPI/multi-host launch, which this single-process runner does NOT do.
+  # Left out deliberately; revisit if/when the runner grows multi-host support.
 
   # ── Phase 2 (declared, not yet exercised here): WH T3K all-MMIO for all_gather ───────
   # all_gather is @skip_for_blackhole, so it needs the WH sim. Uses Nachiket's shipped
