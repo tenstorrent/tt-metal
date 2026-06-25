@@ -240,14 +240,11 @@ def _d2d_recv(inbound) -> tuple:
 
 
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
-    """Push this rank's output hidden state + metadata to the downstream rank's receiver. Coerce the
-    activation to the sender backing's memory layout first so the op's page-for-page copy lines up,
-    then free it."""
+    """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
+    The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
+    TT_FATALs on any spec mismatch, so no host-side relayout is needed."""
     t0 = time.perf_counter()
     backing = outbound.get_backing_tensor()
-    if activation.memory_config() != backing.memory_config() or activation.layout != backing.layout:
-        activation = ttnn.to_layout(activation, backing.layout)
-        activation = ttnn.to_memory_config(activation, backing.memory_config())
     import torch
 
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
