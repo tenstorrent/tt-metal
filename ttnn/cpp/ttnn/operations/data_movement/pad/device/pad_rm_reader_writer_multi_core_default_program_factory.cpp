@@ -54,14 +54,11 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
 
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
-    uint32_t input_page_size = a.buffer()->page_size();
-    uint32_t size_of_valid_data_in_last_input_page_in_row = a.buffer()->page_size();
     uint32_t input_accessor_page_size = stick_size;
     if (a.is_sharded()) {
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_input_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
-        size_of_valid_data_in_last_input_page_in_row = stick_size - (num_input_pages_in_row - 1) * input_page_size;
         const auto& input_mc = a.memory_config();
         if (input_mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             input_mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -71,15 +68,11 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
 
     // Output page-based addressing
     uint32_t num_output_pages_in_row = 1;
-    uint32_t output_page_size = output.buffer()->page_size();
-    uint32_t size_of_valid_data_in_last_output_page_in_row = output.buffer()->page_size();
     uint32_t output_accessor_page_size = stick_size_padded;
     if (output.is_sharded()) {
         uint32_t output_shard_width = output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
                                                                       : output.nd_shard_spec().value().shard_shape[-1];
         num_output_pages_in_row = tt::div_up(W_padded, output_shard_width);
-        size_of_valid_data_in_last_output_page_in_row =
-            stick_size_padded - (num_output_pages_in_row - 1) * output_page_size;
         const auto& output_mc = output.memory_config();
         if (output_mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             output_mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -174,8 +167,6 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         (std::uint32_t)stick_size_padded_aligned,
         (std::uint32_t)unaligned,
         (std::uint32_t)num_input_pages_in_row,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)size_of_valid_data_in_last_input_page_in_row,
         (std::uint32_t)input_accessor_page_size};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
@@ -184,8 +175,6 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         (std::uint32_t)stick_size_padded,
         (std::uint32_t)stick_size_padded_aligned,
         (std::uint32_t)num_output_pages_in_row,
-        (std::uint32_t)output_page_size,
-        (std::uint32_t)size_of_valid_data_in_last_output_page_in_row,
         (std::uint32_t)output_accessor_page_size};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
