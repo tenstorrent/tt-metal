@@ -527,7 +527,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         //   * config_buffer_addr != 0  -> NCRISC reads garbage socket config.
         //   * sync_request != 0        -> BRISC enters sync before the host is ready.
         //   * sync_host_timestamp != 0 -> phantom sync marker pushed on first boot.
-        //   * realtime_profiler_state / program_id_fifo_{start,end} corrupt state machine.
+        //   * realtime_profiler_state / runtime_id_fifo_{start,end} corrupt state machine.
         {
             const uint32_t profiler_msg_size = factory.size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
             const uint32_t profiler_msg_words = profiler_msg_size / sizeof(uint32_t);
@@ -834,7 +834,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                     .start_timestamp = start_time,
                     .end_timestamp = end_time,
                     .frequency = dev_state.sync_frequency,
-                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(start_id),
                 };
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
             }
@@ -1199,7 +1199,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                     .start_timestamp = start_time,
                     .end_timestamp = end_time,
                     .frequency = dev_state.sync_frequency,
-                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                    .kernel_sources = tt::GetKernelSourcesForRuntimeId(start_id),
                 };
                 std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
@@ -1268,7 +1268,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
                         .start_timestamp = start_time,
                         .end_timestamp = end_time,
                         .frequency = dev_state.sync_frequency,
-                        .kernel_sources = tt::GetKernelSourcesForRuntimeId(static_cast<uint16_t>(start_id)),
+                        .kernel_sources = tt::GetKernelSourcesForRuntimeId(start_id),
                     };
                     std::lock_guard<std::mutex> cb_lock(parallel_finish_sync_callback_mu_);
                     tt::InvokeProgramRealtimeProfilerCallbacks(record);

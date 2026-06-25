@@ -67,7 +67,7 @@ public:
     void TieRuntimeIdToProgramId(tt_metal::detail::ProgramImpl& program);
     // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
     // The returned span is valid until MetalContext teardown or reinitialization.
-    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) const;
+    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint32_t runtime_id) const;
     // Register a callback to be invoked when real-time profiler data arrives.
     // Returns a handle that can be used to unregister the callback.
     tt::ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
@@ -115,7 +115,7 @@ private:
     mutable std::mutex kernel_source_mutex_;
     std::unordered_set<std::string> unique_kernel_sources_;
     std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources_;
-    std::unordered_map<uint16_t, uint64_t> runtime_id_to_program_id_;
+    std::unordered_map<uint32_t, uint64_t> runtime_id_to_program_id_;
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;
     // Registered real-time profiler callbacks (invoked from the receiver thread).
