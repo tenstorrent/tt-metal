@@ -28,6 +28,7 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -777,8 +778,10 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
         dispatch_cores.push_back(virtual_dispatch_core);
     }
 
+    // Build a set for O(1) membership tests instead of O(n) std::find per core.
+    const std::unordered_set<CoreCoord> dispatch_cores_set(dispatch_cores.begin(), dispatch_cores.end());
     for (const CoreCoord& core : virtual_cores) {
-        if (std::find(dispatch_cores.begin(), dispatch_cores.end(), core) == dispatch_cores.end()) {
+        if (!dispatch_cores_set.contains(core)) {
             return false;
         }
     }

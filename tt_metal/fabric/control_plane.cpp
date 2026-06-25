@@ -22,6 +22,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -2582,11 +2583,13 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
                         if (!local_direction_map.contains(direction)) {
                             local_direction_map[direction] = channels;
                         } else {
-                            // Merge channels, avoiding duplicates
+                            // Merge channels, avoiding duplicates. Track membership in a set for
+                            // O(1) lookups instead of O(n) std::find per candidate channel.
                             auto& local_channels = local_direction_map[direction];
+                            using chan_t = std::decay_t<decltype(local_channels)>::value_type;
+                            std::unordered_set<chan_t> seen_channels(local_channels.begin(), local_channels.end());
                             for (const auto& channel : channels) {
-                                if (std::find(local_channels.begin(), local_channels.end(), channel) ==
-                                    local_channels.end()) {
+                                if (seen_channels.insert(channel).second) {
                                     local_channels.push_back(channel);
                                 }
                             }

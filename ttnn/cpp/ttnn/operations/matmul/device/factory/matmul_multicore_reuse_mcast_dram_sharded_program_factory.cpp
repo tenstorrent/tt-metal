@@ -7,6 +7,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -653,12 +654,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     }
 
     // in0 sender runtime args (mcast senders)
+    // Build a set for O(1) membership tests instead of O(n) std::find per core.
+    const std::unordered_set<CoreCoord> storage_worker_common_set(
+        storage_worker_common.begin(), storage_worker_common.end());
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
         std::vector<uint32_t> mm_in0_sender_args;
 
         uint32_t worker_core_type;
-        if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
+        if (storage_worker_common_set.contains(core)) {
             worker_core_type = 2;
         } else {
             worker_core_type = 1;
@@ -694,10 +698,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     }
 
     // in0 sender runtime args (idle cores in rect grid)
+    // Build sets for O(1) membership tests instead of O(n) std::find per core.
+    const std::unordered_set<CoreCoord> mcast_senders_set(mcast_senders_coords.begin(), mcast_senders_coords.end());
+    const std::unordered_set<CoreCoord> mcast_receiver_set(mcast_receiver_coords.begin(), mcast_receiver_coords.end());
     for (auto core : all_cores_in_rect_grid_vec) {
-        if (std::find(mcast_senders_coords.begin(), mcast_senders_coords.end(), core) == mcast_senders_coords.end() and
-            std::find(mcast_receiver_coords.begin(), mcast_receiver_coords.end(), core) ==
-                mcast_receiver_coords.end()) {
+        if (!mcast_senders_set.contains(core) and !mcast_receiver_set.contains(core)) {
             std::vector<uint32_t> mm_in0_idle_args;
             uint32_t worker_core_type = 0;
             mm_in0_idle_args.push_back((std::uint32_t)worker_core_type);
@@ -733,10 +738,14 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t expected_max_total_width = num_cores_written_back * per_core_N_storage;
     uint32_t total_tensor_width_written_back = 0;
 
-    // For all cores in the rect grid, set compute and in1 rt args for non-worker cores
+    // For all cores in the rect grid, set compute and in1 rt args for non-worker cores.
+    // Build a set of worker ranges for O(1) membership tests instead of O(n) std::find per core.
+    // NOTE: preserves the original semantics -- membership is by exact single-core range, via the
+    // implicit CoreCoord->CoreRange conversion that the std::find used here.
+    const std::unordered_set<CoreRange> all_worker_ranges_set(
+        all_worker_cores.ranges().begin(), all_worker_cores.ranges().end());
     for (auto core : all_cores_in_rect_grid_vec) {
-        if (std::find(all_worker_cores.ranges().begin(), all_worker_cores.ranges().end(), core) ==
-            all_worker_cores.ranges().end()) {  // not worker
+        if (!all_worker_ranges_set.contains(CoreRange(core, core))) {  // not worker
             bool is_worker_core = false;
             std::vector<uint32_t> mm_in1_sender_writer_args;
             mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);

@@ -4,6 +4,8 @@
 
 #include "dispatch_kernel_initializer.hpp"
 
+#include <unordered_map>
+
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -190,25 +192,31 @@ void DispatchKernelInitializer::init_device_command_queues() {
         return;
     }
 
+    // Map device id -> IDevice* once for O(1) lookup instead of O(n) std::find_if per tunnel stage.
+    // Captured by reference into the async tasks below, which are all joined before this returns.
+    std::unordered_map<ChipId, Device*> device_by_id;
+    device_by_id.reserve(devices_.size());
+    for (auto* dev : devices_) {
+        device_by_id.emplace(dev->id(), dev);
+    }
+
     std::vector<std::shared_future<void>> events;
     for (auto* dev : devices_) {
         if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
             continue;
         }
         ChipId mmio_device_id = dev->id();
-        events.emplace_back(detail::async([this, dev, mmio_device_id]() {
+        events.emplace_back(detail::async([this, dev, mmio_device_id, &device_by_id]() {
             auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(mmio_device_id);
             dev->init_command_queue_device_with_topology(dispatch_topology_.get());
             log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
             for (const auto& tunnel : tunnels_from_mmio) {
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
-                    auto it = std::find_if(devices_.begin(), devices_.end(), [&](IDevice* d) {
-                        return d->id() == mmio_controlled_device_id;
-                    });
-                    if (it != devices_.end()) {
-                        (*it)->init_command_queue_device_with_topology(dispatch_topology_.get());
-                        log_debug(tt::LogMetal, "Command Queue initialized on Device {}", (*it)->id());
+                    auto it = device_by_id.find(static_cast<ChipId>(mmio_controlled_device_id));
+                    if (it != device_by_id.end()) {
+                        it->second->init_command_queue_device_with_topology(dispatch_topology_.get());
+                        log_debug(tt::LogMetal, "Command Queue initialized on Device {}", it->second->id());
                     }
                 }
             }

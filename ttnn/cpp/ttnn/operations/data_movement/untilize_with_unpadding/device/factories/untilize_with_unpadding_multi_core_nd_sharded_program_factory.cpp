@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <unordered_map>
+
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -234,6 +236,12 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
     // Logic for ND sharding makes as few assumptions about page locations as possible. Padded pages will be handled
     // in the writer kernel.
     const auto& mapped_cores = page_mapping.all_cores;
+    // Map each core to its index in mapped_cores for O(1) lookup instead of O(n) std::find per core.
+    std::unordered_map<CoreCoord, size_t> mapped_core_index;
+    mapped_core_index.reserve(mapped_cores.size());
+    for (size_t i = 0; i < mapped_cores.size(); ++i) {
+        mapped_core_index.emplace(mapped_cores[i], i);
+    }
 
     // Use page_mapping to count non-padding blocks per core
     // page_mapping.core_host_page_indices[core_id] contains host page indices for all device pages on that core,
@@ -245,11 +253,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
         compute_desc.runtime_args.reserve(ordered_cores_with_data.size());
     }
     for (auto core : ordered_cores_with_data) {
-        auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
+        auto core_it = mapped_core_index.find(core);
         uint32_t num_input_blocks_to_process = 0;
 
-        if (core_it != mapped_cores.end()) {
-            const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
+        if (core_it != mapped_core_index.end()) {
+            const size_t core_idx = core_it->second;
             const auto& host_page_indices = page_mapping.core_host_page_indices[core_idx];
 
             // Iterate through device pages in blocks of num_tiles_per_input_block.

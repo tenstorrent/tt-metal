@@ -322,6 +322,9 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     std::optional<tt::tt_fabric::FabricNodeId> stage_0_entry_fn;
     std::optional<tt::tt_fabric::FabricNodeId> loopback_exit_fn;
     bool found_non_z_pair = false;
+    // Build a set for O(1) membership tests instead of O(n) std::find per peer.
+    const std::unordered_set<tt::tt_fabric::FabricNodeId> unclaimed_set(
+        unclaimed_mesh_0_nodes.begin(), unclaimed_mesh_0_nodes.end());
     for (std::size_t a = 0; a < unclaimed_mesh_0_nodes.size() && !found_non_z_pair; a++) {
         auto fn_a = unclaimed_mesh_0_nodes[a];
         for (const auto& [chan_id, direction] : control_plane.get_active_fabric_eth_channels(fn_a)) {
@@ -330,9 +333,7 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
             if (peer_fn.mesh_id != mesh_ids[0]) {
                 continue;
             }
-            bool peer_unclaimed = !used_nodes.contains(peer_fn) &&
-                                  std::find(unclaimed_mesh_0_nodes.begin(), unclaimed_mesh_0_nodes.end(), peer_fn) !=
-                                      unclaimed_mesh_0_nodes.end();
+            bool peer_unclaimed = !used_nodes.contains(peer_fn) && unclaimed_set.contains(peer_fn);
             if (!peer_unclaimed) {
                 continue;
             }

@@ -27,6 +27,7 @@
 
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <tt_stl/assert.hpp>
 #include "dispatch/kernels/cq_commands.hpp"
@@ -498,10 +499,12 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(
         virtual_dispatch_cores.push_back(virtual_dispatch_core);
     }
 
+    // Build a set for O(1) membership tests instead of O(n) std::find per core.
+    const std::unordered_set<CoreCoord> virtual_dispatch_cores_set(
+        virtual_dispatch_cores.begin(), virtual_dispatch_cores.end());
     bool has_dispatch_core_been_found = false;
     for (const CoreCoord& core : virtual_cores) {
-        if (std::find(virtual_dispatch_cores.begin(), virtual_dispatch_cores.end(), core) !=
-            virtual_dispatch_cores.end()) {
+        if (virtual_dispatch_cores_set.contains(core)) {
             has_dispatch_core_been_found = true;
         } else if (has_dispatch_core_been_found) {
             return false;

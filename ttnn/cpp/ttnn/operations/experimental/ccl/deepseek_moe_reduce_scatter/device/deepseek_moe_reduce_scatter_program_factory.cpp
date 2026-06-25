@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -38,10 +39,12 @@ CoreCoord choose_additional_core(
         CoreCoord(0, 5),
     };
 
+    // Build a set for O(1) membership tests instead of O(n) std::find per candidate core.
+    const std::unordered_set<CoreCoord> selected_set(cores_already_selected.begin(), cores_already_selected.end());
+
     // try optimal core first
     CoreCoord optimal_supplemental_core = optimal_supplemental_core_per_link.at(clamped_num_links - 1);
-    if (std::find(cores_already_selected.begin(), cores_already_selected.end(), optimal_supplemental_core) ==
-        cores_already_selected.end()) {
+    if (!selected_set.contains(optimal_supplemental_core)) {
         return optimal_supplemental_core;
     }
 
@@ -54,8 +57,7 @@ CoreCoord choose_additional_core(
         for (size_t y = start.y; y <= end.y; y++) {
             for (size_t x = start.x; x <= end.x; x++) {
                 CoreCoord core = CoreCoord(x, y);
-                if (std::find(cores_already_selected.begin(), cores_already_selected.end(), core) ==
-                    cores_already_selected.end()) {
+                if (!selected_set.contains(core)) {
                     return core;
                 }
             }

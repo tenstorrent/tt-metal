@@ -4,6 +4,8 @@
 
 #include "untilize_multi_core_input_and_output_nd_shard_type_and_shard_spec_identical_program_factory.hpp"
 
+#include <unordered_map>
+
 #include "ttnn/common/constants.hpp"
 
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -141,12 +143,18 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
     auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
     auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& mapped_cores = page_mapping.all_cores;
+    // Map each core to its index in mapped_cores for O(1) lookup instead of O(n) std::find per core.
+    std::unordered_map<CoreCoord, size_t> mapped_core_index;
+    mapped_core_index.reserve(mapped_cores.size());
+    for (size_t i = 0; i < mapped_cores.size(); ++i) {
+        mapped_core_index.emplace(mapped_cores[i], i);
+    }
     for (const auto& core : cores) {
-        auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
+        auto core_it = mapped_core_index.find(core);
         uint32_t num_blocks_to_process = 0;
         uint32_t num_tiles_to_process = 0;
-        if (core_it != mapped_cores.end()) {
-            const size_t core_idx = std::distance(mapped_cores.begin(), core_it);
+        if (core_it != mapped_core_index.end()) {
+            const size_t core_idx = core_it->second;
             const size_t num_shards_on_core = distribution_spec.num_shards_per_core(core_idx);
             num_blocks_to_process = num_blocks_per_shard * num_shards_on_core;
             num_tiles_to_process = num_tiles_per_block * num_blocks_to_process;
