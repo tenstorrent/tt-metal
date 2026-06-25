@@ -1002,7 +1002,9 @@ def run_chunked_transformer_no_pcc(
     [(False, False), (True, False), (True, True)],
     ids=["nosvc", "h2dsvc_regular", "h2dsvc_isolated"],
 )
-@pytest.mark.parametrize("num_iters", [1, 2, 10, 20], ids=["iters1", "two_iters", "ten_iters", "iters20"])
+@pytest.mark.parametrize(
+    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
+)
 @pytest.mark.parametrize("n_chunks", [1, 2, 11], ids=["chunks1", "chunks2", "chunks_eleven"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
