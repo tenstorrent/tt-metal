@@ -36,4 +36,8 @@ void kernel_main() {
     // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     noc_async_write(src_addr, dst_addr, hidden_state_len_bytes);
     noc.async_write_barrier();
+
+    // cb_out is waited only as an output-ready handshake (the write above sources from cb_h_acc);
+    // pop it so the CB is left balanced.
+    cb_out_obj.pop_front(num_tiles_per_core);
 }
