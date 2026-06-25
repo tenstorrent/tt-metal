@@ -14,7 +14,7 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad
+from ttml.common.utils import no_grad, round_up_to_tile
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
@@ -96,10 +96,6 @@ def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any]
     hosts = [t.cpu(blocking=False) for t in tensors]
     done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
     return hosts, done
-
-
-def _round_up(x: int) -> int:
-    return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
 
 class LlamaGRPOCompleter(GRPOCompleter):
@@ -320,7 +316,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         logits = self._forward(inputs_np, pad_lengths, B)
 
-        Tp = _round_up(T)
+        Tp = round_up_to_tile(T)
         targets_pad = np.full((B, Tp), pad_token, dtype=np.uint32)
         targets_pad[:, :T] = targets_np
 
@@ -352,7 +348,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
     # ------------------------------------------------------------------
 
     def _tokens_to_tensor(self, tokens_np: np.ndarray, B: int) -> ttml.autograd.Tensor:
-        padded_len = _round_up(tokens_np.shape[1])
+        padded_len = round_up_to_tile(tokens_np.shape[1])
         padded = np.full((B, padded_len), self._ctx._pad_token, dtype=np.uint32)
         padded[:, : tokens_np.shape[1]] = tokens_np
         return ttml.autograd.Tensor.from_numpy(
@@ -365,8 +361,8 @@ class LlamaGRPOCompleter(GRPOCompleter):
         assert len(pad_lengths) == B
 
         whole_len = prompt_len + query_len
-        padded_q = _round_up(query_len)
-        padded_w = _round_up(whole_len)
+        padded_q = round_up_to_tile(query_len)
+        padded_w = round_up_to_tile(whole_len)
 
         mask_one_token = np.zeros((padded_q, padded_w), dtype=np.float32)
         mask_one_token[:query_len, :padded_w] = np.tri(query_len, padded_w, k=prompt_len, dtype=np.float32)
@@ -429,7 +425,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         B_local = B // total_devices
 
         V = len(ctx._tokenizer)
-        padded_V = _round_up(V)
+        padded_V = round_up_to_tile(V)
 
         kv_cache = self._get_kv_cache(B_local)
         logits_mask_tensor = self._build_logits_mask(V, padded_V) if padded_V != V else None

@@ -29,7 +29,7 @@ import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad
+from ttml.common.utils import no_grad, round_up_to_tile, build_causal_mask
 from ttml.models import RunnerType
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 
@@ -39,8 +39,6 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from .qwen3_support import build_mesh, load_weights_from_hf
 from .qwen3_kv_cache import Qwen3KVCache
-
-TILE_SIZE = 32
 
 # Chunked async readback during decode: instead of a blocking device->host sync
 # every token, sampled token columns are read back non-blocking every CHUNK
@@ -56,10 +54,6 @@ class Qwen3CompletionCtx:
     completions_per_prompt: int = 1
     _tokenizer: Any = None
     _pad_token: Optional[int] = None
-
-
-def _round_up(x: int) -> int:
-    return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
 
 def deallocate_tensors(tensors: Any) -> None:
@@ -243,18 +237,6 @@ class Qwen3GRPOCompleter(GRPOCompleter):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _causal_mask(self, seq_len: int) -> ttml.autograd.Tensor:
-        """Square broadcast causal mask ``[1, 1, seq_len, seq_len]`` (1 = attend).
-
-        Broadcast over batch/heads so the prefill (``q==k``) hits the fused SDPA
-        kernel. Prompts are left-aligned (right-padded) and the per-row prediction
-        position is read at ``len_b - 1``, so plain causal masking suffices --
-        right-pad columns are after each row's last real token and are excluded by
-        causality. This mirrors the validated examples/qwen3/generate.py path.
-        """
-        mask = np.tril(np.ones((1, 1, seq_len, seq_len), dtype=np.float32))
-        return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
-
     def _decode_causal_mask(self, cur_pos: int, width: int) -> ttml.autograd.Tensor:
         """Single-query decode mask ``[1, 1, 1, width]`` (broadcast over batch).
 
@@ -310,7 +292,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         max_prompt_len = max(lengths)
         # Tile-aligned prompt window; prompts are left-aligned within it (real
         # tokens at [0, len_b), pad after). Per-row prediction at len_b - 1.
-        Np = _round_up(max_prompt_len)
+        Np = round_up_to_tile(max_prompt_len)
         pred_pos = [length - 1 for length in lengths]
 
         tokens_to_complete = min(ctx.max_tokens_to_complete, self._max_seq_len - Np)
@@ -374,7 +356,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     prompt_np[b, : len(seq)] = np.asarray(seq, dtype=np.uint32)
 
                 input_tensor = self._tokens_to_tensor(prompt_np, B)
-                prefill_mask = self._causal_mask(Np)
+                prefill_mask = build_causal_mask(Np, device=True)
                 logits = self._model(input_tensor, prefill_mask, past_key_values=kv)
 
                 seed = int(np.random.randint(low=1, high=int(1e7)))
@@ -477,7 +459,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         lengths = [len(p) + len(c) - 1 for p, c in zip(prompts, completions)]
         T = max(lengths)
         assert T >= 1
-        Tp = _round_up(T)
+        Tp = round_up_to_tile(T)
 
         inputs_np = np.full((B, Tp), pad_token, dtype=np.uint32)
         targets_np = np.full((B, Tp), pad_token, dtype=np.uint32)
@@ -501,7 +483,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     loss_mask_np[i, start:end] = 1.0
 
         input_tensor = self._tokens_to_tensor(inputs_np, B)
-        mask = self._causal_mask(Tp)
+        mask = build_causal_mask(Tp, device=True)
         logits = self._model(input_tensor, mask)
 
         targets_tt = ttml.autograd.Tensor.from_numpy(

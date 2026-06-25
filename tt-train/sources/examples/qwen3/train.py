@@ -80,9 +80,8 @@ import ttml
 
 from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model
 from utils.memory import MemoryUsageTracker, finalize_memory
-from ttml.common.utils import no_grad
+from ttml.common.utils import no_grad, build_causal_mask
 from utils.tensor_utils import (
-    create_causal_mask,
     create_input_tensor,
     create_target_tensor,
     get_loss_value,
@@ -178,7 +177,7 @@ def generate_text(model, config, tokenizer, prompt, max_tokens, max_seq_len, dev
     ctx = ttml.autograd.AutoContext.get_instance()
     with no_grad():
         orig_vocab = config.vocab_size
-        causal_mask = create_causal_mask(max_seq_len)
+        causal_mask = build_causal_mask(max_seq_len, device=True)
 
         prompt_tokens = tokenizer.encode(prompt)
         current_tokens = list(prompt_tokens)
@@ -659,7 +658,7 @@ def main():
         )
 
     # Causal mask (shared across all steps)
-    causal_mask = create_causal_mask(args.max_seq_len)
+    causal_mask = build_causal_mask(args.max_seq_len, device=True)
 
     # Training state
     ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
