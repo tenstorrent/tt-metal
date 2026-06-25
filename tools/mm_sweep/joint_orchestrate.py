@@ -19,7 +19,8 @@ import json, math, os, statistics, subprocess, sys, time
 from collections import deque
 
 REPO = "/localdev/cglagovich/tt-metal"
-OUT = "/localdev/cglagovich/mm_jointsweep"  # PERSISTENT (not /tmp)
+# FCSWEEP_OUT overrides the output dir (e.g. a targeted per-shape sweep into its own dir).
+OUT = os.environ.get("FCSWEEP_OUT", "/localdev/cglagovich/mm_jointsweep")  # PERSISTENT (not /tmp)
 CFG_BUDGET = int(sys.argv[1]) if len(sys.argv) > 1 else 80  # configs per batch (small -> cheap hang)
 SHARD = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 NSHARD = int(sys.argv[3]) if len(sys.argv) > 3 else 1
@@ -104,6 +105,9 @@ M_TILES = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]
 K_TILES = [1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256]
 N_TILES = M_TILES
 ALL = [(mt * 32, kt * 32, nt * 32) for mt in M_TILES for kt in K_TILES for nt in N_TILES]
+# FCSWEEP_SHAPES overrides the shape set with an explicit json list of [M,K,N] (exact model shapes).
+if os.environ.get("FCSWEEP_SHAPES"):
+    ALL = [tuple(s) for s in json.load(open(os.environ["FCSWEEP_SHAPES"]))]
 
 os.makedirs(OUT, exist_ok=True)
 exclude = set(json.load(open(GLOBAL_DONE))) if os.path.exists(GLOBAL_DONE) else set()

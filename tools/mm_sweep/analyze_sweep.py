@@ -34,6 +34,7 @@ def load():
                 continue
             if r.get("pcc") is not None and r["pcc"] < PCC_MIN:
                 continue
+            r["mcast_used"] = mcast_used(r)
             k = (r["M"], r["K"], r["N"], str(r["S"]), str(r["Pk"]), r["blk"])
             if k not in best or r["us"] < best[k]["us"]:
                 best[k] = r
@@ -42,6 +43,34 @@ def load():
 
 def util_pct(M, K, N, us):
     return 100.0 * (2.0 * M * K * N) / (PEAK_FLOPS * us * 1e-6)
+
+
+def _percore(Mt, Nt, S, Pk):
+    transpose = Mt > Nt
+    y = GY // (S * Pk)
+    x = S * GX
+    in0 = x if transpose else y
+    in1 = y if transpose else x
+    return math.ceil(Mt / in0), math.ceil(Nt / in1)
+
+
+def mcast_used(r):
+    """Did the factory's auto mcast (prefetch_gate) engage for this config? Derived from the gate, since
+    it's not recorded. Gate: config is None (blk in {heuristic,auto}) && min(per-core M,N tiles) <= 2 &&
+    !num_k_fused (Pk==1). Pinned-block configs always have config.has_value() -> mcast off.
+      True / False  -> determinable;  None -> heuristic row (S,Pk chosen internally, not derivable here).
+    Caveat: rows from results_main predate the mcast x K-par exclusion, so a config=None Pk>1 skinny row
+    there MAY have had mcast on; under current code it's off. The Pk==1 verdicts are version-independent."""
+    blk = r["blk"]
+    if blk == "heuristic":
+        return None
+    if blk != "auto":  # pinned MinimalMatmulConfig -> prefetch_gate hard-false
+        return False
+    S, Pk = int(r["S"]), int(r["Pk"])
+    if Pk > 1:  # k-fused -> mutually exclusive with mcast (current guard)
+        return False
+    Mpc, Npc = _percore(r["M"] // 32, r["N"] // 32, S, Pk)
+    return min(Mpc, Npc) <= 2
 
 
 def per_shape(recs):
@@ -112,6 +141,35 @@ def main():
     )
     _, hb = histo("util", utils, [5, 10, 20, 30, 40, 50, 60, 70])
     emit("- histogram: " + "  ".join(f"{lbl}:{cnt}" for lbl, cnt in hb))
+
+    # ---- mcast actual-usage (derived from the factory gate; not recorded in the manifest) ----
+    emit(f"\n## Was mcast actually used? (derived from the prefetch_gate)")
+    on = sum(1 for r in recs if r.get("mcast_used") is True)
+    off = sum(1 for r in recs if r.get("mcast_used") is False)
+    unk = sum(1 for r in recs if r.get("mcast_used") is None)
+    emit(
+        f"- across ALL {len(recs)} configs: mcast ON={on} ({100*on/len(recs):.1f}%)  OFF={off}  "
+        f"heuristic-indeterminate={unk}"
+    )
+    # best-config-per-shape: did the winning config use mcast?
+    bon = sum(1 for s in shapes.values() if s["best"].get("mcast_used") is True)
+    boff = sum(1 for s in shapes.values() if s["best"].get("mcast_used") is False)
+    bunk = sum(1 for s in shapes.values() if s["best"].get("mcast_used") is None)
+    emit(f"- of the {n} best-per-shape configs: mcast ON={bon}  OFF={boff}  heuristic-indeterminate={bunk}")
+    # where mcast-on configs win, how skinny are they (sanity: should all be min per-core <=2)
+    won_mcast = [s for s in shapes.values() if s["best"].get("mcast_used") is True]
+    if won_mcast:
+        emit(
+            f"- shapes whose BEST config used mcast: {len(won_mcast)} "
+            f"(all skinny: min per-core tiles <=2). Examples: "
+            + ", ".join(f"{s['M']}x{s['K']}x{s['N']}" for s in won_mcast[:6])
+        )
+    emit(
+        "- NOTE: every pinned-block config has mcast OFF; mcast only engages on config=None (auto/"
+        "heuristic) skinny shapes with Pk==1. So the auto-vs-pinned block comparison on skinny shapes "
+        "is confounded by this dataflow difference; on N>=4096 non-skinny shapes all configs share the "
+        "same levers (clean)."
+    )
 
     # ---- Q1: underperformers + pattern correlation ----
     emit(f"\n## Q1 - absolute FLOP-utilization underperformers\n")
@@ -249,8 +307,8 @@ def main():
         f"\nPeak {PEAK_FLOPS/1e12:.1f} TFLOP/s (8x8, 2048 FLOP/cyc/core, 1GHz). util% = 2*M*K*N/(peak*time).",
         f"{n} shapes, best config per shape. heur_gap = heuristic_µs / best_µs (1.0 = heuristic optimal).\n",
         "| # | shape (MxKxN) | Mt x Nt x Kt | out_tiles | work GFLOP | best util% | best µs | "
-        "best S | best Pk | best blk | sbh x sbw | heur util% | heur_gap | #cfgs |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "best S | best Pk | best blk | sbh x sbw | mcast | heur util% | heur_gap | #cfgs |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for i, s in enumerate(sorted(vals, key=lambda s: s["best_util"]), 1):
         b = s["best"]
@@ -258,10 +316,11 @@ def main():
         sb = f"{b.get('sbh','?')}x{b.get('sbw','?')}" if b["blk"] not in ("heuristic", "auto") else "-"
         hg = f"{s['heur_us']/s['best_us']:.2f}" if s["heur_us"] else "-"
         hu = f"{s['heur_util']:.1f}" if s["heur_util"] is not None else "-"
+        mc = {True: "on", False: "off", None: "heur?"}[b.get("mcast_used")]
         t.append(
             f"| {i} | {s['M']}x{s['K']}x{s['N']} | {s['Mt']}x{s['Nt']}x{s['Kt']} | {s['Mt']*s['Nt']} | "
             f"{work:.2f} | {s['best_util']:.2f} | {s['best_us']:.1f} | {b['S']} | {b['Pk']} | "
-            f"{b['blk']} | {sb} | {hu} | {hg} | {s['n_cfgs']} |"
+            f"{b['blk']} | {sb} | {mc} | {hu} | {hg} | {s['n_cfgs']} |"
         )
     open(tpath, "w").write("\n".join(t) + "\n")
     print(f"[wrote {tpath}  ({n} shapes)]")
