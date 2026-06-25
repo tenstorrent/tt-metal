@@ -509,8 +509,7 @@ uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) 
     return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
 }
 
-ttnn::Shape compute_padded_shape(
-    ttnn::Shape logical_shape, const uint32_t /*tile_height*/, const uint32_t /*tile_width*/) {
+ttnn::Shape compute_padded_shape(ttnn::Shape logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
     // Special case: if input tensor is 1D row-major, after tiling output tensor will have
     // 1D logical shape but 2D padded shape
     if (logical_shape.rank() == 1) {
@@ -520,7 +519,10 @@ ttnn::Shape compute_padded_shape(
     ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
     std::copy(logical_shape.cbegin(), logical_shape.cend(), output_shape_vec.begin());
 
-    const std::array<uint32_t, 2> tile_shape = {tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT};
+    // Ordered {height, width} so the reverse iterator below rounds the last (width) dim by tile_width
+    // and the second-to-last (height) dim by tile_height. Previously these args were ignored and the
+    // tile dims were hardcoded (harmless only because TILE_HEIGHT == TILE_WIDTH == 32).
+    const std::array<uint32_t, 2> tile_shape = {tile_height, tile_width};
     auto shapeit = tile_shape.rbegin();
 
     std::for_each(output_shape_vec.rbegin(), output_shape_vec.rbegin() + 2, [&shapeit](auto& x) {
