@@ -12,8 +12,7 @@ Generation uses a KV-cache decode: the (tile-aligned, right-padded) prompt
 window is prefilled once with a plain broadcast causal mask, then one token is
 decoded per step against the shared KV cache, sampling at each row's current
 position. The fixed cache length keeps tensor shapes constant across steps (no
-kernel recompiles). It is intentionally simple; the priority here is validating
-the Qwen3 + FSDP + GRPO pipeline.
+kernel recompiles).
 """
 
 from __future__ import annotations
@@ -96,6 +95,13 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         device_config: Device mesh config. ``setup_device`` opens a *named*
             mesh (so an ``"fsdp"`` axis exists) when ``enable_fsdp`` is set.
         model_source: HuggingFace model ID or local directory.
+        memory_efficient: When ``True`` (the default), build the model with
+            ``RunnerType.MemoryEfficient`` (gradient checkpointing): per-block
+            activations are recomputed in the backward pass instead of being
+            retained, which keeps the training forward within DRAM at large
+            micro-batch / sequence lengths. When ``False``, use
+            ``RunnerType.Default`` (retain activations): faster backward, much
+            higher peak memory.
     """
 
     def setup_device(self, device_config: DeviceConfig) -> Any:
@@ -112,6 +118,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         transformer_config: TransformerConfig,
         device_config: DeviceConfig,
         model_source: str,
+        memory_efficient: bool = True,
     ) -> None:
         self._mesh: Any = None
         mesh_device: Any = self.setup_device(device_config)
@@ -140,13 +147,10 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         # recomputed in the backward pass instead of being retained, which keeps
         # the training forward (compute_nlog_probs) within DRAM at large
         # micro-batch / sequence lengths. Matches the Llama GRPO path, which uses
-        # memory_efficient. Set GRPO_QWEN_RUNNER=default to opt back into the
-        # retain-activations runner (faster backward, much higher peak memory).
-        runner_type = (
-            RunnerType.Default
-            if os.environ.get("GRPO_QWEN_RUNNER", "memory_efficient").lower() == "default"
-            else RunnerType.MemoryEfficient
-        )
+        # memory_efficient. Pass memory_efficient=False (--no-memory_efficient on
+        # the CLI) for the retain-activations runner (faster backward, much higher
+        # peak memory).
+        runner_type = RunnerType.MemoryEfficient if memory_efficient else RunnerType.Default
         qwen_config = create_qwen3_config_from_hf(hf_config, max_seq_len, runner_type=runner_type)
         tie = bool(getattr(hf_config, "tie_word_embeddings", False))
 

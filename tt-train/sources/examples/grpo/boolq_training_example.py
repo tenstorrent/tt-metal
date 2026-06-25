@@ -177,6 +177,16 @@ def parse_args():
         default=2048,
         help="Max sequence length for the qwen3 path (bounds the generation horizon).",
     )
+    parser.add_argument(
+        "--memory_efficient",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Qwen3 runner mode. When set (the default), use gradient checkpointing "
+        "(RunnerType.MemoryEfficient): per-block activations are recomputed in the "
+        "backward pass to keep within DRAM at large micro-batch / sequence lengths. "
+        "Pass --no-memory_efficient for the retain-activations runner (RunnerType.Default): "
+        "faster backward, much higher peak memory.",
+    )
     # Accept (and ignore) any extra flags passed by launch scripts so they
     # don't crash argument parsing.
     args, _ = parser.parse_known_args()
@@ -278,6 +288,7 @@ if __name__ == "__main__":
             transformer_config=transformer_config,
             device_config=device_config,
             model_source=model_id,
+            memory_efficient=args.memory_efficient,
         )
     else:
         completer = LlamaGRPOCompleter(
