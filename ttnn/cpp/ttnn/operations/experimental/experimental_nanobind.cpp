@@ -49,32 +49,46 @@
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/h2d_socket_sync/h2d_socket_sync_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
+#include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
+#include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
+#include "ttnn/operations/experimental/topk_large_indices/topk_large_indices_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/generalized_moe_gate_nanobind.hpp"
+#include "ttnn/operations/experimental/indexer_score/indexer_score_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
-#include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -137,20 +151,29 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
+    deepseek_prefill::per_token_cast_to_fp8::detail::bind_experimental_per_token_cast_to_fp8_operation(mod);
+    deepseek_prefill::per_token_cast_back::detail::bind_experimental_per_token_cast_back_operation(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
+
+    // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
+    quasar::bind_quasar(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
+    deepseek_prefill::detail::bind_h2d_socket_sync(mod);
     reshape::detail::bind_view(mod);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
 
     test::bind_test_hang_device_operation(mod);
+    test::bind_test_dram_prefetcher_consumer(mod);
+    bind_tensor_prefetcher(mod);
 
     // CCL ops
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
     ccl::py_module(m_experimental_ccl);
 
     broadcast_to::detail::bind_broadcast_to(mod);
+    multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
@@ -158,16 +181,23 @@ void py_module(nb::module_& mod) {
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::moe::detail::bind_deepseek_moe_gate(mod);
+    deepseek::moe::detail::bind_generalized_moe_gate(mod);
+    topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
+    indexer_score::detail::bind_indexer_score(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
+    deepseek_prefill::detail::bind_unified_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_extract(mod);
     deepseek_prefill::detail::bind_insert(mod);
+    deepseek_prefill::detail::bind_update_padded_kv_cache(mod);
+    deepseek_prefill::detail::bind_zero_padded_kv_cache(mod);
+    deepseek_prefill::detail::bind_rotary_embedding_indexed(mod);
 
     deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
     fusion::detail::bind_fusion_dispatch_op(mod);

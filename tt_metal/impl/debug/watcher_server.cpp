@@ -122,6 +122,13 @@ void WatcherServer::Impl::attach_devices() {
         return;
     }
 
+    // TODO: Remove this once NOC sanitization is supported on Quasar in fast dispatch (#45878)
+    if (env_.get_hal().get_arch() == tt::ARCH::QUASAR && rtoptions.get_fast_dispatch()) {
+        log_warning(
+            tt::LogMetal,
+            "Watcher NOC sanitization has been disabled as it is currently not supported on Quasar in fast dispatch.");
+    }
+
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
@@ -517,8 +524,8 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
     // Initialize DRAM cores debug values (Blackhole only)
     bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
-        for (const auto& dram_core :
-             cluster.get_soc_desc(device_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             write_watcher_init_val_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
         }
     }

@@ -17,6 +17,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class GateComputeMode(Enum):
@@ -24,11 +26,15 @@ class GateComputeMode(Enum):
 
     The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing).
     Each can independently run on device (TTNN) or host (torch).
-    The device grouped-gate has two variants: bf16 (default) and fp32.
+    The device gate has two precision variants: bf16 (default) and fp32.
+
+    The device gate routing rule is selected from the model config: the grouped-topk
+    op handles both cases, collapsing to a plain top-k when there is a single expert
+    group (n_expert_groups == 1, e.g. Kimi) and using grouped routing otherwise.
     """
 
-    DEVICE = "device"  # matmul device, grouped gate device (bf16)
-    DEVICE_FP32 = "device_fp32"  # matmul device, grouped gate device (fp32)
+    DEVICE = "device"  # matmul device, gate device (bf16)
+    DEVICE_FP32 = "device_fp32"  # matmul device, gate device (fp32)
     HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
     HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
@@ -41,24 +47,42 @@ class TtMoEGateConfig:
     ccl_config: dict = field(default_factory=lambda: {"DISPATCH_AXIS": 0, "TP_AXIS": 1, "NUM_LINKS": 2})
     mm_configs: dict = field(
         default_factory=lambda: {
-            # Keyed by (sp_dim, per_device_emb_dim); forward() looks up the tuple.
-            # Missing key → TTNN auto-picks program config.
-            (4096, DeepSeekV3Config.EMB_SIZE // 4): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                in0_block_w=56,
-                out_subblock_h=2,
-                out_subblock_w=4,
-                out_block_h=2,
-                out_block_w=4,
-                per_core_M=2,
-                per_core_N=8,
-                fuse_batch=True,
-                mcast_in0=False,
+            # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
+            # The seq-len element below is a placeholder — __post_init__ rewrites it to the actual
+            # per-chip sequence length (self.sp_dim) so the lookup tracks the real workload.
+            # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
+            (4096, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    out_block_h=2,
+                    out_block_w=4,
+                    per_core_M=2,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (4096, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    out_block_h=2,
+                    out_block_w=4,
+                    per_core_M=2,
+                    per_core_N=12,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
             ),
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
+                fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             ),
         }
@@ -83,9 +107,33 @@ class TtMoEGateConfig:
         )
     )
 
+    def __post_init__(self):
+        # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
+        # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
+        # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of
+        # silently falling back to TTNN's default tiling.
+        self.mm_configs = {
+            ((self.sp_dim, *key[1:]) if isinstance(key, tuple) else key): value
+            for key, value in self.mm_configs.items()
+        }
+
     @property
     def num_cores(self):
         return self.core_grid.num_cores()
+
+    @classmethod
+    def from_model_cfg(cls, model_cfg: type, **overrides) -> "TtMoEGateConfig":
+        """Build from a TestVariant.model_config class. Extra kwargs override per-instance."""
+        return cls(
+            dim=model_cfg.EMB_SIZE,
+            n_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+            n_shared_experts=model_cfg.NUM_SHARED_EXPERTS,
+            n_activated_experts=model_cfg.NUM_EXPERTS_PER_TOKEN,
+            n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
+            n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
+            route_scale=model_cfg.ROUTE_SCALE,
+            **overrides,
+        )
 
 
 class TtMoEGatePrefill(LightweightModule):
@@ -232,6 +280,10 @@ class TtMoEGatePrefill(LightweightModule):
         """
         self.config = config
         self.mesh_device = mesh_device
+        # Shared per-mesh CCL singleton: provides persistent global semaphores for the gate's TP
+        # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
+        # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.fallback_mode = fallback_mode
 
         if weight is not None and bias is not None:
@@ -376,7 +428,7 @@ class TtMoEGatePrefill(LightweightModule):
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
-        config_key = (self.config.sp_dim, per_device_dim)
+        config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
         program_config = self.config.mm_configs.get(config_key)
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
@@ -388,11 +440,19 @@ class TtMoEGatePrefill(LightweightModule):
             program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        if self.mesh_device.shape[self.config.ccl_config["TP_AXIS"]] > 1:
+        tp_axis = self.config.ccl_config["TP_AXIS"]
+        if self.mesh_device.shape[tp_axis] > 1:
+            # Pass persistent CCL semaphores (created once in TT_CCL) so all_reduce_async reuses them
+            # instead of internally allocating+leaking global semaphores in main L1 every call. The
+            # composite all-reduce needs barrier_semaphores of size 2 ([0]=reduce-scatter, [1]=all-gather),
+            # plus the reduce-scatter (3) and all-gather (2) semaphore vectors.
             logits = ttnn.experimental.all_reduce_async(
                 logits,
-                cluster_axis=self.config.ccl_config["TP_AXIS"],
+                cluster_axis=tp_axis,
                 mesh_device=self.mesh_device,
+                barrier_semaphores=self.tt_ccl.barrier_semaphore_handles[tp_axis],
+                rs_global_semaphores=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=tp_axis),
+                ag_global_semaphores=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=tp_axis),
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -469,8 +529,15 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 2: Grouped gate ----
         signpost(header="moe_gate_grouped_gate")
+        # The device gate kernels select the routing rule from n_expert_groups: with a single expert
+        # group (n_expert_groups == 1, e.g. Kimi) the grouped-topk op collapses to a plain top-k.
+        single_group = self.config.n_expert_groups == 1
         if mode == GateComputeMode.DEVICE:
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
+            # The bf16 grouped gate (deepseek_grouped_gate) only supports the multi-group DeepSeek
+            # shape; single-group models route through moe_grouped_topk (fp32), which handles n_groups == 1.
+            ttnn_scores, ttnn_top_k_experts_indices = (
+                self._device_grouped_gate_fp32(logits) if single_group else self._device_grouped_gate(logits)
+            )
 
         elif mode == GateComputeMode.DEVICE_FP32:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate_fp32(logits)

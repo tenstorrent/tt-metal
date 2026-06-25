@@ -17,6 +17,7 @@ from helpers.llk_params import Transpose
 
 class MatmulUnpacker(Unpacker):
     loop: FusedLoop = LoopBlock()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
@@ -109,7 +110,10 @@ class MatmulUnpacker(Unpacker):
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         unpack_tile_size_a = compute_unit.src_a.tile_size
         unpack_tile_size_b = compute_unit.src_b.tile_size
-        full_ct_dim = compute_unit.src_b.dimensions[1] // 32
+        full_ct_dim = (
+            compute_unit.src_b.dimensions[1]
+            // compute_unit.src_b.tile_shape.total_col_dim()
+        )
         output_ct_dim = compute_unit.src_a.tile_count_x
         src_a_partial_face = compute_unit.src_a.partial_face.cpp_enum_value
         src_b_partial_face = compute_unit.src_b.partial_face.cpp_enum_value
@@ -141,5 +145,4 @@ class MatmulUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return f"_llk_unpack_AB_matmul_uninit_({face_r_dim});\n"
+        return f"_llk_unpack_AB_matmul_uninit_();\n"

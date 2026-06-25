@@ -23,11 +23,11 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         default: false
         type: boolean
       gtest_filter:
@@ -47,6 +47,7 @@ jobs:
             cmd: |
               { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_unit_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_unit_tests.sh
               ./build/test/tt_metal/unit_tests_api --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_tensor --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_per_core_allocation --gtest_filter=$GTEST_FILTER
               TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
                 ./build/test/tt_metal/unit_tests_api \
@@ -80,7 +81,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -100,6 +101,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job

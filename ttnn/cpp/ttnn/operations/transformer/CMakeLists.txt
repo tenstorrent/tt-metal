@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Transformer ALIAS ttnn_op_transformer)
 
-tt_reuse_precompile_headers(ttnn_op_transformer TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_transformer TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_transformer)
 
 set_target_properties(
@@ -30,6 +30,7 @@ target_sources(
             attention_softmax/attention_softmax.hpp
             concatenate_heads/concatenate_heads.hpp
             sdpa/sdpa.hpp
+            sdpa/sparse_sdpa.hpp
             sdpa_decode/sdpa_decode.hpp
             sdpa_windowed/sdpa_windowed.hpp
             split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp

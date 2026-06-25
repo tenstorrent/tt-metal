@@ -6,6 +6,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/device.hpp>
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -334,6 +335,102 @@ ttnn::Tensor concat(
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
+    }
+
+    // Issue #43371: When concat is on the last dim and the last dim is not buffer-aligned,
+    // the fallback path transposes dims -2/-1 so that the (small) last dim moves to dim[-2]
+    // and concat proceeds along the new last dim.  If dim[-2] is very large the transposed
+    // page size (element_size * dim[-2]) overflows L1.  Fix: chunk along dim[-2], concat
+    // each chunk independently, then concat the results along dim[-2].
+    // This applies to both TILE_LAYOUT (untilize -> RM -> transpose path) and ROW_MAJOR
+    // (direct transpose path) when the last dim is not buffer-aligned.
+    if (rank >= 2 && dim == rank - 1 && tt::tt_metal::is_device_tensor(first_tensor)) {
+        const uint64_t second_last_dim = first_tensor.logical_shape()[rank - 2];
+        const uint64_t elem_size = first_tensor.element_size();
+        tt::tt_metal::IDevice* device = first_tensor.device();
+        // Match the factory's CB page alignment (concat_program_factory.cpp uses
+        // common_align_len = max(input_alignment, output_alignment)).
+        const uint64_t buf_align = std::max<uint64_t>(
+            first_tensor.buffer()->alignment(), device->allocator()->get_alignment(mem_config.buffer_type()));
+        const uint64_t l1_capacity =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+        // Determine whether the transpose fallback will fire:
+        // - TILE_LAYOUT: untilize produces RM first, then transpose fires if the RM last
+        //   dim is non-aligned. This can only happen when tile padding exists on the concat dim.
+        // - ROW_MAJOR: transpose fires directly when the last dim is not buffer-aligned.
+        bool would_transpose = false;
+        if (first_tensor.layout() == ttnn::TILE_LAYOUT) {
+            bool has_tile_padding_on_concat_dim =
+                std::any_of(input_tensors.begin(), input_tensors.end(), [dim](const ttnn::Tensor& tensor) {
+                    return tensor.logical_shape()[dim] != tensor.padded_shape()[dim];
+                });
+            if (has_tile_padding_on_concat_dim) {
+                would_transpose = std::any_of(
+                    input_tensors.begin(), input_tensors.end(), [dim, buf_align](const ttnn::Tensor& tensor) {
+                        return (static_cast<uint64_t>(tensor.logical_shape()[dim]) * tensor.element_size()) %
+                                   buf_align !=
+                               0;
+                    });
+            }
+        } else if (first_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+            would_transpose =
+                std::any_of(input_tensors.begin(), input_tensors.end(), [dim, buf_align](const ttnn::Tensor& tensor) {
+                    return (static_cast<uint64_t>(tensor.logical_shape()[dim]) * tensor.element_size()) % buf_align !=
+                           0;
+                });
+        }
+
+        // Account for buffer alignment when estimating the post-transpose page size.
+        const uint64_t raw_page = elem_size * second_last_dim;
+        const uint64_t estimated_page_size = ((raw_page + buf_align - 1) / buf_align) * buf_align;
+
+        if (would_transpose && estimated_page_size > l1_capacity) {
+            // TILE_LAYOUT: the final dim[-2] concat operates on tiled chunk outputs, so
+            // chunks must be tile-height-aligned. Read from tensor spec rather than
+            // hardcoding. ROW_MAJOR: no tile boundary required, use alignment of 1.
+            const uint32_t tile_h =
+                (first_tensor.layout() == ttnn::TILE_LAYOUT) ? first_tensor.tensor_spec().tile().get_height() : 1;
+            const uint32_t max_chunk_rows = static_cast<uint32_t>(l1_capacity / (2 * elem_size));
+            const uint32_t chunk_rows = (max_chunk_rows / tile_h) * tile_h;
+            TT_FATAL(
+                chunk_rows > 0,
+                "ttnn.concat: double-buffered tile-height chunk (2 x {} x {} = {} B) exceeds L1 capacity ({} B)",
+                tile_h,
+                elem_size,
+                2 * tile_h * elem_size,
+                l1_capacity);
+
+            const uint32_t total_rows = second_last_dim;
+            std::vector<ttnn::Tensor> chunk_outputs;
+            chunk_outputs.reserve((total_rows + chunk_rows - 1) / chunk_rows);
+
+            for (uint32_t row_start = 0; row_start < total_rows; row_start += chunk_rows) {
+                const uint32_t row_end = std::min(row_start + chunk_rows, total_rows);
+
+                std::vector<ttnn::Tensor> chunk_inputs;
+                chunk_inputs.reserve(input_tensors.size());
+                for (const auto& t : input_tensors) {
+                    ttnn::SmallVector<uint32_t> starts(rank, 0);
+                    ttnn::SmallVector<uint32_t> ends(rank);
+                    for (int i = 0; i < rank; i++) {
+                        ends[i] = t.logical_shape()[i];
+                    }
+                    starts[rank - 2] = row_start;
+                    ends[rank - 2] = row_end;
+                    ttnn::SmallVector<uint32_t> step(rank, 1);
+                    chunk_inputs.push_back(ttnn::slice(t, starts, ends, step, mem_config));
+                }
+
+                chunk_outputs.push_back(
+                    ttnn::concat(chunk_inputs, dim, memory_config, std::nullopt, groups, sub_core_grids));
+            }
+
+            if (chunk_outputs.size() == 1) {
+                return chunk_outputs[0];
+            }
+            return ttnn::concat(chunk_outputs, rank - 2, memory_config, std::nullopt, 1, sub_core_grids);
+        }
     }
 
     auto untilize_rm_retilize_concat =

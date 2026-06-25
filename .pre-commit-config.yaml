@@ -47,6 +47,14 @@ repos:
       args: ["--style=file"]
 - repo: local
   hooks:
+    - id: prefer-expect-error
+      name: "tests: use the expect_error fixture instead of pytest.raises"
+      language: pygrep
+      files: (^|/)tests/.*\.py$
+      entry: '(?<!allow-)pytest\.raises(?!.*allow-pytest\.raises)'
+      # Override on the same line:  with pytest.raises(...):  # allow-pytest.raises: <why>
+- repo: local
+  hooks:
     - id: check-large-files
       name: check for large files (>500 KB)
       entry: python3 scripts/check_file_size.py
@@ -55,11 +63,6 @@ repos:
     - id: validate-metalium-includes
       name: validate-metalium-includes
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api --check-ttnn-forwards
-      language: system
-      pass_filenames: false
-    - id: validate-metalium-deprecation
-      name: validate-metalium-deprecation
-      entry: python3 scripts/validate_api/validate_deprecation.py tt_metal/api origin/main
       language: system
       pass_filenames: false
 - repo: local
@@ -100,7 +103,15 @@ repos:
       entry: bash .github/scripts/utils/validate_golden_csv_columns.sh
       language: system
       pass_filenames: false
-      files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+      files: ^tests/tt_metal/tt_fabric/test_infra/golden/.*bandwidth.*\.csv$
+- repo: local
+  hooks:
+    - id: triage-type-check
+      name: tt-triage type checks
+      entry: tools/triage/run_type_checks.sh
+      language: system
+      pass_filenames: false
+      files: ^tools/triage/
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.

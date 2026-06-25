@@ -378,18 +378,20 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const uint32_t bank_base_address_in,
-        const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
+        const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>{}.get_aligned_page_size()) :
         InterleavedAddrGen<IsDram>(
             {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}),
         aligned_page_size(page_size_in) {}
 
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
-    // See the sharded specialization for the binding's CRTA section layout and the
-    // alignment rationale.
+    // (See the sharded specialization for the binding's CRTA section layout and the alignment rationale.)
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
-            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
+            // TensorAccessorArgs: Create the args object from the token's CTA offset and CRTA offset.
+            //   (But, add 1 to the token's CRTA offset to jump over the base address slot)
+            TensorAccessorArgs<CTA_OFFSET, 1 + (ADDR_CRTA_OFFSET / sizeof(uint32_t))>{},
+            // Bank base address: Get the base address from the front of the token's CRTA section.
             static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
@@ -614,7 +616,7 @@ namespace tensor_accessor {
 // auto-generated kernel_bindings_generated.h) to construct the TensorAccessor directly.
 //
 // The user's kernel code looks like:
-//  auto ta = TensorAccessor(ta::my_host_declared_accessor_name);
+//  auto ta = TensorAccessor(tensor::my_host_declared_accessor_name);
 //
 // No more fussing around with TensorAccessorArgs!
 // All of the boilerplate, nasty args offset logic, and raw base pointer are now fully hidden

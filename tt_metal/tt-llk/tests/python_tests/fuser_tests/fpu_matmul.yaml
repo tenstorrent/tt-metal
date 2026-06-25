@@ -1,0 +1,25 @@
+# Matrix multiply with HiFi2 fidelity.
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "matmul_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 128]
+    pack:
+      - output: "matmul_out"
+        packer: "Packer"

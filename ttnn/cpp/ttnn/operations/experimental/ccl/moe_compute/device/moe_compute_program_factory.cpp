@@ -288,6 +288,17 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     return combine_cores;
 }
 
+ttnn::CoreRange get_moe_worker_mcast_bounding_box(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const uint32_t bh_ring_size) {
+    const auto core_ret =
+        get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, bh_ring_size);
+    return std::get<7>(core_ret).bounding_box();
+}
+
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
     const MoEComputeParams& args,
     const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
@@ -429,12 +440,12 @@ MoEComputeMeshWorkloadFactory::create_at(
     // General info
     uint32_t tokens = get_num_rows_st(tilize_input_tensor);
     uint32_t hidden_size = tilize_input_shape[-1];
-    uint32_t experts = tilize_mapping_shape[-1];
-    uint32_t selected_experts_k = tilize_indices_shape[-1];
 
-    // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
-    // result is fractional experts per device so div_up is required to get the right value here.
-    uint32_t experts_per_device = tt::div_up(experts, num_devices);
+    // Logical experts, routed + shared (replicated experts counted as 1)
+    uint32_t experts = tilize_mapping_shape[-1];
+    // physical experts per device, replicated shared experts are counted per device
+    uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
+    uint32_t selected_experts_k = tilize_indices_shape[-1];
 
     // Output/Combine input core dims, for core selection. These are top-level (lifted) so they
     // remain valid even when combine_params is nullopt (ComputeOnly mode).
@@ -446,6 +457,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t intermediate_size = args.intermediate_size;
     const uint32_t hidden_tiles = hidden_size / 32;
     const uint32_t intermediate_tiles = intermediate_size / 32;
+    const uint32_t num_shared_experts = args.num_shared_experts_per_device.value_or(0);
 
     // Cores
     const auto
@@ -897,7 +909,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // tile_width_bytes = TILE_WIDTH * element_size
     // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
-    uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
+    uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * tilize_input_tensor.element_size();
     uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
 
     const uint32_t primary_mcast_gather_group_num_cores = tilize_num_cores / 2;
@@ -958,6 +970,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"hidden_size", hidden_size},
         {"remote_counts_entry_size", remote_counts_entry_size},
         {"experts", experts},
+        {"experts_per_device", experts_per_device},
         {"selected_experts_k", selected_experts_k},
 
         // Chunk info
@@ -1278,10 +1291,22 @@ MoEComputeMeshWorkloadFactory::create_at(
         "moe_compute: w2 total pages ({}) not divisible by num_cores ({})",
         w2_total_pages_buf,
         matmul_num_cores);
+
+    uint32_t shared_expert_tp_factor;
+    if (args.path == MoEComputePath::ComputeOnly) {
+        // concept of a shared expert doesn't hold in the compute only case.
+        shared_expert_tp_factor = 1;
+    } else {
+        auto* mesh_device = tilize_input_tensor.device();
+        const auto& mesh_shape = mesh_device->get_view().shape();
+        shared_expert_tp_factor = mesh_shape[1 - args.cluster_axis().value()];
+    }
     const uint32_t w0_w1_pages_per_ring_core_total = w0_w1_total_pages_buf / matmul_num_cores;
     const uint32_t w2_pages_per_ring_core_total = w2_total_pages_buf / matmul_num_cores;
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
+        {"num_shared_experts", num_shared_experts},
+        {"shared_expert_tp_factor", shared_expert_tp_factor},
         {"layer_id", args.layer_id},
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},

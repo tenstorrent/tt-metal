@@ -35,11 +35,17 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
     bool compute_only = false,
-    const std::optional<uint32_t>& bh_ring_size = std::nullopt);
+    const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt);
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores);
+
+ttnn::CoreRange get_moe_worker_mcast_bounding_box(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size);
 
 }  // namespace ttnn::experimental

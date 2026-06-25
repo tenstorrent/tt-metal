@@ -7,6 +7,7 @@
 # Debug shebang
 #!/usr/bin/env -S python3 -m pdb
 
+import ast
 import os
 import csv
 from pathlib import Path
@@ -69,6 +70,7 @@ OPS_CSV_HEADER = [
     "MATH FIDELITY",
     "CORE COUNT",
     "AVAILABLE WORKER CORE COUNT",
+    "SUB DEVICE ID",
     "PARALLELIZATION STRATEGY",
     "HOST START TS",
     "HOST END TS",
@@ -129,7 +131,6 @@ OPS_CSV_HEADER = [
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
 
-
 DEVICE_PERF_INT_FIELDS = {
     "GLOBAL CALL COUNT",
     "METAL TRACE ID",
@@ -156,6 +157,95 @@ DEVICE_PERF_INT_FIELDS = {
     "DEVICE TRISC2 KERNEL DURATION [ns]",
     "DEVICE ERISC KERNEL DURATION [ns]",
 }
+
+
+def parse_device_csv_meta_data(meta_data_str: Any) -> Optional[Dict[str, Any]]:
+    if meta_data_str is None:
+        return None
+    meta_data_str = str(meta_data_str).strip()
+    if not meta_data_str:
+        return None
+    try:
+        return json.loads(meta_data_str.replace(";", ","))
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(meta_data_str)
+            return parsed if isinstance(parsed, dict) else None
+        except (ValueError, SyntaxError):
+            return None
+
+
+def normalize_device_csv_trace_field(value: Any, default: int = -1) -> int:
+    if value is None or str(value).strip() in ("", "None"):
+        return default
+    return int(value)
+
+
+def get_op_sub_device_lookup_key(op: OpDict, device_id: int) -> Tuple[int, int, int, int]:
+    """Build a lookup key aligned with device CSV run_host_id / ProgramExecutionUID."""
+
+    perf_row = op.get("_device_perf_row")
+    if perf_row is not None:
+        runtime_id = int(perf_row["GLOBAL CALL COUNT"])
+        trace_id = normalize_device_csv_trace_field(perf_row.get("METAL TRACE ID"))
+        trace_id_counter = normalize_device_csv_trace_field(perf_row.get("METAL TRACE REPLAY SESSION ID"))
+        op_device_id = int(perf_row.get("DEVICE ID", op.get("device_id", device_id)))
+    else:
+        runtime_id = int(op["global_call_count"])
+        trace_id = normalize_device_csv_trace_field(op.get("metal_trace_id"))
+        trace_id_counter = normalize_device_csv_trace_field(op.get("metal_trace_replay_session_id"))
+        op_device_id = int(op.get("device_id", device_id))
+
+    return (op_device_id, runtime_id, trace_id, trace_id_counter)
+
+
+def build_sub_device_id_lookup_from_device_csv(
+    device_log_path: Path,
+) -> Dict[Tuple[int, int, int, int], int]:
+    """Map (device_id, run_host_id, trace_id, trace_id_counter) -> sub_device_id from device CSV meta data."""
+
+    lookup: Dict[Tuple[int, int, int, int], int] = {}
+    device_log_path = Path(device_log_path)
+    if not device_log_path.is_file():
+        return lookup
+
+    df = pd.read_csv(device_log_path, skiprows=1, header=0, na_filter=False)
+    for row in df.itertuples():
+        meta_data = parse_device_csv_meta_data(row[15])
+        if meta_data is None or "sub_device_id" not in meta_data:
+            continue
+
+        sub_device_id = int(meta_data["sub_device_id"])
+        key = (
+            int(row[1]),
+            int(row[8]),
+            normalize_device_csv_trace_field(row[9]),
+            normalize_device_csv_trace_field(row[10]),
+        )
+        if key in lookup and lookup[key] != sub_device_id:
+            logger.warning(
+                "Inconsistent sub_device_id for device {} run_host_id {} trace_id {} trace_id_counter {}: {} vs {}",
+                key[0],
+                key[1],
+                key[2],
+                key[3],
+                lookup[key],
+                sub_device_id,
+            )
+        lookup[key] = sub_device_id
+
+    return lookup
+
+
+def attach_sub_device_ids_to_ops(
+    host_ops_by_device: DeviceOpsDict,
+    sub_device_id_lookup: Dict[Tuple[int, int, int, int], int],
+) -> None:
+    for device_id, device_ops in host_ops_by_device.items():
+        for op in device_ops:
+            lookup_key = get_op_sub_device_lookup_key(op, device_id)
+            if lookup_key in sub_device_id_lookup:
+                op["sub_device_id"] = sub_device_id_lookup[lookup_key]
 
 
 def _parse_int_field(value: str) -> Optional[int]:
@@ -943,6 +1033,9 @@ def append_device_data(
             host_ops_by_device, logFolder, device_analysis_types, traceReplays
         )
 
+    sub_device_id_lookup = build_sub_device_id_lookup_from_device_csv(Path(logFolder) / PROFILER_DEVICE_SIDE_LOG)
+    attach_sub_device_ids_to_ops(host_ops_by_device, sub_device_id_lookup)
+
     trace_ops_by_augmented_id = _build_trace_ops_mapping(host_ops_by_device, ops)
 
     if analyze_noc_traces:
@@ -1018,6 +1111,7 @@ def get_device_data_generate_report(
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
+        sub_device_id_lookup = build_sub_device_id_lookup_from_device_csv(Path(deviceTimesLog))
         setup = device_post_proc_config.default_setup()
         if device_analysis_types:
             allAnalysis = setup.timerAnalysis
@@ -1080,6 +1174,14 @@ def get_device_data_generate_report(
                 deviceOps[device].append(deviceOp)
 
                 rowDict = {csv_header_format("global_call_count"): deviceOp["global_call_count"]}
+                sub_device_lookup_key = (
+                    int(device),
+                    int(deviceOp["global_call_count"]),
+                    -1,
+                    -1,
+                )
+                if sub_device_lookup_key in sub_device_id_lookup:
+                    rowDict["SUB DEVICE ID"] = sub_device_id_lookup[sub_device_lookup_key]
                 for analysis, data in deviceOp["device_time"].items():
                     analysisData = data["series"]
                     analysisStats = data["stats"]

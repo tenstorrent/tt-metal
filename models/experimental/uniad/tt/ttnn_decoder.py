@@ -97,12 +97,13 @@ class TtDetectionTransformerDecoder:
 
                 assert reference_points.shape[-1] == 3
 
-                new_reference_points = ttnn.zeros_like(reference_points, memory_config=ttnn.L1_MEMORY_CONFIG)
+                # The original code did `new_reference_points = ttnn.zeros_like(...)`
+                # here and immediately overwrote it on the next line with the concat
+                # result — a dead allocation called 6× per decoder forward.
                 updated_xy = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])  # shape (..., 2)
                 updated_z = tmp[..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])  # shape (..., 1)
 
                 new_reference_points = ttnn.concat([updated_xy, updated_z], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(tmp)
                 new_reference_points = ttnn.sigmoid(new_reference_points, memory_config=ttnn.L1_MEMORY_CONFIG)
 
                 reference_points = new_reference_points

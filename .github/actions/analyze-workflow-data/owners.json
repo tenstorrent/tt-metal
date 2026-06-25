@@ -3,14 +3,13 @@
     { "job-name-component": "Sanity tests / fabric-unit-tests", "owner": { "id": "U03FJB5TM5Y", "name": "Ridvan Song" } },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-T3K] Llama-3.1-8B-Instruct", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
-      { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" }
+      { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" }
     ] },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-T3K] Qwen2.5-VL-72B-Instruct", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
-    { "job-name-component": "vllm-tests / vllm-tests ([BH-DB] Llama-3.1-8B-Instruct", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
-    { "job-name-component": "vllm-tests / vllm-tests ([BH-QB] Llama-3.1-8B-Instruct", "owner": { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" } },
+    { "job-name-component": "vllm-tests / vllm-tests ([BH-QB] Llama-3.1-8B-Instruct", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" } },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-GLX] Llama-3.3-70B-Instruct", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
-      { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" }
+      { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" }
     ] },
     { "job-name-component": "vllm-tests / vllm-tests ([WH-GLX] Llama-8B DP=16", "owner": [
       { "id": "U08E1JCDVNX", "name": "Pavle Petrovic" },
@@ -161,10 +160,6 @@
     { "job-name-component": "t3000-frequent-tests / t3k sd35_large tests", "owner": { "id": "U06UEFWB4P9", "name": "Colman Glagovich" } },
     { "job-name-component": "t3000-frequent-tests / t3k mistral tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
     { "job-name-component": "blackhole-demo-tests / llama3.3-70b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
-    { "job-name-component": "llama3.1-8b BH-LLMBox performance", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
-    { "job-name-component": "llama3.1-8b BH-LLMBox data-parallel", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
-    { "job-name-component": "llama3.1-8b BH-LLMBox stress", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
-    { "job-name-component": "llama3.3-70b BH-LLMBox batch-32 performance", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "job-name-component": "galaxy-demo-tests / Galaxy Llama3 demo tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "job-name-component": "Galaxy Llama3 demo tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "job-name-component": "galaxy-demo-tests / Galaxy Llama3 long context demo tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
@@ -323,6 +318,12 @@
     { "job-name-component": "ttnn reduce and misc ops group", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
     { "job-name-component": "tt-metal-l2-nightly / ttnn nightly data_movement tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "ttnn nightly data_movement tests", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
+    { "job-name-component": "tt-metal-l2-nightly / ttnn nightly fused tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "ttnn nightly fused tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "tt-metal-l2-nightly / ttnn nightly reduction tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "ttnn nightly reduction tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "tt-metal-l2-nightly / ttnn nightly matmul tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
+    { "job-name-component": "ttnn nightly matmul tests", "owner": { "id": "U084B1CES7M", "name": "Borys Bradel" } },
     { "job-name-component": "cpp-post-commit / CCL", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "CCL", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
     { "job-name-component": "cpp-post-commit / data movement", "owner": { "id": "S09QQRK1CF8", "name": "ops-data-movement" } },
@@ -432,8 +433,6 @@
     { "job-name-component": "profiler-tests", "owner": { "id": "U03BJ1L3LUQ", "name": "Mo Memarian" } },
     { "job-name-component": "quick-6u-quick", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "job-name-component": "t3000-fast-tests", "owner": { "id": "U06LRK6JDGB", "name": "Saad Jameel" } },
-    { "job-name-component": "tt-train-cpp-unit-tests", "owner": { "id": "U07ASPTGJTS", "name": "Denys" } },
-    { "job-name-component": "ttnn", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
     { "job-name-component": "ttnn-conv-tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
     { "job-name-component": "ttnn-data_movement-tests", "owner": { "id": "U084DDYSWCW", "name": "Adrian Morrison" } },
     { "job-name-component": "ttnn-eltwise-tests", "owner": { "id": "U07RNEH2NR4", "name": "Wenbin Lyu" } },
@@ -444,7 +443,6 @@
     { "job-name-component": "ttnn-pool-tests", "owner": { "id": "U052J2QDDKQ", "name": "Pavle Josipovic" } },
     { "job-name-component": "ttnn-sdpa-stress-tests", "owner": { "id": "U06UEFWB4P9", "name": "Colman Glagovich" } },
     { "job-name-component": "ttnn-sdxl-tests", "owner": { "id": "U07N3CUUN05", "name": "Iva Potkonjak" } },
-    { "job-name-component": "ttnn-train-nightly-tests", "owner": { "id": "U082L4RSULT", "name": "Denys Makoviichuk" } },
     { "job-name-component": "ttnn-transformers-tests", "owner": { "id": "U06UEFWB4P9", "name": "Colman Glagovich" } },
     { "job-name-component": "t3000-model-perf-tests-impl / t3k DiT SD3.5 model perf tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
     { "job-name-component": "t3k DiT Wan2.2 model perf tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
@@ -535,9 +533,8 @@
     { "job-name-component": "whisper performance", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
     { "job-name-component": "llama3-8b performance", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "job-name-component": "unet-shallow performance", "owner": { "id": "U06ECNVR0EN", "name": "Evan Smal" } },
-    { "job-name-component": "[BH-DB] Llama-3.1-8B-Instruct", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
     { "job-name-component": "[BH-LB] Llama-3.1-8B-Instruct", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
-    { "job-name-component": "[BH-QB] Llama-3.1-8B-Instruct", "owner": { "id": "U08CEGF78ET", "name": "Salar Hosseini Khorasgani" } },
+    { "job-name-component": "[BH-QB] Llama-3.1-8B-Instruct", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum Cruz" } },
     { "job-name-component": "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
     { "job-name-component": "[BH-LB] Llama-3.1-8B-Instruct v0 structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
     { "job-name-component": "[WH-GLX] Llama-3.3-70B-Instruct v0 fallback structured-output", "owner": { "id": "U091SNDA4TS", "name": "Tomasz Cheda" } },
@@ -591,6 +588,10 @@
     { "job-name-component": "t3k deepseek tests", "owner": { "id": "U03HY7MK4BT", "name": "Mark O'Connor" } },
     { "job-name-component": "t3000-unit-tests / t3k tttv2 modules tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
     { "job-name-component": "t3k tttv2 modules tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
-    { "job-name-component": "TTSim", "owner": { "id": "U08PR765YJ1", "name": "Matt Craighead" } }
+    { "job-name-component": "TTSim", "owner": { "id": "U08PR765YJ1", "name": "Matt Craighead" } },
+    { "job-name-component": "runtime-unit-tests", "owner": { "id": "U099A7FMKL2", "name": "Manish Sudumbrekar" } },
+    { "job-name-component": "runtime-sanity-tests", "owner": { "id": "U099A7FMKL2", "name": "Manish Sudumbrekar" } },
+    { "job-name-component": "runtime-integration-tests", "owner": { "id": "U099A7FMKL2", "name": "Manish Sudumbrekar" } },
+    { "job-name-component": "runtime-perf-tests", "owner": { "id": "U099A7FMKL2", "name": "Manish Sudumbrekar" } }
   ]
 }

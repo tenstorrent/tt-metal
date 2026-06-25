@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
 
@@ -26,9 +27,10 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
 inline __attribute__((always_inline)) uint32_t
 get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
     // offset for every dim except last 2
-    uint32_t start_offset = 0;
+    // 64-bit: shape.volume() (element count) overflows uint32 for tensors > 4 GB.
+    uint64_t start_offset = 0;
 
-    uint32_t num_pages = shape.volume();
+    uint64_t num_pages = shape.volume();
     if (layout == Layout::TILE) {
         num_pages /= tt::constants::TILE_HW;
     } else {
@@ -37,13 +39,13 @@ get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shap
     }
 
     for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
-        uint32_t compressed_dims = 1;
+        uint64_t compressed_dims = 1;
         for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
             compressed_dims *= shape[dim_inner];
         }
         start_offset += (num_pages / compressed_dims) * slice_start[dim_outer];
     }
-    return start_offset;
+    return static_cast<uint32_t>(start_offset);  // page index, fits uint32
 }
 
 inline __attribute__((always_inline)) uint32_t
@@ -143,7 +145,8 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     if (has_step) {  // if all ones modify before passing in to function
         TT_FATAL(
             tensor_args.input.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
-        TT_FATAL(!tensor_args.input.is_sharded(), "Strided slice is not supported for sharded tensor");
+        // Strided + sharded is natively supported: reader/writer kernels route per-row NOC calls
+        // through noc_async_*_sharded, which handles cross-shard splitting transparently.
         TT_FATAL(
             args.step.size() == args.slice_end.rank(),
             "Number of steps {} must match number of ends/starts {}",
@@ -214,9 +217,39 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
         }
     }
     ttnn::Shape output_tensor_shape(std::move(out_shape));
+
+    // Synthesize shard spec for sharded-no-spec output: scale from input spec when layouts match,
+    // else fall back to generate_transpose_shard_spec for a fresh full-grid spec.
+    auto output_mem_config = args.output_mem_config;
+    if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
+        std::optional<tt::tt_metal::ShardSpec> derived;
+        if (input_tensor.is_sharded() && input_tensor.memory_config().shard_spec().has_value() &&
+            input_tensor.memory_config().memory_layout() == output_mem_config.memory_layout() &&
+            input_tensor.logical_shape().rank() == output_tensor_shape.rank()) {
+            auto adjusted = ttnn::operations::data_movement::transpose::adjust_shard_spec_to_shape(
+                *input_tensor.memory_config().shard_spec(), input_tensor.logical_shape(), output_tensor_shape);
+            if (adjusted.has_value()) {
+                // TILE factories require tile-aligned shards; sub-tile results from
+                // adjust_shard_spec_to_shape fall through to generate_transpose_shard_spec.
+                const bool tile_layout = input_tensor.layout() == Layout::TILE;
+                const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
+                                          adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
+                if (!tile_layout || tile_aligned) {
+                    derived = std::move(adjusted);
+                }
+            }
+        }
+        if (!derived.has_value()) {
+            derived = ttnn::operations::data_movement::transpose::generate_transpose_shard_spec(
+                input_tensor, output_tensor_shape, output_mem_config.memory_layout());
+        }
+        output_mem_config =
+            tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
+    }
+
     return ttnn::TensorSpec(
         output_tensor_shape,
-        tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), args.output_mem_config));
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
 }
 
 Tensor SliceDeviceOperation::create_output_tensors(
@@ -243,7 +276,14 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
     bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
 
     if (input.layout() == Layout::ROW_MAJOR) {
-        if (input.is_sharded()) {
+        // HEIGHT→HEIGHT no-step: fast CB path, no NOC read needed.
+        // WIDTH/BLOCK-sharded RM: SliceRmProgramFactory with per-shard page size via noc_async_*_sharded.
+        const bool height_sharded_in_out_no_step =
+            input.is_sharded() &&
+            input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            args.output_mem_config.is_sharded() &&
+            args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && !has_step;
+        if (height_sharded_in_out_no_step) {
             return SliceRmShardedProgramFactory{};
         }
         if (has_step) {
@@ -251,7 +291,7 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         }
         return SliceRmProgramFactory{};
     }
-    // Layout::TILE
+    // Layout::TILE — TensorAccessor at tile granularity handles all sharded buffer types natively.
     return SliceTileProgramFactory{};
 }
 

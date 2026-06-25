@@ -23,9 +23,13 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
+#endif
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -44,14 +48,16 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
  */
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
+    CircularBuffer cb_in0(in0);
+    CircularBuffer cb_in1(in1);
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
     copy_tile_to_dst_init_short(in1);
     binary_max_tile_init();
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
-    cb_wait_front(in0, num_tiles);
-    cb_wait_front(in1, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in0, i, dst_reg_0);
@@ -62,9 +68,9 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
         pack_tile(dst_reg_0, in0);
         tile_regs_release();
     }
-    cb_pop_front(in0, num_tiles);
-    cb_reserve_back(in0, num_tiles);
-    cb_push_back(in0, num_tiles);
+    cb_in0.pop_front(num_tiles);
+    cb_in0.reserve_back(num_tiles);
+    cb_in0.push_back(num_tiles);
 }
 
 /**
@@ -72,15 +78,18 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
  */
 template <VectorMode vector_mode = VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0);
+    CircularBuffer cb_in1(in1);
+    CircularBuffer cb_out(out_cb);
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
-    cb_wait_front(in0, num_tiles);
-    cb_wait_front(in1, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in0, i, dst_reg_0);
@@ -91,7 +100,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
         pack_tile(dst_reg_0, out_cb, i);
         tile_regs_release();
     }
-    cb_push_back(out_cb, num_tiles);
+    cb_out.push_back(num_tiles);
 }
 
 /**
@@ -106,6 +115,10 @@ template <
     uint32_t cols,
     VectorMode vector_mode = VectorMode::C>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_scale(scale_cb);
+    CircularBuffer cb_out(out_cb);
+    CircularBuffer cb_prev(prev_cb);
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -124,19 +137,19 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     constexpr uint32_t granularity = rows;
 #endif
 
-    cb_wait_front(scale_cb, 1);
-    cb_reserve_back(out_cb, rows);
+    cb_scale.wait_front(1);
+    cb_out.reserve_back(rows);
 
     const uint32_t num_tiles_to_wait = dst_tiles * cols;
     uint32_t in0_wait_tiles = num_tiles_to_wait;
 
     uint32_t row_start_idx = 0;
     for (uint32_t g = 0; g < granularity; g++) {
-        cb_wait_front(in0_cb, in0_wait_tiles);
+        cb_in0.wait_front(in0_wait_tiles);
         tile_regs_acquire();
 
         if (do_eltwise_max) {
-            cb_wait_front(prev_cb, g * dst_tiles);
+            cb_prev.wait_front(g * dst_tiles);
             /**
              * Copy previous max values into DST register.
              * Note that this special invocation of copy_tile is necessary to produce
@@ -152,7 +165,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         /**
          * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
          */
-        reduce_block_max_row_init<cols>();
+        reduce_block_max_row_init<cols>(out_cb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t reduce_dst_idx = i;
             reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
@@ -171,7 +184,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         in0_wait_tiles += num_tiles_to_wait;
     }
 
-    cb_push_back(out_cb, rows);
+    cb_out.push_back(rows);
 }
 
 /**
@@ -187,6 +200,9 @@ template <
     uint32_t rows,
     VectorMode vector_mode = VectorMode::C>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_scale(scale_cb);
+    CircularBuffer cb_out(out_cb);
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -195,9 +211,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     // Postcondition: out_cb has rows produced
 
     uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
+    cb_scale.wait_front(1);
+    cb_in0.wait_front(num_tiles);
+    cb_out.reserve_back(rows);
 
     binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
@@ -222,54 +238,13 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         tile_regs_release();
     }
 
-    cb_push_back(out_cb, rows);
+    cb_out.push_back(rows);
 }
 
 #ifdef TRISC_MATH
-/**
- * recip_tile on only the columns 0:8 of a face
- */
-template <bool legacy_compat = true>
-void calculate_recip_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    if constexpr (legacy_compat) {
-        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-            // Note: negate check removed since in always >= 0.0
-            // v_if (in < 0.0)
-            // {
-            //     out = -out;
-            // }
-            // v_endif;
-            if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
-            }
-            sfpi::dst_reg[0] = out;
-            sfpi::dst_reg += 2;
-        }
-    } else {
-        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat out;
-
-            if constexpr (APPROX) {
-                out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
-            } else if constexpr (DST_ACCUM_MODE) {
-                out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-            } else {
-                out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-                out = sfpi::convert<sfpi::vFloat16b>(out, RoundMode::NearestEven);
-            }
-            sfpi::dst_reg[0] = out;
-            sfpi::dst_reg += 2;
-        }
-    }
-}
-
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, VectorMode::C);
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, (legacy_compat), idst, VectorMode::C);
 }
 #endif
 
@@ -277,6 +252,7 @@ void recip_tile_first_column(uint32_t idst) {
  * in_cb = 1 / in_cb
  */
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in(in_cb);
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
@@ -284,7 +260,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(in_cb);
 
-    cb_wait_front(in_cb, num_tiles);
+    cb_in.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_cb, i, 0);
@@ -294,9 +270,9 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
         pack_tile(0, in_cb);
         tile_regs_release();
     }
-    cb_pop_front(in_cb, num_tiles);
-    cb_reserve_back(in_cb, num_tiles);
-    cb_push_back(in_cb, num_tiles);
+    cb_in.pop_front(num_tiles);
+    cb_in.reserve_back(num_tiles);
+    cb_in.push_back(num_tiles);
 }
 
 /**
@@ -310,6 +286,9 @@ template <
     bool do_reduce = true,
     VectorMode vector_mode = VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_reduce(reduce_cb);
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -320,12 +299,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
     exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 
-    cb_wait_front(in0_cb, rows * cols);
-    cb_wait_front(in1_cb, rows);
+    cb_in0.wait_front(rows * cols);
+    cb_in1.wait_front(rows);
     if constexpr (do_reduce) {
-        cb_reserve_back(reduce_cb, rows);
+        cb_reduce.reserve_back(rows);
     }
 
 #ifdef SUB_EXP_GRANULARITY
@@ -348,8 +327,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_commit();
 
             if constexpr (write_result_inplace) {
-                cb_pop_front(in0_cb, dst_tiles);
-                cb_reserve_back(in0_cb, dst_tiles);
+                cb_in0.pop_front(dst_tiles);
+                cb_in0.reserve_back(dst_tiles);
             }
 
             tile_regs_wait();
@@ -359,7 +338,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                     pack_tile(j, in0_cb);
                 }
                 // Granular write output to enable following matmul unpack to start early.
-                cb_push_back(in0_cb, dst_tiles);
+                cb_in0.push_back(dst_tiles);
             }
 
             if constexpr (do_reduce) {
@@ -384,10 +363,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
         }
     }
     if constexpr (do_reduce) {
-        cb_push_back(reduce_cb, rows);
+        cb_reduce.push_back(rows);
     }
 
-    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::none())));
 }
 
 /**
@@ -402,6 +381,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
  */
 template <uint32_t rows, uint32_t cols, bool immediate_pop, bool pack_accumulate>
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Precondition: out_cb has rows*cols produced
@@ -412,8 +394,8 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
     constexpr uint32_t num_tiles = rows * cols;
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, rows);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(rows);
 
     if constexpr (immediate_pop) {
         static_assert(!pack_accumulate, "Unsupported parameter configuration");
@@ -422,15 +404,15 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
                 tile_regs_acquire();
                 mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
                 tile_regs_commit();
-                cb_pop_front(in0_cb, 1);
-                cb_reserve_back(out_cb, 1);
+                cb_in0.pop_front(1);
+                cb_out.reserve_back(1);
                 tile_regs_wait();
                 pack_tile(0, out_cb);
                 tile_regs_release();
-                cb_push_back(out_cb, 1);
+                cb_out.push_back(1);
             }
         }
-        cb_pop_front(in1_cb, rows);
+        cb_in1.pop_front(rows);
     } else {
 #ifdef DHT_GRANULARITY
         constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
@@ -441,7 +423,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 #endif
         PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
         if (!pack_accumulate) {
-            cb_reserve_back(out_cb, num_tiles);
+            cb_out.reserve_back(num_tiles);
         }
         uint32_t in0_index = 0;
         for (uint32_t i = 0; i < rows; ++i) {
@@ -459,15 +441,15 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
                 tile_regs_release();
             }
         }
-        cb_pop_front(in1_cb, rows);
-        cb_pop_front(in0_cb, num_tiles);
+        cb_in1.pop_front(rows);
+        cb_in0.pop_front(num_tiles);
         if (pack_accumulate) {
             PACK((llk_pack_reconfig_l1_acc(false)));
-            cb_pop_front(out_cb, num_tiles);
-            cb_reserve_back(out_cb, num_tiles);
-            cb_push_back(out_cb, num_tiles);
+            cb_out.pop_front(num_tiles);
+            cb_out.reserve_back(num_tiles);
+            cb_out.push_back(num_tiles);
         } else {
-            cb_push_back(out_cb, num_tiles);
+            cb_out.push_back(num_tiles);
         }
     }
 }
@@ -477,6 +459,8 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
  */
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -493,8 +477,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
 #endif
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, rows);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; ++u) {
             tile_regs_acquire();
@@ -502,21 +486,23 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
                 mul_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
             }
             tile_regs_commit();
-            cb_pop_front(in0_cb, dst_tiles);
-            cb_reserve_back(in0_cb, dst_tiles);
+            cb_in0.pop_front(dst_tiles);
+            cb_in0.reserve_back(dst_tiles);
             tile_regs_wait();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, in0_cb);
             }
-            cb_push_back(in0_cb, dst_tiles);
+            cb_in0.push_back(dst_tiles);
             tile_regs_release();
         }
     }
-    cb_pop_front(in1_cb, rows);
+    cb_in1.pop_front(rows);
 }
 
 template <uint32_t in1_scalar_cb, uint32_t num_tiles>
 void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1_scalar(in1_scalar_cb);
     // Precondition: in0_cb has num_tiles produced
     // Precondition: in1_scalar_cb has 1 produced
     // Postcondition: in0_cb has num_tiles produced
@@ -532,8 +518,8 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
 
     reconfig_data_format(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_scalar_cb, 1);
+    cb_in0.wait_front(num_tiles);
+    cb_in1_scalar.wait_front(1);
     uint32_t in0_index = 0;
     for (uint32_t g = 0; g < granularity; ++g) {
         tile_regs_acquire();
@@ -548,9 +534,9 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
         }
         tile_regs_release();
     }
-    cb_pop_front(in0_cb, num_tiles);
-    cb_reserve_back(in0_cb, num_tiles);
-    cb_push_back(in0_cb, num_tiles);
+    cb_in0.pop_front(num_tiles);
+    cb_in0.reserve_back(num_tiles);
+    cb_in0.push_back(num_tiles);
 }
 
 /**
@@ -558,13 +544,15 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
  */
 template <bool pop_in1 = true>
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
     add_tiles_init(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         add_tiles(in0_cb, in1_cb, i, i, 0);
@@ -574,15 +562,17 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         tile_regs_release();
     }
 
-    cb_pop_front(in0_cb, num_tiles);
+    cb_in0.pop_front(num_tiles);
     if (pop_in1) {
-        cb_pop_front(in1_cb, num_tiles);
+        cb_in1.pop_front(num_tiles);
     }
-    cb_reserve_back(in0_cb, num_tiles);
-    cb_push_back(in0_cb, num_tiles);
+    cb_in0.reserve_back(num_tiles);
+    cb_in0.push_back(num_tiles);
 }
 
 void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
     /**
      * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
      * and bcast cols of in1_cb.
@@ -592,18 +582,18 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in1_cb has num_tiles produced
 
     mul_bcast_cols_init_short(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
         tile_regs_commit();
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
+        cb_in0.pop_front(1);
+        cb_in0.reserve_back(1);
         tile_regs_wait();
         pack_tile(0, in0_cb);
         tile_regs_release();
-        cb_push_back(in0_cb, 1);
+        cb_in0.push_back(1);
     }
 }
 
@@ -611,264 +601,40 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
  * in0_cb *= in1_cb
  */
 void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
     mul_tiles_init(in0_cb, in1_cb);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         tile_regs_acquire();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         tile_regs_commit();
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
+        cb_in0.pop_front(1);
+        cb_in0.reserve_back(1);
         tile_regs_wait();
         pack_tile(0, in0_cb);
         tile_regs_release();
-        cb_push_back(in0_cb, 1);
+        cb_in0.push_back(1);
     }
 }
 
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 
-constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
-constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
-
-#ifdef ARCH_WORMHOLE
-#define ADDR_MOD_X ADDR_MOD_3
-#else
-#define ADDR_MOD_X ADDR_MOD_7
-#endif
-
-ALWI void INSERT_SFPNOP() {
-#ifdef ARCH_WORMHOLE
-    TTI_SFPNOP;
-#endif
-}
-
-template <bool USE_SFPARECIP_INSTR, int POLY_DEGREE>
-constexpr bool can_preload_ln2_constants() {
-#ifdef ARCH_WORMHOLE
-    return false;
-#else
-    return (USE_SFPARECIP_INSTR || POLY_DEGREE == 1 || POLY_DEGREE == 2);
-#endif
-}
-
-/**
- * Computes exp(x) using polynomial approximation after range reduction.
- *
- * Scales by configured factor, then reduces to exp(r) * 2^k
- * where r = x - k*ln(2). Uses either SFPARECIP instruction or multi-term polynomial (degree 1-4)
- * to compute exp(r), then reconstructs full result via exponent manipulation,
- * clamping the exponent to handle large positive or negative inputs.
- *
- * @tparam USE_SFPARECIP_INSTR Use hardware SFPARECIP instruction (true) or polynomial evaluation (false). Only
- * supported on Blackhole.
- * @tparam SCALE_EN Apply scaling factor from LREG to input values
- * @tparam ITERATIONS Number of 32-element vectors to process per tile
- * @tparam POLY_DEGREE Polynomial degree (1-4) when USE_SFPARECIP_INSTR=false; higher improves accuracy
- * @tparam IS_FP32_DEST_ACC_EN Float32 accumulation to dest register enabled.
- * @tparam SCALE_BF16 Bfloat16 scale factor represented as uint16_t.
- */
-template <
-    bool SCALE_EN,
-    int ITERATIONS,
-    bool USE_SFPARECIP_INSTR,
-    int POLY_DEGREE,
-    bool IS_FP32_DEST_ACC_EN,
-    uint16_t SCALE_BF16>
-void calculate_exponential_polynomial() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-
-    constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
-    constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
-
-    if constexpr (!USE_SFPARECIP_INSTR) {
-        static_assert(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
-
-        // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
-        constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
-                             : (POLY_DEGREE == 2) ? 0.999848792924395313327307061545061386175496934006f
-                             : (POLY_DEGREE == 3) ? 0.99992449655091231753798502608929170703152709521188f
-                                                  : 1.0000001510806179002040134468008959160576106495165f;
-        constexpr float c1 = (POLY_DEGREE == 1)   ? 1.0201394465967894800285756834161653337107187804001f
-                             : (POLY_DEGREE == 2) ? 1.01508760098521056684783640695492761469306929535975f
-                             : (POLY_DEGREE == 3) ? 0.99993960415029750534472970577402987498389428593233f
-                                                  : 0.99996228117047652035114096488703457970402030983204f;
-        constexpr float c2 = (POLY_DEGREE == 2)   ? 0.50628367056745568861842335616023694454759126020461f
-                             : (POLY_DEGREE == 3) ? 0.50502329058055065591138054839814880512001604099324f
-                                                  : 0.49998365704615426417337683145647067790385638465486f;
-        constexpr float c3 = (POLY_DEGREE == 3) ? 0.16817330195731531429790827442800245470170482723302f
-                                                : 0.16792157982882225102649214918047336097544632172075f;
-        constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
-
-        // Load polynomial coefficients.
-        if constexpr (POLY_DEGREE >= 4) {
-            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
-            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
-        }
-        if constexpr (POLY_DEGREE >= 3) {
-            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
-            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
-        }
-        if constexpr (POLY_DEGREE >= 2) {
-            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
-            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
-        }
-        if constexpr (POLY_DEGREE >= 1) {
-            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
-        }
-    }
-
-    if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
-        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(M_LN2));
-        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(M_LN2));
-    }
-
-    for (int d = 0; d < ITERATIONS; d++) {
-        // Load the input.
-        constexpr uint8_t input_type = IS_FP32_DEST_ACC_EN ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B;
-        TTI_SFPLOAD(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
-
-        if constexpr (SCALE_EN) {
-            TTI_SFPLOADI(p_sfpu::LREG0, 0, SCALE_BF16);
-            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-            INSERT_SFPNOP();
-        }
-
-        // Multiply by 1/ln(2) and round.
-        if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
-            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        } else {
-            TTI_SFPLOADI(p_sfpu::LREG1, 0xA, lo16(LN2_RECIP));
-            TTI_SFPLOADI(p_sfpu::LREG1, 0x8, hi16(LN2_RECIP));
-            TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        }
-        INSERT_SFPNOP();
-        TTI_SFP_STOCH_RND(
-            0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);  // Clamp to [-127,+127].
-        TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
-
-        if constexpr (USE_SFPARECIP_INSTR) {
-#ifdef ARCH_BLACKHOLE
-            // Calculate floor(x) by setting v=v-1 if v>u.
-            TTI_SFPGT(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);                                    // SFPGT_MOD1_SET_CC
-            TTI_SFPMAD(p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG1, 2);  // SFPMAD_MOD1_NEGATE_VC
-            TTI_SFPENCC(0, 0, 0, 0);
-
-            // Calculate exp(x - k*ln2).
-            TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, 2);
-#else
-            ASSERT(false);  // TTI_SFPARECIP instruction only supported on Blackhole".
-#endif
-        } else {
-            if constexpr (can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
-                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            } else {
-                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, lo16(M_LN2));
-                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, hi16(M_LN2));
-                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            }
-            INSERT_SFPNOP();
-
-            // Calculate polynomial.
-            if constexpr (POLY_DEGREE == 1) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else if constexpr (POLY_DEGREE == 2) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else if constexpr (POLY_DEGREE == 3) {
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            } else {  // degree 4.
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpu::LREG2, 0);
-                INSERT_SFPNOP();
-                TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-            }
-            INSERT_SFPNOP();
-        }
-
-        // Multiply by 2^k.
-        TT_SFPADDI(0x42fe, p_sfpu::LREG1, 0);  // Add 127.
-        INSERT_SFPNOP();
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
-        TTI_SFPSETEXP(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        INSERT_SFPNOP();
-
-        // Handle underflow: if k == 0, exp(x) = 0 (fixes -inf case).
-        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 6);  // Set LaneFlags = (LREG1 == 0) and enable CC.
-        TTI_SFPLOADI(p_sfpu::LREG2, 0, 0);     // LREG2 = 0 ONLY for lanes where LREG1 == 0.
-        TTI_SFPENCC(0, 0, 0, 0);               // Disable CC and clear LaneFlags - ALL lanes active again.
-
-        // Store the result.
-        if constexpr (!IS_FP32_DEST_ACC_EN) {
-            // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it
-            // so convert to bfloat16 using round-to-nearest-even.
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        }
-        TTI_SFPSTORE(p_sfpu::LREG2, input_type, ADDR_MOD_X, 0);
-        TTI_INCRWC(0, 4, 0, 0);  // Skip odd columns.
-    }
-}
-
-/**
- * exp_tile on only the columns 0:8 of a face
- */
-template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
-void calculate_exponential_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    if constexpr (SDPA_EXP_APPROX_MODE) {
-        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-            sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result =
-                ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
-                    val, scale_bf16);
-            sfpi::dst_reg[0] = result;
-
-            // Stride by 2 to skip columns 8:16 of the face
-            sfpi::dst_reg += 2;
-        }
-    } else {
-        constexpr int polynomial_degree = DST_ACCUM_MODE ? 4 : 2;
-        calculate_exponential_polynomial<
-            true,
-            ITERATIONS_HALF_FACE,
-            false,
-            polynomial_degree,
-            DST_ACCUM_MODE,
-            scale_bf16>();
-    }
-}
-
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, VectorMode::C);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_exponential_first_column,
+        (SDPA_EXP_APPROX_MODE, scale_bf16),
+        idst,
+        VectorMode::C);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
@@ -877,15 +643,18 @@ void exp_tile_first_column(uint32_t idst) {
  */
 template <uint32_t scale_fp32>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE>();
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
 
     // Convert scale_fp32 to bf16 scale
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
@@ -899,73 +668,15 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         tile_regs_wait();
         pack_tile(0, out_cb);
         tile_regs_release();
-        cb_push_back(out_cb, 1);
+        cb_out.push_back(1);
     }
 }
 
 #ifdef TRISC_MATH
-/**
- * The custom SFPI LLK function computes the following operation:
- * cur_max = max(prev_max, worker_max)
- * cur_sum = exp((worker_max - cur_max) * scale) * worker_sum + exp((prev_max - cur_max) * scale) * prev_sum
- * There are 4 results produced:
- * 1. exp_max_diff = exp((worker_max - cur_max) * scale), produced in dst_reg[prev_max_base_idx]
- * 2. exp_max_diff_2 = exp((prev_max - cur_max) * scale), produced in dst_reg[worker_max_base_idx]
- * 3. cur_sum produced in dst_reg[prev_sum_base_idx]
- * 4. cur_max produced in dst_reg[cur_max_base_idx]
- * fused_max_sub_exp_add_tile
- */
-template <bool SDPA_EXP_APPROX_MODE>
-void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    constexpr uint32_t prev_max_base_idx = 0;      // dst_reg_0 (Tile 0)
-    constexpr uint32_t worker_max_base_idx = 32;   // dst_reg_1 (Tile 1)
-    constexpr uint32_t cur_max_base_idx = 64;      // dst_reg_2 (Tile 2)
-    constexpr uint32_t prev_sum_base_idx = 96;     // dst_reg_3 (Tile 3)
-    constexpr uint32_t worker_sum_base_idx = 128;  // dst_reg_4 (Tile 4)
-
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        // Load inputs for this vector-slot into temporaries to avoid aliasing on dst_reg
-        sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
-        sfpi::vFloat worker_max_vec = sfpi::dst_reg[worker_max_base_idx];
-        sfpi::vFloat prev_sum_vec = sfpi::dst_reg[prev_sum_base_idx];
-        sfpi::vFloat worker_sum_vec = sfpi::dst_reg[worker_sum_base_idx];
-        v_if(prev_max_vec < worker_max_vec) { sfpi::dst_reg[cur_max_base_idx] = worker_max_vec; }
-        v_else { sfpi::dst_reg[cur_max_base_idx] = prev_max_vec; }
-        v_endif;
-        sfpi::vFloat cur_max = sfpi::dst_reg[cur_max_base_idx];
-
-        // Compute differences
-        sfpi::vFloat diff_prev = prev_max_vec - cur_max;
-        sfpi::vFloat diff_worker = worker_max_vec - cur_max;
-
-        // Exponentials of differences
-        sfpi::vFloat exp_prev =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
-                diff_prev, scale_bf16);
-        sfpi::vFloat exp_worker =
-            ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
-                diff_worker, scale_bf16);
-
-        // Store exponentials for optional debug/pack-out
-        sfpi::dst_reg[prev_max_base_idx] = exp_prev;
-        sfpi::dst_reg[worker_max_base_idx] = exp_worker;
-
-        // cur_sum = exp(worker_max - cur_max) * worker_sum + exp(prev_max - cur_max) * prev_sum
-        sfpi::dst_reg[worker_sum_base_idx] = exp_worker * worker_sum_vec;
-        sfpi::dst_reg[prev_sum_base_idx] = exp_prev * prev_sum_vec;
-        sfpi::vFloat corr_worker_sum = sfpi::dst_reg[worker_sum_base_idx];
-        sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
-        sfpi::vFloat corr_sum = corr_worker_sum + corr_prev_sum;
-        sfpi::dst_reg[prev_sum_base_idx] = corr_sum;
-        sfpi::dst_reg += 2;
-    }
-}
-
-template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C>
+template <VectorMode vector_mode = VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fused_max_sub_exp_add_tile, idst, vector_mode, scale_bf16);
 }
 #endif
 
@@ -980,15 +691,23 @@ void correction_block(
     uint32_t cb_exp_max_diff,
     uint32_t cb_exp_max_diff_2,
     uint32_t num_head_tiles) {
-    cb_wait_front(cb_worker_max, num_head_tiles);
-    cb_wait_front(cb_worker_sum, num_head_tiles);
-    cb_wait_front(cb_prev_max, num_head_tiles);
-    cb_wait_front(cb_prev_sum, num_head_tiles);
+    CircularBuffer cb_worker_max_obj(cb_worker_max);
+    CircularBuffer cb_worker_sum_obj(cb_worker_sum);
+    CircularBuffer cb_cur_max_obj(cb_cur_max);
+    CircularBuffer cb_prev_max_obj(cb_prev_max);
+    CircularBuffer cb_cur_sum_obj(cb_cur_sum);
+    CircularBuffer cb_prev_sum_obj(cb_prev_sum);
+    CircularBuffer cb_exp_max_diff_obj(cb_exp_max_diff);
+    CircularBuffer cb_exp_max_diff_2_obj(cb_exp_max_diff_2);
+    cb_worker_max_obj.wait_front(num_head_tiles);
+    cb_worker_sum_obj.wait_front(num_head_tiles);
+    cb_prev_max_obj.wait_front(num_head_tiles);
+    cb_prev_sum_obj.wait_front(num_head_tiles);
 
-    cb_reserve_back(cb_cur_max, num_head_tiles);
-    cb_reserve_back(cb_cur_sum, num_head_tiles);
-    cb_reserve_back(cb_exp_max_diff, num_head_tiles);
-    cb_reserve_back(cb_exp_max_diff_2, num_head_tiles);
+    cb_cur_max_obj.reserve_back(num_head_tiles);
+    cb_cur_sum_obj.reserve_back(num_head_tiles);
+    cb_exp_max_diff_obj.reserve_back(num_head_tiles);
+    cb_exp_max_diff_2_obj.reserve_back(num_head_tiles);
 
     constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
     constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
@@ -1007,7 +726,7 @@ void correction_block(
         copy_tile(cb_worker_max, i, dst_reg_1);
         copy_tile(cb_prev_sum, i, dst_reg_3);
         copy_tile(cb_worker_sum, i, dst_reg_4);
-        MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE, vector_mode>(0, scale_bf16)));
+        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst_reg_0, cb_exp_max_diff);
@@ -1015,13 +734,13 @@ void correction_block(
         pack_tile(dst_reg_2, cb_cur_max);
         pack_tile(dst_reg_3, cb_cur_sum);
         tile_regs_release();
-        cb_push_back(cb_cur_max, 1);
-        cb_push_back(cb_cur_sum, 1);
-        cb_push_back(cb_exp_max_diff, 1);
-        cb_push_back(cb_exp_max_diff_2, 1);
+        cb_cur_max_obj.push_back(1);
+        cb_cur_sum_obj.push_back(1);
+        cb_exp_max_diff_obj.push_back(1);
+        cb_exp_max_diff_2_obj.push_back(1);
     }
-    cb_pop_front(cb_prev_sum, num_head_tiles);
-    cb_pop_front(cb_worker_sum, num_head_tiles);
+    cb_prev_sum_obj.pop_front(num_head_tiles);
+    cb_worker_sum_obj.pop_front(num_head_tiles);
 }
 
 /**
@@ -1029,6 +748,8 @@ void correction_block(
  */
 template <bool pop_in_cb>
 void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in(in_cb);
+    CircularBuffer cb_out(out_cb);
     // Precondition: in_cb has num_tiles produced
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
@@ -1036,8 +757,8 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 
     copy_tile_to_dst_init_short(in_cb);
 
-    cb_wait_front(in_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    cb_in.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
 
 #pragma GCC unroll 0
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -1047,21 +768,23 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         tile_regs_wait();
         pack_tile(0, out_cb);
         tile_regs_release();
-        cb_push_back(out_cb, 1);
+        cb_out.push_back(1);
     }
     if (pop_in_cb) {
-        cb_pop_front(in_cb, num_tiles);
+        cb_in.pop_front(num_tiles);
     }
 }
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in(in_cb);
+    CircularBuffer cb_out(out_cb);
     // Precondition: in_cb has num_tiles produced
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
     // Postcondition: out_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
-    cb_wait_front(in_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    cb_in.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
 #pragma GCC unroll 0
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -1070,16 +793,18 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         tile_regs_wait();
         pack_tile(0, out_cb);
         tile_regs_release();
-        cb_push_back(out_cb, 1);
+        cb_out.push_back(1);
     }
-    cb_pop_front(in_cb, num_tiles);
+    cb_in.pop_front(num_tiles);
 }
 
 void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in(in_cb);
+    CircularBuffer cb_out(out_cb);
     copy_tile_to_dst_init_short(in_cb);
     log_tile_init();
-    cb_wait_front(in_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    cb_in.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -1089,11 +814,14 @@ void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         tile_regs_wait();
         pack_tile(0, out_cb);
         tile_regs_release();
-        cb_push_back(out_cb, 1);
+        cb_out.push_back(1);
     }
 }
 
 void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
     // out_cb = sigmoid(in0_cb - in1_cb)
     /**
      * sigmoid(x) is accurately implemented as 1 / (1 + exp(-x))
@@ -1101,12 +829,12 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
      *
      * Each input tile has only the first column containing valid data, so VectorMode::C is a useful optimization.
      */
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar _sfpu_reciprocal_ path, so initialize exactly
+    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
@@ -1121,9 +849,15 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
-        // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
-        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(
-            0 /*dst_index*/, 0x3F800000 /*scalar*/, VectorMode::C)));
+        // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binop_with_scalar,
+            (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
+            0 /*dst_index*/,
+            VectorMode::C,
+            0x3F800000 /*scalar*/));
         // recip_tile<false>(0, (int)VectorMode::C);
         MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
         tile_regs_commit();
@@ -1131,37 +865,32 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
         pack_tile(0, out_cb);
         tile_regs_release();
     }
-    cb_push_back(out_cb, num_tiles);
+    cb_out.push_back(num_tiles);
 }
 
 #ifdef TRISC_MATH
-/**
- * softplus_tile on only the columns 0:8 of a face
- */
-template <bool SDPA_EXP_APPROX_MODE>
-void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    float beta = ckernel::sfpu::Converter::as_float(param0);
-    float beta_reciprocal = ckernel::sfpu::Converter::as_float(param1);
-    float threshold = ckernel::sfpu::Converter::as_float(param2);
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        ckernel::sfpu::calculate_softplus_body<APPROX, DST_ACCUM_MODE>(beta, beta_reciprocal, threshold);
-        sfpi::dst_reg += 2;
-    }
-}
-
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        calculate_softplus_first_column<APPROX>, idst, VectorMode::C, beta, beta_reciprocal, threshold);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softplus_first_column,
+        idst,
+        VectorMode::C,
+        beta,
+        beta_reciprocal,
+        threshold);
 }
 #endif
 
 void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
     // out_cb = logsigmoid(in0_cb - in1_cb)
     // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
     softplus_tile_init();
     constexpr uint32_t const_1_fp32 = 0x3F800000;
@@ -1187,7 +916,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
         pack_tile(0, out_cb);
         tile_regs_release();
     }
-    cb_push_back(out_cb, num_tiles);
+    cb_out.push_back(num_tiles);
 }
 
 /**
@@ -1195,9 +924,12 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
  * Compile with size optimization to prevent binary size exceeding the limit.
  */
 __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    cb_reserve_back(out_cb, num_tiles);
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -1208,7 +940,7 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
         pack_tile(0, out_cb);
         tile_regs_release();
     }
-    cb_push_back(out_cb, num_tiles);
+    cb_out.push_back(num_tiles);
 }
 
 /**
@@ -1236,7 +968,13 @@ ALWI void matmul_blocks(
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-    mm_block_init_short(
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
+    CircularBuffer cb_mask(mask_cb);
+    CircularBuffer cb_zero(zero_cb);
+
+    matmul_block_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     const uint32_t output_num_tiles = M * N;
@@ -1249,11 +987,11 @@ ALWI void matmul_blocks(
     uint32_t in0_wait_tiles = in0_subblock_num_tiles;
 
     reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
-    cb_reserve_back(out_cb, output_num_tiles);
+    cb_in1.wait_front(K * N);
+    cb_out.reserve_back(output_num_tiles);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        cb_wait_front(in0_cb, in0_wait_tiles);
+        cb_in0.wait_front(in0_wait_tiles);
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
@@ -1269,15 +1007,15 @@ ALWI void matmul_blocks(
                 in1_index += N;
             }
             if (add_mask) {
-                cb_wait_front(mask_cb, out_subblock_num_tiles);
-                cb_wait_front(zero_cb, 1);
+                cb_mask.wait_front(out_subblock_num_tiles);
+                cb_zero.wait_front(1);
                 reconfig_data_format(zero_cb, mask_cb);
                 add_tiles_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
                 reconfig_data_format(in1_cb, in0_cb);
-                mm_block_init_short(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
+                matmul_block_init(in0_cb, in1_cb, transpose, subblock_w, subblock_h, in0_block_w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -1296,13 +1034,15 @@ ALWI void matmul_blocks(
         in0_index_offset += subblock_h * in0_block_w;
         in0_wait_tiles += in0_subblock_num_tiles;
         // Somewhat granularize the push of in0 subblocks
-        cb_push_back(out_cb, in0_subblock_all_cols_num_tiles);
+        cb_out.push_back(in0_subblock_all_cols_num_tiles);
     }
-    cb_pop_front(in1_cb, K * N);
+    cb_in1.pop_front(K * N);
 }
 
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
     // precondition: in0_cb has M*K produced
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -1324,15 +1064,15 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
      */
 
-    mm_block_init_short(
+    matmul_block_init(
         out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
     reconfig_data_format(in1_cb, out_cb);
-    cb_wait_front(in1_cb, N);
-    cb_wait_front(out_cb, M);
+    cb_in1.wait_front(N);
+    cb_out.wait_front(M);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         tile_regs_acquire();
@@ -1344,14 +1084,14 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
         matmul_block(out_cb, in1_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
 
         tile_regs_commit();
-        cb_pop_front(out_cb, subblock_h);
+        cb_out.pop_front(subblock_h);
 
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_h; i++) {
             pack_tile(i, out_cb);
         }
         tile_regs_release();
-        cb_push_back(out_cb, subblock_h);
+        cb_out.push_back(subblock_h);
     }
 }
 
@@ -1509,24 +1249,28 @@ void apply_causal_mask_lightweight(
 }
 
 /**
- * Context for lightweight mask application in ring joint SDPA.
+ * Context for lightweight mask application.
  * All mask tiles reside in a single CB. This struct stores the pre-resolved mask metadata used when
  * lightweight masking is enabled; enablement itself is controlled by the `lightweight_mask_enabled`
  * template parameter(s), not by default-constructing this context.
  */
 struct LightweightMaskContext {
-    bool is_causal = false;                  // Causal masking active for this context instance
-    uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
-    uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
-    uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
-    uint32_t local_n_padded_tiles = 0;       // Fully padded K tile columns for local_n chunk
-    uint32_t joint_n_padded_tiles = 0;       // Fully padded K tile columns for joint_l chunk
-    uint32_t global_n_partial_col = 0;       // Column within tile where global_n padding starts (0 = no partial)
-    uint32_t joint_l_partial_col = 0;        // Column within tile where joint_l padding starts (0 = no partial)
-    uint32_t global_n_partial_tile_idx = 0;  // Index of global_n partial tile in the mask CB
-    uint32_t joint_l_partial_tile_idx = 0;   // Index of joint_l partial tile in the mask CB
-    uint32_t straddle_num_padded_tiles = 0;  // Trailing -inf tiles on straddle chunk (0 = inactive)
-    uint32_t straddle_mask_chunk_id = 0;     // K chunk index where straddle mask applies
+    bool is_causal = false;                       // Causal masking active for this context instance
+    uint32_t neginf_tile_idx = 0;                 // Index of -inf tile in the mask CB
+    uint32_t causal_diag_tile_idx = 0;            // Index of causal diagonal tile in the mask CB
+    uint32_t primary_diag_tile_idx = 0;           // Causal diagonal, or sliding-window trailing-primary tile
+    uint32_t sliding_leading_prev_tile_idx = 0;   // Index of previous sliding-window leading tile
+    uint32_t sliding_leading_tile_idx = 0;        // Index of current sliding-window leading tile in the mask CB
+    uint32_t sliding_trailing_next_tile_idx = 0;  // Index of next sliding-window trailing tile
+    uint32_t global_n_padded_tiles = 0;           // Fully padded K tile columns for global_n chunk
+    uint32_t local_n_padded_tiles = 0;            // Fully padded K tile columns for local_n chunk
+    uint32_t joint_n_padded_tiles = 0;            // Fully padded K tile columns for joint_l chunk
+    uint32_t global_n_partial_col = 0;            // Column within tile where global_n padding starts (0 = no partial)
+    uint32_t joint_l_partial_col = 0;             // Column within tile where joint_l padding starts (0 = no partial)
+    uint32_t global_n_partial_tile_idx = 0;       // Index of global_n partial tile in the mask CB
+    uint32_t joint_l_partial_tile_idx = 0;        // Index of joint_l partial tile in the mask CB
+    uint32_t straddle_num_padded_tiles = 0;       // Trailing -inf tiles on straddle chunk (0 = inactive)
+    uint32_t straddle_mask_chunk_id = 0;          // K chunk index where straddle mask applies
 
     /**
      * Resolve which mask type applies for a given K chunk and return pre-resolved params.
@@ -1807,6 +1551,16 @@ void sdpa_inner_loop(
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true,
     const ChunkedContext& chunked = {}) {
+    // Parameter-stable CB locals. Aliases (cb_sum_A/B, cb_max_A/B, cb_out_im_A/B) are
+    // std::swap-mutated below, so they use inline CircularBuffer(alias).method() at the call
+    // sites instead. cb_out is constructed conditionally near its consumer (cur.out target).
+    CircularBuffer cb_q_in_obj(cb_q_in);
+    CircularBuffer cb_k_in_obj(cb_k_in);
+    CircularBuffer cb_v_in_obj(cb_v_in);
+    CircularBuffer cb_qk_im_obj(cb_qk_im);
+    CircularBuffer cb_attention_sink_obj(cb_attention_sink);
+    CircularBuffer cb_lse_in_obj(cb_lse_in);
+    CircularBuffer cb_prev_out_obj(cb_prev_out);
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1891,10 +1645,10 @@ void sdpa_inner_loop(
             // Chunked-prefill: never take this skip (local-frame causal_k_limit doesn't apply —
             // the diag stamp uses absolute coords every k_chunk instead).
             if (sdpa_type == RING && !chunked_enabled && k_chunk >= causal_k_limit && is_causal) {
-                cb_wait_front(cb_k_in, k_chunk_tiles);
-                cb_wait_front(cb_v_in, v_chunk_tiles);
-                cb_pop_front(cb_k_in, k_chunk_tiles);
-                cb_pop_front(cb_v_in, v_chunk_tiles);
+                cb_k_in_obj.wait_front(k_chunk_tiles);
+                cb_v_in_obj.wait_front(v_chunk_tiles);
+                cb_k_in_obj.pop_front(k_chunk_tiles);
+                cb_v_in_obj.pop_front(v_chunk_tiles);
 
                 continue;
             }
@@ -1977,16 +1731,16 @@ void sdpa_inner_loop(
                 if constexpr (lightweight_mask_enabled) {
                     // Re-enter reserved state on cb_qk_im so the lightweight mask can be stamped in-place.
                     // matmul_blocks above already pushed the QK tiles, so tiles_received has been bumped;
-                    // without the pop+push cycle below, reduce_c's cb_wait_front would return immediately
+                    // without the pop+push cycle below, reduce_c's wait-front would return immediately
                     // and unpack could start before the mask stamps land in L1.
-                    // Safe because cb_pop_front only moves rd_ptr (L1 data is untouched), and on a
+                    // Safe because pop-front only moves rd_ptr (L1 data is untouched), and on a
                     // single-buffered CB of size qk_chunk_tiles the re-reserved wr_ptr wraps back to the
                     // same physical region holding the QK scores.
                     // Warning: this won't work if cb_qk_im is double-buffered -- the stamps would land
                     // in the other buffer, leaving the QK scores unmasked.
-                    cb_wait_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
-                    cb_pop_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
-                    cb_reserve_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
+                    cb_qk_im_obj.wait_front(Sk_chunk_t * Sq_chunk_t);
+                    cb_qk_im_obj.pop_front(Sk_chunk_t * Sq_chunk_t);
+                    cb_qk_im_obj.reserve_back(Sk_chunk_t * Sq_chunk_t);
                     // Chunked-prefill: feed abs K (matches abs q_start_tile so diag stamp lines up).
                     uint32_t k_start_tile_for_mask;
                     uint32_t lw_straddle_col = 0;
@@ -2029,7 +1783,7 @@ void sdpa_inner_loop(
                         k_start_tile_for_mask,
                         lw_straddle_col,
                         lw_straddle_jump);
-                    cb_push_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
+                    cb_qk_im_obj.push_back(Sk_chunk_t * Sq_chunk_t);
                 } else {
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                 }
@@ -2059,7 +1813,8 @@ void sdpa_inner_loop(
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
-            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in matmul)
+            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
+            // matmul)
             reconfig_data_format(cb_v_in, cb_qk_im);
             pack_reconfig_data_format(alias_mm2_cur_out);
 
@@ -2079,7 +1834,7 @@ void sdpa_inner_loop(
                 out_subblock_w,
                 false /*transpose*/);
 
-            cb_pop_front(cb_qk_im, qk_chunk_tiles);
+            cb_qk_im_obj.pop_front(qk_chunk_tiles);
             reconfig_data_format(alias_prev_max, alias_cur_max);
 
             /* OUT_ACC += OUT_IM */
@@ -2089,7 +1844,7 @@ void sdpa_inner_loop(
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                cb_pop_front(alias_prev_max, Sq_chunk_t);
+                CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
                 /**
                  * cb_prev_sum *= cb_exp_max_diff
@@ -2146,7 +1901,7 @@ void sdpa_inner_loop(
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-            cb_pop_front(alias_prev_max, Sq_chunk_t);
+            CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
             // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
             mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
@@ -2189,8 +1944,8 @@ void sdpa_inner_loop(
                  * out = prev_out - sig * (prev_out - cur_out)
                  * lse = prev_lse - torch.logsigmoid(prev_lse - cur_lse)
                  */
-                cb_wait_front(cb_lse_in, Sq_chunk_t);
-                cb_wait_front(cb_prev_out, out_chunk_tiles);
+                cb_lse_in_obj.wait_front(Sq_chunk_t);
+                cb_prev_out_obj.wait_front(out_chunk_tiles);
 
                 uint32_t alias_cur_lse = alias_prev_max;      // full
                 uint32_t alias_sig = alias_cur_max;           // empty
@@ -2210,9 +1965,9 @@ void sdpa_inner_loop(
                 reconfig_data_format(cb_prev_out, alias_sub);
                 pack_reconfig_data_format(cb_out);
                 sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
-                cb_pop_front(cb_prev_out, out_chunk_tiles);
-                cb_pop_front(alias_cur_out, out_chunk_tiles);
-                cb_pop_front(alias_sub, out_chunk_tiles);
+                cb_prev_out_obj.pop_front(out_chunk_tiles);
+                CircularBuffer(alias_cur_out).pop_front(out_chunk_tiles);
+                CircularBuffer(alias_sub).pop_front(out_chunk_tiles);
 
                 // alias_sig = sigmoid(cb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
@@ -2221,9 +1976,9 @@ void sdpa_inner_loop(
                 reconfig_data_format(cb_lse_in, alias_cur_lse);
                 logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
                 sub_block(cb_lse_in, alias_sig, cb_lse_out, Sq_chunk_t);
-                cb_pop_front(alias_sig, Sq_chunk_t);
-                cb_pop_front(alias_cur_lse, Sq_chunk_t);
-                cb_pop_front(cb_lse_in, Sq_chunk_t);
+                CircularBuffer(alias_sig).pop_front(Sq_chunk_t);
+                CircularBuffer(alias_cur_lse).pop_front(Sq_chunk_t);
+                cb_lse_in_obj.pop_front(Sq_chunk_t);
             } else {
                 pack_reconfig_data_format(cb_out);
                 copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
@@ -2240,29 +1995,29 @@ void sdpa_inner_loop(
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
 
             // free up cb_prev_max after K chunks
-            cb_pop_front(alias_prev_max, Sq_chunk_t);
+            CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
         }
 
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
         // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
         if (q_per_core > 1 || is_last_ring_iter) {
-            cb_pop_front(cb_q_in, q_chunk_tiles);
+            cb_q_in_obj.pop_front(q_chunk_tiles);
         }
 
         // Under global Q scheduling the reader pushes one cb_attention_sink slot per Q iter,
         // so we must drain matching slots inside this loop. Pre-PR the push/pop pair was
         // 1:1 outside the loop; the new cadence is 1:1 per iter.
         if constexpr (use_attention_sink) {
-            cb_pop_front(cb_attention_sink, Sq_chunk_t);
+            cb_attention_sink_obj.pop_front(Sq_chunk_t);
         }
     }
 
     if constexpr (sdpa_type == RING) {
         if (KV_chunks_processed_in_iter % 2 == 0) {
-            cb_wait_front(cb_k_in, k_chunk_tiles);
-            cb_wait_front(cb_v_in, v_chunk_tiles);
-            cb_pop_front(cb_k_in, k_chunk_tiles);
-            cb_pop_front(cb_v_in, v_chunk_tiles);
+            cb_k_in_obj.wait_front(k_chunk_tiles);
+            cb_v_in_obj.wait_front(v_chunk_tiles);
+            cb_k_in_obj.pop_front(k_chunk_tiles);
+            cb_v_in_obj.pop_front(v_chunk_tiles);
         }
     }
 }

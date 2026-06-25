@@ -556,11 +556,11 @@ The main processing loop iterates over all tiles, implementing a producer-consum
 For each tile, the kernel first reserves space in both circular buffers using blocking calls to ``cb_reserve_back``
 to ensure that space is available before attempting to write.
 Once space is reserved, the kernel obtains write pointers to the circular buffers and initiates two non-blocking asynchronous
-read operations using ``noc_async_read_tile``. Observe that this call takes in the index of the tile being read and an address generator,
+read operations using ``noc_async_read_page``. Observe that this call takes in the index of the tile being read and an address generator,
 along with the circular buffer address to write the tile to. The address generator automatically maps the logical tile index to the correct physical
 DRAM address based on the specific memory layout.
 
-Because ``noc_async_read_tile`` is non-blocking, the two reads can proceed in parallel if sufficient bandwidth is available, transferring data from DRAM to
+Because ``noc_async_read_page`` is non-blocking, the two reads can proceed in parallel if sufficient bandwidth is available, transferring data from DRAM to
 the circular buffers simultaneously. After both reads are initiated, the kernel calls ``noc_async_read_barrier`` to wait
 for both transfers to complete. This is important because the kernel should not signal that the tiles are ready for consumption
 until data is actually available.
@@ -1153,11 +1153,11 @@ Then, adjust the code to perform matrix multiplication, by making the following 
 
 #. Update the reader kernel to read the tiles of ``A`` and ``B`` in the correct order.
    The order of reading tiles from ``A`` and ``B`` should match the pattern of visiting one row of tiles of ``A``
-   with all columns of tiles of ``B``, as discussed above. Keep in mind that ``noc_async_read_tile`` function only requires the index of the tile to read,
+   with all columns of tiles of ``B``, as discussed above. Keep in mind that ``noc_async_read_page`` function only requires the index of the tile to read,
    not the actual memory address, so your code only needs to generate indices in the right order.
 
 #. Update the writer kernel to write the tiles of ``C`` in the correct order. The order should match the pattern of visiting tiles of ``C`` in row-major order.
-   Keep in mind that ``noc_async_write_tile`` function only requires the index of the tile to write, not the actual memory address,
+   Keep in mind that ``noc_async_write_page`` function only requires the index of the tile to write, not the actual memory address,
    so your code only needs to generate indices in the right order.
 
 #. Update the compute kernel to perform matrix multiplication rather than elementwise addition.

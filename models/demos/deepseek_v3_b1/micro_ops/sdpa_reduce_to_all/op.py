@@ -290,6 +290,7 @@ class SdpaReduceToAll:
 
                 tile = input_l_device.tile
                 tile_height, tile_width = tile.tile_shape
+                l_out_face_geometry = ttnn.FaceGeometry(tile.face_shape[0], tile.num_faces)
                 element_size_bytes = _get_element_size_bytes(input_l_device.dtype)
                 l1_alignment = 16
                 num_links = 2
@@ -426,6 +427,7 @@ class SdpaReduceToAll:
                 cb_l_out_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_l_out, output_l_device)
                 cb_l_out_desc.format_descriptors[0].tile = tile_desc
                 cb_l_out_desc.format_descriptors[0].page_size = aligned_page_size
+                cb_l_out_desc.format_descriptors[0].face_geometry = l_out_face_geometry
 
                 # r1_recv_device is used for both R1 and R2
                 # CBs are manually offset into the recv buffer

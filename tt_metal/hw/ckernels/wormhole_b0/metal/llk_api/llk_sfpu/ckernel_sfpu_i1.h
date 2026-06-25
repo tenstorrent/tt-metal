@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
@@ -44,6 +44,15 @@ namespace ckernel::sfpu {
 // Note: this function must stay minimalist — SFPU LRA is limited.
 // Every operation here competes with the main loop.
 inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat x_signed) {
+    // exp(|x|) — unsafe variants in both paths: |x|∈[10,88.5] precludes
+    // overflow/underflow, so the safe wrappers' clamping/guards are dead
+    // and skipped.
+#ifdef INP_FLOAT32
+    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
+#else
+    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x);
+#endif
+
     // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
     // Computed first so that 1/|x| can be derived as rsqrt_y² without a
     // separate sfpu_reciprocal call.
@@ -67,15 +76,6 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
         -4.3674591560e-02f,
         -1.9748322314e-02f,
         -3.3467922914e-01f);
-
-    // exp(|x|) — unsafe variants in both paths: |x|∈[10,88.5] precludes
-    // overflow/underflow, so the safe wrappers' clamping/guards are dead
-    // and skipped.
-#ifdef INP_FLOAT32
-    const sfpi::vFloat exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
-#else
-    const sfpi::vFloat exp_abs = _sfpu_exp_21f_bf16_unsafe_<true>(abs_x);
-#endif
 
     // i1 is odd: copy sign of original x onto positive magnitude.
     return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
@@ -137,7 +137,7 @@ inline void calculate_i1() {
         v_if(abs_x > I1_THRESHOLD) { val = calculate_i1_asymptotic_(abs_x, x); }
         v_endif;
 #ifndef INP_FLOAT32
-        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::NearestEven);
+        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
 #endif
         sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;

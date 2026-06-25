@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -31,72 +32,15 @@ inline void dispatch_metadata_local_device(
     noc_async_atomic_barrier();
 }
 
-void zero_buffer_async(uint32_t write_addr, int bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    while (bytes > 0) {
-        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
-        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
-        write_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
+void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
+    Noc noc;
+    CircularBuffer cb(cb_id);
+    noc.async_write_zeros(cb, bytes);
 }
 
-void zero_buffer_barrier() { noc_async_read_barrier(); }
-
-// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
-// For a 1D ring with even number of devices, we multicast in both directions to cover all devices
-// with just 2 packets instead of (dispatch_devices - 1) unicast packets
-template <
-    uint32_t LinearizedSrcMeshCoord,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
-    bool DoubleAntipodalAtomicInc = false,
-    typename FabricConnectionsType>
-FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
-    FabricConnectionsType& fabric_connections,
-    volatile PACKET_HEADER_TYPE* packet_header_pos,
-    volatile PACKET_HEADER_TYPE* packet_header_neg,
-    uint64_t semaphore_noc_addr) {
-    using ttnn::operations::ccl::common::ReplicateGroup;
-    const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
-
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
-    // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
-    // dispatch_devices) if DoubleAntipodalAtomicInc is true
-    constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (DispatchDevices + 1) / 2 : DispatchDevices / 2;
-    constexpr uint32_t negative_range =
-        DoubleAntipodalAtomicInc ? DispatchDevices - positive_range : (DispatchDevices - 1) - positive_range;
-
-    // Determine directions based on axis:
-    // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
-    // ROWS (axis=1): dispatch along row → EAST is positive, WEST is negative
-    constexpr uint32_t positive_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
-    constexpr uint32_t negative_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
-
-    // Send multicast in positive direction (start_distance=1, range=positive_range)
-    if constexpr (positive_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[positive_direction],
-            packet_header_pos,
-            cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(positive_range));
-    }
-
-    // Send multicast in negative direction (start_distance=1, range=negative_range)
-    if constexpr (negative_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[negative_direction],
-            packet_header_neg,
-            cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(negative_range));
-    }
+void zero_buffer_barrier() {
+    Noc noc;
+    noc.write_zeros_l1_barrier();
 }
 
 // Bidirectional multicast write - sends same payload to all devices on ring via multicast in both directions
@@ -116,7 +60,7 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
     uint32_t src_addr,
     uint64_t noc_addr,
     int32_t size_bytes,
-    uint32_t alignment) {
+    [[maybe_unused]] uint32_t alignment) {
     using ttnn::operations::ccl::common::ReplicateGroup;
 
     // Split the ring: positive direction gets half, negative direction gets the other half
@@ -188,10 +132,10 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
 // Similar to fabric_multicast_bidirectional_atomic_inc_ring_1d but for scatter writes
 template <
     uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     FabricConnectionsType& fabric_connections,
@@ -202,10 +146,16 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     const std::array<uint16_t, 2>& chunk_sizes) {
     using ttnn::operations::ccl::common::ReplicateGroup;
 
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
-    constexpr uint32_t positive_range = DispatchDevices / 2;
-    constexpr uint32_t negative_range = (DispatchDevices - 1) - positive_range;
+    constexpr uint32_t dispatch_devices =
+        Axis == ttnn::operations::ccl::common::ReplicateGroup::COLS ? MeshRows : MeshCols;
+
+    constexpr uint32_t axis_position =
+        Axis == ReplicateGroup::COLS ? (LinearizedSrcMeshCoord / MeshCols) : (LinearizedSrcMeshCoord % MeshCols);
+
+    constexpr uint32_t positive_range =
+        (Topology == tt::tt_fabric::Topology::Linear) ? (dispatch_devices - 1) - axis_position : dispatch_devices / 2;
+    constexpr uint32_t negative_range =
+        (Topology == tt::tt_fabric::Topology::Linear) ? axis_position : (dispatch_devices - 1) - positive_range;
 
     constexpr uint32_t positive_direction =
         Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
@@ -393,6 +343,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
+    bool sent_local = false;
 
     // Collect all unique remote destinations for this token
     uint32_t remote_token_destinations[NumDevices];
@@ -408,9 +359,12 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
             send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
-                // If the expert lives on the current device, dispatch locally
-                noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
-                needs_barrier = true;
+                if (!sent_local) {
+                    // If the expert lives on the current device, dispatch locally
+                    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
+                    needs_barrier = true;
+                    sent_local = true;
+                }
             } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
                 // Add to remote destinations list
                 remote_token_destinations[num_remote_token_destinations++] = target_device;
@@ -522,29 +476,42 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
                 sent_local = true;
             }
         } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
-            // Remote device on our axis - calculate distance in both directions
-            // pos_distance: going EAST/SOUTH (ascending, with wrap)
-            // neg_distance: going WEST/NORTH (descending, with wrap)
-
+            // Remote device on our axis - select the direction(s) used to reach it.
             uint32_t intra_cluster_target_device_id =
                 get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
 
-            uint32_t pos_distance =
-                (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
-            uint32_t neg_distance =
-                (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
-            // Determine shortest path direction
-            if (pos_distance < neg_distance) {
-                // Shorter via positive direction (EAST/SOUTH)
-                pos_hop_mask |= (1 << (pos_distance - 1));
-            } else if (neg_distance < pos_distance) {
-                // Shorter via negative direction (WEST/NORTH)
-                neg_hop_mask |= (1 << (neg_distance - 1));
+            if constexpr (ttnn::operations::ccl::common::has_wrap_around<Topology>()) {
+                // Ring/Torus: target is reachable in both directions (one wraps around).
+                // pos_distance: going EAST/SOUTH (ascending, with wrap)
+                // neg_distance: going WEST/NORTH (descending, with wrap)
+                uint32_t pos_distance =
+                    (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
+                uint32_t neg_distance =
+                    (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
+                // Determine shortest path direction
+                if (pos_distance < neg_distance) {
+                    // Shorter via positive direction (EAST/SOUTH)
+                    pos_hop_mask |= (1 << (pos_distance - 1));
+                } else if (neg_distance < pos_distance) {
+                    // Shorter via negative direction (WEST/NORTH)
+                    neg_hop_mask |= (1 << (neg_distance - 1));
+                } else {
+                    // Antipodal tie - use provided polarity
+                    if (antipodal_polarity == Polarity::POSITIVE) {
+                        pos_hop_mask |= (1 << (pos_distance - 1));
+                    } else {
+                        neg_hop_mask |= (1 << (neg_distance - 1));
+                    }
+                }
             } else {
-                // Antipodal tie - use provided polarity
-                if (antipodal_polarity == Polarity::POSITIVE) {
+                // Linear: no wrap-around, so exactly one direction reaches the target.
+                // Targets ahead of the source (larger id) go positive (EAST/SOUTH); targets
+                // behind (smaller id) go negative (WEST/NORTH). No antipodal tie is possible.
+                if (intra_cluster_target_device_id > intra_cluster_src_device_id) {
+                    uint32_t pos_distance = intra_cluster_target_device_id - intra_cluster_src_device_id;
                     pos_hop_mask |= (1 << (pos_distance - 1));
                 } else {
+                    uint32_t neg_distance = intra_cluster_src_device_id - intra_cluster_target_device_id;
                     neg_hop_mask |= (1 << (neg_distance - 1));
                 }
             }
@@ -816,21 +783,21 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t send_preparation_buffer_cb_id = get_compile_time_arg_val(4);
 
-    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
+    [[maybe_unused]] constexpr uint32_t input_pages = get_compile_time_arg_val(5);
+    [[maybe_unused]] constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
     constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
-    constexpr uint32_t output_pages = get_compile_time_arg_val(8);
-    constexpr uint32_t metadata_pages = get_compile_time_arg_val(9);
+    [[maybe_unused]] constexpr uint32_t output_pages = get_compile_time_arg_val(8);
+    [[maybe_unused]] constexpr uint32_t metadata_pages = get_compile_time_arg_val(9);
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
+    [[maybe_unused]] constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
+    [[maybe_unused]] constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(13);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(16);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(17);
+    [[maybe_unused]] constexpr uint32_t hidden_size = get_compile_time_arg_val(16);
+    [[maybe_unused]] constexpr uint32_t batch_size = get_compile_time_arg_val(17);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
     constexpr uint32_t experts = get_compile_time_arg_val(19);
     constexpr uint32_t num_shared_experts = get_compile_time_arg_val(20);
@@ -838,30 +805,30 @@ void kernel_main() {
 
     constexpr uint32_t shared_and_selected_experts = selected_experts_k + num_shared_experts;
 
-    constexpr uint32_t num_links = get_compile_time_arg_val(22);
+    [[maybe_unused]] constexpr uint32_t num_links = get_compile_time_arg_val(22);
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(23);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
+    [[maybe_unused]] constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
+    [[maybe_unused]] constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(28);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(31);
+    [[maybe_unused]] constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(28);
+    [[maybe_unused]] constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
+    [[maybe_unused]] constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
+    [[maybe_unused]] constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(31);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(32);
 
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(33);
     constexpr uint32_t alignment = get_compile_time_arg_val(34);
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(35);
-    constexpr uint32_t write_page_by_page = get_compile_time_arg_val(36);
+    [[maybe_unused]] constexpr uint32_t write_page_by_page = get_compile_time_arg_val(36);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(37);
 
     constexpr uint32_t dispatch_devices = get_compile_time_arg_val(38);
 
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    [[maybe_unused]] constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
     constexpr uint32_t output_scores_page_size = get_compile_time_arg_val(43);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
@@ -884,10 +851,10 @@ void kernel_main() {
 #endif
 
     size_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t scores_out_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -906,8 +873,8 @@ void kernel_main() {
     uint32_t payload_size = get_arg_val<uint32_t>(rt_args_idx++);
     bool is_primary_payload_worker = get_arg_val<uint32_t>(rt_args_idx++) == 1;
 
-    constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
-    constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
+    [[maybe_unused]] constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
+    [[maybe_unused]] constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
 
     constexpr uint32_t num_directions = 4;
     constexpr std::array<bool, num_directions> directions = DIRECTIONS;
@@ -997,7 +964,7 @@ void kernel_main() {
 
     uint32_t send_preparation_buffer_address = get_write_ptr(send_preparation_buffer_cb_id);
     detail::zero_buffer_async(
-        send_preparation_buffer_address, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
+        send_preparation_buffer_cb_id, (token_end_idx - token_start_idx) * num_devices * sizeof(uint8_t));
 
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
@@ -1017,8 +984,9 @@ void kernel_main() {
     constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
-    const auto output_scores_addr_gen =
+    [[maybe_unused]] const auto metadata_addr_gen =
+        TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    [[maybe_unused]] const auto output_scores_addr_gen =
         TensorAccessor(scores_out_args, scores_out_tensor_address, output_scores_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
@@ -1035,8 +1003,8 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + 5 * sizeof(PACKET_HEADER_TYPE));
     // packet headers at +6 and +7 are currently unused (reserved for future split sends)
 
-    uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
-    uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
+    [[maybe_unused]] uint32_t base_indices_addr = get_read_ptr(indices_tensor_cb_id);
+    [[maybe_unused]] uint32_t base_scores_addr = get_read_ptr(scores_tensor_cb_id);
 
     detail::zero_buffer_barrier();
 
@@ -1063,12 +1031,7 @@ void kernel_main() {
     // - The cross_device_semaphore is double-buffered externally to avoid races between iterations
 #ifndef SKIP_INIT_SEMAPHORE
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
-        linearized_mesh_coord,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        dispatch_devices>(
+    fabric_multicast_bidirectional_atomic_inc_1d<linearized_mesh_coord, topology, mesh_rows, mesh_cols, axis>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
 
@@ -1108,7 +1071,7 @@ void kernel_main() {
         // we need the global token index to write to the output buffer – each global token that could potentially be
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-        uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
+        uint64_t output_token_write_addr = output_addr_gen.get_noc_addr(global_token);
         // All workers read indices (needed for routing decisions)
         // Only primary worker reads scores (only primary sends metadata)
         cb_wait_front(indices_tensor_cb_id, 1);
@@ -1300,10 +1263,10 @@ void kernel_main() {
         uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
         detail::fabric_multicast_bidirectional_scatter_write_ring_1d_async<
             linearized_mesh_coord,
+            topology,
             mesh_rows,
             mesh_cols,
-            axis,
-            dispatch_devices>(
+            axis>(
             fabric_connections,
             metadata_packet_header_pos,
             metadata_packet_header_neg,
@@ -1313,13 +1276,13 @@ void kernel_main() {
         cb_pop_front(metadata_buffer_id, tokens_per_device);
         // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal
         // device
-        detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
+        fabric_multicast_bidirectional_atomic_inc_1d<
             linearized_mesh_coord,
+            topology,
             mesh_rows,
             mesh_cols,
             axis,
-            dispatch_devices,
-            true>(
+            /*DoubleAntipodalAtomicInc=*/(topology == tt::tt_fabric::Topology::Ring)>(
             fabric_connections,
             atomic_inc_packet_header_pos,
             atomic_inc_packet_header_neg,

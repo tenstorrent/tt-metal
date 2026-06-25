@@ -704,7 +704,7 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
 
 # Bit-15 marks an expert ID as SRAM-resident; the low 15 bits carry the slot index.
 # See create_gate_indices_tensor docstring for the wire-encoding contract that
-# build_sram_expert_weights and the kernel-side filter both depend on.
+# build_sram_routed_proj_cts and the kernel-side filter both depend on.
 _SRAM_BIT = 1 << 15
 
 

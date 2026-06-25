@@ -12,11 +12,21 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include "ttnn/global_circular_buffer.hpp"
 namespace ttnn::global_circular_buffer {
 
 void py_module_types(nb::module_& mod) {
-    nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer").def("size", &GlobalCircularBuffer::size);
+    nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer")
+        .def("size", &GlobalCircularBuffer::size)
+        .def("sender_cores", &GlobalCircularBuffer::sender_cores, nb::rv_policy::reference_internal)
+        .def("receiver_cores", &GlobalCircularBuffer::receiver_cores, nb::rv_policy::reference_internal)
+        .def("sender_core_type", [](const GlobalCircularBuffer& gcb) {
+            return tt::tt_metal::experimental::sender_core_type(gcb) ==
+                           tt::tt_metal::experimental::SenderCoreType::Worker
+                       ? "worker"
+                       : "dram";
+        });
 }
 
 void py_module(nb::module_& mod) {
@@ -59,6 +69,9 @@ void py_module(nb::module_& mod) {
                 size (int): Size of the global circular buffer per core in bytes.
                 buffer_type (BufferType): The type of buffer to use for the global circular buffer.
             )doc");
+
+    // DRAM-sender GCB factories live under ttnn.experimental.* — see
+    // ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.cpp.
 }
 
 }  // namespace ttnn::global_circular_buffer

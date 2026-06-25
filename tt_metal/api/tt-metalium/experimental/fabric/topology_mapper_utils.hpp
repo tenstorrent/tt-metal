@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -44,6 +45,17 @@ using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 // Pinning constraint: maps an ASIC position to a FabricNodeId
 // This constrains which physical ASIC a logical node can be mapped to
 using PinningConstraint = std::pair<AsicPosition, FabricNodeId>;
+
+// Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
+// and the mesh is not folded. Pins all four logical corners to the four tray corners (with hard_pin_node_0
+// fixing the NW corner to tray 1 / asic 1); nw_corner_only pins ONLY the NW corner to any tray-corner ASIC
+// (asic_location==1 on trays 1..4) for sub-galaxy slices. Shared by
+// generate_rank_bindings (Phase 1) and ControlPlane (Phase 2) so both apply identical placement.
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    bool hard_pin_node_0 = false,
+    bool nw_corner_only = false);
 
 /**
  * @brief Configuration options for topology mapping
@@ -462,6 +474,21 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const TopologyMappingConfig& config,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+/** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
+void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);
+void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph);
+
+// Choose one (exit, peer) FabricNodeId pair per candidate set ("hop") such that no FabricNodeId is
+// reused across sets. `candidates[i]` are the candidate pairs for position i; returns the chosen pairs
+// in order, or std::nullopt if no collision-free assignment exists (any set empty, or overconstrained).
+//
+// A backtracking solver for a system of distinct representatives (most-constrained set first). The blitz
+// decode pipeline builder uses it to lay out inter-mesh ring hops, where per-hop greedy first-fit can
+// strand a mid-chain hop on tight rings; kept here so it is reusable and unit-testable without a control
+// plane.
+std::optional<std::vector<std::pair<FabricNodeId, FabricNodeId>>> assign_non_colliding_hops(
+    const std::vector<std::vector<std::pair<FabricNodeId, FabricNodeId>>>& candidates);
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
 
