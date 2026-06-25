@@ -221,8 +221,9 @@ def load_weights_from_hf(
     - ``sharded=False`` (default, eager path): the model is replicated on the
       FSDP axis (or single-device). When used with FSDP this must be called
       BEFORE ``ttml.fsdp.fully_shard`` so ``fully_shard`` can reshard the (full,
-      replicated) parameters in place. CPU prep and the device transfer are
-      pipelined across a small thread pool.
+      replicated) parameters in place. CPU prep is threaded; the device transfer
+      runs serially in the main thread (concurrent device ops race on the
+      program-cache binary commit -- same as the sharded path below).
 
     - ``sharded=True`` (lazy + FSDP path): the model has already been
       ``fully_shard``-ed and materialized, so each parameter is allocated
@@ -289,12 +290,12 @@ def load_weights_from_hf(
                 sharded_mappers[name] = replicate_mapper
 
     def _prepare(hf_name, ttml_name):
-        # CPU-only prep (float cast, permutation, padding). In the sharded path
-        # the device transfer (torch_to_ttml -> from_numpy with a mapper) is done
-        # serially in the main loop below: running those device ops concurrently
-        # across worker threads races on the program-cache binary commit
-        # (TT_FATAL "Expected Program Binaries to be committed to DRAM"). In the
-        # non-sharded path the device transfer is pipelined here.
+        # CPU-only prep (float cast, permutation, padding). The device transfer
+        # (torch_to_ttml) is done serially in the main loop below for BOTH
+        # paths: running those device ops concurrently across worker threads
+        # races on the program-cache binary commit (TT_FATAL "Expected Program
+        # Binaries to be committed to DRAM"). TTNN device ops on a single mesh
+        # device are not thread-safe, so only the CPU prep is threaded here.
         if hf_name not in hf_state_dict or ttml_name not in ttml_shapes:
             return None
 
@@ -327,9 +328,8 @@ def load_weights_from_hf(
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        # Non-sharded path pipelines the device transfer in the worker thread.
-        if not sharded:
-            return torch_to_ttml(weight)
+        # Return the host weight; the device transfer is serialized in the main
+        # loop below (both paths), see the thread-safety note above.
         return weight
 
     items = list(mapping.items())
@@ -345,16 +345,17 @@ def load_weights_from_hf(
                     print(f"  WARNING: ttml param '{ttml_name}' not found for HF '{hf_name}'")
                 skipped.append(hf_name)
                 continue
+            # ``prepared`` is a padded host torch weight from the worker thread;
+            # the device transfer below runs serially in the main thread (TTNN
+            # device ops are not thread-safe -- see the note in ``_prepare``).
             param = ttml_params[ttml_name]
             if sharded:
                 # ``prepared`` is the padded GLOBAL-shape host weight (see above).
                 # Distribute it with the param's precomputed mapper (FSDP-shard or
-                # replicate) -- device transfer runs serially here -- then swap the
-                # value in place to preserve FSDP markers.
+                # replicate), then swap the value in place to preserve FSDP markers.
                 param.set_value(torch_to_ttml(prepared, mapper=sharded_mappers[ttml_name]).get_value())
             else:
-                # ``prepared`` is already a device tensor from the worker thread.
-                param.assign(prepared)
+                param.assign(torch_to_ttml(prepared))
             loaded += 1
 
     print(f"  Qwen3 weight loading: {loaded} loaded, {len(skipped)} skipped")
