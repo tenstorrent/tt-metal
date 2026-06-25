@@ -68,12 +68,12 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
-        case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_XOR_INCLUDE";
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_OR:
+        case UnaryOpType::BITWISE_XOR: return "SFPU_OP_BITWISE_INCLUDE";
         case UnaryOpType::BITWISE_NOT: return "SFPU_OP_BITWISE_NOT_INCLUDE";
-        case UnaryOpType::BITWISE_AND: return "SFPU_OP_BITWISE_AND_INCLUDE";
-        case UnaryOpType::BITWISE_OR: return "SFPU_OP_BITWISE_OR_INCLUDE";
-        case UnaryOpType::RIGHT_SHIFT: return "SFPU_OP_RIGHT_SHIFT_INCLUDE";
-        case UnaryOpType::LEFT_SHIFT: return "SFPU_OP_LEFT_SHIFT_INCLUDE";
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::RIGHT_SHIFT: return "SFPU_OP_SHIFT_INCLUDE";
         case UnaryOpType::REMAINDER: return "SFPU_OP_REMAINDER_INCLUDE";
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
@@ -225,16 +225,46 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 "heaviside_tile_init();",
                 fmt::format("heaviside_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
-        case UnaryOpType::BITWISE_XOR:
-            return {"bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, (uint)params[0])};
-        case UnaryOpType::BITWISE_AND:
-            return {"bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, (uint)params[0])};
-        case UnaryOpType::BITWISE_OR:
-            return {"bitwise_or_tile_init();", fmt::format("bitwise_or_tile({}, {}u);", idst, (uint)params[0])};
-        case UnaryOpType::RIGHT_SHIFT:
-            return {"right_shift_tile_init();", fmt::format("right_shift_tile({}, {}u);", idst, (uint)params[0])};
-        case UnaryOpType::LEFT_SHIFT:
-            return {"left_shift_tile_init();", fmt::format("left_shift_tile({}, {}u);", idst, (uint)params[0])};
+        case UnaryOpType::BITWISE_XOR: {
+            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
+                                      : (input_dtype == DataType::UINT32) ? "UInt32"
+                                                                          : "UInt16";
+            return {
+                "bitwise_xor_tile_init();",
+                fmt::format("bitwise_xor_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
+        }
+        case UnaryOpType::BITWISE_AND: {
+            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
+                                      : (input_dtype == DataType::UINT32) ? "UInt32"
+                                                                          : "UInt16";
+            return {
+                "bitwise_and_tile_init();",
+                fmt::format("bitwise_and_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
+        }
+        case UnaryOpType::BITWISE_OR: {
+            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
+                                      : (input_dtype == DataType::UINT32) ? "UInt32"
+                                                                          : "UInt16";
+            return {
+                "bitwise_or_tile_init();",
+                fmt::format("bitwise_or_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
+        }
+        case UnaryOpType::RIGHT_SHIFT: {
+            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
+                                      : (input_dtype == DataType::UINT32) ? "UInt32"
+                                                                          : "UInt16";
+            return {
+                "right_shift_tile_init();",
+                fmt::format("right_shift_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
+        }
+        case UnaryOpType::LEFT_SHIFT: {
+            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
+                                      : (input_dtype == DataType::UINT32) ? "UInt32"
+                                                                          : "UInt16";
+            return {
+                "left_shift_tile_init();",
+                fmt::format("left_shift_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
+        }
         case UnaryOpType::REMAINDER:
             return {
                 fmt::format(
