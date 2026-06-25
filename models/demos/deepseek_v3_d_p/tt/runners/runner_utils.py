@@ -261,6 +261,18 @@ def prepare_prefill_input_tensor(
     )
 
 
+def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+    """Global spec of the inter-rank hidden state carried over the D2D pipeline socket:
+    [1, 1, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across SP
+    rows, emb across TP cols) to match the embedding output layout the downstream model consumes."""
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+
+
 def probe_dram_allocatable_base(mesh_device, label: str = "") -> None:
     """Snapshot the DRAM allocator state at the moment this is called.
 

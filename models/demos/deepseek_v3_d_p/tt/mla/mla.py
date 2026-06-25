@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -308,7 +307,7 @@ class ttMLA:
         self.tp_factor = mesh_device.shape[self.tp_axis]
         self.sp_factor = mesh_device.shape[self.sp_axis]
 
-        self.ccl_num_links = int(os.environ.get("PREFILL_PP_NUM_LINKS", "2" if is_blackhole() else "1"))
+        self.ccl_num_links = 2 if is_blackhole() else 1  # Blackhole trains 2 fabric routing planes, others 1
         self.ccl_topology = topology
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
