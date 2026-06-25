@@ -7,8 +7,12 @@ import sys
 
 try:
     from .frontier_scatter import main as frontier_main
+    from .plot_pareto_io import main as pareto_io_main
+    from .select_pareto_winners import main as select_pareto_main
 except ImportError:
     from frontier_scatter import main as frontier_main
+    from plot_pareto_io import main as pareto_io_main
+    from select_pareto_winners import main as select_pareto_main
 
 
 def existing(path):
@@ -83,6 +87,27 @@ def parse_args():
     parser.add_argument("--native-vs-embedded", type=existing, help="Native-vs-embedded result directory")
     parser.add_argument("--all", action="store_true", help="Generate every plot type supported by available summary artifacts")
     parser.add_argument("--tiers", action="store_true", help="Also generate best/best99/best95 tier comparison plots")
+    parser.add_argument(
+        "--select-pareto-winners",
+        action="store_true",
+        help="Write data/csv/pareto_winners.csv for later raw IO dumps.",
+    )
+    parser.add_argument(
+        "--include-ttnn-dumps",
+        action="store_true",
+        help="Include TTNN rows in the Pareto winner manifest.",
+    )
+    parser.add_argument(
+        "--ulp-by-input",
+        action="store_true",
+        help="Generate ULP-by-input plots from an existing Pareto dump manifest.",
+    )
+    parser.add_argument("--pareto-manifest", type=existing, help="Pareto winner dump manifest CSV")
+    parser.add_argument(
+        "--strict-ulp-dumps",
+        action="store_true",
+        help="Fail if any manifest dump is missing instead of skipping incomplete activations.",
+    )
     parser.add_argument("--outdir", type=existing, help="Output plot directory. Defaults to <frontier>/plots.")
     parser.add_argument(
         "--frontier-subdir",
@@ -114,6 +139,40 @@ def main():
         frontier_main()
     finally:
         sys.argv = old_argv
+
+    manifest = args.pareto_manifest or (args.frontier / "data" / "csv" / "pareto_winners.csv")
+    if args.select_pareto_winners:
+        select_argv = [str(p) for p in shards] + [
+            "--frontier",
+            str(args.frontier),
+            "--out",
+            str(manifest),
+            "--dump-root",
+            str(args.frontier / "data" / "dumps"),
+            "--plot-root",
+            str(outdir),
+        ]
+        if ttnn:
+            select_argv += ["--ttnn", str(ttnn)]
+        if args.include_ttnn_dumps:
+            select_argv += ["--include-ttnn"]
+        old_argv = sys.argv
+        try:
+            sys.argv = ["select_pareto_winners.py", *select_argv]
+            select_pareto_main()
+        finally:
+            sys.argv = old_argv
+
+    if args.ulp_by_input:
+        io_argv = ["--manifest", str(manifest)]
+        if args.strict_ulp_dumps:
+            io_argv += ["--strict"]
+        old_argv = sys.argv
+        try:
+            sys.argv = ["plot_pareto_io.py", *io_argv]
+            pareto_io_main()
+        finally:
+            sys.argv = old_argv
 
 
 if __name__ == "__main__":

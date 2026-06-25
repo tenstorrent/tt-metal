@@ -46,6 +46,44 @@ python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plot
   --all
 ```
 
+`--all` covers plot families that can be regenerated from summary CSVs. Raw
+IO plots are opt-in because they need persisted `input,output` dumps.
+
+`select_pareto_winners.py` reads frontier summaries and writes a bounded dump
+manifest for per-activation Pareto configs:
+
+```bash
+python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plotting/select_pareto_winners.py \
+  --frontier tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16 \
+  --ttnn tt_metal/programming_examples/generic_lut_activation_embedded/results/native_vs_embedded/bf16/data/csv/ttnn_ref.csv \
+  --include-ttnn
+```
+
+The default manifest is:
+
+```text
+results/frontier/<dtype>/data/csv/pareto_winners.csv
+```
+
+It selects at most three configs per activation/dtype: the fastest TTNN-beating
+config, the lowest-ULP config, and a balanced knee point. If no TTNN-beating
+config exists, it selects from the Pareto frontier with `status=fallback_frontier`.
+
+Once raw dumps named by the manifest exist, generate IO plots with:
+
+```bash
+python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plotting/plot_pareto_io.py \
+  --manifest tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/pareto_winners.csv
+```
+
+Canonical raw dump and plot locations are:
+
+```text
+results/frontier/<dtype>/data/dumps/frontier/<dtype>/<activation>/<role>_<config>.csv
+results/frontier/<dtype>/data/dumps/ttnn/<dtype>/<activation>/ttnn.csv
+results/frontier/<dtype>/plots/ulp_by_input/<dtype>/<activation>.png
+```
+
 `ulp_by_input.py` reads explicit raw dump CSVs with `input,output` columns and
 writes one requested PNG. It is intentionally separate from frontier summaries:
 

@@ -62,6 +62,9 @@ part of the canonical result set above:
 - ULP-by-input plots require explicit raw hardware dump CSVs with `input,output`
   columns. These are consumed by `tools/plotting/ulp_by_input.py`; summary
   frontier CSVs are not sufficient.
+- Pareto-winner IO plots use `frontier/<dtype>/data/csv/pareto_winners.csv` as
+  a manifest, raw dumps under `frontier/<dtype>/data/dumps`, and generated PNGs
+  under `frontier/<dtype>/plots/ulp_by_input`.
 - Hardware error analysis and ULP distribution plots require raw hardware output
   dumps from the retired `*_hardware_outputs` or `data/hardware_outputs` style
   layouts, or equivalent raw dumps migrated into a documented location.

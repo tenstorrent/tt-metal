@@ -144,7 +144,12 @@ while IFS=, read -r act lo hi; do
     printf '%s,%s,,,,,,%s,%s,%s,%s\n' "$act" "$PRECISION" "$lo" "$hi" "$TILES" "no_domain" >> "$OUT"
     continue
   fi
-  dump="/tmp/ttnn_ref_${act}_${PRECISION}_${SHARD}.csv"
+  if [[ -n "$RUN_DIR" ]]; then
+    dump="$RUN_DIR/data/dumps/ttnn/${PRECISION}/${act}/ttnn.csv"
+    mkdir -p "$(dirname "$dump")"
+  else
+    dump="/tmp/ttnn_ref_${act}_${PRECISION}_${SHARD}.csv"
+  fi
   prof_dir="/tmp/ttnn_ref_prof_${act}_${PRECISION}_${SHARD}"
   rm -rf "$prof_dir"; mkdir -p "$prof_dir"
   set +e
