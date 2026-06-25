@@ -11,9 +11,9 @@
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -73,12 +73,12 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sqrt(Et) -
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-inf
 
-constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;         // Gradient w.r.t. output
-constexpr uint32_t cb_query = tt::CBIndex::c_2;               // Original query
-constexpr uint32_t cb_key = tt::CBIndex::c_3;                 // Original key
-constexpr uint32_t cb_value = tt::CBIndex::c_4;               // Original value
+constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
+constexpr uint32_t cb_query = tt::CBIndex::c_2;        // Original query
+constexpr uint32_t cb_key = tt::CBIndex::c_3;          // Original key
+constexpr uint32_t cb_value = tt::CBIndex::c_4;        // Original value
 #if defined(CAUSAL_MASK) || defined(USE_ATTN_MASK)
-constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;           // Original mask
+constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;  // Original mask
 #endif
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;       // Forward pass intermediates
 constexpr uint32_t cb_mat_mul_reduction = tt::CBIndex::c_7;   // Temporary computations
@@ -127,7 +127,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             cb_wait_front(cb_intermediates, num_of_interm_tiles);
 
             reconfig_data_format(cb_query, cb_key);
-            mm_init_short(cb_query, cb_key, /* transpose */ 1);
+            matmul_init(cb_query, cb_key, /* transpose */ 1);
             tile_regs_acquire();
             for (uint32_t tile_idx = 0; tile_idx < qk_tiles; ++tile_idx) {
                 matmul_tiles(
@@ -226,7 +226,9 @@ void kernel_main() {
 
     cb_wait_front(cb_mat_mul_reduction, onetile);
 
-    mm_init(cb_query, cb_key, cb_attention_weights);
+    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // re-establishes its state with reconfig_data_format + matmul_init.
+    matmul_init(cb_query, cb_key);
 
 #ifdef CAUSAL_MASK
     cb_wait_front(cb_attn_mask, onetile);

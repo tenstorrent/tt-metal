@@ -81,8 +81,9 @@ ScopedCopiedPrecompiledRoot precompiled_root_from_live_compile(IDevice* device) 
     JitSrcsBaseline jit_srcs;
     detail::CompileProgram(device, jit_program);
     TT_FATAL(jit_srcs.delta() > 0, "Expected seed JIT compile to invoke jit_build");
-    const fs::path jit_kernel_root =
-        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path();
+    const fs::path jit_kernel_root = BuildEnvManager::get_instance(extract_context_id(device))
+                                         .get_device_build_env(device->build_id())
+                                         .build_env.get_out_kernel_root_path();
     const fs::path jit_kernel_subdir = jit_kernel_root / kReaderKernelName;
     TT_FATAL(fs::exists(jit_kernel_subdir), "Expected JIT kernel artifacts at {}", jit_kernel_subdir.string());
 

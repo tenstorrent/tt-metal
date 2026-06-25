@@ -1,0 +1,16 @@
+# tt-metalium-validation-basic (deb) for merge gate.
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# For max allowed timeout refer to .github/time_budget.yaml (runtime -> smoke; budget is shared with validation smoke).
+
+- name: metalium validation basic
+  cmd: /usr/bin/tt-metalium-validation-basic
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+    bh_p150b_civ2_viommu:
+      timeout: 30
+    bh_p150b_civ2_viommu_prio:
+      timeout: 30
+  team: runtime
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar

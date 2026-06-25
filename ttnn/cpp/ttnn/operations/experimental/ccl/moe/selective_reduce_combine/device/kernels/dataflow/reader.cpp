@@ -119,7 +119,7 @@ void kernel_main() {
         noc_async_writes_flushed(/*noc=*/1);
 
     } else {
-        noc_semaphore_wait_min(sync_semaphore_ptr, 1);
+        noc_semaphore_wait(sync_semaphore_ptr, 1);
     }
 
     // read dense token counts

@@ -56,9 +56,9 @@ sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
     }
     sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
     if constexpr (is_fp32_dest_acc_en) {
-        return _sfpu_reciprocal_<2>(denominator);
+        return sfpu_reciprocal_iter<2>(denominator);
     } else {
-        return _sfpu_reciprocal_<1>(denominator);
+        return sfpu_reciprocal_iter<1>(denominator);
     }
 }
 
@@ -110,7 +110,7 @@ inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, c
 
 inline void swiglu_init() {
     // SwiGLU uses sigmoid internally, which needs reciprocal table init.
-    _init_reciprocal_<false, false>();
+    recip_init<false, false>();
 }
 
 }  // namespace ckernel::sfpu

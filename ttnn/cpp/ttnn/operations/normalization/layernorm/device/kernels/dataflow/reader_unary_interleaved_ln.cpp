@@ -148,7 +148,7 @@ void kernel_main() {
     }
 
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(cb_eps, eps);
+    generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;
