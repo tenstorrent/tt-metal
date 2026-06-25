@@ -792,8 +792,8 @@ void read_line(
                 scratch_src,
                 cb,
                 valid_elements_bytes,
-                {.noc_x = static_cast<uint32_t>(my_x[0]),
-                 .noc_y = static_cast<uint32_t>(my_y[0]),
+                {.noc_x = static_cast<uint32_t>(my_x[noc.get_noc_id()]),
+                 .noc_y = static_cast<uint32_t>(my_y[noc.get_noc_id()]),
                  .addr = cb_scratch.get_write_ptr()},
                 {.offset_bytes = cb_offset});
             noc.async_read_barrier();
