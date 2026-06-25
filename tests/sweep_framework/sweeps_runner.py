@@ -669,6 +669,29 @@ def _execute_vector_with_retry(
             # and every later vector will throw the same error. Treat this like
             # a hang: kill/reset the device and (under skip-on-timeout) abort
             # the suite so we recover instead of spinning for the whole job.
+            # An intermittent dispatch hang (system_memory_manager.cpp:757 "device
+            # timeout") -- the device accumulates dispatch state over the long
+            # sequential suite and a vector's dispatch occasionally stalls past the
+            # hang-detector, even though the SAME config passes on a clean device
+            # (verified: conv2d 1df14794 etc. pass 4/4 in isolation; profiler-off CI
+            # runs still hit it, so it is NOT profiler-related). A device reset clears
+            # that state, so reset + RETRY the vector -- it runs clean on the next
+            # attempt. Falls through to the abort path below only if it hangs AGAIN on
+            # the last attempt (a genuine, non-transient hang).
+            if _is_device_hang_message(result.get("message")) and attempt < MAX_RETRIES:
+                logger.warning(
+                    f"DEVICE HANG (likely intermittent dispatch-state stall) for "
+                    f"input_hash='{input_hash}': {result.get('message')}. Resetting + retrying on a "
+                    f"clean device (attempt {attempt + 1}/{1 + MAX_RETRIES})."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                continue
+
             if _is_device_hang_message(result.get("message")):
                 logger.error(
                     f"DEVICE HANG detected for input_hash='{input_hash}': {result.get('message')}. "
@@ -1310,39 +1333,27 @@ def _is_multidevice_ccl_module(module_name):
     return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
 
 
-def _is_conv2d_module(module_name):
-    """True if the run targets conv2d. conv2d's heavy 1024^2 FABRIC_1D convs hang under
-    the profiler -- see _should_skip_device_profiler."""
-    if not module_name:
-        return False
-    return any("conv2d" in m for m in str(module_name).split(",") if m)
-
-
 def _should_skip_device_profiler(config):
     """Whether to skip enabling the device profiler for this run. The profiler is a
     process-global toggle (TT_METAL_DEVICE_PROFILER, read once at startup; kernels are
     JIT-compiled with instrumentation), so it can't be disabled per-vector -- if it's
     unsafe for any vector the run will hit, skip it for the whole run.
 
-    1) CCL on a 2D mesh: with the profiler on, the cq_prefetch dispatch kernel that
-       FABRIC_2D pushes onto idle-erisc overflows the idle-erisc code region
-       (idle_erisc.elf 0x5544 > 0x5390) and wedges the erisc cores at mesh open
-       (run_mailbox 0x40). FABRIC_1D CCL (mesh_dims=="1d") profiles fine -> keep it.
-    2) conv2d (any mesh): its heavy 1024^2 FABRIC_1D convs run the full conv per chip
-       with long dispatch/sync phases; the profiler INSTRUMENTATION (not just the read)
-       tips the ~25s op over the dispatch hang-detector -> device timeout
-       (system_memory_manager.cpp:757) that aborts the whole conv2d suite. CONFIRMED on
-       BOTH T3K 1x8 (1df14794) and N150 1x1 (f350bce3): profiler-off passes the full
-       suite clean; profiler-on aborts on the first heavy conv -- single-chip is NOT
-       safe (FABRIC_1D + WORKER dispatch is used even on one chip). The conv2d suite
-       always contains these heavy convs and the profiler is all-or-nothing per process,
-       so conv2d cannot be device-perf-profiled at all -> skip on every mesh.
+    CCL on a 2D mesh: with the profiler on, the cq_prefetch dispatch kernel that
+    FABRIC_2D pushes onto idle-erisc overflows the idle-erisc code region
+    (idle_erisc.elf 0x5544 > 0x5390) and wedges the erisc cores at mesh open
+    (run_mailbox 0x40). FABRIC_1D CCL (mesh_dims=="1d") profiles fine -> keep it.
+
+    (conv2d is NOT skipped: its intermittent dispatch hangs are NOT profiler-caused --
+    verified on CI run 28102736204 where the profiler was gated off and conv2d still hit
+    system_memory_manager.cpp:757 on both T3K and N150, including a light 512x512 conv.
+    Those hangs are accumulated-dispatch-state stalls in the long sequential suite and
+    are handled by reset+retry in _execute_vector_with_retry; the heavy-conv profiler
+    GATHER hang is handled per-vector by conv2d's _SKIP_DEVICE_PERF.)
 
     Vectors of a skipped run report device-perf N/A and PASS (not
     FAIL_UNSUPPORTED_DEVICE_PERF) -- see _populate_result_from_response."""
     if _is_multidevice_ccl_module(config.module_name) and config.mesh_dims != "1d":
-        return True
-    if _is_conv2d_module(config.module_name):
         return True
     return False
 
@@ -1524,10 +1535,8 @@ if __name__ == "__main__":
             f"Skipping device profiler for {config.module_name!r} "
             f"(mesh_dims={config.mesh_dims!r}, MESH_DEVICE_SHAPE={os.environ.get('MESH_DEVICE_SHAPE')!r}): "
             "the profiler is process-global and unsafe for this run -- CCL on FABRIC_2D overflows the "
-            "idle-erisc code region at mesh open (idle_erisc.elf 0x5544 > 0x5390; run_mailbox 0x40), and "
-            "conv2d's heavy FABRIC_1D convs hang the dispatch hang-detector on any mesh (single- and "
-            "multi-chip; system_memory_manager.cpp:757 -> aborts the suite). Such vectors report "
-            "device-perf N/A and PASS. 1D-only CCL keeps device-perf."
+            "idle-erisc code region at mesh open (idle_erisc.elf 0x5544 > 0x5390; run_mailbox 0x40). "
+            "Such vectors report device-perf N/A and PASS. 1D-only CCL keeps device-perf."
         )
 
     # Generate run contents description
