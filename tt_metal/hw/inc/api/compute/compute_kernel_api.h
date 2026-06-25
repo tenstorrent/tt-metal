@@ -60,6 +60,7 @@
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "ckernel_sfpu_topk.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -656,6 +657,8 @@ ALWI void silu_tile_pack(uint32_t idst) {
 }
 ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
 
+#endif  // !ARCH_QUASAR — TopK below is all-arch
+
 // topK local sort
 // clang-format off
 /**
@@ -810,6 +813,8 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  * Please refer to documentation for any_init.
  */
 ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
+
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
 
 // clang-format off
 /**
