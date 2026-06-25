@@ -733,6 +733,15 @@ inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t blo
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+    // Re-establish the default MAX SFPSWAP direction (SFPCONFIG bit 8 = 0) unconditionally at the start
+    // of the row-MAX path instead of trusting the paired init. In a multi-axis reduce (e.g. ttir.max
+    // dim=[1,2]) a single shared init is followed by a column reduce and then this row reduce; a column
+    // MIN / Int32 (sign-magnitude) MAX/MIN init flips bit 8 to 1 and leaves that config in place. Without
+    // this reset the row stage would run with the comparator inverted (MIN direction) and drop the true
+    // max. Resetting here makes the row path self-consistent regardless of what a preceding column
+    // calculate left in the config register.
+    _init_sfpu_config_reg();
+
     record_horizontal_reduce_max();
 
     // Single column tile => per-tile store is the final packer-visible result, which uses mode 9 only
@@ -1298,15 +1307,17 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     // sign-magnitude for AVG.
     //   SUM (two's-complement): plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged;
     //        INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt negatives.
-    //   MAX/MIN column reduce (two's-complement): INT32_2S_COMP so the word becomes sign-magnitude for
-    //        SFPSWAP, which compares in sign-magnitude. Scoped to REDUCE_COL so the row-MAX path keeps
-    //        plain INT32.
+    //   MAX/MIN (two's-complement): INT32_2S_COMP so the word becomes sign-magnitude for SFPSWAP, which
+    //        compares in sign-magnitude. This applies to BOTH the column reduce and the row reduce: a
+    //        multi-axis reduce (e.g. ttir.max dim=[1,2]) chains column-then-row over the same DEST, and
+    //        the column path leaves two's-complement there, so the row path must also load/store as
+    //        two's-complement (INT32_2S_COMP) to agree. Using plain INT32 for the row path would read the
+    //        column path's two's-complement output as sign-magnitude and mis-order negatives.
     //   AVG (sign-magnitude): INT32_2S_COMP, which perform_int_average's divide-by-32 step assumes.
     constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
-    constexpr bool int32_max_min_col =
-        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
-         reduce_dim == ReduceDim::REDUCE_COL);
-    constexpr InstrModLoadStore INSTRUCTION_MODE = (int32_avg || int32_max_min_col) ? InstrModLoadStore::INT32_2S_COMP
+    constexpr bool int32_max_min =
+        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN));
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (int32_avg || int32_max_min) ? InstrModLoadStore::INT32_2S_COMP
                                                    : (format == DataFormat::Float16_b)
                                                        ? InstrModLoadStore::DEFAULT
                                                        : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
