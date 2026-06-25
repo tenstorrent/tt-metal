@@ -110,7 +110,7 @@ struct RealtimeProfilerEligibility {
 //   0. Target is not mock or emulated (extends #43968's Mock-only short-circuit to also
 //      cover Emule; D2HSocket requires a real PCIe hugepage in either case).
 //   1. Device is MMIO-capable (D2H sockets need a PCIe-connected sender core).
-//   2. D2H socket memory-allocation path is supported (64-bit PCIe addressing requires IOMMU).
+//   2. D2H socket memory-allocation path can be constructed (IOMMU pinned memory or hugepage fallback).
 //   3. Fabric tensix datamover (MUX / UDM) is disabled (it competes for the same dispatch pool).
 //   4. A tensix core was reserved for the RT profiler at dispatch_core_manager construction.
 //   5. Reserved coordinate lives inside the logical TENSIX grid.
@@ -140,10 +140,9 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
     // ttsim: the simulator's D2H socket exists but its device kernels run many orders of
     // magnitude slower than real silicon, so the 2 s WriteToDeviceL1/sync poll deadline
     // in run_sync() always trips before the profiler core can respond. That burns ~30 s
-    // per chip during MeshDevice bring-up, and on WH (where the 64-bit-PCIe gate below
-    // does NOT fire) it deadlocks downstream waiters that depend on first_unthrottled
-    // finish_sync. Skip the profiler entirely on Simulator targets; performance traces
-    // are not interesting on the sim anyway.
+    // per chip during MeshDevice bring-up and can deadlock downstream waiters that depend
+    // on first_unthrottled finish_sync. Skip the profiler entirely on Simulator targets;
+    // performance traces are not interesting on the sim anyway.
     if (cluster.get_target_device_type() == tt::TargetDevice::Simulator) {
         log_debug(
             tt::LogMetal,
@@ -158,17 +157,6 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
             tt::LogMetal,
             "Real-time profiler disabled on device {}: device is not MMIO-capable (remote device). "
             "D2H sockets require the sender core to sit on a PCIe-connected chip.",
-            device_id);
-        return {};
-    }
-
-    if (hal.get_supports_64_bit_pcie_addressing() && !cluster.is_iommu_enabled()) {
-        log_debug(
-            tt::LogMetal,
-            "Real-time profiler disabled on device {}: this architecture uses 64-bit PCIe "
-            "addressing for the D2H socket, which requires IOMMU to be enabled on the host. "
-            "IOMMU is currently disabled and no hugepage fallback is available. Enable IOMMU "
-            "(or run on a system that has it) to re-enable RT profiler.",
             device_id);
         return {};
     }
