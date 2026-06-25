@@ -191,7 +191,8 @@ void up_links_bh(const std::vector<ResetLink>& links_to_reset) {
 static void down_links_bh_unsafe_impl(bool single_ended) {
     // Build a standalone HAL purely to resolve the Blackhole ETH FW mailbox layout and message
     // encodings. This touches no device -- it is host-side architecture description only.
-    const tt::tt_metal::Hal hal(
+    // [[maybe_unused]]: only referenced by the (currently disabled) PORT_ACTION mailbox setup below.
+    [[maybe_unused]] const tt::tt_metal::Hal hal(
         tt::ARCH::BLACKHOLE,
         /*is_base_routing_fw_enabled=*/false,
         /*enable_2_erisc_mode=*/false,
@@ -203,17 +204,17 @@ static void down_links_bh_unsafe_impl(bool single_ended) {
     // the safe path. That is exactly what lets this run while a test process holds the chip.
     tt::umd::Cluster cluster;
 
-    // Mirror the ETH_MSG_PORT_DOWN message used by down_links_bh(): ETH_MSG_PORT_ACTION with the
-    // "bring port down" argument. The links stay down until reinitialized or the chip is reset.
-    const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
-    const auto msg_val = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION);
-    const auto mailbox_addr = hal.get_eth_fw_mailbox_address(0);
-    const auto first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(0, 0);
-    const std::size_t mailbox_arg_count = hal.get_eth_fw_mailbox_arg_count();
-
-    std::vector<uint32_t> args = {2, 0, 0};
-    args.resize(mailbox_arg_count, 0);
-    const std::vector<uint32_t> msg_vec = {call | msg_val};
+    // PORT_ACTION (port-down) message setup, kept here (disabled) in case we go back to it. This mirrors
+    // the ETH_MSG_PORT_DOWN message used by down_links_bh(): ETH_MSG_PORT_ACTION with the "bring port down"
+    // argument. To re-enable, uncomment these and the matching write_to_device calls in the loop below.
+    // const auto call = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_CALL);
+    // const auto msg_val = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION);
+    // const auto mailbox_addr = hal.get_eth_fw_mailbox_address(0);
+    // const auto first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(0, 0);
+    // const std::size_t mailbox_arg_count = hal.get_eth_fw_mailbox_arg_count();
+    // std::vector<uint32_t> args = {2, 0, 0};
+    // args.resize(mailbox_arg_count, 0);
+    // const std::vector<uint32_t> msg_vec = {call | msg_val};
 
     // After downing the port we also forge boot_results->eth_status.train_status to look like a genuine
     // (recoverable) training failure. The port-down above is a *latched administrative down*, which the
@@ -251,7 +252,6 @@ static void down_links_bh_unsafe_impl(bool single_ended) {
     // Only local MMIO chips are reachable: without start_device() there is no ethernet routing, so we can
     // only poke chips we have a direct PCIe BAR mapping for.
     const auto mmio_chips = cluster.get_target_mmio_device_ids();
-    const auto is_local = [&](int chip_id) { return mmio_chips.count(chip_id) != 0; };
 
     // Build the set of (chip, eth channel) endpoints to bring down.
     std::vector<std::pair<int, uint32_t>> endpoints;
@@ -265,20 +265,33 @@ static void down_links_bh_unsafe_impl(bool single_ended) {
             }
         }
     } else {
-        // Single-ended, single-link: bring down exactly ONE specific link, leaving its partner end UP so
-        // the FW link-recovery retrain has a live peer to handshake with. Isolating one link keeps the
-        // fault contained for debugging recovery.
+        // Single-ended: bring down exactly ONE endpoint per link (across ALL links), leaving each link's
+        // partner end UP so the FW link-recovery retrain has a live peer to handshake with.
         //
-        // Target: chip 2, logical eth channel 8 -- this is syseng channel 10 ("ETH10" in the
-        // eth_train_status dump). get_eth_core_for_channel() in the loop below takes the LOGICAL channel,
-        // so the value here is the logical channel. Edit these two constants to retarget.
-        constexpr int kTargetChip = 2;
-        constexpr uint32_t kTargetLogicalChannel = 8;
-        TT_FATAL(
-            is_local(kTargetChip),
-            "down_links_bh_single_ended_unsafe target chip {} is not a locally reachable MMIO chip",
-            kTargetChip);
-        endpoints.emplace_back(kTargetChip, kTargetLogicalChannel);
+        // get_ethernet_connections() reports every link twice (once from each end), so we canonicalize by
+        // link and take the first locally-reachable endpoint we encounter. For a link between two local
+        // chips that picks one of the two ends; for a link whose partner is not locally reachable, the
+        // local end is the only one we ever see, so it is the one chosen. get_eth_core_for_channel() in the
+        // loop below takes the LOGICAL channel, which is exactly what the connections map is keyed on.
+        const auto* cluster_desc = cluster.get_cluster_description();
+        const auto& eth_conns = cluster_desc->get_ethernet_connections();
+        std::set<std::pair<std::pair<int, int>, std::pair<int, int>>> handled_links;
+        for (auto chip_id : mmio_chips) {
+            auto chip_it = eth_conns.find(chip_id);
+            if (chip_it == eth_conns.end()) {
+                continue;  // no active links on this chip
+            }
+            for (const auto& [channel, remote] : chip_it->second) {
+                const auto [remote_chip, remote_channel] = remote;
+                const std::pair<int, int> here = {chip_id, channel};
+                const std::pair<int, int> there = {remote_chip, remote_channel};
+                const auto link_key = std::minmax(here, there);
+                if (!handled_links.insert({link_key.first, link_key.second}).second) {
+                    continue;  // partner end of this link was already chosen
+                }
+                endpoints.emplace_back(chip_id, static_cast<uint32_t>(channel));
+            }
+        }
     }
 
     for (const auto& [chip_id, channel] : endpoints) {
@@ -292,10 +305,19 @@ static void down_links_bh_unsafe_impl(bool single_ended) {
         log_warning(
             tt::LogDistributed,
             "  UNSAFE port-down chip " + std::to_string(chip_id) + " channel " + std::to_string(channel));
-        // Write args first, then the call word, matching send_eth_msg() ordering so the FW never acts on a
-        // half-populated arg window. No wait-for-ready/done: this is fire-and-forget.
-        cluster.write_to_device(args.data(), args.size() * sizeof(uint32_t), chip_id, core, first_arg_addr);
-        cluster.write_to_device(msg_vec.data(), msg_vec.size() * sizeof(uint32_t), chip_id, core, mailbox_addr);
+        // PORT_ACTION args (op 1): still disabled. If re-enabled it must come before the call word below,
+        // matching send_eth_msg() ordering so the FW never acts on a half-populated arg window.
+        // cluster.write_to_device(args.data(), args.size() * sizeof(uint32_t), chip_id, core, first_arg_addr);
+        // RMW: set bit 0 of register 0xFFBA2200, preserving the other bits. Uses the register access
+        // path (read_from_device_reg/write_to_device_reg) since this is an MMIO register, not memory.
+        constexpr uint64_t kReg = 0xFFBA2200;
+        uint32_t reg_val = 0;
+        cluster.read_from_device_reg(&reg_val, chip_id, core, kReg, sizeof(reg_val));
+        reg_val |= 0x1u;
+        cluster.write_to_device_reg(&reg_val, sizeof(reg_val), chip_id, core, kReg);
+        // PORT_ACTION call word (op 2): disabled. Fire the mailbox message AFTER the RMW. No
+        // wait-for-ready/done: this is fire-and-forget.
+        // cluster.write_to_device(msg_vec.data(), msg_vec.size() * sizeof(uint32_t), chip_id, core, mailbox_addr);
         // Give the FW time to finish processing PORT_ACTION before we stamp train_status. The FW writes
         // train_status = LINK_TRAIN_REQUESTED_DOWN as part of bringing the port down; if we stamp our value
         // first it just gets clobbered. Waiting lets the FW settle so our write below is the last word.

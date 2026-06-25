@@ -391,15 +391,16 @@ static void recover_eth_link_if_down() {
     // initialized to false, so no static-init guard variable is emitted.
     static bool eth_link_was_down = false;
     if (!is_link_up()) {
-        volatile eth_status_t* eth_status = (volatile eth_status_t*)(MEM_SYSENG_ETH_STATUS);
-        invalidate_l1_cache();  // train_status is FW-written; read a fresh value, not a stale cache line
-        if (eth_status->train_status == link_train_status_e::LINK_TRAIN_REQUESTED_DOWN) {  // LINK_TRAIN_REQUESTED_DOWN
-            // Convert an administrative down into a recoverable training-failure state so the FW recovery
-            // path below isn't precluded from running.
-            eth_status->train_status =
-                link_train_status_e::LINK_TRAIN_TIMEOUT_MANUAL_EQ;  // LINK_TRAIN_TIMEOUT_MANUAL_EQ
-            eth_status->port_status = port_status_e::PORT_UP;
-        }
+        // volatile eth_status_t* eth_status = (volatile eth_status_t*)(MEM_SYSENG_ETH_STATUS);
+        // invalidate_l1_cache();  // train_status is FW-written; read a fresh value, not a stale cache line
+        // if (eth_status->train_status == link_train_status_e::LINK_TRAIN_REQUESTED_DOWN) {  //
+        // LINK_TRAIN_REQUESTED_DOWN
+        //     // Convert an administrative down into a recoverable training-failure state so the FW recovery
+        //     // path below isn't precluded from running.
+        //     eth_status->train_status =
+        //         link_train_status_e::LINK_TRAIN_TIMEOUT_MANUAL_EQ;  // LINK_TRAIN_TIMEOUT_MANUAL_EQ
+        //     eth_status->port_status = port_status_e::PORT_UP;
+        // }
         // Record the down-link/recovery event for the watcher (no-op unless the watcher is enabled).
         WATCHER_RING_BUFFER_PUSH(ETH_LINK_DOWN_RING_BUF_CODE);
         eth_link_was_down = true;
