@@ -52,8 +52,8 @@ def test_dispatch_core_config_defaults_follow_cluster_policy():
     assert config.axis == expected_axis
 
 
-def test_dispatch_core_config_constructor_rules():
-    with pytest.raises(Exception, match="COL axis is not supported for ETH dispatch core type"):
+def test_dispatch_core_config_constructor_rules(expect_error):
+    with expect_error(Exception, "COL axis is not supported for ETH dispatch core type"):
         ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH, ttnn.DispatchCoreAxis.COL)
 
     config = ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.COL)
@@ -62,8 +62,8 @@ def test_dispatch_core_config_constructor_rules():
 
     is_blackhole = "blackhole" in ttnn._ttnn.device.get_arch_name()
     if is_blackhole:
-        with pytest.raises(
-            Exception, match="ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX"
+        with expect_error(
+            Exception, "ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX"
         ):
             ttnn.DispatchCoreConfig(
                 axis=ttnn.DispatchCoreAxis.ROW, fabric_tensix_config=ttnn.FabricTensixConfig.DISABLED
@@ -108,13 +108,13 @@ def test_worker_l1_size(device, layout, dtype):
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_worker_l1_fail(device, layout, dtype):
+def test_worker_l1_fail(device, layout, dtype, expect_error):
     torch_tensor = torch.rand((1, 1, 32, 1024), dtype=torch.bfloat16)
 
     core_grid = ttnn.CoreGrid(y=1, x=1)
     memory_config = ttnn.create_sharded_memory_config(torch_tensor.shape, core_grid, ttnn.ShardStrategy.BLOCK)
     ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
-    with pytest.raises(RuntimeError, match=".*Out of Memory:.*"):
+    with expect_error(RuntimeError, ".*Out of Memory:.*"):
         ttnn_tensor = ttnn.to_device(
             ttnn_tensor,
             device,
