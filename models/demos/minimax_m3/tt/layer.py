@@ -34,6 +34,7 @@ class DecoderLayer:
         expert_weight_dtype=ttnn.bfloat4_b,
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
+        sequence_parallel=False,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -111,6 +112,7 @@ class DecoderLayer:
             max_local_batch_size=max_local_batch_size,
             users_row_sharded=users_row_sharded,
             is_sparse=is_sparse,
+            sequence_parallel=sequence_parallel,
         )
 
         # Create attention program config

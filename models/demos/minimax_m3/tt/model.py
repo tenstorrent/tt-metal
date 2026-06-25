@@ -113,6 +113,7 @@ class Model:
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
         expert_weight_dtype=ttnn.bfloat4_b,
+        sequence_parallel=False,
     ):
         """
         Initialize MiniMax-M2 model
@@ -134,6 +135,7 @@ class Model:
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
         self.users_row_sharded = users_row_sharded
+        self.sequence_parallel = sequence_parallel
 
         self.ccl_manager = ccl_manager
 
@@ -194,6 +196,7 @@ class Model:
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
                 expert_weight_dtype=expert_weight_dtype,
+                sequence_parallel=sequence_parallel,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]

@@ -147,7 +147,7 @@ def prefill_forward(
         )
         tt_sdpa_out = dense_sp_attention_nocache(
             tt_q, tt_k, tt_v, mesh_config=mesh_config, ccl_manager=ccl_manager,
-            logical_n=seq_len * sp, n_kv=num_local_kv_heads, head_dim=config.head_dim,
+            logical_n=seq_len * sp, n_kv=config.num_kv_heads, head_dim=config.head_dim,
             scale=config.head_dim**-0.5, program_config=sp_prog, compute_kernel_config=sp_kcfg,
         )
     else:

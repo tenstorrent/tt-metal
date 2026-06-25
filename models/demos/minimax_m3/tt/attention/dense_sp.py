@@ -112,6 +112,9 @@ def dense_sp_attention_nocache(
     (grouped V, no inflation, is_balanced=False). For the first prefill chunk where there's no prior
     cache; multi-chunk accumulation uses dense_sp_attention (cache-read). Validated op-level by
     tests/unit/test_ring_joint_sp_vs_ref.py (PCC 0.99998). Returns the per-device query-shard output.
+
+    n_kv is the GLOBAL KV-head count (e.g. 4); the ring-gather persistent buffer shards it across the TP
+    cols (1/device at TP=4), matching the per-device KV head that tt_k/tt_v already carry.
     """
     mesh_device = ccl_manager.mesh_device
     rows, cols = tuple(mesh_device.shape)
