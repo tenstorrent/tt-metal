@@ -779,11 +779,6 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     assert torch.equal(golden_tensor, output_tensor)
 
 
-def is_int32_overflow(tensor, scalar):
-    result = tensor.to(torch.int64) - scalar
-    return (result < -(2**31) + 1) | (result > 2**31 - 1)
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -802,9 +797,6 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
     in_data = torch.cat([uniform_values, corner_cases])
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
-
-    if is_int32_overflow(in_data, scalar).any():
-        pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -1480,13 +1472,13 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device):
+def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device, expect_error):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min, max)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min, max)
@@ -1593,14 +1585,14 @@ def test_unary_square_uint16_ttnn(input_shapes, device):
         (0, 1),
     ],
 )
-def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
+def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device, expect_error):
     torch.manual_seed(0)
     in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min, max)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min, max)
