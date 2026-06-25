@@ -851,6 +851,7 @@ def run_model(
         "kv_retrieval",
         "longdialogue_qa_eng",
         "longbook_qa_eng",
+        "code_debug",
     ],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
