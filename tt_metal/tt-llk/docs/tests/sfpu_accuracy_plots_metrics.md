@@ -2,10 +2,9 @@
 
 This page documents how we visualize and quantify SFPU accuracy, and summarizes results for a set of SFPU instructions:
 
-- **reciprocal**, **reciprocal (stress)**
-- **atanh**, **atanh (stress)**
-- **elu**, **gelu**, **celu**, **silu**, **hardsigmoid**
-- **log**, **log1p**, **exp**
+- **reciprocal**
+- **log**
+- **exp**
 
 The same structure can be reused for other SFPU ops.
 
@@ -258,45 +257,19 @@ Below we list short summaries for each sfpu operation.
 
 ### Reciprocal
 
-- **Normal region**
-- **Stress region near 0**
-
----
-
-### Atanh
-
-- **ULP sweep** (testing all representable values for `Float16_b` format on specified domain)
-- **Stress region including asymptotes**
-
----
-
-### ELU
-
----
-
-### GELU
-
----
-
-### CELU
-
----
-
-### SILU
-
----
-
-### Hardsigmoid
+![SFPU Reciprocal — Float16](images/reciprocal_float16.png)
 
 ---
 
 ### Log
 
+![SFPU Log — Float16_b](images/log_float16b.png)
+
 ---
 
-### Log1p
-
 ### EXP
+
+![SFPU Exp — Float16_b](images/exp_float16b.png)
 
 ---
 
