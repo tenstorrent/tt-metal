@@ -103,3 +103,38 @@ def test_bitwise_and_int32_scalar(input_shapes, scalar, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 3, 320, 384])),
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_dtype, hi, mask",
+    [
+        (ttnn.uint16, 0xFFFF, 0xFFFF),
+        (ttnn.uint32, 0x7FFFFFFF, 0xFFFFFFFF),
+    ],
+)
+@pytest.mark.parametrize("scalar", [0x0F0F, 0xFF, 0])
+def test_bitwise_and_scalar_unsigned(input_shapes, ttnn_dtype, hi, mask, scalar, device):
+    # Exercises the tensor-scalar SFPU fast path for unsigned dtypes (uint16 / uint32).
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch.randint(0, hi, input_shapes, dtype=torch.int32)
+
+    torch_output_tensor = (torch_input_tensor_a & scalar) & mask
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.bitwise_and(input_tensor_a, scalar)).to(torch.int64) & mask
+
+    assert torch.equal(output_tensor, torch_output_tensor.to(torch.int64))

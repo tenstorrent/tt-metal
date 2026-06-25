@@ -575,15 +575,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
     const bool use_scalar_immediate =
         scalar_immediate_op_supported && !b.has_value() && is_sfpu_op && !is_where_op && !inputs_row_major &&
-        !is_quant_op && (a_dtype == DataType::INT32 || a_dtype == DataType::UINT32) && a_dtype == c_dtype &&
-        operation_attributes.lhs_activations.empty() && operation_attributes.rhs_activations.empty() &&
-        operation_attributes.post_activations.empty() && !op_config.process_lhs.has_value() &&
-        !op_config.process_rhs.has_value() && !op_config.postprocess.has_value();
+        !is_quant_op && (a_dtype == DataType::INT32 || a_dtype == DataType::UINT32 || a_dtype == DataType::UINT16) &&
+        a_dtype == c_dtype && operation_attributes.lhs_activations.empty() &&
+        operation_attributes.rhs_activations.empty() && operation_attributes.post_activations.empty() &&
+        !op_config.process_lhs.has_value() && !op_config.process_rhs.has_value() && !op_config.postprocess.has_value();
     if (use_scalar_immediate) {
         compute_kernel_defines["SFPU_SCALAR_IMMEDIATE"] = "1";
         compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
-        compute_kernel_defines["FILL_LLK"] =
-            (a_dtype == DataType::UINT32) ? "fill_tile_uint<DataFormat::UInt32>" : "fill_tile_int<DataFormat::Int32>";
+        compute_kernel_defines["FILL_LLK"] = (a_dtype == DataType::UINT16)   ? "fill_tile_int<DataFormat::UInt16>"
+                                             : (a_dtype == DataType::UINT32) ? "fill_tile_int<DataFormat::UInt32>"
+                                                                             : "fill_tile_int<DataFormat::Int32>";
     }
 
     // CB: a (c_0)
