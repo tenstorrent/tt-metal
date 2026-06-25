@@ -376,8 +376,7 @@ inline void calculate_gelu_tanh() {
         sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
 
         // Handle +-0 using the sign of x to prevent 1 ULP difference.
-        sfpi::vFloat zero = sfpi::vConst0;
-        sfpi::vFloat result = sfpi::copysgn(zero, x);
+        sfpi::vFloat result = sfpi::copysgn(sfpi::vConst0, x);
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
             // Saturated positive tail: gelu_tanh(x) = x.
