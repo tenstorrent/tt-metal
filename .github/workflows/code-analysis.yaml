@@ -3,7 +3,7 @@ name: "Code analysis"
 on:
   schedule:
     # Run every 6 hours to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
-    - cron: "0 */6 * * *"
+    - cron: "0 */2 * * *"
   workflow_call:
     inputs:
       platform:
