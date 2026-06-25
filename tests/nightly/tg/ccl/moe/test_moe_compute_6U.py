@@ -2217,6 +2217,7 @@ def _run_moe_compute_impl(
         output_height_shard_dim,
         output_width_shard_dim,
         hidden_size,
+        mux_core_range_set=mux_core_range_set,
     )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
