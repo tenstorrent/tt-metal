@@ -169,6 +169,7 @@ INFINITEBENCH_SUBSETS = {
     "kv_retrieval": "kv_retrieval.jsonl",
     "longdialogue_qa_eng": "longdialogue_qa_eng.jsonl",
     "longbook_qa_eng": "longbook_qa_eng.jsonl",
+    "code_debug": "code_debug.jsonl",
 }
 
 

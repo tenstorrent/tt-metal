@@ -84,7 +84,7 @@ DETERMINISM_PCC_THRESHOLD = 1.0
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
-INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
+INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng", "code_debug"}
 SEQ_LEN_1K = 1024
 SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
@@ -993,6 +993,7 @@ def test_ds_prefill_transformer(
         "kv_retrieval",
         "longdialogue_qa_eng",
         "longbook_qa_eng",
+        "code_debug",
     ],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
