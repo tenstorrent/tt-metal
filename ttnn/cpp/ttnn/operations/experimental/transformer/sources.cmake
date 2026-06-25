@@ -64,6 +64,15 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     rotary_embedding/device/rotary_embedding_device_operation.cpp
     rotary_embedding/device/rotary_embedding_program_factory.cpp
     rotary_embedding/rotary_embedding.cpp
+    rotary_embedding_fused_qk/device/rotary_embedding_fused_qk_device_operation.cpp
+    rotary_embedding_fused_qk/device/rotary_embedding_fused_qk_program_factory.cpp
+    rotary_embedding_fused_qk/rotary_embedding_fused_qk.cpp
+    nlp_create_qkv_heads_rope/device/nlp_create_qkv_heads_rope_device_operation.cpp
+    nlp_create_qkv_heads_rope/device/nlp_create_qkv_heads_rope_program_factory.cpp
+    nlp_create_qkv_heads_rope/nlp_create_qkv_heads_rope.cpp
+    concat_heads_matmul/device/concat_heads_matmul_device_operation.cpp
+    concat_heads_matmul/device/concat_heads_matmul_program_factory.cpp
+    concat_heads_matmul/concat_heads_matmul.cpp
     rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp
     rotary_embedding_llama/device/rotary_embedding_llama_multi_core_program_factory.cpp
     rotary_embedding_llama/device/rotary_embedding_llama_multi_core_prefill_sharded_program_factory.cpp

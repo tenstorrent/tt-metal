@@ -524,13 +524,25 @@ def _pws_B(device, w_kn, n_blocks):
 
 
 # --------------------------------------------------------------------------- ttnn layer (Option C: independent ops, imported configs)
-def _build_layer(device, wts, ins, mode="linear"):
+def _build_layer(device, wts, ins, mode="linear", fuse="none"):
     """Upload weights once; return a run() closure that does the full layer forward
     using the production config builders. ``mode`` in {linear, decode, decode_fused}
-    controls ONLY the MLP path -- every other op is byte-identical across modes."""
+    controls ONLY the MLP path -- every other op is byte-identical across modes.
+
+    ``fuse`` controls the ATTENTION prologue/epilogue fusion (orthogonal to ``mode``),
+    exercising the three custom fused ops ported from tt-metal commit a63765d8fd1:
+      * "none"      -- baseline: nlp_create_qkv_heads + 2x rotary_embedding +
+                       nlp_concat_heads + ttnn.linear o-proj + multiply/add residual.
+      * "rope_qk"   -- exercises ttnn.experimental.rotary_embedding_fused_qk (q+k RoPE
+                       in one dispatch) + ttnn.experimental.concat_heads_matmul + addcmul.
+      * "qkv_rope"  -- production fused path: ttnn.experimental.nlp_create_qkv_heads_rope
+                       (create-heads + q/k RoPE fused) + concat_heads_matmul + addcmul.
+    The fused ops are PCC-faithful (~1.0), so the golden is identical for all ``fuse`` values."""
+    assert fuse in ("none", "rope_qk", "qkv_rope"), f"bad fuse={fuse!r}"
     x_t, cos_t, sin_t, pk_t, pv_t, mask_t = ins
     decode = mode != "linear"
     fused = mode == "decode_fused"
+    fuse_resid = fuse != "none"  # gated residual via addcmul when any attn fusion is on
 
     # static tensors (bound OUTSIDE any trace capture)
     x0 = _tt(device, x_t.view(1, 1, M, W))  # bf16 L1
@@ -621,12 +633,22 @@ def _build_layer(device, wts, ins, mode="linear"):
             normed, wqkv, dtype=ttnn.bfloat8_b, memory_config=_L1, program_config=qpc, compute_kernel_config=None
         )
         ttnn.deallocate(normed)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv, num_heads=NH, num_kv_heads=NKV, transpose_k_heads=False, memory_config=_L1
-        )
-        ttnn.deallocate(qkv)
-        q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=_L1)
-        k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=_L1)
+        # --- create-qkv-heads + q/k RoPE (mode-varying via `fuse`) ---
+        if fuse == "qkv_rope":
+            # ONE dispatch: fused create-qkv-heads + q/k RoPE (custom op a63765d8fd1).
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads_rope(qkv, cos, sin, NH, NKV, memory_config=_L1)
+            ttnn.deallocate(qkv)
+        else:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv, num_heads=NH, num_kv_heads=NKV, transpose_k_heads=False, memory_config=_L1
+            )
+            ttnn.deallocate(qkv)
+            if fuse == "rope_qk":
+                # ONE dispatch: q+k RoPE fused (custom op a63765d8fd1).
+                q, k = ttnn.experimental.rotary_embedding_fused_qk(q, k, cos, sin, memory_config=_L1)
+            else:
+                q = ttnn.experimental.rotary_embedding(q, cos, sin, memory_config=_L1)
+                k = ttnn.experimental.rotary_embedding(k, cos, sin, memory_config=_L1)
         kk = ttnn.concat([pk, k], dim=2, memory_config=_L1)
         vv = ttnn.concat([pv, v], dim=2, memory_config=_L1)
         ttnn.deallocate(k)
@@ -648,27 +670,48 @@ def _build_layer(device, wts, ins, mode="linear"):
         ttnn.deallocate(q)
         ttnn.deallocate(kk)
         ttnn.deallocate(vv)
-        a = ttnn.experimental.nlp_concat_heads(a, memory_config=_L1)
-        # --- o projection (bf16 out) ---
+        # --- concat-heads + O-projection (bf16 out); mode-varying via `fuse` ---
         opc = _denoise_tuned_pcfg(MT, (NH * HD) // 32, W // 32, g.x, g.y) or matmul_pcfg(
             MT, (NH * HD) // 32, W // 32, g.x, g.y, in0_block_w=8
         )
-        o = ttnn.linear(a, wo, dtype=ttnn.bfloat16, memory_config=_L1, program_config=opc, compute_kernel_config=None)
-        ttnn.deallocate(a)
-        og = ttnn.multiply(gta, o, memory_config=_L1)
-        x1 = ttnn.add(x0, og, memory_config=_L1)
-        ttnn.deallocate(o)
-        ttnn.deallocate(og)
+        if fuse_resid:
+            # ONE dispatch: fused concat-heads + O-proj over the tuned 1D-mcast matmul (a63765d8fd1).
+            # SDPA output [1,NH,M,HD] is consumed directly as in0 (no separate concat op).
+            o = ttnn.experimental.concat_heads_matmul(
+                a, wo, memory_config=_L1, output_dtype=ttnn.bfloat16, program_config=opc
+            )
+            ttnn.deallocate(a)
+        else:
+            a = ttnn.experimental.nlp_concat_heads(a, memory_config=_L1)
+            o = ttnn.linear(
+                a, wo, dtype=ttnn.bfloat16, memory_config=_L1, program_config=opc, compute_kernel_config=None
+            )
+            ttnn.deallocate(a)
+        # --- gated residual: x0 + gate_a * o ---
+        if fuse_resid:
+            x1 = ttnn.addcmul(x0, gta, o, memory_config=_L1)  # fused multiply+add (a63765d8fd1)
+            ttnn.deallocate(o)
+        else:
+            og = ttnn.multiply(gta, o, memory_config=_L1)
+            x1 = ttnn.add(x0, og, memory_config=_L1)
+            ttnn.deallocate(o)
+            ttnn.deallocate(og)
         # --- adaRMS #2 ---
         normed2 = sharded_rms_norm(x1, sf1, EPS, M, W, bias=shf)
         # --- GeGLU MLP (the ONLY mode-varying region; bracketed by an MLP-only signpost pair) ---
         signpost(header="mlp")
         m = _mlp(normed2)
         signpost(header="mlp_end")
-        mg = ttnn.multiply(gtm, m, memory_config=_L1)
-        out = ttnn.add(x1, mg, memory_config=_L1)
-        for t in (x1, m, mg):
-            ttnn.deallocate(t)
+        # --- gated residual: x1 + gate_m * m ---
+        if fuse_resid:
+            out = ttnn.addcmul(x1, gtm, m, memory_config=_L1)  # fused multiply+add (a63765d8fd1)
+            for t in (x1, m):
+                ttnn.deallocate(t)
+        else:
+            mg = ttnn.multiply(gtm, m, memory_config=_L1)
+            out = ttnn.add(x1, mg, memory_config=_L1)
+            for t in (x1, m, mg):
+                ttnn.deallocate(t)
         return out
 
     return run
@@ -677,34 +720,37 @@ def _build_layer(device, wts, ins, mode="linear"):
 # --------------------------------------------------------------------------- PCC test (eager, no tracy)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 134217728, "l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("mode", ["linear", "decode", "decode_fused"])
-def test_denoise_layer_pcc(device, mode):
+@pytest.mark.parametrize("fuse", ["none", "rope_qk", "qkv_rope"])
+def test_denoise_layer_pcc(device, mode, fuse):
     """Full denoise layer must match the regenerated (mode-independent) torch golden.
 
-    Only the MLP path varies across modes; the golden is the same math for all three.
+    ``mode`` varies ONLY the MLP path; ``fuse`` varies ONLY the attention prologue/epilogue
+    (exercising the three ported fused ops + addcmul). The golden is the same math for all
+    combinations, so every (mode, fuse) pair must hit the same PCC gate.
     """
     wts = _make_layer()
     ins = _inputs()
     ref = _reference(wts, *ins)  # [M, W]
 
-    run = _build_layer(device, wts, ins, mode)
+    run = _build_layer(device, wts, ins, mode, fuse=fuse)
     out = ttnn.to_torch(run()).float().reshape(M, W)
     pcc_val = _pcc(ref, out)
     print(
-        f"\n[denoise LAYER {mode}] PCC = {pcc_val:.8f} (assert >= {PCC}); mask shape "
+        f"\n[denoise LAYER mode={mode} fuse={fuse}] PCC = {pcc_val:.8f} (assert >= {PCC}); mask shape "
         f"{tuple(ins[5].shape)} masked idx [{PREFIX + AH}:{KV}]"
     )
     assert_with_pcc(ref, out, PCC)
 
 
 # --------------------------------------------------------------------------- timing (tracy traced-replay)
-def _capture_and_measure(device, reps, mode):
+def _capture_and_measure(device, reps, mode, fuse="none"):
     """Trace-replay the full layer ``reps`` times, signposted by a per-mode region
     header (full layer) AND a nested MLP-only region (``mlp``/``mlp_end``, emitted
     inside run()). reps replays -> reps mlp regions; the parser sums all of them."""
-    region = f"layer_{mode}"
+    region = f"layer_{mode}" if fuse == "none" else f"layer_{mode}_{fuse}"
     wts = _make_layer()
     ins = _inputs()
-    run = _build_layer(device, wts, ins, mode)
+    run = _build_layer(device, wts, ins, mode, fuse=fuse)
     # warm-up / compile (eager, >=5 reps)
     for _ in range(6):
         ttnn.deallocate(run())
@@ -724,12 +770,15 @@ def _capture_and_measure(device, reps, mode):
 def main():
     reps = int(os.environ.get("PI05_SL_REPS", "50"))
     mode = os.environ.get("PI05_SL_MODE", "linear")
+    fuse = os.environ.get("PI05_SL_FUSE", "none")
     assert mode in ("linear", "decode", "decode_fused"), f"bad PI05_SL_MODE={mode!r}"
-    print(f"[timing] mode={mode} reps={reps} region=layer_{mode}")
+    assert fuse in ("none", "rope_qk", "qkv_rope"), f"bad PI05_SL_FUSE={fuse!r}"
+    region = f"layer_{mode}" if fuse == "none" else f"layer_{mode}_{fuse}"
+    print(f"[timing] mode={mode} fuse={fuse} reps={reps} region={region}")
     dev = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 1), l1_small_size=24576, trace_region_size=134_217_728)
     try:
-        _capture_and_measure(dev, reps, mode)
-        print(f"[trace {mode}] capture+replay OK")
+        _capture_and_measure(dev, reps, mode, fuse=fuse)
+        print(f"[trace {mode} fuse={fuse}] capture+replay OK")
     finally:
         ttnn.close_mesh_device(dev)
 
