@@ -235,10 +235,8 @@ inline void _llk_pack_fast_untilize_clear_output_row_stride_()
 {
     TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, 0, 0, HI_16(p_gpr_pack::TMP0));
-    // Same SETDMAREG->WRCFG dependency as row-stride programming above: clear
-    // TMP0 first, then keep the WRCFGs behind the established LLK barrier.
-    // ISA documents WRCFG's GPR source and STALLWAIT's CFG block mask.
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    // Drain the packer (PACK) here rather than relying on the order of caller function calls to leave it idle.
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_BASE_REG_1_Base_ADDR32);
     // Same self-contained WRCFG scheduling bubble as above before later pack
