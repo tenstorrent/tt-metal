@@ -104,8 +104,14 @@ def _prefill_forward_single(
     if prefix_kv is not None:
         prefix_k, prefix_v = prefix_kv
         canvas_k, canvas_v = tt_k, tt_v
-        tt_k = ttnn.concat([prefix_k, canvas_k], dim=2)
-        tt_v = ttnn.concat([prefix_v, canvas_v], dim=2)
+        prefix_k_concat = ttnn.to_memory_config(prefix_k, canvas_k.memory_config())
+        prefix_v_concat = ttnn.to_memory_config(prefix_v, canvas_v.memory_config())
+        tt_k = ttnn.concat([prefix_k_concat, canvas_k], dim=2)
+        tt_v = ttnn.concat([prefix_v_concat, canvas_v], dim=2)
+        if prefix_k_concat is not prefix_k:
+            prefix_k_concat.deallocate(True)
+        if prefix_v_concat is not prefix_v:
+            prefix_v_concat.deallocate(True)
         canvas_k.deallocate(True)
         canvas_v.deallocate(True)
 

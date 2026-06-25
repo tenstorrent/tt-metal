@@ -254,6 +254,32 @@ def collect_prompt_kv_by_layer(tt_model, prompt_hidden):
     return prompt_kv_by_layer
 
 
+def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int = 0):
+    """Read a frozen prompt K/V prefix from a contiguous Gemma4 KV cache.
+
+    This is the non-paged cache adapter for W2: it reads the encoder-written K/V
+    heads from `[B, heads, max_seq, head_dim]` cache tensors and returns the
+    cache-shaped `(K, V)` prefix accepted by denoise attention. The underlying
+    TTNN slice op requires full tiles along sequence, so bounds must be 32-aligned.
+    """
+    seq_len_end = seq_len_start + prompt_len
+    if seq_len_start % ttnn.TILE_SIZE != 0 or seq_len_end % ttnn.TILE_SIZE != 0:
+        raise ValueError("KV cache slice bounds must be multiples of 32")
+    k_cache, v_cache = kv_cache
+    return (
+        ttnn.experimental.nlp_kv_cache_load_slice(
+            k_cache,
+            seq_len_start=seq_len_start,
+            seq_len_end=seq_len_end,
+        ),
+        ttnn.experimental.nlp_kv_cache_load_slice(
+            v_cache,
+            seq_len_start=seq_len_start,
+            seq_len_end=seq_len_end,
+        ),
+    )
+
+
 def embed_canvas_tokens(tt_model, canvas_tokens):
     """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
     canvas_len = canvas_tokens.shape[-1]

@@ -28,10 +28,10 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
-    collect_prompt_kv_by_layer,
     denoise_attention_forward,
     denoise_logits_from_tokens,
     embed_canvas_tokens,
+    read_prompt_kv_cache_slice,
 )
 from models.experimental.diffusion_gemma.tt.self_conditioning import TtSelfConditioning
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -336,7 +336,14 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
     tt_canvas_tokens = _to_device_tokens(mesh_device, canvas_tokens)
     tt_prompt_tokens = _to_device_tokens(mesh_device, prompt_tokens)
     tt_prompt_hidden = embed_canvas_tokens(tt_model, tt_prompt_tokens)
-    tt_prompt_kv_by_layer = collect_prompt_kv_by_layer(tt_model, tt_prompt_hidden)
+    tt_prompt_logits = tt_model(
+        tt_prompt_hidden,
+        is_decode=False,
+        input_ids_torch=prompt_tokens,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    tt_prompt_logits.deallocate(True)
+    tt_prompt_kv_by_layer = [read_prompt_kv_cache_slice(tt_model.tt_kv_cache[0], prompt_len=prompt_len)]
     tt_prev_logits = _to_device(mesh_device, prev_logits.unsqueeze(0))
     tt_self_conditioning_embedding = _to_device(
         mesh_device,
