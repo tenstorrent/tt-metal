@@ -127,15 +127,13 @@ void kernel_main() {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    reconfig_data_format_srca(cb_in, cb_x2);
-    reconfig_data_format_srcb(cb_in, cb_scaler);
+    reconfig_data_format(cb_scaler, cb_x2);
 
     cb_wait_front(cb_x2, num_tiles_per_block);
     cb_wait_front(cb_scaler, 1);
 
     cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reconfig_data_format(cb_scaler, cb_x2);
     reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     tile_regs_acquire();
