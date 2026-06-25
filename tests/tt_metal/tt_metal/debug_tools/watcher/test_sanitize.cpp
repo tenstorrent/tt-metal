@@ -107,6 +107,10 @@ void RunTestOnCore(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
 
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
+
     // IDLE_ETH cores only support SD (FD not yet implemented)
     // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
     if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {

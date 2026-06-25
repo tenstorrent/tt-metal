@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
 H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 
 # Inline metadata payload — packed by the producer per-iter, surfaced by the
-# kernel via h2d_socket_sync's optional metadata output. Matches the prefill
+# kernel via inbound_socket_service_sync's optional metadata output. Matches the prefill
 # scheduler's PrefillMetadata wire struct (12 bytes, 3 × uint32):
 #   [0] slot_id        — which per-slot KV-cache buffer to write
 #   [1] actual_start   — inclusive absolute KV pos of the first real token
@@ -202,7 +202,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     and the p2c token write-back is removed (downstream consumption is via
     migration / layer-acks, not a host token hand-back).
 
-    `h2d_socket_sync` returns (tokens, metadata); we decode the 3×uint32
+    `inbound_socket_service_sync` returns (tokens, metadata); we decode the 3×uint32
     PrefillMetadata [slot_id, actual_start, actual_end] and pass them straight to
     `pipeline.prefill` (actual_start is the chunk's cache write offset; actual_end - actual_start is
     its real-token count). The loop is push-driven: it has no notion of how many chunks a request
@@ -215,7 +215,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     expected_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11")) if pcc_mode else None
 
     logger.info(
-        "[request] entering request loop — blocks on h2d_socket_sync for each push, "
+        "[request] entering request loop — blocks on inbound_socket_service_sync for each push, "
         + (
             f"runs for {expected_chunks} chunks then PCC-checks the KV cache (PREFILL_REQUEST_LOOP_PCC=1)."
             if pcc_mode
@@ -235,7 +235,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         # core after a producer push lands), copy backing -> fresh output, ack
         # consumed_counter. Returns tensors independent of the backing. This call
         # blocks until the next push arrives, so the loop is naturally idle-waiting.
-        tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+        tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
             h2d_service, metadata_size_bytes=H2D_METADATA_SIZE_BYTES
         )
         # Decode per-iter PrefillMetadata (replicated across the mesh — first device view).
@@ -251,7 +251,7 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
             f"[request] iter={i} metadata: slot_id={slot_id} "
             f"actual_start={actual_start} actual_end={actual_end} actual_isl={actual_isl}"
         )
-        # Time ONLY the prefill compute, not the idle h2d_socket_sync wait above.
+        # Time ONLY the prefill compute, not the idle inbound_socket_service_sync wait above.
         _t0 = _time.perf_counter()
         pipeline.prefill(
             tt_tokens,

@@ -195,7 +195,7 @@ def build_h2d_service(
     global_spec = make_global_spec(mesh_shape, chunk_size)
     mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
     # worker_cores set so the service-core kernel multicasts a data-ready inc
-    # after each transfer; h2d_socket_sync() waits on that on-device, which
+    # after each transfer; inbound_socket_service_sync() waits on that on-device, which
     # avoids the host-side barrier() round-trip per iteration.
     # metadata_size_bytes set so the producer can ship per-iter control bytes
     # (slot_id, actual_start, actual_end) inline with the token push.
