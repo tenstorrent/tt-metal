@@ -383,6 +383,7 @@ def prepare_i2i_denoise_bundle(
     cfg_factor: int | None = None,
     sequence_template: str | None = None,
     system_prompt: str | None = None,
+    cot_text: str | None = None,
     generator: torch.Generator | None = None,
     dtype: torch.dtype = torch.float32,
 ) -> GenImageHostInputs:
@@ -395,6 +396,7 @@ def prepare_i2i_denoise_bundle(
         cfg_factor=cfg_factor,
         sequence_template=sequence_template,
         system_prompt=system_prompt,
+        cot_text=cot_text,
     )
     bundle = build_i2i_inputs_embeds(
         bundle,
@@ -512,6 +514,56 @@ def prepare_recaption_inputs(
     )
 
 
+def prepare_recaption_ar_bundle(
+    tok: HunyuanTokenizer,
+    prompt: str,
+    processor: HunyuanImage3ImageProcessor,
+    wte_weight: torch.Tensor,
+    *,
+    cond_images: CondImage | list[CondImage] | list[list[CondImage]] | None = None,
+    bot_task: str = "recaption",
+    system_prompt: str | None = None,
+    sequence_template: str | None = None,
+    patch_embed=None,
+    time_embed=None,
+    timestep_emb=None,
+    vision_model=None,
+    aligner=None,
+    model_dir: Path | None = None,
+    generator: torch.Generator | None = None,
+    dtype: torch.dtype = torch.float32,
+) -> GenImageHostInputs:
+    """Recaption AR prefix: template + optional cond encode + attention mask."""
+    bundle = prepare_recaption_inputs(
+        tok,
+        prompt,
+        cond_images=cond_images,
+        bot_task=bot_task.split("_")[0] if bot_task == "think_recaption" else bot_task,
+        system_prompt=system_prompt,
+        sequence_template=sequence_template,
+    )
+    has_cond = bundle.batch_cond_images is not None and len(bundle.batch_cond_images[0]) > 0
+    if has_cond:
+        if patch_embed is None or time_embed is None or timestep_emb is None:
+            raise ValueError("patch_embed, time_embed, and timestep_emb are required when cond_images are set")
+        bundle = build_i2i_inputs_embeds(
+            bundle,
+            wte_weight,
+            patch_embed=patch_embed,
+            time_embed=time_embed,
+            timestep_emb=timestep_emb,
+            vision_model=vision_model,
+            aligner=aligner,
+            model_dir=model_dir,
+            generator=generator,
+            dtype=dtype,
+        )
+    else:
+        bundle.inputs_embeds = F.embedding(bundle.input_ids, wte_weight.to(dtype=dtype))
+    bundle.bot_task = bot_task
+    return enrich_bundle_attention(bundle, processor)
+
+
 def print_recaption_inputs_report(
     bundle: GenImageHostInputs,
     tok: HunyuanTokenizer,
@@ -574,6 +626,7 @@ def prepare_i2i_inputs(
     max_length: int | None = None,
     sequence_template: str | None = None,
     system_prompt: str | None = None,
+    cot_text: str | None = None,
 ) -> GenImageHostInputs:
     """Run I2I chat template and build host bundle (cond images + gen_image section)."""
     if cfg_factor is None:
@@ -606,6 +659,7 @@ def prepare_i2i_inputs(
         max_length=max_length,
         sequence_template=sequence_template,
         system_prompt=system_prompt,
+        cot_text=cot_text,
     )
     output = result["output"]
     sections = result["sections"]
