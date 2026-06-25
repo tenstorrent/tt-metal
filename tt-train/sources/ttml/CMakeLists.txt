@@ -1,6 +1,7 @@
 project(ttml)
 
 set(SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/ccache_probe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/autocast_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/callback.cpp

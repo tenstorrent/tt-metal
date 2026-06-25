@@ -7,11 +7,11 @@ BUILD_DIR="${1:?Usage: $0 <cmake-build-dir>}"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-ENTRY=$(jq 'map(select(.file | test("schedulers/scheduler_base\\.cpp$"))) | first' \
+ENTRY=$(jq 'map(select(.file | test("ttml/ccache_probe\\.cpp$"))) | first' \
   "$BUILD_DIR/compile_commands.json")
 
 if [[ "$ENTRY" == "null" || -z "$ENTRY" ]]; then
-  echo "ERROR: scheduler_base.cpp not found in compile_commands.json"
+  echo "ERROR: ccache_probe.cpp not found in compile_commands.json"
   echo "Nearby entries:"
   jq -r '.[].file' "$BUILD_DIR/compile_commands.json" | grep -i "scheduler\|ttml\|tt-train" || true
   exit 1
@@ -60,7 +60,7 @@ echo "========================================"
 cd "$DIR"
 CCACHE_DEBUG=1 CCACHE_DEBUGDIR="$TMPDIR" \
   CCACHE_LOGFILE="$TMPDIR/ccache.log" \
-  ccache $CMD -o /dev/null 2>&1 || true
+  eval "ccache $CMD -o /dev/null" 2>&1 || true
 
 echo "-- log --"
 cat "$TMPDIR/ccache.log" 2>/dev/null || true
