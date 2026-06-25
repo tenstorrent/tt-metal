@@ -34,6 +34,21 @@ def _structured_logits(num_samples: int, length: int, vocab_size: int):
     return logits.expand(num_samples, -1, -1).contiguous()
 
 
+def test_canvas_sample_consumes_regenerated_device_noise(device):
+    num_samples = 64
+    length = 32
+    vocab_size = 32
+    temperature = 0.7
+    logits = _structured_logits(num_samples, length, vocab_size)
+
+    device_noise = TS.sample_gumbel_noise(logits.shape, device=device, seed=47472)
+    samples = TS.canvas_sample(_to_device(device, logits), temperature, device_noise)
+
+    host_noise = ttnn.to_torch(device_noise).float()
+    ref = torch.argmax(logits / temperature + host_noise, dim=-1)
+    assert torch.equal(ttnn.to_torch(samples).squeeze(-1).to(torch.long), ref)
+
+
 @pytest.mark.xfail(
     reason=(
         "QB2 ttnn.rand regenerated noise is currently not iid enough for W4 distributional canvas sampling: "
