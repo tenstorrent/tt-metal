@@ -3817,5 +3817,50 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
 }
 
+// ============================================================================
+// SECTION: Scratchpad (Program-scope L1 resource)
+// ============================================================================
+//
+// A ScratchpadSpec (scratchpad_spec.hpp) declares a Program-scope SRAM ("L1") region,
+// allocated per node with the lifetime of the Program. Kernels access it on the device
+// side through the ScratchPad accessor (hw/inc/api/scratchpad.h).
+
+TEST_F(ProgramSpecTestGen1, ScratchpadConfiguredEmptyKernelCompiles) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_smoke";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+        #include "api/scratchpad.h"
+
+        // Constexpr checks
+        static_assert([](){
+            CoreLocalMem<int> ptr{0x24};
+            uint32_t num_ints{24};
+            uint32_t num_bytes{sizeof(int) * num_ints};
+
+            Scratchpad pad(ptr, num_bytes);
+            return pad.size() == num_ints
+                && pad.size_in_bytes() == num_bytes
+                && pad.get_base_addr() == ptr;
+        }());
+
+        void kernel_main() {}
+    )"};
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch"},
+        .size_per_node = 1024,
+    }};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

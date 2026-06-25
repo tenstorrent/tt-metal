@@ -15,12 +15,12 @@ struct ScratchpadAccessor {
 };
 
 template <typename T>
-class ScratchPad {
+class Scratchpad {
 public:
     // TODO: Implement this.
-    [[nodiscard]] explicit ScratchPad(const ScratchpadAccessor& accessor) noexcept;
+    [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept;
 
-    [[nodiscard]] ScratchPad(CoreLocalMem<T> base_addr, uint32_t size_in_bytes) noexcept :
+    [[nodiscard]] constexpr Scratchpad(CoreLocalMem<T> base_addr, uint32_t size_in_bytes) noexcept :
         start_addr_(base_addr), end_addr_(CoreLocalMem<T>{base_addr.get_address() + size_in_bytes}) {
         ASSERT(base_addr.get_address() % alignof(T) == 0);
         ASSERT(size_in_bytes % sizeof(T) == 0);
@@ -50,9 +50,9 @@ public:
         return *location;
     }
 
-    [[nodiscard]] uint32_t size() const noexcept { return size_in_bytes() / sizeof(T); }
+    [[nodiscard]] constexpr uint32_t size() const noexcept { return size_in_bytes() / sizeof(T); }
 
-    [[nodiscard]] uint32_t size_in_bytes() const noexcept {
+    [[nodiscard]] constexpr uint32_t size_in_bytes() const noexcept {
         return end_addr_.get_address() - start_addr_.get_address();
     }
 
