@@ -28,6 +28,18 @@ INSTRUCT_MODEL_DIR = Path(
     )
 )
 
+# Instruct-Distil checkpoint (8-step meanflow, cfg_distilled). Same vocab as Instruct.
+INSTRUCT_DISTIL_MODEL_DIR = Path(
+    os.environ.get(
+        "HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR",
+        "/home/iguser/Christy/HunyuanImage-3-Instruct-Distil",
+    )
+)
+
+
+def has_distil_weights(model_dir: Path = INSTRUCT_DISTIL_MODEL_DIR) -> bool:
+    return (model_dir / "model.safetensors.index.json").is_file()
+
 
 def load_tensors(model_dir: Path, keys: list[str]) -> dict[str, Tensor]:
     index_path = model_dir / "model.safetensors.index.json"
