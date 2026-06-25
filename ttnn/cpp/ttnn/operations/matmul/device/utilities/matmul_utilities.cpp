@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <set>
+#include <unordered_set>
 
 #include "tt-metalium/allocator.hpp"
 #include "tt-metalium/buffer_types.hpp"
@@ -364,15 +365,17 @@ void get_max_page_size_and_num_pages(
 }
 
 void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons) {
+    // Build a hash set from v1 for O(1) membership tests.
+    const std::unordered_set<CoreCoord> v1_set(v1.begin(), v1.end());
     for (const CoreCoord& item : v2) {
-        if (std::find(v1.begin(), v1.end(), item) != v1.end()) {
+        if (v1_set.contains(item)) {
             commons.push_back(item);
         }
     }
 
-    for (const CoreCoord& item : commons) {
-        v2.erase(std::remove(v2.begin(), v2.end(), item), v2.end());
-    }
+    const std::unordered_set<CoreCoord> commons_set(commons.begin(), commons.end());
+    v2.erase(
+        std::remove_if(v2.begin(), v2.end(), [&](const CoreCoord& c) { return commons_set.contains(c); }), v2.end());
 }
 
 void get_optimal_dram_bank_to_reader_assignment(

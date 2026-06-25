@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <unordered_set>
 #include <tuple>
 #include <utility>
 
@@ -1696,10 +1697,11 @@ std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBuf
 }
 
 std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
+    std::unordered_set<CoreRange> seen;
     std::vector<CoreRange> core_ranges;
     for (const auto& dfb : dataflow_buffers_) {
         for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-            if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
+            if (seen.insert(core_range).second) {
                 core_ranges.push_back(core_range);
             }
         }

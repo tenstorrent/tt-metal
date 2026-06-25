@@ -2779,9 +2779,18 @@ void ControlPlane::collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_fr
 
     auto merge_pair_vectors = [](std::vector<std::pair<FabricNodeId, FabricNodeId>>& into,
                                  const std::vector<std::pair<FabricNodeId, FabricNodeId>>& from) {
+        // Build a set of existing pairs so dedup is O(1) per element instead of O(n).
+        struct PairHash {
+            std::size_t operator()(const std::pair<FabricNodeId, FabricNodeId>& p) const noexcept {
+                std::size_t h1 = std::hash<FabricNodeId>{}(p.first);
+                std::size_t h2 = std::hash<FabricNodeId>{}(p.second);
+                return h1 ^ (h2 << 1);
+            }
+        };
+        std::unordered_set<std::pair<FabricNodeId, FabricNodeId>, PairHash> seen(into.begin(), into.end());
         into.reserve(into.size() + from.size());
         for (const auto& p : from) {
-            if (std::find(into.begin(), into.end(), p) == into.end()) {
+            if (seen.insert(p).second) {
                 into.push_back(p);
             }
         }

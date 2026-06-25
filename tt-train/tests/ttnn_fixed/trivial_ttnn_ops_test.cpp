@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <umd/device/cluster.hpp>
 #include <vector>
@@ -39,12 +40,8 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
     auto res = ttnn::max(tensor, /* dim */ 3, /* keepdim */ true);
     auto res_vector = ttml::core::to_vector(res);
     EXPECT_EQ(res_vector.size(), 6);
-    bool all_equal = true;
-    for (const auto& value : res_vector) {
-        if (std::fabs(value + 1.F) > 1e-2) {
-            all_equal = false;
-        }
-    }
+    bool all_equal =
+        std::all_of(res_vector.begin(), res_vector.end(), [](float v) { return std::fabs(v + 1.F) <= 1e-2F; });
     EXPECT_TRUE(all_equal);
 }
 
