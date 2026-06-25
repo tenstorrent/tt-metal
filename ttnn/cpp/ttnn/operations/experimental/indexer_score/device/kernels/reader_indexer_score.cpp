@@ -43,6 +43,11 @@ constexpr uint32_t q_send_sem = get_compile_time_arg_val(mc_ct_base + 5);
 constexpr uint32_t q_recv_sem = get_compile_time_arg_val(mc_ct_base + 6);
 constexpr uint32_t q_valid_sem = get_compile_time_arg_val(mc_ct_base + 7);
 
+// Optional per-device chunk_offset: flag at mc_ct_base+8; the chunk_offset TensorAccessor (when bound)
+// follows at mc_ct_base+9. The offset tensor's DRAM address is reader runtime arg 21.
+constexpr uint32_t has_offset = get_compile_time_arg_val(mc_ct_base + 8);
+constexpr uint32_t u32_tile_bytes = 32 * 32 * 4;  // one uint32 32x32 tile
+
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
     uint32_t role;            // McastRole: none (DRAM read), sender (read + mcast), receiver (wait for mcast)
@@ -137,6 +142,32 @@ inline void build_scaler_tile() {
     constexpr uint32_t one_bf16_pair = 0x3F803F80;  // two bf16 1.0 values per word
     for (uint32_t i = 0; i < total_words; ++i) {
         ptr[i] = one_bf16_pair;
+    }
+    cb.push_back(1);
+}
+
+// Publish the per-device causal chunk start (in tiles) into cb_offset. When a chunk_offset tensor is
+// bound (has_offset), DRAM-read this device's single uint32 tile (per-SP-chip value); otherwise write the
+// compile-time chunk_start_tiles constant. Pushed once, depth 1; BOTH compute and writer cb_wait_front it
+// (non-consuming) and read L1 directly -- neither pops, so one push serves both consumers.
+// Templated so the discarded `if constexpr` branch is NOT instantiated (this is a non-template free
+// function; outside a template, `if constexpr` still type-checks both branches, which would instantiate
+// TensorAccessorArgs<mc_ct_base+9> and read a CT arg that doesn't exist when no chunk_offset is bound).
+template <bool HasOffset = has_offset>
+inline void fill_cb_offset(Noc noc) {
+    CircularBuffer cb(cb_offset);
+    cb.reserve_back(1);
+    const uint32_t l1 = cb.get_write_ptr();
+    if constexpr (HasOffset) {  // DRAM-read this device's chunk-start tile (per-SP-chip value)
+        // Index made dependent on HasOffset so TensorAccessorArgs<> is only INSTANTIATED in this branch
+        // (a non-dependent <mc_ct_base+9> would be checked at template definition -> out-of-range when unbound).
+        constexpr uint32_t off_ct = HasOffset ? (mc_ct_base + 9) : 0;
+        constexpr auto off_args = TensorAccessorArgs<off_ct>();
+        const auto off_acc = TensorAccessor(off_args, get_arg_val<uint32_t>(21), u32_tile_bytes);
+        noc.async_read(off_acc, CoreLocalMem<uint32_t>(l1), u32_tile_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+    } else {  // single-shot: the compile-time constant
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1)[0] = chunk_start_tiles;
     }
     cb.push_back(1);
 }
@@ -260,6 +291,7 @@ void kernel_main() {
     Noc noc;
 
     build_mask_tiles(noc);
+    fill_cb_offset(noc);  // per-device causal chunk start (tiles) -> cb_offset, for compute + writer
     if constexpr (block_pool) {
         build_scaler_tile();  // 1.0 reduce-MAX scaler for the block-max-pool
     }

@@ -54,6 +54,18 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         q.device() == k.device() && q.device() == w.device(), "indexer_score q, k, weights must be on the same device");
 
+    // Optional per-device causal chunk-start: one uint32 32x32 tile/device, element [0,0] = chunk-start
+    // in TILES, DRAM-read by the reader into cb_offset. When absent, the compile-time chunk_start_idx is
+    // used (single-shot path, byte-identical to before).
+    if (tensor_args.chunk_offset.has_value()) {
+        const auto& co = *tensor_args.chunk_offset;
+        TT_FATAL(co.storage_type() == StorageType::DEVICE, "indexer_score chunk_offset must be on device");
+        TT_FATAL(co.buffer() != nullptr, "indexer_score chunk_offset must have an allocated buffer");
+        TT_FATAL(co.dtype() == DataType::UINT32, "indexer_score chunk_offset must be uint32 (got {})", co.dtype());
+        TT_FATAL(co.layout() == Layout::TILE, "indexer_score chunk_offset must be TILE layout");
+        TT_FATAL(co.device() == q.device(), "indexer_score chunk_offset must be on q's device");
+    }
+
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4 && w_shape.rank() == 4, "q, k, weights must be rank 4");
     TT_FATAL(k_shape[1] == 1, "k must be single-head [B, 1, T, D], got {} heads", k_shape[1]);
@@ -272,7 +284,8 @@ IndexerScoreDeviceOperation::invoke(
     uint32_t num_groups,
     uint32_t block_size,
     const IndexerScoreProgramConfig& program_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<Tensor>& chunk_offset) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
@@ -281,7 +294,7 @@ IndexerScoreDeviceOperation::invoke(
             .block_size = block_size,
             .program_config = program_config,
             .compute_kernel_config = compute_kernel_config},
-        tensor_args_t{.q = q, .k = k, .weights = weights}};
+        tensor_args_t{.q = q, .k = k, .weights = weights, .chunk_offset = chunk_offset}};
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -302,7 +315,8 @@ ttnn::Tensor launch_indexer_score(
     uint32_t num_groups,
     uint32_t block_size,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& chunk_offset) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
     // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi for the 2x peak, else
     // HiFi2 to keep the bf16 mantissa); a caller-supplied config overrides per field. fp32-dest acc and
@@ -318,7 +332,7 @@ ttnn::Tensor launch_indexer_score(
         /*default_dst_full_sync_en=*/false);
     // Reuse invoke() so attribute/tensor packing lives in one place.
     auto [operation_attributes, tensor_args] = OperationType::invoke(
-        q, k, weights, chunk_start_idx, apply_relu, num_groups, block_size, program_config, resolved);
+        q, k, weights, chunk_start_idx, apply_relu, num_groups, block_size, program_config, resolved, chunk_offset);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -341,7 +355,8 @@ ttnn::Tensor indexer_score_dsa(
         /*num_groups=*/1,
         /*block_size=*/0,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        /*chunk_offset=*/std::nullopt);
 }
 
 ttnn::Tensor indexer_score_msa(
@@ -352,7 +367,8 @@ ttnn::Tensor indexer_score_msa(
     uint32_t num_groups,
     uint32_t block_size,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& chunk_offset) {
     // MiniMax M3 has no learned gates, only a 1/sqrt(d) scale: synthesize a constant gate (= scale) of
     // the required [B,Hi,Sq,1] shape so the kernel's gate-multiply path is reused unchanged (it just
     // multiplies by the constant). The local lives until launch() returns, which is where its buffer is
@@ -361,7 +377,16 @@ ttnn::Tensor indexer_score_msa(
     const ttnn::Tensor w =
         ttnn::full(ttnn::Shape({qs[0], qs[1], qs[2], 1}), scale, DataType::BFLOAT16, Layout::TILE, *q.device());
     return launch_indexer_score(
-        q, k, w, chunk_start_idx, /*apply_relu=*/false, num_groups, block_size, program_config, compute_kernel_config);
+        q,
+        k,
+        w,
+        chunk_start_idx,
+        /*apply_relu=*/false,
+        num_groups,
+        block_size,
+        program_config,
+        compute_kernel_config,
+        chunk_offset);
 }
 
 }  // namespace ttnn::experimental

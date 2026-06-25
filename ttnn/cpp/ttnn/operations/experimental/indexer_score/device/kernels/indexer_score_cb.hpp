@@ -25,6 +25,7 @@ enum CbArg : uint32_t {
     cb_out_strip_arg,     // untilized row-major strip output (block_size==0); tilized col-0 block-max (pool)
     cb_scaler_arg,        // block-max-pool only: one 1.0 tile (reduce-MAX scaler); index 0 / unused otherwise
     cb_pool_scratch_arg,  // block-max-pool only: writer's one-tile row-assembly scratch; unused otherwise
+    cb_offset_arg,        // 1 tile: per-device causal chunk-start (tiles), filled by the reader (DRAM or const)
     num_cb_args
 };
 

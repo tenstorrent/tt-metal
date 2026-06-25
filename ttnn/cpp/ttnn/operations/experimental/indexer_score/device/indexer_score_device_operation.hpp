@@ -46,7 +46,8 @@ struct IndexerScoreDeviceOperation {
         uint32_t num_groups,
         uint32_t block_size,
         const IndexerScoreProgramConfig& program_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
+        const DeviceComputeKernelConfig& compute_kernel_config,
+        const std::optional<Tensor>& chunk_offset = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -87,6 +88,7 @@ ttnn::Tensor indexer_score_msa(
     uint32_t num_groups = 1,
     uint32_t block_size = 0,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& chunk_offset = std::nullopt);
 
 }  // namespace ttnn::experimental

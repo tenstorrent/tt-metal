@@ -67,7 +67,6 @@ constexpr uint32_t POOL_TILE_HW = tt::constants::TILE_HEIGHT * tt::constants::TI
 // global key position of q-row 0 (chunk_start) are needed to map a query to its own block column.
 constexpr uint16_t POOL_POS_INF_BF16 = 0x7F80;                                                  // +inf in bf16
 constexpr uint32_t POOL_BLOCK_KEYS = block_pool ? block_tiles * tt::constants::TILE_WIDTH : 1;  // 1: avoid /0 codegen
-constexpr uint32_t POOL_CHUNK_START_KEYS = chunk_start_tiles * tt::constants::TILE_WIDTH;
 
 /** Scatter one q-tile-row's pooled blocks into the row-major output. Extract column 0 of each of the
  *  blocks_per_unit tiles (one bf16 value per query row) into a query-major [TILE_HEIGHT][valid_blocks]
@@ -82,7 +81,8 @@ inline void write_pooled_strip(
     uint32_t page_row_start,
     uint32_t q_seq_row0,
     uint32_t col_off_blocks,
-    uint32_t valid_blocks) {
+    uint32_t valid_blocks,
+    uint32_t chunk_start_keys) {
     CircularBuffer cb(cb_out_strip);
     cb.wait_front(blocks_per_unit);
     volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_read_ptr());
@@ -103,13 +103,15 @@ inline void write_pooled_strip(
         }
     }
 
-    // Forced-local block: query (q_seq_row0 + rr) sits at global key position POOL_CHUNK_START_KEYS +
-    // q_seq_row0 + rr, so its own block is that / POOL_BLOCK_KEYS. The 32 queries of a tile-row can straddle
+    // Forced-local block: query (q_seq_row0 + rr) sits at global key position chunk_start_keys +
+    // q_seq_row0 + rr, so its own block is that / POOL_BLOCK_KEYS. chunk_start_keys is the runtime
+    // per-device causal chunk start in KEYS (cb_offset's tiles * TILE_WIDTH), or the compile-time
+    // constant when no chunk_offset is bound. The 32 queries of a tile-row can straddle
     // a block boundary, so this is per-query, not per-tile-row. Only this unit owns block columns
     // [col_off_blocks, +valid_blocks); the query's local block lands in exactly one unit, so stamp only when
     // it falls in this slice (other units skip it).
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
-        const uint32_t local_block = (POOL_CHUNK_START_KEYS + q_seq_row0 + rr) / POOL_BLOCK_KEYS;
+        const uint32_t local_block = (chunk_start_keys + q_seq_row0 + rr) / POOL_BLOCK_KEYS;
         if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
             scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
         }
@@ -139,6 +141,18 @@ void kernel_main() {
 
     Noc noc;
 
+    // Per-device causal chunk start (in tiles), filled once by the reader into cb_offset (DRAM-read from
+    // the optional chunk_offset tensor, else the compile-time chunk_start_tiles constant). Only the
+    // block-pool forced-local-block stamp needs it; read once, never popped (compute also cb_wait_front's
+    // the same depth-1 push -- non-consuming for both). chunk_start_keys = tiles * TILE_WIDTH.
+    uint32_t chunk_start_keys = 0;
+    if constexpr (block_pool) {
+        CircularBuffer(cb_offset).wait_front(1);
+        const uint32_t chunk_start_tiles_rt =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(cb_offset).get_read_ptr())[0];
+        chunk_start_keys = chunk_start_tiles_rt * tt::constants::TILE_WIDTH;
+    }
+
     WorkUnitSpan span;
     span.start(flat_start);
 
@@ -160,7 +174,8 @@ void kernel_main() {
                 const uint32_t q_seq_row0 = (span.q_tile_start() + r) * tt::constants::TILE_HEIGHT;  // within Sq
                 const uint32_t page_row_start = plane_row0 + q_seq_row0;
                 if constexpr (block_pool) {
-                    write_pooled_strip(noc, out_acc, page_row_start, q_seq_row0, col_off_blocks, valid_blocks);
+                    write_pooled_strip(
+                        noc, out_acc, page_row_start, q_seq_row0, col_off_blocks, valid_blocks, chunk_start_keys);
                 } else {
                     write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
                 }

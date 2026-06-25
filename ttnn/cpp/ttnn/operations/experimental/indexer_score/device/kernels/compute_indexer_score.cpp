@@ -291,10 +291,11 @@ inline void accumulate_row_streaming(uint32_t r, uint32_t slot_base) {
 
 /** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place, so the strip still
  *  untilizes via the fast W=KC path (empty loop when the row is fully valid). */
-inline void stamp_masked_suffix(const WorkUnitSpan& span, uint32_t r, uint32_t slot_base, uint32_t k_tiles_in_unit) {
+inline void stamp_masked_suffix(
+    const WorkUnitSpan& span, uint32_t r, uint32_t slot_base, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles_rt) {
     const uint32_t k_tile0 = span.k_tile_start();
-    const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
-    const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
+    const uint32_t diag_tile = chunk_start_tiles_rt + span.q_tile_start() + r;
+    const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit, chunk_start_tiles_rt);
     for (uint32_t c = valid; c < k_tiles_per_unit; ++c) {
         stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + c, k_tile0 + c, diag_tile);
     }
@@ -313,6 +314,15 @@ void kernel_main() {
     if constexpr (block_pool) {
         CircularBuffer(cb_scaler).wait_front(1);  // reader-filled 1.0 reduce-MAX scaler, reused, never popped
     }
+
+    // Per-device causal chunk start (in tiles), filled by the reader into cb_offset (DRAM-read from the
+    // optional chunk_offset tensor, else the compile-time chunk_start_tiles constant). Read once, never
+    // popped (the writer also cb_wait_front's the same depth-1 push -- non-consuming for both).
+    // Use the free-function compute CB API (cb_wait_front / get_tile_address): the CircularBuffer class'
+    // get_read_ptr references cb_interface, which is NOT linked on the MATH trisc (trisc1) -> link error.
+    cb_wait_front(cb_offset, 1);
+    const uint32_t chunk_start_tiles_rt =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(cb_offset, 0))[0];
 
     // CBs touched twice below (wait/pop, reserve/push) get one instance each.
     CircularBuffer k(cb_k);
@@ -372,7 +382,8 @@ void kernel_main() {
                     accumulate_row_streaming(r, slot_base);
                 }
 
-                stamp_masked_suffix(span, r, slot_base, k_tiles_in_unit);  // causal -inf on the row's masked suffix
+                stamp_masked_suffix(
+                    span, r, slot_base, k_tiles_in_unit, chunk_start_tiles_rt);  // causal -inf masked suffix
             }
             acc.push_back(unit_strip);
 

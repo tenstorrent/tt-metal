@@ -94,6 +94,13 @@ void bind_indexer_score(nb::module_& mod) {
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
                 stay false (the custom LLK is validated for bf16 DEST half-sync).
+            chunk_offset: optional per-device causal chunk-start tensor (uint32,
+                one 32x32 TILE per device; element [0,0] = chunk-start in TILES).
+                When bound, the reader DRAM-reads each device's tile and the
+                compute/writer kernels use that RUNTIME value as the causal-mask
+                diagonal / local-block base instead of chunk_start_idx (lets each
+                SP chip mask against its own absolute query positions). When None
+                (default), the compile-time chunk_start_idx is used (single-shot).
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
@@ -107,7 +114,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("num_groups") = 1,
         nb::arg("block_size") = 0,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
-        nb::arg("compute_kernel_config") = std::nullopt);
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("chunk_offset") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail
