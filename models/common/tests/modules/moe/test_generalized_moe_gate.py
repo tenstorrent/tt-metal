@@ -19,7 +19,6 @@ from loguru import logger
 
 import ttnn
 from models.common.modules.moe.tt_moe_gate import TTMoEGate
-from models.common.utility_functions import skip_for_blackhole
 
 
 def _generalized_golden(
@@ -48,7 +47,6 @@ def _generalized_golden(
 # shared module as ``TTMoEGate.grouped_golden`` — the SINGLE source of truth, reused by the grouped test below.
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
@@ -242,7 +240,6 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     ), "Normalized scores are not consistent with the device's own top-8 selection"
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
@@ -387,7 +384,6 @@ def test_generalized_moe_gate_512_global(device, batch_size, enable_sigmoid, see
     ), f"512 normalized scores not consistent with device selection.\n dev={dev_scores}\n expected={expected}"
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201])
