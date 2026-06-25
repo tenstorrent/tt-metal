@@ -193,6 +193,7 @@ class HunyuanTokenizer:
         image_size: str | tuple[int, int] | list[int] = 1024,
         cond_images: CondImage | list[CondImage] | list[list[CondImage]] | None = None,
         system_prompt: str | None = None,
+        cot_text: str | None = None,
         mode: str = "gen_image",
         bot_task: str = "auto",
         max_length: int | None = None,
@@ -238,12 +239,14 @@ class HunyuanTokenizer:
                 batch_cond_images = list(cond_images)
 
         batch_system_prompt = [system_prompt] * batch_size if system_prompt else None
+        batch_cot_text = [cot_text] * batch_size if cot_text else None
 
         return self._chat.apply_chat_template(
             batch_prompt=batch_prompt,
             batch_gen_image_info=gen_infos,
             batch_cond_images=batch_cond_images,
             batch_system_prompt=batch_system_prompt,
+            batch_cot_text=batch_cot_text,
             mode=mode,
             bot_task=bot_task,
             max_length=max_length,

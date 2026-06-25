@@ -30,6 +30,9 @@
 #   * VAE decode (latent -> pixels) and tokenizer/sequence construction are
 #     separate milestones — see README. This module stops at the latent.
 
+import os
+import time
+
 import ttnn
 
 from .scheduler import classifier_free_guidance_tt
@@ -127,7 +130,11 @@ class HunyuanTtDenoiseStep:
         if base_embeds is None and text_pre is None:
             raise ValueError("text_pre or base_embeds is required")
 
+        verbose = os.environ.get("HY_VERBOSE", "1") != "0"
+
         # 1) patch_embed: noised latent -> image tokens [1,1,n_img,H]
+        if verbose:
+            print("[denoise_step] patch_embed ...", flush=True)
         img_tok, th, tw = self.patch_embed(latent_bchw, t_emb1)
         assert (th, tw) == (self.token_h, self.token_w), f"grid mismatch: got {th}x{tw}"
 
@@ -137,6 +144,8 @@ class HunyuanTtDenoiseStep:
         else:
             seq = self._scatter(img_tok, text_pre, text_post)
         ttnn.deallocate(img_tok)
+        if verbose:
+            print(f"[denoise_step] backbone forward seq_len={self.seq_len} ...", flush=True)
         hidden = self.backbone.forward(
             inputs_embeds=seq,
             seq_len=self.seq_len,
@@ -146,6 +155,8 @@ class HunyuanTtDenoiseStep:
         ttnn.deallocate(seq)
 
         # 3) final_layer: image-span hidden -> velocity prediction (NHWC flat)
+        if verbose:
+            print("[denoise_step] final_layer ...", flush=True)
         H = self.backbone.hidden_size
         img_out = ttnn.slice(
             hidden,
@@ -203,6 +214,10 @@ def denoise_loop(
     scheduler.set_begin_index(0)
     do_cfg = uncond is not None and guidance_scale != 1.0
     latent = init_latent  # torch NCHW (canonical host form; small tensor)
+    timesteps = list(scheduler.timesteps)
+    total_steps = len(timesteps)
+    verbose = os.environ.get("HY_VERBOSE", "1") != "0"
+    loop_t0 = time.time()
 
     # Host<->device helpers — replicate to / gather from the mesh when resident.
     def _up(t_host, dtype):
@@ -239,7 +254,14 @@ def denoise_loop(
             return _up(emb, ttnn.bfloat16)
         return c.get("base_embeds")
 
-    for t in scheduler.timesteps:
+    for step_i, t in enumerate(timesteps):
+        step_t0 = time.time()
+        if verbose:
+            cfg_note = " +CFG" if do_cfg else ""
+            print(
+                f"[denoise] step {step_i + 1}/{total_steps} t={float(t):.0f}{cfg_note} ...",
+                flush=True,
+            )
         # Timestep embedding: pass a (replicated) device tensor [1,1,B,1] so the
         # embedder doesn't host-upload internally (which ignores the mesh).
         tvec = _up(torch.tensor([float(t)] * B, dtype=torch.float32).reshape(1, 1, B, 1), ttnn.float32)
@@ -268,6 +290,8 @@ def denoise_loop(
 
         pred = _one(cond)  # device NHWC flat [1,1,B*h*w,C]
         if do_cfg:
+            if verbose:
+                print("[denoise] CFG uncond pass ...", flush=True)
             pred_uncond = _one(uncond)
             combined = classifier_free_guidance_tt(pred, pred_uncond, guidance_scale)
             ttnn.deallocate(pred)
@@ -284,6 +308,12 @@ def denoise_loop(
         ttnn.deallocate(nxt)
         ttnn.deallocate(te1)
         ttnn.deallocate(te2)
+        if verbose:
+            print(
+                f"[denoise] step {step_i + 1}/{total_steps} done "
+                f"({time.time() - step_t0:.1f}s, total {time.time() - loop_t0:.0f}s)",
+                flush=True,
+            )
 
     return latent  # torch [B, C, h, w] — feed to VAE decode
 

@@ -69,6 +69,51 @@ class StageTransitionLogitsProcessor:
         return scores
 
 
+class ConditionalSliceVocabLogitsProcessor:
+    """Port of upstream ``_ConditionalSliceVocabLogitsProcessor`` (modeling:3042-3072).
+
+    When the last token is in ``trigger_token_ids``, restrict sampling to ratio vocab
+    slices (used after ``<img_size_N>`` when ``image_size='auto'``).
+    """
+
+    def __init__(
+        self,
+        trigger_token_ids: list[int],
+        vocab_start: int,
+        vocab_end: int,
+        other_slices: list | None = None,
+        *,
+        force_greedy: bool = False,
+    ):
+        self.trigger_token_ids = set(trigger_token_ids)
+        self.vocab_start = vocab_start
+        self.vocab_end = vocab_end
+        self.other_slices = other_slices or []
+        self.force_greedy = force_greedy
+
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        last_tokens = input_ids[:, -1]
+        min_score = torch.finfo(scores.dtype).min
+        for i in range(scores.shape[0]):
+            if int(last_tokens[i].item()) not in self.trigger_token_ids:
+                continue
+            original = scores[i].clone()
+            scores[i].fill_(min_score)
+            scores[i, self.vocab_start : self.vocab_end] = original[self.vocab_start : self.vocab_end]
+            for entry in self.other_slices:
+                if isinstance(entry, (tuple, list)) and len(entry) == 2:
+                    start, end = entry
+                    scores[i, start:end] = original[start:end]
+                else:
+                    tid = int(entry)
+                    scores[i, tid] = original[tid]
+            if self.force_greedy:
+                max_token_id = int(scores[i].argmax().item())
+                scores[i].fill_(min_score)
+                scores[i, max_token_id] = 0
+        return scores
+
+
 def apply_repetition_penalty(scores: torch.Tensor, input_ids: torch.Tensor, penalty: float) -> torch.Tensor:
     """HF CTRL-style repetition penalty (matches transformers RepetitionPenaltyLogitsProcessor)."""
     if penalty == 1.0:
@@ -105,6 +150,7 @@ def sample_next_token(
     config: SamplingConfig,
     *,
     processor: StageTransitionLogitsProcessor = None,
+    logits_processors: list | None = None,
     generator: torch.Generator = None,
 ) -> torch.Tensor:
     """One sampling step: logits [B, V] + history -> next token ids [B].
@@ -114,8 +160,13 @@ def sample_next_token(
     """
     scores = logits.float().clone()
     scores = apply_repetition_penalty(scores, input_ids, config.repetition_penalty)
+    processors = []
     if processor is not None:
-        scores = processor(input_ids, scores)
+        processors.append(processor)
+    if logits_processors:
+        processors.extend(logits_processors)
+    for lp in processors:
+        scores = lp(input_ids, scores)
     if not config.do_sample:
         return scores.argmax(dim=-1)
     if config.temperature != 1.0:
@@ -132,6 +183,7 @@ def generate_text(
     config: SamplingConfig = None,
     stage_transitions=None,
     final_stop_tokens=None,
+    logits_processors: list | None = None,
     generator: torch.Generator = None,
 ):
     """Autoregressive decode loop. Mirrors `generate(mode="gen_text")` (modeling:3088).
@@ -164,7 +216,14 @@ def generate_text(
 
     for _ in range(config.max_new_tokens):
         logits = forward_logits_fn(ids)  # [B, V]
-        next_ids = sample_next_token(logits, ids, config, processor=processor, generator=generator)
+        next_ids = sample_next_token(
+            logits,
+            ids,
+            config,
+            processor=processor,
+            logits_processors=logits_processors,
+            generator=generator,
+        )
         for i in range(B):
             if not finished[i]:
                 new_tokens[i].append(int(next_ids[i].item()))
