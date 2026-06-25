@@ -390,7 +390,7 @@ static Tensor std_var_impl(
         reduce_dim = tt::tt_metal::ReduceOpDim::HW;
 
         // Build permutation: kept dims first (in original order), then all
-        // reduction dims.
+        // reduction dims (sorted ascending by generate_reduce_dim).
         ttnn::SmallVector<int64_t> perm;
         perm.reserve(rank);
         for (uint32_t i = 0; i < rank; ++i) {
