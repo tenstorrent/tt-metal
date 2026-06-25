@@ -31,7 +31,7 @@
 #include "api/tensor/tensor_accessor.h"    // TensorAccessor / TensorAccessorArgs
 #include "api/tensor/noc_traits.h"         // noc_traits_t for TensorAccessor on the Noc API
 
-// CT-arg layout (must stay in sync with h2d_socket_sync_program_factory.cpp).
+// CT-arg layout (must stay in sync with inbound_socket_service_sync_program_factory.cpp).
 constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
 constexpr uint32_t num_pages = get_compile_time_arg_val(2);

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "h2d_socket_sync_program_factory.hpp"
+#include "inbound_socket_service_sync_program_factory.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -12,17 +12,17 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-ProgramDescriptor H2DSocketSyncProgramFactory::create_descriptor(
-    const H2DSocketSyncParams& args,
-    const H2DSocketSyncInputs& tensor_args,
+ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
+    const InboundSocketServiceSyncParams& args,
+    const InboundSocketServiceSyncInputs& tensor_args,
     std::vector<Tensor>& outputs,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
-        "h2d_socket_sync: the program factory requires a per-device mesh dispatch coordinate");
+        "inbound_socket_service_sync: the program factory requires a per-device mesh dispatch coordinate");
     const auto& coord = *mesh_dispatch_coordinate;
     const uint32_t idx = coord[0] * args.mesh_num_cols + coord[1];
-    TT_FATAL(idx < args.consumed_addrs.size(), "h2d_socket_sync: mesh coordinate {} out of range", idx);
+    TT_FATAL(idx < args.consumed_addrs.size(), "inbound_socket_service_sync: mesh coordinate {} out of range", idx);
 
     const auto& backing = tensor_args.backing;
     Tensor& tokens_out = outputs[0];
@@ -47,7 +47,7 @@ ProgramDescriptor H2DSocketSyncProgramFactory::create_descriptor(
         }
     }
     const uint32_t num_workers = static_cast<uint32_t>(workers.size());
-    TT_FATAL(num_workers > 0, "h2d_socket_sync: worker_cores must contain at least one core");
+    TT_FATAL(num_workers > 0, "inbound_socket_service_sync: worker_cores must contain at least one core");
 
     auto* backing_buffer = backing.buffer();
     auto* tokens_buffer = tokens_out.buffer();
@@ -84,8 +84,8 @@ ProgramDescriptor H2DSocketSyncProgramFactory::create_descriptor(
 
     KernelDescriptor writer;
     writer.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/h2d_socket_sync/device/kernels/"
-        "h2d_socket_sync_writer.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/device/kernels/"
+        "inbound_socket_service_sync_writer.cpp";
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = worker_crs;
     writer.compile_time_args = ct_args;

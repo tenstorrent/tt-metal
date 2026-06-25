@@ -2,43 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "h2d_socket_sync_device_operation.hpp"
+#include "inbound_socket_service_sync_device_operation.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-H2DSocketSyncOperation::program_factory_t H2DSocketSyncOperation::select_program_factory(
+InboundSocketServiceSyncOperation::program_factory_t InboundSocketServiceSyncOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return H2DSocketSyncProgramFactory{};
+    return InboundSocketServiceSyncProgramFactory{};
 }
 
-void H2DSocketSyncOperation::validate_on_program_cache_miss(
+void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& backing = tensor_args.backing;
-    TT_FATAL(backing.storage_type() == StorageType::DEVICE, "h2d_socket_sync: backing tensor must be on device");
-    TT_FATAL(backing.buffer() != nullptr, "h2d_socket_sync: backing tensor must be allocated");
-    TT_FATAL(args.page_size > 0 && args.num_pages > 0, "h2d_socket_sync: backing tensor has no pages");
+    TT_FATAL(
+        backing.storage_type() == StorageType::DEVICE, "inbound_socket_service_sync: backing tensor must be on device");
+    TT_FATAL(backing.buffer() != nullptr, "inbound_socket_service_sync: backing tensor must be allocated");
+    TT_FATAL(args.page_size > 0 && args.num_pages > 0, "inbound_socket_service_sync: backing tensor has no pages");
     TT_FATAL(
         !args.consumed_addrs.empty() && args.service_core_x.size() == args.consumed_addrs.size() &&
             args.service_core_y.size() == args.consumed_addrs.size(),
-        "h2d_socket_sync: per-coord service state is missing or inconsistent (was the service built with "
+        "inbound_socket_service_sync: per-coord service state is missing or inconsistent (was the service built with "
         "worker_cores?)");
     if (args.metadata_size_bytes > 0) {
         TT_FATAL(
             args.metadata_size_bytes % 4 == 0,
-            "h2d_socket_sync: metadata_size_bytes must be a multiple of 4 (uint32-aligned), got {}",
+            "inbound_socket_service_sync: metadata_size_bytes must be a multiple of 4 (uint32-aligned), got {}",
             args.metadata_size_bytes);
     }
 }
 
-H2DSocketSyncOperation::spec_return_value_t H2DSocketSyncOperation::compute_output_specs(
+InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     std::vector<ttnn::TensorSpec> specs;
     // tokens: identical per-shard spec to the backing tensor.
@@ -54,7 +56,7 @@ H2DSocketSyncOperation::spec_return_value_t H2DSocketSyncOperation::compute_outp
     return specs;
 }
 
-H2DSocketSyncOperation::tensor_return_value_t H2DSocketSyncOperation::create_output_tensors(
+InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyncOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.backing.device();
@@ -66,12 +68,12 @@ H2DSocketSyncOperation::tensor_return_value_t H2DSocketSyncOperation::create_out
     return outputs;
 }
 
-ttsl::hash::hash_t H2DSocketSyncOperation::compute_program_hash(
+ttsl::hash::hash_t InboundSocketServiceSyncOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Stable across calls for a given (service, config): the changing output
     // address is a BufferBinding (patched on cache hit), NOT part of the hash.
     auto program_factory = select_program_factory(args, tensor_args);
-    return operation::hash_operation<H2DSocketSyncOperation>(
+    return operation::hash_operation<InboundSocketServiceSyncOperation>(
         program_factory.index(),
         args.data_ready_sem_addr,
         args.page_size,
@@ -91,23 +93,32 @@ ttsl::hash::hash_t H2DSocketSyncOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-std::vector<ttnn::Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes) {
-    using OperationType = ttnn::experimental::prim::H2DSocketSyncOperation;
+namespace {
+
+// Shared launch body. Snapshots the per-coord service state out of `service`,
+// then runs the cached device operation. Templated on the service type so the
+// same op drains either an H2DStreamService (host->device path) or a
+// D2DStreamServiceReceiver (device->device path): both expose the identical
+// receiver-side getters (only the address return width differs, absorbed by the
+// static_casts below).
+template <typename ServiceT>
+std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(const ServiceT& service, uint32_t metadata_size_bytes) {
+    using OperationType = ttnn::experimental::prim::InboundSocketServiceSyncOperation;
 
     const auto& backing = service.get_backing_tensor();
     auto* mesh_device = backing.device();
     const auto& mesh_shape = mesh_device->shape();
-    TT_FATAL(mesh_shape.dims() == 2, "h2d_socket_sync: expects a 2D mesh, got {} dims", mesh_shape.dims());
+    TT_FATAL(mesh_shape.dims() == 2, "inbound_socket_service_sync: expects a 2D mesh, got {} dims", mesh_shape.dims());
     const uint32_t num_rows = mesh_shape[0];
     const uint32_t num_cols = mesh_shape[1];
 
     OperationType::operation_attributes_t attrs;
-    attrs.data_ready_sem_addr = service.get_data_ready_sem_addr();
+    attrs.data_ready_sem_addr = static_cast<uint32_t>(service.get_data_ready_sem_addr());
     attrs.page_size = static_cast<uint32_t>(backing.buffer()->page_size());
     attrs.num_pages = static_cast<uint32_t>(backing.buffer()->num_pages());
     attrs.scratch_cb_index = 0;
     attrs.metadata_size_bytes = metadata_size_bytes;
-    attrs.metadata_l1_addr = metadata_size_bytes > 0 ? service.get_metadata_addr() : 0;
+    attrs.metadata_l1_addr = metadata_size_bytes > 0 ? static_cast<uint32_t>(service.get_metadata_addr()) : 0;
     attrs.worker_cores = service.get_worker_cores();
     attrs.mesh_num_cols = num_cols;
 
@@ -125,6 +136,18 @@ std::vector<ttnn::Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& 
     }
 
     return ttnn::device_operation::launch<OperationType>(attrs, OperationType::tensor_args_t{backing});
+}
+
+}  // namespace
+
+std::vector<ttnn::Tensor> inbound_socket_service_sync(
+    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes) {
+    return inbound_socket_service_sync_impl(service, metadata_size_bytes);
+}
+
+std::vector<ttnn::Tensor> inbound_socket_service_sync(
+    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
+    return inbound_socket_service_sync_impl(service, metadata_size_bytes);
 }
 
 }  // namespace ttnn::prim
