@@ -479,11 +479,14 @@ def chunk_gated_delta_rule_ttnn(
     if cached_masks is not None:
         triu_ones = cached_masks["triu_ones"]
         tril_mask = cached_masks["tril_mask"]
+        strict_lower = cached_masks["strict_lower"]
     else:
         triu_ones = _create_triu_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
         triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size], memory_config=None)
         tril_mask = _create_tril_ones_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
         tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size], memory_config=None)
+        strict_lower = _create_strict_lower_tril_ttnn(chunk_size, device, dtype=ttnn.float32, memory_config=None)
+        strict_lower = ttnn.reshape(strict_lower, [1, chunk_size, chunk_size], memory_config=None)
 
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
     decay = ttnn.reshape(
@@ -520,12 +523,9 @@ def chunk_gated_delta_rule_ttnn(
     # for these memory-bound small matmuls that run on only 2-8 cores.
     _loop_mc = ttnn.L1_MEMORY_CONFIG if chunk_size > 64 else None
 
-    # HiFi2 + fp32 accumulation for all chunk matmuls. The default compute kernel uses
-    # lower fidelity, which introduces per-matmul rounding errors that compound across
-    # the Neumann series iterations and inter-chunk state propagation steps. The recurrent
-    # step already uses HiFi2 + fp32_dest_acc_en — match that precision here.
+    # HiFi4 + fp32 accumulation for all chunk matmuls.
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -541,6 +541,8 @@ def chunk_gated_delta_rule_ttnn(
     ttnn.deallocate(L_diff)
     L_diff_clamped = ttnn.clip(L_diff_masked, min=-20.0, max=0.0)
     ttnn.deallocate(L_diff_masked)
+    # L_mask with diagonal included (exp(0)=1): used for intra-chunk output attention (L_mask_4d).
+    # The forward substitution A must be STRICTLY lower triangular; diagonal zeroing happens below.
     L_mask = ttnn.multiply(ttnn.exp(L_diff_clamped, memory_config=_batch_mc), tril_mask, memory_config=_batch_mc)
     ttnn.deallocate(L_diff_clamped)
 
@@ -570,6 +572,10 @@ def chunk_gated_delta_rule_ttnn(
     else:
         A = ttnn.to_torch(attn_raw).float()
     ttnn.deallocate(attn_raw)
+    # Forward substitution requires A strictly lower triangular (A[i,i]=0).
+    # L_mask[i,i]=exp(0)=1 gives A[i,i]=-(k_beta_i·k_i)≠0; zero it explicitly.
+    # L_mask itself keeps its diagonal for the separate intra-chunk output attention.
+    A.diagonal(dim1=-2, dim2=-1).zero_()
     eye = _chunk_eye(chunk_size)
     I_minus_A = eye - A
     del A

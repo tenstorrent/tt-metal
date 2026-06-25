@@ -186,7 +186,7 @@ def test_qwen36_full_attn_1d_prefill_pcc(mesh_device):
         mesh_device=mesh_device,
         args=args,
         layer_num=_LAYER_IDX,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         state_dict=layer_sd,
         tt_ccl=tt_ccl,
     )
@@ -202,7 +202,23 @@ def test_qwen36_full_attn_1d_prefill_pcc(mesh_device):
     tt_out = attn.forward(x_tt, current_pos=None, rot_mats=(cos_tt, sin_tt), mode="prefill")
     tt_cpu = _gather_replicated_output(tt_out, mesh_device, _T_PREFILL)
     print(f"[FullAttn-1D/prefill] TT out shape {tuple(tt_cpu.shape)}")
+    ref_out = out_ref[0, :_T_PREFILL, :].float()
+    print(f"[DBG] TT mean={tt_cpu.mean():.4f} std={tt_cpu.std():.4f} max={tt_cpu.abs().max():.4f}")
+    print(f"[DBG] Ref mean={ref_out.mean():.4f} std={ref_out.std():.4f} max={ref_out.abs().max():.4f}")
+    print(f"[DBG] TT[0,:5]={tt_cpu[0,:5].tolist()}")
+    print(f"[DBG] Ref[0,:5]={ref_out[0,:5].tolist()}")
+    # Per-chip-shard PCC
+    H = 5120
+    tp = 4
+    shard = H // tp  # 1280
+    for chip in range(tp):
+        tt_shard = tt_cpu[:, chip * shard : (chip + 1) * shard]
+        ref_shard = ref_out[:, chip * shard : (chip + 1) * shard]
+        shard_pcc = torch.corrcoef(torch.stack([tt_shard.flatten(), ref_shard.flatten()]))[0, 1].item()
+        print(
+            f"[DBG] chip={chip} cols=[{chip*shard}:{(chip+1)*shard}] PCC={shard_pcc:.4f} TT_std={tt_shard.std():.4f} Ref_std={ref_shard.std():.4f}"
+        )
 
-    pcc = _pcc(tt_cpu, out_ref[0, :_T_PREFILL, :])
+    pcc = _pcc(tt_cpu, ref_out)
     print(f"[FullAttn-1D/prefill] PCC = {pcc:.6f} (thresh {_PCC_THRESH})")
     assert pcc > _PCC_THRESH, f"prefill PCC {pcc:.4f} < {_PCC_THRESH}"

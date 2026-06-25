@@ -3,6 +3,40 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## Current Status (2026-06-25)
+
+**All ISL PCC gates PASSING ✅**
+
+Root cause of primed-decode PCC=0.64 gap: `qwen35_chunk_delta_rule_ops.py` computed
+`A = -(kk * L_mask)` for the forward substitution `(I-A)^{-1}`, but `L_mask[i,i] = exp(0) = 1`
+gave `A[i,i] = -(k_beta_i·k_i) ≠ 0`. The forward substitution requires A to be **strictly
+lower triangular** (A[i,i] = 0), matching the fla reference algorithm. The non-zero diagonal
+caused a spurious `1/(1+beta)` division on every v_corrected element.
+
+Fix: `A.diagonal(dim1=-2, dim2=-1).zero_()` on the CPU tensor before `solve_triangular`.
+This is surgical — `L_mask` itself keeps its diagonal for the separate intra-chunk output
+attention computation (where exp(0)=1 is correct for self-attention at position i).
+
+Additional fix from prior session: decay-before-read in `_recurrent_delta_rule_step_fp32`.
+
+**BF16 precision fix (2026-06-25):** GDN prefill at T=8192 was giving PCC=0.9874 (below 0.99
+threshold) with `dtype=bfloat8_b`. Root cause: `A_log` and `dt_bias` were stored in BFP8 via
+`self.dtype`, quantizing the decay factor `g = -exp(A_log) * softplus(a + dt_bias)`. BFP8
+decay noise accumulates over T=8192 recurrent steps (32 chunks × 256 chunk_size). Fix: all
+five GDN weights (`w_qkvz`, `w_ba`, `w_out`, `A_log`, `dt_bias`) now stored in BF16
+regardless of `dtype`, and the input projection outputs are BF16. Memory cost: ~30 MB/layer/chip
+extra on P150.
+
+ISL test suite status after all fixes:
+- GDN prefill T=128 PCC=**0.9998** ✓
+- GDN prefill T=8192 PCC=**0.9999** (was 0.9874) ✓
+- Zero-state decode PCC=**0.9998** ✓
+- Primed-decode (T=32) PCC=**0.9991** ✓
+- BF16-weights decode PCC=**0.9997** ✓
+- 64L ISL=128 composite PCC=**0.9996** (was 0.9877) ✓
+- 64L ISL=8192 final hidden-state PCC=**0.9999** (GDN min=0.9998, was 0.9932 / GDN min=0.977) ✓
+- FA single-block PCC=0.9997 ✓
+
 ## Current Status (2026-06-09)
 
 **Decode perf (correct path):** `demo/text_demo_qwen36.py::test_qwen36_demo_generator_batch1`
