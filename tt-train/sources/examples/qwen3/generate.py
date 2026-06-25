@@ -48,7 +48,7 @@ from tqdm.auto import tqdm
 import ttml
 import ttnn
 
-from utils.kv_cache import KVCache
+from ttml.models.qwen3.kv_cache import KVCache
 from utils.memory import MemoryUsageTracker, finalize_memory
 from utils.tensor_utils import (
     create_input_tensor_from_torch,

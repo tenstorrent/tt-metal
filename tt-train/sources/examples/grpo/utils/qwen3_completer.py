@@ -37,8 +37,9 @@ from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
-from .qwen3_support import build_mesh, load_weights_from_hf
-from .qwen3_kv_cache import Qwen3KVCache
+from ttml.common.utils import build_mesh
+from ttml.models.qwen3.weights import load_weights_from_hf
+from ttml.models.qwen3.kv_cache import KVCache
 
 # Chunked async readback during decode: instead of a blocking device->host sync
 # every token, sampled token columns are read back non-blocking every CHUNK
@@ -320,7 +321,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         # Freed after each generate(); generation is no_grad + memory-efficient,
         # so the full-size allocation only coexists with generation activations.
         cache_len = self._max_seq_len
-        kv = Qwen3KVCache(self._config.num_hidden_layers, cache_len)
+        kv = KVCache(self._config.num_hidden_layers, cache_len)
 
         B_local = B // self._num_devices
         composer = self._dp_composer

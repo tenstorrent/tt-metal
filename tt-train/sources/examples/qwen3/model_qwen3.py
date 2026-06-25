@@ -33,12 +33,3 @@ Qwen3ForCausalLM = Qwen3
 
 def linear(x, weight, bias=None):
     return ttml.ops.linear.linear(x, weight, bias)
-
-
-# =====================================================================
-# Weight loading from HuggingFace
-# =====================================================================
-# ``load_weights_from_hf`` is re-exported from ttml.models.qwen3.weights above. The
-# shared loader's default (``sharded=False``) path is the single-device /
-# replicated loader this module historically provided; the GRPO example passes
-# ``sharded=True`` for the FSDP-materialized path.
