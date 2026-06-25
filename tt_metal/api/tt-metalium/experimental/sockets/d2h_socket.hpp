@@ -27,13 +27,14 @@ struct HDSocketConnectorState;
  * core on a Tenstorrent device to the host CPU. The device kernel writes data to
  * the socket, and the host reads it via this interface.
  *
- * The socket uses pinned host memory that is accessible by the device via PCIe NOC
- * writes. The device kernel writes data to the pinned buffer and updates `bytes_sent`
- * to indicate available data. The host reads data and updates `bytes_acked` to signal
- * that buffer space has been freed.
+ * The socket uses device-visible host memory via PCIe NOC writes. On IOMMU systems
+ * this is regular pinned host memory; without IOMMU it falls back to the CQ sysmem
+ * hugepage region. The device kernel writes data to the host buffer and updates
+ * `bytes_sent` to indicate available data. The host reads data and updates
+ * `bytes_acked` to signal that buffer space has been freed.
  *
  * Requirements:
- * - vIOMMU must be enabled on the system for pinned memory to be accessible by the device
+ * - vIOMMU enabled, or initialized hugepage-backed CQ sysmem for the fallback path
  * - Page size must be PCIe-aligned
  *
  * Flow Control:
@@ -65,7 +66,7 @@ public:
     /**
      * @brief Constructs a D2HSocket for streaming data from a device core to host.
      *
-     * Allocates pinned host memory for the data FIFO and bytes_sent signaling.
+     * Allocates device-visible host memory for the data FIFO and bytes_sent signaling.
      * Creates a configuration buffer on the device that the kernel uses to access
      * socket metadata and downstream (host) buffer addresses.
      *
@@ -161,11 +162,11 @@ public:
     /**
      * @brief Destroys the D2HSocket.
      *
-     * Releases pinned memory mappings before freeing the underlying host buffers.
-     * This ensures the DMA mappings are properly cleaned up to avoid "File exists"
-     * errors when re-pinning memory at the same virtual address.
+     * Releases pinned memory mappings before freeing the underlying host buffers when
+     * using the IOMMU/SHM path. The hugepage fallback is carved from CQ sysmem and is
+     * released with the device.
      * Owner: waits for device acknowledgement, unpins memory, unlinks shared memory,
-     * removes descriptor file.
+     * removes descriptor file when applicable.
      * Connector: unmaps shared memory via NamedShm destructor.
      */
     ~D2HSocket() noexcept;
@@ -324,6 +325,7 @@ private:
     void wait_for_bytes(uint32_t num_bytes);
     void pop_bytes(uint32_t num_bytes);
     void notify_sender();
+    uint32_t read_bytes_sent_counter() const;
 
     // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
     // into `config_buffer_address_`, and configures the sender-side TLB. The caller must
