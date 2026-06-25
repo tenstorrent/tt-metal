@@ -145,8 +145,16 @@ For a quick smoke run, cap scenes with `train_test_split.scene_filter.max_scenes
   server ran it under the venv's 2.11). The parity check (step 0) is the gate; if
   an API gap appears, bump navsim310's torch toward ttnn's build target and re-pin.
 - **DDIM noise** is drawn fresh (unseeded) per forward, matching the upstream eval.
-- **Not a perf win.** Removing the socket saves <1% of per-scenario time; the real
-  lever is trace capture (`01_plan.md` §10.4 #1).
+- **Trace capture (on by default).** The agent captures the consolidated
+  backbone-loop trace once in `initialize()` and replays it per scene via
+  `execute_compiled()`. Set `DD_TRACE=0` to disable (eager `__call__`, for A/B).
+  Measured on a 2000-scene navtest A/B (sequential, navsim310): PDM unchanged
+  (eager 0.8669 vs traced 0.8676), wall **394→377 s = 1.045×** (−8.5 ms/scene).
+  The win is modest because the **in-process per-scene cost is dominated by
+  navsim CPU** (feature building + PDM scoring), not the model forward — the
+  forward itself is ~1.34× faster but is a minority of per-scene wall, so more
+  model-side tracing buys little here. Removing the socket (vs the bridge) is a
+  separate <1% effect.
 
 ## Fallback: the cross-process bridge
 
