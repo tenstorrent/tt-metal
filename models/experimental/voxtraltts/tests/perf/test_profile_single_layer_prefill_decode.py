@@ -4,6 +4,10 @@
 
 Measured between Tracy ``start``/``stop`` signposts. Text stack only (AR KV cache);
 acoustic/tokenizer stages use separate perf tests.
+
+Runs on P150 single card by default. Set ``MESH_DEVICE=P150x4`` (on a BH QB2 1×4 host)
+to profile the tensor-parallel text layer across 4 devices; the ``device`` fixture then
+yields the full 1×4 mesh and the residual stream is column-sharded ``dim // num_devices``.
 """
 from __future__ import annotations
 
@@ -15,6 +19,10 @@ from loguru import logger
 from models.experimental.voxtraltts.utils.common import create_real_voxtral_text_model_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
 from models.experimental.voxtraltts.tt.text_backbone.common import Mode
+from models.experimental.voxtraltts.utils.mesh import (
+    voxtral_is_multi_device_mesh,
+    voxtral_tp_shard_last_dim_mapper,
+)
 
 try:
     from tracy import signpost
@@ -38,7 +46,39 @@ def _stop() -> None:
         signpost(header="stop")
 
 
-def _prefill_layer(model, layer, hidden, *, dim):
+def _residual_mesh_mapper(inner):
+    """Mesh mapper for the layer's residual-stream input.
+
+    On TP (``MESH_DEVICE=P150x4``) the residual stream is column-sharded ``[*, dim // num_devices]``
+    on each chip — matching the embedding (sharded on dim 3) and ``get_residual_mem_config`` — so the
+    hidden state must shard on its last dim. On a single device it is replicated (full ``dim``).
+    """
+    if voxtral_is_multi_device_mesh(inner.mesh_device):
+        return voxtral_tp_shard_last_dim_mapper(inner.mesh_device, inner.args.cluster_shape)
+    return ttnn.ReplicateTensorToMesh(inner.mesh_device)
+
+
+def _build_page_table(model, layer):
+    """Device page table for the layer's paged KV cache (``None`` for a non-paged cache).
+
+    The cache is allocated with the layer's ``paged_attention_config`` (block_size 32), so prefill
+    ``fill_cache`` / decode ``paged_update_cache`` must be given the block mapping — otherwise the
+    paged-shaped cache is treated as contiguous (height = block_size) and the fill overflows.
+    Mirrors ``VoxtralTTTextModel._resolve_page_table_tt`` for the single-layer profiling path.
+    """
+    from models.experimental.voxtraltts.utils.common import build_voxtral_text_page_table_tt
+
+    pac = getattr(layer.attention, "paged_attention_config", None)
+    if pac is None:
+        return None
+    return build_voxtral_text_page_table_tt(
+        model.inner.mesh_device,
+        max_seq_len=int(model.inner.args.max_seq_len),
+        paged_block_size=int(pac.block_size),
+    )
+
+
+def _prefill_layer(model, layer, hidden, *, dim, page_table=None):
     """Run one layer prefill (fills KV cache)."""
     inner = model.inner
     args = inner.args
@@ -52,7 +92,7 @@ def _prefill_layer(model, layer, hidden, *, dim):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=prefill_cfg,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(inner.mesh_device),
+        mesh_mapper=_residual_mesh_mapper(inner),
     )
     return layer(
         x_tt,
@@ -61,12 +101,12 @@ def _prefill_layer(model, layer, hidden, *, dim):
         rot_mats_local=rot_local,
         user_id=0,
         mode=Mode.PREFILL,
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
     )
 
 
-def _decode_layer(model, layer, new_hidden, pos_idx, *, dim):
+def _decode_layer(model, layer, new_hidden, pos_idx, *, dim, page_table=None):
     """Run one layer decode at *pos_idx* (reads KV cache)."""
     inner = model.inner
     args = inner.args
@@ -86,7 +126,7 @@ def _decode_layer(model, layer, new_hidden, pos_idx, *, dim):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=decode_cfg,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(inner.mesh_device),
+        mesh_mapper=_residual_mesh_mapper(inner),
     )
     return layer(
         x_decode,
@@ -95,7 +135,7 @@ def _decode_layer(model, layer, new_hidden, pos_idx, *, dim):
         rot_mats_local=rot_local_d,
         user_id=0,
         mode=Mode.DECODE,
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
     )
 
@@ -119,21 +159,24 @@ def test_profile_single_layer_prefill_decode(device, reset_seeds):
     prompt_hidden = hidden_full[:, :PREFILL_SEQ_LEN, :]
     new_hidden = hidden_full[:, PREFILL_SEQ_LEN, :]
 
+    # Paged KV cache needs the block mapping for fill_cache (prefill) and paged_update_cache (decode).
+    page_table = _build_page_table(model, layer)
+
     # Drain profiler after model load so signposted region is not dropped.
     ttnn.synchronize_device(device)
     ttnn.ReadDeviceProfiler(device)
 
     for _ in range(NUM_WARMUP_ITERS):
-        pre = _prefill_layer(model, layer, prompt_hidden, dim=dim)
-        out = _decode_layer(model, layer, new_hidden, DECODE_POS, dim=dim)
+        pre = _prefill_layer(model, layer, prompt_hidden, dim=dim, page_table=page_table)
+        out = _decode_layer(model, layer, new_hidden, DECODE_POS, dim=dim, page_table=page_table)
         pre.deallocate(True)
         out.deallocate(True)
         ttnn.synchronize_device(device)
 
     ttnn.synchronize_device(device)
     _start()
-    pre = _prefill_layer(model, layer, prompt_hidden, dim=dim)
-    out = _decode_layer(model, layer, new_hidden, DECODE_POS, dim=dim)
+    pre = _prefill_layer(model, layer, prompt_hidden, dim=dim, page_table=page_table)
+    out = _decode_layer(model, layer, new_hidden, DECODE_POS, dim=dim, page_table=page_table)
     ttnn.synchronize_device(device)
     _stop()
     pre.deallocate(True)

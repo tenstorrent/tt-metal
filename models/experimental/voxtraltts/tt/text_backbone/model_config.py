@@ -1635,9 +1635,14 @@ class ModelArgs:
             else:
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                    # in0_block_w sweep (128x3072x1536 QKV, BH P150x4, HiFi4): in0_block_w=1 re-streams
+                    # K in 96 single-tile blocks -> ~86us / 32 active cores; in0_block_w=12 (Kt=96/8)
+                    # -> ~51us (1.67x), pcc 0.9999, no L1 OOM. K is always dim (Kt=96, 12|96) and this
+                    # branch only runs at seq_len<=128, so the divisor holds for every prefill call.
+                    # See tests/perf/test_qkv_prefill_matmul_sweep_p150.py.
+                    in0_block_w=12 if (is_blackhole() and self.dim == 3072) else 1,
                     out_subblock_h=1,  # Must be divisible by per_core_M
-                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    out_subblock_w=2 if (is_blackhole() and self.dim == 3072) else 1,
                     per_core_M=7
                     if self.device_name == "P100"
                     else (

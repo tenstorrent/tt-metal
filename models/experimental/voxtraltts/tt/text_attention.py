@@ -371,6 +371,7 @@ class Attention(_BaseAttention):
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         if self.args.use_minimal_qkv_prefill_matmul(seq_len):
+            print("using minimal matmul")
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
                 self.wqkv,
