@@ -18,7 +18,6 @@ on:
           - stable_diffusion_xl
           - mistral-small-3.1-24b
           - mochi
-          - flux.1-dev
           - wan2.2-t2v-a14b
           - z-image-turbo
       system-type:

@@ -1,0 +1,89 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    // src_cb / dst_cb are now DFB bindings (dfb::src0 / dfb::dst0); the remaining
+    // values are named compile-time arguments.
+    constexpr uint32_t pixel_size = get_arg(args::pixel_size);
+    constexpr uint32_t aligned_pixel_size = get_arg(args::aligned_pixel_size);
+    constexpr uint32_t aligned_dst_pixel_size = get_arg(args::aligned_dst_pixel_size);
+    constexpr uint32_t aligned_chunk_size = get_arg(args::aligned_chunk_size);
+    constexpr uint32_t aligned_row_size = get_arg(args::aligned_row_size);
+    constexpr uint32_t stride_h = get_arg(args::stride_h);
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t num_dst_rows = get_arg(args::num_dst_rows);
+    constexpr uint32_t num_dst_cols = get_arg(args::num_dst_cols);
+    constexpr uint32_t dst_row_offset = get_arg(args::dst_row_offset);
+    constexpr uint32_t element_size = get_arg(args::element_size);
+    constexpr uint32_t is_reader = get_arg(args::is_reader);
+
+    constexpr uint32_t dst_row_size = num_dst_cols * aligned_dst_pixel_size;
+    constexpr uint32_t cols_per_core = num_dst_cols / 2;
+    constexpr uint32_t process_cols = cols_per_core + ((num_dst_cols % 2) & is_reader);
+    constexpr uint32_t core_col_offset = is_reader ? 0 : aligned_chunk_size;
+    constexpr uint32_t core_dst_offset = is_reader ? 0 : aligned_dst_pixel_size;
+
+    constexpr bool is_aligned = (pixel_size == aligned_pixel_size);
+    constexpr uint32_t elements_per_pixel = pixel_size / element_size;
+    constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
+
+    Noc noc;
+    DataflowBuffer src_cb_obj(dfb::src0);
+    DataflowBuffer dst_cb_obj(dfb::dst0);
+
+    const uint32_t dst_addr_base = dst_cb_obj.get_write_ptr();
+    uint32_t src_addr_base = src_cb_obj.get_read_ptr();
+
+    if constexpr (is_aligned) {
+        experimental::set_read_state<aligned_chunk_size>(noc, src_addr_base);
+    }
+
+    // Process each destination row
+    for (uint32_t row = 0; row < num_dst_rows; ++row) {
+        uint32_t src_col_offset = core_col_offset;
+        uint32_t dst_addr = dst_addr_base + (row * dst_row_size) + core_dst_offset;
+
+        // Process columns assigned to this core
+        for (uint32_t col = 0; col < process_cols; ++col) {
+            uint32_t dst_pixel_addr = dst_addr;
+            // Gather pixels along stride_h dimension
+            for (uint32_t h = 0; h < stride_h; ++h) {
+                const uint32_t h_offset = h * aligned_row_size;
+                if constexpr (is_aligned) {
+                    // Fast path: aligned NOC read
+                    experimental::read_with_state(noc, dst_pixel_addr, src_addr_base + src_col_offset + h_offset);
+                    dst_pixel_addr += aligned_chunk_size;
+                } else {
+                    // Slow path: element-wise copy for unaligned data
+                    // Cast to uint16_t* for element-level access to pixel data
+                    uint16_t* src_ptr = (uint16_t*)(src_addr_base + src_col_offset + h_offset);
+                    uint16_t* dst_ptr = (uint16_t*)dst_pixel_addr;
+
+                    // Gather pixels along stride_w dimension
+                    for (uint32_t w = 0; w < stride_w; ++w) {
+                        // Copy elements_per_pixel (half-words) from source to destination
+                        for (uint32_t i = 0; i < elements_per_pixel; ++i) {
+                            dst_ptr[i] = src_ptr[i];
+                        }
+                        src_ptr += elements_per_aligned_pixel;
+                        dst_ptr += elements_per_pixel;
+                    }
+                    dst_pixel_addr += pixel_size * stride_w;
+                }
+            }
+            // Move to next column (2 cores interleaved)
+            src_col_offset += aligned_chunk_size * 2;
+            dst_addr += aligned_dst_pixel_size * 2;
+        }
+        // Move to next row
+        src_addr_base += dst_row_offset;
+    }
+
+    noc.async_read_barrier();
+}

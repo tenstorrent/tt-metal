@@ -120,6 +120,15 @@ struct dp_top_callstack_t {
         this->ra = ra == UINTPTR_MAX ? ra : (ra - kernel_offset - 1);
         this->skip_frames = skip_frames;
     }
+
+    __attribute__((always_inline)) static inline dp_top_callstack_t current(std::uintptr_t skip_frames) {
+        std::uintptr_t pc;
+        asm volatile("auipc %[pc], 0\n" : [pc] "=r"(pc));
+        std::uintptr_t ra = reinterpret_cast<std::uintptr_t>(__builtin_return_address(0));
+
+        // the +1 is to ignore the current frame
+        return dp_top_callstack_t(pc, ra, skip_frames + 1);
+    }
 };
 
 #ifdef UCK_CHLKC_UNPACK

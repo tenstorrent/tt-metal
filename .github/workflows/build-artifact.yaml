@@ -368,6 +368,22 @@ jobs:
       ${{ needs.parse-platform.outputs.distro }}
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
+    # Cross-workflow compile mutex: if two workflows (e.g. pr-gate + merge-gate) trigger
+    # builds for the same commit + config simultaneously, queue them so the second run
+    # gets a fully warm ccache instead of both racing with cold caches.
+    # Keyed purely on SHA + compile inputs — no branch/PR special-casing.
+    concurrency:
+      group: >-
+        cmake-build-
+        ${{ github.sha }}-
+        ${{ inputs.platform }}-
+        ${{ inputs.build-type }}-
+        ${{ inputs.toolchain }}-
+        ${{ inputs.architecture }}-
+        tracy:${{ inputs.tracy }}-
+        dist:${{ inputs.distributed }}-
+        lto:${{ inputs.enable-lto }}
+      queue: max
     timeout-minutes: 100
     runs-on: ${{ inputs['runs-on'] }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
@@ -574,7 +590,11 @@ jobs:
         timeout-minutes: 90
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
-          cmake --build build --target install
+          "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
+            --interval 1 \
+            --label "cmake build (install target)" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            -- cmake --build build --target install
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
@@ -691,3 +711,4 @@ jobs:
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-type: ${{ inputs.build-type || 'Release' }}
+      runs-on: ${{ inputs['runs-on'] }}
