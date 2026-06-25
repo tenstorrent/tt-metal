@@ -703,24 +703,40 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             # bad state and poison every later config in the sweep (the TP=2 nan cascade).
             # A per-config CCLManager/semaphore gives each shape independent AG state.
             ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
-            ag = ccl.get_ag_ping_pong_semaphore(tp_axis)
             inp = _build(submesh, cfg, tp_axis)
-            pob = _make_pob(inp, submesh, cfg, links, tp_axis)
+            # CCL ping-pong (the ONLY correct way to drive sems + POBs for a CCL): consecutive
+            # op launches MUST alternate between distinct (semaphore, POB) sets so an op's
+            # end-of-op fabric atomic-incs drain on the unused set before it is reused. Reusing
+            # one set across launches races the in-kernel sem reset against in-flight peer incs,
+            # and the all-gather desyncs -> a worker reads a wrong/un-gathered stats slot
+            # (intermittent wrong-row output, ~50% on a multi-config run). Mirrors the bench.
+            sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+            pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
             ref = _torch_ref(cfg)
+
+            def _fused(k, _inp=inp, _sems=sems, _pobs=pobs, _cfg=cfg):  # launch k -> ping-pong set k%_PINGPONG
+                s = _sems[k % _PINGPONG]
+                p = _make_pob(_inp, submesh, _cfg, links, tp_axis) if fresh_pob else _pobs[k % _PINGPONG]
+                return _gather(_run_fused(_inp, submesh, s, _cfg, topology, tp_axis, p, op_override), tp_axis)
+
             # Composite baseline is best-effort: the production distributed-rmsnorm op may
             # not support every shape (e.g. ring_size==1 at TP=1). A baseline that can't run
             # must not abort the fused-vs-torch correctness check, so swallow its failure.
+            # Use the LAST ping-pong set so out0 (set 0, the determinism reference) is not
+            # contaminated by the baseline's trailing fabric incs.
             try:
-                comp = _gather(_run_baseline(inp, submesh, ag, cfg, topology, tp_axis, op_override), tp_axis)
+                comp = _gather(
+                    _run_baseline(inp, submesh, sems[_PINGPONG - 1], cfg, topology, tp_axis, op_override), tp_axis
+                )
             except Exception as be:  # noqa: BLE001
                 comp = None
                 logger.warning(f"  baseline unavailable for {cfg.cid}: {type(be).__name__}: {str(be)[:120]}")
-            out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
+            out0 = _fused(0)
 
             ndiff, maxdelta, worst_oi = 0, 0.0, None
-            for _ in range(9):  # 10 fused runs total, same input -> must be bit-exact
-                p = _make_pob(inp, submesh, cfg, links, tp_axis) if fresh_pob else pob
-                oi = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, p, op_override), tp_axis)
+            _det_reps = int(_os.getenv("CORR_DET_REPEATS", "9"))  # extra fused runs after out0
+            for _j in range(_det_reps):  # same input -> must be bit-exact
+                oi = _fused(_j + 1)
                 d = (oi - out0).abs().max().item()
                 if d > 0.0:
                     ndiff += 1
@@ -750,7 +766,7 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             logger.info(
                 f"RMSCORR {cfg.cid:<22} det={'OK' if det else 'FAIL'} pcc(F:torch)={pcc_ft * 100:.4f}% "
                 f"pcc(base:torch)={pcc_ct * 100:.4f}% pcc(F:base)={pcc_fc * 100:.4f}% maxabs={maxabs:.4f} "
-                f"ratio={ratio:.4f} worstrow={worstrow * 100:.2f}% det_ndiff={ndiff}/9 det_maxdelta={maxdelta:.4f}"
+                f"ratio={ratio:.4f} worstrow={worstrow * 100:.2f}% det_ndiff={ndiff}/{_det_reps} det_maxdelta={maxdelta:.4f}"
                 f"{'  <-- SUSPICIOUS' if susp else ''}"
             )
         except Exception as e:  # noqa: BLE001 — characterize (OOM / FATAL / hang-timeout), keep sweeping
