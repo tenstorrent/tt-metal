@@ -45,9 +45,9 @@ inline sfpi::vFloat _calculate_isposinf_(const sfpi::vFloat& in)
     // SFPU microcode
     sfpi::vInt exp     = sfpi::exexp(in);
     sfpi::vInt man     = sfpi::exman(in);
-    sfpi::vInt pos     = sfpi::lz(sfpi::as<sfpi::vUInt>(in));
+    //    sfpi::vInt pos     = sfpi::lz(sfpi::as<sfpi::vUInt>(in));
     sfpi::vFloat out   = 0.0f;
-    v_if (pos != 0 && exp == 128 && man == 0)
+    v_if ((__builtin_rvtt_sfplz(in.get(), sfpi::SFPLZ_MOD1_CC_NE0), pos != 0) && exp == 128 && man == 0)
     {
         out = 1.0f;
     }
