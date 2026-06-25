@@ -839,6 +839,126 @@ class GemmaAttentionTTNN:
         return output, new_cache
 
 
+class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
+    """Fused-only attention for the pi0.5 action-expert (denoise) path.
+
+    Overrides forward() with the fused-op sequence (commit a63765d8fd) and carries NO unfused
+    fallback: create-qkv-heads + q/k RoPE fuse into ``nlp_create_qkv_heads_rope`` (1 dispatch), and
+    concat-heads + O-projection fuse into ``concat_heads_matmul`` (1 dispatch, bf16 out). Used ONLY
+    by the expert block (AdaRMSGemmaBlockTTNN); the shared GemmaAttentionTTNN (VLM prefill) keeps its
+    own unfused path because concat_heads_matmul is valid only for a <=1-tile suffix (the 32-token
+    denoise suffix) — the 1024-token prefill would be incorrect.
+    """
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        position_ids: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
+        use_cache: bool = False,
+        keep_padded: bool = False,
+        *,
+        bs_norm_factory=None,
+        bs_grid: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        batch_size = hidden_states.shape[0]
+        if len(hidden_states.shape) == 4:
+            seq_len = hidden_states.shape[2]
+        else:
+            seq_len = hidden_states.shape[1]
+            hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
+        # The fused concat_heads_matmul O-projection is only valid for a <=1-tile suffix (contiguous
+        # head tiles). Fail loudly rather than silently mis-compute if used outside that regime.
+        assert seq_len <= 32, (
+            f"AdaRMSExpertAttentionTTNN requires suffix seq_len<=32 (1 tile), got {seq_len}. "
+            f"action_horizon>32 is unsupported on the fused expert path."
+        )
+
+        # Fused QKV linear (bf8_b), interleaved path (the expert never passes bs_norm_factory).
+        m_tiles = (batch_size * seq_len) // 32
+        k_tiles_in = self.hidden_size // 32
+        n_tiles_qkv = self.wqkv.shape[-1] // 32
+        m_tiles_interleaved = (seq_len + 31) // 32
+        wqkv_pcfg = build_matmul_pcfg(
+            m_tiles_interleaved, k_tiles_in, n_tiles_qkv, self.grid_size[0], self.grid_size[1], in0_block_w=8
+        )
+        if wqkv_pcfg is not None:
+            xqkv = ttnn.linear(
+                hidden_states,
+                self.wqkv,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                program_config=wqkv_pcfg,
+            )
+        else:
+            xqkv = ttnn.linear(
+                hidden_states,
+                self.wqkv,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                core_grid=self.core_grid,
+            )
+
+        # RoPE tables: caller-supplied position-aware override, else sliced sequential meta.
+        if cos is not None and sin is not None:
+            cos_for_rope, sin_for_rope, own_rope = cos, sin, False
+        else:
+            cos_for_rope = ttnn.slice(self.cos_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            sin_for_rope = ttnn.slice(self.sin_meta, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            own_rope = True
+
+        # Fused create-qkv-heads + q/k RoPE in ONE dispatch (byte-identical to nlp_create_qkv_heads
+        # + 2x rotary_embedding, PCC ~1.0). Output is roped, head-split, and tile-aligned.
+        q_rope, k_rope, v = ttnn.experimental.nlp_create_qkv_heads_rope(
+            xqkv, cos_for_rope, sin_for_rope, self.num_heads, self.num_kv_heads, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        if own_rope:
+            ttnn.deallocate(cos_for_rope)
+            ttnn.deallocate(sin_for_rope)
+
+        if past_key_value is not None:
+            past_k, past_v = past_key_value
+            k_rope = ttnn.concat([past_k, k_rope], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        new_cache = (k_rope, v) if use_cache else None
+
+        kv_seq_len = k_rope.shape[2]
+        q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, kv_seq_len)
+        sdpa_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.grid_size,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=get_sdpa_exp_approx_mode(kv_seq_len),
+        )
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            q_rope,
+            k_rope,
+            v,
+            attn_mask=attention_mask,
+            is_causal=False,
+            scale=self.scale,
+            program_config=sdpa_cfg,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Fused concat-heads + O-projection in ONE dispatch (bf16 out so it can feed the bf16 fused
+        # addcmul gated residual). Uses the tuned 1D-mcast O-matmul program config.
+        oproj_k = (self.num_heads * self.head_dim) // 32
+        oproj_n = self.hidden_size // 32
+        oproj_pcfg = build_matmul_pcfg(m_tiles, oproj_k, oproj_n, self.grid_size[0], self.grid_size[1], in0_block_w=8)
+        output = ttnn.experimental.concat_heads_matmul(
+            attn_output, self.o_proj, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=oproj_pcfg
+        )
+        output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))
+        return output, new_cache
+
+
 # ============================================================================
 # GeGLU MLP (TTNN)
 # ============================================================================
@@ -863,6 +983,7 @@ class GemmaMLPTTNN:
         config: GemmaConfig,
         weights: Dict[str, torch.Tensor],
         device: ttnn.Device,
+        force_bf16_out: bool = False,
     ):
         """
         Initialize MLP with weights.
@@ -871,9 +992,14 @@ class GemmaMLPTTNN:
             config: Gemma configuration
             weights: PyTorch weight tensors (will be converted to TTNN)
             device: TTNN device
+            force_bf16_out: emit bf16 gate/up/down outputs (ignoring PI0_VLM_MLP_BF8_OUT). Set by the
+                action-expert (denoise) block so the bf16 mlp_output feeds the fused addcmul gated
+                residual. The tiny denoise suffix has no L1 pressure, so the bf8 footprint saving
+                (which matters for the 1024-token VLM prefill) is unneeded here.
         """
         self.config = config
         self.device = device
+        self._force_bf16_out = force_bf16_out
 
         # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings
         def to_ttnn(w):
@@ -1140,6 +1266,10 @@ class GemmaMLPTTNN:
             import os as _os_mlp
 
             _mlp_bf8_out = _os_mlp.environ.get("PI0_VLM_MLP_BF8_OUT", "").lower() in ("1", "true", "yes", "on")
+            # The action-expert block forces bf16 outputs so mlp_output can feed the fused addcmul
+            # gated residual (ternary addcmul requires all operands share a dtype).
+            if self._force_bf16_out:
+                _mlp_bf8_out = False
             common_kwargs = dict(
                 dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -1804,8 +1934,10 @@ class AdaRMSGemmaBlockTTNN:
         self.mod_weight = weights["adarms_mod.weight"]
         self.mod_bias = weights.get("adarms_mod.bias")
 
-        self.attention = GemmaAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta)
-        self.mlp = GemmaMLPTTNN(config, weights, device)
+        # Action-expert (denoise) path: fused-only attention + bf16 MLP output (feeds the fused
+        # addcmul gated residual). The shared VLM-prefill block keeps the unfused GemmaAttentionTTNN.
+        self.attention = AdaRMSExpertAttentionTTNN(config, weights, layer_idx, device, cos_meta, sin_meta)
+        self.mlp = GemmaMLPTTNN(config, weights, device, force_bf16_out=True)
 
         device_grid = device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
@@ -1911,12 +2043,13 @@ class AdaRMSGemmaBlockTTNN:
             normed, cos, sin, attention_mask, position_ids, past_key_value, use_cache, keep_padded=keep_padded
         )
         ttnn.deallocate(normed)
-        gated_attn = ttnn.mul(attn_output, ga, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Fused gated residual: hidden + ga*attn_output in one addcmul. All operands are bf16
+        # (AdaRMSExpertAttentionTTNN emits bf16; the residual stream + gate are bf16), satisfying
+        # the ternary addcmul same-dtype requirement.
+        hidden_states = ttnn.addcmul(hidden_states, ga, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
         if mod_owned:
             ttnn.deallocate(ga)
-        hidden_states = ttnn.add(hidden_states, gated_attn, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(gated_attn)
 
         # ---- FFW sublayer ----
         normed = _modulated_rms_norm(
@@ -1935,11 +2068,11 @@ class AdaRMSGemmaBlockTTNN:
             ttnn.deallocate(tf)
         mlp_output = self.mlp.forward(normed)
         ttnn.deallocate(normed)
-        gated_mlp = ttnn.mul(mlp_output, gf, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Fused gated residual: hidden + gf*mlp_output in one addcmul. The expert MLP runs with
+        # force_bf16_out so mlp_output is bf16, matching the bf16 residual stream + gate.
+        hidden_states = ttnn.addcmul(hidden_states, gf, mlp_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(mlp_output)
         if mod_owned:
             ttnn.deallocate(gf)
-        hidden_states = ttnn.add(hidden_states, gated_mlp, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(gated_mlp)
 
         return hidden_states, new_cache
