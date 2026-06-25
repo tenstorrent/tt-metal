@@ -1,0 +1,236 @@
+resolved 60 / 60
+=== sweep best (bf16) :: 60 configs ===
+=== shard 1/4 chip=1 cache=/tmp/native_best_cache1 ===
+[1/60] abs bf16
+[2/60] acos bf16
+acos           bf16  | NATIVE MaxULP 0.0          5.74us    PureULP 0.0        ML_pass% 97.24683154915714 | OURS MaxULP 0.06         6.46µs   PureULP 1.0        ML_pass% 97.265625 | range [-0.99,0.99] 256t
+[3/60] acosh bf16
+[4/60] asin bf16
+[5/60] asinh bf16
+[6/60] atan bf16
+atan           bf16  | NATIVE MaxULP 0.5          3.91us    PureULP 128.0      ML_pass% 99.85915492957747 | OURS MaxULP 0.00         4.08µs   PureULP 128.0      ML_pass% 99.859619140625 | range [-1.5707963267948966,1.5707963267948966] 256t
+[7/60] atanh bf16
+[8/60] cbrt bf16
+[9/60] celu bf16
+[10/60] cos bf16
+cos            bf16  | NATIVE MaxULP 0.0          2.56us    PureULP 0.0        ML_pass% 99.90278284117147 | OURS MaxULP 0.00         4.05µs   PureULP 0.0        ML_pass% 99.90234375 | range [-3.141592653589793,3.141592653589793] 256t
+[11/60] cosh bf16
+[12/60] digamma bf16
+[13/60] elu bf16
+[14/60] erf bf16
+erf            bf16  | NATIVE MaxULP 0.5          3.63us    PureULP 143.0      ML_pass% 99.154321357884 | OURS MaxULP 0.00         4.03µs   PureULP 0.0        ML_pass% 99.87983703613281 | range [-10.0,10.0] 256t
+[15/60] erfc bf16
+[16/60] erfinv bf16
+[17/60] exp bf16
+[18/60] exp2 bf16
+exp2           bf16  | NATIVE MaxULP 0.5          2.52us    PureULP 1.0        ML_pass% 95.64091757480884 | OURS MaxULP 0.00         2.13µs   PureULP 0.0        ML_pass% 97.56965637207031 | range [-7.0,7.0] 256t
+[19/60] expm1 bf16
+[20/60] gelu bf16
+[21/60] hardmish bf16
+[22/60] hardshrink bf16
+hardshrink     bf16  | NATIVE MaxULP 0.0          1.82us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 7.31         1.86µs   PureULP 4.976629616218725e+39 ML_pass% 0.8754730224609375 | range [-11.0,11.0] 256t
+[23/60] hardsigmoid bf16
+[24/60] hardswish bf16
+[25/60] hardtanh bf16
+[26/60] i0 bf16
+i0             bf16  | NATIVE MaxULP 1.0          3.10us    PureULP 1.0        ML_pass% 95.91555209020572 | OURS MaxULP 0.00         3.64µs   PureULP 0.0        ML_pass% 97.30491638183594 | range [-10.0,10.0] 256t
+[27/60] i1 bf16
+[28/60] identity bf16
+[29/60] leaky_relu bf16
+[30/60] lgamma bf16
+lgamma         bf16  | NATIVE MaxULP 1.0          13.48us   PureULP 164.0      ML_pass% 38.73405762871989 | OURS MaxULP 0.02         6.57µs   PureULP 3.0504744043892112e+34 ML_pass% 54.631805419921875 | range [0.001,100.0] 256t
+[31/60] log bf16
+[32/60] log10 bf16
+[33/60] log1p bf16
+[34/60] log2 bf16
+log2           bf16  | NATIVE MaxULP 1.0          2.47us    PureULP 1.0        ML_pass% 67.01877934272301 | OURS MaxULP 0.00         2.57µs   PureULP 0.0        ML_pass% 67.61741638183594 | range [0.1,10.0] 256t
+[35/60] logit bf16
+[36/60] logsigmoid bf16
+[37/60] mish bf16
+[38/60] multigammaln bf16
+multigammaln   bf16  | NATIVE MaxULP 127.0        0.13us    PureULP 4251.0     ML_pass% 0.0      | OURS MaxULP 0.00         3.42µs   PureULP 0.0        ML_pass% 52.234649658203125 | range [1.5,50.0] 256t
+[39/60] polygamma bf16
+[40/60] prelu bf16
+[41/60] relu bf16
+[42/60] relu6 bf16
+relu6          bf16  | NATIVE MaxULP 0.0          1.84us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 0.00         1.89µs   PureULP 0.0        ML_pass% 100.0    | range [-10.0,10.0] 256t
+[43/60] relu_max bf16
+[44/60] relu_min bf16
+[45/60] rsqrt bf16
+[46/60] selu bf16
+selu           bf16  | NATIVE MaxULP 3.2766905029171264e-37 3.63us    PureULP 223.0      ML_pass% 98.83944101241528 | OURS MaxULP 0.00         2.80µs   PureULP 0.0        ML_pass% 98.883056640625 | range [-10.0,10.0] 256t
+[47/60] sigmoid bf16
+[48/60] sigmoid_accurate bf16
+[49/60] silu bf16
+[50/60] sin bf16
+sin            bf16  | NATIVE MaxULP 0.0          2.35us    PureULP 0.0        ML_pass% 99.8541742617572 | OURS MaxULP 0.00         2.87µs   PureULP 0.0        ML_pass% 99.853515625 | range [-3.141592653589793,3.141592653589793] 256t
+[51/60] sinh bf16
+[52/60] softplus bf16
+[53/60] softshrink bf16
+[54/60] softsign bf16
+softsign       bf16  | NATIVE MaxULP 1.0          1.96us    PureULP 1.0        ML_pass% 98.1467042523841 | OURS MaxULP 0.00         2.17µs   PureULP 0.0        ML_pass% 99.70817565917969 | range [-10.0,10.0] 256t
+[55/60] sqrt bf16
+[56/60] swish bf16
+[57/60] tan bf16
+[58/60] tanh bf16
+tanh           bf16  | NATIVE MaxULP 0.5          2.29us    PureULP 128.0      ML_pass% 99.57691145361136 | OURS MaxULP 0.00         2.87µs   PureULP 0.0        ML_pass% 99.89128112792969 | range [-5.0,5.0] 256t
+[59/60] tanhshrink bf16
+[60/60] threshold bf16
+=== done shard 1/4: ran=15 skipped=0 -> /home/ttuser/native_dispatch/results/20260625_074850/chip1/best_chip1.txt ; /home/ttuser/native_dispatch/results/20260625_074850/chip1/best_chip1.csv ===
+resolved 60 / 60
+=== sweep best99 (bf16) :: 60 configs ===
+=== shard 1/4 chip=1 cache=/tmp/native_best99_cache1 ===
+[1/60] abs bf16
+[2/60] acos bf16
+acos           bf16  | NATIVE MaxULP 0.0          5.74us    PureULP 0.0        ML_pass% 97.24683154915714 | OURS MaxULP 1.00         3.59µs   PureULP 1.0        ML_pass% 97.2686767578125 | range [-0.99,0.99] 256t
+[3/60] acosh bf16
+[4/60] asin bf16
+[5/60] asinh bf16
+[6/60] atan bf16
+atan           bf16  | NATIVE MaxULP 0.5          3.90us    PureULP 128.0      ML_pass% 99.85915492957747 | OURS MaxULP 1.00         2.12µs   PureULP 128.0      ML_pass% 99.7802734375 | range [-1.5707963267948966,1.5707963267948966] 256t
+[7/60] atanh bf16
+[8/60] cbrt bf16
+[9/60] celu bf16
+[10/60] cos bf16
+cos            bf16  | NATIVE MaxULP 0.0          2.55us    PureULP 0.0        ML_pass% 99.90278284117147 | OURS MaxULP 0.50         2.82µs   PureULP 1.0        ML_pass% 99.90234375 | range [-3.141592653589793,3.141592653589793] 256t
+[11/60] cosh bf16
+[12/60] digamma bf16
+[13/60] elu bf16
+[14/60] erf bf16
+erf            bf16  | NATIVE MaxULP 0.5          3.66us    PureULP 143.0      ML_pass% 99.154321357884 | OURS MaxULP 0.50         2.87µs   PureULP 1.0        ML_pass% 99.69673156738281 | range [-10.0,10.0] 256t
+[15/60] erfc bf16
+[16/60] erfinv bf16
+[17/60] exp bf16
+[18/60] exp2 bf16
+exp2           bf16  | NATIVE MaxULP 0.5          2.53us    PureULP 1.0        ML_pass% 95.64091757480884 | OURS MaxULP 0.00         2.13µs   PureULP 0.0        ML_pass% 97.56965637207031 | range [-7.0,7.0] 256t
+[19/60] expm1 bf16
+[20/60] gelu bf16
+[21/60] hardmish bf16
+[22/60] hardshrink bf16
+hardshrink     bf16  | NATIVE MaxULP 0.0          1.79us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 8.00         1.91µs   PureULP 5.444517870735016e+39 ML_pass% 99.9969482421875 | range [-11.0,11.0] 256t
+[23/60] hardsigmoid bf16
+[24/60] hardswish bf16
+[25/60] hardtanh bf16
+[26/60] i0 bf16
+i0             bf16  | NATIVE MaxULP 1.0          3.10us    PureULP 1.0        ML_pass% 95.91555209020572 | OURS MaxULP 0.06         3.19µs   PureULP 1.0        ML_pass% 97.30491638183594 | range [-10.0,10.0] 256t
+[27/60] i1 bf16
+[28/60] identity bf16
+[29/60] leaky_relu bf16
+[30/60] lgamma bf16
+lgamma         bf16  | NATIVE MaxULP 1.0          13.48us   PureULP 164.0      ML_pass% 38.73405762871989 | OURS MaxULP 0.02         6.90µs   PureULP 9.151423213167634e+34 ML_pass% 54.726409912109375 | range [0.001,100.0] 256t
+[31/60] log bf16
+[32/60] log10 bf16
+[33/60] log1p bf16
+[34/60] log2 bf16
+log2           bf16  | NATIVE MaxULP 1.0          2.47us    PureULP 1.0        ML_pass% 67.01877934272301 | OURS MaxULP 79.00        3.37µs   PureULP 1.3759586675117293e+35 ML_pass% 14.45159912109375 | range [0.1,10.0] 256t
+[35/60] logit bf16
+[36/60] logsigmoid bf16
+[37/60] mish bf16
+[38/60] multigammaln bf16
+multigammaln   bf16  | NATIVE MaxULP 127.0        0.13us    PureULP 4251.0     ML_pass% 0.0      | OURS MaxULP 0.25         2.93µs   PureULP 1.0        ML_pass% 52.234649658203125 | range [1.5,50.0] 256t
+[39/60] polygamma bf16
+[40/60] prelu bf16
+[41/60] relu bf16
+[42/60] relu6 bf16
+relu6          bf16  | NATIVE MaxULP 0.0          1.83us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 64.00        1.79µs   PureULP 128.0      ML_pass% 99.70703125 | range [-10.0,10.0] 256t
+[43/60] relu_max bf16
+[44/60] relu_min bf16
+[45/60] rsqrt bf16
+[46/60] selu bf16
+selu           bf16  | NATIVE MaxULP 3.2766905029171264e-37 3.63us    PureULP 223.0      ML_pass% 98.83944101241528 | OURS MaxULP 0.12         2.58µs   PureULP 1.0        ML_pass% 98.883056640625 | range [-10.0,10.0] 256t
+[47/60] sigmoid bf16
+[48/60] sigmoid_accurate bf16
+[49/60] silu bf16
+[50/60] sin bf16
+sin            bf16  | NATIVE MaxULP 0.0          2.34us    PureULP 0.0        ML_pass% 99.8541742617572 | OURS MaxULP 0.50         2.76µs   PureULP 1.0        ML_pass% 99.8291015625 | range [-3.141592653589793,3.141592653589793] 256t
+[51/60] sinh bf16
+[52/60] softplus bf16
+[53/60] softshrink bf16
+[54/60] softsign bf16
+softsign       bf16  | NATIVE MaxULP 1.0          1.97us    PureULP 1.0        ML_pass% 98.1467042523841 | OURS MaxULP 0.00         2.17µs   PureULP 0.0        ML_pass% 99.70817565917969 | range [-10.0,10.0] 256t
+[55/60] sqrt bf16
+[56/60] swish bf16
+[57/60] tan bf16
+[58/60] tanh bf16
+tanh           bf16  | NATIVE MaxULP 0.5          2.28us    PureULP 128.0      ML_pass% 99.57691145361136 | OURS MaxULP 0.50         2.38µs   PureULP 128.0      ML_pass% 99.66812133789062 | range [-5.0,5.0] 256t
+[59/60] tanhshrink bf16
+[60/60] threshold bf16
+=== done shard 1/4: ran=15 skipped=0 -> /home/ttuser/native_dispatch/results/20260625_074850/chip1/best99_chip1.txt ; /home/ttuser/native_dispatch/results/20260625_074850/chip1/best99_chip1.csv ===
+  MISS gelu bf16 -> gelu_p9_s16_uniform_any_ulp.csv
+  MISS log bf16 -> log_p8_s1_curvature_any_ulp.csv
+  MISS log10 bf16 -> log10_p7_s1_curvature_any_ulp.csv
+  MISS polygamma bf16 -> polygamma_p9_s64_geomroot_lsq_ulp.csv
+resolved 56 / 60
+=== sweep best95 (bf16) :: 56 configs ===
+=== shard 1/4 chip=1 cache=/tmp/native_best95_cache1 ===
+[1/56] abs bf16
+[2/56] acos bf16
+acos           bf16  | NATIVE MaxULP 0.0          5.76us    PureULP 0.0        ML_pass% 97.24683154915714 | OURS MaxULP 1.00         2.93µs   PureULP 1.0        ML_pass% 96.0052490234375 | range [-0.99,0.99] 256t
+[3/56] acosh bf16
+[4/56] asin bf16
+[5/56] asinh bf16
+[6/56] atan bf16
+atan           bf16  | NATIVE MaxULP 0.5          3.91us    PureULP 128.0      ML_pass% 99.85915492957747 | OURS MaxULP 0.00         4.08µs   PureULP 128.0      ML_pass% 99.859619140625 | range [-1.5707963267948966,1.5707963267948966] 256t
+[7/56] atanh bf16
+[8/56] cbrt bf16
+[9/56] celu bf16
+[10/56] cos bf16
+cos            bf16  | NATIVE MaxULP 0.0          2.55us    PureULP 0.0        ML_pass% 99.90278284117147 | OURS MaxULP 0.00         5.11µs   PureULP 0.0        ML_pass% 99.90234375 | range [-3.141592653589793,3.141592653589793] 256t
+[11/56] cosh bf16
+[12/56] digamma bf16
+[13/56] elu bf16
+[14/56] erf bf16
+erf            bf16  | NATIVE MaxULP 0.5          3.63us    PureULP 143.0      ML_pass% 99.154321357884 | OURS MaxULP 0.00         4.03µs   PureULP 0.0        ML_pass% 99.87983703613281 | range [-10.0,10.0] 256t
+[15/56] erfc bf16
+[16/56] erfinv bf16
+[17/56] exp bf16
+[18/56] exp2 bf16
+exp2           bf16  | NATIVE MaxULP 0.5          2.52us    PureULP 1.0        ML_pass% 95.64091757480884 | OURS MaxULP 0.00         2.13µs   PureULP 0.0        ML_pass% 97.56965637207031 | range [-7.0,7.0] 256t
+[19/56] expm1 bf16
+[20/56] hardmish bf16
+[21/56] hardshrink bf16
+[22/56] hardsigmoid bf16
+hardsigmoid    bf16  | NATIVE MaxULP 0.5          1.81us    PureULP 1.0        ML_pass% 91.9030768308043 | OURS MaxULP 0.50         7.30µs   PureULP 1.0        ML_pass% 99.27978515625 | range [-10.0,10.0] 256t
+[23/56] hardswish bf16
+[24/56] hardtanh bf16
+[25/56] i0 bf16
+[26/56] i1 bf16
+i1             bf16  | NATIVE MaxULP 0.5          7.41us    PureULP 128.0      ML_pass% 98.79445810591974 | OURS MaxULP 1.00         2.70µs   PureULP 128.0      ML_pass% 98.48365783691406 | range [-10.0,10.0] 256t
+[27/56] identity bf16
+[28/56] leaky_relu bf16
+[29/56] lgamma bf16
+[30/56] log1p bf16
+log1p          bf16  | NATIVE MaxULP 1.0          2.43us    PureULP 1.0        ML_pass% 99.33746656941406 | OURS MaxULP 0.00         5.57µs   PureULP 1.0992907548854177e+30 ML_pass% 99.346923828125 | range [-0.9,10.0] 256t
+[31/56] log2 bf16
+[32/56] logit bf16
+[33/56] logsigmoid bf16
+[34/56] mish bf16
+mish           bf16  | NATIVE MaxULP 0.25         4.32us    PureULP 128.0      ML_pass% 99.56816409764289 | OURS MaxULP 0.00         5.58µs   PureULP 9.50737950171172e+30 ML_pass% 99.6551513671875 | range [-10.0,10.0] 256t
+[35/56] multigammaln bf16
+[36/56] prelu bf16
+[37/56] relu bf16
+[38/56] relu6 bf16
+relu6          bf16  | NATIVE MaxULP 0.0          1.78us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 0.00         1.90µs   PureULP 0.0        ML_pass% 100.0    | range [-10.0,10.0] 256t
+[39/56] relu_max bf16
+[40/56] relu_min bf16
+[41/56] rsqrt bf16
+[42/56] selu bf16
+selu           bf16  | NATIVE MaxULP 3.2766905029171264e-37 3.62us    PureULP 223.0      ML_pass% 98.83944101241528 | OURS MaxULP 0.00         3.64µs   PureULP 1.0        ML_pass% 98.883056640625 | range [-10.0,10.0] 256t
+[43/56] sigmoid bf16
+[44/56] sigmoid_accurate bf16
+[45/56] silu bf16
+[46/56] sin bf16
+sin            bf16  | NATIVE MaxULP 0.0          2.35us    PureULP 0.0        ML_pass% 99.8541742617572 | OURS MaxULP 0.00         2.87µs   PureULP 0.0        ML_pass% 99.853515625 | range [-3.141592653589793,3.141592653589793] 256t
+[47/56] sinh bf16
+[48/56] softplus bf16
+[49/56] softshrink bf16
+[50/56] softsign bf16
+softsign       bf16  | NATIVE MaxULP 1.0          1.96us    PureULP 1.0        ML_pass% 98.1467042523841 | OURS MaxULP 0.00         2.17µs   PureULP 0.0        ML_pass% 99.70817565917969 | range [-10.0,10.0] 256t
+[51/56] sqrt bf16
+[52/56] swish bf16
+[53/56] tan bf16
+[54/56] tanh bf16
+tanh           bf16  | NATIVE MaxULP 0.5          2.29us    PureULP 128.0      ML_pass% 99.57691145361136 | OURS MaxULP 0.00         2.70µs   PureULP 128.0      ML_pass% 99.89128112792969 | range [-5.0,5.0] 256t
+[55/56] tanhshrink bf16
+[56/56] threshold bf16
+=== done shard 1/4: ran=14 skipped=0 -> /home/ttuser/native_dispatch/results/20260625_074850/chip1/best95_chip1.txt ; /home/ttuser/native_dispatch/results/20260625_074850/chip1/best95_chip1.csv ===

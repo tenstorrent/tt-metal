@@ -1,0 +1,16 @@
+=== ttnn-ref sweep precision=fp32 shard=0/4 total=60 chip=0 ===
+abs fp32 MaxULP=0.0 us=2.94
+asinh fp32 MaxULP=10107.0 us=4.69
+celu fp32 MaxULP=0.0625 us=4.40
+elu fp32 MaxULP=0.0625 us=4.38
+exp fp32 MaxULP=1.0 us=4.02
+hardmish fp32 MaxULP=0.03125 us=3.05
+hardtanh fp32 MaxULP=0.0 us=3.14
+leaky_relu fp32 native_fail_rc_1
+log1p fp32 MaxULP=1.0 us=3.88
+mish fp32 MaxULP=2.0 us=5.94
+relu fp32 MaxULP=0.0 us=3.02
+rsqrt fp32 MaxULP=1.0 us=3.33
+silu fp32 MaxULP=2.0 us=4.62
+softshrink fp32 MaxULP=0.0 us=3.25
+tan fp32 MaxULP=1.0 us=4.64

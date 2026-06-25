@@ -1,0 +1,16 @@
+=== ttnn-ref sweep precision=fp32 shard=3/4 total=60 chip=3 ===
+asin fp32 MaxULP=27.5 us=7.99
+cbrt fp32 MaxULP=2.0 us=3.41
+digamma fp32 MaxULP=79.0 us=12.17
+erfinv fp32 MaxULP=20560.0 us=6.52
+gelu fp32 MaxULP=2.0 us=6.61
+hardswish fp32 MaxULP=0.25 us=3.30
+identity fp32 MaxULP=0.0 us=1.90
+log10 fp32 MaxULP=1.0 us=3.89
+logsigmoid fp32 native_fail_rc_1
+prelu fp32 native_fail_rc_1
+relu_min fp32 native_fail_rc_1
+sigmoid_accurate fp32 MaxULP=2.0 us=4.58
+softplus fp32 MaxULP=43.625 us=7.35
+swish fp32 MaxULP=2.0 us=4.61
+threshold fp32 native_fail_rc_1

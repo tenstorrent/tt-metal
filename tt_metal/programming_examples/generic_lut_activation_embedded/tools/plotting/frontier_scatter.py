@@ -250,7 +250,7 @@ def parse_args():
     parser.add_argument("--ttnn", help="Optional TTNN reference CSV")
     parser.add_argument(
         "--frontier-subdir",
-        default="frontier_scatter",
+        default="scatter",
         help="Optional subdirectory under --outdir for per-activation frontier plots",
     )
     parser.add_argument(
@@ -260,7 +260,7 @@ def parse_args():
         metavar="LABEL=CSV",
         help="Optional native-vs-embedded tier CSV for summary overlays; can be repeated",
     )
-    parser.add_argument("--outdir", default="frontier_plots", help="Output directory")
+    parser.add_argument("--outdir", default="plots", help="Output plot directory")
     return parser.parse_args()
 
 
@@ -410,7 +410,7 @@ def write_tier_plots(outdir, tiers, ttnn, plt):
                 by_act[act].append((label, r))
     if not by_act:
         return
-    tier_dir = os.path.join(outdir, "tier_comparison")
+    tier_dir = os.path.join(outdir, "tiers")
     os.makedirs(tier_dir, exist_ok=True)
     colors = {"best": "#4E79A7", "best99": "#59A14F", "best95": "#F28E2B"}
     for act in sorted(by_act):

@@ -1,0 +1,10 @@
+/home/ttuser/tt-metal/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_plot.py:128: UserWarning: You passed a edgecolor/edgecolors ('tab:green') for an unfilled marker ('x').  Matplotlib is ignoring the edgecolor in favor of the facecolor.  This behavior may change in the future.
+  ax.scatter(0, (r["_ulp"] or 0), facecolors="none", edgecolors=c, s=22, marker="x")
+/home/ttuser/tt-metal/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_plot.py:128: UserWarning: You passed a edgecolor/edgecolors ('tab:purple') for an unfilled marker ('x').  Matplotlib is ignoring the edgecolor in favor of the facecolor.  This behavior may change in the future.
+  ax.scatter(0, (r["_ulp"] or 0), facecolors="none", edgecolors=c, s=22, marker="x")
+/home/ttuser/tt-metal/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_plot.py:128: UserWarning: You passed a edgecolor/edgecolors ('tab:orange') for an unfilled marker ('x').  Matplotlib is ignoring the edgecolor in favor of the facecolor.  This behavior may change in the future.
+  ax.scatter(0, (r["_ulp"] or 0), facecolors="none", edgecolors=c, s=22, marker="x")
+/home/ttuser/tt-metal/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_plot.py:128: UserWarning: You passed a edgecolor/edgecolors ('tab:red') for an unfilled marker ('x').  Matplotlib is ignoring the edgecolor in favor of the facecolor.  This behavior may change in the future.
+  ax.scatter(0, (r["_ulp"] or 0), facecolors="none", edgecolors=c, s=22, marker="x")
+/home/ttuser/tt-metal/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_plot.py:128: UserWarning: You passed a edgecolor/edgecolors ('tab:blue') for an unfilled marker ('x').  Matplotlib is ignoring the edgecolor in favor of the facecolor.  This behavior may change in the future.
+  ax.scatter(0, (r["_ulp"] or 0), facecolors="none", edgecolors=c, s=22, marker="x")

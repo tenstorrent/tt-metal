@@ -1,0 +1,16 @@
+=== ttnn-ref sweep precision=fp32 shard=1/4 total=60 chip=1 ===
+acos fp32 MaxULP=14.0 us=8.12
+atan fp32 MaxULP=2.0 us=5.11
+cos fp32 MaxULP=1.0 us=3.48
+erf fp32 MaxULP=3.5 us=5.49
+exp2 fp32 MaxULP=0.5 us=3.59
+hardshrink fp32 MaxULP=0.0 us=2.98
+i0 fp32 MaxULP=2582.0 us=3.82
+lgamma fp32 MaxULP=1685.673828125 us=21.33
+log2 fp32 MaxULP=1.0 us=3.87
+multigammaln fp32 MaxULP=8301360.0 us=3.21
+relu6 fp32 MaxULP=0.0 us=3.06
+selu fp32 MaxULP=11.0 us=4.40
+sin fp32 MaxULP=1.0 us=3.41
+softsign fp32 MaxULP=3.0 us=3.19
+tanh fp32 MaxULP=5.0 us=7.34

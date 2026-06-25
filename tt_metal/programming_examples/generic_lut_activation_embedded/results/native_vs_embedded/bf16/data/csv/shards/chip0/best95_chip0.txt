@@ -1,0 +1,14 @@
+abs            bf16  | NATIVE MaxULP 0.0          1.70us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 0.00         1.78µs   PureULP 0.0        ML_pass% 100.0    | range [-128.0,128.0] 256t
+asinh          bf16  | NATIVE MaxULP 1.0          4.13us    PureULP 255.0      ML_pass% 97.33701193546452 | OURS MaxULP 0.00         3.86µs   PureULP 179.0      ML_pass% 98.88992309570312 | range [-10.0,10.0] 256t
+celu           bf16  | NATIVE MaxULP 0.0          3.60us    PureULP 0.0        ML_pass% 99.91603190787501 | OURS MaxULP 0.00         2.97µs   PureULP 0.0        ML_pass% 99.92523193359375 | range [-10.0,10.0] 256t
+elu            bf16  | NATIVE MaxULP 0.0          3.63us    PureULP 0.0        ML_pass% 99.91603190787501 | OURS MaxULP 0.00         2.97µs   PureULP 0.0        ML_pass% 99.92523193359375 | range [-10.0,10.0] 256t
+exp            bf16  | NATIVE MaxULP 1.0          1.89us    PureULP 1.0        ML_pass% 95.69963413902717 | OURS MaxULP 1.00         1.94µs   PureULP 1.0        ML_pass% 95.63941955566406 | range [-10.0,10.0] 256t
+hardshrink     bf16  | NATIVE MaxULP 0.0          1.80us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 7.31         1.87µs   PureULP 4.976629616218725e+39 ML_pass% 0.8754730224609375 | range [-11.0,11.0] 256t
+i0             bf16  | NATIVE MaxULP 1.0          3.10us    PureULP 1.0        ML_pass% 95.91555209020572 | OURS MaxULP 0.50         3.09µs   PureULP 1.0        ML_pass% 97.30491638183594 | range [-10.0,10.0] 256t
+lgamma         bf16  | NATIVE MaxULP 1.0          13.47us   PureULP 164.0      ML_pass% 38.73405762871989 | OURS MaxULP 0.02         6.91µs   PureULP 1.3072646814853616e+30 ML_pass% 54.442596435546875 | range [0.001,100.0] 256t
+logsigmoid     bf16  | NATIVE MaxULP NAT_FAIL     0us       PureULP -          ML_pass% -        | OURS MaxULP 0.06         9.44µs   PureULP 1.0        ML_pass% 9.901046752929688 | range [-10.0,10.0] 256t
+relu           bf16  | NATIVE MaxULP 0.0          1.72us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 0.00         1.78µs   PureULP 0.0        ML_pass% 100.0    | range [-10.0,10.0] 256t
+rsqrt          bf16  | NATIVE MaxULP 0.0          2.49us    PureULP 0.0        ML_pass% 66.22579121398205 | OURS MaxULP 250.41       1.67µs   PureULP 251.8125   ML_pass% 0.2346038818359375 | range [0.001,100.0] 256t
+silu           bf16  | NATIVE MaxULP 0.25         3.10us    PureULP 128.0      ML_pass% 99.43921309902237 | OURS MaxULP 9.09         6.50µs   PureULP 5.444517870735016e+39 ML_pass% 1.6460418701171875 | range [-10.0,10.0] 256t
+softshrink     bf16  | NATIVE MaxULP 0.0          1.93us    PureULP 0.0        ML_pass% 100.0    | OURS MaxULP 0.00         2.00µs   PureULP 0.0        ML_pass% 100.0    | range [-11.0,11.0] 256t
+tan            bf16  | NATIVE MaxULP 0.125        2.94us    PureULP 1.0        ML_pass% 99.61399424054899 | OURS MaxULP 0.00         3.47µs   PureULP 0.0        ML_pass% 99.615478515625 | range [-1.5,1.5] 256t
