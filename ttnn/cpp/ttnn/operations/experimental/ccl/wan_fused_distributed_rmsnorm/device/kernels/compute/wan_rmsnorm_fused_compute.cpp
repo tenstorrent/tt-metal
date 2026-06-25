@@ -584,10 +584,175 @@ void kernel_main() {
 
                             cb_pop_front(reduce_result_cb, 1);
                         }  // !block_major_post
+
+                        if constexpr (block_major_post && per_head_norm != 0) {
+                            // ===== Head-major POST (per_head_norm wide shards) =====
+                            // Process THIS head's post_group_width (head_dim_tiles) cols
+                            // fully: x*(1/rms_head) -> [weight] -> [bias] -> [matmul-rotate
+                            // + RoPE] -> output, with head-local intermediate/rotated/output
+                            // CBs. Input stays RESIDENT (read at absolute index, popped at
+                            // end-of-chunk). reduce_result holds this head's 1/rms (front),
+                            // popped after this head. Broadcast cos/sin are held resident
+                            // across heads (cyclic index); popped once after the head loop.
+                            DeviceZoneScopedN("P_HEADMAJOR");
+                            for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
+                                const uint32_t tiles_in_block = ((post_group_width - col_tile) >= block_size)
+                                                                    ? block_size
+                                                                    : (post_group_width - col_tile);
+                                // ---- x * (1/rms_head): resident input cols -> mul_rms_result_cb ----
+                                reconfig_data_format(input_cb, reduce_result_cb);
+                                pack_reconfig_data_format(mul_rms_result_cb);
+                                mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                                cb_reserve_back(mul_rms_result_cb, block_size);
+                                tile_regs_acquire();
+                                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    mul_tiles_bcast_cols(
+                                        input_cb, reduce_result_cb, group_abs_base + col_tile + i, 0, i);
+                                }
+                                tile_regs_commit();
+                                tile_regs_wait();
+                                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    pack_tile(i, mul_rms_result_cb);
+                                }
+                                tile_regs_release();
+                                cb_push_back(mul_rms_result_cb, block_size);
+
+                                // ---- * weight (resident, absolute col index) ----
+                                if constexpr (has_weight) {
+                                    cb_wait_front(weight_cb, group_abs_base + col_tile + tiles_in_block);
+                                    cb_wait_front(mul_rms_result_cb, block_size);
+                                    reconfig_data_format(mul_rms_result_cb, weight_cb);
+                                    pack_reconfig_data_format(mul_weight_result_cb);
+                                    if constexpr (per_token_weight != 0) {
+                                        mul_tiles_init(mul_rms_result_cb, weight_cb);
+                                    } else {
+                                        mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
+                                    }
+                                    cb_reserve_back(mul_weight_result_cb, block_size);
+                                    tile_regs_acquire();
+                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                        if constexpr (per_token_weight != 0) {
+                                            mul_tiles(
+                                                mul_rms_result_cb, weight_cb, i, group_abs_base + col_tile + i, i);
+                                        } else {
+                                            mul_tiles_bcast_rows(
+                                                mul_rms_result_cb, weight_cb, i, group_abs_base + col_tile + i, i);
+                                        }
+                                    }
+                                    tile_regs_commit();
+                                    cb_pop_front(mul_rms_result_cb, block_size);
+                                    tile_regs_wait();
+                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                        pack_tile(i, mul_weight_result_cb);
+                                    }
+                                    tile_regs_release();
+                                    cb_push_back(mul_weight_result_cb, block_size);
+                                }
+                                // ---- + bias ----
+                                if constexpr (has_bias) {
+                                    cb_wait_front(bias_cb, group_abs_base + col_tile + tiles_in_block);
+                                    cb_wait_front(mul_weight_result_cb, block_size);
+                                    reconfig_data_format(mul_weight_result_cb, bias_cb);
+                                    pack_reconfig_data_format(add_bias_result_cb);
+                                    if constexpr (per_token_bias != 0) {
+                                        add_tiles_init(mul_weight_result_cb, bias_cb);
+                                    } else {
+                                        add_bcast_rows_init_short(mul_weight_result_cb, bias_cb);
+                                    }
+                                    cb_reserve_back(add_bias_result_cb, block_size);
+                                    tile_regs_acquire();
+                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                        if constexpr (per_token_bias != 0) {
+                                            add_tiles(
+                                                mul_weight_result_cb, bias_cb, i, group_abs_base + col_tile + i, i);
+                                        } else {
+                                            add_tiles_bcast_rows(
+                                                mul_weight_result_cb, bias_cb, i, group_abs_base + col_tile + i, i);
+                                        }
+                                    }
+                                    tile_regs_commit();
+                                    cb_pop_front(mul_weight_result_cb, block_size);
+                                    tile_regs_wait();
+                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                        pack_tile(i, add_bias_result_cb);
+                                    }
+                                    tile_regs_release();
+                                    cb_push_back(add_bias_result_cb, block_size);
+                                }
+                                // ---- matmul-rotate + RoPE finalize, else block already output ----
+                                if constexpr (fuse_rope) {
+                                    reconfig_data_format(transformation_mat_cb, intermediate_cb);
+                                    pack_reconfig_data_format(rotated_input_cb);
+                                    mm_block_init_short(intermediate_cb, transformation_mat_cb, 0, 1, block_size, 1);
+                                    cb_wait_front(intermediate_cb, block_size);
+                                    cb_reserve_back(rotated_input_cb, block_size);
+                                    tile_regs_acquire();
+                                    matmul_block(intermediate_cb, transformation_mat_cb, 0, 0, 0, 0, 1, block_size, 1);
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    for (uint32_t i = 0; i < block_size; i++) {
+                                        pack_tile(i, rotated_input_cb);
+                                    }
+                                    tile_regs_release();
+                                    cb_push_back(rotated_input_cb, block_size);
+                                    // cos/sin: per-head RoPE uses this head's absolute cols (popped
+                                    // per head); broadcast holds head_dim_tiles resident, indexed
+                                    // by the column within the head (popped once after the head loop).
+                                    if constexpr (per_head_rope != 0) {
+                                        cb_wait_front(rope_cos_cb, group_abs_base + col_tile + tiles_in_block);
+                                        cb_wait_front(rope_sin_cb, group_abs_base + col_tile + tiles_in_block);
+                                    } else {
+                                        cb_wait_front(rope_cos_cb, head_dim_tiles);
+                                        cb_wait_front(rope_sin_cb, head_dim_tiles);
+                                    }
+                                    cb_wait_front(intermediate_cb, block_size);
+                                    cb_wait_front(rotated_input_cb, block_size);
+                                    cb_reserve_back(output_cb, block_size);
+                                    reconfig_data_format(intermediate_cb, rope_cos_cb);
+                                    pack_reconfig_data_format(output_cb);
+                                    tile_regs_acquire();
+                                    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(
+                                        intermediate_cb, rope_cos_cb, false);
+                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                        const uint32_t ridx = (per_head_rope != 0) ? (group_abs_base + col_tile + i)
+                                                                                   : ((col_tile + i) % head_dim_tiles);
+                                        mul_tiles(intermediate_cb, rope_cos_cb, i, ridx, i);
+                                    }
+                                    binary_tiles_init<false, EltwiseBinaryType::ELWMUL>(
+                                        rotated_input_cb, rope_sin_cb, true);
+                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                        const uint32_t ridx = (per_head_rope != 0) ? (group_abs_base + col_tile + i)
+                                                                                   : ((col_tile + i) % head_dim_tiles);
+                                        mul_tiles(rotated_input_cb, rope_sin_cb, i, ridx, i);
+                                    }
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                        pack_tile(i, output_cb);
+                                    }
+                                    tile_regs_release();
+                                    cb_push_back(output_cb, block_size);
+                                    cb_pop_front(intermediate_cb, block_size);
+                                    cb_pop_front(rotated_input_cb, block_size);
+                                    if constexpr (per_head_rope != 0) {
+                                        cb_pop_front(rope_cos_cb, tiles_in_block);
+                                        cb_pop_front(rope_sin_cb, tiles_in_block);
+                                    }
+                                }
+                                // !fuse_rope: the last affine sub-phase already wrote output_cb.
+                            }
+                            cb_pop_front(reduce_result_cb, 1);  // this head's 1/rms
+                        }
                     }
                 }  // P_NORM
 
-                if constexpr (block_major_post) {
+                if constexpr (block_major_post && per_head_norm != 0 && fuse_rope && per_head_rope == 0) {
+                    // Broadcast cos/sin were held resident across all heads; drain once.
+                    cb_pop_front(rope_cos_cb, head_dim_tiles);
+                    cb_pop_front(rope_sin_cb, head_dim_tiles);
+                }
+
+                if constexpr (block_major_post && per_head_norm == 0) {
                     // ===== Full block-major POST (wide low-TP shards) =====
                     // streaming_low_l1 + per_head_norm==0 guaranteed: one resident row,
                     // a single group (post_group_width == num_tile_cols), and
