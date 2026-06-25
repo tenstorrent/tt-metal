@@ -582,7 +582,6 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape, const bool e
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE, const bool en_int32_dest = false)
 {
-    g_llk_math_reduce_tile_idx = tile_idx;
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     const bool use_int32_fpu_glue = en_int32_dest && (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW || REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR);

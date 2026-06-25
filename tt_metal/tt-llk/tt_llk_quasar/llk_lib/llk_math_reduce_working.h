@@ -84,7 +84,7 @@ inline void _reduce_row_transpose_warmup_()
     _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
     _reduce_row_transpose_alu_cfg_enter_();
 
-    // Guarantee the source datums are zero before we transpose them
+    // Guarantee the source datums are zero before we transpose them (one scratch row only).
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, warmup_scratch_row);
 
     // Dummy transpose of zeros: flushes the transpose-engine latch and leaves
@@ -143,6 +143,24 @@ inline void _reduce_row_transpose_fpu_(const std::uint32_t dest_addr = 0)
 }
 
 /**
+ * @brief Prime dest rows with the integer max-pool identity (INT8 min) before the first GMPOOL.
+ *
+ * ZEROACC only clears to zero; for Max, max(0, negative_input) is wrong. ZEROSRC with
+ * packed_fmt=INT8 and zero_val=-inf fills SrcA with INT8 minimum, then MOVA2D broadcasts
+ * that into the dest rows GMPOOL will accumulate into.
+ */
+inline void _reduce_int32_dest_init_min_for_max_(const std::uint32_t dst_addr)
+{
+    TTI_ZEROSRC(1, 1, 0, 1, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
+    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD);
+
+    TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, dst_addr + 0);
+    TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, dst_addr + 8);
+    TTI_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, dst_addr + 0);
+    TTI_MOVA2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, dst_addr + 8);
+}
+
+/**
  * @brief Pool one pair of input faces (one output face row) into dest at an explicit row offset.
  *
  * Int32-dest reduce only (LoFi exact-integer accumulation; no fidelity multi-pass).
@@ -150,6 +168,11 @@ inline void _reduce_row_transpose_fpu_(const std::uint32_t dest_addr = 0)
 template <PoolType POOL_TYPE, std::uint8_t DST_ADDR>
 inline void _reduce_row_pool_face_pair_()
 {
+    if constexpr (POOL_TYPE == PoolType::MAX)
+    {
+        _reduce_int32_dest_init_min_for_max_(DST_ADDR);
+    }
+
     tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, DST_ADDR>();
     tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, DST_ADDR>();
 }
@@ -189,6 +212,11 @@ inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
 {
     constexpr std::uint32_t scratch_dst_addr = 16;
 
+    if constexpr (POOL_TYPE == PoolType::MAX)
+    {
+        _reduce_int32_dest_init_min_for_max_(scratch_dst_addr);
+    }
+
     for (std::uint32_t face = 0; face < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face++)
     {
         tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
@@ -207,14 +235,14 @@ inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
     TTI_MOVD2A(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, 0);
     TTI_MOVD2A(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, 8);
 
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
-
     if constexpr (POOL_TYPE == PoolType::MAX)
     {
+        _reduce_int32_dest_init_min_for_max_(0);
         tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
     }
     else
     {
+        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
         TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
         tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCAB_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
     }
@@ -586,7 +614,6 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape, const bool e
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE, const bool en_int32_dest = false)
 {
-    g_llk_math_reduce_tile_idx = tile_idx;
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     const bool use_int32_fpu_glue = en_int32_dest && (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW || REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR);

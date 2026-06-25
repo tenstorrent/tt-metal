@@ -148,7 +148,11 @@ def test_reduce_quasar(
 
     input_dimensions = [64, 64]
 
-    stimuli_spec = StimuliSpec.constant(value=-100)
+    # stimuli_spec = StimuliSpec.constant(value=-100)
+    if formats.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127, high=127)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
