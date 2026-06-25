@@ -29,14 +29,16 @@ All padding amounts are tile-aligned (multiples of 32).
 All output widths are multiples of 64 elements (L1-aligned for bfloat16 on Wormhole)
 so sharded output configs are valid for both TILE and ROW_MAJOR layouts.
 
-Six test categories (matching test_reshape_universal_input.py structure):
-  1. Interleaved inputs → DRAM output         (baseline, should always pass)
-  2. Sharded inputs → DRAM output             (isolates reading from sharded input)
-  3. DRAM input → sharded output              (isolates writing to sharded output)
-  4. Sharded input → sharded output           (full sharded path, production use-case)
+Seven test categories (matching test_reshape_universal_input.py structure):
+  1. Interleaved inputs -> DRAM output         (baseline, should always pass)
+  2. Sharded inputs -> DRAM output             (isolates reading from sharded input)
+  3. DRAM input -> sharded output              (isolates writing to sharded output)
+  4. Sharded input -> sharded output           (full sharded path, production use-case)
   5. Non-4D sharded inputs (rank-2, rank-3)
   6. RM W/B sharded width front-padding
-  7. DRAM W/B sharded input (S2I composite fallback)
+  7. DRAM W/B sharded input (to_memory_config composite fallback)
+  8. Alt shape + float32 W/B sharded input     (accessor_page_size / shard_width coverage)
+  9. Cross-strategy sharded -> sharded         (input/output shard geometry differ)
 """
 
 import pytest
@@ -84,6 +86,25 @@ SHARDING_STRATEGIES = [
 
 LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 
+_TORCH_DTYPE = {
+    ttnn.bfloat16: torch.bfloat16,
+    ttnn.float32: torch.float32,
+}
+
+# Non-square base shape: different shard_width from [1,1,64,128] grid division.
+ALT_SHAPE_PAD_CASES = [
+    ([(0, 0), (0, 0), (0, 0), (0, 64)], [1, 1, 32, 256], [1, 1, 32, 320], "pad_w_small"),
+    ([(0, 0), (0, 0), (0, 32), (0, 0)], [1, 1, 32, 256], [1, 1, 64, 256], "pad_h_small"),
+]
+
+# Single pad case for cross-strategy sharded output (exercises mismatched accessor_page_size).
+CROSS_STRATEGY_PAD_CASE = (
+    [(0, 0), (0, 0), (0, 0), (0, 64)],
+    [1, 1, 64, 128],
+    [1, 1, 64, 192],
+    "pad_w_small",
+)
+
 
 # ---------------------------------------------------------------------------
 # Core test runner
@@ -98,14 +119,16 @@ def _run_pad(
     input_memory_config,
     layout,
     output_memory_config=None,
+    dtype=ttnn.bfloat16,
 ):
     """Run ttnn.pad and verify output against torch reference.
 
-    output_memory_config=None → DRAM interleaved output.
+    output_memory_config=None -> DRAM interleaved output.
     Pass a sharded MemoryConfig to test the sharded-output path.
     """
+    torch_dtype = _TORCH_DTYPE[dtype]
     torch.manual_seed(0)
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
 
     # torch.nn.functional.pad takes padding in reverse-dim order (innermost first)
     flat_pad = []
@@ -116,7 +139,7 @@ def _run_pad(
     tt_input = ttnn.from_torch(
         torch_input,
         layout=layout,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         device=device,
         memory_config=input_memory_config,
     )
@@ -230,9 +253,8 @@ def test_pad_sharded_output(device, padding_spec, input_shape, output_shape, cas
 
 
 # ---------------------------------------------------------------------------
-# Category 4: Sharded input → sharded output (same strategy, recomputed spec)
-#   Full sharded-to-sharded pad — primary production use-case.
-#   Source of the H/W/N gaps in unary.md.
+# Category 4: Sharded input -> sharded output (same strategy, recomputed spec)
+#   Full sharded-to-sharded pad - primary production use-case.
 # ---------------------------------------------------------------------------
 
 
@@ -359,12 +381,14 @@ def test_pad_rm_wb_sharded_front_pad_to_sharded(
 
 
 # ---------------------------------------------------------------------------
-# Category 7: DRAM WIDTH/BLOCK sharded input (S2I composite fallback)
+# Category 7: DRAM WIDTH/BLOCK sharded input (to_memory_config composite fallback)
 #
 # needs_pad_composite_fallback routes DRAM-sharded W/B inputs through
-# to_memory_config → pad. L1 sharded tests above exercise the native path.
-# WIDTH sharded DRAM is used here; BLOCK DRAM requires dram-bank grid mapping
-# that differs from the L1 compute grid helper.
+# to_memory_config -> pad. L1 sharded tests above exercise the native path.
+# WIDTH sharded DRAM is used here; BLOCK DRAM tensor creation fails because
+# make_sharded_memory_config maps compute cores to DRAM banks (see test below).
+# TODO(#41610): add BLOCK DRAM end-to-end test once DRAM block shard grids are
+# supported by the test helper / host validation.
 # ---------------------------------------------------------------------------
 
 DRAM_WB_FALLBACK_CASES = [
@@ -378,7 +402,7 @@ DRAM_WB_FALLBACK_CASES = [
     ids=[c[3] for c in DRAM_WB_FALLBACK_CASES],
 )
 def test_pad_dram_wb_sharded_input_composite_fallback(device, padding_spec, input_shape, output_shape, case_id):
-    """DRAM WIDTH sharded input → DRAM output via to_memory_config composite fallback."""
+    """DRAM WIDTH sharded input -> DRAM output via to_memory_config composite fallback."""
     in_cfg = make_sharded_memory_config(
         device,
         input_shape,
@@ -387,3 +411,109 @@ def test_pad_dram_wb_sharded_input_composite_fallback(device, padding_spec, inpu
         buffer_type=ttnn.BufferType.DRAM,
     )
     _run_pad(device, input_shape, padding_spec, output_shape, in_cfg, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def test_pad_dram_block_sharded_composite_fallback_unsupported(device, expect_error):
+    """BLOCK DRAM also hits needs_pad_composite_fallback but cannot be host-uploaded today.
+
+    make_sharded_memory_config builds a compute-core grid; DRAM block sharding needs
+    DRAM bank coordinates, so from_torch fails before pad runs.
+    """
+    in_cfg = make_sharded_memory_config(
+        device,
+        [1, 1, 64, 128],
+        ttnn.ShardStrategy.BLOCK,
+        ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    torch_input = torch.randn([1, 1, 64, 128], dtype=torch.bfloat16)
+    with expect_error(RuntimeError, "Logical DRAM core"):
+        ttnn.from_torch(
+            torch_input,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=device,
+            memory_config=in_cfg,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Category 8: Alt shape + float32 W/B sharded input
+#
+# accessor_page_size = shard_width * element_size in the RM factory. Exercises
+# non-default shard_width (alt aspect ratio) and element_size=4 (float32).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    ALT_SHAPE_PAD_CASES,
+    ids=[c[3] for c in ALT_SHAPE_PAD_CASES],
+)
+@pytest.mark.parametrize(
+    "strategy,strat_id",
+    [
+        (ttnn.ShardStrategy.WIDTH, "width"),
+        (ttnn.ShardStrategy.BLOCK, "block"),
+    ],
+    ids=["width", "block"],
+)
+@pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
+def test_pad_alt_shape_wb_sharded_input(
+    device, padding_spec, input_shape, output_shape, case_id, strategy, strat_id, layout
+):
+    """Non-square [1,1,32,256] W/B sharded input -> DRAM output."""
+    mem_cfg = make_sharded_memory_config(device, input_shape, strategy, layout)
+    _run_pad(device, input_shape, padding_spec, output_shape, mem_cfg, layout)
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    [PAD_CASES[2]],  # pad_w_small only
+    ids=["pad_w_small"],
+)
+@pytest.mark.parametrize(
+    "strategy,strat_id",
+    [
+        (ttnn.ShardStrategy.WIDTH, "width"),
+        (ttnn.ShardStrategy.BLOCK, "block"),
+    ],
+    ids=["width", "block"],
+)
+def test_pad_float32_wb_sharded_input(device, padding_spec, input_shape, output_shape, case_id, strategy, strat_id):
+    """float32 RM W/B sharded input -> DRAM output (element_size=4 accessor_page_size)."""
+    mem_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+    _run_pad(
+        device,
+        input_shape,
+        padding_spec,
+        output_shape,
+        mem_cfg,
+        ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.float32,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Category 9: Cross-strategy sharded input -> sharded output
+#
+# Production configs may pad between different shard strategies; reader and writer
+# must use independent input/output accessor_page_size values.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "in_strategy,out_strategy,cross_id",
+    [
+        (ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, "height_to_width"),
+        (ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT, "width_to_height"),
+    ],
+    ids=["height_to_width", "width_to_height"],
+)
+@pytest.mark.parametrize("layout", LAYOUTS, ids=["TILE", "ROW_MAJOR"])
+def test_pad_cross_strategy_sharded_to_sharded(device, in_strategy, out_strategy, cross_id, layout):
+    """Cross-strategy sharded input -> sharded output (mismatched shard geometries)."""
+    padding_spec, input_shape, output_shape, _case_id = CROSS_STRATEGY_PAD_CASE
+    in_cfg = make_sharded_memory_config(device, input_shape, in_strategy, layout)
+    out_cfg = make_sharded_memory_config(device, output_shape, out_strategy, layout)
+    _run_pad(device, input_shape, padding_spec, output_shape, in_cfg, layout, output_memory_config=out_cfg)

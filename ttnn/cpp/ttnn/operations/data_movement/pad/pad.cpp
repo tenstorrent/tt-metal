@@ -18,7 +18,7 @@ namespace ttnn::operations::data_movement::detail {
 
 namespace {
 
-inline bool is_bw_sharded(const MemoryConfig& mc) {
+inline bool is_width_or_block_sharded(const MemoryConfig& mc) {
     const auto layout = mc.memory_layout();
     return mc.is_sharded() &&
            (layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED);
@@ -33,10 +33,10 @@ inline bool is_bw_sharded(const MemoryConfig& mc) {
 //     regardless of tile alignment; the front_padding kernel branch reads into a temp buffer
 //     and memmoves to the correct L1 offset, so width front-pad is also handled natively.
 //
-// DRAM-sharded W/B inputs use to_memory_config → pad → (optional) interleaved_to_sharded.
+// DRAM-sharded W/B inputs use to_memory_config → pad → (optional) to_memory_config/interleaved_to_sharded.
 // sharded_to_interleaved is L1-only, so to_memory_config is used instead (mirrors repeat.cpp).
 inline bool needs_pad_composite_fallback(const ttnn::Tensor& input_tensor) {
-    if (!is_bw_sharded(input_tensor.memory_config())) {
+    if (!is_width_or_block_sharded(input_tensor.memory_config())) {
         return false;
     }
     return !input_tensor.memory_config().is_l1();  // DRAM-sharded edge case only
@@ -73,7 +73,10 @@ ttnn::Tensor pad_via_interleaved_composite(
         sub_core_grids);
 
     if (output_memory_config.is_sharded()) {
-        return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
+        if (output_memory_config.is_l1()) {
+            return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
+        }
+        return ttnn::to_memory_config(padded, output_memory_config, std::nullopt);
     }
     return padded;
 }

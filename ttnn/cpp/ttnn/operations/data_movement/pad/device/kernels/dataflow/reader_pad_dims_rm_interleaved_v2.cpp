@@ -65,8 +65,8 @@ void kernel_main() {
     constexpr bool unaligned = get_compile_time_arg_val(19) == 1;
 
     constexpr uint32_t num_input_pages_in_row = get_compile_time_arg_val(20);
-    constexpr uint32_t accessor_page_size = get_compile_time_arg_val(23);
-    constexpr auto src_args = TensorAccessorArgs<24>();
+    constexpr uint32_t accessor_page_size = get_compile_time_arg_val(21);
+    constexpr auto src_args = TensorAccessorArgs<22>();
 
     uint32_t packed_pad_value = 0;
     if constexpr (not_pad_by_zero) {
