@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
+#include <cstdlib>
 
 #include "tt_fabric_test_context.hpp"
 #include "tt_fabric_test_constants.hpp"
@@ -366,7 +367,44 @@ int main(int argc, char** argv) {
         for (const auto& failed_test : failed_tests) {
             log_error(tt::LogTest, "  - {}", failed_test);
         }
-        TT_THROW("Some tests failed golden comparison validation. See summary above.");
+
+        // #5: --no-golden-gate -- measure + emit BW data but do NOT gate on the golden comparison.
+        // Intended for profiler/Tracy builds (e.g. the metal-run-microbenchmarks workflow) whose ~10%
+        // instrumentation overhead cannot meet the non-profiler golden. The non-profiler golden gate
+        // still runs in (TM-Fabric) Fabric Tests, so regression coverage is not lost.
+        if (cmdline_parser.no_golden_gate()) {
+            log_warning(
+                tt::LogTest,
+                "--no-golden-gate set: {} test(s) below golden, but NOT failing the run (data-collection mode).",
+                failed_tests.size());
+        } else {
+            // #2 (Stage-2 slow-mode classification): the fabric link-health gate
+            // (validate_fabric_link_health(): retrain / CRC / uncorrected-codeword counts) already PASSED
+            // before measurement, so a *systemic* bandwidth shortfall here matches the known per-boot HW/FW
+            // fabric-init "slow mode" rather than a code regression. A targeted shortfall (a few tests) is
+            // more likely a real regression and still hard-fails below.
+            // NOTE: this only classifies/signals -- it does NOT fix the variance (a HW/FW init/link-training
+            // root cause). The effective recovery is a retry on a FRESH runner (re-rolls the per-boot mode);
+            // --retry-exit-on-slow-mode emits EX_TEMPFAIL(75) so CI auto-retry can act on it.
+            constexpr std::size_t kSlowModeSystemicFailureThreshold = 10;
+            const bool systemic_bw_shortfall =
+                has_bandwidth_tests && failed_tests.size() >= kSlowModeSystemicFailureThreshold;
+            if (systemic_bw_shortfall) {
+                log_error(
+                    tt::LogTest,
+                    "Stage-2 slow-mode signature: {} tests below golden with link-health clean -- matches the "
+                    "known per-boot fabric-init throughput variance (HW/FW), not necessarily a code regression; "
+                    "a retry on a fresh runner typically lands in fast mode.",
+                    failed_tests.size());
+                if (cmdline_parser.exit_retry_on_slow_mode()) {
+                    log_error(
+                        tt::LogTest,
+                        "--retry-exit-on-slow-mode set: exiting 75 (EX_TEMPFAIL) to signal a CI runner retry.");
+                    std::exit(75);
+                }
+            }
+            TT_THROW("Some tests failed golden comparison validation. See summary above.");
+        }
     }
 
     auto total_tests_count = raw_test_configs.size();
