@@ -42,7 +42,6 @@ import torch
 
 import ttnn
 from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
-from models.common.utility_functions import is_blackhole
 
 _TOKEN_SHAPE = (16, 16)  # 256 experts laid out as a 16×16 face per token
 _SHARD_SHAPE = (32, 32)  # one 32×32 tile per core (the op's per-token shard)
@@ -172,18 +171,6 @@ class TTMoEGate:
             raise ValueError(
                 f"generalized_moe_gate kernel op supports topk {_KERNEL_TOPK}; got {select_experts_k} "
                 "(this k should have taken the ttnn fallback)"
-            )
-        # Blackhole: the generalized_moe_gate KERNEL op has no Blackhole LLK (only tt_llk_wormhole_b0 ships
-        # llk_*generalized_moe_gate*; the compute API header has no ARCH_BLACKHOLE branch), so the n_group=1
-        # kernel path (k∈{4,6,8}, N≤512) does not build on BH. Fail here with a clear reason instead of a
-        # cryptic kernel-compile error deep in the op. EXEMPT (both run on BH): the grouped deepseek_moe_gate
-        # (n_group=8, which DOES ship a Blackhole LLK) and the arch-portable ttnn fallback (use_fallback).
-        if n_group == 1 and not use_fallback and is_blackhole():
-            raise NotImplementedError(
-                f"TTMoEGate: the generalized_moe_gate kernel op is Wormhole-only (no Blackhole LLK yet), so "
-                f"the n_group=1 kernel path (k={select_experts_k}, N={num_experts} ≤ 512) is unsupported on "
-                "Blackhole. Run on Wormhole/Galaxy, or use a config that takes the ttnn fallback "
-                "(k∉{4,6,8} or N>512). Pending a BH LLK port (tracked follow-up)."
             )
 
         self.mesh_device = mesh_device
