@@ -231,6 +231,20 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - For DRAM-sharded decode matmul, weights should be width-sharded in DRAM and activations/outputs width-sharded in L1 on the matching core grid.
 - Keep the primary optimization target single-user batch-1 prefill/decode. This is not permission to remove larger-batch support; preserve correct batch handling and verify up to batch/concurrency 32 for complete model and serving paths when hardware and memory allow it. For MoE decoders on non-Galaxy systems, preserve gate-selected active-expert execution and prefer the GPT-OSS `ttnn.sparse_matmul` path for sparse expert projections plus score weighting and expert reduction. Dense all-expert execution is a debug baseline, not the optimized target.
 
+## Optimization Advice
+
+### OPT-001: Treat split decode QKV as a topology defect until proven otherwise
+
+When optimizing decoder attention and the measured path has separate Q, K, and V matmuls that consume the same post-norm activation, first test a packed QKV projection before spending time on local program-config tuning for the split projections. This applies when the model's Q, K, and V projections are ordinary linear projections of the same hidden state and there is no per-projection operation, dtype, bias, adapter, normalization, quantization, or device-placement contract that requires them to stay separate.
+
+This is a special case of the rule that fewer larger matmuls are generally better than more smaller matmuls when the larger matmul preserves dtype, layout, program-config quality, and downstream consumption.
+
+The packed candidate should pack or concatenate the Q, K, and V weights at load time, run one decode matmul for the combined output width, then use the target's legal on-device QKV-head creation path before rotary, KV-cache update, and SDPA or FlashDecode. For grouped-query attention, compute the packed width from the real head counts: `q_heads * head_dim + 2 * kv_heads * head_dim`. Preserve any required weight permutation or reverse-permutation convention from the reference implementation; a fast packed path with wrong Q/K ordering is a correctness bug, not an optimization.
+
+Verify the topology in the final `tt-perf-report`, not only in code. A successful packed decode path should show one material QKV projection matmul in the attention block, not three Q/K/V matmuls, and it should not contain a cluster of reshapes, slices, and layout conversions whose only purpose is to repair the split projection outputs before rotary. If the path remains split, leave measured evidence or a precise blocker after adapting weight packing, output splitting/head creation, memory configs, rank, padding, and dtype/fidelity. "The functional implementation was already split" is not a blocker.
+
+Compare packed and split candidates under the same traced warmed decode harness, context shape, precision policy, and correctness checks. Keep the faster correct path. If packing loses because it forces worse dtype, fidelity, memory layout, program config, or extra output movement, record that full-path comparison; do not infer the answer from op count alone.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
