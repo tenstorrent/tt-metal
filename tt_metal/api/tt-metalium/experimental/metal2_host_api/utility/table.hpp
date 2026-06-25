@@ -153,6 +153,18 @@ public:
     [[nodiscard]] size_type size() const noexcept { return entries_.size(); }
     void clear() noexcept { entries_.clear(); }
 
+    // Reserves backing storage for at least `n` entries, so a sized fill never reallocates.
+    void reserve(size_type n) { entries_.reserve(n); }
+
+    // Appends without checking the key is absent, skipping insert()'s find() scan (O(N) not O(N^2)).
+    // Caller MUST guarantee uniqueness (e.g. schema names); a duplicate key breaks find()/==/hashing.
+    void append_unchecked(const value_type& entry) { entries_.push_back(entry); }
+    void append_unchecked(value_type&& entry) { entries_.push_back(std::move(entry)); }
+    template <typename KeyArg, typename ValArg>
+    void append_unchecked(KeyArg&& key, ValArg&& value) {
+        entries_.emplace_back(std::forward<KeyArg>(key), std::forward<ValArg>(value));
+    }
+
     // Returns an iterator to the entry for `key`, or end() if the key is absent.
     [[nodiscard]] iterator find(const K& key) {
         return iterator{std::ranges::find(entries_, key, &Storage::value_type::first)};

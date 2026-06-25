@@ -13,6 +13,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include "ttnn/spec_run_args.hpp"
+
 #include <vector>
 
 using namespace tt::constants;
@@ -127,12 +129,9 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
     };
 
     std::vector<KernelSpec> kernels;
-    KernelRunArgs reader_run{.kernel = READER_KERNEL};
-    KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
-    compute_run.runtime_arg_values.reserve(num_cores_total);
+    KernelRunArgs reader_run;
+    KernelRunArgs writer_run;
+    KernelRunArgs compute_run;
 
     if (row_major) {
         // --------------------------------------------------------------------
@@ -223,6 +222,13 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
 
         kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
 
+        ttnn::spec::KernelRunArgsBuilder reader_b(READER_KERNEL, {"start_id", "num_hw_blocks"});
+        ttnn::spec::KernelRunArgsBuilder compute_b(COMPUTE_KERNEL, {"num_hw_blocks"});
+        ttnn::spec::KernelRunArgsBuilder writer_b(WRITER_KERNEL, {"start_id", "num_hw_blocks"});
+        reader_b.reserve(num_cores_total);
+        compute_b.reserve(num_cores_total);
+        writer_b.reserve(num_cores_total);
+
         for (uint32_t i = 0, num_sticks_read = 0, num_sticks_write = 0; i < num_cores_total; i++) {
             const CoreCoord core = {i / num_cores_y, i % num_cores_y};
             uint32_t num_hw_blocks_per_core;
@@ -235,15 +241,16 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
             }
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values.push_back(
-                {node, {{"start_id", num_sticks_read}, {"num_hw_blocks", num_hw_blocks_per_core}}});
-            compute_run.runtime_arg_values.push_back({node, {{"num_hw_blocks", num_hw_blocks_per_core}}});
-            writer_run.runtime_arg_values.push_back(
-                {node, {{"start_id", num_sticks_write}, {"num_hw_blocks", num_hw_blocks_per_core}}});
+            reader_b.emit(node, num_sticks_read, num_hw_blocks_per_core);
+            compute_b.emit(node, num_hw_blocks_per_core);
+            writer_b.emit(node, num_sticks_write, num_hw_blocks_per_core);
 
             num_sticks_read += num_hw_blocks_per_core * H;
             num_sticks_write += num_hw_blocks_per_core * W;
         }
+        reader_run = reader_b.take();
+        compute_run = compute_b.take();
+        writer_run = writer_b.take();
     } else {
         // --------------------------------------------------------------------
         // Tiled path: reader streams tiles in NWH order into cb_in0, compute transposes each tile
@@ -302,6 +309,14 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
         const uint32_t Ht_walk = input_shape[2] / TILE_HEIGHT;
         const uint32_t HtWt_walk = Ht_walk * Wt_walk;
 
+        ttnn::spec::KernelRunArgsBuilder reader_b(
+            READER_KERNEL, {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"});
+        ttnn::spec::KernelRunArgsBuilder compute_b(COMPUTE_KERNEL, {"NHtWt"});
+        ttnn::spec::KernelRunArgsBuilder writer_b(WRITER_KERNEL, {"num_pages", "start_id"});
+        reader_b.reserve(num_cores_total);
+        compute_b.reserve(num_cores_total);
+        writer_b.reserve(num_cores_total);
+
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
             const CoreCoord core = {i / num_cores_y, i % num_cores_y};
             uint32_t num_tiles_per_core;
@@ -317,21 +332,23 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
             const uint32_t w = num_tiles_read / Ht_walk % Wt_walk;
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values.push_back(
-                {node,
-                 {{"num_tiles", num_tiles_per_core},
-                  {"start_id", tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w},
-                  {"start_ht", h},
-                  {"start_wt", w},
-                  {"Ht", Ht_walk},
-                  {"Wt", Wt_walk},
-                  {"HtWt", HtWt_walk}}});
-            compute_run.runtime_arg_values.push_back({node, {{"NHtWt", num_tiles_per_core}}});
-            writer_run.runtime_arg_values.push_back(
-                {node, {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_read}}});
+            reader_b.emit(
+                node,
+                num_tiles_per_core,
+                tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w,
+                h,
+                w,
+                Ht_walk,
+                Wt_walk,
+                HtWt_walk);
+            compute_b.emit(node, num_tiles_per_core);
+            writer_b.emit(node, num_tiles_per_core, num_tiles_read);
 
             num_tiles_read += num_tiles_per_core;
         }
+        reader_run = reader_b.take();
+        compute_run = compute_b.take();
+        writer_run = writer_b.take();
     }
 
     WorkUnitSpec wu{
