@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
-from models.demos.minimax_m3.tt.experts.operations import apply_swiglu
+from .activation import apply_swiglu
 
 
 class CompositeRoutedExpert(TtRoutedExpert):

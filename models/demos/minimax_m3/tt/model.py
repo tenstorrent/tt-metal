@@ -191,8 +191,6 @@ class Model:
                 transformation_mats=self.transformation_mats,
                 max_local_batch_size=max_local_batch_size,
                 users_row_sharded=users_row_sharded,
-                use_throughput_experts=use_throughput_experts,
-                tokens_per_device=max_local_batch_size,
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
                 expert_weight_dtype=expert_weight_dtype,

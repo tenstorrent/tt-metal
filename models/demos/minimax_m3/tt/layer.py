@@ -29,8 +29,6 @@ class DecoderLayer:
         max_seq_len=1024,
         max_local_batch_size=1,
         users_row_sharded=False,
-        use_throughput_experts=False,
-        tokens_per_device=32,
         expert_weight_dtype=ttnn.bfloat4_b,
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
@@ -70,14 +68,12 @@ class DecoderLayer:
             self.mlp = MLP(
                 mesh_device,
                 hf_config,
-                # MiniMax-M2 names the MoE block 'block_sparse_moe'.
+                # MiniMax-M3 names the MoE block 'block_sparse_moe'.
                 substate(state_dict, "block_sparse_moe"),
                 ccl_manager,
                 dtype=dtype,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
                 mesh_config=mesh_config,
-                use_throughput_experts=use_throughput_experts,
-                tokens_per_device=tokens_per_device,
                 expert_weight_dtype=expert_weight_dtype,
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
