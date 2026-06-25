@@ -24,7 +24,6 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/compute_kernel_api.h"  // abs_tile / abs_tile_init
-#include "api/compute/binary_max_min.h"
 #include "api/compute/bcast.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -87,15 +86,19 @@ void kernel_main() {
                 copy_tile_init(cb_tile);
                 cb_reserve_back(cb_abs, block_wt);
                 abs_tile_init();
+                // One acquire/commit/pass for the whole block row: init runs once (above), the
+                // tile_regs handshake amortizes over all block_wt tiles instead of per tile.
+                tile_regs_acquire();
                 for (uint32_t k = 0; k < block_wt; ++k) {
-                    tile_regs_acquire();
-                    copy_tile(cb_tile, block_h_idx * block_wt + k, IDST0);
-                    abs_tile(IDST0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(IDST0, cb_abs);
-                    tile_regs_release();
+                    copy_tile(cb_tile, block_h_idx * block_wt + k, k);
+                    abs_tile(k);
                 }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t k = 0; k < block_wt; ++k) {
+                    pack_tile(k, cb_abs);
+                }
+                tile_regs_release();
                 cb_push_back(cb_abs, block_wt);
 
                 // reduce -> per-row max (col 0), accumulate, clamp, *1/448 -> scale (slot 0);
@@ -107,14 +110,12 @@ void kernel_main() {
                 tile_regs_acquire();
                 reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs, cb_scaler, cb_scale_tiles);
                 for (uint32_t k = 0; k < block_wt; ++k) {
-                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs, cb_scaler, k, 0, k);
+                    // Accumulate into a single dst slot: the FPU MAX-pool maxes each tile against
+                    // the running result, so slot 0 holds the block amax after the loop. This moves
+                    // the cross-tile combine onto the FPU and drops the SFPU binary_max pass.
+                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs, cb_scaler, k, 0, IDST0);
                 }
                 reduce_uninit();
-
-                binary_max_tile_init();
-                for (uint32_t i = 1; i < block_wt; i++) {
-                    binary_max_tile(IDST0, i, IDST0);  // slot 0 = amax
-                }
 
                 clamp_tile_init();
                 clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
@@ -144,14 +145,17 @@ void kernel_main() {
             cb_wait_front(cb_inv_scale_tiles, block_ht);
             cb_reserve_back(cb_out_tile, tiles_per_block);
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
+                // Batch the whole block row under one tile_regs handshake (FPU bcast-mul).
+                tile_regs_acquire();
                 for (uint32_t k = 0; k < block_wt; ++k) {
-                    tile_regs_acquire();
-                    mul_tiles_bcast_cols(cb_tile, cb_inv_scale_tiles, block_h_idx * block_wt + k, block_h_idx, IDST0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(IDST0, cb_out_tile);
-                    tile_regs_release();
+                    mul_tiles_bcast_cols(cb_tile, cb_inv_scale_tiles, block_h_idx * block_wt + k, block_h_idx, k);
                 }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t k = 0; k < block_wt; ++k) {
+                    pack_tile(k, cb_out_tile);
+                }
+                tile_regs_release();
             }
             cb_push_back(cb_out_tile, tiles_per_block);
             cb_pop_front(cb_tile, tiles_per_block);
