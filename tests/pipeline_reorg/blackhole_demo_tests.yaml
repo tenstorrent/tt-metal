@@ -168,7 +168,7 @@
 
 # ─── Voxtral TTS ────────────────────────────────────────────────────────────
 
-- name: Voxtral TTS demo (P150)
+- name: Voxtral TTS demo (P150 CIv2)
   cmd: |
     set -e
     uv pip install -r models/experimental/voxtraltts/requirements.txt
@@ -178,7 +178,7 @@
     export CI=true
     python models/experimental/voxtraltts/demo/demo.py
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 15
   owner_id: U03PUAKE719
   team: models
