@@ -122,15 +122,26 @@ run with `train_test_split.scene_filter.max_scenes=N`.
 
 ## 3. Device arbitration — pick the worker carefully
 
-One Wormhole = one device handle, owned by **one process**.
+One Wormhole = one device handle; the TTNN device context is **thread-affine**;
+and `run_pdm_score` instantiates a **fresh agent + `initialize()` per worker
+chunk** (not one shared instance).
 
-- **`worker=sequential`** (validated default): one process, build-then-forward
-  serially. The proven path — parity check, 5-scene smoke, and the full navtest run.
-- **`worker=single_machine_thread_pool`** (possible speed-up, **validate first**):
-  threads share the single agent instance + device behind `self._lock`, so
-  feature-building *could* overlap the serialized device forward. **Unvalidated** —
-  TTNN device handles can be thread-affine (the handle is opened on one thread), so
-  confirm a short run matches `sequential` before relying on it.
+- **`worker=sequential`** (validated default): one chunk → one agent → opens +
+  uses the device on that thread. The proven path — parity, smoke, full navtest.
+- **`worker=single_machine_thread_pool` + `DD_DEVICE_THREAD=1`** (**fastest**):
+  the N worker chunks build features in parallel and funnel every forward to a
+  **process-wide singleton** owning the device on one thread. This overlaps the
+  CPU-bound feature-building with the serialized device forward. Measured on a
+  2000-scene navtest: **237 s vs 377 s sequential-traced = 1.59×** (118.5 vs
+  188.5 ms/scene), PDM **0.8678** (matches sequential 0.8669/0.8676 → correct).
+  ```bash
+  DD_DEVICE_THREAD=1 python …/run_pdm_score.py … worker=single_machine_thread_pool …
+  ```
+  WITHOUT `DD_DEVICE_THREAD=1` the thread-pool worker FATALs ("context_id …
+  invalid") — the per-chunk agents each `open_device(0)` and touch the
+  thread-affine context from many threads. (The funnel exits via `os._exit(0)`
+  after the results CSV is written, to skip tt_metal's main-thread `MetalContext`
+  teardown which SIGABRTs on the thread-affine cluster — results are unaffected.)
 - **`worker=ray_distributed`**: **do not use** — each ray worker is a separate
   process and would try to `ttnn.open_device(0)` concurrently → conflict.
 
@@ -153,8 +164,10 @@ For a quick smoke run, cap scenes with `train_test_split.scene_filter.max_scenes
   The win is modest because the **in-process per-scene cost is dominated by
   navsim CPU** (feature building + PDM scoring), not the model forward — the
   forward itself is ~1.34× faster but is a minority of per-scene wall, so more
-  model-side tracing buys little here. Removing the socket (vs the bridge) is a
-  separate <1% effect.
+  model-side tracing buys little here. The **bigger eval lever is the
+  `DD_DEVICE_THREAD=1` funnel (§3)** — it overlaps that navsim CPU with the device
+  forward for **~1.59×** (and stacks with the trace). Removing the socket (vs the
+  bridge) is a separate <1% effect.
 
 ## Fallback: the cross-process bridge
 
