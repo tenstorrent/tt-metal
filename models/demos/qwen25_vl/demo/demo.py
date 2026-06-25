@@ -510,7 +510,13 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = model._supports_on_device_sampling
+        # Diagnostic A/B toggle (#48037). The actual gibberish fix is the model-level
+        # `_tt_vllm_always_refresh_decode_trace_inputs = True` (Transformer in tt/model.py), which
+        # keeps on-device sampling. Setting TT_QWEN_FORCE_HOST_SAMPLING=1 forces host argmax
+        # instead: a known-good reference (correct output) but slower (per-step logits read-back),
+        # useful to compare against the on-device path locally.
+        force_host_sampling = os.environ.get("TT_QWEN_FORCE_HOST_SAMPLING", "0") == "1"
+        argmax_on_device = model._supports_on_device_sampling and not force_host_sampling
         if argmax_on_device:
             logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
@@ -564,6 +570,9 @@ def test_demo(
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                # Normalize to [batch, 1] to match the on-device path (out_tok feeds the next
+                # decode and is indexed per-user); the host argmax can return [batch] or [1, batch].
+                out_tok = out_tok.reshape(batch_size, 1)
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)

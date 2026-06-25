@@ -335,6 +335,21 @@ class DropInVisionTransformer(torch.nn.Module):
 
 
 class Transformer(TTTransformer):
+    # Re-stage the decode trace inputs (token / current_pos / mROPE idxs / page table)
+    # from host on every decode step instead of relying on the on-device self-update
+    # of those buffers between steps. The on-device self-update path regressed
+    # (see #48037): from the 2nd decode step the device re-processed a stale token,
+    # producing gibberish (BERTScore F1 ~0.34). Confirmed by forcing host argmax
+    # sampling, which re-stages inputs from host every step and restored correct
+    # output (F1 0.791). This flag keeps that correctness while staying on the cheap
+    # on-device sampling path (no per-step logits read-back), so the decode perf
+    # target is preserved. It also fixes the repeat-batch staleness (#45522): the
+    # first decode of each new prefill re-stages host token/pos rather than reusing
+    # the previous batch's device buffers. With this flag the sampled token is not
+    # fed back into the trace token buffer (host re-stages it), so
+    # Generator._decode_token_feedback_buffer returns None for this model.
+    _tt_vllm_always_refresh_decode_trace_inputs = True
+
     def __init__(
         self,
         args,
