@@ -32,3 +32,28 @@
   - `test_softmax_precision_matrix.py` (192 cases: 8 shapes × 3 dtypes × 4 fidelities × 2 distributions)
   - `test_softmax_refinement1_dtypes.py` (47 cases: dtype support, fp32_dest_acc_en=False rejection, output dtype match, numerical stability, L1 memory)
   - `precision_matrix_results.md` (results file)
+
+## Refinement 2 — Layout support + multi-core distribution
+- **Date**: 2026-06-25
+- **What was done**:
+  - Added `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]`
+  - Implemented tilize-wrapped reader/writer path using CT-arg dispatch (`is_rm`):
+    - Reader: `read_sticks_for_tilize<cb_rm_in>` (TILE granularity) for RM path; direct tile reads for TILE path
+    - Writer: `write_sticks_after_untilize<cb_rm_out>` for RM path; direct tile writes for TILE path
+    - Compute: `tilize<Wt, cb_rm_in, cb_input_tiles>` at slab start → 4-phase softmax math (unchanged) → `untilize<Wt, cb_output_tiles, cb_rm_out>` at slab end
+  - New CBs: `cb_rm_in` (CB3, reader→tilize, double-buffered 2*Wt pages), `cb_rm_out` (CB17, untilize→writer, double-buffered 2*Wt pages)
+  - Multi-core: same `split_work_to_cores` pattern from Phase 0; RM path uses stick (page) offsets instead of tile offsets
+  - Key fix: `UnpackAndPackReconfigure` (not `NoReconfigure`) for tilize/untilize — the softmax math changes data formats between tilize and untilize, so the helpers must reconfigure the unpacker/packer format registers
+  - `cb_output_tiles` sized as full slab (Ht*Wt tiles) for RM path — the sequential mul→untilize can't pipeline (both own all TRISCs)
+  - `cb_rm_in`/`cb_rm_out` page_size = `tile_size` (TILE granularity convention for `read_sticks_for_tilize`)
+- **Accuracy achieved**:
+  - fp32 + RM: PCC ≥ 0.999 on shapes [(1,1,32,32), (1,1,64,128), (2,4,64,64), (4,8,32,256)]
+  - bf16 + RM: PCC ≥ 0.995 on same shapes
+  - RM vs TILE equivalence: PCC ≥ 0.999 (same input, both paths produce matching output)
+- **Golden test progress**: 42 passed (16 RM + 26 TILE), 58 failed (all OOM on large shapes — same as Phase 0 baseline, Refinement 5 scope), 141 skipped (INVALID), 600 xfailed. No XPASS-strict failures — SUPPORTED update is correct, no drift.
+- **Issues encountered**:
+  - Fixed: `NoReconfigure` for tilize/untilize caused LLK_ASSERT `unp_A_src_format mismatch` — the softmax math changes data formats between tilize and untilize. Fix: use default `UnpackAndPackReconfigure`.
+  - Pre-existing: OOM on large shapes (W≥4096, H≥2048) for both TILE and RM layouts — same as Phase 0, addressed by Refinement 5.
+- **Tests added**:
+  - `test_softmax_layout_matrix.py` (40 cases: 2 layouts × 5 shapes × 2 dtypes × 2 dims + 12 L1 memory cases)
+  - `test_softmax_refinement2_layout.py` (33 cases: RM basic, multi-core distribution, RM-vs-TILE equivalence, output layout match, numerical stability, L1 memory)

@@ -36,7 +36,7 @@
 
 **Done when**: all `dtype=BFLOAT16` and `dtype=BFLOAT8_B` cells currently in `xfail_expected` with `layout=TILE, alignment=tile_aligned, rank=4, fp32_dest_acc_en=True` pass.
 
-### [ ] Refinement 2 — Layout support + multi-core distribution
+### [x] Refinement 2 — Layout support + multi-core distribution
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` via an in-kernel tilize-wrapped reader (math always stays on tiles). Distribute the per-row work across the available core grid (interleaved DRAM, embarrassingly parallel — already multi-core from Phase 0, but the layout path needs its own reader validation).
 
