@@ -75,10 +75,11 @@ reconcile before proceeding. Don't rationalize past contradictions.
 - KV cache: use bfloat16 for vision models (bfloat8_b causes logit flips at S > 2500).
 - Verify end-to-end output is functionally correct, not just PCC passing.
 - **PCC at short ISL does not guarantee correctness at long ISL.** Always test PCC
-  at the maximum intended sequence length, not just the cheapest short case. For
-  recurrent / SSM layers this is critical: quantisation noise in decay parameters
-  (e.g. `A_log`, `dt_bias`) accumulates multiplicatively over `T / chunk_size`
-  chunks — PCC can be 0.9999 at ISL=128 and fail (< 0.99) at ISL=8192.
+  at the maximum intended sequence length (256K for this project), not just the
+  cheapest short case. For recurrent / SSM layers this is critical: quantisation
+  noise in decay parameters (e.g. `A_log`, `dt_bias`) accumulates multiplicatively
+  over `T / chunk_size` chunks — PCC can be 0.9999 at ISL=128 and fail (< 0.99)
+  at ISL=8192.
 - **Recurrent decay parameters must be BF16**, regardless of the module's default
   dtype. Any weight that gates exponential decay over time (e.g. `A_log`, `dt_bias`
   in GatedDeltaNet / Mamba) should be stored and computed in BF16 to prevent
