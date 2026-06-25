@@ -473,6 +473,11 @@ from ttnn.operations.matmul import (
 # normalization ops (softmax/layer_norm/rms_norm/group_norm) nuked for agent
 # evaluation — their Python configs/helpers are reimplemented with the op.
 
+from ttnn.operations.softmax import (
+    softmax,
+    default_compute_kernel_config as softmax_default_compute_kernel_config,
+)
+
 from ttnn.operations.embedding import (
     EmbeddingsType,
 )
