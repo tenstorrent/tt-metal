@@ -1,7 +1,7 @@
 # DiffusionGemma 26B-A4B (bring-up)
 
 ## Platforms
-Blackhole — QB2 / TT-QuietBox 2 (4× Blackhole, `MESH_DEVICE=P150x4`).
+Blackhole — QB2 
 
 ## Introduction
 DiffusionGemma 26B-A4B-it is a discrete **text-diffusion** LLM fine-tuned from
