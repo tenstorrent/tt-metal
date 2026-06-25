@@ -62,6 +62,12 @@ class TtnnFPN:
         self._c5_w, self._c5_b = _prep(ref_backbone.c5_conv)  # 1×1  512→64
         self._up5_w, self._up5_b = _prep(ref_backbone.up_conv5)  # 3×3  64→64
         self._up4_w, self._up4_b = _prep(ref_backbone.up_conv4)  # 3×3  64→64
+        # Output-channel counts taken from the original convs — after the first
+        # forward the cached device weights conv2d returns no longer expose C_out
+        # via .shape[0], so we must not read it off the weight tensor.
+        self._c5_cout = ref_backbone.c5_conv.out_channels
+        self._up5_cout = ref_backbone.up_conv5.out_channels
+        self._up4_cout = ref_backbone.up_conv4.out_channels
 
         # Upsample parameters (used with PyTorch F.interpolate)
         self._scale = float(ref_backbone.upsample.scale_factor)
@@ -92,16 +98,26 @@ class TtnnFPN:
         ksize: int,
         stride: int,
         pad: int,
-    ) -> torch.Tensor:
-        """Run one TTNN conv2d + relu; returns a PyTorch NCHW float32 tensor."""
+        c_out: int,
+    ):
+        """Run one TTNN conv2d + relu.
+
+        Returns ``(out_nchw_float32, prepared_w, prepared_b)``.  The prepared
+        weight/bias are the device-resident tensors ``ttnn.conv2d`` returns; the
+        caller reassigns them so the next forward skips the host re-upload (a
+        small perf win and a prerequisite for trace capture, which forbids
+        host→device writes).  ``c_out`` is passed in rather than read from
+        ``w.shape[0]`` because the cached device weight no longer exposes it.
+        """
         B, C_in, H, W = x.shape
-        C_out = w.shape[0]
         x_tt = _to_ttnn_tile(x, B, H, W, C_in, self._device)
-        out_tt, H_out, W_out, _, _ = _ttnn_conv2d(self._device, x_tt, w, b, B, H, W, C_in, C_out, ksize, stride, pad)
+        out_tt, H_out, W_out, prep_w, prep_b = _ttnn_conv2d(
+            self._device, x_tt, w, b, B, H, W, C_in, c_out, ksize, stride, pad
+        )
         if out_tt.is_sharded():
             out_tt = ttnn.sharded_to_interleaved(out_tt, ttnn.DRAM_MEMORY_CONFIG)
         out_tt = ttnn.relu(out_tt)
-        return _from_ttnn_tile(out_tt, B, H_out, W_out, C_out)
+        return _from_ttnn_tile(out_tt, B, H_out, W_out, c_out), prep_w, prep_b
 
     # ------------------------------------------------------------------
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
@@ -112,14 +128,18 @@ class TtnnFPN:
             (B, 64, 64, 64) float32 — bev_upscale (P3).
         """
         # c5_conv: 1×1, 512→64, relu
-        p5 = self._conv_relu(x, self._c5_w, self._c5_b, ksize=1, stride=1, pad=0)
+        p5, self._c5_w, self._c5_b = self._conv_relu(
+            x, self._c5_w, self._c5_b, ksize=1, stride=1, pad=0, c_out=self._c5_cout
+        )
 
         # bilinear 8×8 → 16×16  (TTNN ttnn.upsample, integer scale)
         s = int(round(self._scale))
         p5_up = self._upsample_bilinear(p5, s, s)
 
         # up_conv5: 3×3, 64→64, relu
-        p4 = self._conv_relu(p5_up, self._up5_w, self._up5_b, ksize=3, stride=1, pad=1)
+        p4, self._up5_w, self._up5_b = self._conv_relu(
+            p5_up, self._up5_w, self._up5_b, ksize=3, stride=1, pad=1, c_out=self._up5_cout
+        )
 
         # bilinear 16×16 → 64×64 (TTNN ttnn.upsample, derived integer scale)
         scale_h = self._size2[0] // p4.shape[2]
@@ -127,6 +147,8 @@ class TtnnFPN:
         p4_up = self._upsample_bilinear(p4, scale_h, scale_w)
 
         # up_conv4: 3×3, 64→64, relu
-        p3 = self._conv_relu(p4_up, self._up4_w, self._up4_b, ksize=3, stride=1, pad=1)
+        p3, self._up4_w, self._up4_b = self._conv_relu(
+            p4_up, self._up4_w, self._up4_b, ksize=3, stride=1, pad=1, c_out=self._up4_cout
+        )
 
         return p3
