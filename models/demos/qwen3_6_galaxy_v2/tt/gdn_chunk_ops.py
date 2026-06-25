@@ -44,13 +44,25 @@ def create_chunk_masks(chunk_size, device):
     Call once during model init and pass as `cached_masks` to avoid
     recreating on every forward call (48 layers x every prefill).
 
-    Returns dict with keys: triu_ones, tril_mask, lower_causal, eye
+    Returns dict with keys: triu_ones, tril_mask, lower_causal, strictly_lower, eye
     """
     triu_ones = _create_triu_ones(chunk_size, device, dtype=ttnn.float32)
     triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
     tril_mask = _create_tril_ones(chunk_size, device, dtype=ttnn.float32)
     tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size])
     lower_causal = _create_tril_ones(chunk_size, device, dtype=ttnn.float32)
+    # Strict lower triangular (diagonal=-1): used to exclude the self-product
+    # diagonal from the L_tt intra-chunk correction matrix so L_tt has unit
+    # diagonal and correct (negative) off-diagonal sign.
+    strictly_lower_ones = ttnn.ones(
+        shape=(chunk_size, chunk_size),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    strictly_lower_ones = ttnn.tril(strictly_lower_ones, diagonal=-1)
+    strictly_lower = ttnn.reshape(strictly_lower_ones, [1, chunk_size, chunk_size])
     eye = ttnn.from_torch(
         torch.eye(chunk_size, dtype=torch.float32).unsqueeze(0),
         dtype=ttnn.float32,
@@ -67,7 +79,14 @@ def create_chunk_masks(chunk_size, device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    return {"triu_ones": triu_ones, "tril_mask": tril_mask, "lower_causal": lower_causal, "eye": eye, "eye_32": eye_32}
+    return {
+        "triu_ones": triu_ones,
+        "tril_mask": tril_mask,
+        "lower_causal": lower_causal,
+        "strictly_lower": strictly_lower,
+        "eye": eye,
+        "eye_32": eye_32,
+    }
 
 
 def l2_norm(x, dim=-1, eps=1e-6):
@@ -468,12 +487,24 @@ def chunk_gated_delta_rule(
     if cached_masks is not None:
         triu_ones = cached_masks["triu_ones"]
         tril_mask = cached_masks["tril_mask"]
+        _strictly_lower = cached_masks["strictly_lower"]
         _eye_1cc = cached_masks["eye"]
     else:
         triu_ones = _create_triu_ones(chunk_size, mesh_device, dtype=ttnn.float32)
         triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
         tril_mask = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
         tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size])
+        _strictly_lower_ones = ttnn.tril(
+            ttnn.ones(
+                shape=(chunk_size, chunk_size),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            ),
+            diagonal=-1,
+        )
+        _strictly_lower = ttnn.reshape(_strictly_lower_ones, [1, chunk_size, chunk_size])
         _eye_1cc = ttnn.from_torch(
             torch.eye(chunk_size, dtype=torch.float32).unsqueeze(0),
             dtype=ttnn.float32,
@@ -528,15 +559,23 @@ def chunk_gated_delta_rule(
     kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
     ttnn.deallocate(k_c_t)
 
-    # Compute -(kk * L_mask) = lower-triangular correction matrix including diagonal.
-    attn_raw = ttnn.neg(ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
+    # Build L_tt = I - tril(kk, diagonal=-1) * L_mask.
+    #
+    # The reference chunk_gated_delta_rule zeros the *diagonal* of kk before
+    # building the triangular system:
+    #   attn = -kk.masked_fill(upper_tri_incl_diag, 0)   # strictly lower tri
+    #   attn_final = forward_sub(attn) + I                # = (I - A)^{-1}
+    # where A = tril(kk*L_mask, diagonal=-1)  (STRICTLY lower, no diagonal).
+    #
+    # Including the diagonal (old code: L_tt = I + kk*L_mask) gives L_tt[i,i]
+    # = 1 + beta[i] > 1 and wrong-sign off-diagonal, producing a different
+    # matrix whose inverse has bad absolute error (high PCC, wrong magnitude).
+    kk_strict = ttnn.multiply(kk, _strictly_lower, memory_config=_cmc)  # zero diagonal
     ttnn.deallocate(kk)
-
-    # Forward substitution: (I - A)^{-1} where A = attn_raw is lower triangular.
-    # Fully on-device via blocked Neumann+GEMM — trace-compatible, no CPU round-trip.
-    # Each device independently processes its own head shard.
-    L_tt = ttnn.add(_eye_1cc, ttnn.neg(attn_raw, memory_config=_cmc), memory_config=_cmc)
-    ttnn.deallocate(attn_raw)
+    attn_A = ttnn.multiply(kk_strict, L_mask, memory_config=_cmc)  # tril(kk,-1)*L_mask
+    ttnn.deallocate(kk_strict)
+    L_tt = ttnn.subtract(_eye_1cc, attn_A, memory_config=_cmc)  # I - tril(kk,-1)*L_mask
+    ttnn.deallocate(attn_A)
     attn = _solve_lower_triangular_blocked_ttnn(L_tt, _eye_1cc, mesh_device)
     ttnn.deallocate(L_tt)
 

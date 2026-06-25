@@ -137,6 +137,126 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
+def _abs_err(tt: torch.Tensor, ref: torch.Tensor):
+    """Return (max_abs_err, mean_abs_err, rel_err_pct) for TT vs reference."""
+    d = (tt.float() - ref.float()).abs()
+    r = ref.float().abs()
+    return d.max().item(), d.mean().item(), (d / r.clamp(min=1e-6)).mean().item() * 100
+
+
+# ---------------------------------------------------------------------------
+# CPU-only before/after verification of the L_tt sign/diagonal fix.
+# This test runs entirely on CPU so it can be executed without hardware to
+# confirm the fix direction before doing a full hardware PCC run.
+# ---------------------------------------------------------------------------
+
+
+def _chunk_gated_delta_rule_cpu_old(k_beta, k, L_mask, v_beta, eye):
+    """OLD (buggy) L_tt: I + kk*L_mask  (wrong sign + includes diagonal)."""
+    kk = k_beta @ k.transpose(-1, -2)  # [batch, C, C]
+    attn_raw = -(kk * L_mask)
+    L_tt = eye + (-attn_raw)  # = I + kk*L_mask
+    attn = torch.linalg.solve_triangular(L_tt, eye.expand_as(L_tt), upper=False)
+    return attn @ v_beta
+
+
+def _chunk_gated_delta_rule_cpu_new(k_beta, k, L_mask, v_beta, eye):
+    """NEW (fixed) L_tt: I - tril(kk,-1)*L_mask  (unit diagonal, correct sign)."""
+    kk = k_beta @ k.transpose(-1, -2)
+    # Zero diagonal: only keep strictly-lower-triangular part
+    kk_strict = torch.tril(kk, diagonal=-1)
+    attn_A = kk_strict * L_mask
+    L_tt = eye - attn_A  # unit diagonal
+    attn = torch.linalg.solve_triangular(L_tt, eye.expand_as(L_tt), upper=False)
+    return attn @ v_beta
+
+
+def _chunk_gated_delta_rule_ref(k_beta, k, v_beta, g, chunk_size):
+    """Reference PyTorch chunk_gated_delta_rule for one chunk via forward substitution.
+
+    Mirrors models/experimental/gated_attention_gated_deltanet/torch_functional/delta_rule_ops.py
+    but self-contained (no external import required).
+
+    k_beta, k: [batch, T, K]   v_beta: [batch, T, V]   g: [batch, T]
+    Returns v_corrected: [batch, T, V]
+    """
+    batch, T, K = k.shape
+    decay = g.float().cumsum(dim=-1)  # [batch, T]
+    decay_col = decay.unsqueeze(-1)
+    decay_row = decay.unsqueeze(-2)
+    L_mask = (decay_col - decay_row).tril().clamp(min=-20.0, max=0.0).exp()
+    L_mask = L_mask * torch.ones(batch, T, T, dtype=torch.float32)
+
+    mask_upper = torch.triu(torch.ones(T, T, dtype=torch.bool), diagonal=0)
+    kk = k_beta.float() @ k.float().transpose(-1, -2)  # [batch, T, T]
+    attn_raw = kk * L_mask
+    attn = -attn_raw.masked_fill(mask_upper, 0)  # strictly lower tri, negative
+
+    # Forward substitution: builds (I-A)^{-1} in-place
+    for i in range(1, T):
+        prev_rows = attn[..., :i, :i]
+        curr_row = attn[..., i, :i]
+        feedback = (curr_row.unsqueeze(-1) * prev_rows).sum(-2)
+        attn[..., i, :i] = curr_row + feedback
+    attn = attn + torch.eye(T, dtype=torch.float32)
+    return attn @ v_beta.float()
+
+
+def test_gdn_ltt_fix_cpu():
+    """CPU-only: compare OLD vs NEW L_tt against the reference forward-substitution.
+
+    Runs in < 1 second without any hardware.  Prints absolute error before/after
+    the fix so the improvement is visible even before a full hardware PCC run.
+    """
+    torch.manual_seed(42)
+    B, H, T, K, V = 1, 4, 64, 64, 64
+
+    q = torch.nn.functional.normalize(torch.randn(B, T, H, K), dim=-1)
+    k = torch.nn.functional.normalize(torch.randn(B, T, H, K), dim=-1)
+    v = torch.randn(B, T, H, V)
+    beta = torch.sigmoid(torch.randn(B, T, H))
+    g = -torch.nn.functional.softplus(torch.randn(B, T, H))
+
+    beta_unsq = beta[..., None]  # [B, T, H, 1]
+    k_beta = k * beta_unsq
+    v_beta = v * beta_unsq
+
+    # Collapse B*H into batch dim
+    batch = B * H
+    k_b = k.permute(0, 2, 1, 3).reshape(batch, T, K)
+    k_beta_b = k_beta.permute(0, 2, 1, 3).reshape(batch, T, K)
+    v_beta_b = v_beta.permute(0, 2, 1, 3).reshape(batch, T, V)
+    g_b = g.permute(0, 2, 1).reshape(batch, T)
+
+    decay = g_b.float().cumsum(dim=-1)
+    decay_col = decay.unsqueeze(-1)
+    decay_row = decay.unsqueeze(-2)
+    L_diff = (decay_col - decay_row).tril().clamp(min=-20.0, max=0.0)
+    L_mask = L_diff.exp() * torch.ones(batch, T, T).tril()
+
+    eye = torch.eye(T, dtype=torch.float32).unsqueeze(0)
+
+    v_ref = _chunk_gated_delta_rule_ref(k_beta_b, k_b, v_beta_b, g_b, T)
+    v_old = _chunk_gated_delta_rule_cpu_old(k_beta_b, k_b, L_mask, v_beta_b, eye)
+    v_new = _chunk_gated_delta_rule_cpu_new(k_beta_b, k_b, L_mask, v_beta_b, eye)
+
+    ref_flat = v_ref.reshape(-1).float()
+    old_flat = v_old.reshape(-1).float()
+    new_flat = v_new.reshape(-1).float()
+
+    pcc_old = _pcc(old_flat, ref_flat)
+    pcc_new = _pcc(new_flat, ref_flat)
+    old_max, old_mae, old_rel = _abs_err(old_flat, ref_flat)
+    new_max, new_mae, new_rel = _abs_err(new_flat, ref_flat)
+
+    print(f"\n[L_tt fix] BEFORE: PCC={pcc_old:.4f}  max_abs={old_max:.4f}  mae={old_mae:.4f}  rel={old_rel:.1f}%")
+    print(f"[L_tt fix] AFTER : PCC={pcc_new:.4f}  max_abs={new_max:.4f}  mae={new_mae:.4f}  rel={new_rel:.1f}%")
+
+    assert new_mae < old_mae * 0.5, f"Fix did not improve MAE: before={old_mae:.4f} after={new_mae:.4f}"
+    assert pcc_new > 0.99, f"PCC dropped after fix: {pcc_new:.4f}"
+    print("[L_tt fix] PASSED — absolute error improved, PCC preserved.")
+
+
 # ---------------------------------------------------------------------------
 # TT module construction + I/O helpers
 # ---------------------------------------------------------------------------
@@ -219,8 +339,12 @@ def test_qwen36_gdn_1d_prefill_pcc(mesh_device):
     tt_cpu = _gather_replicated_output(tt_out, tp8_mesh, _T_PREFILL)
     print(f"[GDN-1D/prefill] TT out shape {tuple(tt_cpu.shape)}")
 
-    pcc = _pcc(tt_cpu, out_ref[0, :_T_PREFILL, :])
-    print(f"[GDN-1D/prefill] PCC = {pcc:.6f} (thresh {_PCC_THRESH})")
+    ref_slice = out_ref[0, :_T_PREFILL, :]
+    pcc = _pcc(tt_cpu, ref_slice)
+    max_err, mae, rel = _abs_err(tt_cpu, ref_slice)
+    print(
+        f"[GDN-1D/prefill] PCC={pcc:.6f}  max_abs={max_err:.4f}  mae={mae:.4f}  rel={rel:.1f}%  (thresh PCC>{_PCC_THRESH})"
+    )
     assert pcc > _PCC_THRESH, f"prefill PCC {pcc:.4f} < {_PCC_THRESH}"
 
 
@@ -276,8 +400,12 @@ def test_qwen36_gdn_1d_decode_zerostate_pcc(mesh_device):
     )
     tt_out_step = attn.forward(x_step_tt, mode="decode")
     tt_step_cpu = _gather_replicated_output(tt_out_step, tp8_mesh, 1)
-    pcc = _pcc(tt_step_cpu, out_ref_step[0, :1, :])
-    print(f"[GDN-1D/decode-zerostate] PCC = {pcc:.6f} (thresh {_PCC_THRESH})")
+    ref_step = out_ref_step[0, :1, :]
+    pcc = _pcc(tt_step_cpu, ref_step)
+    max_err, mae, rel = _abs_err(tt_step_cpu, ref_step)
+    print(
+        f"[GDN-1D/decode-zerostate] PCC={pcc:.6f}  max_abs={max_err:.4f}  mae={mae:.4f}  rel={rel:.1f}%  (thresh PCC>{_PCC_THRESH})"
+    )
     assert pcc > _PCC_THRESH, f"zero-state decode PCC {pcc:.4f} < {_PCC_THRESH}"
 
 
@@ -346,6 +474,10 @@ def test_qwen36_gdn_1d_decode_pcc(mesh_device):
     tt_step_cpu = _gather_replicated_output(tt_out_step, tp8_mesh, 1)
     print(f"[GDN-1D/decode] TT out step shape {tuple(tt_step_cpu.shape)}")
 
-    pcc = _pcc(tt_step_cpu, out_ref_step[0, :1, :])
-    print(f"[GDN-1D/decode] PCC = {pcc:.6f} (thresh {_PCC_THRESH})")
+    ref_step = out_ref_step[0, :1, :]
+    pcc = _pcc(tt_step_cpu, ref_step)
+    max_err, mae, rel = _abs_err(tt_step_cpu, ref_step)
+    print(
+        f"[GDN-1D/decode] PCC={pcc:.6f}  max_abs={max_err:.4f}  mae={mae:.4f}  rel={rel:.1f}%  (thresh PCC>{_PCC_THRESH})"
+    )
     assert pcc > _PCC_THRESH, f"decode PCC {pcc:.4f} < {_PCC_THRESH}"
