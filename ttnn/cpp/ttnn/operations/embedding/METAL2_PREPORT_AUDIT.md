@@ -204,3 +204,15 @@ has not yet completed Device 2.0 migration, and is not a permanent blocker.
   reader could mistake "push_back(buffer)" for an automatic Case 2. Resolved here in favor of the
   kernel-side rule (Case 1, since the address feeds a `TensorAccessor`). Noting in case the wording
   could call this out explicitly.
+
+---
+
+## ⚠️ Post-port-attempt correction (2026-06-25) — second, framework-level blocker
+
+The Device-2.0 donor prerequisite called out above was resolved (`writer_unary_stick_layout_interleaved_start_id.cpp` migrated to D2.0, **PR #48147**, validated). A re-audit *for the actual port* then surfaced a **second, independent blocker that this audit missed**, putting the op back at **RED — framework-blocked** (not portable):
+
+- The RM reader (`device/kernels/dataflow/embeddings.cpp`) self-stages the input indices in **`cb_in1`** (`reserve_back`/`push_back` + `get_write_ptr`, then raw self-read) with **no cross-kernel consumer** — a **DM-kernel sync-free CB**. (Check the other factories' readers for the same shape.)
+
+Metal 2.0 requires one producer + one consumer per local DFB, has **no scratch/sync-free DFB** (`DataflowBufferSpec` = `borrowed_from`/`alias_with` only), and the single-ended **self-loop workaround is compute-kernel-only** — binding it on a data-movement kernel FATALs (`"self-looped by data-movement kernel"`). A DM-kernel sync-free CB is therefore **framework-inexpressible today**. See [[metal2-port-portability-predictor]].
+
+**Corrected status: RED, framework-blocked** (wait-for-feature: a sync-free/scratch DFB or DM-kernel self-loop). The #48147 prereq is necessary but **not sufficient**; do not attempt the port until the sync-free-CB feature lands.

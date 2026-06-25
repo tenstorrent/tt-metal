@@ -133,3 +133,13 @@ Referenced kernels (all in-directory; none borrowed):
 ## Recipe notes
 
 - **`Buffer*`-binding form that the kernel then feeds into a `TensorAccessor` — Case 1 or Case 2?** The factories use the `Buffer*`-binding shape (`emplace_runtime_args(core, {src_buffer, ...})`), which the Detection§ "`Buffer*`-binding form" bullet labels **Case 2** ("the kernel consumes a raw `uint32_t` base, so it is Case 2"). But the *kernels here* feed that base straight into `TensorAccessor(args, addr)` — the textbook **Case 1** shape. I classified by the dominant rule "classify by what the kernel does with the base pointer" → Case 1, treating the `Buffer*`-binding bullet's "Case 2" as describing the *common* case for that host shape rather than a hard override. A one-line clarification in the `Buffer*`-binding bullet ("…unless the kernel constructs a `TensorAccessor` from the base, in which case it is Case 1 per the kernel-side rule") would remove the apparent contradiction for the next auditor.
+
+---
+
+## ✅/⚠️ Post-port update (2026-06-25)
+
+**Ported successfully (PR #48172):** the decode (`RotaryEmbeddingLlamaMultiCoreSharded`) and prefill-interleaved (`RotaryEmbeddingLlamaMultiCore`) factories — 423 passed / 5 skipped / 0 failed across the full suite (incl. the cache-hit borrowed-DFB path). The GREEN grade held for these two.
+
+**`RotaryEmbeddingLlamaMultiCorePrefillSharded` — framework-blocked (audit miss):** when the cos/sin/trans_mat **shard grid is smaller than the device grid** (`partial_cos_sin`/`partial_tm`), the legacy factory defines the *same* CB index (`c_1`/`c_2`/`c_3`) **twice** — borrowed (`.buffer=`) on the shard-grid cores and plain scratch on the remaining cores. A Metal 2.0 `DataflowBufferSpec` is **program-wide** (one `borrowed_from` per id), so a CB that is borrowed on some nodes and scratch on others has no expression today. Left on legacy `create_descriptor` (decoupled via forked `_metal2` kernels; regression-clean). Wait-for-feature: per-node borrowed-DFB binding. See [[metal2-port-portability-predictor]].
+
+**Reusable constraint discovered during the MultiCore port:** Gen1 **data-movement kernels cannot self-loop a DFB** (only compute kernels can). The legacy writer's producer-only zero-fill CB was fixed by hoisting it to a reader (PRODUCER) → writer (CONSUMER) cross-kernel DFB (output-identical).

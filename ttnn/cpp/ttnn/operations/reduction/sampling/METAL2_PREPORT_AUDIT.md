@@ -183,3 +183,11 @@ None — no custom hash to mine.
 ## Recipe notes
 
 - The YELLOW isolated-holdover carve-out (audit §Prerequisites Check 2) is framed around a free function "where the Device-2.0 wrapper object is already in scope at the call site." For a **donor** that takes a bare `uint32_t cb_id` and is itself wholly Device 1.0 (no wrapper anywhere in the donor body), the carve-out clearly does not apply and the donor-side gate (Check 2 RED) governs — but the recipe could state explicitly that a *donor function whose signature is `uint32_t cb_id` and whose body is Device 1.0* is a Check-2 RED, not a YELLOW holdover, since the surface shape (`get_write_ptr(cb_id)`) superficially resembles the holdover pattern. The disambiguator used here: a holdover needs the wrapper *already in scope in the same kernel*; a donor on `uint32_t cb_id` constructs no wrapper, so the binding tokens have nothing to attach to.
+
+---
+
+## ⚠️ Post-port-attempt correction (2026-06-25) — self-loop workaround does NOT apply (compute-only)
+
+The Device-2.0 donor prerequisite (`generate_bcast_scalar.hpp`) was resolved (**PR #48148**, validated). The port was then attempted and **gated**: this audit prescribed "the sanctioned self-loop workaround" for the writer's sync-free CBs **`c_13`** (output staging: `cb_out.get_write_ptr()` → `noc.async_write`, no FIFO partner) and **`c_14`/`c_15`** (writer `reserve_back`/`push_back` + raw `CoreLocalMem` self-read, no consumer). That prescription is **wrong**: the self-loop workaround is **compute-kernel-only**; binding it on the (DM) writer FATALs, and Metal 2.0 has no scratch/sync-free DFB. `c_14`/`c_15` could be salvaged by hoisting their DRAM read writer→reader (PRODUCER→CONSUMER), but **`c_13` has no escape**.
+
+**Corrected status: RED, framework-blocked** (wait-for-feature: sync-free/scratch DFB or DM-kernel self-loop). See [[metal2-port-portability-predictor]]. The #48148 prereq is necessary but not sufficient.

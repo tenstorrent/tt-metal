@@ -154,3 +154,11 @@ Q1/Q2 FYI-U; Q3/Q4/Q6 are all "none," so nothing mirrors to a (non-existent) bri
 ## Recipe notes
 
 - The recipe's SPSC subject is written largely around *FIFO* producers/consumers and the "hidden second writer" being a raw co-fill *alongside* a FIFO producer. This op's primary SPSC shape is different but cleanly covered by the endpoint-census rule ("*any* access counts ... raw pointer ... all count"): **two raw, sync-free writers** (no FIFO producer at all) on the same output CB across two RISCs. It is neither the "hidden writer" face (no FIFO producer to hide behind) nor exactly the "multiple readers" face (these are writers into output, not readers of a resident tensor-view). It is most naturally read as the *visible* `(≥2 producers)` row of the census table. The recipe's two named "faces" ((a) hidden writer, (b) multiple readers) didn't obviously enumerate "two co-resident raw writers into a borrowed output CB"; a third illustrative face (split-RISC co-writers into output) would have made the match more immediate. Flagging per the recipe's invitation to log friction.
+
+---
+
+## ⚠️ Post-port-attempt correction (2026-06-25) — second, framework-level blocker after the SPSC fix
+
+The SPSC prerequisite was resolved (single-producer collapse, **PR #48151**, validated 205/39/0). The port was then attempted and **gated** on a **second blocker this audit missed**: after the collapse, the op is **compute-less** — the single DM reader writes the borrowed output CBs **`c_16`/`c_17`/`c_18`** via raw `get_write_ptr()`, **producer-only, with no consumer kernel**. A DM-producer-only CB cannot pair (no consumer) and cannot self-loop (self-loop is compute-kernel-only). 
+
+**Corrected status: RED, framework-blocked** (wait-for-feature: sync-free/scratch DFB or DM-kernel self-loop). See [[metal2-port-portability-predictor]]. The #48151 SPSC prereq cleared the producer-count gate but the op is still not portable until the DM-output-CB feature lands.
