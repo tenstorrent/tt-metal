@@ -9,7 +9,6 @@
 #include <filesystem>
 #include <algorithm>
 #include <optional>
-#include <functional>
 #include <unordered_set>
 #include <utility>
 #include <yaml-cpp/yaml.h>
@@ -595,111 +594,6 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
 
     check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
-}
-
-// Probe which BH-galaxy topologies the discovered physical system can host.
-// Builds the control plane (runs the TopologyMapper, no traffic) for each
-// descriptor and reports SUCCESS / FAIL. Tells us whether this galaxy has a
-// wrap on neither / one / both axes.
-TEST_F(ControlPlaneFixture, ProbeGalaxyTorusWrapSupport) {
-    const std::string descs[] = {
-        "single_bh_galaxy_mesh_graph_descriptor.textproto",       // no wrap (line/mesh)
-        "single_bh_galaxy_torus_x_graph_descriptor.textproto",    // wrap on X only
-        "single_bh_galaxy_torus_y_graph_descriptor.textproto",    // wrap on Y only
-        "single_bh_galaxy_torus_xy_graph_descriptor.textproto",   // wrap on both (torus)
-    };
-    auto try_cfg = [](const std::string& label,
-                      const std::function<std::unique_ptr<tt::tt_fabric::ControlPlane>()>& fn) {
-        std::string verdict;
-        try {
-            auto cp = fn();
-            verdict = "SUCCESS";
-        } catch (const std::exception& e) {
-            std::string msg = e.what();
-            if (msg.size() > 140) {
-                msg = msg.substr(0, 140) + "...";
-            }
-            verdict = "FAIL: " + msg;
-        }
-        log_info(tt::LogTest, "[wrap-probe]   {}: {}", label, verdict);
-    };
-
-    // The torus_xy MGD declares both-axis wrap edges. Pairing it with a STRICT
-    // torus fabric config forces those wrap edges to be validated against the
-    // physical galaxy. Plain FABRIC_2D would downgrade to MESH and hide it.
-    const std::filesystem::path torus_xy_mgd =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto";
-
-    auto make_cp = [&](tt::tt_fabric::FabricConfig cfg) {
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
-        auto cp = std::make_unique<tt::tt_fabric::ControlPlane>(
-            cluster, rtoptions, hal, dctx, torus_xy_mgd.string(), cfg, kReliabilityMode);
-        cp->configure_routing_tables_for_fabric_ethernet_channels();
-        return cp;
-    };
-
-    log_info(tt::LogTest, "[wrap-probe] === torus_xy MGD under STRICT torus fabric configs ===");
-    try_cfg("FABRIC_2D (->MESH, downgrades)", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D); });
-    try_cfg("FABRIC_2D_TORUS_X  (needs X wrap)", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X); });
-    try_cfg("FABRIC_2D_TORUS_Y  (needs Y wrap)", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y); });
-    try_cfg("FABRIC_2D_TORUS_XY (needs both) ", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); });
-}
-
-// Wormhole-galaxy counterpart of ProbeGalaxyTorusWrapSupport. Same probe, but
-// using the single_galaxy_* (WH) mesh-graph descriptors. Builds the control
-// plane (runs the TopologyMapper, no traffic) for each descriptor and reports
-// SUCCESS / FAIL. Tells us whether this galaxy has a wrap on neither / one /
-// both axes.
-TEST_F(ControlPlaneFixture, ProbeWormholeGalaxyTorusWrapSupport) {
-    const std::string descs[] = {
-        "single_galaxy_mesh_graph_descriptor.textproto",       // no wrap (line/mesh)
-        "single_galaxy_torus_x_graph_descriptor.textproto",    // wrap on X only
-        "single_galaxy_torus_y_graph_descriptor.textproto",    // wrap on Y only
-        "single_galaxy_torus_xy_graph_descriptor.textproto",   // wrap on both (torus)
-    };
-    auto try_cfg = [](const std::string& label,
-                      const std::function<std::unique_ptr<tt::tt_fabric::ControlPlane>()>& fn) {
-        std::string verdict;
-        try {
-            auto cp = fn();
-            verdict = "SUCCESS";
-        } catch (const std::exception& e) {
-            std::string msg = e.what();
-            if (msg.size() > 140) {
-                msg = msg.substr(0, 140) + "...";
-            }
-            verdict = "FAIL: " + msg;
-        }
-        log_info(tt::LogTest, "[wrap-probe]   {}: {}", label, verdict);
-    };
-
-    // The torus_xy MGD declares both-axis wrap edges. Pairing it with a STRICT
-    // torus fabric config forces those wrap edges to be validated against the
-    // physical galaxy. Plain FABRIC_2D would downgrade to MESH and hide it.
-    const std::filesystem::path torus_xy_mgd =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
-
-    auto make_cp = [&](tt::tt_fabric::FabricConfig cfg) {
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
-        auto cp = std::make_unique<tt::tt_fabric::ControlPlane>(
-            cluster, rtoptions, hal, dctx, torus_xy_mgd.string(), cfg, kReliabilityMode);
-        cp->configure_routing_tables_for_fabric_ethernet_channels();
-        return cp;
-    };
-
-    log_info(tt::LogTest, "[wrap-probe] === torus_xy MGD under STRICT torus fabric configs ===");
-    try_cfg("FABRIC_2D (->MESH, downgrades)", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D); });
-    try_cfg("FABRIC_2D_TORUS_X  (needs X wrap)", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X); });
-    try_cfg("FABRIC_2D_TORUS_Y  (needs Y wrap)", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y); });
-    try_cfg("FABRIC_2D_TORUS_XY (needs both) ", [&] { return make_cp(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); });
 }
 
 // Exercises the auto-discovery path that the tt-xla single-galaxy failure actually
