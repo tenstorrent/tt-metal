@@ -17,18 +17,20 @@ modernised navsim's dependencies to Python 3.10 (torch 2.0.1+cpu, numpy 1.23.4,
 
 Device arbitration — one Wormhole = one device handle, the TTNN device context is
 **thread-affine**, AND navsim's ``run_pdm_score`` instantiates a FRESH agent and
-calls ``initialize()`` **per worker chunk** (not once, shared).  Two modes:
+calls ``initialize()`` **per worker chunk** (not once, shared).  The agent picks
+the right path **automatically from the worker type — no env var** (see
+:func:`_is_pool_worker_thread`):
 
-  * ``worker=sequential`` (default): one chunk on one thread → one agent → opens
-    + uses the device on that thread.  Simplest; the validated path.
-  * ``worker=single_machine_thread_pool`` **+ ``DD_DEVICE_THREAD=1``**: the N
-    worker chunks each build a (cheap) agent, but all of them delegate to a
-    **process-wide singleton** (:class:`_DeviceWorker`) that owns the device +
-    model on ONE dedicated thread and serves forwards off a queue.  Worker
-    threads build features in parallel (CPU) and enqueue, overlapping that CPU
-    with the serialized device forward.  Required because (a) per-chunk agents
-    would otherwise each ``open_device(0)`` → conflict, and (b) the device
-    context is thread-affine so all device ops must run on the owner thread.
+  * ``worker=sequential``: one chunk runs on the MAIN thread → one agent → opens +
+    uses the device on that thread.  Simplest; the validated path.
+  * ``worker=single_machine_thread_pool``: the N worker chunks each build a (cheap)
+    agent on a pool thread, but all of them delegate to a **process-wide singleton**
+    (:class:`_DeviceWorker`) that owns the device + model on ONE dedicated thread and
+    serves forwards off a queue.  Worker threads build features in parallel (CPU) and
+    enqueue, overlapping that CPU with the serialized device forward (~1.59× vs
+    sequential).  Required because (a) per-chunk agents would otherwise each
+    ``open_device(0)`` → conflict, and (b) the device context is thread-affine so all
+    device ops must run on the owner thread.
 
 Do **not** use ``worker=ray_distributed``: each ray worker is a separate process
 and would try to open device 0 concurrently.
@@ -38,7 +40,8 @@ by itself a throughput win.  The levers are **trace capture** (the singleton/
 sequential build captures the consolidated backbone-loop trace and replays it via
 ``execute_compiled()``; ~1.34× forward, PCC 1.0; ``DD_TRACE=0`` to disable) and,
 because the in-process per-scene cost is dominated by navsim CPU (feature-build +
-PDM scoring), the ``DD_DEVICE_THREAD=1`` funnel above.
+PDM scoring), the ``single_machine_thread_pool`` funnel above (~1.59×, the
+dominant eval lever).
 
 Wire-up (see scripts/navsim_inproc/README.md for the full recipe + caveats):
   1. ``conda activate navsim310``
@@ -70,8 +73,16 @@ def _trace_enabled() -> bool:
     return os.environ.get("DD_TRACE", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
-def _use_device_thread() -> bool:
-    return os.environ.get("DD_DEVICE_THREAD", "0").strip().lower() in ("1", "true", "yes", "on")
+def _is_pool_worker_thread() -> bool:
+    """True on a thread-pool worker, False on the main thread.
+
+    Auto-selects the device path from the worker type with **no env var**: nuplan's
+    Sequential executor runs ``run_pdm_score`` (hence ``initialize()``) inline on the
+    MAIN thread, while ``single_machine_thread_pool`` runs it on ThreadPoolExecutor
+    worker threads.  Main → native (device on this thread); worker → shared singleton
+    funnel.
+    """
+    return threading.current_thread() is not threading.main_thread()
 
 
 def _open_build_trace(checkpoint_path: str, anchors_path: str, device_id: int):
@@ -134,7 +145,7 @@ def _run_forward(model, feats, traced):
 
 
 # ---------------------------------------------------------------------------
-# Process-wide device-owner singleton (DD_DEVICE_THREAD=1)
+# Process-wide device-owner singleton (worker=single_machine_thread_pool)
 # ---------------------------------------------------------------------------
 # navsim's run_pdm_score instantiates a FRESH agent + initialize() per worker
 # chunk, so with worker=single_machine_thread_pool the N chunks would each open
@@ -214,7 +225,7 @@ class _DeviceWorker:
         # the (now-closed) device thread, that teardown SIGABRTs in umd::Cluster::
         # close_device. The PDM results CSV is already written by this point, so bypass
         # the crashing C++ static teardown with an immediate clean exit. Only reached on
-        # the DD_DEVICE_THREAD funnel path (this atexit is registered by _DeviceWorker).
+        # the thread-pool funnel path (this atexit is registered by _DeviceWorker).
         os._exit(0)
 
 
@@ -249,7 +260,7 @@ class DiffusionDriveTtnnInprocAgent(AbstractAgent):
         self._model = None
         self._traced = False
         self._lock = threading.Lock()
-        # DD_DEVICE_THREAD=1 path: shared process-wide device-owner singleton.
+        # Thread-pool path: shared process-wide device-owner singleton.
         self._worker = None  # type: _DeviceWorker | None
         self._initialized = False
 
@@ -260,8 +271,9 @@ class DiffusionDriveTtnnInprocAgent(AbstractAgent):
     def initialize(self) -> None:
         """Build (or attach to) the on-device TTNN stack; idempotent + thread-safe.
 
-        Sequential: opens the device + builds + captures the trace on the calling
-        thread (one chunk → one agent, so this is safe).  ``DD_DEVICE_THREAD=1``:
+        Auto-selected by worker type (no env var).  Main thread (``sequential``):
+        opens the device + builds + captures the trace on this thread (one chunk →
+        one agent, so it's safe).  Pool worker (``single_machine_thread_pool``):
         attaches to the process-wide :class:`_DeviceWorker` singleton (created by
         the first agent across all worker chunks), which owns the device on one
         thread — see the module docstring for why per-chunk agents require this.
@@ -269,9 +281,11 @@ class DiffusionDriveTtnnInprocAgent(AbstractAgent):
         with self._lock:
             if self._initialized:
                 return
-            if _use_device_thread():
+            if _is_pool_worker_thread():
+                # thread-pool: per-chunk agents on worker threads → shared singleton.
                 self._worker = _get_singleton(self._checkpoint_path, self._anchors_path, self._device_id)
             else:
+                # sequential: one chunk on the main thread → device on this thread.
                 self._device, self._model, self._traced = _open_build_trace(
                     self._checkpoint_path, self._anchors_path, self._device_id
                 )
