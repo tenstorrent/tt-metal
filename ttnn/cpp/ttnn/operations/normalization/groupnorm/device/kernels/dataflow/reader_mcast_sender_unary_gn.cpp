@@ -206,6 +206,11 @@ void kernel_main() {
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
     constexpr uint32_t cb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out_id = tt::CBIndex::c_23;
+#ifdef UNTILIZE_OUT
+    // Row-major reread scratch CB (c_20): gathered ROW_MAJOR output rows for the shared tiles, tilized
+    // on-core by the compute kernel into cb_reread_out (c_23) for cross-group accumulation.
+    constexpr uint32_t cb_reread_rm_id = tt::CBIndex::c_20;
+#endif
 
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
@@ -217,27 +222,18 @@ void kernel_main() {
     CircularBuffer cb_repack_out(cb_repack_out_id);
     CircularBuffer cb_out0(cb_out0_id);
     CircularBuffer cb_reread_out(cb_reread_out_id);
+#ifdef UNTILIZE_OUT
+    CircularBuffer cb_reread_rm(cb_reread_rm_id);
+#endif
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(cb_out0_id);
     const uint32_t num_bytes_read = datum_size_bytes;
 
-#if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
-    uint32_t src_addr_in0 = in0_l1_read_addr;
-    UnicastEndpoint self_ep;
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_repack.reserve_back(per_core_N);
-        uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
-        for (uint32_t i = 0; i < tile_height; ++i) {
-            noc.async_read(self_ep, CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
-            src_addr_in0 += per_core_N_bytes;
-            l1_write_addr_repack += per_core_N_bytes_with_stride;
-        }
-        noc.async_read_barrier();
-        cb_repack.push_back(per_core_N);
-    }
-#endif
+    // NOTE: the previous self-L1 "repack" read here assumed the input shard was already
+    // resident in cb_in0's L1 (the sharded code path). For interleaved DRAM input that is
+    // never true, so the row-major staging is now done per-group/per-out_block from DRAM
+    // directly into cb_repack inside the main loop below (see the TILIZE_IN branch).
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
@@ -324,7 +320,46 @@ void kernel_main() {
                             out_block_hw_actual = out_block_hw_normal;
                         }
 
-#if !defined(READER_REPACK) or !defined(TILIZE_IN)
+#ifdef TILIZE_IN
+                        // Row-major interleaved input: stage this group's out_block region
+                        // (block_w tiles wide x out_block_h tile-rows) into cb_repack in
+                        // row-major form. The compute kernel tilizes it into cb_in0 (c_0).
+                        // Each DRAM page is one full tensor row (num_channels_tiles * tile_width
+                        // datums); read the group's column slice at a byte offset and lay the
+                        // 32 rows of each tile-row out contiguously at a block_w-wide stride so
+                        // tilize<block_w> consumes them directly.
+                        {
+                            const auto src_a = TensorAccessor(src0_args, src_addr);
+                            const uint32_t full_row_datums = num_channels_tiles * tile_width;
+                            const uint32_t col_start_datums = ((start_id % num_channels_tiles) + index_g_offset) * tile_width;
+                            const uint32_t want_datums = block_w * tile_width;
+                            const uint32_t avail_datums =
+                                (col_start_datums < full_row_datums) ? (full_row_datums - col_start_datums) : 0;
+                            const uint32_t read_datums = want_datums < avail_datums ? want_datums : avail_datums;
+                            const uint32_t read_bytes = read_datums * datum_size_bytes;
+                            const uint32_t col_start_bytes = col_start_datums * datum_size_bytes;
+                            const uint32_t repack_row_stride_bytes = want_datums * datum_size_bytes;
+                            const uint32_t tile_row_base =
+                                (start_id + index_b_offset + out_block_start_id_offset) / num_channels_tiles;
+
+                            cb_repack.reserve_back(out_block_hw_normal);
+                            uint32_t l1_write_addr = cb_repack.get_write_ptr();
+                            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                                const uint32_t row_base = (tile_row_base + mt) * tile_height;
+                                for (uint32_t r = 0; r < tile_height; r++) {
+                                    noc.async_read(
+                                        src_a,
+                                        CoreLocalMem<uint32_t>(l1_write_addr),
+                                        read_bytes,
+                                        {.page_id = row_base + r, .offset_bytes = col_start_bytes},
+                                        {});
+                                    l1_write_addr += repack_row_stride_bytes;
+                                }
+                            }
+                            noc.async_read_barrier();
+                            cb_repack.push_back(out_block_hw_normal);
+                        }
+#else
                         const uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
                         const auto src_a = TensorAccessor(src0_args, src_addr);
                         uint32_t l1_write_addr;
@@ -422,6 +457,39 @@ void kernel_main() {
                             uint32_t block_w_curr =
                                 index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
+#ifdef UNTILIZE_OUT
+                            // ROW_MAJOR output: the previously written output is row-major in DRAM, so
+                            // gather the rows for the reread tiles into the row-major scratch CB (c_20)
+                            // exactly like the TILIZE_IN input gather. The compute kernel tilizes c_20
+                            // into cb_reread_out (c_23) before the cross-group accumulation. Gather the
+                            // full block_w width so the on-core tilize (compile-time block_w wide) sees a
+                            // well-formed block; out-of-range columns are masked out downstream.
+                            constexpr uint32_t reread_row_chunk_bytes = tile_width * datum_size_bytes;
+                            uint32_t l1_write_addr = cb_reread_rm.get_write_ptr();
+                            cb_reread_rm.reserve_back(out_block_hw_normal);
+                            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                                for (uint32_t r = 0; r < tile_height; r++) {
+                                    for (uint32_t nt = 0; nt < block_w; nt++) {
+                                        const uint32_t page_id_tile = out_start_id + out_block_start_id_offset +
+                                                                      (mt * num_channels_tiles) + nt + index_b_offset +
+                                                                      index_g_offset;
+                                        const uint32_t tile_row = page_id_tile / num_channels_tiles;
+                                        const uint32_t tile_col = page_id_tile % num_channels_tiles;
+                                        const uint32_t rm_row = (tile_row * tile_height) + r;
+                                        const uint32_t col_off_bytes = tile_col * reread_row_chunk_bytes;
+                                        noc.async_read(
+                                            dst_a,
+                                            CoreLocalMem<uint32_t>(l1_write_addr),
+                                            reread_row_chunk_bytes,
+                                            {.page_id = rm_row, .offset_bytes = col_off_bytes},
+                                            {});
+                                        l1_write_addr += reread_row_chunk_bytes;
+                                    }
+                                }
+                                noc.async_read_barrier();
+                            }
+                            cb_reread_rm.push_back(out_block_hw_normal);
+#else
                             const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out_id);
                             uint32_t l1_write_addr;
                             l1_write_addr = cb_reread_out.get_write_ptr();
@@ -441,6 +509,7 @@ void kernel_main() {
                                 }
                             }
                             cb_reread_out.push_back(out_block_hw_normal);
+#endif
                         }
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }

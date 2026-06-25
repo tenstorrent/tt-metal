@@ -225,6 +225,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    // ROW_MAJOR output (UNTILIZE_OUT) is only implemented on the single-core (no_mcast) path: it
+    // relies on the reader re-gathering the previously written row-major output for cross-group
+    // overlap, which the multicast receiver reader does not do. ROW_MAJOR input (tilize_in) -> TILE
+    // output is supported on the multicast path.
+    TT_FATAL(
+        !untilize_out,
+        "group_norm: ROW_MAJOR output is not supported on the multicast path yet (selected when the core "
+        "grid spans multiple cores). Request a TILE-layout output, or use a single-core grid.");
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 

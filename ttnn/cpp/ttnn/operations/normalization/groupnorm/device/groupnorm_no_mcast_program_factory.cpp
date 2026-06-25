@@ -275,6 +275,35 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    // ROW_MAJOR interleaved input/output is handled by on-core tilize/untilize in the
+    // reader/compute/writer kernels (TILIZE_IN / UNTILIZE_OUT), which process one out-block of one
+    // group at a time. The following combinations are not implemented on that on-core path yet;
+    // reject them with a clear, actionable error instead of silently mis-reading data and hanging.
+    if (tilize_in || untilize_out) {
+        TT_FATAL(
+            !reader_repack_output,
+            "group_norm: ROW_MAJOR interleaved input/output requires per_core_N ({}) to be a multiple of the tile "
+            "width ({}). Adjust the core grid so each core's channel slice is tile-aligned, or use TILE layout.",
+            per_core_N,
+            tile_width);
+        // The per-block on-core tilize/untilize consumes exactly out_block_h_normal tile-rows per
+        // out-block, so num_out_blocks must divide block_h evenly (no ragged final out-block).
+        TT_FATAL(
+            block_ht_group_1 % num_out_blocks == 0,
+            "group_norm: ROW_MAJOR interleaved input/output requires num_out_blocks ({}) to evenly divide block_h "
+            "({}). Choose a num_out_blocks that divides block_h, or use TILE layout.",
+            num_out_blocks,
+            block_ht_group_1);
+        if (block_ht_group_2 > 0) {
+            TT_FATAL(
+                block_ht_group_2 % num_out_blocks == 0,
+                "group_norm: ROW_MAJOR interleaved input/output requires num_out_blocks ({}) to evenly divide "
+                "block_h_group_2 ({}).",
+                num_out_blocks,
+                block_ht_group_2);
+        }
+    }
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -442,11 +471,27 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         out_CB_size_group_2 = in0_block_tiles_group_2 * out_single_tile_size;
     }
 
+    // For row-major interleaved input the reader stages each group's per-out_block
+    // tile region into cb_repack (c_26) in row-major form and the compute kernel
+    // tilizes it into cb_in0 (c_0). cb_repack must hold one out_block of the group's
+    // tiles (double-buffered so the reader can prefetch the next pass/out_block).
+    uint32_t repack_in_CB_size = std::max(in0_block_tiles_group_1, in0_block_tiles_group_2) * in_single_tile_size * 2;
+
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
         x_CB_size_group_2 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
         xmm_CB_size_group_2 = single_tile_size * 3;
+        if (tilize_in) {
+            // Row-major welford: the compute kernel tilizes the full per_core_N-wide input row
+            // (cb_repack -> c_29) up front, before the welford DEST-accumulation region, so c_29
+            // must hold a whole batch's tiles (block_ht * per_core_Nt). cb_repack must hold at
+            // least one per_core_Nt-wide block-row (double-buffered for reader prefetch). Unlike
+            // the non-welford path these are full-width (per_core_Nt), not per-group (block_wt).
+            in_CB_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
+            in_CB_size_group_2 = block_ht_group_2 * per_core_Nt * in_single_tile_size;
+            repack_in_CB_size = per_core_Nt * in_single_tile_size * 2;
+        }
     }
 
     // Application Setup
@@ -743,12 +788,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    // ROW_MAJOR interleaved output: the writer must scatter on-core untilized row-major rows to the
+    // ROW_MAJOR DRAM output (UNTILIZE_OUT path), mirroring the reader's TILIZE_IN gather. Without this
+    // define the writer would silently take the TILE-layout write path and write tiled bytes into a
+    // row-major buffer.
+    std::map<std::string, std::string> writer_defines;
+    if (untilize_out) {
+        writer_defines["UNTILIZE_OUT"] = "1";
+    }
+
     KernelDescriptor writer_desc_g1;
     writer_desc_g1.kernel_source = writer_kernel;
     writer_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc_g1.core_ranges = all_cores_group_1;
     writer_desc_g1.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc_g1.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_1);
+    writer_desc_g1.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc_g1.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -1035,6 +1090,29 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                 .page_size = in_single_tile_size,
             }}},
         });
+
+        // Row-major reread scratch CB (c_20): the reader gathers the previously written ROW_MAJOR
+        // output rows for overlapping (shared) tiles here; the compute tilizes c_20 -> cb_reread_out
+        // (c_23) for the cross-group accumulation, mirroring the TILIZE_IN input gather.
+        constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_CB_size_group_2,
+            .core_ranges = all_cores_group_2,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
     }
 
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
@@ -1106,11 +1184,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }}},
         });
     }
-    if (reader_repack_output) {
+    if (reader_repack_output || tilize_in) {
         constexpr uint32_t repack_cb_index = tt::CBIndex::c_26;
         constexpr uint32_t repack_out_cb_index = tt::CBIndex::c_31;
+        uint32_t repack_total_size = 0;
+        if (reader_repack_output) {
+            repack_total_size = std::max(repack_total_size, repack_CB_size);
+        }
+        if (tilize_in) {
+            repack_total_size = std::max(repack_total_size, repack_in_CB_size);
+        }
         desc.cbs.push_back(CBDescriptor{
-            .total_size = repack_CB_size,
+            .total_size = repack_total_size,
             .core_ranges = all_cores,
             .format_descriptors =
                 {{CBFormatDescriptor{
