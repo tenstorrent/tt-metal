@@ -50,6 +50,12 @@ class Attention(_BaseAttention):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        # TP4 QKV decode: reshard in0 to 12 cores (DRAM-bound; matmul grid follows in0 shard). None on 1×1.
+        opt_qkv_in_cfg = self.args.get_attn_qkv_opt_input_mem_config()
+        if opt_qkv_in_cfg is not None:
+            x_opt = ttnn.to_memory_config(x, opt_qkv_in_cfg)
+            ttnn.deallocate(x)
+            x = x_opt
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,

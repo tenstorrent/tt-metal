@@ -1617,11 +1617,12 @@ class ModelArgs:
                     untilize_out=True,
                 )
             else:
+                opt_num_cores = self.qkv_decode_opt_num_cores()
                 return self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
-                    num_cores=self.attn_input_grid.num_cores,
+                    num_cores=opt_num_cores if opt_num_cores is not None else self.attn_input_grid.num_cores,
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
@@ -1657,6 +1658,33 @@ class ModelArgs:
                 )
         else:
             raise ValueError(f"Invalid mode: {mode}")
+
+    _QKV_DECODE_OPT_NUM_CORES = 12  # tuned grid for the decode QKV matmul (see qkv_decode_opt_num_cores)
+
+    def qkv_decode_opt_num_cores(self):
+        """12 cores for TP4 QKV decode (32×3072×1536, DRAM-bound); else ``None`` → ``attn_input_grid``. BH QB2: 21.5 µs vs 36.7 µs."""
+        if self.num_devices > 1 and self.dim == 3072 and (self.qkv_size // self.num_devices) == 1536:
+            return self._QKV_DECODE_OPT_NUM_CORES
+        return None
+
+    def get_attn_qkv_opt_input_mem_config(self):
+        """L1 width-shard for the decode QKV activation matching ``qkv_decode_opt_num_cores``.
+
+        A DRAM-sharded matmul takes its core grid from the in0 shard, so the activation
+        must be resharded onto the tuned core count before the QKV matmul. ``None`` when
+        the optimization does not apply.
+        """
+        nc = self.qkv_decode_opt_num_cores()
+        if nc is None:
+            return None
+        assert nc == 12, "QKV decode opt grid (2x6) is wired for 12 cores"
+        return ttnn.create_sharded_memory_config(
+            (self.tile_padded_batch_rows, self.dim // nc),
+            ttnn.CoreGrid(y=2, x=6),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
     def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
         if seq_len > 128:

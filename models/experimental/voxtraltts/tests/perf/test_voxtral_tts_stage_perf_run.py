@@ -29,6 +29,7 @@ from loguru import logger
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
 from models.experimental.voxtraltts.utils.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.mesh import voxtral_is_multi_device_mesh
 from models.experimental.voxtraltts.tt.voxtral_tts import ACOUSTIC_CFG_ALPHA_DEFAULT, VoxtralTTSPipeline
 
 try:
@@ -69,6 +70,29 @@ def _stop() -> None:
         signpost(header="stop")
 
 
+def _build_perf_embeds(pipe, device, prompt_token_ids):
+    """Mesh-appropriate prompt embeds for the text prefill/decode stages.
+
+    TP text (multi-device mesh) requires column-sharded ttnn embeds (local ``dim // N`` per
+    chip); 1×1 uses the host-torch full-``dim`` builder. Mirrors the mesh branch in
+    ``VoxtralTTSPipeline.text_prefill_hidden`` so the perf path matches the real pipeline.
+    """
+    if voxtral_is_multi_device_mesh(device):
+        _, embeds_tt = pipe._build_voice_injected_embeds_tt_qb2(prompt_token_ids, _PERF_VOICE)
+        return embeds_tt
+    return pipe._build_voice_injected_embeds(prompt_token_ids, _PERF_VOICE)
+
+
+def _take_tokens(embeds, n):
+    """First ``n`` tokens along dim 0. ttnn embeds slice with ``ttnn.slice`` (keeping the
+    per-chip local width); host-torch embeds slice with Python ``[:n]``."""
+    if isinstance(embeds, ttnn.Tensor):
+        n = min(n, int(embeds.shape[0]))
+        w = int(embeds.shape[-1])
+        return ttnn.slice(embeds, [0, 0, 0, 0], [n, 1, 1, w])
+    return embeds[:n]
+
+
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("stage", _STAGES)
@@ -106,11 +130,11 @@ def test_voxtral_tts_stage_perf_run(device, reset_seeds, request, stage):
 
     if stage == "text_prefill":
         prompt_token_ids = compose_speech_request(_PERF_TEXT, name, voice=_PERF_VOICE)["prompt_token_ids"]
-        embeds = pipe._build_voice_injected_embeds(prompt_token_ids, _PERF_VOICE)
+        embeds = _build_perf_embeds(pipe, device, prompt_token_ids)
         # Cap profiled prefill length so the measured region fits the device profiler's capacity
         # (the full voice-padded prompt overflows it, leaving ops untimed). Per-token cost is
         # representative; scale by the real prompt length for total prefill latency.
-        embeds = embeds[:_PREFILL_TOKENS]
+        embeds = _take_tokens(embeds, _PREFILL_TOKENS)
         ttnn.synchronize_device(device)
         _start()
         _ = pipe.text.prefill_from_embeds(embeds, start_pos=0)
@@ -119,11 +143,11 @@ def test_voxtral_tts_stage_perf_run(device, reset_seeds, request, stage):
 
     elif stage == "text_decode":
         prompt_token_ids = compose_speech_request(_PERF_TEXT, name, voice=_PERF_VOICE)["prompt_token_ids"]
-        embeds = pipe._build_voice_injected_embeds(prompt_token_ids, _PERF_VOICE)
+        embeds = _build_perf_embeds(pipe, device, prompt_token_ids)
         # Short setup prefill (outside markers) just to populate a representative KV cache. Using the
         # full prompt here exhausts the device profiler's op-timing budget, so the measured decode
         # steps end up with empty (0.00 us) durations.
-        setup = embeds[:_DECODE_SETUP_TOKENS]
+        setup = _take_tokens(embeds, _DECODE_SETUP_TOKENS)
         _ = pipe.text.prefill_from_embeds(setup, start_pos=0)
         pos = int(setup.shape[0])
         mm_embed = torch.zeros(dim, dtype=torch.bfloat16)  # shape is what matters for device perf
