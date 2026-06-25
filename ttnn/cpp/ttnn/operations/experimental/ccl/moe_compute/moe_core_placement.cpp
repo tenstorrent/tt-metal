@@ -542,7 +542,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
 
     log_info(
         tt::LogOp,
-        "moe_compute: placement matmul_mode={} tilize={} {} combine={} {} matmul={} {} | bboxes tilize={} "
+        "moe_compute: placement matmul_mode={} tilize={} {} combine={} {} matmul={} {} mux={} | bboxes tilize={} "
         "combine={} matmul={}",
         used_compact_matmul ? "compact" : "dram-adjacent",
         tilize_cores.size(),
@@ -551,6 +551,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
         CoreRangeSet(combine_cores).str(),
         matmul_cores.size(),
         matmul_core_range_set.str(),
+        mux_core_range_set.empty() ? "none" : mux_core_range_set.str(),
         tilize_bounding_box.str(),
         combine_bounding_box.str(),
         matmul_bounding_box.str());

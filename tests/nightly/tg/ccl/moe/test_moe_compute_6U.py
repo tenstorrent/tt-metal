@@ -108,7 +108,7 @@ class MoEMeshConfig:
     use_linear_topology: bool = False
     num_links: int = 4
     cluster_axis: int = 1
-    mux_core_range: tuple = ((1, 1), (3, 3))
+    mux_core_ranges: tuple = (((1, 1), (3, 3)),)
 
     @property
     def mesh_shape(self):
@@ -232,26 +232,40 @@ def _models_for_mesh(mesh_cfg: MoEMeshConfig):
     return tuple(m for m in mesh_cfg.model_configs if _include_model_on_mesh(mesh_cfg, m))
 
 
+_MUX_DEFAULT = ((1, 1), (3, 3))
+
+
+def _mux_tag(mux_core_range):
+    """Format a mux_core_range as a compact test-ID component."""
+    if mux_core_range == _MUX_DEFAULT:
+        return "mux_default"
+    (sx, sy), (ex, ey) = mux_core_range
+    return f"mux_{sx}x{sy}_{ex}x{ey}"
+
+
 def _expand_mesh_model_test_cases(mesh_configs):
     """Expand mesh + model configs into pytest.param entries for parametrized MoE model tests."""
     cases = []
     for mesh_cfg in mesh_configs:
-        for model_param in _expand_model_configs(_models_for_mesh(mesh_cfg)):
-            desc_skip = pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(mesh_cfg.mesh_graph_desc),
-                reason=f"{mesh_cfg.name} tests require TT_MESH_GRAPH_DESC_PATH={mesh_cfg.mesh_graph_desc}",
-            )
-            cases.append(
-                pytest.param(
-                    mesh_cfg.device_params,
-                    mesh_cfg,
-                    mesh_cfg.mesh_shape,
-                    mesh_cfg.mesh_shape,
-                    *model_param.values,
-                    marks=list(model_param.marks) + [desc_skip],
-                    id=f"{mesh_cfg.name}-{model_param.id}",
+        for mux_core_range in mesh_cfg.mux_core_ranges:
+            mux_tag = _mux_tag(mux_core_range)
+            for model_param in _expand_model_configs(_models_for_mesh(mesh_cfg)):
+                desc_skip = pytest.mark.skipif(
+                    not is_mesh_graph_descriptor_set(mesh_cfg.mesh_graph_desc),
+                    reason=f"{mesh_cfg.name} tests require TT_MESH_GRAPH_DESC_PATH={mesh_cfg.mesh_graph_desc}",
                 )
-            )
+                cases.append(
+                    pytest.param(
+                        mesh_cfg.device_params,
+                        mesh_cfg,
+                        mesh_cfg.mesh_shape,
+                        mesh_cfg.mesh_shape,
+                        mux_core_range,
+                        *model_param.values,
+                        marks=list(model_param.marks) + [desc_skip],
+                        id=f"{mesh_cfg.name}-{mux_tag}-{model_param.id}",
+                    )
+                )
     return cases
 
 
@@ -308,7 +322,7 @@ _MODELS_8x1_ROW = [
 ]
 
 _MODELS_1x8_MUX_EASTERN = [
-    MoEModelConfig("deepseek_ocr", N=896, hidden_size=1280, selected_experts_k=6),
+    MoEModelConfig("gpt_oss", N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("correctness",), activation_types=(MoEActivationFunction.SWIGLU,)),
 ]
 
 _MOE_MESH_CONFIGS = [
@@ -320,7 +334,7 @@ _MOE_MESH_CONFIGS = [
     MoEMeshConfig("16x1-row",        16, MESH_GRAPH_DESC_16x1,             _MODELS_16x1_ROW,  MOE_DEVICE_PARAMS_ROW, cluster_axis=0),
     MoEMeshConfig("8x1-row",          8, MESH_GRAPH_DESC_8x1,              _MODELS_8x1_ROW,   MOE_DEVICE_PARAMS_ROW, cluster_axis=0),
     MoEMeshConfig("8x1-row-bh_lb",    8, MESH_GRAPH_DESC_BH_LB_8x1_LINEAR, _MODELS_8x1_ROW,  MOE_DEVICE_PARAMS_ROW_LINEAR, use_linear_topology=True, num_links=2, cluster_axis=0),
-    MoEMeshConfig("1x8-torus-mux",    8, MESH_GRAPH_DESC_1x8, _MODELS_1x8_MUX_EASTERN, MOE_DEVICE_PARAMS, mux_core_range=((6, 0), (7, 9))),
+    MoEMeshConfig("1x8-linear-mux",   8, MESH_GRAPH_DESC_BH_LB_1x8_LINEAR, _MODELS_1x8_MUX_EASTERN, MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True, num_links=2, mux_core_ranges=(((4, 4), (9, 9)), ((10, 0), (11, 3)), )),
 ]
 # fmt: on
 
@@ -2366,7 +2380,7 @@ def _run_moe_compute_impl(
 #   MOE_COMPUTE_FULL=1             — all models x all meshes (1x8/1x16 x torus/linear); tier rules unchanged.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "device_params, mesh_cfg, mesh_shape, mesh_device, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace",
+    "device_params, mesh_cfg, mesh_shape, mesh_device, mux_core_range, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace",
     MOE_COMPUTE_MODEL_TEST_CASES,
     indirect=["device_params", "mesh_device"],
 )
@@ -2374,6 +2388,7 @@ def test_moe_compute(
     mesh_device,
     mesh_shape,
     mesh_cfg,
+    mux_core_range,
     enable_trace,
     model_cfg,
     test_mode,
@@ -2396,7 +2411,7 @@ def test_moe_compute(
         topology=topology,
         num_links=mesh_cfg.num_links,
         cluster_axis=mesh_cfg.cluster_axis,
-        mux_core_range=mesh_cfg.mux_core_range,
+        mux_core_range=mux_core_range,
     )
 
 
