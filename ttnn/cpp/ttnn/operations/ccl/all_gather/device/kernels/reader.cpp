@@ -18,9 +18,6 @@
 
 #include "common.hpp"
 
-#include "api/debug/dprint.h"
-// #include "api/debug/device_print.h"
-
 using address_t = uint32_t;
 
 void kernel_main() {
@@ -46,7 +43,6 @@ void kernel_main() {
     constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
-    constexpr uint32_t num_banks = NUM_DRAM_BANKS;  // compile-time constant available in kernels
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -186,7 +182,6 @@ void kernel_main() {
     auto l1_read_addr = l1_base_addr;
 
     // "iterator" for input_tensor
-    // TODO for per-bank iteration, start from (input_page_id_start + bank) and incr by += num_banks
     auto input_page_id = input_page_id_start;
     auto valid_input_page_id = [&]() __attribute__((always_inline)) { return input_page_id < input_page_id_end; };
     auto next_input_page_id = [&]() __attribute__((always_inline)) { return input_page_id++; };
@@ -218,16 +213,10 @@ void kernel_main() {
         return loc;
     };
 
-    // We reserve one to kick start the pipeline, and then it is steady state
+    // We reserve two to kick start the pipeline, and then it is steady state
     cb.reserve_back(2);
-
-    // uint32_t bank = chip_id; // starting
-    // for (uint32_t b = 0; b < num_banks; ++b) {
-    // uint32_t first_page = input_page_id_start + bank;
-    // bank = (bank == num_banks - 1) ? 0 : bank + 1;
-
     while (valid_input_page_id()) {
-        // fill CB page
+        // Read input tensor and fill CB page
         for (uint32_t i = 0; i < inputs_per_cb_page && valid_input_page_id(); ++i) {
             auto page_id = next_input_page_id();
             noc.async_read<NocOptions::TXN_ID>(
@@ -238,10 +227,6 @@ void kernel_main() {
                 {},
                 {.trid = curr_trid});
             l1_write_addr += input_page_size;
-
-            // uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(page_id);  // true for
-            // DRAM uint32_t bank_id = interleaved_addr_gen::get_bank_index<true>(page_id, bank_offset_index); DPRINT <<
-            // "page_id=" << page_id << " bank=" << bank_id << ENDL();
         }
         if (l1_write_addr == l1_end_addr) {
             l1_write_addr = l1_base_addr;
@@ -269,9 +254,9 @@ void kernel_main() {
                 }
             }
 
-            // Reserve for next block
-            // Reserve back is not incremental, so to reserve one more, we need to reserve 2
-            // This accounts for the one we already have reserved (for in-flight read)
+            // Reserve for next block.
+            // Reserve back is not incremental, so to reserve one more, we need to reserve 2.
+            // This accounts for the one we already have reserved (for in-flight read).
             cb.reserve_back(2);
         }
         txns_in_flight = true;
@@ -298,37 +283,6 @@ void kernel_main() {
             }
         }
     }
-
-    //}
-
-    /*// NUM_DRAM_BANKS is a device compile-time constant available in kernels
-    uint32_t num_banks = NUM_DRAM_BANKS;
-
-    for (uint32_t bank = 0; bank < num_banks; bank++) {
-        for (uint32_t page_id = bank; page_id < total_pages; page_id += num_banks) {
-            // page_id hits bank `bank` every iteration
-            // use with noc.async_read(tensor_accessor, dst, size, {.page_id = page_id}, ...);
-        }
-    }
-
-    for (uint32_t bank = 0; bank < num_banks; bank++) {
-    // First page_id in [start, end) that lands on this bank
-    uint32_t remainder = start_page_id % num_banks;
-    uint32_t first = (remainder <= bank)
-        ? start_page_id + (bank - remainder)
-        : start_page_id + (num_banks - remainder + bank);
-
-        for (uint32_t page_id = first; page_id < end_page_id; page_id += num_banks) {
-            // all iterations hit bank `bank`
-        }
-    }
-
-    for (uint32_t i = 0; i < num_banks; i++) {
-        uint32_t first = start_page_id + i;
-        for (uint32_t page_id = first; page_id < end_page_id; page_id += num_banks) {
-            // all iterations here hit the same bank
-        }
-    }*/
 
     ///////////////////////////////////////////////////
     // CLEANUP

@@ -19,9 +19,6 @@
 
 #include "common.hpp"
 
-// #include "api/debug/dprint.h"
-#include "api/debug/device_print.h"
-
 using address_t = uint32_t;
 
 void kernel_main() {
@@ -43,7 +40,6 @@ void kernel_main() {
     constexpr bool enable_fabric = (num_connections > 0);
     constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
-    constexpr uint32_t num_banks = NUM_DRAM_BANKS;  // compile-time constant available in kernels
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -73,14 +69,6 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb(cb0_id);
-
-    // DPRINT << "output_page_size=" << output_page_size << " pages_per_packet=" << pages_per_packet << " pages_per_cb="
-    // << outputs_per_cb_page << ENDL();
-    // DEVICE_PRINT(
-    //    "output_page_size={} pages_per_packet={} pages_per_cb={}\n",
-    //    output_page_size,
-    //    pages_per_packet,
-    //    outputs_per_cb_page);
 
     ///////////////////////////////////////////////////
     // FABRIC INIT
@@ -222,8 +210,6 @@ void kernel_main() {
         }
         cb.pop_front(1);
     }
-
-    //}
 
     ///////////////////////////////////////////////////
     // CLEANUP

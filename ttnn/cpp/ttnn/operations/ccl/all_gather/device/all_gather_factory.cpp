@@ -13,31 +13,6 @@ namespace ttnn::operations::ccl {
 
 using namespace ::ttnn::ccl;
 
-// TODO finalize core placement.
-/*
-namespace {  // anonymous namespace for internal helpers
-
-CoreRangeSet get_cores_close_to_erisc(uint32_t num_workers, bool row_wise) {
-    CoreRangeSet worker_cores;
-    std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
-    for (const auto& cr : desired_core_range) {
-        auto cores = corerange_to_cores(cr, std::nullopt, row_wise);
-        for (const auto& core : cores) {
-            worker_cores = worker_cores.merge(CoreRangeSet(CoreRange(core, core)));
-            if (worker_cores.num_cores() == num_workers) {
-                break;
-            }
-        }
-        if (worker_cores.num_cores() == num_workers) {
-            break;
-        }
-    }
-    return worker_cores;
-}
-
-}  // namespace
-*/
-
 AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     const AllGatherParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -97,8 +72,6 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     const uint32_t num_devices = operation_attributes.num_devices;
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
-    // TODO verify row-major device_idx matches ShardTensorToMesh order under 2D no-cluster_axis;
-    // manual (2,4) test will catch any mismatch. i.e. in 2D mesh shape, whats the device_slot?
 
     // Compute hops + neighbors for each mesh axis.
     // Each axis ∈ {0, 1} contributes a forward/backward pair: axis 1 -> (E=fwd, W=bwd),
@@ -157,9 +130,6 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     // Get worker cores
     uint32_t num_workers_per_link = 1;
-    // TODO finalize core placement
-    /*auto sender_worker_core_range = get_cores_close_to_erisc(min_num_links * num_workers_per_link, true);
-    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);*/
     auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         min_num_links,
         num_workers_per_link,

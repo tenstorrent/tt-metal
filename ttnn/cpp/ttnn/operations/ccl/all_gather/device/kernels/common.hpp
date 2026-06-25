@@ -31,7 +31,6 @@ public:
         fabric_connection{manager},
         // PacketHeaderPool::allocate_header_n (vs allocate_header) allows sending the same packet along multiple
         // paths in a single API invocation.
-        // TODO remove _n for 1D?
         scatter_route_id_1{PacketHeaderPool::allocate_header_n(num_connections)},
         scatter_route_id_2{
             alternate_routes ? PacketHeaderPool::allocate_header_n(num_connections) : scatter_route_id_1},
@@ -88,7 +87,7 @@ public:
     }
 
     ~FabricWriter() {
-        // TODO static_assert(chunk_count == 0, "outstanding chunks! flush() not called correctly");
+        ASSERT(chunk_count == 0);  // outstanding chunks! flush() not called correctly
     }
 
     // Send a single page
