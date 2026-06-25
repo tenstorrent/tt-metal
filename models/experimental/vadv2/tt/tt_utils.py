@@ -143,13 +143,10 @@ def inverse_sigmoid(x, eps: float = 1e-5):
     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
     x = ttnn.clamp(x, min=0, max=1)
     x1 = ttnn.clamp(x, min=eps)
-    if len(x.shape) == 3:
-        x_temp = ttnn.ones(shape=[x.shape[0], x.shape[1], x.shape[2]], layout=ttnn.TILE_LAYOUT, device=x.device())
-    else:
-        x_temp = ttnn.ones(
-            shape=[x.shape[0], x.shape[1], x.shape[2], x.shape[3]], layout=ttnn.TILE_LAYOUT, device=x.device()
-        )
-    x_temp = x_temp - x
+    # `1 - x` computed as a scalar reverse-subtract instead of materialising a
+    # `ttnn.ones` tensor: ttnn.ones does a host->device fill that is forbidden
+    # inside Metal-Trace capture. ttnn.rsub(x, 1.0) == 1.0 - x, device-only.
+    x_temp = ttnn.rsub(x, 1.0)
     x2 = ttnn.clamp(x_temp, min=eps)
     return ttnn.log(ttnn.div(x1, x2))
 

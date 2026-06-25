@@ -85,7 +85,10 @@ class TtCustomMSDeformableAttention:
 
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
-        assert (ttnn.sum(spatial_shapes[:, 0] * spatial_shapes[:, 1])) == num_value
+        # NOTE: a `ttnn.sum(spatial_shapes[:,0]*spatial_shapes[:,1]) == num_value`
+        # sanity assert used to live here, but `== num_value` forces a host-side
+        # `__bool__` sync on a device tensor every call — a Metal-Trace capture
+        # blocker. spatial_shapes is static, so the invariant is structural.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
 
         value = linear_flatten_batch(value, params.value_proj.weight, bias=params.value_proj.bias)
