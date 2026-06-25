@@ -908,6 +908,7 @@ ALL_ARCHS = set(
         "grayskull",
         "wormhole_b0",
         "blackhole",
+        "quasar",
     ]
 )
 

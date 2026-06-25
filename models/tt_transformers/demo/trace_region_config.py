@@ -8,7 +8,7 @@ import re
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_quasar, is_wormhole_b0
 from models.demos.utils.model_targets import normalize_sku
 from models.demos.utils.trace_region_sizes import hf_model_name_candidates, resolve_trace_region_size_for_candidates
 
@@ -49,6 +49,10 @@ def get_mesh_device_name(num_devices, mesh_device_name):
             4: "N150x4",
             8: "T3K",
             32: "TG",
+        }
+    elif is_quasar():
+        dict_device_names = {
+            1: "QUASAR_BOARD",
         }
     else:
         raise ValueError(f"Unsupported architecture: {arch_name}")
