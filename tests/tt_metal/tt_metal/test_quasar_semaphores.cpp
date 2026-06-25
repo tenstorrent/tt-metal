@@ -178,6 +178,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     auto mesh_device = devices_[0];
 
+    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "This test requires at least 2 worker nodes.";
+    }
+
     const experimental::NodeCoord node_0{0, 0};
     const experimental::NodeCoord node_1{1, 0};
 
