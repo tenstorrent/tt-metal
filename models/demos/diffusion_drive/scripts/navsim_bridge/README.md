@@ -1,5 +1,9 @@
 # NavSim PDM evaluation with the TTNN model (cross-process bridge)
 
+> **This is the fallback path.** The default is the in-process agent in
+> [`../navsim_inproc/`](../navsim_inproc/README.md) (single env, no socket/server).
+> Use this bridge only when `ttnn` cannot be imported in the navsim env.
+
 The NavSim eval harness (`run_pdm_score.py`) runs in the **`navsim` conda env
 (Python 3.9)**; TTNN is only importable in the **tt-metal venv (Python 3.10)**.
 They can't share the compiled `ttnn` wheel, so inference is delegated over a
