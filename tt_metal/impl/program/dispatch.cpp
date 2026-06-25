@@ -754,6 +754,12 @@ BatchedTransfers assemble_runtime_args_commands(
         // Set by the user based on the kernel and core coord
         for (auto& kg : program.get_kernel_groups(index)) {
             if (kg->total_rta_size != 0) {
+                // These per-core vectors are cleared per kernel group, so reserve their final size
+                // up front (one entry per core) instead of growing one element at a time.
+                const size_t kg_num_cores = kg->core_ranges.num_cores();
+                unique_rt_args_data.reserve(kg_num_cores);
+                unique_rt_data_and_sizes.reserve(kg_num_cores);
+                unique_sub_cmds.reserve(kg_num_cores);
                 for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
