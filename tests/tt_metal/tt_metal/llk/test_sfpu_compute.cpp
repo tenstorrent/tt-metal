@@ -1153,7 +1153,7 @@ void run_quasar_sfpu_unpack_to_dest_fp32(
 // so building the kernel would fail with "not declared in this scope". Skip them on
 // Quasar so the suite reflects actual coverage instead of a hard kernel-build failure.
 inline bool is_unary_sfpu_op_unsupported_on_quasar(const std::string& sfpu_op) {
-    return sfpu_op == "gelu" || sfpu_op == "log" || sfpu_op == "tanh" || sfpu_op == "sign";
+    return sfpu_op == "log" || sfpu_op == "tanh" || sfpu_op == "sign";
 }
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
