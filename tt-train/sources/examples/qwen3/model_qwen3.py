@@ -10,14 +10,6 @@ single-device ``Qwen3`` model, and re-exports symbols consumed by
 ``model_qwen3_distributed.py``, ``model_factory.py`` and external callers.
 """
 
-<<<<<<< HEAD
-=======
-import sys
-
-import torch
-from tqdm import tqdm
-
->>>>>>> main
 import ttml
 
 # Re-export shared components so existing callers (model_qwen3_distributed,
