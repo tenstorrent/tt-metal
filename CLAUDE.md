@@ -74,6 +74,15 @@ reconcile before proceeding. Don't rationalize past contradictions.
 - T3K multi-chip: use `ttnn.all_reduce` (not `tt_all_reduce` which is a NO-OP on T3K).
 - KV cache: use bfloat16 for vision models (bfloat8_b causes logit flips at S > 2500).
 - Verify end-to-end output is functionally correct, not just PCC passing.
+- **PCC at short ISL does not guarantee correctness at long ISL.** Always test PCC
+  at the maximum intended sequence length, not just the cheapest short case. For
+  recurrent / SSM layers this is critical: quantisation noise in decay parameters
+  (e.g. `A_log`, `dt_bias`) accumulates multiplicatively over `T / chunk_size`
+  chunks — PCC can be 0.9999 at ISL=128 and fail (< 0.99) at ISL=8192.
+- **Recurrent decay parameters must be BF16**, regardless of the module's default
+  dtype. Any weight that gates exponential decay over time (e.g. `A_log`, `dt_bias`
+  in GatedDeltaNet / Mamba) should be stored and computed in BF16 to prevent
+  per-chunk quantisation error from compounding across the sequence.
 - Skill: `/ttnn`
 
 ### Phase 4: Debug
