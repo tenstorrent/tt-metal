@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# buongiorno
 import math
 
-import pytest
 import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
