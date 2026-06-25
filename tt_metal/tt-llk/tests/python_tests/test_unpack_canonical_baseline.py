@@ -24,13 +24,12 @@ expected/actual agreement is a genuine cross-check of two independent code
 paths, not a tautology.
 """
 
+from conftest import skip_for_coverage
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TEST_FACE_DIMS
-
-from conftest import skip_for_coverage
 
 pytestmark = skip_for_coverage
 

@@ -30,6 +30,7 @@ The `do_restore` toggle makes this a controlled experiment:
 from dataclasses import dataclass
 
 import torch
+from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
@@ -46,8 +47,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-
-from conftest import skip_for_blackhole
 
 # The matmul victim is always a regular 32x32 (4-face) tile.
 MATMUL_NUM_FACES = 4

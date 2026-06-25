@@ -31,6 +31,7 @@ express (matches `test_unpack_tilize_uninit_restore_tiny`).
 
 from dataclasses import dataclass
 
+from conftest import skip_for_blackhole, skip_for_coverage
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
@@ -42,8 +43,6 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TemplateParameter,
 )
-
-from conftest import skip_for_blackhole, skip_for_coverage
 
 pytestmark = skip_for_coverage
 
