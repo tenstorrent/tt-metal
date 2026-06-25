@@ -58,6 +58,18 @@ def _to_ttnn_tile(x: torch.Tensor, B: int, H: int, W: int, C: int, device: ttnn.
     return ttnn.from_torch(x_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _to_host_tile(x: torch.Tensor, B: int, H: int, W: int, C: int) -> ttnn.Tensor:
+    """Like ``_to_ttnn_tile`` but stays on host (no ``device=``).
+
+    Used to refill a fixed-address pre-allocated device input via
+    ``ttnn.copy_host_to_device_tensor`` for trace replay — the device tensor's
+    address was bound at capture time, so we cannot allocate a fresh one.
+    """
+    x_nhwc = x.permute(0, 2, 3, 1).contiguous()
+    x_flat = x_nhwc.reshape(1, 1, B * H * W, C).to(torch.bfloat16)
+    return ttnn.from_torch(x_flat, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+
 def _from_ttnn_tile(x_ttnn: ttnn.Tensor, B: int, H: int, W: int, C: int) -> torch.Tensor:
     """Convert (1,1,B*H*W,C) TTNN → (B, C, H, W) float32 PyTorch."""
     if x_ttnn.is_sharded():
@@ -172,6 +184,18 @@ class TtnnTransfuserBackbone:
         # stems+fusion+FPN are all installed (_maybe_enable_consolidated, called
         # from build_stage3/3_6); set DD_CONSOLIDATE=0 to force the staged path.
         self._consolidated = False
+
+        # Stage 7: optional captured trace of the [stage→fusion]×4 device loop.
+        # capture_backbone_trace() pre-allocates the stem-output device inputs
+        # (fixed addresses) + records the graph; run_backbone_trace() replays it.
+        self._bb_trace_id = None
+        self._bb_img_in = None  # fixed-address device input (image stem output)
+        self._bb_lid_in = None  # fixed-address device input (lidar stem output)
+        self._bb_out = None  # persistent device output (deepest LiDAR feature)
+        self._bb_ish = None  # (B,H,W,C) of the lifted image input
+        self._bb_lsh = None  # (B,H,W,C) of the lifted lidar input
+        self._bb_out_shape = None  # (B,H,W,C) of the trace output
+        self._bb_in_torch_shapes = None  # ((B,C,H,W)_img, (B,C,H,W)_lid) for host refill
 
     # ------------------------------------------------------------------
     # Stage 3.6 installers
@@ -366,16 +390,127 @@ class TtnnTransfuserBackbone:
         lid_t = _to_ttnn_tile(lidar_feats, Bl, Hl, Wl, Cl, self._device)
         img_shape, lid_shape = (Bi, Hi, Wi, Ci), (Bl, Hl, Wl, Cl)
 
-        for i in range(4):
-            img_t, img_shape = self._run_ttnn_stage_dev(img_t, img_shape, self._img_stages[i])
-            lid_t, lid_shape = self._run_ttnn_stage_dev(lid_t, lid_shape, self._lidar_stages[i])
-            img_t, img_shape, lid_t, lid_shape = self._ttnn_fusion.forward_dev(img_t, img_shape, lid_t, lid_shape, i)
+        lid_t, lid_shape = self._run_loop_dev(img_t, img_shape, lid_t, lid_shape)
 
         # One host hop: deepest LiDAR feature → torch for the FPN tail.
         B, H, W, C = lid_shape
         lidar_feats = _from_ttnn_tile(lid_t, B, H, W, C)
         bev_upscale = self._ttnn_fpn(lidar_feats)
         return bev_upscale, lidar_feats, None
+
+    def _run_loop_dev(self, img_t, img_shape, lid_t, lid_shape):
+        """The device-native ``[stage → fusion] × 4`` loop, ttnn-in/ttnn-out.
+
+        Shared by ``forward_consolidated`` (fresh per-forward inputs, fine to
+        consume) and the trace path (inputs are persistent, so the traced fn
+        clones them before calling this). Returns ``(lid_t, lid_shape)`` — the
+        deepest LiDAR feature that feeds the FPN tail. The final image feature is
+        unused downstream, so it is deallocated."""
+        for i in range(4):
+            img_t, img_shape = self._run_ttnn_stage_dev(img_t, img_shape, self._img_stages[i])
+            lid_t, lid_shape = self._run_ttnn_stage_dev(lid_t, lid_shape, self._lidar_stages[i])
+            img_t, img_shape, lid_t, lid_shape = self._ttnn_fusion.forward_dev(img_t, img_shape, lid_t, lid_shape, i)
+        ttnn.deallocate(img_t)
+        return lid_t, lid_shape
+
+    # ------------------------------------------------------------------
+    # Stage 7: trace capture / replay of the consolidated backbone loop
+    # ------------------------------------------------------------------
+
+    def _stem_to_device_inputs(self, image: torch.Tensor, lidar: torch.Tensor):
+        """Run the stems (torch) and return their NHWC-tiled torch outputs + shapes.
+
+        The stems themselves run on-device but return torch (post-maxpool); this
+        is the boundary the trace cannot yet cross, so the stem output is what we
+        lift into the fixed-address trace input."""
+        ref = self._ref
+        if ref.config.latent:
+            lidar = ref.lidar_latent.expand(image.shape[0], -1, -1, -1)
+        img_feats = self._img_stem(image)
+        lidar_feats = self._lidar_stem(lidar)
+        return img_feats, lidar_feats
+
+    def capture_backbone_trace(self, image: torch.Tensor, lidar: torch.Tensor) -> None:
+        """Capture the ``[stage → fusion] × 4`` device loop as a replayable trace.
+
+        Pre-allocates the two stem-output device tensors as fixed-address trace
+        inputs, double-warms the loop (so every conv kernel variant is JIT-built
+        before capture), then records ``clone(inputs) → loop → deepest-LiDAR``.
+        The clone inside the captured region lets ``run_backbone_trace`` refill
+        the persistent inputs (a legal write outside capture) before each replay.
+
+        Requires the consolidated path (stems + fusion + FPN installed).
+        """
+        if self._img_stem is None or self._ttnn_fusion is None or self._ttnn_fpn is None:
+            raise RuntimeError("capture_backbone_trace requires stems + fusion + FPN (build_stage3/3_6)")
+
+        img_feats, lidar_feats = self._stem_to_device_inputs(image, lidar)
+        Bi, Ci, Hi, Wi = img_feats.shape
+        Bl, Cl, Hl, Wl = lidar_feats.shape
+        self._bb_img_in = _to_ttnn_tile(img_feats, Bi, Hi, Wi, Ci, self._device)
+        self._bb_lid_in = _to_ttnn_tile(lidar_feats, Bl, Hl, Wl, Cl, self._device)
+        self._bb_ish, self._bb_lsh = (Bi, Hi, Wi, Ci), (Bl, Hl, Wl, Cl)
+        self._bb_in_torch_shapes = ((Bi, Ci, Hi, Wi), (Bl, Cl, Hl, Wl))
+
+        def _traced():
+            # clone the persistent inputs INSIDE the captured region so replay
+            # reads the refilled fixed-address tensors and the loop mutates copies.
+            it = ttnn.clone(self._bb_img_in)
+            lt = ttnn.clone(self._bb_lid_in)
+            lt, lsh = self._run_loop_dev(it, self._bb_ish, lt, self._bb_lsh)
+            self._bb_out_shape = lsh
+            return lt
+
+        # Double warm-up populates the program cache for all kernel variants.
+        for _ in range(2):
+            tmp = _traced()
+            ttnn.deallocate(tmp)
+        ttnn.synchronize_device(self._device)
+
+        try:
+            self._bb_trace_id = ttnn.begin_trace_capture(self._device, cq_id=0)
+            self._bb_out = _traced()
+            ttnn.end_trace_capture(self._device, self._bb_trace_id, cq_id=0)
+        except Exception:
+            # Never leave an open trace: a leaked trace_id_ fatals every later op.
+            if self._bb_trace_id is not None:
+                try:
+                    ttnn.release_trace(self._device, self._bb_trace_id)
+                except Exception:
+                    pass
+            self._bb_trace_id = None
+            raise
+
+    def run_backbone_trace(self, image: torch.Tensor, lidar: torch.Tensor):
+        """Replay the captured backbone loop, then run the FPN tail on host hop.
+
+        Refills the fixed-address trace inputs with this call's stem outputs,
+        executes the trace, lowers the deepest LiDAR feature to torch and runs the
+        (not-yet-traced) FPN. Output matches ``forward_consolidated``:
+        ``(bev_upscale, bev_feature, None)``."""
+        if self._bb_trace_id is None:
+            raise RuntimeError("run_backbone_trace called before capture_backbone_trace")
+
+        img_feats, lidar_feats = self._stem_to_device_inputs(image, lidar)
+        (Bi, Ci, Hi, Wi), (Bl, Cl, Hl, Wl) = self._bb_in_torch_shapes
+        # Refill the persistent device inputs (legal H2D write, outside capture).
+        ttnn.copy_host_to_device_tensor(_to_host_tile(img_feats, Bi, Hi, Wi, Ci), self._bb_img_in)
+        ttnn.copy_host_to_device_tensor(_to_host_tile(lidar_feats, Bl, Hl, Wl, Cl), self._bb_lid_in)
+
+        ttnn.execute_trace(self._device, self._bb_trace_id, cq_id=0, blocking=True)
+
+        B, H, W, C = self._bb_out_shape
+        lidar_out = _from_ttnn_tile(self._bb_out, B, H, W, C)
+        bev_upscale = self._ttnn_fpn(lidar_out)
+        return bev_upscale, lidar_out, None
+
+    def release_backbone_trace(self) -> None:
+        """Release the captured trace (frees the trace region)."""
+        if self._bb_trace_id is not None:
+            try:
+                ttnn.release_trace(self._device, self._bb_trace_id)
+            finally:
+                self._bb_trace_id = None
 
 
 # ---------------------------------------------------------------------------
