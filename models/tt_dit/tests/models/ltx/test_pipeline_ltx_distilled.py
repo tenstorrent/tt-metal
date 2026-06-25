@@ -30,8 +30,12 @@ from models.tt_dit.utils.vbench import assert_vbench_quality
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
-ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
-line_trace_params = {**line_params, "trace_region_size": 300_000_000}
+# l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
+# whose sharding/config tensors allocate from the dedicated L1_SMALL pool; it defaults to 0, which
+# OOMs the vocoder. 32 KB matches the audio component tests; the audio submesh (create_submesh)
+# inherits it from the parent mesh.
+ring_trace_params = {**ring_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+line_trace_params = {**line_params, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 
 # Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips in the default suite
