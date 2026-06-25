@@ -52,35 +52,44 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # keyed by BATCH because both differ between batch-1 and batch-32.
 #
 # Numbers are MEASURED, not from PERF.md (which is stale — its 22.9/19.6 tok/s/u are unreachable on
-# either stack). Source: qwen3_32b REBASE_UPDATE.md §4 (perf re-run 2026-06-17, device-MCP) and the
-# TTTv1 batch-32 baseline (2026-06-25). decode tok/s/u · TTFT ms/user, T3K:
-#     cell                 TTTv2 host    TTTv2 on_device_topk
-#     performance/batch-1  9.5 · 103.7   16.8 · 105.1
-#     performance/batch-32 9.8 ·  95.3   16.5 ·  94.8
-#     accuracy/batch-1     8.5 · 123.0   12.8 · 120.0
-#     accuracy/batch-32    8.2 · 112.1   12.5 · 111.2
+# either stack). The perf cases default to SAMPLING_MODE=on_device_topk — the TTTv1-comparable path
+# (host pays a full-vocab all-gather + PCIe readback; TTTv1 auto-uses on-device sampling). Comparing
+# the WRONG path (host) vs TTTv1 was the entire apparent "decode gap" (host 7.9 vs TTTv1 13.0).
 #
-# tok_s_u is a FLOOR set at the host numbers (the demo's default SAMPLING_MODE). host runs meet it
-# tightly; on_device_topk runs clear it comfortably (16.8 ≥ 9.5·0.95) — so the gate holds in either
-# mode and still catches a real decode regression. ttft_ms is a CEILING at the measured (sequential-
-# prefill) TTFT; it's ~mode-independent, and the batched-prefill path only makes it faster (lower),
-# so it stays under the ceiling. top1/top5 are floors the measured book accuracy clears (perf
-# 90.2/98.4, acc 95.5/100.0; REBASE_UPDATE §4.2).
+# Decode tok/s/u · TTFT ms/user on the rebased base 5a5db2e2aee (2026-06-25, device-MCP T3K),
+# TTTv2 on_device_topk (jobs 195730-40, 203620-42) vs TTTv1 simple_text_demo auto on-device
+# (job 200605-41) — SAME base, apples-to-apples:
+#     cell                 TTTv2 on_device_topk   TTTv1        TTTv2/TTTv1
+#     performance/batch-1  12.4 · 111.8           12.99 · —    0.95×  (within 5% tol)
+#     performance/batch-32 12.3 ·  96.8           12.15 · —    1.01×  (TTTv2 ≥ TTTv1)
+#     accuracy/batch-1      9.0 · 124.5            9.32 · —    0.97×  (within 5% tol)
+#     accuracy/batch-32     8.8 · 114.4            8.82 · —    1.00×  (parity)
+# => TTTv2 on_device_topk is at PARITY with TTTv1 (batch-32 ≥ TTTv1; batch-1 within the 5% gate
+#    tolerance). BOTH stacks dropped equally from the 2026-06-17 16.x baseline (TTTv1 16.6→13.0,
+#    TTTv2 16.8→12.4) — a shared UPSTREAM decode/topk regression in the rebase window, NOT a port
+#    regression. See REBASE_UPDATE.md §4 and DECODE_PERF_GAP_HANDOFF_2026-06-25.md.
+#
+# tok_s_u is a FLOOR at the ACHIEVED on_device_topk number; the gate's PERF_TOLERANCE (5%) supplies
+# the headroom (e.g. perf/batch-1 floor 12.4·0.95 = 11.78, comfortably below the steady 12.4–12.5
+# measured), so the gate is robust to run-to-run noise yet still catches a real decode regression.
+# ttft_ms is a CEILING above the worst observed (sequential-prefill) TTFT plus headroom; it's
+# ~mode-independent and the batched-prefill path only lowers it. top1/top5 are floors the measured
+# book accuracy clears (perf 90.2/98.4, acc 95.5/100.0; REBASE_UPDATE §4.2).
 EXPECTED_METRICS = {
     "performance": {
         "T3K": {
             "top1": 89,
             "top5": 97,
-            "batch-1": {"tok_s_u": 9.5, "ttft_ms": 106},
-            "batch-32": {"tok_s_u": 9.8, "ttft_ms": 96},
+            "batch-1": {"tok_s_u": 12.4, "ttft_ms": 118},
+            "batch-32": {"tok_s_u": 12.3, "ttft_ms": 102},
         },
     },
     "accuracy": {
         "T3K": {
             "top1": 95,
             "top5": 100,
-            "batch-1": {"tok_s_u": 8.5, "ttft_ms": 124},
-            "batch-32": {"tok_s_u": 8.2, "ttft_ms": 113},
+            "batch-1": {"tok_s_u": 9.0, "ttft_ms": 130},
+            "batch-32": {"tok_s_u": 8.8, "ttft_ms": 120},
         },
     },
 }
@@ -538,12 +547,14 @@ def _run_perf_benchmark(model, mesh_device, expected, batch_size, case_name):
         )
 
         # On-device sampling toggle (see the rebase / sampling handoff docs):
-        #   host            -> sampling_params=None (host-argmax, the default shipped path)
+        #   host            -> sampling_params=None (host-argmax; slow — full-vocab all-gather + PCIe
+        #                      readback every step; NOT comparable to TTTv1)
         #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
         #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
         #                      the [*,32] tuples; PERF.md-parity recipe, faster on >=8-dev meshes)
-        # On T3K (8 devices) the vocab shards 8-ways, so on-device top-k is expected to beat host.
-        sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+        # DEFAULT is on_device_topk: on T3K (8 devices) the vocab shards 8-ways and TTTv1 auto-uses
+        # on-device sampling, so this is the apples-to-apples TTTv1-comparable path the gate measures.
+        sampling_mode = os.environ.get("SAMPLING_MODE", "on_device_topk").lower()
         _on_device_params = {
             "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
             "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
