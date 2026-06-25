@@ -617,27 +617,24 @@ class Qwen3_32B(LightweightModule):
         # The model owns its sampler (replacing the self.sampling = None placeholder); callers pick
         # behavior per request via sampling_params. Buffers are lazy (nothing materializes until the
         # first on-device sampled decode), so this is harmless when sampling_params is None (the
-        # host-argmax path, which stays the demo default). Qwen3-32B is T3K-only (num_devices == 8),
-        # where the vocab shards 8-ways and on-device top-k is the cheap path.
-        self.supports_on_device_sampling = self.num_devices >= 1
-        self.sampling = (
-            Sampling1D(
-                # Padded width for the per-device top-k offset math; valid_vocab_size carries the
-                # real tokenizer vocab so #47021's mask zeroes out the trailing pad logits.
-                vocab_size=self.padded_vocab_size,
-                valid_vocab_size=self.vocab_size,
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                max_batch_size=_nearest_32(cfg.max_batch_size),
-                # Clone TTTv1's decision: allow_force_argmax=False for all non-Galaxy meshes (only
-                # Llama-3.1-8B on TG flips it True). The perf recipe (temp=0, top_k=32, top_p=0.08)
-                # routes through the cheap top-k op path — per-device ttnn.topk -> all-gather of the
-                # [*,32] tuples -> ttnn.sampling — never the full-vocab argmax all-gather.
-                allow_force_argmax=False,
-                pad_to_power_of_2=True,
-            )
-            if self.supports_on_device_sampling
-            else None
+        # host-argmax path, which stays the demo default). Qwen3-32B is T3K-only (from_pretrained
+        # rejects non-8 meshes), so the vocab always shards 8-ways and on-device top-k is always the
+        # cheap path — build the sampler unconditionally (no num_devices gate to mislead readers).
+        self.supports_on_device_sampling = True
+        self.sampling = Sampling1D(
+            # Padded width for the per-device top-k offset math; valid_vocab_size carries the
+            # real tokenizer vocab so #47021's mask zeroes out the trailing pad logits.
+            vocab_size=self.padded_vocab_size,
+            valid_vocab_size=self.vocab_size,
+            mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
+            max_batch_size=_nearest_32(cfg.max_batch_size),
+            # Clone TTTv1's decision: allow_force_argmax=False for all non-Galaxy meshes (only
+            # Llama-3.1-8B on TG flips it True). The perf recipe (temp=0, top_k=32, top_p=0.08)
+            # routes through the cheap top-k op path — per-device ttnn.topk -> all-gather of the
+            # [*,32] tuples -> ttnn.sampling — never the full-vocab argmax all-gather.
+            allow_force_argmax=False,
+            pad_to_power_of_2=True,
         )
 
     @property

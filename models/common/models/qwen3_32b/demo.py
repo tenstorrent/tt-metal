@@ -210,6 +210,7 @@ def test_qwen3_32b_executor_prefill_smoke(mesh_device, hf_model_id, seq_len: int
     kv_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
 
     ttnn.SetDefaultDevice(mesh_device)
+    logits = None
     try:
         ex = EagerQwen3_32BExecutor(model, mesh_device)
         kv = ex.allocate_kv_cache(kv_shape, torch.bfloat16, ma.n_layers)
@@ -217,12 +218,14 @@ def test_qwen3_32b_executor_prefill_smoke(mesh_device, hf_model_id, seq_len: int
         toks = torch.zeros(1, seq_len, dtype=torch.long)
         toks[0, :4] = torch.tensor([1, 2, 3, 4], dtype=torch.long)
         logits = ex.prefill_forward(toks, page_table=page_table, kv_cache=kv)
-        assert logits.shape[0] == 1 and logits.shape[-1] == model.vocab_size
     except Exception as e:
         pytest.skip(f"Executor prefill not runnable: {e}")
     finally:
         ttnn.SetDefaultDevice(None)
         cleanup_model_case(model, mesh_device)
+    # Assert OUTSIDE the try so a real shape regression fails the test instead of being
+    # swallowed into a skip by the broad `except` above.
+    assert logits.shape[0] == 1 and logits.shape[-1] == model.vocab_size
 
 
 @_slow
@@ -273,6 +276,8 @@ def test_qwen3_32b_teacher_forcing_prefill_vs_hf(mesh_device, hf_model_id, tmp_p
     input_ids[0, :4] = torch.tensor([1, 2, 3, 4], dtype=torch.long)
 
     ttnn.SetDefaultDevice(mesh_device)
+    ok = None
+    pcc = None
     try:
         hf = AutoModelForCausalLM.from_pretrained(hf_model_id, torch_dtype=torch.bfloat16)
         hf.eval()
@@ -286,12 +291,14 @@ def test_qwen3_32b_teacher_forcing_prefill_vs_hf(mesh_device, hf_model_id, tmp_p
         tt_vec = tt_logits[0, 0, :].float()
 
         ok, pcc = comp_pcc(hf_out, tt_vec, pcc=0.85)
-        assert ok, f"Prefill last-token PCC too low: {pcc}"
     except Exception as e:
         pytest.skip(f"Teacher-forcing PCC check not runnable: {e}")
     finally:
         ttnn.SetDefaultDevice(None)
         cleanup_model_case(model, mesh_device)
+    # Assert OUTSIDE the try so a genuine PCC regression — the whole point of this test — fails
+    # instead of being converted into a skip by the broad `except` above.
+    assert ok, f"Prefill last-token PCC too low: {pcc}"
 
 
 @_slow
