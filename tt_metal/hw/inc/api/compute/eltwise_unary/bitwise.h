@@ -12,22 +12,6 @@
 
 namespace ckernel {
 
-// clang-format off
-/**
- * Performs an element-wise bitwise operation between each element of a tile in the DST register at
- * index idst and an immediate scalar param0: y = bitwise(x, param0). The input must be of int data
- * type only. Output overwrites the input tile in DST. The DST register buffer must be in acquired state
- * via *acquire_dst* call. This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The scalar second operand of the bitwise operation                         | uint32_t |                                                       | True     |
- */
-// clang-format on
-
 namespace detail {
 template <DataFormat data_format>
 constexpr InstrModLoadStore unary_bitwise_instr_mode() {
@@ -38,6 +22,21 @@ constexpr InstrModLoadStore unary_bitwise_instr_mode() {
 }
 }  // namespace detail
 
+// clang-format off
+/**
+ * Performs an element-wise bitwise AND between each element of a tile in the DST register at index idst and an
+ * immediate scalar param0: y = x & param0. The input must be of integer data type: Int32, UInt32, or UInt16. Output
+ * overwrites the input tile in DST. The DST register buffer must be in acquired state via *acquire_dst* call. This
+ * call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The scalar second operand of the bitwise operation                         | uint32_t |                                                       | True     |
+ */
+// clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_bitwise_instr_mode<data_format>();
@@ -51,6 +50,21 @@ ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
         param0));
 }
 
+// clang-format off
+/**
+ * Performs an element-wise bitwise OR between each element of a tile in the DST register at index idst and an
+ * immediate scalar param0: y = x | param0. The input must be of integer data type: Int32, UInt32, or UInt16. Output
+ * overwrites the input tile in DST. The DST register buffer must be in acquired state via *acquire_dst* call. This
+ * call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The scalar second operand of the bitwise operation                         | uint32_t |                                                       | True     |
+ */
+// clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_bitwise_instr_mode<data_format>();
@@ -64,6 +78,21 @@ ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
         param0));
 }
 
+// clang-format off
+/**
+ * Performs an element-wise bitwise XOR between each element of a tile in the DST register at index idst and an
+ * immediate scalar param0: y = x ^ param0. The input must be of integer data type: Int32, UInt32, or UInt16. Output
+ * overwrites the input tile in DST. The DST register buffer must be in acquired state via *acquire_dst* call. This
+ * call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The scalar second operand of the bitwise operation                         | uint32_t |                                                       | True     |
+ */
+// clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_bitwise_instr_mode<data_format>();

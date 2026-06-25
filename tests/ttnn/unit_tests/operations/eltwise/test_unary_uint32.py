@@ -230,7 +230,7 @@ def test_bitwise_scalar_uint32_full_range(device, ttnn_function, scalar):
         ttnn.bitwise_right_shift,
     ],
 )
-@pytest.mark.parametrize("shift", [0, 1, 4, 31])
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
 def test_bitwise_shift_scalar_uint32(device, ttnn_function, shift):
     # Torch CPU does not implement shifts for the uint32 dtype, so reinterpret the full-range values as
     # int32 to compute the golden, then mask to 32 bits to emulate the uint32 output.
@@ -257,7 +257,7 @@ def test_bitwise_shift_scalar_uint32(device, ttnn_function, shift):
         ttnn.bitwise_right_shift,
     ],
 )
-@pytest.mark.parametrize("shift", [0, 1, 4, 31])
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
 def test_bitwise_shift_scalar_uint32_full_range(device, ttnn_function, shift):
     # Torch CPU does not implement shifts for the uint32 dtype, so reinterpret the full-range values as
     # int32 to compute the golden, then mask to 32 bits to emulate the uint32 output.

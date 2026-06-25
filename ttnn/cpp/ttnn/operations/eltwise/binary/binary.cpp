@@ -288,8 +288,6 @@
             sub_device_id);                                                          \
     }
 
-// Since unary SFPU path does not support lhs/rhs/post activations, whenever any activation is requested
-// unary bitwise ops fall back to the binary_ng tensor-scalar variant.
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(NAME, OP_TYPE)                                            \
     Tensor NAME(                                                                                           \
         const Tensor& lhs,                                                                                 \
@@ -301,10 +299,13 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                        \
         const std::optional<CoreRangeSet>& sub_core_grids,                                                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                   \
-        if (post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {              \
+        /* Fast path: unary SFPU handles scalar bitwise/shift directly with no activations. */             \
+        if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&           \
+            rhs_activations.empty()) {                                                                     \
             return ttnn::unary_with_int32_param(                                                           \
                 operations::unary::UnaryOpType::OP_TYPE, lhs, rhs, memory_config, output, sub_core_grids); \
         }                                                                                                  \
+        /* Fallback: binary_ng tensor-scalar variant supports activations and sub_device_id. */            \
         return ttnn::detail::invoke_binary_ng(                                                             \
             lhs,                                                                                           \
             rhs,                                                                                           \

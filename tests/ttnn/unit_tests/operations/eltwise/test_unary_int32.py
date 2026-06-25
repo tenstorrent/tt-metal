@@ -265,7 +265,7 @@ def test_bitwise_scalar_int32_full_range(device, ttnn_function, scalar):
         ttnn.bitwise_right_shift,
     ],
 )
-@pytest.mark.parametrize("shift", [0, 1, 4, 31])
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
 def test_bitwise_shift_scalar_int32(device, ttnn_function, shift):
     x_torch = torch.tensor([[1, 2, 255, -4096, 2147483647, -2147483648, -2147483647, 0]], dtype=torch.int32)
 
@@ -286,7 +286,7 @@ def test_bitwise_shift_scalar_int32(device, ttnn_function, shift):
         ttnn.bitwise_right_shift,
     ],
 )
-@pytest.mark.parametrize("shift", [0, 1, 4, 31])
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
 def test_bitwise_shift_scalar_int32_full_range(device, ttnn_function, shift):
     x_torch = torch.linspace(-2147483648, 2147483647, 1024, dtype=torch.int32)
 
@@ -295,6 +295,20 @@ def test_bitwise_shift_scalar_int32_full_range(device, ttnn_function, shift):
 
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn_function(x_tt, shift)
+
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
+    assert torch.equal(tt_out, z_torch)
+
+
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
+def test_logical_left_shift_scalar_int32(device, shift):
+    x_torch = torch.tensor([[1, 2, 255, -4096, 2147483647, -2147483648, -2147483647, 0]], dtype=torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.logical_left_shift)
+    z_torch = golden_fn(x_torch, shift)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn.logical_left_shift(x_tt, shift)
 
     tt_out = ttnn.to_torch(z_tt_out, dtype=torch.int32)
     assert torch.equal(tt_out, z_torch)

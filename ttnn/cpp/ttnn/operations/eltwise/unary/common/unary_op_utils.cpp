@@ -110,6 +110,23 @@ std::string get_macro_definition(UnaryOpType op_type) {
     };
 }
 
+const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    TT_FATAL(
+        input_dtype.has_value(),
+        "Missing input dtype for op_type {}: a valid integer input dtype (Int32/UInt32/UInt16) is required.",
+        op_type);
+    if (*input_dtype == DataType::INT32) {
+        return "Int32";
+    }
+    if (*input_dtype == DataType::UINT32) {
+        return "UInt32";
+    }
+    if (*input_dtype == DataType::UINT16) {
+        return "UInt16";
+    }
+    TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
+}
+
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
@@ -225,46 +242,46 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 "heaviside_tile_init();",
                 fmt::format("heaviside_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
-        case UnaryOpType::BITWISE_XOR: {
-            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
-                                      : (input_dtype == DataType::UINT32) ? "UInt32"
-                                                                          : "UInt16";
+        case UnaryOpType::BITWISE_XOR:
             return {
                 "bitwise_xor_tile_init();",
-                fmt::format("bitwise_xor_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
-        }
-        case UnaryOpType::BITWISE_AND: {
-            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
-                                      : (input_dtype == DataType::UINT32) ? "UInt32"
-                                                                          : "UInt16";
+                fmt::format(
+                    "bitwise_xor_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
+        case UnaryOpType::BITWISE_AND:
             return {
                 "bitwise_and_tile_init();",
-                fmt::format("bitwise_and_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
-        }
-        case UnaryOpType::BITWISE_OR: {
-            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
-                                      : (input_dtype == DataType::UINT32) ? "UInt32"
-                                                                          : "UInt16";
+                fmt::format(
+                    "bitwise_and_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
+        case UnaryOpType::BITWISE_OR:
             return {
                 "bitwise_or_tile_init();",
-                fmt::format("bitwise_or_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
-        }
-        case UnaryOpType::RIGHT_SHIFT: {
-            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
-                                      : (input_dtype == DataType::UINT32) ? "UInt32"
-                                                                          : "UInt16";
+                fmt::format(
+                    "bitwise_or_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
+        case UnaryOpType::RIGHT_SHIFT:
             return {
                 "right_shift_tile_init();",
-                fmt::format("right_shift_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
-        }
-        case UnaryOpType::LEFT_SHIFT: {
-            const char* data_format = (input_dtype == DataType::INT32)    ? "Int32"
-                                      : (input_dtype == DataType::UINT32) ? "UInt32"
-                                                                          : "UInt16";
+                fmt::format(
+                    "right_shift_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
+        case UnaryOpType::LEFT_SHIFT:
             return {
                 "left_shift_tile_init();",
-                fmt::format("left_shift_tile<DataFormat::{}>({}, {}u);", data_format, idst, (uint)params[0])};
-        }
+                fmt::format(
+                    "left_shift_tile<DataFormat::{}>({}, {}u);",
+                    bitwise_shift_data_format_str(op_type, input_dtype),
+                    idst,
+                    (uint)params[0])};
         case UnaryOpType::REMAINDER:
             return {
                 fmt::format(
