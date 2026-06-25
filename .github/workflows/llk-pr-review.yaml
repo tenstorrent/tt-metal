@@ -3,13 +3,13 @@ name: LLK PR Review
 # On-demand AI code review for LLK pull requests.
 #
 # Anyone with write access triggers it by commenting "@llk-ai review" on a PR.
-# The job runs the /code-review skill at max effort against the PR's diff, with:
+# The job runs the code-review plugin command against the PR's diff, with:
 #   * the LLK MCP servers (tt_metal/tt-llk/.mcp.json — DeepWiki, Atlassian, Glean),
-#   * the repo's own guidance (tt_metal/tt-llk/.claude/CLAUDE.md, auto-discovered
-#     from the checkout), and
 #   * the team's private LLK review knowledge, fetched at runtime and injected as
-#     an appended system prompt,
-# then posts its findings as inline review comments on the PR.
+#     an appended system prompt.
+# (The command itself discovers and applies the relevant CLAUDE.md files, including
+# any in directories touched by the PR, so we do not need to point it at them.)
+# It posts its findings as inline review comments on the PR.
 #
 # The human gate is that a person with write access must type the trigger phrase.
 
@@ -29,7 +29,7 @@ on:
         required: true
         type: string
       effort:
-        description: "Review effort level"
+        description: "Reasoning effort for the review session (--effort)"
         required: false
         default: "max"
         type: choice
@@ -56,7 +56,7 @@ jobs:
         contains(github.event.comment.body, '@llk-ai review')
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 45          # /code-review max fans out subagents; this bounds it
+    timeout-minutes: 45          # the command fans out subagents; this bounds it
     permissions:
       contents: read             # read the checkout
       pull-requests: write       # post inline review comments
@@ -67,23 +67,16 @@ jobs:
       # or review comment).
       PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
     steps:
-      # 1. Full checkout so /code-review can compute the merge-base diff vs main.
+      # 1. Checkout so the command (and the knowledge assembly step) has the repo.
+      #    The command fetches the diff itself via `gh pr diff`, so a shallow
+      #    checkout of the default ref is enough.
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 2. Switch to the PR's head branch, and ensure a local `main` exists so
-      #    /code-review can diff the PR against it (main...HEAD).
-      - name: Check out the PR branch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr checkout "${PR_NUMBER}"
-          git fetch origin +refs/heads/main:refs/heads/main
-
-      # 3. Fetch the private LLK review knowledge, kept out of the public tree and
+      # 2. Fetch the private LLK review knowledge, kept out of the public tree and
       #    pulled at runtime into a scratch dir via a sparse checkout.
       - name: Fetch private LLK review knowledge
         uses: actions/checkout@v4
@@ -96,8 +89,10 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # 4. Assemble the knowledge into a single append-system-prompt file:
-      #    a framing line, then each .md file.
+      # 3. Assemble the knowledge into a single append-system-prompt file:
+      #    a framing line, then each .md file. (Posting mechanics are handled by
+      #    the code-review command itself — it uses the action's inline-comment
+      #    MCP tool — so we only inject domain knowledge here.)
       - name: Assemble review system prompt
         run: |
           set -euo pipefail
@@ -112,47 +107,11 @@ jobs:
               cat "$f"
               echo
             done
-            cat <<'EOF'
-
-          # === How to post inline review comments ===
-          Post every finding as a LINE-ANCHORED inline comment on the PR diff, using the
-          GitHub REST API via `gh api`. Anchor each comment to the file and line it is
-          about. Use this exact form (the flag types matter):
-
-            HEAD="$(git rev-parse HEAD)"
-            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" --method POST \
-              -f body="<finding text>" \
-              -f commit_id="$HEAD" \
-              -f path="<path/relative/to/repo/root>" \
-              -f side="RIGHT" \
-              -F line=<line-number>
-
-          Rules — follow these or the call fails:
-          - Pass `line` (and `start_line`, if a range) with `-F` (numeric), NEVER `-f`
-            (`-f line=...` sends a string and the API rejects it with HTTP 422).
-          - Do NOT pass `subject_type` — it is not a valid key for this endpoint.
-          - For a multi-line range, add `-F start_line=<n> -f start_side="RIGHT"`.
-          - `commit_id` must be the PR head SHA (`git rev-parse HEAD` after checkout).
-          - `path` is relative to the repo root, exactly as it appears in the diff.
-          - NEVER fall back to `gh pr review --comment` or `gh pr comment` — those post an
-            unanchored summary, not a line comment. If an inline post fails, fix the
-            command and retry; do not downgrade to a top-level comment.
-
-          Determining the line number — do NOT eyeball it:
-          - Find the exact line with `grep -n "<unique snippet of the code>" <file>`,
-            and use the number of the line that holds the code your finding is about.
-          - Before posting, verify with `sed -n "<line>p" <file>` that it prints the
-            exact code you are commenting on; if it does not, fix the line number.
-          - For a finding that spans several lines, anchor the whole range:
-            `-F start_line=<first> -f start_side="RIGHT" -F line=<last>`.
-          - The line must be a changed/added line shown in the PR diff; if it is not,
-            anchor to the nearest changed line the finding refers to.
-          EOF
           } > "$out"
           echo "Assembled $(wc -l < "$out") lines into $out"
 
-      # 5. Run the review: /code-review at max effort, with the LLK MCP servers
-      #    and the assembled knowledge, posting findings inline via --comment.
+      # 4. Run the review: the code-review plugin command against the PR, posting
+      #    findings inline via --comment, with the LLK MCP servers and knowledge.
       - name: Run /code-review
         uses: anthropics/claude-code-action@v1
         env:
@@ -164,10 +123,10 @@ jobs:
           # The proxy requires the "anthropic/" model prefix.
           ANTHROPIC_MODEL: anthropic/claude-opus-4-5-20251101
           ANTHROPIC_SMALL_FAST_MODEL: anthropic/claude-haiku-4-5-20251001
-          # So /code-review --comment can detect the PR and post via gh.
-          # GITHUB_TOKEN is the per-run automatic token; its write scope comes
-          # from the job's `permissions:` block (pull-requests/issues: write),
-          # so comments post as github-actions[bot] — no user PAT required.
+          # So the command can detect the PR and post via gh / the inline-comment
+          # MCP tool. GITHUB_TOKEN is the per-run automatic token; its write scope
+          # comes from the job's `permissions:` block (pull-requests/issues:
+          # write), so comments post as github-actions[bot] — no user PAT needed.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # Present only to satisfy the action's auth precheck; actual auth +
@@ -176,11 +135,20 @@ jobs:
           anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           trigger_phrase: "@llk-ai review"
-          prompt: "/code-review ${{ github.event.inputs.effort || 'max' }} --comment"
+          # Install the code-review command from Anthropic's plugin marketplace.
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          # The command takes a PR reference and an optional --comment flag (there
+          # is no effort argument). --comment makes it post inline comments.
+          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
-          # anthropic/ prefix for the proxy).
+          # anthropic/ prefix for the proxy). --effort sets the session reasoning
+          # effort (the code-review command itself takes no effort argument).
+          # The allowlist must include the inline-comment MCP tool the command
+          # posts with, plus gh for diff/view.
           claude_args: |
-            --allowedTools "Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__deepwiki,mcp__atlassian,mcp__glean_default"
-            --max-turns 60
+            --effort ${{ github.event.inputs.effort || 'max' }}
+            --allowedTools "Task,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
+            --max-turns 80
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
