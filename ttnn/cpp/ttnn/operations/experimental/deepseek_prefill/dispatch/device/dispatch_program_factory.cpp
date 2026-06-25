@@ -501,8 +501,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     std::vector<uint32_t> compile_time_args = {
         // CB IDs (9)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id (row-major path only)
-        static_cast<uint32_t>(
-            tt::CBIndex::c_1),  // cb_indices_id        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
+        static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
+        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
         static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_route_info_id
         static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_payload_for_writer_id
         static_cast<uint32_t>(tt::CBIndex::c_6),  // cb_metadata_for_writer_id
@@ -1186,8 +1186,8 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
     std::vector<uint32_t> compile_time_args = {
         // CB IDs (9)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id
-        static_cast<uint32_t>(
-            tt::CBIndex::c_1),  // cb_indices_id        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
+        static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
+        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
         static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_route_info_id
         static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_payload_for_writer_id
         static_cast<uint32_t>(tt::CBIndex::c_6),  // cb_metadata_for_writer_id
