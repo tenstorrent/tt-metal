@@ -244,7 +244,10 @@ void run_single_core_transpose(
                                           ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
                                           : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp";
 
-    const bool fp32_dest_acc_en = (test_config.data_format == tt::DataFormat::Float32);
+    // Enable 32-bit dest accumulate for the 32-bit formats (Float32/Int32); the compute kernel forwards
+    // DST_ACCUM_MODE as the transpose-dest EN_32BIT_DEST template arg, so the two must agree.
+    const bool fp32_dest_acc_en =
+        (test_config.data_format == tt::DataFormat::Float32 || test_config.data_format == tt::DataFormat::Int32);
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel_path,
@@ -400,6 +403,24 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
             .shape = {1, 1, 64, 64},
             .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
             .data_format = tt::DataFormat::Float32,
+            .dst_full_sync_en = dst_full_sync_en,
+        };
+        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+    }
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
+    // 16-bit dest (EN_32BIT_DEST=false): exercises the implied-math-format-disabled config path.
+    // Tests SyncHalf and SyncFull
+    for (const bool dst_full_sync_en : {false, true}) {
+        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
+        unit_tests::compute::transpose::TransposeConfig test_config = {
+            .short_init = false,
+            .transpose_dest = true,
+            .single_tile_size = constants::TILE_HW * sizeof(uint16_t),
+            .shape = {1, 1, 64, 64},
+            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+            .data_format = tt::DataFormat::Float16_b,
             .dst_full_sync_en = dst_full_sync_en,
         };
         unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
