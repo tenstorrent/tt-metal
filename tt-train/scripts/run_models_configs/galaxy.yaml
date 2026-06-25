@@ -49,3 +49,38 @@ models:
       text_file: "data/shakespeare.txt"
       hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
       output_file: "data/tokenized_shakespeare_llama8b"
+
+  - name: "Qwen 3 1.7B DDP=32 Shakespeare"
+    filename: "qwen3_1_7b_ddp32_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_qwen3_17b_ddp.yaml"
+      - "--track_memory"
+      - "--max_steps=2048"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "Qwen/Qwen3-1.7B"
+      output_file: "data/tokenized_shakespeare_qwen3"
+
+  - name: "Tiny Deepseek v3 DDP=32 (Char) Shakespeare"
+    filename: "tiny_deepseek_v3_ddp32_char_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tiny_deepseek_char_ddp.yaml"
+      - "--max_steps 1000"
+      - "--track_memory"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
+
+  - name: "Llama 70B TP=8 FSDP=4 Shakespeare"
+    filename: "llama_70b_tp8_fsdp8_shakespeare"
+    binary: "${TT_METAL_RUNTIME_ROOT}/tt-train/sources/examples/train/train.py"
+    args:
+      - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/llama70b/training_shakespeare_llama70b_tp8_fsdp4.yaml"
+      - "--max_steps 1000"
+      - "--track_memory"
+    mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_ring_ring.textproto"
+    tokenize:
+      text_file: "data/shakespeare.txt"
+      hf_tokenizer: "/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.1-70B-Instruct/snapshots/1605565b47bb9346c5515c34102e054115b4f98b"
+      output_file: "data/tokenized_shakespeare_llama70b"

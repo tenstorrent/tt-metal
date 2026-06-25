@@ -23,6 +23,9 @@ on:
           - tinyllama_1_1b_ddp32_shakespeare
           - llama_8b_tp8_ddp4_shakespeare
           - llama_8b_tp4_ddp8_shakespeare
+          - qwen3_1_7b_ddp32_shakespeare
+          - tiny_deepseek_v3_ddp32_char_shakespeare
+          - llama_70b_tp8_fsdp8_shakespeare
 
       build-type:
         required: false

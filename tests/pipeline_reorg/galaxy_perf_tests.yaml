@@ -115,24 +115,50 @@
 
 # TT-Train Blackhole Galaxy model perf tests
 #   To keep the workflow file as general as possible, tt-train specific setup will be called before each command via a script
-- name: Galaxy TinyLlama 1.1B DDP=32 train perf tests
-  cmd: |
-    ./tt-train/scripts/setup_pth.sh
-    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
-  model: tinyllama_1_1b_ddp32_shakespeare
-  skus:
-    bh_galaxy_perf:
-      timeout: 75
-  owner_id: U07K00A281X # Kevin Wu
-  team: train
-  arch: blackhole
-  save-perf-data: false
+# - name: Galaxy TinyLlama 1.1B DDP=32 train perf tests
+#   cmd: |
+#     ./tt-train/scripts/setup_pth.sh
+#     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
+#   model: tinyllama_1_1b_ddp32_shakespeare
+#   skus:
+#     bh_galaxy_perf:
+#       timeout: 75
+#   owner_id: U07K00A281X # Kevin Wu
+#   team: train
+#   arch: blackhole
+#   save-perf-data: false
 
-- name: Galaxy Llama 8B TP=8 DDP=4 train perf tests
+# - name: Galaxy Llama 8B TP=8 DDP=4 train perf tests
+#   cmd: |
+#     ./tt-train/scripts/setup_pth.sh
+#     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
+#   model: llama_8b_tp8_ddp4_shakespeare
+#   skus:
+#     bh_galaxy_perf:
+#       timeout: 50
+#   owner_id: U07K00A281X # Kevin Wu
+#   team: train
+#   arch: blackhole
+#   save-perf-data: false
+
+# - name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
+#   cmd: |
+#     ./tt-train/scripts/setup_pth.sh
+#     python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
+#   model: llama_8b_tp4_ddp8_shakespeare
+#   skus:
+#     bh_galaxy_perf:
+#       timeout: 55
+#   owner_id: U07K00A281X # Kevin Wu
+#   team: train
+#   arch: blackhole
+#   save-perf-data: false
+
+- name: Qwen 3 1.7B DDP=32 train perf tests
   cmd: |
     ./tt-train/scripts/setup_pth.sh
-    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
-  model: llama_8b_tp8_ddp4_shakespeare
+    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "qwen3_1_7b_ddp32_shakespeare"
+  model: qwen3_1_7b_ddp32_shakespeare
   skus:
     bh_galaxy_perf:
       timeout: 50
@@ -141,14 +167,27 @@
   arch: blackhole
   save-perf-data: false
 
-- name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
+- name: Tiny Deepseek v3 DDP=32 train perf tests
   cmd: |
     ./tt-train/scripts/setup_pth.sh
-    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
-  model: llama_8b_tp4_ddp8_shakespeare
+    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tiny_deepseek_v3_ddp32_char_shakespeare"
+  model: tiny_deepseek_v3_ddp32_char_shakespeare
   skus:
     bh_galaxy_perf:
-      timeout: 55
+      timeout: 170
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false
+
+- name: Llama 70B TP=8 FSDP=4 train perf tests
+  cmd: |
+    ./tt-train/scripts/setup_pth.sh
+    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_70b_tp8_fsdp8_shakespeare"
+  model: llama_70b_tp8_fsdp8_shakespeare
+  skus:
+    bh_galaxy_perf:
+      timeout: 200
   owner_id: U07K00A281X # Kevin Wu
   team: train
   arch: blackhole
