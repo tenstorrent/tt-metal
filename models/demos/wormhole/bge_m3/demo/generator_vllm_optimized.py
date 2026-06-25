@@ -160,12 +160,6 @@ class BgeM3ForEmbeddingOptimized:
         # the fixed trace length (S512) with pad_token_id; the model derives the
         # attention mask, token_type_ids and position_ids from input_ids in-graph
         # (trace-safe). CLS pooling reads only token 0, so padding is harmless.
-        import os
-        import time
-
-        _prof = os.environ.get("BGE_PROFILE") == "1"
-        _t0 = time.perf_counter() if _prof else 0.0
-
         # Reuse a single pinned host buffer; refill in place each call.
         if self._padded_ids is None:
             pad_id = int(self.model_args.pad_token_id)
@@ -189,29 +183,18 @@ class BgeM3ForEmbeddingOptimized:
             ttnn.deallocate(warm)
             self._trace_out = self.model.capture_trace(input_ids=self._input_ids_dev, mesh_device=self.device)
             self._allocate_d2h(self._trace_out)
-            _t1 = time.perf_counter() if _prof else 0.0
         else:
             # Optimized H2D: refresh the persistent device slot in place with a
             # single host->device copy (no new device allocation, no D2D copy).
             ttnn.copy_host_to_device_tensor(host_ids, self._input_ids_dev)
             ttnn.synchronize_device(self.device)
-            _t1 = time.perf_counter() if _prof else 0.0
 
         # Replay the captured trace from the fixed input address.
         self.model.execute_trace(blocking=True)
-        _t2 = time.perf_counter() if _prof else 0.0
 
         pooled = self._read_output(self._trace_out)  # [B, 1, 1, HIDDEN] bf16
         pooled = pooled.reshape(batch_size, HIDDEN).to(torch.float32)
-        out = F.normalize(pooled, p=2, dim=-1)
-        if _prof:
-            _t3 = time.perf_counter()
-            print(
-                f"[BGE_PROFILE] h2d={1e3*(_t1-_t0):.3f}ms fwd={1e3*(_t2-_t1):.3f}ms "
-                f"d2h={1e3*(_t3-_t2):.3f}ms total={1e3*(_t3-_t0):.3f}ms",
-                flush=True,
-            )
-        return out
+        return F.normalize(pooled, p=2, dim=-1)
 
     def get_embedding_dim(self) -> int:
         return HIDDEN
