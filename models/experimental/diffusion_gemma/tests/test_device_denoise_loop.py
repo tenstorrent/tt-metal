@@ -9,8 +9,16 @@ import pytest
 import torch
 
 import ttnn
+from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference import sampling as S
-from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_step, renoise, temperature_at_step
+from models.experimental.diffusion_gemma.reference.denoise_loop import denoise_block as ref_denoise_block
+from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_trajectories
+from models.experimental.diffusion_gemma.tt.denoise_loop import (
+    denoise_block,
+    denoise_step,
+    renoise,
+    temperature_at_step,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [
@@ -103,3 +111,54 @@ def test_uint32_renoise_preserves_full_vocab_token_ids(device):
     )
 
     assert torch.equal(ttnn.to_torch(out).squeeze(1).squeeze(-1).to(torch.long), ref)
+
+
+def test_multi_step_denoise_trajectory_matches_reference(device):
+    torch.manual_seed(17)
+    batch = 1
+    length = 256
+    vocab_size = 256
+    max_steps = 4
+
+    logits = _structured_logits(length, vocab_size)
+    step0_temperature = temperature_at_step(0, max_steps, 0.8, 0.4)
+    ref_entropy = S.token_entropy(logits, temperature=step0_temperature)
+    budget = _budget_for_accept_count(ref_entropy, 96)
+    cfg = DiffusionConfig(
+        max_denoise_steps=max_steps,
+        entropy_stop_threshold=10.0,
+        stable_steps_to_halt=1,
+        entropy_budget=budget,
+    )
+    init_canvas = torch.randint(0, vocab_size, (batch, length), dtype=torch.long)
+    gumbel_noise = [torch.zeros_like(logits) for _ in range(max_steps)]
+    noise_tokens = [torch.randint(0, vocab_size, (batch, length), dtype=torch.long) for _ in range(max_steps)]
+
+    ref = ref_denoise_block(
+        lambda canvas, step: logits,
+        init_canvas,
+        cfg,
+        vocab_size,
+        gumbel_noise_fn=lambda step: gumbel_noise[step],
+        noise_tokens_fn=lambda step: noise_tokens[step],
+    )
+
+    tt_logits = _to_device(device, logits.unsqueeze(1))
+    tt_gumbel_noise = [_to_device(device, noise.unsqueeze(1)) for noise in gumbel_noise]
+    tt_noise_tokens = [
+        _to_device(device, noise.view(batch, 1, length, 1).to(torch.int32), dtype=ttnn.uint32) for noise in noise_tokens
+    ]
+    tt = denoise_block(
+        lambda canvas, step: tt_logits,
+        _to_device(device, init_canvas.view(batch, 1, length, 1).to(torch.int32), dtype=ttnn.uint32),
+        cfg,
+        gumbel_noise_fn=lambda step: tt_gumbel_noise[step],
+        noise_tokens_fn=lambda step: tt_noise_tokens[step],
+    )
+
+    comparison = compare_trajectories(ref, tt, max_entropy_abs_err_threshold=0.2)
+    accept_flips = sum(int((ra.accept_mask != rb.accept_mask).sum()) for ra, rb in zip(ref.per_step, tt.per_step))
+    assert comparison.passed, comparison
+    assert ref.halted and tt.halted
+    assert ref.num_steps == tt.num_steps == 2
+    assert accept_flips == 0

@@ -11,11 +11,17 @@ tests and the real W2 denoise logits path.
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Callable, List, NamedTuple, Optional
 
+import torch
 import ttnn
 
+from models.experimental.diffusion_gemma.config import DiffusionConfig
+from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory, StepRecord
 from models.experimental.diffusion_gemma.tt import sampling as TS
+
+TtLogitsFn = Callable[[ttnn.Tensor, int], ttnn.Tensor]
+TtNoiseFn = Callable[[int], ttnn.Tensor]
 
 
 class TtDenoiseStepResult(NamedTuple):
@@ -119,3 +125,81 @@ def denoise_step(
         sampled=sampled,
         argmax=argmax,
     )
+
+
+def _ids_to_torch(tensor: ttnn.Tensor) -> torch.Tensor:
+    return ttnn.to_torch(tensor).squeeze(1).squeeze(-1).to(torch.long)
+
+
+def _entropy_to_torch(tensor: ttnn.Tensor) -> torch.Tensor:
+    return ttnn.to_torch(tensor).squeeze(1).squeeze(-1).float()
+
+
+def _accept_to_torch(tensor: ttnn.Tensor) -> torch.Tensor:
+    return ttnn.to_torch(tensor).squeeze(1).squeeze(1) > 0.5
+
+
+def denoise_block(
+    logits_fn: TtLogitsFn,
+    init_canvas: ttnn.Tensor,
+    config: DiffusionConfig,
+    *,
+    gumbel_noise_fn: Optional[TtNoiseFn] = None,
+    noise_tokens_fn: Optional[TtNoiseFn] = None,
+) -> DenoiseTrajectory:
+    """Run a device denoise trajectory and return host decision records.
+
+    The full ``[B, L, vocab]`` logits stay on device. For the data-dependent halt
+    check and the trajectory harness, this reads back only per-step ``[B, L]``
+    decision tensors: argmax, entropy, sampled ids, accept mask, and canvas.
+    """
+    canvas = init_canvas
+    records: List[StepRecord] = []
+    committed: Optional[torch.Tensor] = None
+    argmax_history: List[torch.Tensor] = []
+    n_stable = config.stable_steps_to_halt
+
+    for step in range(config.max_denoise_steps):
+        temperature = temperature_at_step(
+            step, config.max_denoise_steps, config.temperature_start, config.temperature_end
+        )
+        res = denoise_step(
+            logits_fn(canvas, step),
+            temperature=temperature,
+            entropy_budget=config.entropy_budget,
+            gumbel_noise=gumbel_noise_fn(step) if gumbel_noise_fn else None,
+            noise_tokens=noise_tokens_fn(step) if noise_tokens_fn else None,
+        )
+
+        argmax = _ids_to_torch(res.argmax)
+        entropy = _entropy_to_torch(res.entropy)
+        sampled = _ids_to_torch(res.sampled)
+        accept_mask = _accept_to_torch(res.accept_mask)
+        host_canvas = _ids_to_torch(res.canvas)
+        entropy_mean = entropy.mean().item()
+        records.append(
+            StepRecord(
+                step=step,
+                temperature=temperature,
+                entropy_mean=entropy_mean,
+                num_accepted=int(accept_mask.sum()),
+                argmax=argmax,
+                entropy=entropy,
+                sampled=sampled,
+                accept_mask=accept_mask,
+                canvas=host_canvas,
+            )
+        )
+
+        committed = argmax
+        stable = n_stable == 0 or (
+            len(argmax_history) >= n_stable and all(torch.equal(argmax, h) for h in argmax_history[-n_stable:])
+        )
+        confident = entropy_mean < config.entropy_stop_threshold
+        argmax_history.append(argmax)
+        canvas = res.canvas
+
+        if stable and confident:
+            return DenoiseTrajectory(committed, step + 1, True, records)
+
+    return DenoiseTrajectory(committed, config.max_denoise_steps, False, records)
