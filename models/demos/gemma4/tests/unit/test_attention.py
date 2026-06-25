@@ -13,6 +13,8 @@ Tests prefill and decode for both sliding and global layers, across all TP facto
     pytest -k "decode"           # decode only
 """
 
+import os
+
 import pytest
 import torch
 
@@ -378,6 +380,10 @@ def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, t
     )
 
 
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Batched decode PCC test is slow; excluded from CI (run locally for coverage).",
+)
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
@@ -391,6 +397,9 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     not catch a per-user-position bug. Compares each user's TT output against an HF
     reference computed per user. Uses the 2D embedding-lookup RoPE cache (the path
     real decode takes); the 4D legacy cache cannot represent per-user positions.
+
+    Skipped in CI (slow — runs across every gemma4 variant's unit job); run
+    locally for batched-decode coverage.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
