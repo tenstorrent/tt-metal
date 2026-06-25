@@ -88,10 +88,14 @@ def main():
         cache = model_args.weight_cache_path(ttnn.bfloat8_b)
         mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
         ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
+        # ep_seq_len_per_chip = per-device token count (640 for SP). DP uses the full seq (5120).
+        # Override via EP_SEQ_PER_CHIP to isolate dispatch-buffer sizing issues.
+        ep_seq = int(os.getenv("EP_SEQ_PER_CHIP", str(seq // sp)))
+        print(f"[sp-gen] ep_seq_len_per_chip={ep_seq} (per-device tokens={seq//sp})", flush=True)
         model = Model(
             mesh_device=mesh, hf_config=hf_config, state_dict=state_dict, ccl_manager=ccl,
             mesh_config=mesh_config, tensor_cache_path=cache, create_kv_cache=False,
-            max_local_batch_size=1, sequence_parallel=True, use_ep_moe=True, ep_seq_len_per_chip=seq // sp,
+            max_local_batch_size=1, sequence_parallel=True, use_ep_moe=True, ep_seq_len_per_chip=ep_seq,
             expert_weight_dtype=expert_dtype,
         )
         del state_dict

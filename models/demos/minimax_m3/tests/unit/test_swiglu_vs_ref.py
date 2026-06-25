@@ -14,14 +14,15 @@ Inputs are scaled past ±limit so the clamp path is actually exercised. Depends 
 (no HuggingFace / checkpoint), random inputs — runs on a single Wormhole/Blackhole card.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.tt.experts.config import ExpertConfig
-from models.demos.minimax_m3.tt.experts.operations import apply_swiglu
+from models.demos.minimax_m3.tt.experts_throughput.activation import apply_swiglu
 
 from ..test_factory import parametrize_mesh_with_fabric
 
@@ -53,14 +54,7 @@ def test_swiglu_vs_ref(mesh_device, device_params, alpha, limit, m, width, reset
 
     ref = _torch_swiglu(gate, up, alpha, limit)
 
-    config = ExpertConfig(
-        intermediate_size=width,
-        num_experts=128,
-        hidden_size=6144,
-        num_experts_per_tok=4,
-        swiglu_limit=limit,
-        alpha=alpha,
-    )
+    config = SimpleNamespace(swiglu_limit=limit, alpha=alpha)
 
     def _to_tt(t):
         return ttnn.from_torch(
