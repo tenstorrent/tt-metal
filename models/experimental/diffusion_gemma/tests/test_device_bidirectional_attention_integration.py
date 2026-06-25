@@ -27,6 +27,9 @@ from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
+from models.experimental.diffusion_gemma.config import DiffusionConfig
+from models.experimental.diffusion_gemma.reference.denoise_loop import denoise_block as ref_denoise_block
+from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_trajectories
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
     denoise_attention_forward,
@@ -34,6 +37,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     embed_canvas_tokens,
     read_prompt_kv_cache_slice,
 )
+from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block
 from models.experimental.diffusion_gemma.tt.self_conditioning import TtSelfConditioning
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding, apply_rotary_pos_emb
@@ -88,6 +92,16 @@ def _to_device_tokens(mesh_device, value):
         value.to(torch.int32),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=_mesh_mapper(mesh_device),
+    )
+
+
+def _to_device_canvas_ids(mesh_device, value):
+    return ttnn.from_torch(
+        value.view(value.shape[0], 1, value.shape[1], 1).to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.uint32,
         mesh_mapper=_mesh_mapper(mesh_device),
     )
@@ -459,3 +473,147 @@ def test_denoise_logits_adapter_threads_prev_logits_for_self_conditioning(mesh_d
 
     passing, message = assert_with_pcc(expected.float(), actual.float(), 0.999)
     assert passing, message
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_denoise_controller_real_logits_records_decision_flips(mesh_device, reset_seeds):
+    torch.manual_seed(8)
+    prompt_len = 64
+    canvas_len = 256
+    total_len = prompt_len + canvas_len
+    vocab_size = 256
+    max_steps = 2
+
+    hf_text_config = _create_hf_text_config(vocab_size=vocab_size, num_layers=1)
+    if getattr(hf_text_config, "enable_moe_block", False):
+        hf_text_config.num_experts = 4
+        hf_text_config.top_k_experts = 2
+    hf_model = _create_hf_model(hf_text_config)
+    tt_model = _build_tt_model(mesh_device, hf_model, hf_text_config, num_layers=1, max_seq_len=total_len)
+
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
+    init_canvas = torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long)
+    gumbel_noise = [torch.zeros(1, canvas_len, vocab_size) for _ in range(max_steps)]
+    noise_tokens = [torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long) for _ in range(max_steps)]
+    cfg = DiffusionConfig(
+        max_denoise_steps=max_steps,
+        entropy_stop_threshold=-1.0,
+        stable_steps_to_halt=1,
+        entropy_budget=0.1,
+    )
+
+    self_conditioning_ref = SelfConditioning(
+        hf_text_config.hidden_size,
+        intermediate_size=hf_text_config.intermediate_size,
+        eps=hf_text_config.rms_norm_eps,
+        activation=hf_text_config.hidden_activation,
+    ).eval()
+    self_conditioning_state = {
+        "pre_norm.weight": self_conditioning_ref.pre_norm.weight.data.clone(),
+        "gate_proj.weight": self_conditioning_ref.gate_proj.weight.data.clone(),
+        "up_proj.weight": self_conditioning_ref.up_proj.weight.data.clone(),
+        "down_proj.weight": self_conditioning_ref.down_proj.weight.data.clone(),
+    }
+    mask = build_canvas_denoise_mask(
+        prompt_len,
+        canvas_len,
+        local_window=False,
+        neg_inf=NEG,
+        dtype=torch.float32,
+    ).view(1, 1, canvas_len, total_len)
+    with torch.no_grad():
+        prompt_hidden = hf_model.embed_tokens(prompt_tokens)
+        prompt_kv_hidden = hf_model.layers[0].input_layernorm(prompt_hidden)
+
+    class TorchLogitsAdapter:
+        def __init__(self):
+            self.prev_logits = None
+
+        def __call__(self, canvas, step):
+            with torch.no_grad():
+                canvas_hidden = hf_model.embed_tokens(canvas)
+                conditioned = self_conditioning_ref.condition(
+                    canvas_hidden,
+                    self.prev_logits,
+                    hf_model.embed_tokens.weight,
+                    enabled=self.prev_logits is not None,
+                )
+                logits = _torch_denoise_logits_reference(hf_model, conditioned, [prompt_kv_hidden], mask)
+                self.prev_logits = logits
+                return logits
+
+    ref = ref_denoise_block(
+        TorchLogitsAdapter(),
+        init_canvas,
+        cfg,
+        vocab_size,
+        gumbel_noise_fn=lambda step: gumbel_noise[step],
+        noise_tokens_fn=lambda step: noise_tokens[step],
+    )
+
+    tt_prompt_tokens = _to_device_tokens(mesh_device, prompt_tokens)
+    tt_prompt_hidden = embed_canvas_tokens(tt_model, tt_prompt_tokens)
+    tt_prompt_logits = tt_model(
+        tt_prompt_hidden,
+        is_decode=False,
+        input_ids_torch=prompt_tokens,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    tt_prompt_logits.deallocate(True)
+    tt_prompt_kv_by_layer = [read_prompt_kv_cache_slice(tt_model.tt_kv_cache[0], prompt_len=prompt_len)]
+    self_conditioning = TtSelfConditioning(
+        mesh_device,
+        self_conditioning_state,
+        hidden_size=hf_text_config.hidden_size,
+        intermediate_size=hf_text_config.intermediate_size,
+        eps=hf_text_config.rms_norm_eps,
+    )
+    tt_self_conditioning_embedding = _to_device(
+        mesh_device,
+        hf_model.embed_tokens.weight.detach().unsqueeze(0).unsqueeze(0),
+    )
+    tt_adapter = DenoiseLogitsAdapter(
+        tt_model,
+        prompt_hidden_by_layer=tt_prompt_kv_by_layer,
+        self_conditioning=self_conditioning,
+        self_conditioning_embedding_weight=tt_self_conditioning_embedding,
+    )
+    tt = denoise_block(
+        tt_adapter,
+        _to_device_canvas_ids(mesh_device, init_canvas),
+        cfg,
+        gumbel_noise_fn=lambda step: _to_device(mesh_device, gumbel_noise[step].unsqueeze(0)),
+        noise_tokens_fn=lambda step: _to_device_canvas_ids(mesh_device, noise_tokens[step]),
+    )
+
+    comparison = compare_trajectories(
+        ref,
+        tt,
+        min_argmax_agreement=0.0,
+        min_sampled_agreement=0.0,
+        min_accept_iou=0.0,
+        min_canvas_agreement=0.0,
+        min_per_step_entropy_pcc=0.0,
+        max_entropy_abs_err_threshold=float("inf"),
+        committed_match_threshold=0.0,
+        entropy_pcc_threshold=0.0,
+    )
+    accept_flips = [int((ra.accept_mask != rb.accept_mask).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
+    argmax_flips = [int((ra.argmax != rb.argmax).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
+    canvas_flips = [int((ra.canvas != rb.canvas).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
+    print(
+        "\n[real-logits trajectory] "
+        f"accept_flips={accept_flips} argmax_flips={argmax_flips} canvas_flips={canvas_flips} "
+        f"entropy_pcc={comparison.per_step_entropy_pcc}"
+    )
+
+    tt_adapter.reset()
+    for tt_k, tt_v in tt_prompt_kv_by_layer:
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+
+    assert comparison.steps_match and comparison.halted_match
+    assert ref.num_steps == tt.num_steps == max_steps
+    assert not ref.halted and not tt.halted
+    assert len(accept_flips) == max_steps
+    assert sum(accept_flips) == 0

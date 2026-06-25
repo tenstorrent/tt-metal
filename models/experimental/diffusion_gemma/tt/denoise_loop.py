@@ -127,16 +127,25 @@ def denoise_step(
     )
 
 
+def _to_host_torch(tensor: ttnn.Tensor) -> torch.Tensor:
+    try:
+        return ttnn.to_torch(tensor)
+    except RuntimeError as exc:
+        if "distributed on MeshShape" not in str(exc):
+            raise
+        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+
+
 def _ids_to_torch(tensor: ttnn.Tensor) -> torch.Tensor:
-    return ttnn.to_torch(tensor).squeeze(1).squeeze(-1).to(torch.long)
+    return _to_host_torch(tensor).squeeze(1).squeeze(-1).to(torch.long)
 
 
 def _entropy_to_torch(tensor: ttnn.Tensor) -> torch.Tensor:
-    return ttnn.to_torch(tensor).squeeze(1).squeeze(-1).float()
+    return _to_host_torch(tensor).squeeze(1).squeeze(-1).float()
 
 
 def _accept_to_torch(tensor: ttnn.Tensor) -> torch.Tensor:
-    return ttnn.to_torch(tensor).squeeze(1).squeeze(1) > 0.5
+    return _to_host_torch(tensor).squeeze(1).squeeze(1) > 0.5
 
 
 def denoise_block(

@@ -282,8 +282,16 @@ def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int 
 
 def embed_canvas_tokens(tt_model, canvas_tokens):
     """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
-    canvas_len = canvas_tokens.shape[-1]
-    canvas_hidden = tt_model.embed_tokens(canvas_tokens)
+    if len(canvas_tokens.shape) == 4 and canvas_tokens.shape[-1] == 1:
+        canvas_len = canvas_tokens.shape[-2]
+        token_ids = ttnn.reshape(canvas_tokens, (canvas_tokens.shape[0], canvas_len))
+        token_ids = ttnn.to_layout(token_ids, ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        canvas_len = canvas_tokens.shape[-1]
+        token_ids = canvas_tokens
+    canvas_hidden = tt_model.embed_tokens(token_ids)
+    if token_ids is not canvas_tokens:
+        token_ids.deallocate(True)
     if len(canvas_hidden.shape) == 3:
         canvas_hidden = ttnn.reshape(canvas_hidden, (1, 1, canvas_len, tt_model.hidden_size))
     elif canvas_hidden.shape[-2] != canvas_len:
