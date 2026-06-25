@@ -8,7 +8,9 @@
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+// TODO(nuked-op matmul): restore matmul/matmul.hpp — deleted with the op; only the program-config
+// types are still needed (provided by the nuke-op stub header below).
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
@@ -80,27 +82,13 @@ ttnn::Tensor routed_expert_ffn_bh(
     // Gate matmul: leave silu un-fused here so we can fuse it into the
     // downstream multiply (which lets us collapse silu + multiply + reshard
     // into a single op).
-    auto gate_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/gate_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config_no_act,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config);
-
-    auto up_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/up_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config_no_act,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config);
+    // TODO(nuked-op matmul): restore real calls — ttnn::matmul deleted with the op; passthrough first tensor arg.
+    (void)gate_up_config_no_act;
+    (void)gate_up_mem;
+    (void)gate_proj;
+    (void)up_proj;
+    ttnn::Tensor gate_result = x;
+    ttnn::Tensor up_result = x;
 
     // Fused silu + multiply + reshard: multiply applies silu to lhs (gate)
     // before the elementwise product and writes the result directly into L1
@@ -160,19 +148,11 @@ ttnn::Tensor routed_expert_ffn_bh(
         .fuse_batch = false,
     };
 
-    return ttnn::matmul(
-        /*input_tensor_a=*/activated,
-        /*input_tensor_b=*/down_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/std::nullopt,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/down_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
-        /*output_tile=*/std::nullopt,
-        /*optional_output_tensor=*/std::move(output));
+    // TODO(nuked-op matmul): restore real call — ttnn::matmul deleted with the op; passthrough first tensor arg.
+    (void)down_config;
+    (void)down_proj;
+    (void)output;
+    return activated;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail

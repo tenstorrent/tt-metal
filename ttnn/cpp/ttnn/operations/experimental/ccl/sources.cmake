@@ -14,9 +14,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     llama_reduce_scatter/llama_reduce_scatter.cpp
     llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
     llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
-    llama_reduce_scatter_matmul/rs_matmul.cpp
-    llama_reduce_scatter_matmul/device/rs_matmul_op.cpp
-    llama_reduce_scatter_matmul/device/rs_matmul_program_factory.cpp
     llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads.cpp
     llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_device_op.cpp
     llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_program_factory.cpp
@@ -25,10 +22,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     all_gather_async/device/all_gather_async_default_program_factory.cpp
     all_gather_async/device/all_gather_async_llama_sharded_program_factory.cpp
     all_gather_async/device/all_gather_via_broadcast_factory.cpp
-    llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
-    llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.cpp
-    llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp
-    llama_all_gather_matmul_async/device/llama_1d_mm_fusion.cpp
     all_to_all_async/all_to_all_async.cpp
     all_to_all_async/device/all_to_all_async_device_operation.cpp
     all_to_all_async/device/all_to_all_async_program_factory.cpp
@@ -39,21 +32,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     all_gather_concat_heads_fused/all_gather_concat.cpp
     all_gather_concat_heads_fused/device/all_gather_concat_device_operation.cpp
     all_gather_concat_heads_fused/device/all_gather_concat_program_factory.cpp
-    all_gather_matmul_async/all_gather_matmul_async.cpp
-    all_gather_matmul_async/device/all_gather_matmul_async_device_operation.cpp
-    all_gather_matmul_async/device/all_gather_matmul_async_program_factory.cpp
-    strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
-    strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
-    strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
-    minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.cpp
-    minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.cpp
-    minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_program.cpp
-    all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp
-    all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp
-    all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp
-    matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
-    matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp
-    matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp

@@ -51,10 +51,6 @@ set(TTNN_OP_MOREH_SRCS
     moreh_linear_backward/device/moreh_linear_backward_single_core_program_factory.cpp
     moreh_linear_backward/moreh_linear_backward.cpp
     moreh_linear/moreh_linear.cpp
-    moreh_matmul_backward/moreh_matmul_backward.cpp
-    moreh_matmul/device/moreh_matmul_device_operation.cpp
-    moreh_matmul/device/moreh_matmul_program_factory.cpp
-    moreh_matmul/moreh_matmul.cpp
     moreh_mean_backward/device/moreh_mean_backward_device_operation.cpp
     moreh_mean_backward/device/moreh_mean_backward_program_factory.cpp
     moreh_mean_backward/moreh_mean_backward.cpp
@@ -138,7 +134,6 @@ set(TTNN_OP_MOREH_API_HEADERS
     moreh_layer_norm_backward/moreh_layer_norm_backward.hpp
     moreh_linear_backward/device/moreh_linear_backward_device_operation.hpp
     moreh_linear_backward/moreh_linear_backward.hpp
-    moreh_matmul/moreh_matmul.hpp
     moreh_mean/moreh_mean.hpp
     moreh_mean_backward/moreh_mean_backward.hpp
     moreh_nll_loss/moreh_nll_loss.hpp

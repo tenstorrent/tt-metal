@@ -4,7 +4,7 @@
 
 #include "moreh_bmm.hpp"
 
-#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+// TODO(nuke-op matmul): restore real call — moreh_matmul deleted with the matmul op
 
 namespace ttnn {
 
@@ -14,7 +14,12 @@ Tensor moreh_bmm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::moreh_matmul(input, mat2, false, false, output, std::nullopt, memory_config, compute_kernel_config);
+    // TODO(nuked-op matmul): restore real call — ttnn::moreh_matmul deleted; passthrough first tensor arg.
+    (void)mat2;
+    (void)output;
+    (void)memory_config;
+    (void)compute_kernel_config;
+    return input;
 }
 
 }  // namespace ttnn

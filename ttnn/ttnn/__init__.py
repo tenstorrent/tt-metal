@@ -456,19 +456,9 @@ ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
 
-from ttnn.operations.matmul import (
-    MatmulMultiCoreReuseProgramConfig,
-    MatmulMultiCoreReuseMultiCastProgramConfig,
-    MatmulMultiCoreReuseMultiCast1DProgramConfig,
-    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
-    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
-    MatmulParams,
-    MatmulInputs,
-    MatmulDeviceOperation,
-    MatmulMultiCoreReuseOptimizedProgramFactory,
-    create_matmul_attributes,
-    matmul_select_program_factory,
-)
+# TODO(nuked-op matmul): the matmul op (and its Matmul*ProgramConfig / Params /
+# DeviceOperation / factory bindings) was removed. Restore these imports when
+# the matmul op is recreated.
 
 from ttnn.operations.normalization import (
     SoftmaxProgramConfig,
@@ -538,7 +528,8 @@ from ttnn.operations.pool import (
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
-from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+
+# TODO(nuked-op matmul): MinimalMatmulConfig removed with experimental/minimal_matmul.
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation

@@ -10,7 +10,9 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+// TODO(nuked-op matmul): restore matmul/matmul.hpp — deleted with the op; only the program-config
+// types are still needed (provided by the nuke-op stub header below).
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::routed_expert_ffn::detail {
 
@@ -83,27 +85,13 @@ ttnn::Tensor routed_expert_ffn_wh(
         gate_up_grid, {gate_up_per_core_M * ttnn::TILE_SIZE, gate_up_per_core_N * ttnn::TILE_SIZE});
     auto gate_up_mem = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, gate_up_shard};
 
-    auto gate_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/gate_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::string("silu"),
-        /*compute_kernel_config=*/compute_kernel_config);
-
-    auto up_result = ttnn::matmul(
-        /*input_tensor_a=*/x,
-        /*input_tensor_b=*/up_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/gate_up_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/gate_up_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config);
+    // TODO(nuked-op matmul): restore real calls — ttnn::matmul deleted with the op; passthrough first tensor arg.
+    (void)gate_up_config;
+    (void)gate_up_mem;
+    (void)gate_proj;
+    (void)up_proj;
+    ttnn::Tensor gate_result = x;
+    ttnn::Tensor up_result = x;
 
     // In-place multiply: result stays in gate_result's block-sharded L1 buffer
     ttnn::multiply_(/*lhs=*/gate_result, /*rhs=*/up_result);
@@ -156,20 +144,12 @@ ttnn::Tensor routed_expert_ffn_wh(
     // Fast path: matmul writes directly to the L1 block-sharded buffer.
     // optional_output_tensor isn't passed — matmul would ignore it since the
     // memory_configs don't match. We hand the caller's tensor to the reshard.
-    auto result = ttnn::matmul(
-        /*input_tensor_a=*/gate_result,
-        /*input_tensor_b=*/down_proj,
-        /*transpose_a=*/false,
-        /*transpose_b=*/false,
-        /*memory_config=*/down_mem,
-        /*dtype=*/std::nullopt,
-        /*program_config=*/down_config,
-        /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_kernel_config,
-        /*core_grid=*/std::nullopt,
-        /*output_tile=*/std::nullopt,
-        /*optional_output_tensor=*/std::nullopt);
-    gate_result.deallocate(/*force=*/true);
+    // TODO(nuked-op matmul): restore real call — ttnn::matmul deleted with the op; passthrough a tensor.
+    (void)down_config;
+    (void)down_mem;
+    (void)down_proj;
+    (void)gate_result;
+    ttnn::Tensor result = x;
 
     // Always reshard L1 to DRAM interleaved. Releases the L1 shard so it doesn't
     // persist across expert calls. If the caller supplied a DRAM output tensor,

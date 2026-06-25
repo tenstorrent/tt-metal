@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// TODO(nuked-op matmul): minimal stub
+// The matmul op was nuked, but the MatmulProgramConfig variant (and its members) is a
+// shared host type still consumed by surviving code: the global_circular_buffer matmul-1d
+// GCB API + impl, conv2d / conv_transpose2d, and the deepseek routed_expert_ffn factories.
+// This reproduces the config structs verbatim (they only depend on surviving headers) so
+// those consumers compile until matmul is recreated from scratch.
+
 #pragma once
 
 #include "tt-metalium/core_coord.hpp"
@@ -9,9 +16,6 @@
 
 namespace ttnn::operations::matmul {
 
-// TODO: Uplift this to support fused activation and bias
-// TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
-// for in1 iff B=1 for in0 (ie. single core)
 struct MatmulMultiCoreReuseProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
@@ -37,18 +41,6 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
-// 1D mcast matmul program config.
-//
-// When `gather_in0 == false`, `compute_with_storage_grid_size` describes the size of the
-// rectangular grid of worker cores that the multicast paths will use, anchored at (0, 0) on
-// the device, or at the bounding-box start of the active sub-device when `sub_device_id` is
-// set on the op. The 1D mcast factory targets a single bounding-box rectangle for multicast
-// and the per-core index math assumes a single contiguous row-major rectangle, so when
-// `sub_device_id` is provided the sub-device's worker cores must themselves form a single
-// rectangle. Non-rectangular sub-device grids are rejected at validate time.
-//
-// When `gather_in0 == true`, `compute_with_storage_grid_size` is ignored and the gather path
-// can run on any sub-device worker layout, including non-rectangular ones.
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
@@ -95,10 +87,6 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
 
 // Ensures allowed_worker_cores is populated on every config variant that supports it.
-// If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is
-// synthesized from compute_with_storage_grid_size (or from the device grid for
-// MatmulMultiCoreProgramConfig).  After this call, factories can read
-// config.allowed_worker_cores.value() unconditionally.
 inline void normalize_program_config(MatmulProgramConfig& config, const CoreCoord& device_grid) {
     auto make_crs = [](const CoreCoord& grid) {
         return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
@@ -118,7 +106,6 @@ inline void normalize_program_config(MatmulProgramConfig& config, const CoreCoor
                     c.allowed_worker_cores = make_crs(device_grid);
                 }
             }
-            // DRAM-sharded configs have no grid fields to normalize.
         },
         config);
 }

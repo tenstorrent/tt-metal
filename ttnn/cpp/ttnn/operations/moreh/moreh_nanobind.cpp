@@ -22,8 +22,6 @@
 #include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_linear/moreh_linear_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_matmul/moreh_matmul_nanobind.hpp"
-#include "ttnn/operations/moreh/moreh_matmul_backward/moreh_matmul_backward_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_nanobind.hpp"
@@ -57,8 +55,6 @@ void bind_moreh_operations(nb::module_& mod) {
     moreh_layer_norm::bind_moreh_layer_norm_operation(mod);
     moreh_linear_backward::bind_moreh_linear_backward_operation(mod);
     moreh_linear::bind_moreh_linear_operation(mod);
-    moreh_matmul_backward::bind_moreh_matmul_backward_operation(mod);
-    moreh_matmul::bind_moreh_matmul_operation(mod);
     moreh_mean_backward::bind_moreh_mean_backward_operation(mod);
     moreh_mean::bind_moreh_mean_operation(mod);
     moreh_nll_loss_backward::bind_moreh_nll_loss_backward_operation(mod);

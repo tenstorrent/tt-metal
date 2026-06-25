@@ -21,7 +21,6 @@ file(
     all_to_all_async/device/kernels/*
     all_to_all_async_generic/device/kernels/*
     all_to_all_dispatch_metadata/device/kernels/*
-    llama_all_gather_matmul_async/device/kernels/*
     llama_reduce_scatter/device/kernels/*
     llama_reduce_scatter_create_heads/device/kernels/*
     neighbor_pad_async/device/kernels/*

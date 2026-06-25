@@ -18,7 +18,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
+// TODO(nuked-op matmul): restore real call — matmul/matmul.hpp deleted with the op
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
@@ -283,18 +283,11 @@ ConvTranspose2dResult conv_transpose2d_L1(
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
         }
-        output = ttnn::linear(
-            input_tensor_post_tm,
-            weight_tensor_on_device,
-            bias_tensor_on_device,
-            false,
-            false,
-            mm_output_memory_config,
-            output_dtype,
-            program_config,
-            // for sharded input, activation is set on program config
-            input_tensor_post_tm.is_sharded() ? std::nullopt : conv_config.activation,
-            compute_config);
+        // TODO(nuked-op matmul): restore real call — ttnn::linear was deleted with the matmul op.
+        // Passthrough of the first tensor arg to satisfy the type system; NOT functionally correct.
+        (void)program_config;
+        (void)mm_output_memory_config;
+        output = input_tensor_post_tm;
 
         if (should_deallocate_act) {
             input_tensor_post_tm.deallocate(/*force*/ true);
