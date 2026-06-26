@@ -100,7 +100,13 @@ string GetRiscName(
     CoreCoord virtual_core =
         cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
+    const std::string risc_name = hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
+    // Mark dispatch-engine (DE) cores in the prefix so they're distinguishable from Tensix DMs without
+    // having to bake the distinction into each DPRINT message (e.g. "DE-DM4" vs "DM4").
+    if (programmable_core_type == tt_metal::HalProgrammableCoreType::DISPATCH) {
+        return "DE-" + risc_name;
+    }
+    return risc_name;
 }
 
 inline bool RiscEnabled(
@@ -230,6 +236,24 @@ public:
                 make_buffer(structure_address, compute_size, compute_count, dm_count),
                 make_buffer(structure_address + compute_size, dm_size, dm_count, 0),
             };
+        }
+
+        // Quasar dispatch-engine cores run DM-only firmware (COMPILE_FOR_DM), but the on-device
+        // DevicePrintMemoryLayout still reserves the TRISC sub-buffer first, so the DM print buffer
+        // (the one get_device_print_buffer() returns) lives at structure_address + compute_size. Only
+        // the DM sub-buffer is populated; mirror the DM half of the Quasar TENSIX split above.
+        if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type == HalProgrammableCoreType::DISPATCH) {
+            const uint16_t dm_count = static_cast<uint16_t>(hal.get_processor_types_count(
+                programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
+            const uint16_t compute_size = 3264;
+            const uint16_t dm_size = 1632;
+            TT_FATAL(
+                static_cast<uint32_t>(compute_size) + dm_size == structure_size,
+                "Quasar DISPATCH DPRINT buffer split (compute {} + DM {}) doesn't match region size {}",
+                compute_size,
+                dm_size,
+                structure_size);
+            return {make_buffer(structure_address + compute_size, dm_size, dm_count, 0)};
         }
 
         const uint16_t num_processors = static_cast<uint16_t>(hal.get_num_risc_processors(programmable_core_type));
@@ -1069,7 +1093,11 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
         int cores_class = rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type);
         if (dispatch_cores_are_dispatch_type && worker_selects_dispatch) {
             if (core_type == CoreType::WORKER) {
-                cores_class = tt::llrt::RunTimeDebugClassNoneSpecified;
+                // The "dispatch" selection is rerouted to the DISPATCH iteration below. Skip the WORKER
+                // iteration entirely: matching a class name (e.g. "dispatch") makes ParseFeatureCoreRange
+                // return without populating cores[WORKER], so falling through to the explicit-cores branch
+                // would throw map::at on get_feature_cores(...).at(CoreType::WORKER).
+                continue;
             } else if (core_type == CoreType::DISPATCH) {
                 cores_class = tt::llrt::RunTimeDebugClassDispatch;
             }

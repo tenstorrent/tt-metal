@@ -1077,22 +1077,15 @@ void experimental::quasar::DispatchEngineKernel::process_defines(
 }
 
 bool experimental::quasar::DispatchEngineKernel::configure(
-    IDevice* device,
-    const CoreCoord& logical_core,
-    [[maybe_unused]] uint32_t base_address,
-    [[maybe_unused]] const uint32_t offsets[]) const {
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     TT_FATAL(is_on_logical_core(logical_core), "Cannot configure kernel because it is not on core {}", logical_core.str());
-    const auto& hal = MetalContext::instance().hal();
     const ChipId device_id = device->id();
     const CoreCoord dispatch_core = device->virtual_core_from_logical_core(logical_core, CoreType::DISPATCH);
     const ll_api::memory& binary_mem = *this->binaries(BuildEnvManager::get_instance(extract_context_id(device))
                                                            .get_device_build_env(device->build_id())
                                                            .build_key())[0];
-    const auto dispatch_core_index = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
-    const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->dm_processor_);
-    tt::llrt::test_load_write_read_risc_binary(
-        binary_mem, device_id, dispatch_core, dispatch_core_index, dm_class_idx, riscv_id);
+    llrt::write_binary_to_address(binary_mem, device_id, dispatch_core, base_address + offsets[riscv_id]);
     return true;
 }
 
