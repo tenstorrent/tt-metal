@@ -304,8 +304,8 @@ class _CompletionCheckConsumer:
     and starves any Python drain thread, even though the router had already injected every completion.
 
     In production a real scheduler consumes this channel; this only fakes the consumer side under test.
-    Pre-configured with the expected total (PREFILL_CHECK_EXPECTED_CHUNKS, else PREFILL_STANDALONE_NCHUNKS)
-    so the C++ thread self-terminates + logs PASS on its own — no dependency on Python teardown.
+    Pre-configured with the expected total (PREFILL_CHECK_EXPECTED_CHUNKS) so the C++ thread
+    self-terminates + logs PASS on its own — no dependency on Python teardown.
     """
 
     def __init__(self, ack_shm_name: str, *, num_layers: int):
@@ -314,18 +314,17 @@ class _CompletionCheckConsumer:
         from models.demos.test.prefill_test import LayerCompletionConsumer
 
         self._num_layers = num_layers
-        explicit_chunks = os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS") or os.environ.get(
-            "PREFILL_STANDALONE_NCHUNKS"
-        )
+        # This consumer only runs in (unbounded) request mode, where the external producer — NOT
+        # PREFILL_STANDALONE_NCHUNKS — determines the chunk count. So the expected total must come from
+        # PREFILL_CHECK_EXPECTED_CHUNKS; NCHUNKS is deliberately not consulted (it's commonly set via the
+        # standalone global_env and would silently pick a wrong-but-confident count). If unset, the
+        # consumer's self-terminate threshold is a guess and the PASS/FAIL signal is unreliable.
+        explicit_chunks = os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS")
         if explicit_chunks is None:
-            # Unbounded request mode sends an arbitrary number of chunks, so this fallback is a guess:
-            # the consumer self-terminates at expected_total, making the PASS/FAIL signal meaningless
-            # unless the real chunk count is pinned. Only trustworthy in STANDALONE mode or with an
-            # explicit PREFILL_CHECK_EXPECTED_CHUNKS.
             logger.warning(
-                "[completion-check] neither PREFILL_CHECK_EXPECTED_CHUNKS nor PREFILL_STANDALONE_NCHUNKS "
-                "is set; falling back to 11 chunks — the PASS/FAIL tally is unreliable in unbounded "
-                "request mode. Set PREFILL_CHECK_EXPECTED_CHUNKS to the real chunk count."
+                "[completion-check] PREFILL_CHECK_EXPECTED_CHUNKS is not set; falling back to 11 chunks — "
+                "the PASS/FAIL tally is unreliable in unbounded request mode. Set it to the number of "
+                "chunks the producer will actually send."
             )
         self._expected_chunks = int(explicit_chunks or "11")
         self._expected_total = self._expected_chunks * num_layers
