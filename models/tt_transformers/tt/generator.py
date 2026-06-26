@@ -1657,19 +1657,26 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             logits_i = tt_logits[i]
             if isinstance(logits_i, tuple):
                 logits_i = logits_i[0]
+            # Some models must run the on-device sampling op eagerly rather than from its
+            # own captured trace: the force-argmax path does an all_gather_async whose
+            # multi_device_global_semaphore is taken from get_and_cycle_*() at capture time
+            # and frozen into the trace, so replaying the sampling trace reuses a stale
+            # semaphore and the gather corrupts from the 2nd decode step (#48037). Running
+            # sampling eagerly re-acquires a fresh semaphore each step.
+            sampling_enable_trace = enable_trace and not getattr(self.model[i], "_tt_disable_sampling_trace", False)
             # Must match the capture-time decision in _capture_decode_trace_text:
             # only feed the sampled token back into device_inputs[0] for models
             # that use on-device token feedback (see _decode_token_feedback_buffer).
             tt_out_tok = (
                 self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[True][i])
-                if enable_trace and self.trace_inputs_decode[True]
+                if sampling_enable_trace and self.trace_inputs_decode[True]
                 else None
             )
             sampled_outputs.append(
                 sampling_module.sample(
                     logits=logits_i,
                     tt_out_tok=tt_out_tok,
-                    enable_trace=enable_trace,
+                    enable_trace=sampling_enable_trace,
                 )
             )
         return sampled_outputs
