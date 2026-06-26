@@ -38,6 +38,7 @@ def _validate_q_rope_offset(q_rope_offset: int, *, batch_size: int) -> None:
 def _slice_rope_cache(cache, start, length):
     if start % TILE_SIZE != 0:
         raise ValueError(f"RoPE cache start must be a multiple of {TILE_SIZE}, got {start}")
+    # Fast path is correct only when callers pre-slice RoPE caches to the active seq_len.
     if start == 0 and cache.shape[-2] == length:
         return cache
     return ttnn.slice(cache, [0, 0, start, 0], [cache.shape[0], cache.shape[1], start + length, cache.shape[3]])
