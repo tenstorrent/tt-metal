@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -121,6 +122,18 @@ uint32_t worker_count(const CoreRange& worker_cores) {
            (worker_cores.end_coord.y - worker_cores.start_coord.y + 1);
 }
 
+uint32_t effective_host_push_thread_count(
+    bool parallel_host_push, uint32_t host_push_thread_count, size_t num_sockets) {
+    if (!parallel_host_push || host_push_thread_count == 1 || num_sockets <= 1) {
+        return 1;
+    }
+    if (host_push_thread_count == 0) {
+        return static_cast<uint32_t>(
+            std::min<size_t>(tt::tt_metal::H2DStreamService::kAutoHostPushThreadCount, num_sockets));
+    }
+    return static_cast<uint32_t>(std::min<size_t>(host_push_thread_count, num_sockets));
+}
+
 ttsl::SmallVector<MeshMapperConfig::Placement> full_shard_2d_placements() {
     // Shard tensor dim 2 (height) across mesh rows, dim 3 (width) across mesh cols.
     return {MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{3}};
@@ -211,7 +224,7 @@ LatencyStats summarize_latency_us(std::vector<double> latencies_us) {
     TT_FATAL(!latencies_us.empty(), "latencies_us must not be empty");
     std::sort(latencies_us.begin(), latencies_us.end());
     const auto percentile = [&](double fraction) {
-        const auto idx = static_cast<std::size_t>((latencies_us.size() - 1) * fraction + 0.5);
+        const auto idx = static_cast<std::size_t>(std::lround(static_cast<double>(latencies_us.size() - 1) * fraction));
         return latencies_us[idx];
     };
     const double sum = std::accumulate(latencies_us.begin(), latencies_us.end(), 0.0);
@@ -353,13 +366,8 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     TT_FATAL(per_shard_payload_bytes % socket_page_size == 0, "socket page size must divide per-shard payload bytes");
     const uint32_t num_socket_pages = static_cast<uint32_t>(per_shard_payload_bytes / socket_page_size);
     const uint32_t pages_per_chunk = socket_page_size / backing_buf->page_size();
-    const uint32_t effective_host_push_thread_count =
-        !cs.parallel_host_push ? 1
-                               : (cs.host_push_thread_count == 0
-                                      ? static_cast<uint32_t>(std::min<size_t>(
-                                            tt::tt_metal::H2DStreamService::kAutoHostPushThreadCount, sockets.size()))
-                                      : static_cast<uint32_t>(std::min<size_t>(
-                                            std::max<uint32_t>(cs.host_push_thread_count, 1u), sockets.size())));
+    const uint32_t effective_host_push_threads =
+        effective_host_push_thread_count(cs.parallel_host_push, cs.host_push_thread_count, sockets.size());
     // The service auto-sizes slot depth from service-core L1 (no longer max_socket_page_size_bytes /
     // socket_page_size), so read the actual derived value rather than recomputing it.
     const uint32_t slot_count = service.get_slot_count();
@@ -501,7 +509,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["worker_count"] = static_cast<double>(num_workers);
         state.counters["parallel_host_push"] = cs.parallel_host_push ? 1.0 : 0.0;
         state.counters["host_push_thread_count"] = static_cast<double>(cs.host_push_thread_count);
-        state.counters["effective_host_push_thread_count"] = static_cast<double>(effective_host_push_thread_count);
+        state.counters["effective_host_push_thread_count"] = static_cast<double>(effective_host_push_threads);
         state.counters["per_shard_bytes"] = static_cast<double>(per_shard_payload_bytes);
         state.counters["socket_page_size"] = static_cast<double>(socket_page_size);
         state.counters["num_socket_pages"] = static_cast<double>(num_socket_pages);
