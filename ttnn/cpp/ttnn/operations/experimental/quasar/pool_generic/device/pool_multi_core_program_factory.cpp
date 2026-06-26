@@ -1175,7 +1175,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         device_arch,
         op_attr.compute_kernel_config_,
         tt::tt_metal::MathFidelity::HiFi4,
-        /*math_approx_mode=*/false,
+        /*default_approx_mode=*/false,
         /*fp32_dest_acc_en=*/(params.is_avg_pool && params.is_large_kernel) || indexes_32_bit,
         /*packer_l1_acc=*/false,
         /*dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
