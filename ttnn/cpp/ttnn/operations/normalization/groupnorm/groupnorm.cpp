@@ -4,11 +4,16 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
+#include "device/groupnorm_program_utils.hpp"
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+
+#include <tt-metalium/allocator.hpp>
+
+#include <optional>
 
 namespace {
 
@@ -96,48 +101,55 @@ int64_t get_group_norm_cores_across_channel(
 
 namespace ttnn::operations::normalization {
 
-ttnn::Tensor get_mask_tensor(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& input_mask,
-    const std::optional<ttnn::Tensor>& negative_mask,
-    const CoreGrid& core_grid,
-    const int num_groups) {
-    ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
-    if (!input_mask.has_value() and !negative_mask.has_value()) {
-        // create input mask
-        int64_t num_channel = input_tensor.padded_shape()[-1];
-        int64_t num_cores_across_channel;
-        if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
-            const auto mem_layout = input_tensor.memory_config().memory_layout();
-            const auto shard_spec = input_tensor.memory_config().shard_spec();
-            std::optional<ShardOrientation> shard_orientation = std::nullopt;
-            if (shard_spec.has_value()) {
-                shard_orientation = shard_spec->orientation;
-            }
-            num_cores_across_channel = get_group_norm_cores_across_channel(mem_layout, core_grid, shard_orientation);
-        } else {
-            uint32_t num_virtual_cols =
-                compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
-            TT_FATAL(
-                num_virtual_cols > 0,
-                "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
-                "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
-                "and num_groups % nvc == 0.",
-                core_grid.x,
-                num_groups,
-                num_channel);
-            num_cores_across_channel = static_cast<int64_t>(num_virtual_cols);
+static int64_t compute_num_cores_across_channel(
+    const ttnn::Tensor& input_tensor, const CoreGrid& core_grid, const int num_groups) {
+    int64_t num_channel = input_tensor.padded_shape()[-1];
+    if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
+        const auto mem_layout = input_tensor.memory_config().memory_layout();
+        const auto shard_spec = input_tensor.memory_config().shard_spec();
+        std::optional<ShardOrientation> shard_orientation = std::nullopt;
+        if (shard_spec.has_value()) {
+            shard_orientation = shard_spec->orientation;
         }
-        mask = create_group_norm_input_mask(
-            num_channel,
-            num_groups,
-            num_cores_across_channel,
-            tt::tt_metal::DataType::BFLOAT16,
-            input_tensor.tensor_spec().tile().get_height(),
-            input_tensor.tensor_spec().tile().get_width());
-        mask = mask.to_device(input_tensor.device());
+        return get_group_norm_cores_across_channel(mem_layout, core_grid, shard_orientation);
     }
-    return mask;
+    uint32_t num_virtual_cols = compute_num_virtual_cols(core_grid.x, num_groups, static_cast<uint32_t>(num_channel));
+    TT_FATAL(
+        num_virtual_cols > 0,
+        "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
+        "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
+        "and num_groups % nvc == 0.",
+        core_grid.x,
+        num_groups,
+        num_channel);
+    return static_cast<int64_t>(num_virtual_cols);
+}
+
+ttnn::Tensor get_mask_tensor(const ttnn::Tensor& input_tensor, const CoreGrid& core_grid, const int num_groups) {
+    int64_t num_channel = input_tensor.padded_shape()[-1];
+    int64_t num_cores_across_channel = compute_num_cores_across_channel(input_tensor, core_grid, num_groups);
+    ttnn::Tensor mask = create_group_norm_input_mask(
+        num_channel,
+        num_groups,
+        num_cores_across_channel,
+        tt::tt_metal::DataType::BFLOAT16,
+        input_tensor.tensor_spec().tile().get_height(),
+        input_tensor.tensor_spec().tile().get_width());
+    return mask.to_device(input_tensor.device());
+}
+
+ttnn::Tensor get_negative_mask_tensor(
+    const ttnn::Tensor& input_tensor, const CoreGrid& core_grid, const int num_groups) {
+    int64_t num_channel = input_tensor.padded_shape()[-1];
+    int64_t num_cores_across_channel = compute_num_cores_across_channel(input_tensor, core_grid, num_groups);
+    ttnn::Tensor neg_mask = create_group_norm_input_negative_mask(
+        num_channel,
+        num_groups,
+        num_cores_across_channel,
+        tt::tt_metal::DataType::BFLOAT16,
+        input_tensor.tensor_spec().tile().get_height(),
+        input_tensor.tensor_spec().tile().get_width());
+    return neg_mask.to_device(input_tensor.device());
 }
 
 }  // namespace ttnn::operations::normalization
@@ -148,9 +160,9 @@ Tensor group_norm(
     const Tensor& input_tensor,
     const int num_groups,
     const float epsilon,
-    const std::optional<Tensor>& input_mask,
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& bias,
+    const std::optional<Tensor>& /*input_mask*/,
     const std::optional<Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> /*dtype*/,
@@ -159,7 +171,7 @@ Tensor group_norm(
     std::optional<Layout> output_layout,
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<Tensor>& negative_mask,
+    const std::optional<Tensor>& /*negative_mask*/,
     bool use_welford) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
@@ -220,14 +232,9 @@ Tensor group_norm(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
         input_tensor.storage_type());
-    if (input_mask.has_value()) {
-        TT_FATAL(
-            input_mask->storage_type() == StorageType::DEVICE,
-            "Input mask must be on device, got storage type: {}",
-            input_mask->storage_type());
-        TT_FATAL(input_mask->buffer() != nullptr, "Input mask must be allocated in buffers on device!");
-        TT_FATAL(input_tensor.device() == input_mask->device(), "Input and input mask tensors must be on same device");
-    }
+    // Note: input_mask is no longer a public parameter; the mask is created internally (always
+    // on-device, always allocated) and validated in the device op's validate(). The user-mask
+    // validation that #46162 added here is therefore obsolete on this interface.
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
@@ -346,17 +353,88 @@ Tensor group_norm(
         validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }
 
-    // auto generate mask tensor if both input_mask and negative_mask are not provided
-    ttnn::Tensor mask = operations::normalization::get_mask_tensor(
-        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups);
+    ttnn::Tensor mask = operations::normalization::get_mask_tensor(input_tensor, core_grid.value(), num_groups);
 
     if (input_tensor.is_sharded()) {
+        const Layout effective_output_layout = output_layout.value_or(input_tensor.layout());
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
-            .output_layout = output_layout.value_or(input_tensor.layout())};
+            .output_layout = effective_output_layout};
+
+        // negative_mask reduces L1 CB usage at a small perf cost; only valid for ROW_MAJOR in/out
+        const bool negative_mask_applicable =
+            input_tensor.layout() == Layout::ROW_MAJOR && effective_output_layout == Layout::ROW_MAJOR;
+
+        // Allocate the output up front (reusing the op's own create_output_tensors, so the spec
+        // can't drift) so that lowest_occupied_compute_l1_address() reflects it exactly. We then
+        // decide whether the cheaper no-negative-mask CBs fit with NO prediction about where the
+        // allocator placed the output. The pre-allocated output is handed to the prim op via
+        // optional_output, so it is not allocated a second time.
+        const ttnn::prim::GroupNormParams output_alloc_params{
+            .eps = epsilon,
+            .num_groups = static_cast<uint32_t>(num_groups),
+            .output_mem_config = output_mem_config,
+            .program_config = program_config,
+            .compute_kernel_config = kernel_config_val,
+            .use_welford = use_welford};
+        const ttnn::Tensor output = ttnn::prim::GroupNormDeviceOperation::create_output_tensors(
+            output_alloc_params, ttnn::prim::GroupNormInputs{.input = input_tensor});
+
+        // Exact L1-fit check: the CBs grow up from l1_base; the output (now allocated) is already
+        // counted in lowest_occupied. So the no-negative-mask CBs fit iff
+        //   l1_base + static_cb_total <= lowest_occupied.
+        // CB sizes come from the same helper the program factory uses, so they match what the
+        // factory will allocate. NOTE: this is exact under the default LOCKSTEP allocator; under
+        // the experimental HYBRID per-core allocator (or if another stream allocates L1 between
+        // here and dispatch) per-core occupancy can diverge from this single value, and the
+        // framework's dispatch-time check in program.cpp remains the ground truth.
+        const bool needs_negative_mask = negative_mask_applicable && [&] {
+            const uint32_t l1_base =
+                input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+            const auto lowest_occupied = input_tensor.device()->lowest_occupied_compute_l1_address();
+            const uint32_t lowest_l1 = lowest_occupied.value_or(input_tensor.buffer()->address());
+
+            const auto cb_sizes = ttnn::prim::compute_sharded_gn_static_cb_sizes(
+                input_tensor,
+                gamma.has_value() ? std::make_optional(gamma->dtype()) : std::nullopt,
+                beta.has_value() ? std::make_optional(beta->dtype()) : std::nullopt,
+                use_welford,
+                static_cast<uint32_t>(num_groups));
+            const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+            const bool reader_repack_output = (input_tensor.shard_spec().value().shape[1] % tile_w) != 0;
+            const uint32_t cb_total = cb_sizes.total(
+                /*with_negative_mask=*/false,
+                /*untilize_out=*/effective_output_layout == Layout::ROW_MAJOR,
+                /*has_gamma=*/gamma.has_value(),
+                /*has_beta=*/beta.has_value(),
+                /*has_input_mask=*/true,
+                reader_repack_output,
+                use_welford);
+            return l1_base + cb_total > lowest_l1;
+        }();
+
+        if (!needs_negative_mask) {
+            return ttnn::prim::group_norm(
+                input_tensor,
+                epsilon,
+                static_cast<uint32_t>(num_groups),
+                output_mem_config,
+                program_config,
+                kernel_config_val,
+                use_welford,
+                gamma,
+                beta,
+                mask,
+                std::nullopt,
+                reciprocals,
+                output);
+        }
+
+        ttnn::Tensor neg_mask =
+            operations::normalization::get_negative_mask_tensor(input_tensor, core_grid.value(), num_groups);
         return ttnn::prim::group_norm(
             input_tensor,
             epsilon,
@@ -368,8 +446,9 @@ Tensor group_norm(
             gamma,
             beta,
             mask,
-            negative_mask,
-            reciprocals);
+            neg_mask,
+            reciprocals,
+            output);
     }
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
@@ -392,7 +471,7 @@ Tensor group_norm(
         gamma,
         beta,
         mask,
-        negative_mask,
+        std::nullopt,
         reciprocals);
 }
 

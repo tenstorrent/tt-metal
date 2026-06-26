@@ -323,41 +323,33 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
-    uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
-    // in2 - scaler
-    uint32_t in2_CB_size = single_tile_size * (use_welford ? 3 : 1);
-    // in3 - eps
-    uint32_t in3_CB_size = single_tile_size;
-    // gamma
+
+    // Statically-allocated CB sizes come from a single shared helper so this factory and the
+    // op-level L1 sizing helpers can never disagree about how much L1 the CBs consume. To add
+    // or resize a static CB, edit compute_sharded_gn_static_cb_sizes() — the single source of
+    // truth.
+    const GroupNormShardedStaticCbSizes static_cb = compute_sharded_gn_static_cb_sizes(
+        a,
+        gamma.has_value() ? std::make_optional(gamma.value().dtype()) : std::nullopt,
+        beta.has_value() ? std::make_optional(beta.value().dtype()) : std::nullopt,
+        use_welford,
+        num_groups);
+    // Static CB byte sizes are read directly from `static_cb` at each CB descriptor below, so
+    // this factory and the op-level L1 sizing helpers can never disagree. Only the per-core tile
+    // counts (gamma/beta and input mask) and the output CB size are kept as locals, since they are
+    // not part of the shared static-CB helper.
     uint32_t gamma_beta_num_cols_tile_per_core = per_core_Nt;
-    uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
-    // beta
-    uint32_t in6_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
-    // input mask
     uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
-    uint32_t in_mask_CB_size =
-        block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2);  // double buffer
-    // negative mask
-    uint32_t in_negative_mask_CB_size = block_wt * in_negative_mask_single_tile_size * 2;  // double buffer
-    // repack cb
-    uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
-    // itermediate buffers
-    uint32_t interm_block_tiles = block_ht * block_wt;
-    uint32_t x_CB_size = single_tile_size * (use_welford ? 1 : interm_block_tiles);
-    // In welford, we both store mean and var here, so double the size
-    uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);
-    uint32_t ex_global_CB_size = ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);  // the final result Ex
-    uint32_t ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : ex_partial_CB_size;
     // output buffer size
     uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
 
     log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
     log_debug(tt::LogOp, "per_core_Mt: {}", per_core_Mt);
     log_debug(tt::LogOp, "in0_CB_size: {}", in0_CB_size);
-    log_debug(tt::LogOp, "in_CB_size: {}", in_CB_size);
+    log_debug(tt::LogOp, "in_CB_size: {}", static_cb.in_CB_size);
     log_debug(tt::LogOp, "gamma_beta_num_cols_tile_per_core: {}", gamma_beta_num_cols_tile_per_core);
-    log_debug(tt::LogOp, "in5_CB_size: {}", in5_CB_size);
-    log_debug(tt::LogOp, "repack_CB_size: {}", repack_CB_size);
+    log_debug(tt::LogOp, "in5_CB_size: {}", static_cb.in5_CB_size);
+    log_debug(tt::LogOp, "repack_CB_size: {}", static_cb.repack_CB_size);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -907,11 +899,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     };
     if (!negative_mask.has_value()) {
         // in - stores tilized input
-        desc.cbs.push_back(make_in_cb_desc(in_CB_size));
+        desc.cbs.push_back(make_in_cb_desc(static_cb.in_CB_size));
         if (untilize_out) {
             constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
             desc.cbs.push_back(CBDescriptor{
-                .total_size = in_CB_size,
+                .total_size = static_cb.in_CB_size,
                 .core_ranges = all_cores,
                 .format_descriptors = {{CBFormatDescriptor{
                     .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -923,12 +915,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     } else {
         // in - stores tilized input
         // tilized in is overlapped with it
-        desc.cbs.push_back(make_in_cb_desc(in_CB_size));
+        desc.cbs.push_back(make_in_cb_desc(static_cb.in_CB_size));
     }
     // in2 scaler - for partial Ex
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = in2_CB_size,
+        .total_size = static_cb.in2_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in2_cb_index),
@@ -939,7 +931,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // in3 eps
     constexpr uint32_t in3_cb_index = tt::CBIndex::c_3;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = in3_CB_size,
+        .total_size = static_cb.in3_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in3_cb_index),
@@ -951,7 +943,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (!use_welford) {
         constexpr uint32_t in4_cb_index = tt::CBIndex::c_4;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in2_CB_size,
+            .total_size = static_cb.in2_CB_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in4_cb_index),
@@ -964,7 +956,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (gamma.has_value()) {
         constexpr uint32_t in5_cb_index = tt::CBIndex::c_5;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in5_CB_size,
+            .total_size = static_cb.in5_CB_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in5_cb_index),
@@ -977,7 +969,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (beta.has_value()) {
         constexpr uint32_t in6_cb_index = tt::CBIndex::c_6;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in6_CB_size,
+            .total_size = static_cb.in6_CB_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in6_cb_index),
@@ -990,7 +982,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (input_mask.has_value()) {
         constexpr uint32_t in_mask_cb_index = tt::CBIndex::c_7;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_mask_CB_size,
+            .total_size = static_cb.in_mask_CB_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in_mask_cb_index),
@@ -1003,7 +995,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     if (negative_mask.has_value()) {
         constexpr uint32_t in_negative_mask_cb_index = tt::CBIndex::c_14;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_negative_mask_CB_size,
+            .total_size = static_cb.in_negative_mask_CB_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in_negative_mask_cb_index),
@@ -1016,7 +1008,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         constexpr uint32_t repack_cb_index = tt::CBIndex::c_11;
         constexpr uint32_t repack_out_cb_index = tt::CBIndex::c_12;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = repack_CB_size,
+            .total_size = static_cb.repack_CB_size,
             .core_ranges = all_cores,
             .format_descriptors =
                 {{CBFormatDescriptor{
@@ -1034,7 +1026,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // x
     constexpr uint32_t x_cb_index = tt::CBIndex::c_13;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = x_CB_size,
+        .total_size = static_cb.x_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(x_cb_index),
@@ -1046,7 +1038,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // ex_partial
     constexpr uint32_t ex_cb_partial_index = tt::CBIndex::c_8;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = ex_partial_CB_size,
+        .total_size = static_cb.ex_partial_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(ex_cb_partial_index),
@@ -1073,7 +1065,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     constexpr uint32_t ex_cb_index = tt::CBIndex::c_9;
     constexpr uint32_t ex_global_cb_index = tt::CBIndex::c_15;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = ex_global_CB_size,
+        .total_size = static_cb.ex_global_CB_size,
         .core_ranges = all_cores,
         .format_descriptors =
             {{CBFormatDescriptor{
@@ -1091,7 +1083,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // ex2pe
     constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_17;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = ex2pe_CB_size,
+        .total_size = static_cb.ex2pe_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_ex2pe_index),

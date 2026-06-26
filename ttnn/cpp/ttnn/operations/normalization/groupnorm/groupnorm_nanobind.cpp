@@ -54,9 +54,10 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
             Keyword args:
                 num_groups (int): Number of groups to split the tensor's channels into.
                 epsilon (float): Defaults to 1e-12.
-                input_mask (ttnn.Tensor, optional): Defaults to `None`. When processing the inputs, the mask is used to only look at the elements of the current group.
                 weight (ttnn.Tensor, optional): Gamma (scale) parameter for the affine transformation. When omitted, no scaling is applied. Defaults to `None`.
                 bias (ttnn.Tensor, optional): Beta (shift) parameter for the affine transformation. When omitted, no shift is applied. Defaults to `None`.
+                input_mask (ttnn.Tensor, optional): Deprecated. This argument is ignored and will be removed soon. The mask is now created automatically. Defaults to `None`.
+                negative_mask (ttnn.Tensor, optional): Deprecated. This argument is ignored and will be removed soon. The mask is now created automatically. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (ttnn.DataType, optional): Defaults to `None`.
                 core_grid (CoreGrid, optional): Defaults to `None`.
@@ -64,7 +65,6 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 output_layout (ttnn.Layout, optional): Defaults to `None`.
                 num_out_blocks (int, optional): For non-sharded (interleaved) inputs, splits the per-core output height (``block_h``, in tiles) into ``num_out_blocks`` chunks so each iteration uses less SRAM, at the cost of performance. Ignored for sharded inputs. Should only be set if needed to relieve SRAM pressure. Accepted explicit values are ``-1`` (use the built-in auto-heuristic) or a chunk count in range ``[1, block_h]``. Defaults to `None`, whose meaning depends on :attr:`core_grid` (non-sharded inputs only): when :attr:`core_grid` is also `None` (auto-selected), ``num_out_blocks`` is determined automatically using the same auto-heuristic as ``-1``, and passing an explicit ``num_out_blocks`` in that case is rejected. When :attr:`core_grid` is provided and ``num_out_blocks`` is `None` (default), ``num_out_blocks`` defaults to ``1`` (no chunking).
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
-                negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB's used in the sharded version of the kernel by overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).
                 use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance.
                 reciprocals (ttnn.Tensor, optional): Defaults to `None`. FP32 tensor containing pre-computed reciprocal values. Only valid when ``use_welford`` is True. Must be sharded to L1 using the legacy ``ShardSpec`` representation, with the shard grid matching the compute :attr:`core_grid`. Interleaved tensors and ``NdShardSpec`` sharding are currently not supported for the :attr:`reciprocals` tensor.
 
@@ -123,9 +123,9 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("num_groups"),
         nb::arg("epsilon") = 1e-12,
-        nb::arg("input_mask") = nb::none(),
         nb::arg("weight") = nb::none(),
         nb::arg("bias") = nb::none(),
+        nb::arg("input_mask") = nb::none(),
         nb::arg("reciprocals") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),

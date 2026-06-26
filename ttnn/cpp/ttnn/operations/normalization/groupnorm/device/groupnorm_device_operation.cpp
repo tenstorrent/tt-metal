@@ -278,6 +278,11 @@ TensorSpec GroupNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
+    // A pre-allocated output fixes the spec; the op writes into it rather than allocating.
+    if (tensor_args.optional_output.has_value()) {
+        return tensor_args.optional_output->tensor_spec();
+    }
+
     return std::visit(
         [&](const auto& program_config) -> spec_return_value_t {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -306,6 +311,11 @@ Tensor GroupNormDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 
+    // Reuse a pre-allocated output if the caller provided one (no second allocation).
+    if (tensor_args.optional_output.has_value()) {
+        return tensor_args.optional_output.value();
+    }
+
     return std::visit(
         [&](const auto& program_config) -> tensor_return_value_t {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -333,7 +343,8 @@ Tensor group_norm(
     std::optional<Tensor> beta,
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
-    std::optional<Tensor> reciprocals) {
+    std::optional<Tensor> reciprocals,
+    std::optional<Tensor> optional_output) {
     if (negative_mask.has_value()) {
         TT_FATAL(
             negative_mask.value().storage_type() == StorageType::DEVICE,
@@ -358,7 +369,8 @@ Tensor group_norm(
         .beta = std::move(beta),
         .input_mask = std::move(input_mask),
         .negative_mask = std::move(negative_mask),
-        .reciprocals = std::move(reciprocals)};
+        .reciprocals = std::move(reciprocals),
+        .optional_output = std::move(optional_output)};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
