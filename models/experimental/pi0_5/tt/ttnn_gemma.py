@@ -1127,7 +1127,11 @@ class GemmaMLPTTNN:
             # tile multiple (32). Verified savings: ~26 ms / inference (expert MLP
             # gate+up+down accounted for 38 ms of matmul time, mostly wasted
             # padding compute).
-            tile = 32
+            # Standard path rounds M to a full 32-row tile. The MD/denoise path
+            # uses a 16-row tile so M=16 stays 16 (genuine 16×32, no pad-to-32);
+            # M=32 still rounds to 32. tile=16 is unsafe for the standard path
+            # (m_tiles = padded//32 would truncate for non-32-aligned chunks).
+            tile = 16 if self._md_denoise else 32
             padded_chunk_size = ((actual_chunk_size + tile - 1) // tile) * tile
             needs_chunk_padding = padded_chunk_size > actual_chunk_size
 
@@ -1147,7 +1151,10 @@ class GemmaMLPTTNN:
             # awkward shapes; we fall back to the default `core_grid` path then.
             m_tiles = padded_chunk_size // 32
 
-            # PI0_MD_DENOISE: tiny-tile matmul_decode path for M=16 or M=32 denoise MLP.
+            # PI0_MD_DENOISE: tiny-tile matmul_decode path for the M=32 denoise MLP
+            # (tile=16 above also lets M=16 take this branch genuinely, with no
+            # pad-to-32; M=16 currently fails at _md_shard_a because width-sharded
+            # activations require tile-aligned 32-row shards).
             # gate/up via partial K-split (N=4096>120c), down full-width; A width-sharded
             # over 2 cores, GeGLU stays sharded, reshard A for down. Additive fast path.
             if self._md_denoise and padded_chunk_size in (16, 32):
