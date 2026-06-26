@@ -125,6 +125,7 @@ target_sources(
         concat_heads_matmul/device/concat_heads_matmul_device_operation.cpp
         concat_heads_matmul/device/concat_heads_matmul_program_factory.cpp
         concat_heads_matmul/concat_heads_matmul.cpp
+        concat_heads_matmul_decode/concat_heads_matmul_decode.cpp
         rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp
         rotary_embedding_hf/device/rotary_embedding_hf_multi_core_program_factory.cpp
         rotary_embedding_hf/device/rotary_embedding_hf_sharded_program_factory.cpp
@@ -147,7 +148,14 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_experimental_transformer PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_experimental_transformer
+    PUBLIC
+        TTNN::Core
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::MatmulDecode
+)
 
 install(
     TARGETS

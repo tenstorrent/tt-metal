@@ -65,9 +65,12 @@ _N_WARMUP = int(os.environ.get("PI05_WALLTIME_WARMUP", "3"))
 _N_SUBMESHES = int(os.environ.get("PI05_WALLTIME_NSUB", "4"))
 _LATENCY_CEILING_MS = float(os.environ.get("PI05_WALLTIME_CEILING", "40.0"))
 _DRAIN = os.environ.get("PI05_WALLTIME_DRAIN", "stage0")
+# PI05_WALLTIME_DECODE_ALL=1 routes the denoise block's 5 projection matmuls (QKV, o, MLP
+# gate/up/down) through ttnn.matmul_decode (partial-width-sharded) instead of ttnn.linear.
+_DECODE_ALL = os.environ.get("PI05_WALLTIME_DECODE_ALL", "0").lower() in ("1", "true", "yes", "on")
 
-# 4-way (5,5,4,4); 8-way (3,3,3,3,2,2,1,1). Both sum to the 18 expert layers.
-_SPLITS = {4: (5, 5, 4, 4), 8: (3, 3, 3, 3, 2, 2, 1, 1)}
+# 4-way (5,5,4,4); 8-way (2,2,2,3,3,2,2,2). Both sum to the 18 expert layers.
+_SPLITS = {4: (5, 5, 4, 4), 8: (2, 2, 2, 3, 3, 2, 2, 2)}
 
 
 def _expert_block_w(W, mlp_dim, head_dim, num_heads, num_kv_heads):
@@ -152,6 +155,9 @@ def test_replay_walltime():
         perf_suffix_len,
     )
     from models.experimental.pi0_5.tt.tt_pipeline._d2d_pipeline import Pipeline
+    from models.experimental.pi0_5.tt.tt_pipeline import denoise_block as _db
+
+    _db.DECODE_ALL = _DECODE_ALL  # route projection matmuls through matmul_decode when set
 
     if _N_SUBMESHES not in _SPLITS:
         pytest.skip(f"no layer split defined for n_submeshes={_N_SUBMESHES} (have {sorted(_SPLITS)})")
@@ -201,7 +207,7 @@ def test_replay_walltime():
         md = statistics.median(times)
         print(
             f"\n[replay-walltime n_sub={_N_SUBMESHES} prefix={_PREFIX_LEN} N={_N_STEPS} "
-            f"M={suffix_len // 32} drain={_DRAIN}] "
+            f"M={suffix_len // 32} drain={_DRAIN} decode_all={_DECODE_ALL}] "
             f"min={min(times):.3f} median={md:.3f} mean={statistics.mean(times):.3f} ms "
             f"({md / _N_STEPS:.3f} ms/step) over {_N_REPLAYS} reps"
         )
