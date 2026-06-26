@@ -174,6 +174,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/generalized_moe_gate_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/fused_experts_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek/hyperconnection/fused_hyperconnection_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_large_indices/topk_large_indices_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
