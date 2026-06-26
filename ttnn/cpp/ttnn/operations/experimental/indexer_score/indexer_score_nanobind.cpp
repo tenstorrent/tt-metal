@@ -32,8 +32,11 @@ void bind_indexer_score(nb::module_& mod) {
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
             k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
             weights: [B, Hi, Sq, 1] bf16 tiled, scales pre-folded
-            chunk_start_idx: global position of query row 0 (causality: key t
-                visible to query s iff t <= chunk_start_idx + s)
+            chunk_start_idx: absolute global position of rank 0's query row 0
+                (rank 0 = lowest cluster_axis coord; causality: key t visible to
+                query s iff t <= chunk_start + s). OMIT on a mesh -> deduced as
+                T - sp_ring*Sq (sp_ring = mesh extent along cluster_axis, whole
+                mesh if unset). Single device: set to history + rank*Sq per rank.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Defaults always fit
                 L1; raise head_group_size (0 = all resident) for performance.
@@ -50,6 +53,10 @@ void bind_indexer_score(nb::module_& mod) {
                 chunk_start_idx + Sq <= kv_len. Re-applied each dispatch, so a
                 serving loop growing kv_len (<= T) reuses one program -- no
                 recompile. Only output columns [0, kv_len) are written.
+            cluster_axis: mesh axis that is the SP ring. On a mesh, device r uses
+                chunk_start = chunk_start_idx + r*Sq, where r is its linearized
+                index along this axis (Sq = q seq len). None = linear device order
+                (1 on a single device, so chunk_start_idx is used as-is).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -58,11 +65,12 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("k"),
         nb::arg("weights"),
         nb::kw_only(),
-        nb::arg("chunk_start_idx") = 0,
+        nb::arg("chunk_start_idx") = std::nullopt,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
-        nb::arg("kv_len") = std::nullopt);
+        nb::arg("kv_len") = std::nullopt,
+        nb::arg("cluster_axis") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

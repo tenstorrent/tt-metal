@@ -367,3 +367,4 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: ${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}
       run-metal-cpp-unit-tests: true
+      job-timeout: ${{ inputs.enable-llk-asserts && 40 || 35 }}

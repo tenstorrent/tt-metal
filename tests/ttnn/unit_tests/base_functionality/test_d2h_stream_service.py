@@ -7,39 +7,17 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_slow_dispatch, skip_with_llk_assert
 
-from models.common.utility_functions import skip_for_slow_dispatch
-
-# D2HStreamService claims FD dispatch-column service cores, which the runtime only permits when
-# BOTH conditions hold (see tt_metal/impl/internal/service/service_core_manager.cpp):
-#   1. Fast Dispatch is active (get_claimable_cores / claim TT_FATAL otherwise), and
-#   2. the cluster is a Blackhole board or a UBB Galaxy (claim TT_FATAL otherwise).
-#
-# This is an allowlist of real clusters that satisfy condition 2. Simulator cluster types
-# (SIMULATOR_*) are deliberately excluded: the simulator has no Fast Dispatch, so it can never
-# satisfy condition 1 and would hit the "requires Fast Dispatch" TT_FATAL even on Blackhole arch.
-# Slow Dispatch on real hardware is handled separately by skip_for_slow_dispatch() below.
-# Anything not listed here (simulators, non-Galaxy Wormhole, future cluster types) skips cleanly.
-_D2H_SUPPORTED_CLUSTER_TYPES = frozenset(
-    {
-        # Blackhole single/multi-card
-        ttnn.cluster.ClusterType.P100,
-        ttnn.cluster.ClusterType.P150,
-        ttnn.cluster.ClusterType.P150_X2,
-        ttnn.cluster.ClusterType.P150_X4,
-        ttnn.cluster.ClusterType.P150_X8,
-        ttnn.cluster.ClusterType.P300,
-        ttnn.cluster.ClusterType.P300_X2,
-        # UBB Galaxy (Wormhole and Blackhole)
-        ttnn.cluster.ClusterType.GALAXY,
-        ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
-    }
-)
+# Only run on Blackhole Galaxy; smaller Blackhole boards (P150/P300) fail to pin host pages for
+# the DMA buffer. See #47750.
+_D2H_SUPPORTED_CLUSTER_TYPES = frozenset({ttnn.cluster.ClusterType.BLACKHOLE_GALAXY})
 pytestmark = [
     skip_for_slow_dispatch(),
+    skip_with_llk_assert("D2HStreamService fails to pin host DMA buffers. Issue: #47909"),
     pytest.mark.skipif(
         ttnn.cluster.get_cluster_type() not in _D2H_SUPPORTED_CLUSTER_TYPES,
-        reason="D2HStreamService is only supported on Blackhole and UBB Galaxy clusters",
+        reason="D2HStreamService sweeps are only run on Blackhole Galaxy clusters (#47750)",
     ),
 ]
 

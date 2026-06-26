@@ -3,7 +3,7 @@ name: "Code analysis"
 on:
   schedule:
     # Run every 6 hours to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
-    - cron: "0 */6 * * *"
+    - cron: "0 */2 * * *"
   workflow_call:
     inputs:
       platform:
@@ -172,6 +172,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -180,7 +183,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: ''
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
@@ -190,6 +193,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -198,7 +204,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -207,6 +213,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -215,7 +224,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -224,6 +233,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -232,7 +244,7 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -241,6 +253,9 @@ jobs:
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
           needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
@@ -249,4 +264,4 @@ jobs:
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
-      post-pr-suggestions: ${{ inputs.post-pr-suggestions }}
+      post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}

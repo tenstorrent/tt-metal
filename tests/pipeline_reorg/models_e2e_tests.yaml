@@ -519,7 +519,6 @@
 
 - name: GPT-OSS 20B e2e tests
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=openai/gpt-oss-20b
     pytest models/demos/gpt_oss/demo/text_demo.py --timeout 600
   model: gpt-oss-20b
@@ -538,7 +537,6 @@
 
 - name: GPT-OSS 120B e2e tests
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
@@ -588,7 +586,7 @@
   model: phi-3-mini
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 6
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

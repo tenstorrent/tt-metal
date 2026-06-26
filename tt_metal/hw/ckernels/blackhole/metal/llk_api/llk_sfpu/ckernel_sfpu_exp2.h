@@ -35,9 +35,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
-    i = sfpi::abs(sfpi::reinterpret<sfpi::vInt>(sm));
+    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + sfpi::vConstFloatPrgm2;
-    i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
+    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + sfpi::vConstFloatPrgm1;
     y *= std::numeric_limits<float>::infinity();
     r = r * f + sfpi::vConstFloatPrgm0;
@@ -93,8 +93,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
     //   fractional_part  = (xlog2 - floor) * 2^23   (integer in [0, 2^23))
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
-    sfpi::vMag fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
+    sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+    sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 

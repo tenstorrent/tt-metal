@@ -28,7 +28,12 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 }
 
 struct operation_attributes_t {
-    uint32_t chunk_start_idx{0};
+    // Absolute chunk_start of rank 0 (lowest cluster_axis coord; the only device on a single chip). Rank r
+    // uses chunk_start_idx + r*Sq (Sq = per-device q seq len; r = linearized index along cluster_axis), so
+    // the per-device value is derived host-side and passed to compute as a RUNTIME arg, hash-excluded --
+    // distinct values reuse one program (see compute_program_hash).
+    uint32_t chunk_start_idx{0};             // absolute chunk_start of rank 0 (elements, tile-aligned)
+    std::optional<uint32_t> cluster_axis{};  // mesh axis that is the SP ring; unset = linear device order
     IndexerScoreProgramConfig program_config{};
     // Resolved (not optional) so it is part of the reflected program-cache key; the public callable
     // fills it from the user's optional config, defaulting math_fidelity to the dtype-derived choice.

@@ -17,9 +17,11 @@ Two deployments, both Galaxy chunked prefill (50K history + 5K chunk =
              heads and the -inf mask is head-independent, so -inf survives the
              cross-TP sum)
 
-SP enters only via ``chunk_start``, so this is single-chip with ``sp_rank``
-selecting the ring position. This file is deliberately narrow (GLM5/DSv32 shapes
-only); broader knob/corner/validation coverage will be migrated in separately.
+We test on single chip with an explicit ``chunk_start``, ``sp_rank`` selecting the ring
+position. The multi-device QuietBox tests at the end instead derive ``chunk_start`` per
+device from the real mesh coordinate (one hash-excluded program serving every SP rank).
+This file is deliberately narrow (GLM5/DSv32 shapes only); broader knob/corner/validation
+coverage will be migrated in separately.
 """
 
 import os
@@ -809,3 +811,157 @@ def test_indexer_score_streaming_qmcast_uneven_bands(device):
     assert max_bands > min_bands, f"need an uneven band split: U={U}, cols_used={cols_used}"
 
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
+# ==============================================================================================
+# Multi-device (QuietBox, 4 BH) tests: PER-DEVICE chunk_start derived from the mesh coordinate.
+# ==============================================================================================
+# Use the `mesh_device` fixture (vs `device` above); they auto-skip on a single chip (the fixture skips
+# when requested devices exceed the machine's), so they no-op on the single-chip nightly and run on a
+# QuietBox. A SINGLE mesh dispatch where each device is a different SP rank: chunk_start = chunk_start_idx
+# + r*Sq (r = linearized index along cluster_axis), one hash-excluded program for all. Two layouts:
+#   - 1D SP=4 (flat mesh): history 25600 + chunk 4*640 -> T 28160; cluster_axis unset (linear order).
+#   - 2D SP=2 x TP=2:      history 25600 + chunk 2*640 -> T 26880; cluster_axis = SP axis, heads split.
+# Functional only (exact -inf map + PCC >= 0.999 per SP rank); reuse indexer_score_ref / assert_indexer_match.
+
+QB_DIM = 128  # indexer head dim
+QB_SQ = 640  # queries per SP rank (preserved from the SP=8 deployment)
+QB_HISTORY = 25600  # 25k history, tile-aligned (800 tiles)
+
+# GLM5 (8 heads) and DSv32 (16 heads), as in the single-device deployment cases above.
+QB_CASES = [("glm5", 8), ("dsv32", 16)]
+QB_IDS = [c[0] for c in QB_CASES]
+
+
+def _global_inputs(heads, chunk, t, seed):
+    """Global GLX tensors (bf16; deployed dtypes applied at shard time): q/w over `chunk` queries, k over
+    `t` all-gathered keys. Weights are random so some gates are negative (-inf must stay distinguishable
+    from low-but-valid scores)."""
+    g = torch.Generator().manual_seed(seed)
+    q = torch.randn(1, heads, chunk, QB_DIM, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, t, QB_DIM, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, heads, chunk, 1, generator=g, dtype=torch.bfloat16)
+    return q, k, w
+
+
+def _to_mesh(mesh_device, t, dtype, mapper):
+    """from_torch with the shared tiled-layout boilerplate."""
+    return ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=mapper)
+
+
+def _per_sp_ref(q_g, k_g, w_g, sp_count, history):
+    """Reference: each SP rank's full-head score (chunk_start = history + sp*Sq), concatenated along seq."""
+    refs = []
+    for sp in range(sp_count):
+        sl = slice(sp * QB_SQ, (sp + 1) * QB_SQ)
+        refs.append(indexer_score_ref(q_g[:, :, sl, :], k_g, w_g[:, :, sl, :], history + sp * QB_SQ))
+    return torch.cat(refs, dim=2)
+
+
+# ---- 1D mesh: SP=4 (flat QuietBox), cluster_axis unset (linear device order) ------------------
+QB_SP = 4  # devices (QuietBox); SP ring positions 0..3
+QB_CHUNK = QB_SP * QB_SQ  # 2560 chunk queries (2.5k), sharded SP=4 -> 640/device
+QB_T = QB_HISTORY + QB_CHUNK  # 28160 all-gathered keys (880 tiles)
+
+
+def _shard_1d(mesh_device, heads, seed):
+    """SP=4 inputs: q/w sharded along seq (each device its own 640 rows), k replicated. Deployed dtypes."""
+    q_g, k_g, w_g = _global_inputs(heads, QB_CHUNK, QB_T, seed)
+    shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    return q_g, k_g, w_g, q_dev, k_dev, w_dev
+
+
+@pytest.mark.parametrize("mesh_device", [QB_SP], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_per_device_chunk_start(mesh_device, case_id, heads):
+    """One mesh dispatch over 4 BH devices, each deriving its own chunk_start from its coordinate.
+    Validate each device's output against its own chunk_start reference."""
+    q_g, k_g, w_g, q_dev, k_dev, w_dev = _shard_1d(mesh_device, heads, seed=42)
+
+    # chunk_start_idx OMITTED -> the op deduces base = T - sp_ring*Sq = QB_HISTORY (sp_ring = 4 devices,
+    # cluster_axis unset), then device r gets base + r*Sq. No chunk_start passed at all.
+    out = ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, program_config=glx_config(heads))
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+
+    ref = _per_sp_ref(q_g, k_g, w_g, QB_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB_CHUNK, QB_T, check_neg=True)
+
+
+@pytest.mark.parametrize("mesh_device", [QB_SP], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_one_compile_all_chunk_starts(mesh_device, case_id, heads):
+    """chunk_start is excluded from the program hash: running several different bases must add exactly
+    ONE program-cache entry (the first compile), proving no per-value recompile."""
+    _, _, _, q_dev, k_dev, w_dev = _shard_1d(mesh_device, heads, seed=7)
+
+    # Three distinct chunk-start bases (all within the causal window). Only the first should compile.
+    bases = [QB_HISTORY, QB_HISTORY - QB_SQ, QB_HISTORY - 2 * QB_SQ]
+
+    entries_before = mesh_device.num_program_cache_entries()
+    for base in bases:
+        ttnn.experimental.indexer_score(
+            q_dev, k_dev, w_dev, chunk_start_idx=base, program_config=glx_config(heads)
+        ).deallocate()
+
+    added = mesh_device.num_program_cache_entries() - entries_before
+    assert added == 1, f"expected 1 program-cache entry across 3 distinct chunk_start bases, got {added}"
+
+
+# ---- 2D mesh: SP=2 (one axis) x TP=2 (the other, head-split) ----------------------------------
+# Exercises cluster_axis on a real 2D mesh, which a 1xN mesh can't: chunk_start must vary along the
+# SP axis only, while the two TP devices sharing an SP position get the SAME chunk_start.
+QB2_SP = 2  # sequence-parallel ranks (chunk_start varies along this axis)
+QB2_TP = 2  # tensor-parallel ranks (heads split across this axis)
+QB2_CHUNK = QB2_SP * QB_SQ  # 1280 chunk queries, sharded SP=2 -> 640/device
+QB2_T = QB_HISTORY + QB2_CHUNK  # 26880 keys (840 tiles)
+QB2_SP_AXIS = 0  # mesh rows = SP ring (passed as cluster_axis)
+QB2_TP_AXIS = 1  # mesh cols = TP head split
+
+
+def _axis_dims(sp_dim, tp_dim):
+    """A 2-tuple indexed by mesh axis: SP axis -> sp_dim, TP axis -> tp_dim. Used for both the q/w shard
+    mapper and the output composer (sharding and concat use the same dims here)."""
+    dims = [None, None]
+    dims[QB2_SP_AXIS], dims[QB2_TP_AXIS] = sp_dim, tp_dim
+    return tuple(dims)
+
+
+@pytest.mark.parametrize("mesh_device", [(QB2_SP, QB2_TP)], ids=["2x2"], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_sp2_tp2(mesh_device, case_id, heads):
+    """One mesh dispatch over a 2x2 mesh: chunk_start derived per-device from the coordinate along
+    cluster_axis (SP), constant across the TP axis; heads split across TP. Each TP device computes a
+    partial head-sum, which the test sums back (the TP all-reduce) and validates per SP rank against
+    its own full-head, own-chunk_start reference."""
+    q_g, k_g, w_g = _global_inputs(heads, QB2_CHUNK, QB2_T, seed=42)
+
+    # q/w: seq (dim 2) sharded along the SP axis, heads (dim 1) along the TP axis. k replicated.
+    mesh_shape = tuple(mesh_device.shape)
+    qw_dims = _axis_dims(sp_dim=2, tp_dim=1)
+    shard_qw = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=qw_dims)
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_qw)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_qw)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    # chunk_start_idx OMITTED: the op deduces base = T - sp_ring*Sq, where sp_ring is the mesh extent
+    # along cluster_axis (2, the SP axis) -- NOT the total device count (4). Device (sp, tp) then gets
+    # chunk_start = base + sp*Sq -- identical for both TP devices at SP position sp.
+    out = ttnn.experimental.indexer_score(
+        q_dev,
+        k_dev,
+        w_dev,
+        cluster_axis=QB2_SP_AXIS,
+        program_config=glx_config(heads // QB2_TP),  # per-device head count
+    )
+    # Concat SP shards along seq (dim 2) and the TP head-partials along the size-1 head dim (dim 1), then
+    # SUM the partials (the TP all-reduce) -> full [1,1,1280,T] score.
+    out_t = ttnn.to_torch(
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=qw_dims)
+    )
+    out_t = out_t.float().sum(dim=1, keepdim=True)
+
+    ref = _per_sp_ref(q_g, k_g, w_g, QB2_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB2_CHUNK, QB2_T, check_neg=True)
