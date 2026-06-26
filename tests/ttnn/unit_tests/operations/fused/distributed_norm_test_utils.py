@@ -157,13 +157,13 @@ def compute_ttnn_distributed_norm(
     mesh_device,
     norm_type,
     eps,
+    input_dtype,
     use_legacy=False,
     use_high_precision=True,
     weight_layout=ttnn.TILE_LAYOUT,
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
     use_2d_core_grid=None,
-    input_dtype=ttnn.bfloat16,
 ):
     """
     Compute TTNN distributed normalization output.
@@ -175,6 +175,7 @@ def compute_ttnn_distributed_norm(
         mesh_device: TTNN mesh device
         norm_type: "layer_norm" or "rms_norm"
         eps: Epsilon value
+        input_dtype: TTNN dtype for input/stats/gamma/beta (required)
         use_legacy: Whether to use legacy reduction/rsqrt
         use_high_precision: Whether to use high precision compute config
         weight_layout: Memory layout for weight tensor
@@ -377,6 +378,7 @@ def run_distributed_norm_test(
     hidden_dim,
     eps,
     norm_type,
+    input_dtype,
     mean=0,
     var=1,
     outlier_pct=0,
@@ -388,7 +390,6 @@ def run_distributed_norm_test(
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
     use_2d_core_grid=None,
-    input_dtype=ttnn.bfloat16,
 ):
     """
     Main test function for distributed normalization.
@@ -400,6 +401,7 @@ def run_distributed_norm_test(
         hidden_dim: Hidden dimension
         eps: Epsilon for numerical stability
         norm_type: "layer_norm" or "rms_norm"
+        input_dtype: TTNN dtype for input/stats/gamma/beta (required)
         mean: Mean of input distribution
         var: Variance of input distribution
         outlier_pct: Percentage of outliers
@@ -439,13 +441,13 @@ def run_distributed_norm_test(
         mesh_device,
         norm_type,
         eps,
+        input_dtype,
         use_legacy,
         use_high_precision,
         weight_layout,
         bias_layout,
         use_welford,
         use_2d_core_grid,
-        input_dtype,
     )
 
     # Check average relative difference

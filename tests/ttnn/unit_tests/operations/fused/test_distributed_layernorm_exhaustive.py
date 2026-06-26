@@ -26,6 +26,7 @@ def test_my_custom_config(mesh_device):
         hidden_dim=4096,        # Your hidden dimension
         eps=1e-6,               # Epsilon value
         norm_type="layer_norm", # "layer_norm" or "rms_norm"
+        input_dtype=ttnn.bfloat16,  # Input/stats/gamma/beta dtype (required)
         mean=0,                 # Input distribution mean
         var=1,                  # Input distribution variance
         outlier_pct=0,          # Percentage of outliers (0-1)
@@ -117,6 +118,7 @@ def test_distributed_norm_allclose(
         hidden_dim=hidden_dim,
         eps=eps,
         norm_type=norm_type,
+        input_dtype=ttnn.bfloat16,
         mean=mean,
         var=var,
         outlier_pct=outlier_pct,
@@ -168,6 +170,7 @@ def test_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use
         hidden_dim=hidden_dim,
         eps=eps,
         norm_type=norm_type,
+        input_dtype=ttnn.bfloat16,
         mean=0,
         var=1,
         outlier_pct=0,
@@ -205,7 +208,7 @@ def test_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use
     ],
     indirect=True,
 )
-def test_welford_fp32(mesh_device, hidden_dim, eps, input_dtype, weight_layout):
+def test_distributed_layernorm_dtype(mesh_device, hidden_dim, eps, input_dtype, weight_layout):
     """FP32 (and bf16 control) Welford layer_norm across pre-AG -> all-gather -> post-AG.
     input_dtype drives input, stats, gamma and beta dtypes; fp32 requires fp32_dest_acc_en
     (use_high_precision=True). Covers both TILE and ROW_MAJOR gamma/beta."""
@@ -216,13 +219,13 @@ def test_welford_fp32(mesh_device, hidden_dim, eps, input_dtype, weight_layout):
         hidden_dim=hidden_dim,
         eps=eps,
         norm_type="layer_norm",
+        input_dtype=input_dtype,
         use_legacy=False,
         use_high_precision=True,
         verbose=False,
         use_welford=True,
         weight_layout=weight_layout,
         bias_layout=weight_layout,
-        input_dtype=input_dtype,
     )
     assert passes, (
         f"TEST FAILED: Average relative difference {mean_rel_diff*100:.2f}% exceeds 5% threshold | "
@@ -273,6 +276,7 @@ def test_distributed_layernorm_memory_layouts(mesh_device, norm_type, weight_lay
         hidden_dim=4096,
         eps=1e-6,
         norm_type=norm_type,
+        input_dtype=ttnn.bfloat16,
         mean=0,
         var=1,
         outlier_pct=0,
@@ -333,6 +337,7 @@ def test_distributed_rmsnorm_memory_layouts(mesh_device, norm_type, weight_layou
         hidden_dim=4096,
         eps=1e-6,
         norm_type=norm_type,
+        input_dtype=ttnn.bfloat16,
         mean=0,
         var=1,
         outlier_pct=0,
@@ -386,6 +391,7 @@ def test_distributed_norm_large_batch(mesh_device, norm_type, use_welford):
         hidden_dim=4096,
         eps=1e-6,
         norm_type=norm_type,
+        input_dtype=ttnn.bfloat16,
         mean=0,
         var=1,
         outlier_pct=0,
@@ -424,6 +430,7 @@ def test_distributed_layernorm_sweep_hidden_dim(mesh_device, hidden_dim):
         hidden_dim=hidden_dim,
         eps=1e-6,
         norm_type="layer_norm",
+        input_dtype=ttnn.bfloat16,
         mean=0,
         var=1,
         outlier_pct=0,
@@ -489,6 +496,7 @@ def test_distributed_rmsnorm_2d_core_grid(mesh_device, batch_size, seq_len, hidd
         hidden_dim=hidden_dim,
         eps=eps,
         norm_type="rms_norm",
+        input_dtype=ttnn.bfloat16,
         mean=0,
         var=1,
         outlier_pct=0,
