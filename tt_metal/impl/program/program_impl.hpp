@@ -284,6 +284,11 @@ public:
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
 
+    // Metal 2.0: reserve a per-node scratchpad (program-lifetime L1 region of size_per_node bytes on
+    // each core in core_range_set) and return its logical id.
+    // TODO: real per-core L1 reservation (mirror add_dataflow_buffer). Currently a stub.
+    uint32_t add_scratchpad(const CoreRangeSet& core_range_set, uint32_t size_per_node);
+
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
 
@@ -348,6 +353,7 @@ public:
     void register_kernel_spec_name(const std::string& name, KernelHandle handle);
     void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
     void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
+    void register_scratchpad_spec_name(const std::string& name, uint32_t scratchpad_id);
     void register_tensor_parameter(
         const std::string& name,
         const TensorSpec& spec,

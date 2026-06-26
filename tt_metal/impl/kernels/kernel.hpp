@@ -94,6 +94,8 @@ KernelHandle CreateKernelFromString(
 using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
 // Metal 2.0: local semaphore accessor names -> semaphore ids
 using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: local scratchpad accessor names -> scratchpad ids
+using ScratchpadLocalAccessorHandleMap = std::unordered_map<std::string, uint32_t>;
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
@@ -179,6 +181,8 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
     void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
+    void process_scratchpad_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint32_t scratchpad_id)>) const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
@@ -256,7 +260,8 @@ protected:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {});
+        const KernelCrtaLayout& crta_layout = {},
+        const ScratchpadLocalAccessorHandleMap& scratchpad_local_accessor_handles = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -277,6 +282,7 @@ protected:
     const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
+    const ScratchpadLocalAccessorHandleMap scratchpad_local_accessor_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -325,7 +331,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const ScratchpadLocalAccessorHandleMap& scratchpad_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -340,7 +347,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            scratchpad_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -462,7 +470,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const ScratchpadLocalAccessorHandleMap& scratchpad_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -477,7 +486,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            scratchpad_local_accessor_handles),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
@@ -548,7 +558,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const ScratchpadLocalAccessorHandleMap& scratchpad_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -563,7 +574,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            scratchpad_local_accessor_handles),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -620,7 +632,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const ScratchpadLocalAccessorHandleMap& scratchpad_local_accessor_handles = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -635,7 +648,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            scratchpad_local_accessor_handles),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(

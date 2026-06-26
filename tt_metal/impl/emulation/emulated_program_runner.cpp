@@ -756,6 +756,10 @@ static void emit_metal2_namespaces(
         }
         f << "}  // namespace sem\n";
     }
+    // TODO: emit the `scratch::` namespace. Add a scratchpad_accessors map to Metal2BindingsSnapshot,
+    // populate it in build_metal2_snapshot via kernel.process_scratchpad_local_accessor_handles, emit
+    // `namespace scratch { constexpr ScratchpadAccessor <name>{id}; }` here (with the api/scratchpad.h
+    // include), and include it in cache_key_suffix(). Must stay in sync with genfiles.cpp.
     if (!s.ta_accessors.empty()) {
         f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {

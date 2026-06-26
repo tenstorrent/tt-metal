@@ -65,6 +65,8 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
     virtual void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
+    virtual void process_scratchpad_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint32_t scratchpad_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace

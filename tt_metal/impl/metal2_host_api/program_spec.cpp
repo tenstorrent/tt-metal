@@ -150,6 +150,7 @@ using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 // DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
+using ScratchpadNameToIdMap = std::unordered_map<ScratchpadSpecName, uint32_t>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -2377,6 +2378,18 @@ tt::tt_metal::SemaphoreLocalAccessorHandleMap MakeSemaphoreLocalAccessorHandles(
     return out;
 }
 
+// Create map of local accessor name -> scratchpad id
+tt::tt_metal::ScratchpadLocalAccessorHandleMap MakeScratchpadLocalAccessorHandles(
+    const KernelSpec& kernel_spec, const ScratchpadNameToIdMap& scratchpad_name_to_id) {
+    tt::tt_metal::ScratchpadLocalAccessorHandleMap out;
+    out.reserve(kernel_spec.scratchpad_bindings.size());
+    for (const auto& scratchpad_binding : kernel_spec.scratchpad_bindings) {
+        const uint32_t id = scratchpad_name_to_id.at(scratchpad_binding.scratchpad_spec_name);
+        out.emplace(scratchpad_binding.accessor_name, id);
+    }
+    return out;
+}
+
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
@@ -2863,6 +2876,18 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
+    // Create Scratchpads and build name -> ID map.
+    // NOTE: Iterate over spec.scratchpads to preserve user-provided deterministic ordering.
+    // Allocation nodes are the owning kernel's node set (a scratchpad is private to one kernel).
+    ScratchpadNameToIdMap scratchpad_name_to_id;
+    for (const auto& scratchpad_spec : spec.scratchpads) {
+        const ScratchpadSpecName& scratchpad_name = scratchpad_spec.unique_id;
+        uint32_t scratchpad_id = program_impl->add_scratchpad(
+            collected.scratchpad_node_set.at(scratchpad_name), scratchpad_spec.size_per_node);
+        program_impl->register_scratchpad_spec_name(scratchpad_name.get(), scratchpad_id);
+        scratchpad_name_to_id[scratchpad_name] = scratchpad_id;
+    }
+
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
@@ -2873,6 +2898,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
         const tt::tt_metal::SemaphoreLocalAccessorHandleMap semaphore_handles =
             MakeSemaphoreLocalAccessorHandles(kernel_spec, semaphore_name_to_id);
+        const tt::tt_metal::ScratchpadLocalAccessorHandleMap scratchpad_handles =
+            MakeScratchpadLocalAccessorHandles(kernel_spec, scratchpad_name_to_id);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
@@ -2913,7 +2940,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout);
+                    ta_bindings.crta_layout,
+                    scratchpad_handles);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 config.compile_args = ta_bindings.cta_words;
@@ -2929,7 +2957,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout);
+                    ta_bindings.crta_layout,
+                    scratchpad_handles);
             }
         } else {  // gen1
             if (kernel_spec.is_data_movement_kernel()) {
@@ -2945,7 +2974,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout);
+                    ta_bindings.crta_layout,
+                    scratchpad_handles);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
                 config.compile_args = ta_bindings.cta_words;
@@ -2959,7 +2989,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout);
+                    ta_bindings.crta_layout,
+                    scratchpad_handles);
             }
         }
 

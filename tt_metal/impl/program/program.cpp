@@ -532,6 +532,18 @@ void ProgramImpl::register_semaphore_spec_name(const std::string& name, uint32_t
     TT_FATAL(inserted, "Duplicate semaphore spec name: {}", name);
 }
 
+uint32_t ProgramImpl::add_scratchpad(const CoreRangeSet& /*core_range_set*/, uint32_t /*size_per_node*/) {
+    // TODO: reserve per-core L1 (mirror add_dataflow_buffer): create a ScratchpadImpl, assign a
+    // contiguous id, store core ranges + size_per_node, create/reuse a CircularBufferAllocator per
+    // core range, and set local_scratchpad_allocation_needed_. Returns a placeholder id for now.
+    return 0;
+}
+
+void ProgramImpl::register_scratchpad_spec_name(const std::string& /*name*/, uint32_t /*scratchpad_id*/) {
+    // TODO: add a scratchpad_handles map to Metal2NameRegistry (+ a get_scratchpad_handle getter) and
+    // mirror register_dfb_spec_name (lazy-init registry, try_emplace, duplicate-name FATAL). No-op for now.
+}
+
 KernelHandle ProgramImpl::get_kernel_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->kernel_handles.find(name);

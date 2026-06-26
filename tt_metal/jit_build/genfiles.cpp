@@ -171,6 +171,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
+        // TODO: emit the `scratch::` namespace. Collect entries via
+        // settings.process_scratchpad_local_accessor_handles, sort by name, emit
+        // `#include "api/scratchpad.h"` then `namespace scratch { constexpr ScratchpadAccessor
+        // <name>{id}; }`, parallel to the dfb/sem blocks above.
+
         if (!ta_entries.empty()) {
             // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
