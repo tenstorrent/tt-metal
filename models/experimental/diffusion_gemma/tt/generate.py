@@ -35,6 +35,13 @@ class DeviceGeneration(NamedTuple):
     trajectories: list[DenoiseTrajectory]
 
 
+class DeviceTextGeneration(NamedTuple):
+    prompt_tokens: torch.Tensor
+    generation: DeviceGeneration
+    sequences: torch.Tensor
+    text: list[str]
+
+
 def _deallocate_decode_inputs(device_inputs) -> None:
     for value in device_inputs:
         if value is not None and hasattr(value, "deallocate"):
@@ -487,3 +494,63 @@ def decode_generation(
     if hasattr(tokenizer, "batch_decode"):
         return tokenizer.batch_decode(token_ids, **decode_kwargs)
     return [tokenizer.decode(ids, **decode_kwargs) for ids in token_ids]
+
+
+def generate_text(
+    tt_model,
+    logits_fn,
+    tokenizer,
+    prompt,
+    *,
+    num_blocks: int,
+    config: DiffusionConfig,
+    init_canvas_fn: Callable[[int, int], object],
+    system_prompt: str | None = None,
+    add_generation_prompt: bool = True,
+    gumbel_noise_fn=None,
+    noise_tokens_fn=None,
+    page_table=None,
+    page_tables_per_layer=None,
+    max_new_tokens: int | None = None,
+    eos_token_id=None,
+    skip_prompt: bool = True,
+    decode_kwargs: dict | None = None,
+    prefill_fn: Callable[..., int] = prefill_prompt_tokens,
+    blocks_fn: Callable[..., DeviceGeneration] = generate_blocks,
+) -> DeviceTextGeneration:
+    """Tokenize a prompt, run device generation, and decode host-visible text."""
+    prompt_tokens = tokenize_prompt(
+        tokenizer,
+        prompt,
+        system_prompt=system_prompt,
+        add_generation_prompt=add_generation_prompt,
+    )
+    generation = generate_from_prompt_tokens(
+        tt_model,
+        logits_fn,
+        prompt_tokens,
+        num_blocks=num_blocks,
+        config=config,
+        init_canvas_fn=init_canvas_fn,
+        gumbel_noise_fn=gumbel_noise_fn,
+        noise_tokens_fn=noise_tokens_fn,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+        prefill_fn=prefill_fn,
+        blocks_fn=blocks_fn,
+    )
+    text = decode_generation(
+        tokenizer,
+        prompt_tokens,
+        generation,
+        skip_prompt=skip_prompt,
+        max_new_tokens=max_new_tokens,
+        eos_token_id=eos_token_id,
+        **(decode_kwargs or {}),
+    )
+    return DeviceTextGeneration(
+        prompt_tokens=prompt_tokens,
+        generation=generation,
+        sequences=generation_sequences(prompt_tokens, generation),
+        text=text,
+    )

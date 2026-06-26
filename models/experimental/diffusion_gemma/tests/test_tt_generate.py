@@ -13,6 +13,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     denoise_and_commit_block,
     generate_blocks,
     generate_from_prompt_tokens,
+    generate_text,
     generation_sequences,
     generation_token_ids,
     host_canvas_to_device,
@@ -211,6 +212,59 @@ def test_generate_from_prompt_tokens_prefills_then_runs_blocks():
     assert kwargs["noise_tokens_fn"] is noise_tokens_fn
     assert kwargs["page_table"] == "page-table"
     assert kwargs["page_tables_per_layer"] == ["layer-pages"]
+
+
+def test_generate_text_tokenizes_generates_and_decodes():
+    calls = []
+    tokenizer = _FakeChatTokenizer()
+    config = DiffusionConfig(canvas_length=4)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5, 9, 6]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=7,
+        trajectories=[],
+    )
+
+    def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
+        calls.append(("prefill", tt_model, tokens.clone(), page_table, page_tables_per_layer))
+        return tokens.shape[1]
+
+    def fake_blocks(tt_model, logits_fn, **kwargs):
+        calls.append(("blocks", tt_model, logits_fn, kwargs))
+        return generation
+
+    init_canvas_fn = object()
+    out = generate_text(
+        "model",
+        "logits",
+        tokenizer,
+        "hello",
+        num_blocks=1,
+        config=config,
+        init_canvas_fn=init_canvas_fn,
+        system_prompt="be helpful",
+        max_new_tokens=4,
+        eos_token_id=9,
+        decode_kwargs={"skip_special_tokens": True},
+        prefill_fn=fake_prefill,
+        blocks_fn=fake_blocks,
+    )
+
+    assert torch.equal(out.prompt_tokens, torch.tensor([[2, 1, 99]], dtype=torch.long))
+    assert torch.equal(out.sequences, torch.tensor([[2, 1, 99, 4, 5, 9, 6]], dtype=torch.long))
+    assert out.generation is generation
+    assert out.text == ["4 5 9"]
+    assert tokenizer.calls[0] == (
+        [{"role": "system", "content": "be helpful"}, {"role": "user", "content": "hello"}],
+        True,
+        True,
+    )
+    assert tokenizer.calls[1] == ([[4, 5, 9]], {"skip_special_tokens": True})
+    assert calls[0][0:2] == ("prefill", "model")
+    assert torch.equal(calls[0][2], torch.tensor([[2, 1, 99]], dtype=torch.long))
+    assert calls[0][3:] == (None, None)
+    assert calls[1][0:3] == ("blocks", "model", "logits")
+    assert calls[1][3]["init_canvas_fn"] is init_canvas_fn
 
 
 def test_generation_sequences_appends_prompt_and_generated_tokens():
