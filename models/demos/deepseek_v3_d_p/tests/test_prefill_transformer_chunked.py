@@ -49,6 +49,9 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = 5 * 1024  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
+# Larger KV cache for the no-PCC perf sweep only (up to 100k ISL = 20 chunks). Kept separate from
+# SEQ_CACHE so the PCC tests and the _PADDED_FULL_55K split (which assert against 55*1024) are untouched.
+SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 
 # H2D stream-service constants (mirror prefill_runner.py). Used by the with-service variant of the
 # no-PCC test: build the H2D service so its persistent receiver kernel spins on its worker core during
@@ -806,14 +809,14 @@ def run_chunked_transformer_no_pcc(
 
     chunk_local = CHUNK // sp  # 640
     total_len = n_chunks * CHUNK
-    assert total_len <= SEQ_CACHE, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE}"
+    assert total_len <= SEQ_CACHE_NOPCC, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE_NOPCC}"
 
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    config.max_seq_len = SEQ_CACHE
+    config.max_seq_len = SEQ_CACHE_NOPCC
 
     logger.info(
         f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
-        f"total_len={total_len} cache={SEQ_CACHE} chunk={CHUNK} num_iters={num_iters} "
+        f"total_len={total_len} cache={SEQ_CACHE_NOPCC} chunk={CHUNK} num_iters={num_iters} "
         f"with_h2d_service={with_h2d_service}"
     )
 
@@ -1005,7 +1008,11 @@ def run_chunked_transformer_no_pcc(
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
-@pytest.mark.parametrize("n_chunks", [1, 2, 11], ids=["chunks1", "chunks2", "chunks_eleven"])
+@pytest.mark.parametrize(
+    "n_chunks",
+    [1, 2, 5, 10, 11, 20],
+    ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks_eleven", "chunks20"],
+)
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
