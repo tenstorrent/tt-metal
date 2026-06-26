@@ -83,7 +83,9 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
         2,
         (ttnn.Topology.Ring, ttnn.Topology.Linear),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-torus-y-8x4",
+        # Id omits `fabric2d-`/`mesh-` so it stays out of the count-guarded `-k "8x4 and fabric2d"`
+        # (EXPECT_NUM_TESTS=1) CI selectors that target the fabric2d-mesh siblings; select via `-k torus-y`.
+        id="torus-y-8x4",
     ),
     # FABRIC_2D_TORUS_Y on a 4x4 sub-torus (16 of the galaxy's 32 chips). Same [RING, LINE]
     # shape as the 8x4 torus but with a Ring-4 on the SP axis (dim 0). Requires carving the
@@ -101,7 +103,7 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
         2,
         (ttnn.Topology.Ring, ttnn.Topology.Linear),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="fabric2d-torus-y-4x4",
+        id="torus-y-4x4",
     ),
 ]
 

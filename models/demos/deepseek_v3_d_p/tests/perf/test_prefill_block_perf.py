@@ -130,7 +130,7 @@ _SUBTORUS_Y4_ENV = {
         # degenerates to Linear. All entries calibrated 2026-06-26 on the 110-c78 BH galaxy at the
         # standard 0.03 margin (real weights).
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-8x4 and layer0 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-y-8x4 and layer0 and gate_device and no_ref and isl_25k'",
             25_236_993,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer0 dense, isl_25k).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_torus_y",
@@ -140,7 +140,7 @@ _SUBTORUS_Y4_ENV = {
             "glx_8x4_layer0_dense_real_weights_torus_y",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-8x4 and layer3 and gate_device and no_ref and isl_25k'",
+            f"pytest {_TEST_PATH} -k 'torus-y-8x4 and layer3 and gate_device and no_ref and isl_25k'",
             67_193_413,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer3 MoE, device gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_torus_y",
@@ -163,7 +163,7 @@ _SUBTORUS_Y4_ENV = {
         # forced with DS_4X4_FULL_EXPERTS=1, but that path currently stalls on the ring (the reason
         # moe-gate_host_all was added) and is deliberately NOT exercised here.
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer0 and gate_device and no_ref and isl_12k8'",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer0 and gate_device and no_ref and isl_12k8'",
             17_978_418,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer0 dense, 3200 tok/chip).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer0_dense_torus_y",
@@ -173,7 +173,7 @@ _SUBTORUS_Y4_ENV = {
             "subtorus_4x4_layer0_dense_real_weights_torus_y_isl12k8",
         ),
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer3 and gate_device and no_ref and isl_12k8'",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_12k8'",
             56_528_886,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 128 experts / HOST gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y",  # 128 experts / HOST gate (see note above)
@@ -185,7 +185,7 @@ _SUBTORUS_Y4_ENV = {
         # 4x4 sub-torus at isl_2k56 (2560 = half of 5k -> 640 tokens/chip on the 4-wide SP axis).
         # Same 128-expert / HOST-gate behavior as the isl_12k8 layer3 entry above (see note).
         (
-            f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56'",
+            f"pytest {_TEST_PATH} -k 'torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56'",
             15_570_232,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 640 tok/chip, HOST gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y_isl2k56",  # 128 experts / HOST gate
