@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"  // get_my_thread_id / get_num_threads (multi-NEO partition)
 #include "experimental/kernel_args.h"
 
 #ifdef ENABLE_KERNEL_TIMER
@@ -32,10 +33,25 @@ void kernel_main() {
 
     DataflowBuffer dfb_out(dfb::out);
 
-    // Output shard is written in place by the compute kernel; the writer only consumes credits so
-    // the DFB ring drains. Mirrors the CB writer's DST_SHARDED no-op (FIFO sync, no NoC traffic).
-    dfb_out.wait_front(num_tiles);
-    dfb_out.pop_front(num_tiles);
+    const uint32_t nthreads = get_num_threads();
+    if (nthreads <= 1) {
+        // Single-NEO fast path: bulk drain (original behavior).
+        dfb_out.wait_front(num_tiles);
+        dfb_out.pop_front(num_tiles);
+    } else {
+        // Multi-NEO: N writer threads (one per NEO) drain a STRIDED output DFB. Drain ONETILE at a
+        // time with modulo-skip so each thread consumes the credits produced by the matching compute
+        // thread on its own tile-counter (bulk count-division mis-aligns the round-robin and deadlocks
+        // or corrupts).
+        const uint32_t tid = get_my_thread_id();
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            if (t % nthreads != tid) {
+                continue;
+            }
+            dfb_out.wait_front(1);
+            dfb_out.pop_front(1);
+        }
+    }
 
 #ifdef ENABLE_KERNEL_TIMER
     kernel_timer_write(get_arg(args::timer_l1_addr), kTimerSlotWriter, _timer.stop());

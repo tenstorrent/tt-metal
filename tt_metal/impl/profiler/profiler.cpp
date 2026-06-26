@@ -1548,6 +1548,11 @@ void DeviceProfiler::readRiscProfilerResults(
         }
 
         tracy::RiscType riscType;
+        // Quasar-only: the true hardware trisc_id (0=UNPACK,1=MATH,2=PACK,3=ISOLATE_SFPU) for TRISC
+        // rows, captured BEFORE the lossy min(trisc_id,2) collapse below so it can be stamped into the
+        // marker's data field (tracy's RiscType enum has no TRISC_3, so trisc_id 2 and 3 otherwise both
+        // become the TRISC_2 label). UINT64_MAX means "not a Quasar TRISC row" (don't stamp).
+        uint64_t quasar_trisc_id_stamp = UINT64_MAX;
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = tracy::RiscType::TENSIX_RISC_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
@@ -1561,9 +1566,17 @@ void DeviceProfiler::readRiscProfilerResults(
                         .hal()
                         .get_processor_types_count(CoreType, static_cast<uint32_t>(HalProcessorClassType::DM));
                 if (static_cast<uint32_t>(riscEndIndex) < num_quasar_dm_cores) {
+                    // DM cores: index 0 -> BRISC label, 1..N -> NCRISC label (tracy enum has only two
+                    // DM slots). Stamp the true DM core index (= riscEndIndex = mhartid) into the data
+                    // field so multiple DM kernels (reader on DM1, writer on DM0, both zoned "DM0-FW")
+                    // are distinguishable downstream instead of all reading as one BRISC/DM0 row.
+                    quasar_trisc_id_stamp = static_cast<uint64_t>(riscEndIndex);
                     riscType = (riscEndIndex == 0) ? tracy::RiscType::BRISC : tracy::RiscType::NCRISC;
                 } else {
                     const uint32_t trisc_id = static_cast<uint32_t>(riscEndIndex) - num_quasar_dm_cores;
+                    // Preserve the true trisc_id in the data field so the collapsed TRISC_2 label
+                    // (which folds trisc_id 2 PACK and 3 ISOLATE_SFPU) can be disambiguated downstream.
+                    quasar_trisc_id_stamp = static_cast<uint64_t>(trisc_id);
                     riscType = static_cast<tracy::RiscType>(
                         static_cast<uint32_t>(tracy::RiscType::TRISC_0) + std::min<uint32_t>(trisc_id, 2));
                 }
@@ -1735,7 +1748,10 @@ void DeviceProfiler::readRiscProfilerResults(
                                     device_id,
                                     phys_coord,
                                     riscType,
-                                    0,
+                                    // Stamp the true Quasar trisc_id into the (otherwise-0) data field
+                                    // for TRISC zones so the collapsed TRISC_2 label can be split into
+                                    // PACK (2) vs ISOLATE_SFPU (3) downstream. 0 for all other rows.
+                                    (quasar_trisc_id_stamp == UINT64_MAX) ? 0 : quasar_trisc_id_stamp,
                                     timer_id,
                                     (uint64_t(time_H) << 32) | time_L);
                             }

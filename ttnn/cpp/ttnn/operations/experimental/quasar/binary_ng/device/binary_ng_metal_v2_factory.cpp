@@ -235,6 +235,21 @@ ProgramArtifacts create_sharded_artifacts(
         compute_defines_tbl.emplace("ENABLE_KERNEL_TIMER", "1");
     }
 
+    // EXPERIMENTAL multi-NEO compute. Off by default (single NEO, production path byte-identical).
+    // TT_QUASAR_ADD_NEOS in {1,2} sets how many NEO clusters the add runs on. Reader, compute, and
+    // writer all run with this thread count so every DFB endpoint has matching producer/consumer
+    // counts (mismatched counts deadlock the tile-counter round-robin). NOTE: 4 is NOT allowed here —
+    // reader(4)+writer(4)=8 user DM cores exceeds the Quasar budget of 6 (8 physical - DM0/DM1
+    // reserved; program_spec.cpp), so the add can scale to at most 2 NEOs. The kernels partition the
+    // shard's tiles strided (onetile + modulo-skip) across get_my_thread_id()/get_num_threads().
+    uint32_t add_neos = 1;
+    if (const char* neos_env = std::getenv("TT_QUASAR_ADD_NEOS")) {
+        const uint32_t requested = static_cast<uint32_t>(std::atoi(neos_env));
+        if (requested == 1 || requested == 2) {
+            add_neos = requested;
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     // Kernels.
     // -----------------------------------------------------------------------------------------
@@ -244,7 +259,7 @@ ProgramArtifacts create_sharded_artifacts(
     m2::KernelSpec reader_spec{
         .unique_id = READER,
         .source = std::filesystem::path(kShardedReaderDfb),
-        .num_threads = 1,
+        .num_threads = add_neos,
         .dfb_bindings = {m2::ProducerOf(IN0, "in0"), m2::ProducerOf(IN1, "in1")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
@@ -255,7 +270,7 @@ ProgramArtifacts create_sharded_artifacts(
     m2::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path(kShardedWriterDfb),
-        .num_threads = 1,
+        .num_threads = add_neos,
         .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config =
@@ -270,7 +285,7 @@ ProgramArtifacts create_sharded_artifacts(
     m2::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(kShardedComputeDfb),
-        .num_threads = 1,
+        .num_threads = add_neos,
         .compiler_options = {.defines = compute_defines_tbl},
         .dfb_bindings = {m2::ConsumerOf(IN0, "in0"), m2::ConsumerOf(IN1, "in1"), m2::ProducerOf(OUT, "out")},
         .compile_time_args = {{"num_tiles_per_cycle", num_tiles_per_cycle}},

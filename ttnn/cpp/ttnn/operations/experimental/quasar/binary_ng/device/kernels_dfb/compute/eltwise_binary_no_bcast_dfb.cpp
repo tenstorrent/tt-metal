@@ -32,6 +32,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"  // get_my_thread_id / get_num_threads (multi-NEO partition)
 #include "experimental/kernel_args.h"
 
 #ifdef ENABLE_KERNEL_TIMER
@@ -86,13 +87,33 @@ void kernel_main() {
         dfb_in1.pop_front(n);
     };
 
-    const uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
-    for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_tiles(num_tiles_per_cycle);
-    }
-    const uint32_t remainder = num_tiles % num_tiles_per_cycle;
-    if (remainder > 0) {
-        process_tiles(remainder);
+    const uint32_t nthreads = get_num_threads();
+    if (nthreads <= 1) {
+        // Single-NEO fast path: bulk DST-batched chunks over the whole shard (original behavior,
+        // byte-identical to the validated single-NEO add).
+        const uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
+        for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
+            process_tiles(num_tiles_per_cycle);
+        }
+        const uint32_t remainder = num_tiles % num_tiles_per_cycle;
+        if (remainder > 0) {
+            process_tiles(remainder);
+        }
+    } else {
+        // Multi-NEO path: N threads (one per NEO) consume a STRIDED DFB. Per the DFB tile-counter
+        // round-robin (advances once per pop_front/push_back), correctness requires ONETILE
+        // granularity + explicit modulo-skip — bulk count-division mis-aligns tiles (verified: a
+        // count-division attempt gave wrong PCC). Each thread walks the full tile index and processes
+        // tile t where (t % nthreads == my_thread_id), one tile at a time. Matches the BMM precedent
+        // (tests/.../compute/bmm.cpp).
+        const uint32_t tid = get_my_thread_id();
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            if (t % nthreads != tid) {
+                continue;
+            }
+            process_tiles(1);
+        }
+        dfb_out.finish();
     }
 
 #ifdef ENABLE_KERNEL_TIMER
