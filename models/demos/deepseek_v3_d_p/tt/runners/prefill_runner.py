@@ -283,6 +283,25 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
+def _d2d_recv(inbound) -> tuple:
+    """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
+    decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
+    feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
+    import torch
+
+    t0 = time.perf_counter()
+    act, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+        inbound, metadata_size_bytes=METADATA_SIZE_BYTES
+    )
+    m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
+    meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
+    logger.info(
+        f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
+        f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
+    )
+    return act, meta
+
+
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
