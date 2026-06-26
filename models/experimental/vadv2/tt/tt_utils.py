@@ -28,6 +28,16 @@ def fold_offset_normalizer_into_weight(weight, bias, W, H, device):
     return w2, b2
 
 
+def build_folded_sampling_offsets(sampling_offsets, spatial_shapes, device):
+    """Read [W, H] from spatial_shapes (a one-time host sync) and return the
+    sampling_offsets Linear (weight, bias) pre-scaled by 1/[W, H] via
+    fold_offset_normalizer_into_weight. Shared by the deformable-attention
+    modules, which cache the result on their first call."""
+    W = int(spatial_shapes[0, 1].item())
+    H = int(spatial_shapes[0, 0].item())
+    return fold_offset_normalizer_into_weight(sampling_offsets.weight, sampling_offsets.bias, W, H, device)
+
+
 # Switch the num_levels==1 path over to the fused
 # `ttnn.experimental.multi_scale_deformable_attn` op (grid_sample + weighted
 # sum in one kernel) once there is enough batched work to amortize its launch.

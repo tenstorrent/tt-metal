@@ -4,7 +4,7 @@
 
 import warnings
 import ttnn
-from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, fold_offset_normalizer_into_weight
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, build_folded_sampling_offsets
 from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -362,11 +362,7 @@ class TtMSDeformableAttention3D:
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
         if self._so_w is None:
-            W = int(spatial_shapes[0, 1].item())
-            H = int(spatial_shapes[0, 0].item())
-            self._so_w, self._so_b = fold_offset_normalizer_into_weight(
-                params.sampling_offsets.weight, params.sampling_offsets.bias, W, H, self.device
-            )
+            self._so_w, self._so_b = build_folded_sampling_offsets(params.sampling_offsets, spatial_shapes, self.device)
         sampling_offsets = linear_flatten_batch(query, self._so_w, bias=self._so_b)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)

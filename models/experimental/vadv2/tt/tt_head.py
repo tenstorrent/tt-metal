@@ -235,31 +235,24 @@ class TtVADHead:
         self._const_ones_cache = {}
         self._base_idx_cache = {}
 
-    def _const_zeros(self, shape, dtype=None, layout=None):
+    def _const_tensor(self, create_fn, cache, shape, dtype=None, layout=None):
         key = (tuple(shape), dtype, layout)
-        t = self._const_zeros_cache.get(key)
+        t = cache.get(key)
         if t is None:
             kw = {}
             if dtype is not None:
                 kw["dtype"] = dtype
             if layout is not None:
                 kw["layout"] = layout
-            t = ttnn.zeros(shape, device=self.device, **kw)
-            self._const_zeros_cache[key] = t
+            t = create_fn(shape, device=self.device, **kw)
+            cache[key] = t
         return ttnn.clone(t)
 
+    def _const_zeros(self, shape, dtype=None, layout=None):
+        return self._const_tensor(ttnn.zeros, self._const_zeros_cache, shape, dtype, layout)
+
     def _const_ones(self, shape, dtype=None, layout=None):
-        key = (tuple(shape), dtype, layout)
-        t = self._const_ones_cache.get(key)
-        if t is None:
-            kw = {}
-            if dtype is not None:
-                kw["dtype"] = dtype
-            if layout is not None:
-                kw["layout"] = layout
-            t = ttnn.ones(shape, device=self.device, **kw)
-            self._const_ones_cache[key] = t
-        return ttnn.clone(t)
+        return self._const_tensor(ttnn.ones, self._const_ones_cache, shape, dtype, layout)
 
     def _arange_base(self, count, num_pts):
         key = (count, num_pts)
