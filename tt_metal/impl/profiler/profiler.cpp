@@ -2711,7 +2711,33 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
         double device_time = device_sync_info.device_time;
         double frequency = device_sync_info.frequency;
 
-        if (frequency == 0) {
+        if (realtime_sync_line.has_value() && smallest_timestamp != (1lu << 63)) {
+            // Realtime-profiler clock fit is available: anchor this worker context to that
+            // line so its zones align with the rt-profiler records (shared device wall
+            // clock). Keep device_time at the smallest WORKER marker (in-range, correct
+            // clock reference -- do NOT use the rt anchor's dispatch-core cycle here), but
+            // derive cpu_time as the host TSC at which the shared device clock reads that
+            // marker per the fit:
+            //   cpu_time = host_start + (device_time - first_timestamp) / (freq * ratio)
+            // ratio = TracyGetTimerMul(), the same TSC->ns factor the fit was built with.
+            const double ratio = TracyGetTimerMul();
+            device_time = static_cast<double>(smallest_timestamp);
+            cpu_time = realtime_sync_line->host_anchor +
+                       (device_time - realtime_sync_line->device_anchor) / (realtime_sync_line->frequency * ratio);
+            frequency = realtime_sync_line->frequency;
+            device_sync_info = SyncInfo(cpu_time, device_time, frequency);
+            log_debug(
+                tt::LogMetal,
+                "Device {}, core {},{} anchored to realtime-profiler clock fit: smallest_ts={}, "
+                "device_anchor={:.0f}, cpu_time={:.0f}, freq={} GHz",
+                device_id,
+                worker_core.x,
+                worker_core.y,
+                smallest_timestamp,
+                realtime_sync_line->device_anchor,
+                cpu_time,
+                frequency);
+        } else if (frequency == 0) {
             cpu_time = TracyGetCpuTime();
             device_time = smallest_timestamp;
             frequency = device_core_frequency / 1000.0;

@@ -119,6 +119,12 @@ private:
 
     void run_sync(DeviceState& dev_state, uint32_t num_samples);
 
+    // Mirror the rt-profiler Tracy context calibration onto the device (Tracy) profiler's
+    // sync anchor, so its worker zones host-align to the same line as the rt records.
+    // Called wherever we (re)calibrate the rt context (AddDevice / CalibrateDevice).
+    void publish_device_profiler_sync_anchor(
+        uint32_t chip_id, double host_anchor, double device_anchor, double frequency, const std::string& core_label);
+
     // ContextId of the owning MeshDevice, captured in the constructor. All MetalContext
     // accesses inside this manager must go through MetalContext::instance(context_id_)
     // so a non-default (mock / coexistence) context routes through its own HAL, cluster

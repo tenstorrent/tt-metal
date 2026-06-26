@@ -53,6 +53,8 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
+#include "tt_metal/impl/profiler/profiler.hpp"                // tt::tt_metal::SyncInfo, DeviceProfiler
+#include "tt_metal/impl/profiler/profiler_state_manager.hpp"  // ProfilerStateManager
 
 namespace tt::tt_metal::distributed {
 
@@ -697,6 +699,12 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             dev_state.sync_host_start,
             static_cast<double>(dev_state.first_timestamp),
             dev_state.sync_frequency);
+        publish_device_profiler_sync_anchor(
+            dev_state.chip_id,
+            static_cast<double>(dev_state.sync_host_start),
+            static_cast<double>(dev_state.first_timestamp),
+            dev_state.sync_frequency,
+            dev_state.realtime_profiler_core.str());
     }
 
     // Emit sync verification markers: take one independent device measurement per device
@@ -762,6 +770,12 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             tracy_handler_->CalibrateDevice(
                 dev_state.chip_id, sync_check_host_anchor, device_time, dev_state.sync_frequency);
             tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+            publish_device_profiler_sync_anchor(
+                dev_state.chip_id,
+                static_cast<double>(sync_check_host_anchor),
+                static_cast<double>(device_time),
+                dev_state.sync_frequency,
+                dev_state.realtime_profiler_core.str());
 
             dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
 
@@ -811,6 +825,12 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 tracy_handler_->CalibrateDevice(
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                publish_device_profiler_sync_anchor(
+                    dev_state.chip_id,
+                    static_cast<double>(dev_state.sync_host_time_before),
+                    static_cast<double>(device_time),
+                    dev_state.sync_frequency,
+                    dev_state.realtime_profiler_core.str());
                 pages_received++;
                 dev_state.sync_response_received.store(true);
                 return true;
@@ -1125,6 +1145,9 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
             samples.size(),
             dev_state.sync_frequency,
             dev_state.first_timestamp);
+        // The device (Tracy) profiler's sync anchor is published in lockstep with the rt
+        // context's own calibration (AddDevice / CalibrateDevice sites), not here -- see
+        // publish_device_profiler_sync_anchor().
     } else {
         dev_state.sync_frequency = cluster.get_device_aiclk(dev_state.chip_id) / 1000.0;
         dev_state.first_timestamp = 0;
@@ -1134,6 +1157,32 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
             "[Real-time profiler] Device {} sync failed - not enough samples, using default frequency",
             dev_state.chip_id);
     }
+}
+
+void RealtimeProfilerManager::publish_device_profiler_sync_anchor(
+    uint32_t chip_id, double host_anchor, double device_anchor, double frequency, const std::string& core_label) {
+    // Mirror the rt context's calibration point onto the device (Tracy) profiler so its
+    // worker zones host-align to the same line as the rt records. We pass the raw anchor
+    // (host TSC, device cycle, frequency) -- NOT a finished SyncInfo -- because the device
+    // profiler keeps its OWN worker-marker device anchor and only adopts our host<->device
+    // mapping (updateTracyContext does the conversion). Worker and rt/dispatch cores share
+    // one device wall clock, so the anchor is valid for worker-marker cycles.
+    auto& psm = MetalContext::instance(context_id_).profiler_state_manager();
+    if (!psm || !psm->device_profiler_map.contains(chip_id)) {
+        return;
+    }
+    std::scoped_lock map_lock(psm->device_profiler_map_mutex);
+    psm->device_profiler_map.at(chip_id).realtime_sync_line =
+        tt::tt_metal::DeviceProfiler::RealtimeSyncLine{host_anchor, device_anchor, frequency};
+    log_debug(
+        tt::LogMetal,
+        "[Real-time profiler] Device-profiler clock anchor for device {} core {}: "
+        "host_anchor={:.0f}, device_anchor={:.0f}, freq={:.6f} GHz",
+        chip_id,
+        core_label,
+        host_anchor,
+        device_anchor,
+        frequency);
 }
 
 void RealtimeProfilerManager::trigger_sync_check() {
@@ -1254,6 +1303,12 @@ void RealtimeProfilerManager::trigger_sync_check() {
                 tracy_handler_->CalibrateDevice(
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                publish_device_profiler_sync_anchor(
+                    dev_state.chip_id,
+                    static_cast<double>(dev_state.sync_host_time_before),
+                    static_cast<double>(device_time),
+                    dev_state.sync_frequency,
+                    dev_state.realtime_profiler_core.str());
                 dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
                 dev_state.pending_first_unthrottled_finish_sync = false;
                 got_sync = true;
