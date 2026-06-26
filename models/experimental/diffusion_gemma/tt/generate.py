@@ -365,16 +365,76 @@ def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGenerati
     return torch.cat([prompt_tokens, generation.generated], dim=1)
 
 
+def _normalize_eos_token_ids(eos_token_id):
+    if eos_token_id is None:
+        return None
+    if isinstance(eos_token_id, int):
+        return {eos_token_id}
+    return set(eos_token_id)
+
+
+def _trim_generated_token_ids(generated: torch.Tensor, *, max_new_tokens: int | None = None, eos_token_id=None):
+    if max_new_tokens is not None and max_new_tokens < 0:
+        raise ValueError("max_new_tokens must be non-negative")
+
+    eos_ids = _normalize_eos_token_ids(eos_token_id)
+    rows = []
+    for row in generated.tolist():
+        if max_new_tokens is not None:
+            row = row[:max_new_tokens]
+        if eos_ids:
+            for idx, token_id in enumerate(row):
+                if token_id in eos_ids:
+                    row = row[: idx + 1]
+                    break
+        rows.append(row)
+    return rows
+
+
+def generation_token_ids(
+    prompt_tokens: torch.Tensor,
+    generation: DeviceGeneration,
+    *,
+    skip_prompt: bool = True,
+    max_new_tokens: int | None = None,
+    eos_token_id=None,
+):
+    """Return decoded token-id rows, applying output-only length/EOS stops."""
+    generation_sequences(prompt_tokens, generation)  # validates shape and prompt length.
+    generated_rows = _trim_generated_token_ids(
+        generation.generated,
+        max_new_tokens=max_new_tokens,
+        eos_token_id=eos_token_id,
+    )
+    if skip_prompt:
+        return generated_rows
+    return [prompt_row + generated_row for prompt_row, generated_row in zip(prompt_tokens.tolist(), generated_rows)]
+
+
 def decode_generation(
-    tokenizer, prompt_tokens: torch.Tensor, generation: DeviceGeneration, *, skip_prompt: bool = True, **decode_kwargs
+    tokenizer,
+    prompt_tokens: torch.Tensor,
+    generation: DeviceGeneration,
+    *,
+    skip_prompt: bool = True,
+    max_new_tokens: int | None = None,
+    eos_token_id=None,
+    **decode_kwargs,
 ):
     """Decode generated token ids with a HuggingFace-style tokenizer.
 
     ``skip_prompt=True`` mirrors the common text-generation UX: return only the
     generated continuation. Set it to ``False`` for HF-style full sequences.
+    ``max_new_tokens`` and ``eos_token_id`` trim only the host-visible output;
+    the device KV cache may already contain a full committed canvas block.
     """
-    tokens = generation.generated if skip_prompt else generation_sequences(prompt_tokens, generation)
-    token_ids = tokens.tolist()
+    token_ids = generation_token_ids(
+        prompt_tokens,
+        generation,
+        skip_prompt=skip_prompt,
+        max_new_tokens=max_new_tokens,
+        eos_token_id=eos_token_id,
+    )
     if hasattr(tokenizer, "batch_decode"):
         return tokenizer.batch_decode(token_ids, **decode_kwargs)
     return [tokenizer.decode(ids, **decode_kwargs) for ids in token_ids]

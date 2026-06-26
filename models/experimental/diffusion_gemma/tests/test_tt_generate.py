@@ -14,6 +14,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     generate_blocks,
     generate_from_prompt_tokens,
     generation_sequences,
+    generation_token_ids,
     host_canvas_to_device,
     host_tokens_to_device,
     make_host_canvas_init_fn,
@@ -248,6 +249,45 @@ def test_decode_generation_can_include_prompt_tokens():
     )
 
     assert decode_generation(tokenizer, prompt_tokens, generation, skip_prompt=False) == ["1 2 3 4 5"]
+
+
+def test_generation_token_ids_applies_max_new_tokens_and_eos_to_continuation():
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5, 9, 6]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=7,
+        trajectories=[],
+    )
+
+    assert generation_token_ids(prompt_tokens, generation, max_new_tokens=4, eos_token_id=9) == [[4, 5, 9]]
+    assert generation_token_ids(prompt_tokens, generation, max_new_tokens=2, eos_token_id=9) == [[4, 5]]
+
+
+def test_generation_token_ids_can_return_full_trimmed_sequences():
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5, 9, 6]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=7,
+        trajectories=[],
+    )
+
+    assert generation_token_ids(prompt_tokens, generation, skip_prompt=False, eos_token_id=[9]) == [[1, 2, 3, 4, 5, 9]]
+
+
+def test_decode_generation_rejects_negative_max_new_tokens():
+    tokenizer = _FakeTokenizer()
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match="max_new_tokens"):
+        decode_generation(tokenizer, prompt_tokens, generation, max_new_tokens=-1)
 
 
 def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
