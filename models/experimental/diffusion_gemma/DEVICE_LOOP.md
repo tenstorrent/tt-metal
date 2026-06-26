@@ -1,20 +1,71 @@
-# DiffusionGemma device bring-up — loop spec + implementation status
+# DiffusionGemma device bring-up — plan, spec & status
 
 **Audience:** an autonomous agent running in `/loop` mode on the QB2 box `bh-qbge-06`.
-**Goal of the loop:** take the four device-integration workstreams below from ⬜ to ✅,
-in dependency order, each validated on QB2 against the pure-torch oracle in `reference/`.
+**Goal:** take DiffusionGemma from a set of validated pieces to a model that actually runs — a prompt string in, generated text out, on QB2.
 
-This file is the **single source of truth** for the branch (the former `STATUS.md` was
-folded in here). **Part I** is the agent loop spec — how the four device workstreams are
-executed and their acceptance criteria. **Part II** is the live implementation status —
-environment constraints, the workstream status table, the 2026-06-26 code review, session
-notes, and build order. **For what is done right now, jump to Part II.**
+This file is the **single source of truth** for the branch (the former `STATUS.md` was folded in). It is organized as:
+- **Roadmap** (below, read first) — the forward plan: where we are, the critical path, and the phased work to a running model.
+- **Part I — Execution spec** — the loop protocol, env/run recipe, ground rules, the decision-fidelity bar, and the W1–W4 workstream specs + acceptance criteria.
+- **Part II — Implementation status** — environment constraints, the per-workstream status table, the 2026-06-26 code review + fix verification, session notes, and build order.
 
-This is the **Functional-core** device work. Everything it depends on (the torch
-reference/oracle, the PCC harness, the causal backbone PCC, the isolated device
-spikes for entropy/accept/SDPA/self-cond) is **already done** — see the Part II status
-table. Do **not** redo it. This loop turns the validated *pieces* into an *integrated*
-on-device diffusion forward.
+---
+
+# Roadmap — the path to a running model
+
+> The original four device workstreams (W1–W4, Part I) are now mostly done or blocked. The **real** remaining work to a first running generation is the integration + correctness phases below, surfaced by the 2026-06-26 gap analysis. This roadmap is authoritative for "what to do next"; W1–W4 in Part I are the detailed specs for the pieces they cover.
+
+## Where we are (2026-06-26)
+
+Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus three of the four device pieces are validated **in isolation**: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA ≤32768 (W2a/#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
+
+**Nothing runs end-to-end.** There is no callable — device, or even CPU-against-real-weights — that takes a prompt string and returns text. The validated halves (the full 26B backbone ↔ the device denoise loop) have **never been joined**: no device commit-append, no per-block position advancement, no full-model + self-conditioning assembly from the real checkpoint, no tokenizer/text I/O, and no end-to-end acceptance test.
+
+## Two distinct gaps — do not conflate them
+
+| Gap | What it is | Cost | Tracking |
+|---|---|---|---|
+| **Make it RUN** (emit *some* text) | Integration glue: join the pieces into one prompt→text device loop | Large but tractable net-new engineering (~weeks) | #47464 |
+| **Make it CORRECT** (match HF) | The bf16/MoE/TP=4 **decision-fidelity bar** — diffusion commits the *clean argmax*, and the shared backbone shows only ~50% argmax agreement | Core gemma4 MoE-precision work **or** a product decision; possibly multi-week or unachievable on current kernels | #48291 |
+
+The model can be made to *run* (and emit text) **without** resolving fidelity — it just will not be *correct*. Decide #48291 early: it determines whether the integration work yields usable output. Diffusion has no temperature/top-p cushion (it commits the clean argmax), so the ~50% backbone argmax ceiling maps almost directly to wrong tokens.
+
+## Critical path to a first CORRECT generation (dependency-ordered)
+
+| # | Step | Status | Issue |
+|---|---|---|---|
+| 0 | **Decide the decision-fidelity bar** — engineering MoE-precision fix, or product accepts a degraded floor (informed by a real-ckpt denoise trajectory measurement) | 🔴 open escalation | **#48291** |
+| 1 | **Device commit-append** — write the committed canvas into the KV cache with `COMMIT_APPEND` (primitive exists in #47474, never called in `tt/`) | ⬜ | #47464 |
+| 2 | **Per-block RoPE/position advancement** — block N at `prompt_len + N·256` (`q_rope_offset` hardcoded today) | ⬜ | #47464 |
+| 3 | **Join full 26B + device self-conditioning + 30-layer prompt-KV** from the real checkpoint (self-cond tensors currently discarded; only single-layer prompt-KV lists exist) | ⬜ | #47464 |
+| 4 | **Measure the integrated real-size denoise step fits** on the (1,4) mesh (full-canvas logits + 262k soft-embed matmul + 30-layer `[P+C]` KV concat) | ⬜ | #47464 / #47487 |
+| 5 | **Entry point `tt/generate.py`** — tokenize + chat template → prefill → canvas init → denoise(≤48) → commit → advance → loop blocks → detokenize, with EOS/length stop | ⬜ | #47464 |
+| 6 | **e2e acceptance test** — cheapest first: CPU HF `generate()` vs `reference/generate_blocks` token-equal; then device-vs-HF on a short prompt with injected reference noise | ⬜ | #47464 |
+
+> **Cheapest unblocked step:** the CPU half of #6 (HF `generate()` vs `reference/generate_blocks` token-equal) — proves the algorithm independent of device precision, needs no QB2, and is not gated by #48291.
+
+## Phased roadmap
+
+**Phase 0 — Foundation** ✅ done — torch reference + PCC harness (#47468 ✅ closed), causal backbone PCC (#47461 ✅), QB2 memory fit (#47487).
+
+**Phase 1 — Device pieces (W1–W4)** — three done, one blocked:
+- W1 KV-phase machine ✅ (#47474) — residual: bounded-sliding commit-append wrap correctness still unverified (test is non-discriminating).
+- W2a bidirectional masked SDPA, prompt+canvas ≤ 32768 ✅ (#47462).
+- W4 on-device canvas sampling ✅ (#47472) — residual: SAMP-3 mesh-mapper `TT_FATAL` (latent), regenerated-noise unvalidated at production vocab.
+- W3 decode-loop control flow ✅ built & validated on synthetic logits, 🔴 blocked on #48291 (#47463).
+
+**Phase 2 — Integration to a first run** (#47464) — ⬜ not started; the bulk of remaining engineering — critical-path steps 1–6 above.
+
+**Phase 3 — Correctness** (#48291) — 🔴 the gating decision — resolve the decision-fidelity bar (MoE precision work, or product acceptance of a degraded floor), measured via a real-checkpoint denoise trajectory.
+
+**Phase 4 — Functional milestone** (#47464) — after a first correct run — full 256K context (requires **W2b** long-prompt non-causal masked chunking, #47462 — unbuilt new-kernel work), TP across the mesh, perf optimization (#47465).
+
+**Beyond Functional** — batched canvas decode (#47557), vLLM runner + TT-plugin integration (#47466 / #47488), CI + perf-regression pipelines (#47489), multimodal T+I / T+V (#47467), quantized checkpoint (#47475).
+
+## Biggest risks
+
+1. **#48291 may be unachievable** on the current bf16/MoE/TP=4 kernels without core gemma4 MoE-precision work (fp32-faithful router top-k is blocked by `ttnn.topk` `TT_FATAL` on FLOAT32; fp32 experts exceed QB2 DRAM). If so, correct diffusion output needs that kernel work or an explicit product decision to ship degraded quality.
+2. **W2b** (long-prompt > 32768 non-causal masked chunking) is unbuilt, likely-new-kernel work that gates the 256K criterion.
+3. **Per-block position advancement** (step 2) is an easy-to-miss correctness requirement — without it, every block past the first is positioned wrong and the text is garbage even if fidelity were perfect.
 
 ---
 
@@ -27,8 +78,10 @@ on-device diffusion forward.
 > spec says "update the status table" it means that Part II table. Confirm with the user which
 > branch the device loop runs on before iteration 1.
 
-1. **Read the status table** (Part II) → find the first workstream not yet ✅ in the order
-   W1→W2→W3→W4. Within a workstream, pick the first unchecked task in its checklist.
+1. **Read the Roadmap** (top of this file) → find the first incomplete step on the critical
+   path / the active phase. W1–W4 are mostly done; the live work is **Phase 2 integration**
+   (#47464), and **Phase 3 correctness is gated by the #48291 decision** — surface that, don't
+   silently pick around it. Cross-check the Part II status table for per-workstream detail.
 2. **Do the smallest shippable increment** of that task (one module / one device test).
 3. **Validate on device** (recipe §1). The oracle is always `reference/` — assert the
    ttnn output matches it (PCC or `torch.equal`), never assert against a fresh guess.
@@ -114,7 +167,7 @@ nonzero flip as a finding to report, not to suppress.
 
 ---
 
-## W1 — #47474 KV-cache phase state machine  ✅ done **(was the prereq for W2/W3)** — see Part II + the 2026-06-26 review (bounded-sliding wrap is untested)
+## W1 — #47474 KV-cache phase state machine  ✅ done **(was the prereq for W2/W3)** — residual: bounded-sliding commit-append wrap exercised but not yet verified (see Roadmap Phase 1 + Part II fix verification)
 
 **Why first:** gemma4 (re)writes KV on every forward and uses a bounded-sliding
 circular cache that would *wrap/corrupt* on a commit-append. The denoise loop reads a
@@ -204,6 +257,8 @@ every layer type.
   SDPA masked path handles a windowed mask. Clearly label it non-canonical.
 
 ### W2b — long-prompt masked chunking, prompt + canvas > 32768  🔴 SEPARATE HIGH-RISK BLOCKER
+> 📋 **Detailed spike-first plan: [`DEVICE_LOOP_W2B.md`](./DEVICE_LOOP_W2B.md).** Source investigation reframed this: the denoise attention is a `[256 × (P+C)]` *all-attend rectangle* (no mask, no causal logic), and the maskless non-causal SDPA path already exists — so W2b may be **near-zero kernel work** (lift the `prefill.py:180-181` guard), pending one gating spike (**S1**: does the existing op return correct results at `[256 × >32768]`?). If S1 fails, fall to host K-chunking or a paged kernel. See the W2b plan for the full decision tree.
+
 **Do NOT bundle this into W2a acceptance.** The existing gemma4 chunked-prefill long-context
 path is **causal-only** (`operations.py:25-29`, `prefill.py:106-130`) and `attn_mask` is
 mutually exclusive with the windowing it relies on — so a **non-causal masked chunked path
@@ -253,7 +308,7 @@ running on device, matching `reference/denoise_loop.py` step-for-step.
 
 ---
 
-## W4 — #47472 on-device canvas sampling  ✅ done — see Part II + the 2026-06-26 review (`gumbel_max` leak)
+## W4 — #47472 on-device canvas sampling  ✅ done — residual: SAMP-3 mesh-mapper `TT_FATAL` (latent) + regenerated-noise unvalidated at prod vocab (see Roadmap Phase 1 + Part II fix verification)
 
 **State:** `tt/sampling.py` has `temperature_scale`, `token_entropy`, `gumbel_max`,
 `softmax` (all device, validated). **Net-new here = the user-facing per-position canvas
@@ -407,6 +462,20 @@ Adversarial multi-agent review of the 48 commits `d13c3ad0c91..HEAD` (~3834 LOC)
 - **`ttnn.sort` risk "rides on" the integration test** — refuted: the `accept_flips==0` assertion is itself a host-sort-vs-device-sort cross-check, and `test_single_denoise_step_matches_reference` validates the sort chain element-exact. (The residual doc-vs-fact divergence is captured as the Must-fix above.)
 - **Synthetic fp32 loop test is the only coverage of decision fidelity** — refuted: the real bf16 path is covered by the controller diagnostic test (which is the H2 finding's actual weakness — thresholds disabled, not absence of the test).
 - **Removing `test_full_model[blackhole-1x4]=0.83` from the shared `pcc_thresholds.json` reverts to 0.99 and would fail** — refuted: the 26B MoE `test_full_model` `pytest.skip`s at `tp<8`, so on a 1×4 mesh (tp=4) it never reaches `compare_tensors`; the removed entry was dead for that combo. The removal correctly de-pollutes the shared production gate; DiffusionGemma's PCC gap is handled in `test_device_backbone_pcc.py`.
+
+### Fix verification — 2026-06-26 (independent re-check of the 23-commit fix campaign)
+
+A second multi-agent pass independently verified all 23 fix commits at snapshot `03c40727c48` — for each fix: (a) does it resolve the finding, (b) does it introduce a regression, (c) is the added test real (would it fail if the bug regressed)? Every not-clean verdict was adversarially re-checked against the code. **Result: 20/25 fixes fully clean; the production `gemma4` path is provably unchanged.**
+
+**Production `gemma4` cleared.** The three shared-code fixes are bit-for-bit safe: every production caller (`ttnn_prefill/decode/verify_forward`) passes `kv_phase=None` → safe default and never trips the new `coerce_kv_cache_phase` guards (isolated-run confirmed); `_largest_tile_divisor` is identical to the old `min()` on every power-of-2 prefill bucket (brute-forced); `q_rope_offset=0` / `_slice_rope_cache(start=0)` pass the new asserts. The H1/M1/M2/DENO-* dealloc+guard fixes are confirmed with **no double-free / use-after-free** (`committed` is the host copy of `res.argmax`, freed device tensors are not read; `z` from `temperature_scale` is always a fresh tensor).
+
+- 🔴 **NEW BUG introduced by the SAMP-3 fix — `_rand_mesh_mapper` will `TT_FATAL` on the QB2 1×4 mesh** — `tt/sampling.py:121-124` (commit `cab7f9955e8`). The fix added `ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])` (placements size 1) with **no `mesh_shape_override`**; `ttnn.rand` (`rand.cpp:69-78`) asserts `placements.size() == device.shape().dims()`, and QB2 opens as `MeshShape(1,4)` → `dims()==2`, so `1 != 2` → hard fatal on the exact multi-device mesh the feature targets (pre-fix `mesh_mapper=None` did not crash). **Latent**: regenerated-noise is opt-in/diagnostic after SAMP-2 and the production path injects host noise, so it is off the hot path — but it is a guaranteed crash once that path runs on multi-device, and untested (single-device fixture never exercises the `>1`-device branch). **Fix:** add `mesh_shape_override=ttnn.MeshShape([device.get_num_devices()])`, matching `models/common/modules/rmsnorm/rmsnorm_1d.py:388`.
+- 🟡 **M3 wrap test is non-discriminating (the #1 KV hazard is still not actually verified)** — `tests/test_device_kv_phase.py:284-350` (commit `3b15e15439e`). It activates the bounded-sliding path (real model + decode + `cache_position_modulo==64` assert), but at `position=64, sliding_window=64` both correct-wrap and broken-no-wrap resolve to the **same** physical slot (block 0 row 0 — the zero-padded page-table tail also maps there), and `_assert_regions_changed` checks only that one slot changed. Reverting `cache_position_modulo` still passes. Fix: pick a position that is `block_size`-aligned but **not** `sliding_window`-aligned (so wrap vs no-wrap land on different physical blocks) and assert a non-wrapped slot stays untouched. ⇒ refines the W1 header caveat: "wrap untested" → "wrap exercised, correctness not yet verified".
+- 🟢 **Fix-correct but regression-unguarded (low):**
+  - **H1 / M1** — the dealloc fixes are correct, but no allocator high-water-mark test exists and the loop test halts at 2 steps (never the 48-step cap), so a *re-introduced* leak would be silent in CI. (M1 also leaks `init_canvas` in the degenerate `max_denoise_steps==0` config — non-production.) ⇒ resolves the W4 header caveat: the `gumbel_max` leak **is** fixed; only the leak-regression *guard* is missing.
+  - **KV-P-4** — fix is production-identical; only the `(100,100)==32` assertion distinguishes new from old — `(384,256)==192` / `(512,256)==256` pass under both (sanity checks, not regression guards).
+
+**Net:** the campaign is solid; the only item that can bite before use is the SAMP-3 mesh-mapper fatal (latent), then the M3 test gap. Neither touches the production `gemma4` path.
 
 ## Session 2026-06-22 — #47468 / #47461 / #47487 push (QB2-only)
 
