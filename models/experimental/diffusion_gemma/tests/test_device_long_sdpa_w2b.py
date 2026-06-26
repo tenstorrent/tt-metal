@@ -120,18 +120,20 @@ class _TinyGemma4Text(torch.nn.Module):
         self.lm_head = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
 
-def _tiny_full_attention_config():
+def _tiny_attention_config(layer_type):
+    layer_types = ["sliding_attention", "full_attention"] if layer_type == "sliding_attention" else ["full_attention"]
     config = Gemma4TextConfig(
         vocab_size=128,
         hidden_size=128,
         intermediate_size=256,
-        num_hidden_layers=1,
+        num_hidden_layers=len(layer_types),
         num_attention_heads=4,
         num_key_value_heads=4,
         num_global_key_value_heads=4,
         head_dim=32,
         global_head_dim=32,
-        layer_types=["full_attention"],
+        layer_types=layer_types,
+        sliding_window=1024,
         max_position_embeddings=262144,
         rms_norm_eps=1e-6,
         hidden_activation="gelu_pytorch_tanh",
@@ -141,10 +143,14 @@ def _tiny_full_attention_config():
         hidden_size_per_layer_input=0,
         final_logit_softcapping=0.0,
         rope_parameters={
+            "sliding_attention": {
+                "rope_type": "default",
+                "rope_theta": 10000.0,
+            },
             "full_attention": {
                 "rope_type": "default",
                 "rope_theta": 1000000.0,
-            }
+            },
         },
     )
     config._attn_implementation = "eager"
@@ -175,19 +181,22 @@ def _to_torch_hidden(device, value):
     return ttnn.to_torch(ttnn.get_device_tensors(value)[0]) if is_mesh else ttnn.to_torch(value)
 
 
-def _torch_tiny_denoise_attention_reference(hf_model, prompt_hidden, canvas_hidden):
+def _torch_tiny_denoise_attention_reference(hf_model, layer_idx, prompt_hidden, canvas_hidden):
     config = hf_model.config
-    attn = hf_model.layers[0].self_attn
+    layer_type = config.layer_types[layer_idx]
+    attn = hf_model.layers[layer_idx].self_attn
     kv_hidden = torch.cat([prompt_hidden, canvas_hidden], dim=1)
     total_len = kv_hidden.shape[1]
     canvas_len = canvas_hidden.shape[1]
     rope = Gemma4TextRotaryEmbedding(config)
-    cos, sin = rope(kv_hidden, torch.arange(total_len).unsqueeze(0), layer_type="full_attention")
+    cos, sin = rope(kv_hidden, torch.arange(total_len).unsqueeze(0), layer_type=layer_type)
     q_cos = cos[:, -canvas_len:, :]
     q_sin = sin[:, -canvas_len:, :]
 
-    q_shape = (*canvas_hidden.shape[:-1], config.num_attention_heads, attn.head_dim)
-    kv_shape = (*kv_hidden.shape[:-1], config.num_global_key_value_heads, attn.head_dim)
+    q_heads = attn.q_proj.out_features // attn.head_dim
+    kv_heads = attn.k_proj.out_features // attn.head_dim
+    q_shape = (*canvas_hidden.shape[:-1], q_heads, attn.head_dim)
+    kv_shape = (*kv_hidden.shape[:-1], kv_heads, attn.head_dim)
     query = attn.q_norm(attn.q_proj(canvas_hidden).view(q_shape))
     query = apply_rotary_pos_emb(query, q_cos, q_sin, unsqueeze_dim=2).transpose(1, 2)
     key = attn.k_norm(attn.k_proj(kv_hidden).view(kv_shape))
@@ -269,17 +278,20 @@ def test_w2b_rope_slice_reaches_256k(device):
 
 
 @pytest.mark.parametrize(
-    "prompt_len",
+    ("layer_type", "prompt_len"),
     [
-        pytest.param(33024, id="sk33280"),
-        pytest.param(261888, marks=_requires_full_sweep(), id="sk262144"),
+        pytest.param("full_attention", 33024, id="full-sk33280"),
+        pytest.param("sliding_attention", 33024, id="sliding-sk33280"),
+        pytest.param("full_attention", 261888, marks=_requires_full_sweep(), id="full-sk262144"),
+        pytest.param("sliding_attention", 261888, marks=_requires_full_sweep(), id="sliding-sk262144"),
     ],
 )
-def test_w2b_integrated_long_prompt_denoise_attention(device, prompt_len):
+def test_w2b_integrated_long_prompt_denoise_attention(device, layer_type, prompt_len):
     torch.manual_seed(47462)
     canvas_len = CANVAS_LEN
     total_len = prompt_len + canvas_len
-    config = _tiny_full_attention_config()
+    config = _tiny_attention_config(layer_type)
+    layer_idx = 0
     hf_model = _TinyGemma4Text(config).eval()
     model_args = Gemma4ModelArgs.from_hf_config(config)
     model_args._hf_text_config = config
@@ -295,20 +307,20 @@ def test_w2b_integrated_long_prompt_denoise_attention(device, prompt_len):
         mesh_config=mesh_config,
         max_seq_len=total_len,
         max_local_batch_size=1,
-        num_layers=1,
+        num_layers=layer_idx + 1,
         create_kv_cache=False,
     )
 
     prompt_hidden = torch.randn(1, prompt_len, config.hidden_size)
     canvas_hidden = torch.randn(1, canvas_len, config.hidden_size)
     with torch.no_grad():
-        golden = _torch_tiny_denoise_attention_reference(hf_model, prompt_hidden, canvas_hidden)
+        golden = _torch_tiny_denoise_attention_reference(hf_model, layer_idx, prompt_hidden, canvas_hidden)
 
     tt_prompt_hidden = _to_device_hidden(device, prompt_hidden)
     tt_canvas_hidden = _to_device_hidden(device, canvas_hidden)
     tt_out = denoise_attention_forward(
         tt_model,
-        layer_idx=0,
+        layer_idx=layer_idx,
         prompt_hidden=tt_prompt_hidden,
         canvas_hidden=tt_canvas_hidden,
     )
