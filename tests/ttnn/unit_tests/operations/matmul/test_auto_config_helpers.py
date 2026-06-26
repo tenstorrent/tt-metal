@@ -49,6 +49,27 @@ def _make_signature():
     )
 
 
+def _make_linear_signature(*, a_shape=(256, 1024), b_shape=(1024, 512), bias_shape=(512,)):
+    signature = _make_signature()
+    m, k, n = auto_matmul._extract_mkn(a_shape, b_shape, False, False)
+    return dataclasses.replace(
+        signature,
+        is_linear=True,
+        input_tensor_a={**signature.input_tensor_a, "shape": list(a_shape)},
+        input_tensor_b={**signature.input_tensor_b, "shape": list(b_shape)},
+        bias={
+            "shape": list(bias_shape),
+            "dtype": "bfloat16",
+            "layout": "Layout.TILE",
+            "memory_config": "DRAM_MEMORY_CONFIG",
+            "topology": None,
+        },
+        m=m,
+        k=k,
+        n=n,
+    )
+
+
 def _make_distributed_signature(*, lhs_shard_dim=None, rhs_shard_dim=None):
     lhs_topology = None
     rhs_topology = None
@@ -107,6 +128,24 @@ def test_extract_mkn_respects_transposes():
 
 def test_extract_mkn_uses_broadcasted_batch_shape():
     assert auto_matmul._extract_mkn((1, 32, 64), (8, 64, 128), False, False) == (256, 64, 128)
+
+
+def test_linear_bias_broadcast_that_changes_output_shape_disables_minimal_candidates():
+    signature = _make_linear_signature(bias_shape=(1, 1, 512))
+    bias = SimpleNamespace(shape=(1, 1, 512), dtype="bfloat16", layout="Layout.TILE")
+
+    assert auto_matmul._broadcast_shape((256, 512), (1, 1, 512)) == (1, 256, 512)
+    assert not auto_matmul._minimal_matmul_preserves_linear_bias_shape(signature)
+    assert not auto_matmul._can_use_minimal_matmul_common(signature, bias)
+
+
+@pytest.mark.parametrize("bias_shape", [(512,), (1, 512)])
+def test_linear_bias_broadcast_that_preserves_output_shape_allows_minimal_candidates(bias_shape):
+    signature = _make_linear_signature(bias_shape=bias_shape)
+    bias = SimpleNamespace(shape=bias_shape, dtype="bfloat16", layout="Layout.TILE")
+
+    assert auto_matmul._minimal_matmul_preserves_linear_bias_shape(signature)
+    assert auto_matmul._can_use_minimal_matmul_common(signature, bias)
 
 
 def test_cache_round_trip_and_force_retune(monkeypatch, tmp_path):

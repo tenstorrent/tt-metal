@@ -154,6 +154,36 @@ def _extract_output_shape(
     return tuple(batch_shape) + (int(lhs_row_dim), int(rhs_col_dim))
 
 
+def _broadcast_shape(lhs_shape: tuple[int, ...], rhs_shape: tuple[int, ...]) -> tuple[int, ...]:
+    max_rank = max(len(lhs_shape), len(rhs_shape))
+    lhs_shape = (1,) * (max_rank - len(lhs_shape)) + lhs_shape
+    rhs_shape = (1,) * (max_rank - len(rhs_shape)) + rhs_shape
+    output_shape = []
+    for lhs_dim, rhs_dim in zip(lhs_shape, rhs_shape):
+        if lhs_dim == 1:
+            output_shape.append(rhs_dim)
+        elif rhs_dim == 1 or lhs_dim == rhs_dim:
+            output_shape.append(lhs_dim)
+        else:
+            raise ValueError(f"Incompatible broadcast dimensions: {lhs_shape} vs {rhs_shape}")
+    return tuple(int(dim) for dim in output_shape)
+
+
+def _minimal_matmul_preserves_linear_bias_shape(signature: "AutoMatmulSignature") -> bool:
+    if not signature.is_linear or signature.bias is None:
+        return True
+
+    lhs_shape = tuple(int(dim) for dim in signature.input_tensor_a.get("shape", ()))
+    rhs_shape = tuple(int(dim) for dim in signature.input_tensor_b.get("shape", ()))
+    bias_shape = tuple(int(dim) for dim in signature.bias.get("shape", ()))
+    try:
+        matmul_shape = _extract_output_shape(lhs_shape, rhs_shape, signature.transpose_a, signature.transpose_b)
+        linear_shape = _broadcast_shape(matmul_shape, bias_shape)
+    except (IndexError, TypeError, ValueError):
+        return False
+    return linear_shape == matmul_shape
+
+
 def _is_distributed(signature: "AutoMatmulSignature") -> bool:
     for descriptor in (
         signature.input_tensor_a.get("topology"),
@@ -624,6 +654,8 @@ def _can_use_minimal_matmul_common(signature: AutoMatmulSignature, bias: Any | N
         # such as SILU can hang the device in minimal_matmul on certain block
         # configurations. Fall back to default_matmul/default_linear, which apply
         # the activation correctly via the full C++ kernel path.
+        return False
+    if not _minimal_matmul_preserves_linear_bias_shape(signature):
         return False
     if signature.input_tensor_a.get("layout") != str(ttnn.TILE_LAYOUT):
         return False
