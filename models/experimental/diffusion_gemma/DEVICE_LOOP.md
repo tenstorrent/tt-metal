@@ -51,7 +51,7 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 - W1 KV-phase machine ✅ (#47474) — bounded-sliding commit-append wrap now has a discriminating QB2 regression test.
 - W2a bidirectional masked SDPA, prompt+canvas ≤ 32768 ✅ (#47462).
 - W2b long-prompt (>32768) attention ✅ via the maskless reframe (D1, no new kernel) — SDPA op + RoPE reachability + integrated tiny-model denoise pass PCC≥0.99 through **262144** for **both** full and sliding layers, wired into the BH QuietBox2 pipeline (`tests/pipeline_reorg/blackhole_e2e_tests.yaml`). Residual: integration is a tiny config (hidden=128, head_dim=32); real-26B denoise integration is #47464 (#47462).
-- W4 on-device canvas sampling ✅ (#47472) — residual: SAMP-3 mesh-mapper `TT_FATAL` (latent), regenerated-noise unvalidated at production vocab.
+- W4 on-device canvas sampling ✅ (#47472) — SAMP-3 mesh-mapper `TT_FATAL` fixed; residual: regenerated-noise unvalidated at production vocab.
 - W3 decode-loop control flow ✅ built & validated on synthetic logits, 🔴 blocked on #48291 (#47463).
 
 **Phase 2 — Integration to a first run** (#47464) — ⬜ not started; the bulk of remaining engineering — critical-path steps 1–6 above.
@@ -309,7 +309,7 @@ running on device, matching `reference/denoise_loop.py` step-for-step.
 
 ---
 
-## W4 — #47472 on-device canvas sampling  ✅ done — residual: SAMP-3 mesh-mapper `TT_FATAL` (latent) + regenerated-noise unvalidated at prod vocab (see Roadmap Phase 1 + Part II fix verification)
+## W4 — #47472 on-device canvas sampling  ✅ done — SAMP-3 mesh-mapper `TT_FATAL` fixed; residual: regenerated-noise unvalidated at prod vocab (see Roadmap Phase 1 + Part II fix verification)
 
 **State:** `tt/sampling.py` has `temperature_scale`, `token_entropy`, `gumbel_max`,
 `softmax` (all device, validated). **Net-new here = the user-facing per-position canvas
@@ -470,13 +470,13 @@ A second multi-agent pass independently verified all 23 fix commits at snapshot 
 
 **Production `gemma4` cleared.** The three shared-code fixes are bit-for-bit safe: every production caller (`ttnn_prefill/decode/verify_forward`) passes `kv_phase=None` → safe default and never trips the new `coerce_kv_cache_phase` guards (isolated-run confirmed); `_largest_tile_divisor` is identical to the old `min()` on every power-of-2 prefill bucket (brute-forced); `q_rope_offset=0` / `_slice_rope_cache(start=0)` pass the new asserts. The H1/M1/M2/DENO-* dealloc+guard fixes are confirmed with **no double-free / use-after-free** (`committed` is the host copy of `res.argmax`, freed device tensors are not read; `z` from `temperature_scale` is always a fresh tensor).
 
-- 🔴 **NEW BUG introduced by the SAMP-3 fix — `_rand_mesh_mapper` will `TT_FATAL` on the QB2 1×4 mesh** — `tt/sampling.py:121-124` (commit `cab7f9955e8`). The fix added `ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])` (placements size 1) with **no `mesh_shape_override`**; `ttnn.rand` (`rand.cpp:69-78`) asserts `placements.size() == device.shape().dims()`, and QB2 opens as `MeshShape(1,4)` → `dims()==2`, so `1 != 2` → hard fatal on the exact multi-device mesh the feature targets (pre-fix `mesh_mapper=None` did not crash). **Latent**: regenerated-noise is opt-in/diagnostic after SAMP-2 and the production path injects host noise, so it is off the hot path — but it is a guaranteed crash once that path runs on multi-device, and untested (single-device fixture never exercises the `>1`-device branch). **Fix:** add `mesh_shape_override=ttnn.MeshShape([device.get_num_devices()])`, matching `models/common/modules/rmsnorm/rmsnorm_1d.py:388`.
+- ✅ **Fixed 2026-06-26 [#47472/#47464] SAMP-3 mesh mapper fatal** — `_rand_mesh_mapper` now uses `ttnn.MeshMapperConfig(placements=[PlacementReplicate()], mesh_shape_override=ttnn.MeshShape([device.get_num_devices()]))`, so the single replicate placement maps over a flattened QB2 1×4 mesh instead of tripping `placements.size() == device.shape().dims()`. Guarded by CPU mapper tests (`test_tt_sampling.py`, 2 passed) and a real QB2 1×4 regenerated-Gumbel smoke (`test_device_sampling_mesh.py`, 1 passed).
 - ✅ **Fixed 2026-06-26 [#47474/#47464] M3 wrap test is now discriminating** — `tests/test_device_kv_phase.py` drives bounded-sliding `COMMIT_APPEND` at `position=sliding_window+block_size`, so correct modulo writes physical slot 32 while a broken no-wrap path would write slot 96. The test now asserts the wrapped slot changes and the no-wrap slot stays untouched. Validated on QB2 with `test_bounded_sliding_commit_append_wraps_cache_slot` (1 passed).
 - 🟢 **Fix-correct but regression-unguarded (low):**
   - **H1 / M1** — the dealloc fixes are correct, but no allocator high-water-mark test exists and the loop test halts at 2 steps (never the 48-step cap), so a *re-introduced* leak would be silent in CI. (M1 also leaks `init_canvas` in the degenerate `max_denoise_steps==0` config — non-production.) ⇒ resolves the W4 header caveat: the `gumbel_max` leak **is** fixed; only the leak-regression *guard* is missing.
   - **KV-P-4** — fix is production-identical; only the `(100,100)==32` assertion distinguishes new from old — `(384,256)==192` / `(512,256)==256` pass under both (sanity checks, not regression guards).
 
-**Net:** the campaign is solid; the only item that can bite before use is the SAMP-3 mesh-mapper fatal (latent), then the M3 test gap. Neither touches the production `gemma4` path.
+**Net:** the campaign is solid; the known SAMP-3 mesh-mapper fatal is fixed, and neither the remaining leak-regression guard gap nor the RNG distribution/fidelity caveats touch the production `gemma4` path.
 
 ## Session 2026-06-22 — #47468 / #47461 / #47487 push (QB2-only)
 

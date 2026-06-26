@@ -120,7 +120,10 @@ def _gumbel_from_uniform(u):
 
 def _rand_mesh_mapper(device):
     if hasattr(device, "shape") and device.get_num_devices() > 1:
-        return ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])
+        return ttnn.MeshMapperConfig(
+            placements=[ttnn.PlacementReplicate()],
+            mesh_shape_override=ttnn.MeshShape([device.get_num_devices()]),
+        )
     return None
 
 
