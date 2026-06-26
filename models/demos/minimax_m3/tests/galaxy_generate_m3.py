@@ -52,7 +52,10 @@ def main():
 
     expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
     rows, cols = 8, 4
-    print(f"[gen-m3] mesh=({rows},{cols}) TP={cols} DP={rows} EP=32 | expert_dtype={expert_dtype} | gen={NUM_GEN}", flush=True)
+    print(
+        f"[gen-m3] mesh=({rows},{cols}) TP={cols} DP={rows} EP=32 | expert_dtype={expert_dtype} | gen={NUM_GEN}",
+        flush=True,
+    )
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
@@ -78,9 +81,16 @@ def main():
         mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
         ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
         model = Model(
-            mesh_device=mesh, hf_config=hf_config, state_dict=state_dict, ccl_manager=ccl,
-            mesh_config=mesh_config, tensor_cache_path=cache, create_kv_cache=False,
-            max_local_batch_size=1, users_row_sharded=True, use_ep_moe=True, ep_seq_len_per_chip=seq,
+            mesh_device=mesh,
+            hf_config=hf_config,
+            state_dict=state_dict,
+            ccl_manager=ccl,
+            mesh_config=mesh_config,
+            tensor_cache_path=cache,
+            max_local_batch_size=1,
+            users_row_sharded=True,
+            use_ep_moe=True,
+            ep_seq_len_per_chip=seq,
             expert_weight_dtype=expert_dtype,
         )
         del state_dict
@@ -90,8 +100,13 @@ def main():
         for g in range(NUM_GEN):
             host_out = model.prepare_inputs_prefill(toks, page_table=None, batched_prefill=True)
             logits = model.ttnn_prefill_forward(
-                host_out[0], rot_mats_global=host_out[1], rot_mats_local=host_out[2],
-                page_table=host_out[3], kv_cache=None, batch_size=1, get_last_token=-1,
+                host_out[0],
+                rot_mats_global=host_out[1],
+                rot_mats_local=host_out[2],
+                page_table=host_out[3],
+                kv_cache=None,
+                batch_size=1,
+                get_last_token=-1,
             )
             ttnn.synchronize_device(mesh)
             dts = ttnn.get_device_tensors(logits)

@@ -7,7 +7,6 @@ MiniMax-M2 specific implementation of create_tt_model that's compatible with tt_
 """
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def create_tt_model(
@@ -15,12 +14,10 @@ def create_tt_model(
     max_batch_size,
     max_seq_len,
     optimizations=None,
-    paged_attention_config: PagedAttentionConfig = None,
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
     mesh_config=None,
-    create_kv_cache=True,
     users_row_sharded=False,
     use_throughput_experts=False,
 ):
@@ -66,18 +63,9 @@ def create_tt_model(
         dtype=dtype,
         state_dict=state_dict,
         tensor_cache_path=str(model_args.weight_cache_path(dtype)),
-        paged_attention_config=paged_attention_config,
         mesh_config=mesh_config,  # Pass explicit MeshConfig
-        create_kv_cache=create_kv_cache,
         users_row_sharded=users_row_sharded,
         use_throughput_experts=use_throughput_experts,
     )
 
-    # Extract tt_kv_cache like tt_transformers does
-    tt_kv_cache = []
-    if create_kv_cache:
-        for layer in model.layers:
-            # MiniMax-M2 uses self_attn instead of attention
-            tt_kv_cache.append(layer.self_attn.layer_past)
-
-    return model_args, model, tt_kv_cache, state_dict
+    return model_args, model, state_dict

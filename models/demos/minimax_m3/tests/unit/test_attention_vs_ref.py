@@ -161,7 +161,6 @@ def test_attention_prefill_vs_ref(mesh_device, device_params, seq_len, reset_see
         program_config=MiniMaxM3AttentionProgramConfig(),
         layer_idx=0,
         transformation_mats=trans_mats,
-        create_kv_cache=True,
     )
 
     rope_mats = [

@@ -213,7 +213,6 @@ def test_model_ep_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         state_dict=state,
         ccl_manager=ccl,
         mesh_config=mesh_config,
-        create_kv_cache=False,
         max_local_batch_size=1,
         users_row_sharded=True,
         use_ep_moe=True,

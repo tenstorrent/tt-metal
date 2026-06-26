@@ -57,7 +57,9 @@ def main():
     expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
     rows, cols = 8, 4
     sp, tp = rows, cols
-    print(f"[sp-gen] mesh=({rows},{cols}) TP={tp} SP={sp} EP=32 | expert_dtype={expert_dtype} | gen={NUM_GEN}", flush=True)
+    print(
+        f"[sp-gen] mesh=({rows},{cols}) TP={tp} SP={sp} EP=32 | expert_dtype={expert_dtype} | gen={NUM_GEN}", flush=True
+    )
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
@@ -93,9 +95,16 @@ def main():
         ep_seq = int(os.getenv("EP_SEQ_PER_CHIP", str(seq // sp)))
         print(f"[sp-gen] ep_seq_len_per_chip={ep_seq} (per-device tokens={seq//sp})", flush=True)
         model = Model(
-            mesh_device=mesh, hf_config=hf_config, state_dict=state_dict, ccl_manager=ccl,
-            mesh_config=mesh_config, tensor_cache_path=cache, create_kv_cache=False,
-            max_local_batch_size=1, sequence_parallel=True, use_ep_moe=True, ep_seq_len_per_chip=ep_seq,
+            mesh_device=mesh,
+            hf_config=hf_config,
+            state_dict=state_dict,
+            ccl_manager=ccl,
+            mesh_config=mesh_config,
+            tensor_cache_path=cache,
+            max_local_batch_size=1,
+            sequence_parallel=True,
+            use_ep_moe=True,
+            ep_seq_len_per_chip=ep_seq,
             expert_weight_dtype=expert_dtype,
         )
         del state_dict
@@ -105,14 +114,23 @@ def main():
         for g in range(NUM_GEN):
             host_out = model.prepare_inputs_prefill(toks)  # SP path (self.sequence_parallel)
             logits = model.ttnn_prefill_forward(
-                host_out[0], rot_mats_global=host_out[1], rot_mats_local=host_out[2],
-                page_table=host_out[3], kv_cache=None, batch_size=1, get_last_token=-1,
+                host_out[0],
+                rot_mats_global=host_out[1],
+                rot_mats_local=host_out[2],
+                page_table=host_out[3],
+                kv_cache=None,
+                batch_size=1,
+                get_last_token=-1,
             )
             ttnn.synchronize_device(mesh)
             # gather: rows -> seq (dim -2), cols -> vocab (dim -1)
-            out = ttnn.to_torch(
-                logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=(rows, cols), dims=(-2, -1))
-            ).float().reshape(seq, -1)
+            out = (
+                ttnn.to_torch(
+                    logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=(rows, cols), dims=(-2, -1))
+                )
+                .float()
+                .reshape(seq, -1)
+            )
             pred_pos = real_len + g - 1
             nxt = int(out[pred_pos][:V].argmax())
             gen.append(nxt)

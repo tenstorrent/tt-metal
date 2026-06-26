@@ -83,7 +83,6 @@ def main():
             ccl_manager=ccl,
             mesh_config=mesh_config,
             tensor_cache_path=cache,
-            create_kv_cache=False,
             max_local_batch_size=1,
             users_row_sharded=True,
             use_ep_moe=True,
