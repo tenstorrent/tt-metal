@@ -175,7 +175,8 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
 
 def _largest_tile_divisor(length, preferred):
     """Pick a tile-multiple chunk size that divides ``length``."""
-    for candidate in range(min(preferred, length), 31, -32):
+    start = (min(preferred, length) // 32) * 32
+    for candidate in range(start, 31, -32):
         if length % candidate == 0:
             return candidate
     return 32
