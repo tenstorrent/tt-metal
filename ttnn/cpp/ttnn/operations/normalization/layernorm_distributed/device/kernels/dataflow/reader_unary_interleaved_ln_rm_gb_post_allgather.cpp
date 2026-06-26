@@ -7,6 +7,7 @@
  */
 
 #include <stdint.h>
+#include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -21,12 +22,12 @@ template <uint32_t t, typename AccessorType>
 void async_read_row_to_tile(
     const Noc& noc, const AccessorType& accessor, uint32_t page_id, uint32_t L1_dst_addr, uint32_t datum_bytes) {
     // Byte offsets within a tile scale with the datum size (2B for bf16, 4B for fp32):
-    //   row_bytes  = one tile-width row  = 32 datums
-    //   face_bytes = one 16x16 tile face = 256 datums (face 1 starts here within the tile)
-    //   half_row   = first 16 datums of the row (face boundary inside a row-major stick)
-    const uint32_t row_bytes = 32 * datum_bytes;
-    const uint32_t face_bytes = 256 * datum_bytes;
-    const uint32_t half_row_bytes = 16 * datum_bytes;
+    //   row_bytes  = one tile-width row  = TILE_WIDTH (32) datums
+    //   face_bytes = one 16x16 tile face = FACE_HW (256) datums (face 1 starts here within the tile)
+    //   half_row   = first FACE_WIDTH (16) datums of the row (face boundary inside a row-major stick)
+    const uint32_t row_bytes = tt::constants::TILE_WIDTH * datum_bytes;
+    const uint32_t face_bytes = tt::constants::FACE_HW * datum_bytes;
+    const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * datum_bytes;
     // Read one full row (32 datums) from the start of the page
     noc.async_read(accessor, CoreLocalMem<uint32_t>(L1_dst_addr), row_bytes, {.page_id = page_id}, {});
 
@@ -78,8 +79,8 @@ void kernel_main() {
     const uint32_t stats_tile_bytes = get_tile_size(cb_stats);
     // datum size (bytes) of gamma/beta, derived from their tile size (TILE_HW = 32*32 = 1024 datums/tile).
     // Used to scale the row/face byte offsets when packing a stick into tile layout (bf16=2B, fp32=4B).
-    const uint32_t gamma_datum_bytes = get_tile_size(cb_gamma) / 1024;
-    const uint32_t beta_datum_bytes = get_tile_size(cb_beta) / 1024;
+    const uint32_t gamma_datum_bytes = get_tile_size(cb_gamma) / tt::constants::TILE_HW;
+    const uint32_t beta_datum_bytes = get_tile_size(cb_beta) / tt::constants::TILE_HW;
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
