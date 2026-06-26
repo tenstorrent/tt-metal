@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include "prefill_test_nanobind.hpp"
+//
+// Standalone, test-only Python extension (`_prefill_test`) for the layer-completion scheduler
+// stand-in. Deliberately NOT part of the ttnn module / public API: it is built as its own .so and
+// imported via `models.demos.test.prefill_test`. See layer_completion_consumer.hpp for rationale.
 
 #include <cstdint>
 #include <string>
@@ -12,10 +14,12 @@
 
 #include "layer_completion_consumer.hpp"
 
-namespace ttnn::operations::experimental::deepseek_prefill::prefill_test::detail {
+namespace nb = nanobind;
 
-void bind_prefill_test(nb::module_& mod) {
-    using ttnn::operations::experimental::deepseek_prefill::LayerCompletionConsumer;
+NB_MODULE(_prefill_test, mod) {
+    using tt::tests::prefill_test::LayerCompletionConsumer;
+
+    mod.doc() = "Test-only layer-completion consumer (scheduler stand-in). Not a ttnn API.";
 
     nb::class_<LayerCompletionConsumer>(mod, "LayerCompletionConsumer")
         .def(
@@ -37,11 +41,3 @@ void bind_prefill_test(nb::module_& mod) {
         .def_prop_ro("total", &LayerCompletionConsumer::total)
         .def_prop_ro("reached_expected", &LayerCompletionConsumer::reached_expected);
 }
-
-}  // namespace ttnn::operations::experimental::deepseek_prefill::prefill_test::detail
-
-namespace ttnn::operations::experimental::deepseek_prefill::detail {
-
-void bind_prefill_test(::nanobind::module_& mod) { prefill_test::detail::bind_prefill_test(mod); }
-
-}  // namespace ttnn::operations::experimental::deepseek_prefill::detail

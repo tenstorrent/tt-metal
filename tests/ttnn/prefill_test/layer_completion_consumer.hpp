@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Test / scheduler-stand-in consumer for the layer-completion aggregation feature. Lives in the
-// deepseek_prefill `prefill_test` component (near the prefill runner) — it is NOT production router
-// infra. Drains the master router's scheduler counter channel on a NATIVE C++ thread so it is immune
-// to the Python GIL: a Python drain thread on the master rank gets starved the moment that rank's
-// main thread blocks in a GIL-holding call (e.g. the request loop waiting on H2D), which made the
-// old Python shim stall at a partial count while the router had already injected every completion.
-// This is also how a real scheduler would consume the channel. Self-terminates once `expected`
-// completions are drained and logs a PASS line — it does NOT depend on any Python teardown running.
+// Test / scheduler-stand-in consumer for the layer-completion aggregation feature. Test-only: it is
+// built into a standalone `_prefill_test` Python extension (see tests/ttnn/prefill_test), NOT into
+// the ttnn module, and is NOT production router infra. Drains the master router's scheduler counter
+// channel on a NATIVE C++ thread so it is immune to the Python GIL: a Python drain thread on the
+// master rank gets starved the moment that rank's main thread blocks in a GIL-holding call (e.g. the
+// request loop waiting on H2D), which made the old Python shim stall at a partial count while the
+// router had already injected every completion. This is also how a real scheduler would consume the
+// channel. Self-terminates once `expected` completions are drained and logs a PASS line — it does
+// NOT depend on any Python teardown running.
 
 #pragma once
 
@@ -23,7 +24,7 @@ namespace tt::tt_metal::distributed {
 class InterProcessCounterChannel;
 }
 
-namespace ttnn::operations::experimental::deepseek_prefill {
+namespace tt::tests::prefill_test {
 
 class LayerCompletionConsumer {
 public:
@@ -53,4 +54,4 @@ private:
     std::atomic<bool> stopped_{false};
 };
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill
+}  // namespace tt::tests::prefill_test
