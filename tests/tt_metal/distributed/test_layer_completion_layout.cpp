@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <internal/service/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_message.hpp>
 #include "layer_completion_ring_layout.hpp"
 
 namespace tt::tt_metal::distributed::test {

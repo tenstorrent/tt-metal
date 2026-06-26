@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/service/layer_completion_reorder_buffer.hpp>
+#include <internal/disaggregation/layer_completion_reorder_buffer.hpp>
 
 namespace tt::tt_metal::distributed {
 

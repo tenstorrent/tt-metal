@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include <internal/service/layer_completion_message.hpp>
-#include <internal/service/layer_completion_reorder_buffer.hpp>
+#include <internal/disaggregation/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_reorder_buffer.hpp>
 
 namespace tt::tt_metal::distributed::test {
 
