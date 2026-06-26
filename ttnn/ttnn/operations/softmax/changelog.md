@@ -82,3 +82,24 @@
 - **Issues encountered**: None. The partial scaler mechanism from `/partial-scaler-reduce` skill worked perfectly for both MAX and SUM reduces. The `toy_reduce_partial` reference example confirmed the pattern works for MAX with garbage padding and negative values.
 - **Tests added**:
   - `test_softmax_refinement3_non_aligned.py` (74 cases: w_non_aligned/h_non_aligned/both × TILE/RM × fp32/bf16 × dim=-1/-2 + aligned baselines + negative values + garbage padding masking + bf8b exclusion)
+
+## Refinement 4 — Rank expansion (2D, 3D tensors)
+- **Date**: 2026-06-26
+- **What was done**:
+  - Added `rank=2` and `rank=3` to `SUPPORTED["rank"]`
+  - Host-side change only: the entry point now calls `ttnn.unsqueeze_to_4D()` on rank-2/3 input tensors before building the program descriptor, then reshapes the output back to the original rank via `ttnn.reshape()` on return
+  - No kernel changes — the kernels are rank-agnostic (they only see Ht, Wt, num_slabs as compile-time/runtime args)
+  - `validate()`'s dim canonicalization (`dim if dim < 0 else dim - ndim`) already handles rank-2/3 correctly: positive dim aliases (e.g. `dim=1` for rank-2 ≡ `dim=-1`) canonicalize to the same negative offset
+  - After unsqueeze, rank-2 `(B, H)` → `(1, 1, B, H)`, rank-3 `(B, S, H)` → `(1, B, S, H)` — the last two dims (H, W) stay the same, so dim=-1/-2 still refer to the correct reduction axes
+- **Accuracy achieved**:
+  - Rank-2 TILE dim=-1 (32,64): PCC=0.999999, max_diff=0.000359
+  - Rank-2 TILE dim=-2 (32,64): PCC=0.999999, max_diff=0.000508
+  - Rank-3 TILE dim=-1 (4,128,512): PCC=0.999999, max_diff=0.000264
+  - Rank-3 TILE dim=-2 (4,128,512): PCC=0.999999, max_diff=0.000546
+  - Rank-3 RM dim=-1 (4,128,512): PCC=0.999999, max_diff=0.000310
+  - Rank-2 RM dim=-1 (32,64): PCC=0.999999, max_diff=0.000351
+  - All non-OOM rank-2/3 golden cells pass with PCC ≥ 0.999
+- **Golden test progress**: 228 → 435 passing (+207 new). All rank-2/3 cells with shapes that fit in L1 pass. The 140 failures are all pre-existing OOM on wide shapes (W≥4096, H≥512, 1024×1024) — these are Refinement 5 scope, not rank-specific. Zero non-OOM rank-2/3 failures. No XPASS-strict failures.
+- **Issues encountered**: None. This was a purely host-side change. The `ttnn.unsqueeze_to_4D` / `ttnn.reshape` pattern is the standard ttnn idiom for handling non-4D tensors (used by transpose, permute, split, reductions, etc.).
+- **Tests added**:
+  - `test_softmax_refinement4_rank.py` (66 cases: rank-2/3 × TILE/RM × dim=-1/-2 + bf16 + positive dim aliases + non-tile-aligned + cross-rank equivalence + output layout preservation + default dim + negative values + multi-core)

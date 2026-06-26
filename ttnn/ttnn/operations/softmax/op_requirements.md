@@ -54,7 +54,7 @@
 
 **Done when**: all `alignment ∈ {w_non_aligned, h_non_aligned}` cells currently in `xfail_expected` with `dtype=float32`, `layout=TILE`, `rank=4`, `fp32_dest_acc_en=True` pass.
 
-### [ ] Refinement 4 — Rank expansion (2D, 3D tensors)
+### [x] Refinement 4 — Rank expansion (2D, 3D tensors)
 
 **Goal**: add `rank=2` and `rank=3` to `SUPPORTED["rank"]`. The program descriptor currently assumes rank-4 (`N, C = shape[0], shape[1]; H, W = shape[2], shape[3]`). For rank-2 `(B, H)` and rank-3 `(B, S, H)`, the host-side code needs to reinterpret the shape as 4D internally (e.g., rank-2 → `(1, 1, B, H)`, rank-3 → `(1, B, S, H)`) before building the program descriptor. The kernel itself is rank-agnostic — it only sees Ht, Wt, and num_slabs as compile-time/runtime args.
 
