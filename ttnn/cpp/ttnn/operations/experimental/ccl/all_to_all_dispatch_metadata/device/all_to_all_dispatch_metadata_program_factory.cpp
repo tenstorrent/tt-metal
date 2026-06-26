@@ -495,11 +495,8 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    // Payload-split chunk boundaries are used as offsets into the (possibly DRAM-resident) input
-    // tensor by both the reader and the writer. They must satisfy the coarser of the L1/DRAM NOC
-    // read alignments: an unaligned offset is legal for an L1 source but produces an illegal
-    // unaligned noc_async_read for a DRAM source, which hangs the op (e.g. hidden dim 5120 on WH).
-    const uint32_t payload_alignment = std::max(l1_alignment, tt::tt_metal::hal::get_dram_alignment());
+    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t payload_alignment = std::max(l1_alignment, dram_alignment);
 
     // New mapping format: [devices, experts]
     // Each page is one device's view. Kernels only need to read 1 page (source device's mapping row).
@@ -778,10 +775,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
 
             // Calculate payload split parameters
             // Worker 0 sends first portion, worker 1 sends second portion, etc.
-            // Round the per-worker chunk up to payload_alignment so every payload_offset is a legal
-            // NOC read address for both L1 and DRAM inputs; the final populated worker reads the
-            // remainder. This also tiles the page exactly, avoiding the trailing-byte loss that a
-            // plain full_payload_size / workers_per_link suffers when the division is not exact.
+            // Round up chunks to aligned addresses, final worker gets remainder.
             uint32_t full_payload_size = input_page_size;
             uint32_t payload_chunk = tt::round_up(tt::div_up(full_payload_size, workers_per_link), payload_alignment);
             uint32_t payload_offset = std::min(worker_idx_within_link * payload_chunk, full_payload_size);
