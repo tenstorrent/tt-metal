@@ -821,6 +821,13 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     # scheduler consuming the same channel in production.
     completion_check = None
     check_completions = os.environ.get("PREFILL_CHECK_COMPLETIONS", "0") == "1"
+    # The single-rank LayerAck channel is the scheduler's per-layer signal (it drives migration).
+    # Opt-in: creating it unconditionally makes two concurrent single-rank runs sharing a service_id
+    # collide on the same /dev/shm segment. Defaults on when migration is enabled (its only consumer);
+    # set PREFILL_ENABLE_LAYER_ACK=1 to force it on without full migration.
+    enable_layer_ack = (
+        os.environ.get("PREFILL_ENABLE_LAYER_ACK", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")) == "1"
+    )
 
     def _unlink_stale_shm(name: str) -> None:
         # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
@@ -857,12 +864,14 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
             wait_ready_timeout_ms=wait_ready_ms,
         )
 
-    if single_rank:
+    if single_rank and enable_layer_ack:
         # Direct path: the runtime owns + inject()s the scheduler counter channel.
         _unlink_stale_shm(ack_shm_name)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+    elif single_rank:
+        logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
     else:
         # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
         ring_shm_name = os.environ.get("PREFILL_LAYER_COMPLETION_RING", f"/tt_prefill_layer_completion_ring_{rank}")
