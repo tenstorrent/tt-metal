@@ -308,6 +308,14 @@ Do not reject BFP4 attention because BFP4 MLP failed, because BFP8 activations w
 
 The final report must list QKV/output-projection dtype and fidelity, weight memory config, row times, SDPA/cache side effects, correctness, follow-on cache-use evidence when cache PCC is the concern, and kept/rejected decision. If attention projections remain BFP8 or BF16 while QKV, Q/K/V, output projection, or fused attention matmul rows are material, the stage is not optimized without a real-weight BFP4 attention trial or a precise op/correctness blocker.
 
+### OPT-008: Compare row-parallel output projection decompositions
+
+For tensor-parallel row-parallel output projections, choose the algebra before choosing the CCL primitive. Compare the two main legal decompositions: local-input/full-output matmul followed by reduce or reduce-scatter, and gathered-input/local-output matmul followed by all-gather when the residual boundary needs replicated hidden state. The second family often appears as fused all-gather plus matmul with output-sharded weights. Do not reject it because a matmul-reduce-scatter candidate failed, because a sharded-residual carry-forward probe failed, or because the functional implementation uses local full-output weights.
+
+When testing fused all-gather plus output projection, repack or reshard the projection weight for local output width, adapt tensors to the fused op's rank and layout contract, and set the CCL axis, transfer count, input/output memory configs, and matmul program config explicitly. The expected perf report should show a fused CCL+matmul row whose matmul N is the local output width, followed by a gather only if the next residual/norm contract requires replicated hidden. A local-input/full-output matmul plus RS/AG is a different decomposition, not a failed version of this one.
+
+The final report for a material row-parallel output projection must list which decomposition was selected, the weight sharding/layout for each candidate, fused op rank/layout requirements, CCL transfer count, program config, row times, whole-layer latency, correctness, and exact blocker for rejected decompositions. If the fused all-gather-matmul path fails with L1 circular-buffer allocation, report the requested and available bytes plus the tensor shapes and program config that produced them; then try the smallest legal local-output candidate before treating the fused family as blocked.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
