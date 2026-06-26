@@ -43,12 +43,12 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *([".."] * 
 _SUBTORUS_Y4_ENV = {
     # The 16 PCIe device indices forming the inner 4x4 sub-torus carved from the 8x4 galaxy.
     # These MUST match the chip->(tray, asic) pinnings in
-    # single_bh_galaxy_subtorus_y4_pinned_graph_descriptor.textproto — if the descriptor's pinned
+    # single_bh_galaxy_subtorus_y4_pinned_graph_descriptor.textproto: if the descriptor's pinned
     # set changes, regenerate this list from it (do not edit independently).
     "TT_VISIBLE_DEVICES": "2,3,6,7,10,11,14,15,18,19,22,23,26,27,30,31",
     "TT_MESH_GRAPH_DESC_PATH": os.path.join(
         _REPO_ROOT,
-        "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_subtorus_y4_graph_descriptor.textproto",
+        "models/demos/deepseek_v3_d_p/experimental_descriptors/single_bh_galaxy_subtorus_y4_graph_descriptor.textproto",
     ),
 }
 
