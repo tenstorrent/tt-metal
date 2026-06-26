@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LTX-2.3 Distilled — Realtime Perf Report</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171b22; --line:#262c36; --fg:#e6edf3; --muted:#9aa7b4;
+          --good:#3fb950; --warn:#d29922; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .wrap { max-width:1080px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  h2 { font-size:17px; margin:32px 0 12px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .hero { display:flex; gap:16px; flex-wrap:wrap; margin:18px 0; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:14px 18px; flex:1; min-width:150px; }
+  .stat .n { font-size:26px; font-weight:650; }
+  .stat .l { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .good { color:var(--good); } .warn { color:var(--warn); } .accent { color:var(--accent); }
+  table { width:100%; border-collapse:collapse; background:var(--panel);
+          border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th,td { padding:9px 12px; text-align:right; border-bottom:1px solid var(--line); }
+  th:first-child,td:first-child { text-align:left; }
+  thead th { background:#1c2230; color:var(--muted); font-weight:600; }
+  tbody tr:last-child td { border-bottom:none; }
+  tr.total td { font-weight:700; background:#1a2030; }
+  .delta-good { color:var(--good); } .delta-flat { color:var(--muted); }
+  .frames { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  .frames figure { margin:0; }
+  .frames img { width:100%; border:1px solid var(--line); border-radius:8px; display:block; }
+  .frames figcaption { color:var(--muted); font-size:12px; margin-top:6px; text-align:center; }
+  code { background:#1c2230; padding:1px 6px; border-radius:5px; font-size:12.5px; }
+  .commit { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+            padding:10px 14px; margin:8px 0; }
+  .commit .h { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+  .commit .sha { color:var(--accent); }
+  .commit .d { color:var(--muted); margin-top:3px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:20px;
+         border:1px solid var(--line); color:var(--muted); margin-left:6px; }
+  .note { color:var(--muted); font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LTX-2.3 Distilled AV — Realtime Optimization</h1>
+  <p class="sub">8-chip Blackhole p150b (loudbox) · config <code>bh_2x4sp1tp0</code> (2×4, sp=4, tp=2, Linear) ·
+     1088×1920 · 145 frames (6.04 s @ 24 fps) · warm gen#1, <code>LTX_TRACED=1</code></p>
+
+  <div class="hero">
+    <div class="stat"><div class="n">21.03 s</div><div class="l">baseline e2e</div></div>
+    <div class="stat"><div class="n good">14.96 s</div><div class="l">L1+L2 e2e</div></div>
+    <div class="stat"><div class="n good">−29%</div><div class="l">end-to-end</div></div>
+    <div class="stat"><div class="n good">&lt; 15 s ✓</div><div class="l">target (loudbox proxy)</div></div>
+  </div>
+
+  <h2>Per-stage timings (warm gen#1, seconds)</h2>
+  <table>
+    <thead><tr>
+      <th>Stage</th><th>Baseline</th><th>L1 (bf8+LoFi)</th><th>L1+L2 (step-cut)</th><th>Δ vs base</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>Encoder (cache)</td><td>0.01</td><td>0.01</td><td>0.00</td><td class="delta-flat">—</td></tr>
+      <tr><td>Stage 1 denoise <span class="note">(8→8→6 steps)</span></td><td>6.23</td><td>5.73</td><td>4.33</td><td class="delta-good">−30%</td></tr>
+      <tr><td>Latent upsample</td><td>1.37</td><td>1.33</td><td>1.40</td><td class="delta-flat">~0</td></tr>
+      <tr><td>Stage 2 denoise <span class="note">(3→3→2 steps)</span></td><td>10.47</td><td>9.53</td><td>6.36</td><td class="delta-good">−39%</td></tr>
+      <tr><td>VAE decode</td><td>2.08</td><td>1.96</td><td>2.04</td><td class="delta-flat">~0</td></tr>
+      <tr><td>Audio decode</td><td>0.87</td><td>0.84</td><td>0.82</td><td class="delta-flat">~0</td></tr>
+      <tr class="total"><td>Total e2e</td><td>21.03</td><td>19.40</td><td>14.96</td><td class="delta-good">−29%</td></tr>
+    </tbody>
+  </table>
+  <p class="note">L1 alone: −7.8% (DiT linears only; matmul is CCL-gated so the headline win is modest, as predicted).
+     L2 step-cut delivers the rest by removing denoise iterations (S1 8→6, S2 3→2) — the bulk of the e2e drop.</p>
+
+  <h2>Quality — frame 72 (mid-clip)</h2>
+  <div class="frames">
+    <figure><img src="frames/ltx_baseline_2x4.png" alt="baseline"><figcaption>Baseline (21.03 s)</figcaption></figure>
+    <figure><img src="frames/ltx_l1_2x4.png" alt="L1"><figcaption>L1 bf8+LoFi (19.40 s)</figcaption></figure>
+    <figure><img src="frames/ltx_l1l2_step_2x4.png" alt="L1+L2"><figcaption>L1+L2 step-cut (14.96 s)</figcaption></figure>
+  </div>
+  <p class="note">No visible degradation. L1 (bf8) is indistinguishable (block PCC 99.89–99.93 vs 0.988 gate).
+     L2 step-cut output stays sharp and converged — strings, tuning pegs, hair, fabric folds all crisp.</p>
+
+  <h2>Landed changes (branch <code>smarton/ltx-rt/2026-06-26</code>)</h2>
+
+  <div class="commit"><div class="h"><span class="sha">d66ec9a</span> ltx video: DiT-linear quant config (LTX_QUANT, off by default)<span class="tag">L1</span></div>
+    <div class="d">bf8_b weights + activations, LoFi compute on DiT linears; self_attn_out / cross_attn_out carve-outs stay bf16 to match the fused addcmul epilogue.</div></div>
+  <div class="commit"><div class="h"><span class="sha">21cd923</span> ltx video: block-level quant helper + LTX_QUANT PCC gate<span class="tag">L1</span></div>
+    <div class="d">Per-block quant application shared with the transformer-block PCC test against the torch oracle.</div></div>
+  <div class="commit"><div class="h"><span class="sha">73717c5</span> ltx video: env-overridable denoise sigma schedules<span class="tag">L2</span></div>
+    <div class="d">LTX_S1_SIGMAS / LTX_S2_SIGMAS cut steps S1 8→6, S2 3→2 with a tuned schedule.</div></div>
+  <div class="commit"><div class="h"><span class="sha">ddcfeb9</span> ltx video: quant-tag the transformer cache key<span class="tag">fix</span></div>
+    <div class="d">bf8 and bf16 caches must not alias — the cache name now carries the quant preset.</div></div>
+  <div class="commit"><div class="h"><span class="sha">4c41397</span> ltx video: quantize before the transformer cache write<span class="tag">fix</span></div>
+    <div class="d">Quant runs as a load_model post_load_hook (pre-save) so cached tensorbins are bf8.</div></div>
+  <div class="commit"><div class="h"><span class="sha">cff03a5</span> ltx video: set quant weight dtype before load<span class="tag">fix</span></div>
+    <div class="d">param.dtype set even when weights aren't resident, so a fresh-process bf8 cache hit doesn't clash under dynamic_load.</div></div>
+  <div class="commit"><div class="h"><span class="sha">ba7ca06</span> ltx test: bh_2x4sp1tp0 needs trace_params<span class="tag">harness</span></div>
+    <div class="d">LTX_TRACED needs the trace region; native conv1d audio taps need the L1_SMALL pool.</div></div>
+
+  <h2>Next</h2>
+  <p class="note">Target met on the loudbox proxy at gen#1. Remaining headroom: L4 (sparse attention) for further Stage-2 cuts;
+     audio submesh routing (−20% on the audio stage); nsight HW-counter phases for deeper per-zone visibility.
+     gen#0 (cold) is 21.71 s — steady-state warm gen is the realtime metric.</p>
+</div>
+</body>
+</html>
