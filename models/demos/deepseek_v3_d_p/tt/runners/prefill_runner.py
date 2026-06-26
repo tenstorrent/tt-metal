@@ -849,6 +849,13 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     # scheduler consuming the same channel in production.
     completion_check = None
     check_completions = os.environ.get("PREFILL_CHECK_COMPLETIONS", "0") == "1"
+    # The single-rank LayerAck channel is the scheduler's per-layer signal (it drives migration).
+    # Opt-in: creating it unconditionally makes two concurrent single-rank runs sharing a service_id
+    # collide on the same /dev/shm segment. Defaults on when migration is enabled (its only consumer);
+    # set PREFILL_ENABLE_LAYER_ACK=1 to force it on without full migration.
+    enable_layer_ack = (
+        os.environ.get("PREFILL_ENABLE_LAYER_ACK", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")) == "1"
+    )
 
     enable_layer_ack = (
         os.environ.get("PREFILL_ENABLE_LAYER_ACK", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")) == "1"
