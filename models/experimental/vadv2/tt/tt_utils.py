@@ -64,12 +64,13 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
         else:
             H_int, W_int = int(value_spatial_shapes[0, 0].item()), int(value_spatial_shapes[0, 1].item())
 
-        # value (bs, num_value, num_heads, D) -> (N, H, W, D) ROW_MAJOR bf16
-        value_l = ttnn.reshape(value, [bs, value.shape[1], num_heads * embed_dims])
-        value_l = ttnn.permute(value_l, (0, 2, 1))
-        value_l = ttnn.reshape(value_l, [bs * num_heads, embed_dims, H_int, W_int])
-        value_l = ttnn.permute(value_l, (0, 2, 3, 1))
+        # value (bs, num_value=H*W, num_heads, D) -> (bs*num_heads, H, W, D) ROW_MAJOR bf16.
+        # A single permute moving num_heads next to bs, then (in ROW_MAJOR, where the
+        # reshape is a free view) split H*W into H,W. Equivalent bit-for-bit to the old
+        # reshape/permute/reshape/permute dance but two fewer materialising ops.
+        value_l = ttnn.permute(value, (0, 2, 1, 3))  # (bs, num_heads, H*W, D)
         value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
+        value_l = ttnn.reshape(value_l, [bs * num_heads, H_int, W_int, embed_dims])
 
         # sampling_grids (bs, Q, num_heads, 1, num_points, 2) -> (N, Q*P, 1, 2)
         grid = sampling_grids[:, :, :, 0]  # (bs, Q, num_heads, num_points, 2)
