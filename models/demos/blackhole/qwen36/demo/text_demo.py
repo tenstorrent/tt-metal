@@ -263,6 +263,10 @@ def _blocks_for(seqlen, max_generated_tokens):
         # Batched decode (TP only): B users sharing one shared paged KV + batched GDN state.
         pytest.param(128, 50, True, 8, 1, id="batched_128_b8"),
         pytest.param(128, 50, True, 32, 1, id="batched_128_b32"),
+        # Batched LONG prefill (TP only): T>128 routes to prefill_chunked_peruser (per-user
+        # chunk-outer prefill into a B=1 GDN scratch, assembled into the batched decode buffers).
+        pytest.param(4096, 50, True, 8, 1, id="batched_4k_b8"),
+        pytest.param(4096, 50, True, 32, 1, id="batched_4k_b32"),
     ],
 )
 def test_demo_text(
@@ -651,18 +655,55 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     T = token_ids.shape[1]
 
     # Per-user block budget covering the prompt + everything we decode (one contiguous range/user).
-    bpu = max(4, -(-(T + max_generated_tokens) // BLOCK_SIZE))
+    # Round UP to a multiple of 8: the flexible chunked SDPA reads each user's page-table row as a
+    # ROW_MAJOR int32 stick and requires stick_size (= bpu * 4 bytes) % 32 == 0, i.e. bpu % 8 == 0
+    # (same constraint _blocks_for enforces for the single-user path). A misaligned bpu makes the
+    # long-prefill SDPA read the wrong KV — coherent for a few decode tokens, then gibberish.
+    bpu = max(8, -(-(T + max_generated_tokens) // BLOCK_SIZE))
+    bpu = ((bpu + 7) // 8) * 8
     total_blocks = B * bpu
     kv_cache_shape = [total_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
 
     # ---- per-user prefill (replicate the one loaded prompt to all B users) ----
-    t0 = time.time()
+    # Three routes by prompt length T (QWEN35_TP_PREFILL_EAGER=1 forces the eager paths for A/B):
+    #   T == 128  -> traced bucket prefill: capture ONE B=1 full-bucket(128) trace and replay it
+    #                once per user (persistent buffers + execute_trace + per-replay GDN state
+    #                stitched into row u of the [B,...] decode buffer). 32 execute_trace dispatches
+    #                vs 32 eager B=1 prefills (no per-layer host dispatch / per-op from_torch).
+    #   T  > 128  -> prefill_chunked_peruser: the proven single-user chunk-outer path run per user
+    #                into a B=1 GDN scratch, then assembled into row u. Handles ANY length with
+    #                exact valid_len masking (short prompts via masked bucket; long via chunk-outer
+    #                + masked tail), so the GDN decode state is correct — unlike single-pass
+    #                prefill_paged_peruser, which breaks beyond ~one chunk.
+    #   T  < 128  -> prefill_paged_peruser: eager single-pass per-user prefill (< one chunk, fine).
+    # The traced bucket path serves ONLY exactly-128 prompts: a short prompt padded through the GDN
+    # recurrence inside the trace would corrupt the decode state (valid_len can't be masked in a
+    # trace), so every other length takes a path that masks the GDN recurrence exactly.
+    bucket = 128
+    eager = os.environ.get("QWEN35_TP_PREFILL_EAGER") == "1"
+    use_traced_bucket = (T == bucket) and not eager
     token_list = [token_ids[:, :T] for _ in range(B)]
-    pf_logits = model.prefill_paged_peruser(token_list, page_table, valid_lens=[T] * B)
+    if use_traced_bucket:
+        # Capture is a one-time startup cost (programs + warmup + throwaway capture passes), so
+        # it is done OUTSIDE the TTFT timer — mirrors the single-user traced path
+        # (capture_prefill_trace_chunked before t0). vLLM captures once at server start; per
+        # request only the B replays run. Capture against one row (the buffer width is fixed
+        # across replays); each replay DMA's the user's page-table row in.
+        model.capture_prefill_trace_bucket(mesh, page_table[0:1].contiguous(), bucket=bucket)
+    t0 = time.time()
+    if use_traced_bucket:
+        pf_logits = model.prefill_traced_bucket_batched(token_list, page_table, valid_lens=[T] * B)
+    elif T > bucket:
+        # Long prompts: per-user chunk-outer prefill (correct for any length; eager in this stage).
+        pf_logits = model.prefill_chunked_peruser(token_list, page_table, valid_lens=[T] * B)
+    else:
+        pf_logits = model.prefill_paged_peruser(token_list, page_table, valid_lens=[T] * B)
     ttnn.synchronize_device(mesh)
     ttft = time.time() - t0
+    if use_traced_bucket:
+        model.release_prefill_trace_bucket()
 
     comp0 = ttnn.ConcatMeshToTensor(mesh, dim=0)
 
