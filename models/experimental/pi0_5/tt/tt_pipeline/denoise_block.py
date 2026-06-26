@@ -170,8 +170,10 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
 
         m_t = s // 32
         if DECODE_ALL:
-            # adaRMS emits block-sharded (fast 8-core norm, no S2I); matmul_decode reshards in0 in its reader.
-            # hidden_states (== the block's `normed`) is owned + freed by the block forward.
+            # adaRMS emits block-sharded (fast 8-core norm, no S2I); matmul_decode reshards in0 in
+            # its reader. QKV output stays WIDTH-SHARDED (no interleaved scatter) so
+            # nlp_create_qkv_heads_rope reads it directly via TensorAccessor. hidden_states
+            # (== the block's `normed`) is owned + freed by the block forward.
             qkv = ttnn.matmul_decode(
                 hidden_states,
                 self.wqkv_b,
@@ -179,7 +181,6 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
                 reshard_input=True,
                 reshard_cores=_RESHARD_CORES,
                 compute_kernel_config=_LOFI,
-                interleaved_output=True,
                 dtype=ttnn.bfloat8_b,
             )
         else:
