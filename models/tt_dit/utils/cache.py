@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -160,7 +159,7 @@ def _cache_is_complete(cache_dir: str | Path) -> bool:
 
 
 def _mark_cache_complete(cache_dir: str | Path) -> None:
-    (Path(cache_dir) / CACHE_DICT_FILE).write_text(json.dumps({"complete": True}))
+    (Path(cache_dir) / CACHE_DICT_FILE).touch()
 
 
 def _distributed_world_size() -> int:
