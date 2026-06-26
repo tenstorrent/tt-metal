@@ -674,9 +674,14 @@ def generate_text_from_checkpoint_state(
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
         if eos_token_id is not None:
             generate_kwargs["eos_token_id"] = eos_token_id
+    adapter_kwargs = dict(adapter_kwargs or {})
+    if "config" not in adapter_kwargs:
+        adapter_config = getattr(tt_model, "hf_config", None)
+        if adapter_config is not None:
+            adapter_kwargs["config"] = adapter_config
     logits_fn_builder = logits_fn_builder_factory(
         dg_state_dict,
-        **(adapter_kwargs or {}),
+        **adapter_kwargs,
     )
     return generate_text_fn(
         tt_model,

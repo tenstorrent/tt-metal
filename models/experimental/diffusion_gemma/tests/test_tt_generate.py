@@ -452,6 +452,58 @@ def test_generate_text_from_checkpoint_state_builds_logits_and_delegates():
     assert kwargs["max_new_tokens"] == 8
 
 
+def test_generate_text_from_checkpoint_state_uses_model_config_for_adapter():
+    calls = {}
+
+    class _Model:
+        hf_config = "model-config"
+
+    def fake_builder_factory(dg_state_dict, **kwargs):
+        calls["builder"] = (dg_state_dict, kwargs)
+        return "builder"
+
+    out = generate_text_from_checkpoint_state(
+        _Model(),
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        logits_fn_builder_factory=fake_builder_factory,
+        generate_text_fn=lambda *args, **kwargs: "result",
+    )
+
+    assert out == "result"
+    assert calls["builder"] == ({"raw": "state"}, {"config": "model-config"})
+
+
+def test_generate_text_from_checkpoint_state_preserves_explicit_adapter_config():
+    calls = {}
+
+    class _Model:
+        hf_config = "model-config"
+
+    def fake_builder_factory(dg_state_dict, **kwargs):
+        calls["builder"] = (dg_state_dict, kwargs)
+        return "builder"
+
+    generate_text_from_checkpoint_state(
+        _Model(),
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        adapter_kwargs={"config": "explicit-config", "dtype": "bf16"},
+        logits_fn_builder_factory=fake_builder_factory,
+        generate_text_fn=lambda *args, **kwargs: "result",
+    )
+
+    assert calls["builder"] == ({"raw": "state"}, {"config": "explicit-config", "dtype": "bf16"})
+
+
 def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tokens():
     calls = {}
 
