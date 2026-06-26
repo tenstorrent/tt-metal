@@ -9,35 +9,55 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t padded_stick_size = get_arg_val<uint32_t>(1);
-    const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(2);
-    const uint32_t stick_size_offset = get_arg_val<uint32_t>(3);
-    const uint32_t num_dims = get_arg_val<uint32_t>(4);
-    const uint32_t misalignment = get_arg_val<uint32_t>(5);
-    const uint32_t start_id = get_arg_val<uint32_t>(6);
-    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(7);
-    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(8);
-    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(9);
+    constexpr uint32_t num_dims = get_arg(args::num_dims);
 
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
+    // Common (shared) runtime args.
+    // addr_offset = begins_bytes - misalignment: a constant byte offset into the input buffer
+    // (folded into the program hash). The buffer base address is read from the auto-patched
+    // tensor binding so the read survives buffer reallocation on a program-cache hit.
+    const uint32_t addr_offset = get_arg(args::addr_offset);
+    const uint32_t padded_stick_size = get_arg(args::padded_stick_size);
+    const uint32_t unpadded_stick_size = get_arg(args::unpadded_stick_size);
+    const uint32_t stick_size_offset = get_arg(args::stick_size_offset);
+    const uint32_t misalignment = get_arg(args::misalignment);
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    // Per-core runtime args.
+    const uint32_t start_id = get_arg(args::start_id);
+    const uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    const uint32_t num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
+    const uint32_t num_read_per_barrier = get_arg(args::num_read_per_barrier);
+
+    // num_unpadded_sticks / num_padded_sticks are per-dim arrays read in the inner loop by a
+    // runtime-varying index, so they arrive as common runtime varargs: [0, num_dims) is
+    // num_unpadded_sticks and [num_dims, 2*num_dims) is num_padded_sticks.
+    uint32_t num_unpadded_sticks[num_dims];
+    uint32_t num_padded_sticks[num_dims];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        num_unpadded_sticks[j] = get_common_vararg(j);
+        num_padded_sticks[j] = get_common_vararg(num_dims + j);
+    }
+
+    // id_per_dim is a per-core array advanced in the inner loop by a runtime-varying index → runtime varargs.
+    uint32_t id_per_dim[num_dims];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        id_per_dim[j] = get_vararg(j);
+    }
+
     uint32_t read_size = unpadded_stick_size + misalignment;
 
     // padded_stick_size = per-shard page size (shard_W on B/W-sharded, full row otherwise);
     // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
-    const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
+    // Override the binding's address (aligned-down: base + addr_offset) and page size (per-shard
+    // width). The base address is the auto-patched binding address (cache-hit safe).
+    const uint32_t base_addr = get_common_arg_val<uint32_t>(decltype(tensor::in)::addr_crta_offset / sizeof(uint32_t));
+    const auto s0 = TensorAccessor(decltype(tensor::in)::args, base_addr + addr_offset, padded_stick_size);
 
-    constexpr uint32_t cb_id_in0 = 0;
-
+    // Create objects for Device 2.0 API
+    DataflowBuffer cb_in0(dfb::cb_in);
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_in0(cb_id_in0);
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;

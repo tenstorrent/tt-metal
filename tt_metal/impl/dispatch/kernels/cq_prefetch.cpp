@@ -2777,8 +2777,6 @@ void kernel_main() {
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
-    init_telemetry<tt::tt_metal::PrefetchCoreTelemetry, prefetch_telemetry_base, telemetry_enabled>();
-
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
     } else if (is_h_variant) {

@@ -54,12 +54,12 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            53_000_000,  # Recalibrated for the stacked optimizations on BH LoudBox 2x4; FABRIC_1D.
-            # Was 58_750_603. Two compounding speedups now both land here: direct-write FFN
-            # fusion (#46800, ~3.2% on its own -> 56_857_362) AND unified_routed_expert_ffn
-            # two-RISC (UP_SPLIT) read overlap (~53 ms measured for UP_SPLIT alone, bit-exact).
-            # Combined is <= the UP_SPLIT number; 53 ms is the best pre-rebase estimate and must
-            # be reconfirmed against a CI run on the 2x4-2link box (margin 0.03).
+            49_760_000,  # Re-centered 2026-06-25 for the rebase onto main, which now carries BOTH
+            # the in-place direct-write change (drop the separate output buffer + per-layer fill;
+            # measured 50.61 ms alone) AND #47536 (update_padded_kv_cache RM/fp8; measured 51.29 ms
+            # alone). The combined 2x4-2link number can't be measured on the galaxy, so the target is
+            # the midpoint of the plausible combined band [48.91, 50.61] ms; margin 0.03 ->
+            # [48.27, 51.25] ms brackets both speedups stacking and either alone. Was 53_000_000.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe",
             1,
@@ -92,9 +92,12 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
-            67_000_000,  # Recalibrated 2026-06-21 on BH LoudBox 2x4; FABRIC_2D. Was 72_463_075;
-            # unified_routed_expert_ffn two-RISC (UP_SPLIT) read overlap dropped the MoE block
-            # device time (~67 ms measured, bit-exact).
+            63_200_000,  # Re-centered 2026-06-25 for the rebase onto main, which now carries BOTH
+            # the in-place direct-write change (measured 64.30 ms alone) AND #47536
+            # (update_padded_kv_cache RM/fp8; measured 64.80 ms alone). The combined 2x4-2link number
+            # can't be measured on the galaxy, so the target is the midpoint of the plausible combined
+            # band [62.10, 64.30] ms; margin 0.03 -> [61.30, 65.10] ms brackets both speedups stacking
+            # and either alone. Was 67_000_000.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
