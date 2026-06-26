@@ -13,6 +13,7 @@ Run from the ``tt-metal`` repo root with this tree's venv (matches the local ``t
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import soundfile as sf
@@ -129,6 +130,17 @@ def main() -> int:
         )
         wave_chunks: list[torch.Tensor] = []
         torch.manual_seed(0)
+
+        # --- Performance metrics accumulators. ---
+        # Wall-clock (incl. host-driven prosody/LSTM loops + device compute) is what an end
+        # user perceives, so latency/RTF/throughput are measured against perf_counter walls.
+        sample_rate_hz = KokoroConfig.sample_rate_hz
+        total_inference_s = 0.0  # sum of per-chunk forward latencies
+        time_to_first_audio_s: float | None = None  # wall from loop start to first chunk's audio
+        total_chars = 0  # input text characters synthesized (for char/s throughput)
+        per_chunk_metrics: list[dict] = []
+        loop_t0 = time.perf_counter()
+
         for chunk_idx, result in enumerate(results):
             phonemes = result.phonemes
             if not phonemes:
@@ -138,9 +150,42 @@ def main() -> int:
             if ref_s.dim() == 1:
                 ref_s = ref_s.unsqueeze(0)
             ref_s = ref_s.float()
+
+            # ``out.audio.detach().float()`` below forces a device readback, so the forward
+            # is fully resolved by the time we stop the timer — no extra synchronize needed.
+            chunk_t0 = time.perf_counter()
             out = model(phonemes=phonemes, ref_s=ref_s, speed=args.speed, deterministic=True)
-            wave_chunks.append(out.audio.detach().float().flatten())
-            logger.info(f"Chunk {chunk_idx}: phoneme_len={len(phonemes)} samples={wave_chunks[-1].numel()} source=tt")
+            chunk_audio = out.audio.detach().float().flatten()
+            chunk_t1 = time.perf_counter()
+
+            if time_to_first_audio_s is None:
+                time_to_first_audio_s = chunk_t1 - loop_t0
+
+            chunk_infer_s = chunk_t1 - chunk_t0
+            total_inference_s += chunk_infer_s
+            # Input characters for this chunk (graphemes = original text; phonemes as fallback).
+            chunk_chars = len(getattr(result, "graphemes", None) or phonemes)
+            total_chars += chunk_chars
+
+            chunk_samples = chunk_audio.numel()
+            chunk_audio_s = chunk_samples / sample_rate_hz
+            per_chunk_metrics.append(
+                {
+                    "phonemes": len(phonemes),
+                    "chars": chunk_chars,
+                    "samples": chunk_samples,
+                    "audio_s": chunk_audio_s,
+                    "infer_s": chunk_infer_s,
+                    "rtf": (chunk_infer_s / chunk_audio_s) if chunk_audio_s > 0 else float("nan"),
+                }
+            )
+
+            wave_chunks.append(chunk_audio)
+            logger.info(
+                f"Chunk {chunk_idx}: phoneme_len={len(phonemes)} chars={chunk_chars} "
+                f"samples={chunk_samples} audio_s={chunk_audio_s:.2f} infer_s={chunk_infer_s:.3f} "
+                f"rtf={per_chunk_metrics[-1]['rtf']:.3f} source=tt"
+            )
 
         if not wave_chunks:
             logger.error("No audio produced from pipeline chunks.")
@@ -151,6 +196,21 @@ def main() -> int:
 
     sf.write(str(out_path), audio, KokoroConfig.sample_rate_hz)
     logger.info(f"Wrote {out_path.resolve()} samples={audio.shape[-1]} sr={KokoroConfig.sample_rate_hz}")
+
+    # --- Performance summary. ---
+    total_audio_s = audio.shape[-1] / KokoroConfig.sample_rate_hz
+    overall_rtf = (total_inference_s / total_audio_s) if total_audio_s > 0 else float("nan")
+    throughput_char_s = (total_chars / total_inference_s) if total_inference_s > 0 else float("nan")
+    ttfa = time_to_first_audio_s if time_to_first_audio_s is not None else float("nan")
+
+    logger.info("Kokoro-82M demo performance metrics:")
+    logger.info(f"  {'chunks':<22}: {len(per_chunk_metrics)}")
+    logger.info(f"  {'input characters':<22}: {total_chars}")
+    logger.info(f"  {'generated audio (s)':<22}: {total_audio_s:.2f}")
+    logger.info(f"  {'total latency (s)':<22}: {total_inference_s:.3f}")
+    logger.info(f"  {'time to first audio (s)':<22}: {ttfa:.3f}")
+    logger.info(f"  {'real-time factor (RTF)':<22}: {overall_rtf:.3f}  (infer_s / audio_s, <1 = faster than real time)")
+    logger.info(f"  {'throughput (char/s)':<22}: {throughput_char_s:.2f}")
     return 0
 
 
