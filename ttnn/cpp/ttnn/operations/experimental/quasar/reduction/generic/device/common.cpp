@@ -270,6 +270,17 @@ bool h_reduce_negate_fits_in_l1(
     const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using namespace tt::tt_metal;
 
+    // The quasar Metal 2.0 ReduceMultiCoreH factory does not yet implement the fused in-kernel negate
+    // path (reduce_h_neg.cpp, which uses self-loop acc/ineg CBs). Force the host to take the
+    // external-negate fallback instead — min(x) == -reduce(MAX, H, -x) computed via the regular
+    // (negate=false) reduce kernel, which IS on Metal 2.0 — so a MIN H-reduce never reaches the
+    // unported fused-negate path. Flip this to `true` (and delete the early return) once reduce_h_neg
+    // is ported to Metal 2.0.
+    constexpr bool kFusedHNegateSupportedOnMetal2 = false;
+    if (!kFusedHNegateSupportedOnMetal2) {
+        return false;
+    }
+
     const auto& shape = input_tensor.padded_shape();
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
