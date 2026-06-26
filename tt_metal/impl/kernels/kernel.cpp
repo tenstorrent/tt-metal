@@ -556,6 +556,18 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
     }
+    // Scratchpad binding handles:
+    //  - stored as a std::vector (user-specified order), matching the `scratch::` namespace
+    //    genfiles.cpp emits, so no sort step needed
+    //  - hash the size first to avoid the [a, b] vs [ab] collision (same rationale as above)
+    //  - scratchpad_spec_name is intentionally omitted: it's the address source, not part of the
+    //    generated headers (mirrors tensor_parameter_name being omitted above)
+    hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.crta_offset));
+        hasher.update(static_cast<uint64_t>(handle.size_in_bytes));
+    }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!
     // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
