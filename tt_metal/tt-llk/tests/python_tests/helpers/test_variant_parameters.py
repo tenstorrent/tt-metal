@@ -596,6 +596,21 @@ class SFPU_TILE_INDICES(RuntimeParameter):
 
 
 @dataclass
+class ZERO_POINT(RuntimeParameter):
+    """fp32 bit-pattern of the quant-family zero-point, passed to the binary SFPU
+    init at runtime. DEQUANT expects the bits of -zero_point (the init negates the
+    contract by loading these bits directly). Ignored by non-quant binary ops."""
+
+    zero_point_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t ZERO_POINT = {self.zero_point_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
 class L1_ACC(RuntimeParameter):
     l1_acc: L1Accumulation = L1Accumulation.No
 
