@@ -95,7 +95,7 @@ using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uin
 // Metal 2.0: local semaphore accessor names -> semaphore ids
 using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
 // Metal 2.0: local scratchpad accessor names -> scratchpad ids
-using ScratchpadLocalAccessorHandleMap = std::unordered_map<std::string, uint32_t>;
+using ScratchpadLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
@@ -182,7 +182,7 @@ public:
     void process_semaphore_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
     void process_scratchpad_local_accessor_handles(
-        std::function<void(const std::string& accessor_name, uint32_t scratchpad_id)>) const override;
+        std::function<void(const std::string& accessor_name, uint16_t scratchpad_id)>) const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,

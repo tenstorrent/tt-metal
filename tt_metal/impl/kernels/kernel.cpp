@@ -322,7 +322,7 @@ void Kernel::process_semaphore_local_accessor_handles(
 }
 
 void Kernel::process_scratchpad_local_accessor_handles(
-    const std::function<void(const std::string& accessor_name, uint32_t scratchpad_id)> /*callback*/) const {
+    const std::function<void(const std::string& accessor_name, uint16_t scratchpad_id)> /*callback*/) const {
     // TODO: iterate this->scratchpad_local_accessor_handles_ and invoke callback(name, id), mirroring
     // process_dataflow_buffer_local_accessor_handles. Left as a no-op until the scratch:: codegen
     // (genfiles.cpp / emulated_program_runner.cpp) is wired up to consume it.

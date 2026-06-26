@@ -10,7 +10,7 @@
 
 // TODO: Write doc
 struct ScratchpadAccessor {
-    uint32_t id;
+    uint16_t id;
     // entry size could be injected.
 };
 

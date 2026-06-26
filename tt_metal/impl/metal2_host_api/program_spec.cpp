@@ -2385,7 +2385,13 @@ tt::tt_metal::ScratchpadLocalAccessorHandleMap MakeScratchpadLocalAccessorHandle
     out.reserve(kernel_spec.scratchpad_bindings.size());
     for (const auto& scratchpad_binding : kernel_spec.scratchpad_bindings) {
         const uint32_t id = scratchpad_name_to_id.at(scratchpad_binding.scratchpad_spec_name);
-        out.emplace(scratchpad_binding.accessor_name, id);
+        TT_FATAL(
+            id <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' scratchpad '{}' id {} does not fit uint16_t",
+            kernel_spec.unique_id,
+            scratchpad_binding.scratchpad_spec_name,
+            id);
+        out.emplace(scratchpad_binding.accessor_name, static_cast<uint16_t>(id));
     }
     return out;
 }
