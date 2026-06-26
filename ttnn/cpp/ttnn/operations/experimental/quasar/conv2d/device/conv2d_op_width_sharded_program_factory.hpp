@@ -19,7 +19,7 @@ struct Conv2dWidthShardedProgramFactory {
     // allocation stays at a stable address across dispatches).  This replaces the
     // legacy WorkloadDescriptor::buffers parking.
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& tensor_return_value);
+        const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim::qsr
