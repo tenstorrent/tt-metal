@@ -452,6 +452,30 @@ def test_generate_text_from_checkpoint_state_builds_logits_and_delegates():
     assert kwargs["max_new_tokens"] == 8
 
 
+def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tokens():
+    calls = {}
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    out = generate_text_from_checkpoint_state(
+        "model",
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        max_new_tokens=9,
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["generate"]["num_blocks"] == 3
+    assert calls["generate"]["max_new_tokens"] == 9
+
+
 def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monkeypatch):
     calls = {}
     result = object()
@@ -560,6 +584,20 @@ def test_generate_text_from_checkpoint_state_requires_canvas_source():
             dg_state_dict={"raw": "state"},
             num_blocks=1,
             config=DiffusionConfig(canvas_length=4),
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_generate_text_from_checkpoint_state_requires_length_budget():
+    with pytest.raises(ValueError, match="num_blocks"):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
             logits_fn_builder_factory=lambda *args, **kwargs: "builder",
             generate_text_fn=lambda *args, **kwargs: None,
         )

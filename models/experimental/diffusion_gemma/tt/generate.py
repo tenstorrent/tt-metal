@@ -616,7 +616,7 @@ def generate_text_from_checkpoint_state(
     prompt,
     *,
     dg_state_dict,
-    num_blocks: int,
+    num_blocks: int | None = None,
     config: DiffusionConfig,
     init_canvas_fn: Callable[[int, int], object] | None = None,
     vocab_size: int | None = None,
@@ -629,6 +629,13 @@ def generate_text_from_checkpoint_state(
     **generate_kwargs,
 ) -> DeviceTextGeneration:
     """Run prompt-to-text generation using raw DiffusionGemma checkpoint state."""
+    if num_blocks is None:
+        max_new_tokens = generate_kwargs.get("max_new_tokens")
+        if max_new_tokens is None:
+            raise ValueError("num_blocks is required unless max_new_tokens is provided")
+        if max_new_tokens < 0:
+            raise ValueError("max_new_tokens must be non-negative")
+        num_blocks = (max_new_tokens + config.canvas_length - 1) // config.canvas_length
     if init_canvas_fn is None:
         if vocab_size is None or seed is None:
             raise ValueError("init_canvas_fn is required unless vocab_size and seed are provided")
