@@ -80,6 +80,12 @@ jobs:
               SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
             timeout: 10
             test-type: fast-qb2
+          - name: indexer_score multi-device tests (QB2 only)
+            # The per-device chunk_start (SP=4 and SP=2xTP=2) mesh tests; single-chip cases in the same
+            # file run in tt-metal-l2-nightly. -k selects only the multi-device functions.
+            cmd: pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k indexer_score_qb -svv
+            timeout: 10
+            test-type: fast-qb2
           # NOTE: All slow / loudbox / qb multi-card BH tests have been migrated
           # into tests/pipeline_reorg/blackhole_e2e_tests.yaml and are now run by
           # the blackhole-e2e-tests workflow. This file only carries the

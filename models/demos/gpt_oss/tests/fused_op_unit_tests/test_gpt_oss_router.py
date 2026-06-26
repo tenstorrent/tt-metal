@@ -91,8 +91,10 @@ def gpt_oss_router_reference(
     """
     with torch.no_grad():
         # Reference router returns (routing_weights, routing_indices)
-        router_scores, router_indices = reference_router(hidden_states)
-
+        # transformers 5.x GptOssTopKRouter.forward returns (router_logits, router_scores, router_indices);
+        # <5 returned (router_scores, router_indices). Unpack version-tolerantly.
+        _router_out = reference_router(hidden_states)
+        router_scores, router_indices = (_router_out[1], _router_out[2]) if len(_router_out) == 3 else _router_out
     if use_throughput_experts:
         # When using throughput experts, convert sparse router_scores to dense router_weights
         # (reorder weights to match the order of the indices)

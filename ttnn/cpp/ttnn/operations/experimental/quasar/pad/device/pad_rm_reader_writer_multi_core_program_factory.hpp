@@ -4,29 +4,22 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-
 #include "ttnn/device_operation.hpp"
-#include "ttnn/distributed/types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "pad_device_operation_types.hpp"
 
 namespace ttnn::prim::qsr {
 
+// Metal 2.0 (MetalV2FactoryConcept) factory for the resnet-shaped multi-core, ROW_MAJOR-layout pad
+// path.  The work is split across cores by split_across_cores() (currently hardcoded for resnet
+// shapes); each core streams its slice of unpadded input rows into cb_in0, filling padding from the
+// op-owned pad-value const tensor (tensor::pad), and the writer drains cb_in0 to the output.
+//
+// The op-owned pad-value const tensor is allocated once on cache miss inside create_program_artifacts
+// and parked on ProgramArtifacts::op_owned_tensors so it outlives the cached Program at a stable
+// address (see #44565).
 struct PadRmReaderWriterMultiCoreProgramFactory {
-    // Workload-scoped pad-value const tensor is allocated once on cache miss inside
-    // create_workload_descriptor() and parked on the returned WorkloadDescriptor::buffers
-    // so it outlives the cached workload via the program cache.  Holding the SOURCE
-    // Tensor (not just shared_ptr<MeshBuffer>) is required because ~Tensor force-deallocates
-    // the device memory through DeviceStorage::deallocate regardless of external
-    // shared_ptr<MeshBuffer> owners (see #44565).  emplace_runtime_args() with Buffer*
-    // lets the framework patch the const tensor's address on cache hits without rerunning
-    // this factory.
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const PadParams& operation_attributes,
-        const PadInputs& tensor_args,
-        Tensor& output,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output);
 };
 }  // namespace ttnn::prim::qsr

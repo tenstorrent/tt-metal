@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/add_int_sfpu.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "experimental/kernel_args.h"
 
 #define DEBUG_PRINT 0
 
@@ -32,29 +33,38 @@
 void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
-    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
+    constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
+    constexpr uint32_t window_size_hw = get_arg(args::window_size_hw);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(2);
+    constexpr uint32_t split_reader = get_arg(args::split_reader);
 
-    constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t in_c = get_compile_time_arg_val(4);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
-    constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
+    constexpr uint32_t max_out_sticks_per_core = get_arg(args::max_out_sticks_per_core);
+    constexpr uint32_t in_c = get_arg(args::in_c);
+    constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
+    constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
 
-    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
-    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);  // for split reader
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
+    // CB ids are Metal 2.0 DFB tokens. Keep the legacy variable names so the rest of the
+    // kernel (experimental::CB construction and LLK calls taking a uint32_t CB id) is unchanged;
+    // dfb::<name> converts implicitly to uint32_t.
+    constexpr auto in_cb_id_0 = dfb::in_cb_0;
+#ifdef SPLIT_READER
+    constexpr auto in_cb_id_1 = dfb::in_cb_1;  // for split reader
+#endif
+    constexpr auto in_scalar_cb_id_0 = dfb::in_scalar_cb_0;
+#ifdef SPLIT_READER
+    constexpr auto in_scalar_cb_id_1 = dfb::in_scalar_cb_1;
+#endif
+    constexpr auto out_cb_id = dfb::out_cb;
+    constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
+    constexpr bool is_output_tiled = get_arg(args::is_output_tiled);  // 1 = TILED, 0 = ROW_MAJOR
+    constexpr bool is_output_block_format = (bool)get_arg(args::is_output_block_format);
+#ifdef OUTPUT_TILED
+    constexpr auto pre_tilize_cb_id = dfb::pre_tilize_cb;
     // fast_tilize_cb_id is a consumer-view alias of pre_tilize_cb_id (same L1 region,
     // full-tile face_geometry = {face_r_dim=16, num_faces=4}). Used as the input operand
     // to fast_tilize so the unpacker/math read the correct face count from CB metadata.
-    constexpr uint32_t fast_tilize_cb_id = get_compile_time_arg_val(38);
+    constexpr auto fast_tilize_cb_id = dfb::fast_tilize_cb;
+#endif
 
     constexpr bool use_split_reader = split_reader;
 
@@ -79,7 +89,7 @@ void kernel_main() {
     // also force the 4-tile limit via ct_arg[16] so each chunk fits in half-sync DEST (= 4 fp32 tiles)
     // without forcing dst_full_sync_en.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr bool force_max_tiles_per_reduction_4 = get_compile_time_arg_val(16);
+    constexpr bool force_max_tiles_per_reduction_4 = get_arg(args::force_max_tiles_per_reduction_4);
     constexpr uint32_t MAX_TILES_PER_REDUCTION =
         (force_max_tiles_per_reduction_4 || (is_avg_pool && is_large_kernel)) ? 4 : 8;
     constexpr uint32_t max_tiles_per_iter =
@@ -98,15 +108,26 @@ void kernel_main() {
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
 
-    constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
+    // tilize_untilize_cb references pre_tilize_cb_id at parse time, so gate the name selection
+    // at the preprocessor (an `is_output_tiled ? ...` ternary would still name-look-up
+    // pre_tilize_cb_id on the non-tiled build, where that DFB token is not emitted).
+#ifdef OUTPUT_TILED
+    constexpr uint32_t tilize_untilize_cb = pre_tilize_cb_id;
+#else
+    constexpr uint32_t tilize_untilize_cb = out_cb_id;
+#endif
 
     experimental::CB in_scalar_cb_0(in_scalar_cb_id_0);
-    experimental::CB in_scalar_cb_1(in_scalar_cb_id_1);
     experimental::CB in_cb_0(in_cb_id_0);
+#ifdef SPLIT_READER
+    experimental::CB in_scalar_cb_1(in_scalar_cb_id_1);
     experimental::CB in_cb_1(in_cb_id_1);
+#endif
     experimental::CB out_cb(out_cb_id);
+#ifdef OUTPUT_TILED
     experimental::CB pre_tilize_cb(pre_tilize_cb_id);
     experimental::CB fast_tilize_cb(fast_tilize_cb_id);
+#endif
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb);
@@ -125,7 +146,8 @@ void kernel_main() {
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
-    uint32_t num_out_sticks_this_core = max_out_sticks_per_core ? max_out_sticks_per_core : get_arg_val<uint32_t>(0);
+    uint32_t num_out_sticks_this_core =
+        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
     uint32_t last_tile_height =
         num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
 
@@ -134,10 +156,19 @@ void kernel_main() {
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
         const bool reader0 = !(use_split_reader && (n & 0x1));
         const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
+        // The reader1 (split) DFB tokens only exist under SPLIT_READER; gate the selection at
+        // the preprocessor so the non-split build never names dfb::in_cb_1 / dfb::in_scalar_cb_1.
+#ifdef SPLIT_READER
         const uint32_t curr_scalar_cb_id = use_reader1_scalar ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
         experimental::CB curr_scalar_cb = use_reader1_scalar ? in_scalar_cb_1 : in_scalar_cb_0;
         experimental::CB curr_in_cb = reader0 ? in_cb_0 : in_cb_1;
+#else
+        const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
+        const uint32_t curr_in_cb_id = in_cb_id_0;
+        experimental::CB curr_scalar_cb = in_scalar_cb_0;
+        experimental::CB curr_in_cb = in_cb_0;
+#endif
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);
         }
@@ -180,7 +211,11 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (is_output_tiled) {
-                // TILED output: accumulate sticks and perform tilization when needed
+                // TILED output: accumulate sticks and perform tilization when needed.
+                // pre_tilize_cb_id / fast_tilize_cb_id are only emitted under OUTPUT_TILED; even
+                // though this branch is discarded by `if constexpr` on the non-tiled build, the
+                // compiler still name-looks-up those DFB tokens, so the body must be #ifdef-gated.
+#ifdef OUTPUT_TILED
                 if (last_c_block) {
                     pack_untilize_dest<partial_iter_output_tiles>(pre_tilize_cb_id, 1, 0);
                     pre_tilize_cb.push_back(partial_iter_output_tiles);
@@ -246,6 +281,7 @@ void kernel_main() {
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                         pre_tilize_cb_id)));
                 }
+#endif  // OUTPUT_TILED
             } else {
                 // ROW_MAJOR output: pack directly to output CB
                 if (last_c_block) {

@@ -37,16 +37,9 @@ struct Case {
     uint32_t slack_tiles = 0U;
 };
 
-struct Stats {
-    double avg_us = 0.0;
-    double min_us = 0.0;
-    double max_us = 0.0;
-    double p50_us = 0.0;
-};
-
 struct CaseResult {
-    Stats forward;
-    Stats forward_backward;
+    double forward_us = 0.0;
+    double forward_backward_us = 0.0;
 };
 
 // ---------------------------------------------------------------------------
@@ -94,19 +87,21 @@ ttml::autograd::TensorPtr build_grouped_tensor(
     return ttml::autograd::create_tensor(ttml::core::from_xtensor(grouped, device), /*requires_grad=*/true);
 }
 
-Stats summarize(const std::vector<double>& times_us) {
-    Stats s;
-    if (times_us.empty()) {
-        return s;
+// Time `fn`: num_warmup unmeasured iterations, then num_measure iterations bracketed by one
+// device Synchronize on each side. Returns average microseconds per iteration.
+template <typename Fn>
+double time_avg_us(uint32_t num_warmup, uint32_t num_measure, ttnn::distributed::MeshDevice* device, Fn&& fn) {
+    for (uint32_t i = 0; i < num_warmup; ++i) {
+        fn();
     }
-    s.avg_us = ttml::benchmark_utils::average(times_us);
-    s.min_us = *std::min_element(times_us.begin(), times_us.end());
-    s.max_us = *std::max_element(times_us.begin(), times_us.end());
-    std::vector<double> sorted = times_us;
-    const auto mid = sorted.begin() + sorted.size() / 2;
-    std::nth_element(sorted.begin(), mid, sorted.end());
-    s.p50_us = *mid;
-    return s;
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t0 = std::chrono::high_resolution_clock::now();
+    for (uint32_t i = 0; i < num_measure; ++i) {
+        fn();
+    }
+    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    const auto t1 = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double, std::micro>(t1 - t0).count() / static_cast<double>(num_measure);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,55 +126,44 @@ CaseResult run_case(const Case& c, uint32_t num_warmup, uint32_t num_measure) {
     const auto w_up = build_expert_weight_list(c.E, c.I, c.H, device, rng);
     const auto w_down = build_expert_weight_list(c.E, c.H, c.I, device, rng);
 
-    auto build_grouped = [&]() { return build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng); };
+    // Inputs are built once and reused across all warmup + measurement iterations.
+    // The variable_matmul kernels are read-only on the inputs, so reuse is safe.
+    const auto grouped_fwd = build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng);
+    const auto grouped_fb = build_grouped_tensor(T_cap, c.H, offsets_host, c.counts, device, rng);
 
-    // Forward-only timing pass.
-    std::vector<double> fwd_times;
-    fwd_times.reserve(num_measure);
-
-    auto run_forward = [&]() -> double {
-        const auto grouped = build_grouped();
-        const auto t0 = std::chrono::high_resolution_clock::now();
-        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-        const auto t1 = std::chrono::high_resolution_clock::now();
+    // Forward-only.
+    auto do_forward = [&]() {
+        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped_fwd, offsets_tensor, w_gate, w_up, w_down);
         ttml::autograd::ctx().reset_graph();
-        return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
 
-    for (uint32_t i = 0; i < num_warmup; ++i) {
-        (void)run_forward();
-    }
-    for (uint32_t i = 0; i < num_measure; ++i) {
-        fwd_times.push_back(run_forward());
-    }
-
-    // Forward+backward timing pass.
-    std::vector<double> fb_times;
-    fb_times.reserve(num_measure);
-
-    auto run_fwd_bwd = [&]() -> double {
-        const auto grouped = build_grouped();
-        const auto t0 = std::chrono::high_resolution_clock::now();
-        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped, offsets_tensor, w_gate, w_up, w_down);
+    // Forward+backward. Clear grads each step: reset_graph() drops graph nodes but not the
+    // persistent weight/input grads, so without this every add_grad after the first step would
+    // accumulate (an extra add, plus unbounded growth). Empty-tensor reset → next add_grad is a
+    // plain set. Host-only, so timing is unaffected.
+    auto clear_grads = [&]() {
+        grouped_fb->set_grad(ttnn::Tensor());
+        for (const auto& w : w_gate) {
+            w->set_grad(ttnn::Tensor());
+        }
+        for (const auto& w : w_up) {
+            w->set_grad(ttnn::Tensor());
+        }
+        for (const auto& w : w_down) {
+            w->set_grad(ttnn::Tensor());
+        }
+    };
+    auto do_fwd_bwd = [&]() {
+        clear_grads();
+        const auto out = ttml::ops::moe_ffn_swiglu_fw(grouped_fb, offsets_tensor, w_gate, w_up, w_down);
         out->set_grad(ttml::core::ones_like(out->get_value()));
         out->backward();
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-        const auto t1 = std::chrono::high_resolution_clock::now();
         ttml::autograd::ctx().reset_graph();
-        return std::chrono::duration<double, std::micro>(t1 - t0).count();
     };
 
-    for (uint32_t i = 0; i < num_warmup; ++i) {
-        (void)run_fwd_bwd();
-    }
-    for (uint32_t i = 0; i < num_measure; ++i) {
-        fb_times.push_back(run_fwd_bwd());
-    }
-
     CaseResult r;
-    r.forward = summarize(fwd_times);
-    r.forward_backward = summarize(fb_times);
+    r.forward_us = time_avg_us(num_warmup, num_measure, device, do_forward);
+    r.forward_backward_us = time_avg_us(num_warmup, num_measure, device, do_fwd_bwd);
     return r;
 }
 
@@ -194,11 +178,31 @@ std::vector<uint32_t> uniform_counts(uint32_t E, uint32_t tokens, uint32_t K) {
 }
 
 // Skewed dispatch: one hot expert gets `hot_frac` share of (tokens·K), rest split evenly.
-std::vector<uint32_t> skewed_counts(uint32_t E, uint32_t tokens, uint32_t K, float hot_frac) {
+[[maybe_unused]] std::vector<uint32_t> skewed_counts(uint32_t E, uint32_t tokens, uint32_t K, float hot_frac) {
     const uint32_t total_active = tokens * K;
     const uint32_t hot = static_cast<uint32_t>(static_cast<float>(total_active) * hot_frac);
     const uint32_t rest = (total_active - hot) / (E - 1U);
     std::vector<uint32_t> counts(E, rest);
+    counts[0] = hot;
+    return counts;
+}
+
+// EP-aware variants: per-expert M_e is computed using the GLOBAL expert count
+// (E_global), not the local one (E_local). Matches real EP deployments where
+// each device holds E_local = E_global / EP experts but the per-expert token
+// share is set by E_global.
+[[maybe_unused]] std::vector<uint32_t> uniform_counts_ep(
+    uint32_t E_local, uint32_t tokens, uint32_t K, uint32_t E_global) {
+    const uint32_t per_expert = (tokens * K) / E_global;
+    return std::vector<uint32_t>(E_local, per_expert);
+}
+
+[[maybe_unused]] std::vector<uint32_t> skewed_counts_ep(
+    uint32_t E_local, uint32_t tokens, uint32_t K, float hot_frac, uint32_t E_global) {
+    const uint32_t per_device_total = (tokens * K * E_local) / E_global;
+    const uint32_t hot = static_cast<uint32_t>(static_cast<float>(per_device_total) * hot_frac);
+    const uint32_t rest = (per_device_total - hot) / (E_local - 1U);
+    std::vector<uint32_t> counts(E_local, rest);
     counts[0] = hot;
     return counts;
 }
@@ -209,26 +213,18 @@ std::vector<uint32_t> skewed_counts(uint32_t E, uint32_t tokens, uint32_t K, flo
 
 void print_header() {
     fmt::print("\n");
-    fmt::print("+------------------------------------+--------+--------+--------+--------+--------+--------+\n");
-    fmt::print("| case                               | fwd    | fwd    | fwd    | fwd+bw | fwd+bw | fwd+bw |\n");
-    fmt::print("|                                    | avg µs | min µs | p50 µs | avg µs | min µs | p50 µs |\n");
-    fmt::print("+------------------------------------+--------+--------+--------+--------+--------+--------+\n");
+    fmt::print("+------------------------------------+--------+--------+\n");
+    fmt::print("| case                               | fwd    | fwd+bw |\n");
+    fmt::print("|                                    | avg µs | avg µs |\n");
+    fmt::print("+------------------------------------+--------+--------+\n");
 }
 
 void print_row(const std::string& name, const CaseResult& r) {
-    fmt::print(
-        "| {:<34} | {:>6.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f} |\n",
-        name,
-        r.forward.avg_us,
-        r.forward.min_us,
-        r.forward.p50_us,
-        r.forward_backward.avg_us,
-        r.forward_backward.min_us,
-        r.forward_backward.p50_us);
+    fmt::print("| {:<34} | {:>6.0f} | {:>6.0f} |\n", name, r.forward_us, r.forward_backward_us);
 }
 
 void print_footer() {
-    fmt::print("+------------------------------------+--------+--------+--------+--------+--------+--------+\n");
+    fmt::print("+------------------------------------+--------+--------+\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +235,7 @@ void print_footer() {
 
 int main() {
     try {
-        constexpr uint32_t num_warmup = 2U;
+        constexpr uint32_t num_warmup = 3U;
         constexpr uint32_t num_measure = 10U;
 
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
@@ -262,8 +258,32 @@ int main() {
             {"h4096_i512_e12_uniform_4ktok", 12, 4096, 512, uniform_counts(12, /*tokens=*/4096, /*K=*/8)},
             {"h4096_i512_e12_skewed40_4ktok", 12, 4096, 512, skewed_counts(12, /*tokens=*/4096, /*K=*/8, 0.4F)},
 
+            // Same shape, but realistic EP=8 from 96 global experts:
+            // per-expert M_e = (4096*8)/96 = 341 -> padded to 11 tiles (352 rows). 12 local experts.
+            // T_cap per device = 12 * 352 = 4224.
+            {"h4096_i512_e12_g96_uniform_4ktok",
+             12,
+             4096,
+             512,
+             uniform_counts_ep(/*E_local=*/12, /*tokens=*/4096, /*K=*/8, /*E_global=*/96)},
+            {"h4096_i512_e12_g96_skewed40_4ktok",
+             12,
+             4096,
+             512,
+             skewed_counts_ep(/*E_local=*/12, /*tokens=*/4096, /*K=*/8, /*hot=*/0.4F, /*E_global=*/96)},
+
             // Smaller debug shape that fits comfortably and runs fast.
             {"debug_h512_i1024_e4_uniform_512tok", 4, 512, 1024, uniform_counts(4, /*tokens=*/512, /*K=*/2)},
+
+            // tt-train tiny_deepseek_char: dim=1536, moe_inter_dim=768, E=32, top-K=4.
+            // Single sequence (T=2048) and batch=2 (T=4096) under uniform dispatch.
+            {"tiny_deepseek_h1536_i768_e32_uniform_2ktok", 32, 1536, 768, uniform_counts(32, /*tokens=*/2048, /*K=*/4)},
+            {"tiny_deepseek_h1536_i768_e32_uniform_4ktok", 32, 1536, 768, uniform_counts(32, /*tokens=*/4096, /*K=*/4)},
+            {"tiny_deepseek_h1536_i768_e32_skewed40_4ktok",
+             32,
+             1536,
+             768,
+             skewed_counts(32, /*tokens=*/4096, /*K=*/4, 0.4F)},
 
             // Trailing-pad path comparison: same shape, with vs without slack.
             // Slack mirrors moe_group's worst-case formula: per-expert (32 + 7·N) rows

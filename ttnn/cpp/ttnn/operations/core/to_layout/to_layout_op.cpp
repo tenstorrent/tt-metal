@@ -33,9 +33,11 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
         page_config = tt::tt_metal::PageConfig(layout, tensor.tensor_spec().tile());
     }
 
-    TensorSpec padded_spec(
-        tensor.padded_shape(), tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config()));
-    return tensor.padded_shape() != padded_spec.padded_shape();
+    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
+    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input.
+    const auto padded_shape = tt::tt_metal::TensorLayout(tensor.dtype(), page_config, tensor.memory_config())
+                                  .compute_padded_shape(tensor.padded_shape());
+    return tensor.padded_shape() != padded_shape;
 }
 
 bool is_allowed_row_major_dtype(ttnn::DataType tensor_dtype, std::optional<ttnn::DataType> requested_dtype) {
@@ -93,10 +95,11 @@ Tensor to_layout_impl(
     if (tensor_arg.layout() == Layout::TILE) {
         page_config = tt::tt_metal::PageConfig(Layout::TILE, tensor_arg.tensor_spec().tile());
     }
-    TensorSpec tile_spec = TensorSpec(
-        tensor_arg.logical_shape(), tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config));
-
-    auto padded_output_shape = tile_spec.padded_shape();
+    // Padded shape only (dtype-independent). Use TensorLayout, not a TensorSpec: TensorSpec rejects
+    // FP8_E4M3 + TILE (fp8 is ROW_MAJOR-only) though fp8 is a valid tilize input; the real output dtype
+    // flows through `dtype` into tilize()/untilize() below.
+    auto padded_output_shape = tt::tt_metal::TensorLayout(tensor_arg.dtype(), page_config, output_memory_config)
+                                   .compute_padded_shape(tensor_arg.logical_shape());
     auto original_rank = tensor_arg.logical_shape().rank();
     const auto& original_shape = tensor_arg.logical_shape();
 

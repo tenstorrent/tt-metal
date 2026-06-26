@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal single-device test for ttnn.experimental.deepseek_prefill.h2d_socket_sync.
+"""Minimal single-device test for ttnn.experimental.deepseek_prefill.inbound_socket_service_sync.
 
-The test runs on mesh 1x1, pushes a chunk through the service, runs the h2d_socket_sync op,
+The test runs on mesh 1x1, pushes a chunk through the service, runs the inbound_socket_service_sync op,
 and checks that:
 
   * the op's output equals the pushed bytes (direct, per-device, bit-exact),
@@ -57,7 +57,7 @@ def test_h2d_socket_sync_single_device(mesh_device):
         metadata_size_bytes=_METADATA_SIZE_BYTES,
     )
     logger.info(
-        f"[h2d_socket_sync] service built: mesh={tuple(mesh_device.shape)}, isl={_ISL}, "
+        f"[inbound_socket_service_sync] service built: mesh={tuple(mesh_device.shape)}, isl={_ISL}, "
         f"per_row_bytes={per_row_bytes}, metadata_size_bytes={_METADATA_SIZE_BYTES}, iters={_NUM_ITERS}"
     )
 
@@ -70,7 +70,7 @@ def test_h2d_socket_sync_single_device(mesh_device):
         service.forward_to_tensor_bytes(src.contiguous().numpy(), metadata=meta)
 
         pre = mesh_device.num_program_cache_entries()
-        tokens, tt_meta = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+        tokens, tt_meta = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
             service, metadata_size_bytes=_METADATA_SIZE_BYTES
         )
         op_cache_delta.append(mesh_device.num_program_cache_entries() - pre)
@@ -82,7 +82,7 @@ def test_h2d_socket_sync_single_device(mesh_device):
         assert meta_vals == [i, 0, _ISL], f"iter {i}: metadata mismatch {meta_vals}"
 
         logger.info(
-            f"[h2d_socket_sync] iter {i}: synced {per_row_bytes} B/row, tokens byte-exact, "
+            f"[inbound_socket_service_sync] iter {i}: synced {per_row_bytes} B/row, tokens byte-exact, "
             f"metadata={meta_vals}, program_cache_delta={op_cache_delta[i]}"
         )
 
@@ -90,7 +90,7 @@ def test_h2d_socket_sync_single_device(mesh_device):
     assert all(d == 0 for d in op_cache_delta[1:]), f"op recompiled instead of cache-hitting: {op_cache_delta}"
 
     logger.info(
-        f"[h2d_socket_sync] PASS: {_NUM_ITERS} iters byte-exact + metadata round-trip, "
+        f"[inbound_socket_service_sync] PASS: {_NUM_ITERS} iters byte-exact + metadata round-trip, "
         f"program-cached (deltas={op_cache_delta})"
     )
 
