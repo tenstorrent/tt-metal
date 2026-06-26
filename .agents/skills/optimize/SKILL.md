@@ -316,6 +316,14 @@ When testing fused all-gather plus output projection, repack or reshard the proj
 
 The final report for a material row-parallel output projection must list which decomposition was selected, the weight sharding/layout for each candidate, fused op rank/layout requirements, CCL transfer count, program config, row times, whole-layer latency, correctness, and exact blocker for rejected decompositions. If the fused all-gather-matmul path fails with L1 circular-buffer allocation, report the requested and available bytes plus the tensor shapes and program config that produced them; then try the smallest legal local-output candidate before treating the fused family as blocked.
 
+### OPT-009: Make repeated decode CCL buffers persistent when legal
+
+For repeated traced decode collectives, async CCL is not complete by itself. If an all-gather, reduce-scatter, all-reduce, or fused CCL+matmul row is material and runs every token or every layer, try the API's persistent or preallocated output, intermediate, and ring buffers when available. This applies to hidden all-gathers after output projections, reduce-scatters after row-parallel matmuls, LM-head or logits collectives, expert collectives, and fused CCL+matmul rows.
+
+Keep the CCL algorithm, payload dtype, collective dimension, topology, link count, worker count, buffers per channel, and memory configs fixed while testing persistence unless the API requires a coupled change. Compare the persistent-buffer candidate against the best non-persistent candidate in the same traced warmed decode window. If persistence cannot be used, report the exact API limitation, tensor shape, memory config, buffer size, trace constraint, L1/DRAM allocation failure, or correctness failure; do not leave the field implicit.
+
+The final report must list every material decode CCL row with payload dtype, input/output memory configs, CCL axis/dim, topology, `chunks_per_sync`, `num_workers_per_link`, `num_buffers_per_channel`, persistent output buffer status, persistent intermediate buffer status, row time, and kept/rejected decision. A stage with repeated decode CCL rows using default non-persistent buffers is incomplete unless a persistent/preallocated candidate was measured or a precise blocker is recorded.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
