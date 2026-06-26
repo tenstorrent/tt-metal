@@ -28,10 +28,12 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 0.0f;
-    fill_cb_with_value(cb_id_in1, scaler.u);
+    CircularBuffer cb_in1(cb_id_in1);
+    fill_cb_with_value(cb_in1, scaler.u);
 
     scaler.f = 1.0f / num_input_tiles;
-    fill_cb_with_value(cb_id_in2, scaler.u, 1);
+    CircularBuffer cb_in2(cb_id_in2);
+    fill_cb_with_value(cb_in2, scaler.u, 1);
 
     constexpr auto input_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(input_args, input_addr);
