@@ -3,6 +3,10 @@
 
 """CPU unit tests for the block-autoregressive multi-canvas loop (#47464)."""
 
+import importlib.util
+from types import SimpleNamespace
+
+import pytest
 import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
@@ -36,6 +40,109 @@ class _PrefixDependentModel:
         logits = torch.full((self.batch, self.canvas_len, self.vocab), -1e4)
         logits[..., target] = 1e4
         return logits
+
+
+class _ToyCache:
+    is_compileable = False
+    max_cache_len = 0
+
+    def get_seq_length(self):
+        return 0
+
+
+class _ToyEncoder:
+    def __init__(self):
+        self.total_encoded = 0
+
+    def create_masks_for_generate(self, **kwargs):
+        return {}
+
+    def __call__(self, input_ids, **kwargs):
+        self.total_encoded += input_ids.shape[1]
+        return SimpleNamespace(past_key_values=kwargs["past_key_values"])
+
+
+class _ToyDecoder:
+    def __init__(self):
+        self.embed_tokens = SimpleNamespace(weight=torch.empty(1, dtype=torch.float32))
+
+    def create_diffusion_decoder_attention_mask(self, **kwargs):
+        return {}
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("transformers.models.diffusion_gemma") is None,
+    reason="transformers.models.diffusion_gemma not installed (ships since transformers 5.12)",
+)
+def test_reference_generate_blocks_matches_hf_generate_outer_loop():
+    """CPU #47464 acceptance: HF generate() and our reference commit the same blocks.
+
+    The fake model keeps HF's generation mixin, sampler, denoise step, and
+    commit-append loop, but replaces the 26B backbone with peaked logits whose
+    target depends on the encoded prefix length. If HF or our reference stop
+    advancing the prefix between blocks, the second and third committed blocks
+    diverge.
+    """
+
+    from transformers.models.diffusion_gemma.generation_diffusion_gemma import (
+        DiffusionGemmaGenerationConfig,
+        DiffusionGemmaGenerationMixin,
+        EntropyBoundSamplerConfig,
+    )
+
+    class _ToyHFGenerateModel(DiffusionGemmaGenerationMixin):
+        def __init__(self, canvas_len, vocab):
+            self.dtype = torch.float32
+            self.config = SimpleNamespace(
+                canvas_length=canvas_len,
+                text_config=SimpleNamespace(vocab_size=vocab),
+                image_token_id=-1,
+            )
+            self.generation_config = DiffusionGemmaGenerationConfig(
+                max_new_tokens=canvas_len,
+                max_denoising_steps=1,
+                sampler_config=EntropyBoundSamplerConfig(entropy_bound=0.1),
+                t_min=0.4,
+                t_max=0.8,
+                stability_threshold=1,
+                confidence_threshold=0.005,
+                pad_token_id=None,
+                eos_token_id=None,
+                cache_implementation=None,
+            )
+            self.model = SimpleNamespace(encoder=_ToyEncoder(), decoder=_ToyDecoder())
+
+        def forward(self, decoder_input_ids, **kwargs):
+            batch, canvas_len = decoder_input_ids.shape
+            target = (self.model.encoder.total_encoded // canvas_len) % self.config.text_config.vocab_size
+            logits = torch.full((batch, canvas_len, self.config.text_config.vocab_size), -1e4)
+            logits[..., target] = 1e4
+            return SimpleNamespace(logits=logits)
+
+    batch, canvas_len, vocab, blocks = 1, 4, 16, 3
+    prompt = torch.zeros(batch, 2 * canvas_len, dtype=torch.long)
+
+    ref = generate_blocks(
+        _PrefixDependentModel(batch, canvas_len, vocab),
+        prompt,
+        blocks,
+        DiffusionConfig(
+            canvas_length=canvas_len,
+            max_denoise_steps=1,
+            entropy_stop_threshold=0.005,
+            stable_steps_to_halt=1,
+        ),
+        vocab,
+        generator=_gen(4),
+    )
+    hf = _ToyHFGenerateModel(canvas_len, vocab)
+    hf_out = hf.generate(prompt, past_key_values=_ToyCache(), max_new_tokens=blocks * canvas_len)
+    hf_generated = hf_out.sequences[:, prompt.shape[1] :]
+
+    assert torch.equal(hf_generated, ref.generated)
+    for b in range(blocks):
+        block_tokens = hf_generated[:, b * canvas_len : (b + 1) * canvas_len]
+        assert torch.all(block_tokens == 2 + b)
 
 
 def test_generates_num_blocks_times_canvas_tokens():
