@@ -70,6 +70,16 @@ run_perf_op_report_test() {
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
 }
 
+run_accumulate_profiler_test() {
+    remove_default_log_locations
+    echo "Sanity test: L1-accumulate device profiling runs, accumulates worker zones, and skips the perf report"
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+    # Multi-invocation workload (1000 matmuls) exercises the full accumulate path:
+    # per-RISC L1 accumulation, BRISC aggregation, near-full flush + DRAM push.
+    python -m tracy -p --enable-accumulate-profiling -m pytest tests/ttnn/tracy/test_dispatch_profiler.py::test_with_ops -k WORKER
+    python $PROFILER_TEST_SCRIPTS_ROOT/verify_accumulate_profiler.py
+}
+
 run_realtime_profiler_test() {
     remove_default_log_locations
     # Consolidated real-time profiler test suite: callback smoke test, short-zone
@@ -89,6 +99,7 @@ run_profiling_test() {
     run_device_profiler_test
     run_perf_op_report_test
     run_realtime_profiler_test
+    run_accumulate_profiler_test
 }
 
 main() {
