@@ -103,10 +103,13 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         self._fsdp_enabled = (
             bool(device_config.enable_fsdp) and self._mesh.has_axis("fsdp") and (self._mesh.axis_size("fsdp") > 1)
         )
+        self._ddp_enabled = bool(
+            device_config.enable_ddp and self._mesh.has_axis("dp") and (self._mesh.axis_size("dp") > 1)
+        )
 
         # Batch sharding: when FSDP (or DDP) is active the batch is sliced
         # across the whole mesh along dim 0, matching the GRPO trainer.
-        batch_sharded = self._fsdp_enabled or bool(device_config.enable_ddp)
+        batch_sharded = self._fsdp_enabled or self._ddp_enabled
         self._dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if batch_sharded else None
         self._dp_composer = (
             ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if batch_sharded else None
@@ -284,7 +287,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             f"[qwen3] generate B={B} prompts={len(prompts)} Np={Np} tokens_to_complete={tokens_to_complete}",
             flush=True,
         )
-        # Decode prompt[0] to confirm the chat-templated input is sane (not itself
+        # Print decode prompt[0] to confirm the chat-templated input is sane (not itself
         # garbage) -- rules the prompt in/out as a gibberish source.
         try:
             preview = self._ctx._tokenizer.decode(rows[0], skip_special_tokens=False)

@@ -312,4 +312,4 @@ if __name__ == "__main__":
         model_source=model_id,
     )
     grpo_trainer.train()
-    print("SCRIPT COMPLETE")
+    print("BOOLQ GRPO TRAINING COMPLETE")
