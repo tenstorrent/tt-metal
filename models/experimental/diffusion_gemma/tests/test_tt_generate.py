@@ -21,6 +21,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     host_gumbel_noise_to_device,
     host_tokens_to_device,
     make_host_gumbel_noise_fn,
+    make_host_noise_tokens_fn,
     make_seeded_gumbel_noise_fn,
     make_host_canvas_init_fn,
     make_seeded_host_canvas_init_fn,
@@ -1641,6 +1642,39 @@ def test_make_seeded_host_noise_tokens_fn_generates_step_noise(monkeypatch):
     assert torch.equal(calls[0][1], calls[2][1])
     assert not torch.equal(calls[0][1], calls[1][1])
     assert int(calls[0][1].min()) >= 0 and int(calls[0][1].max()) < 16
+
+
+def test_make_host_noise_tokens_fn_replays_fixed_tokens(monkeypatch):
+    calls = []
+
+    def fake_host_canvas_to_device(mesh_device, tokens):
+        calls.append((mesh_device, tokens.clone()))
+        tokens[0, 0] = 99
+        return f"device-noise-{len(calls)}"
+
+    monkeypatch.setattr(G, "host_canvas_to_device", fake_host_canvas_to_device)
+    host_tokens = [
+        [torch.tensor([[1, 2, 3]]), torch.tensor([[4, 5, 6]])],
+        [torch.tensor([[7, 8, 9]])],
+    ]
+    noise_fn = make_host_noise_tokens_fn("mesh", host_tokens)
+    host_tokens[0][0][0, 0] = 88
+
+    assert noise_fn(0)(0) == "device-noise-1"
+    assert noise_fn(0)(1) == "device-noise-2"
+    assert noise_fn(0)(0) == "device-noise-3"
+    assert noise_fn(1)(0) == "device-noise-4"
+    assert torch.equal(calls[0][1], torch.tensor([[1, 2, 3]]))
+    assert torch.equal(calls[1][1], torch.tensor([[4, 5, 6]]))
+    assert torch.equal(calls[2][1], torch.tensor([[1, 2, 3]]))
+    assert torch.equal(calls[3][1], torch.tensor([[7, 8, 9]]))
+
+
+def test_make_host_noise_tokens_fn_rejects_bad_shapes():
+    with pytest.raises(ValueError, match="host_canvases"):
+        make_host_noise_tokens_fn("mesh", [[torch.tensor([1, 2, 3])]])
+    with pytest.raises(ValueError, match="host_canvases"):
+        make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]]), torch.tensor([[4, 5]])]])
 
 
 def test_make_host_gumbel_noise_fn_replays_fixed_noise(monkeypatch):

@@ -253,6 +253,21 @@ def make_host_gumbel_noise_fn(mesh_device, host_gumbel_noise):
     return gumbel_noise_for_block
 
 
+def make_host_noise_tokens_fn(mesh_device, host_noise_tokens):
+    """Create ``generate_blocks`` renoise hooks from fixed host token tensors."""
+    blocks = [[tokens.clone() for tokens in block] for block in host_noise_tokens]
+    for block in blocks:
+        _validate_replay_canvases(block)
+
+    def noise_tokens_for_block(block_idx: int):
+        def noise_tokens_for_step(step: int):
+            return host_canvas_to_device(mesh_device, blocks[block_idx][step].clone())
+
+        return noise_tokens_for_step
+
+    return noise_tokens_for_block
+
+
 def _check_random_token_args(batch: int, canvas_len: int, vocab_size: int) -> None:
     if batch <= 0:
         raise ValueError("batch must be positive")
