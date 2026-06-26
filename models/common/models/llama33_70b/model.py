@@ -305,8 +305,8 @@ class Llama33_70BExecutorRuntimeConfig:
         # unlike the family default [128, 1024] and unlike Llama-3.1-70B's [128, 1024, 2048, ...].
         # So we trace 128-token prefill (batch-32 Short-Context workload) and leave everything else
         # eager on BOTH stacks. Decode trace remains enabled at the engine layer regardless.
-        num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
-        allowed = {8: (128,)}.get(num_devices, (128,))
+        # T3K-only (from_pretrained raises for any non-8-device mesh), so the bucket is fixed at [128].
+        allowed = (128,)
         return (
             prefill_seq_len in allowed
             and prefill_seq_len <= self.max_prefill_chunk_size

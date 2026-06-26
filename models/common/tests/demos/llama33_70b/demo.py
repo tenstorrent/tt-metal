@@ -352,7 +352,7 @@ def test_llama33_70b(test_config, mesh_device, optimizations):
         # on T3K, leaving only ~3 GB for KV + activations).
         # batch-32 uses max_seq_len=1024 to avoid DRAM OOM: 80 layers × 1 KV head/dev × 128 ×
         # 32 batch × 4096 × BFP8 ≈ 2.7 GB/device at seq 4096 would overflow alongside weights;
-        # 1024 (≈0.67 GB KV) still covers the 512-token prefill + 200 decode workload.
+        # 1024 (≈0.67 GB KV) still covers the natural-length prefill (~128 bucket) + 200 decode workload.
         if test_config == "batch-32":
             max_bs, max_seq_len = 32, 1024
             expected = EXPECTED_METRICS_BATCH32.get(device_name, {})
@@ -477,11 +477,14 @@ def _run_perf_benchmark(
         # length to get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
         input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
 
-        # On-device sampling toggle for SKU evidence-gathering (see sampling handoff docs):
+        # On-device sampling toggle for SKU evidence-gathering:
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
-        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
-        #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
-        #                      the [*,32] tuples; faster than force-argmax). On T3K (8 dev) the vocab
+        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured top-k op path with k=1.
+        #                      Sampling1D is built allow_force_argmax=False, so even greedy routes
+        #                      through ttnn.topk (k=1 top-k == argmax-via-topk), NOT the force-argmax
+        #                      full-vocab all-gather.
+        #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured top-k op path with k=32
+        #                      (gathers only the [*,32] tuples). On T3K (8 dev) the vocab
         #                      shards 8-ways so on-device top-k is the faster path vs host readback.
         sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
         _on_device_params = {
