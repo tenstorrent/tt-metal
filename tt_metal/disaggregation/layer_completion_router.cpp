@@ -109,6 +109,15 @@ void LayerCompletionRouter::run_master() {
         }
     }
 
+    // Drain completions this (master) rank produced into its own ring between the last pop
+    // and stop_ being set — mirror run_subordinate(); the master is itself a producer to this
+    // ring, so without this its own last chunk's trailing layers are silently dropped (never
+    // injected into the scheduler channel). (Subordinate-side in-flight messages still depend
+    // on coordinated cross-rank teardown — tracked separately.)
+    while (queue_->try_pop(m)) {
+        ingest(m);
+    }
+
     // Cancel still-outstanding receives so MPI can release them at teardown.
     for (auto& r : reqs) {
         if (r && r->active()) {

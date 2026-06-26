@@ -45,7 +45,11 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     resolve_weight_cache_path,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
-from models.demos.test.prefill_test import LayerCompletionConsumer
+
+# NOTE: LayerCompletionConsumer (the test-only `_prefill_test` extension) is imported lazily inside
+# _CompletionCheckConsumer.__init__ — its .so is built only under WITH_PYTHON_BINDINGS and may be
+# absent in a packaged/wheel build, so a top-level import would hard-fail the runner for everyone
+# (including single-rank runs that never enable PREFILL_CHECK_COMPLETIONS).
 
 
 def _apply_manifest_env():
@@ -300,6 +304,10 @@ class _CompletionCheckConsumer:
     """
 
     def __init__(self, ack_shm_name: str, *, num_layers: int):
+        # Imported here (not at module top) so the runner doesn't hard-fail when the test-only
+        # _prefill_test extension is absent; only PREFILL_CHECK_COMPLETIONS=1 runs reach this.
+        from models.demos.test.prefill_test import LayerCompletionConsumer
+
         self._num_layers = num_layers
         self._expected_chunks = int(
             os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS", os.environ.get("PREFILL_STANDALONE_NCHUNKS", "11"))
