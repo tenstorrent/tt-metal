@@ -30,11 +30,11 @@ from models.experimental.diffusion_gemma.tt.generate import (
     commit_canvas_tokens,
     generate_blocks,
     make_host_canvas_init_fn,
+    prefill_prompt_tokens,
 )
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
 
 pytestmark = pytest.mark.use_module_device
 
@@ -147,9 +147,11 @@ class _PositionDependentDeviceLogits:
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
-            if hasattr(self.mesh_device, "shape") and self.mesh_device.get_num_devices() > 1
-            else None,
+            mesh_mapper=(
+                ttnn.ReplicateTensorToMesh(self.mesh_device)
+                if hasattr(self.mesh_device, "shape") and self.mesh_device.get_num_devices() > 1
+                else None
+            ),
         )
         return self._last_logits
 
@@ -460,17 +462,16 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
     vocab_size = 256
     model = _build_tiny_gemma4_model(mesh_device, vocab_size=vocab_size, max_seq_len=128)
 
-    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
-    prompt_logits = model(
-        _embed_tokens(model, prompt_tokens, mesh_device),
-        is_decode=False,
-        input_ids_torch=prompt_tokens,
-        kv_phase=KVCachePhase.PREFILL_WRITE,
-    )
-    prompt_logits.deallocate(True)
-
     k_cache, v_cache = model.tt_kv_cache[0]
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    k_prompt_before = _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh)
+    v_prompt_before = _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh)
+
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
+    assert prefill_prompt_tokens(model, prompt_tokens) == prompt_len
+    _assert_regions_changed(k_prompt_before, _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh))
+    _assert_regions_changed(v_prompt_before, _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh))
+
     k_block0_before = _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
     v_block0_before = _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
     k_block1_before = _cache_region(k_cache, prompt_len + canvas_len, prompt_len + 2 * canvas_len, is_mesh=is_mesh)

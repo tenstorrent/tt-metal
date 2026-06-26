@@ -12,7 +12,9 @@ from models.experimental.diffusion_gemma.tt.generate import (
     denoise_and_commit_block,
     generate_blocks,
     host_canvas_to_device,
+    host_tokens_to_device,
     make_host_canvas_init_fn,
+    prefill_prompt_tokens,
 )
 
 
@@ -160,6 +162,94 @@ def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
     assert kwargs["layout"] == "tile"
     assert kwargs["dtype"] == "uint32"
     assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
+
+
+def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
+    calls = {}
+
+    class _FakeTtnn:
+        ROW_MAJOR_LAYOUT = "row-major"
+        uint32 = "uint32"
+
+        @staticmethod
+        def ReplicateTensorToMesh(mesh_device):
+            return ("replicate", mesh_device)
+
+        @staticmethod
+        def from_torch(value, **kwargs):
+            calls["from_torch"] = (value.clone(), kwargs)
+            return "device-tokens"
+
+    monkeypatch.setattr(G, "ttnn", _FakeTtnn)
+    tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+
+    out = host_tokens_to_device(_FakeMesh(), tokens)
+
+    value, kwargs = calls["from_torch"]
+    assert out == "device-tokens"
+    assert torch.equal(value, torch.tensor([[1, 2, 3]], dtype=torch.int32))
+    assert kwargs["layout"] == "row-major"
+    assert kwargs["dtype"] == "uint32"
+    assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
+
+
+def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
+    calls = {}
+
+    class _FakeDeviceTensor:
+        def __init__(self, name):
+            self.name = name
+            self.deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        ROW_MAJOR_LAYOUT = "row-major"
+        TILE_LAYOUT = "tile"
+        uint32 = "uint32"
+
+        @staticmethod
+        def from_torch(value, **kwargs):
+            calls["from_torch"] = (value.clone(), kwargs)
+            return _FakeDeviceTensor("tokens")
+
+        @staticmethod
+        def reshape(value, shape):
+            calls["reshape"] = (value, shape)
+            return _FakeDeviceTensor("reshaped-embeds")
+
+        @staticmethod
+        def to_layout(value, layout):
+            calls["to_layout"] = (value, layout)
+            return _FakeDeviceTensor("tile-embeds")
+
+    class _FakeModel:
+        mesh_device = object()
+        hidden_size = 16
+
+        def embed_tokens(self, tt_tokens):
+            calls["embed_tokens"] = tt_tokens
+            return _FakeDeviceTensor("embeds")
+
+        def __call__(self, hidden_states, **kwargs):
+            calls["model"] = (hidden_states, kwargs)
+            return _FakeDeviceTensor("logits")
+
+    monkeypatch.setattr(G, "ttnn", _FakeTtnn)
+    prompt_tokens = torch.tensor([[4, 5, 6]], dtype=torch.long)
+
+    out = prefill_prompt_tokens(_FakeModel(), prompt_tokens, page_tables_per_layer=["pages"])
+
+    assert out == 3
+    assert calls["embed_tokens"].deallocated is True
+    assert calls["reshape"][1] == (1, 1, 3, 16)
+    hidden_states, kwargs = calls["model"]
+    assert hidden_states.name == "tile-embeds"
+    assert kwargs["is_decode"] is False
+    assert kwargs["input_ids_torch"] is prompt_tokens
+    assert kwargs["kv_phase"] is G.KVCachePhase.PREFILL_WRITE
+    assert kwargs["page_tables_per_layer"] == ["pages"]
 
 
 def test_make_host_canvas_init_fn_replays_fixed_canvases(monkeypatch):

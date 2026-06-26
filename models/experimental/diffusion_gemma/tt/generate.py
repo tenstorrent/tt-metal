@@ -60,6 +60,47 @@ def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
     )
 
 
+def host_tokens_to_device(mesh_device, tokens: torch.Tensor):
+    """Move host token ids ``[batch, seq_len]`` to Gemma4 token layout."""
+    if tokens.dim() != 2:
+        raise ValueError("tokens must have shape [batch, seq_len]")
+    return ttnn.from_torch(
+        tokens.to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=_replicate_mapper(mesh_device),
+    )
+
+
+def embed_host_tokens(tt_model, tokens: torch.Tensor):
+    """Embed host token ids as ``[1, 1, seq_len, hidden]`` TILE states."""
+    tt_tokens = host_tokens_to_device(tt_model.mesh_device, tokens)
+    embeds = tt_model.embed_tokens(tt_tokens)
+    tt_tokens.deallocate(True)
+    embeds = ttnn.reshape(embeds, (1, 1, tokens.shape[1], tt_model.hidden_size))
+    return ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
+
+
+def prefill_prompt_tokens(tt_model, prompt_tokens: torch.Tensor, *, page_table=None, page_tables_per_layer=None) -> int:
+    """Write prompt token K/V into the frozen cache and return prompt length."""
+    if prompt_tokens.dim() != 2:
+        raise ValueError("prompt_tokens must have shape [batch, seq_len]")
+    if prompt_tokens.shape[0] != 1:
+        raise NotImplementedError("prefill_prompt_tokens currently supports batch=1")
+    prompt_embeds = embed_host_tokens(tt_model, prompt_tokens)
+    logits = tt_model(
+        prompt_embeds,
+        is_decode=False,
+        input_ids_torch=prompt_tokens,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    logits.deallocate(True)
+    return prompt_tokens.shape[1]
+
+
 def make_host_canvas_init_fn(mesh_device, host_canvases):
     """Create a ``generate_blocks`` init hook from fixed host canvas tensors."""
     canvases = list(host_canvases)
