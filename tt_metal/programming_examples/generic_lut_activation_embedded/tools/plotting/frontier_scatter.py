@@ -194,6 +194,30 @@ def shade_ttnn_win_region(ax, tus, tulp):
     return True
 
 
+def legend_outside_two_rows(ax, handles=None, labels=None):
+    if handles is None or labels is None:
+        handles, labels = ax.get_legend_handles_labels()
+    seen = {}
+    for handle, label in zip(handles, labels):
+        if label and label not in seen:
+            seen[label] = handle
+    if not seen:
+        return
+    ncols = max(1, (len(seen) + 1) // 2)
+    ax.legend(
+        seen.values(),
+        seen.keys(),
+        ncols=ncols,
+        mode="expand",
+        frameon=False,
+        handletextpad=0.4,
+        columnspacing=1.0,
+        loc="lower left",
+        bbox_to_anchor=(0.0, 1.02, 1.0, 0.22),
+        borderaxespad=0.0,
+    )
+
+
 def load_tier_csvs(specs):
     tiers = []
     for spec in specs or []:
@@ -476,15 +500,7 @@ def main():
         ymin, ymax = ax.get_ylim()
         if ymax > 0:
             ax.set_ylim(0, ymax * 1.08)
-        ax.legend(
-            ncols=4,
-            frameon=False,
-            handletextpad=0.4,
-            columnspacing=1.2,
-            loc="lower center",
-            bbox_to_anchor=(0.5, 1.02),
-            borderaxespad=0.0,
-        )
+        legend_outside_two_rows(ax)
         ax.grid(True, color="#CCCCCC", alpha=0.12, linewidth=0.5)
         fig.tight_layout()
         plot_dir = args.outdir
@@ -552,19 +568,7 @@ def write_tier_plots(outdir, tiers, ttnn, plt):
         if ymax > 0:
             ax.set_ylim(0, ymax * 1.08)
         ax.grid(True, color="#CCCCCC", alpha=0.12, linewidth=0.5)
-        handles, labels = ax.get_legend_handles_labels()
-        dedup = dict(zip(labels, handles))
-        ax.legend(
-            dedup.values(),
-            dedup.keys(),
-            ncols=min(4, len(dedup)),
-            frameon=False,
-            handletextpad=0.4,
-            columnspacing=1.2,
-            loc="lower center",
-            bbox_to_anchor=(0.5, 1.02),
-            borderaxespad=0.0,
-        )
+        legend_outside_two_rows(ax)
         fig.tight_layout()
         fig.savefig(os.path.join(tier_dir, f"{slug(act)}.png"), dpi=300, bbox_inches="tight", facecolor="white")
         plt.close(fig)
