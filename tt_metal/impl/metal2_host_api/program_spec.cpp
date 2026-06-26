@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
+#include "experimental/metal2_host_api/scratchpad_spec.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -60,10 +61,16 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, const CrossNodeDataflowBufferSpec*> cross_node_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
     std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
+
+    // The single kernel that binds each scratchpad. A scratchpad is private to one
+    // kernel (bound at most once across the whole ProgramSpec), so this is an owner,
+    // not a list of users.
+    std::unordered_map<ScratchpadSpecName, const KernelSpec*> scratchpad_owner;
 
     // DFB endpoint info (derived from kernel bindings).
     // Populated for both local and cross-node DFBs.
@@ -90,8 +97,10 @@ struct CollectedSpecData {
     // Derived node sets:
     //  - kernel_node_set: union of containing WorkUnitSpec target_nodes
     //  - dfb_node_set: union of binding-kernels' node sets (local DFBs only).
+    //  - scratchpad_node_set: the owning kernel's node set.
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
+    std::unordered_map<ScratchpadSpecName, NodeRangeSet> scratchpad_node_set;
 };
 
 // Bitmask for tracking processor allocation on a node
@@ -523,6 +532,57 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             tensor_parameter.unique_id);
     }
 
+    // Collect ScratchpadSpecs
+    for (const auto& scratchpad : spec.scratchpads) {
+        auto [it, inserted] = collected.scratchpad_by_name.try_emplace(scratchpad.unique_id, &scratchpad);
+        TT_FATAL(inserted, "Duplicate ScratchpadSpec name '{}'", scratchpad.unique_id);
+    }
+
+    // Validate kernel scratchpad bindings and record the owning kernel.
+    // A scratchpad is private to a single kernel: it may be bound at most once across the whole
+    // ProgramSpec (single-owner rule below). This also catches a kernel binding the same scratchpad
+    // twice — the second binding sees the owner already set.
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.scratchpad_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate scratchpad accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
+                "Kernel '{}' references unknown scratchpad '{}'",
+                kernel.unique_id,
+                binding.scratchpad_spec_name);
+
+            auto [owner_it, owner_inserted] =
+                collected.scratchpad_owner.try_emplace(binding.scratchpad_spec_name, &kernel);
+            TT_FATAL(
+                owner_inserted,
+                "Scratchpad '{}' is bound by more than one kernel ('{}' and '{}'). A scratchpad is "
+                "private to a single kernel.",
+                binding.scratchpad_spec_name,
+                owner_it->second->unique_id,
+                kernel.unique_id);
+        }
+    }
+
+    // Referential integrity: every declared scratchpad must be bound by some kernel.
+    // (Same usage requirement as DFBs and TensorParameters; an unbound scratchpad is a user error.)
+    for (const auto& scratchpad : spec.scratchpads) {
+        TT_FATAL(
+            collected.scratchpad_owner.contains(scratchpad.unique_id),
+            "ScratchpadSpec '{}' is defined but not bound by any kernel",
+            scratchpad.unique_id);
+    }
+
     // Build WorkUnitSpec membership for each kernel, validating references along the way.
     // (WorkUnitSpec.name is debug-only; no uniqueness invariant.)
     // A kernel may belong to multiple WorkUnitSpecs; its effective target node set is the union.
@@ -569,6 +629,13 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             node_set = node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
         }
         collected.dfb_node_set[dfb.unique_id] = node_set;
+    }
+
+    // Derive each scratchpad's allocation node set. A scratchpad is private to a single kernel, so
+    // its node set is simply that owning kernel's node set.
+    for (const auto& scratchpad : spec.scratchpads) {
+        const KernelSpec* owner = collected.scratchpad_owner.at(scratchpad.unique_id);
+        collected.scratchpad_node_set[scratchpad.unique_id] = collected.kernel_node_set.at(owner->unique_id);
     }
 
     return collected;

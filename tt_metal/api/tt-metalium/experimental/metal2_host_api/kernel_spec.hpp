@@ -158,8 +158,9 @@ struct KernelSpec {
     // The kernel constructs the accessor via Scratchpad(scratch::<accessor_name>)
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
-        std::string accessor_name;                // sratchpad accessor name (used in the kernel source code)
+        std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
     };
+    Group<ScratchpadBinding> scratchpad_bindings;
 
     // Additional resource binding types:
     //  - Scratchpad bindings (Program-local memory resource)
