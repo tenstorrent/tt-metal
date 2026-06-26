@@ -142,3 +142,9 @@
 {"source":"run_safe_pytest","pid":1021102,"started_at_ms":1782437670932,"wait_ms":3,"run_ms":24239,"test_path":"/tmp/test_v2_more.py","exit_code":1}
 {"source":"tt-probe","pid":1022183,"started_at_ms":1782437703316,"wait_ms":179,"run_ms":17931,"test_path":"softmax","exit_code":0}
 {"source":"tt-probe","pid":1022733,"started_at_ms":1782437780178,"wait_ms":178,"run_ms":20726,"test_path":"softmax","exit_code":0}
+{"source":"run_safe_pytest","pid":1024231,"started_at_ms":1782437824487,"wait_ms":2,"run_ms":111846,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":2}
+{"source":"tt-probe","pid":1029872,"started_at_ms":1782438205414,"wait_ms":177,"run_ms":17952,"test_path":"softmax","exit_code":1}
+{"source":"tt-probe","pid":1030523,"started_at_ms":1782438285758,"wait_ms":177,"run_ms":37084,"test_path":"softmax","exit_code":2}
+{"source":"tt-probe","pid":1031230,"started_at_ms":1782438360083,"wait_ms":181,"run_ms":36269,"test_path":"softmax","exit_code":2}
+{"source":"tt-probe","pid":1031654,"started_at_ms":1782438421208,"wait_ms":179,"run_ms":40710,"test_path":"softmax","exit_code":2}
+{"source":"tt-probe","pid":1032446,"started_at_ms":1782438487277,"wait_ms":179,"run_ms":19024,"test_path":"softmax","exit_code":0}

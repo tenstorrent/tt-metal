@@ -40,8 +40,9 @@ void kernel_main() {
     constexpr uint32_t origin_W = get_compile_time_arg_val(4);
     constexpr uint32_t origin_H = get_compile_time_arg_val(5);
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(6);
+    constexpr uint32_t chunk_along_reduce = get_compile_time_arg_val(7);
 
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr auto src_args = TensorAccessorArgs<8>();
     const auto src_accessor = TensorAccessor(src_args, input_buffer_address);
 
     // Prepare scaler tiles once at kernel start.
@@ -88,7 +89,11 @@ void kernel_main() {
     }
 
     constexpr uint32_t reduce_dim_tiles = (dim == -1) ? Wt : Ht;
-    constexpr uint32_t num_chunks = reduce_dim_tiles / BLOCK_SIZE;
+    constexpr uint32_t non_reduce_dim = (dim == -1) ? Ht : Wt;
+    constexpr uint32_t num_chunks =
+        chunk_along_reduce ? (reduce_dim_tiles / BLOCK_SIZE) : (non_reduce_dim / BLOCK_SIZE);
+    constexpr uint32_t num_passes = chunk_along_reduce ? 3 : 1;
+    constexpr uint32_t tiles_per_chunk = chunk_along_reduce ? BLOCK_SIZE : (BLOCK_SIZE * reduce_dim_tiles);
 
     CircularBuffer input_cb(cb_input_tiles);
     Noc noc;
@@ -99,36 +104,75 @@ void kernel_main() {
         uint32_t slab_start_tile = start_id;
 
         for (uint32_t slab = 0; slab < num_slabs; ++slab) {
-            if constexpr (dim == -1) {
-                // For each tile-row (ht), 3 passes of num_chunks chunks
-                // Tiles in a slab are row-major: tile(ht, wt) = slab_start + ht*Wt + wt
-                for (uint32_t ht = 0; ht < Ht; ++ht) {
-                    uint32_t row_base = slab_start_tile + ht * Wt;
-                    for (uint32_t pass = 0; pass < 3; ++pass) {
-                        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-                            uint32_t chunk_base = row_base + chunk * BLOCK_SIZE;
-                            for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
+            if constexpr (chunk_along_reduce) {
+                // 3-pass approach: chunk along reduce dim
+                if constexpr (dim == -1) {
+                    for (uint32_t ht = 0; ht < Ht; ++ht) {
+                        uint32_t row_base = slab_start_tile + ht * Wt;
+                        for (uint32_t pass = 0; pass < num_passes; ++pass) {
+                            for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                                uint32_t chunk_base = row_base + chunk * BLOCK_SIZE;
+                                for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
+                                    input_cb.reserve_back(1);
+                                    noc.async_read(
+                                        src_accessor,
+                                        input_cb,
+                                        tile_bytes,
+                                        {.page_id = chunk_base + i},
+                                        {.offset_bytes = 0});
+                                    noc.async_read_barrier();
+                                    input_cb.push_back(1);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for (uint32_t wt = 0; wt < Wt; ++wt) {
+                        for (uint32_t pass = 0; pass < num_passes; ++pass) {
+                            for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                                for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
+                                    uint32_t ht = chunk * BLOCK_SIZE + i;
+                                    uint32_t tile_id = slab_start_tile + ht * Wt + wt;
+                                    input_cb.reserve_back(1);
+                                    noc.async_read(
+                                        src_accessor, input_cb, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+                                    noc.async_read_barrier();
+                                    input_cb.push_back(1);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // chunk_along_non_reduce: 1 pass, chunks along non-reduce dim
+                // Each chunk reads BLOCK_SIZE non-reduce-dim elements × full reduce dim
+                if constexpr (dim == -1) {
+                    // non-reduce = Ht, reduce = Wt
+                    // Each chunk: BLOCK_SIZE rows, each with Wt tiles
+                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                        for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
+                            uint32_t ht = chunk * BLOCK_SIZE + i;
+                            uint32_t row_base = slab_start_tile + ht * Wt;
+                            for (uint32_t wt = 0; wt < Wt; ++wt) {
                                 input_cb.reserve_back(1);
                                 noc.async_read(
                                     src_accessor,
                                     input_cb,
                                     tile_bytes,
-                                    {.page_id = chunk_base + i},
+                                    {.page_id = row_base + wt},
                                     {.offset_bytes = 0});
                                 noc.async_read_barrier();
                                 input_cb.push_back(1);
                             }
                         }
                     }
-                }
-            } else {
-                // dim=-2: for each tile-column (wt), 3 passes of num_chunks chunks
-                // tile(ht, wt) = slab_start + ht*Wt + wt
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    for (uint32_t pass = 0; pass < 3; ++pass) {
-                        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-                            for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
-                                uint32_t ht = chunk * BLOCK_SIZE + i;
+                } else {
+                    // non-reduce = Wt, reduce = Ht
+                    // Each chunk: BLOCK_SIZE columns, each with Ht tiles
+                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                        for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
+                            uint32_t wt = chunk * BLOCK_SIZE + i;
+                            for (uint32_t ht = 0; ht < Ht; ++ht) {
                                 uint32_t tile_id = slab_start_tile + ht * Wt + wt;
                                 input_cb.reserve_back(1);
                                 noc.async_read(

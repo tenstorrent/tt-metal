@@ -40,7 +40,9 @@ constexpr uint32_t cb_scaler_sum = 2;
 constexpr uint32_t cb_rm_in = 3;
 constexpr uint32_t cb_output_tiles = 16;
 constexpr uint32_t cb_rm_out = 17;
+constexpr uint32_t cb_max = 24;  // V2b (non-reduce chunking): per-chunk max
 constexpr uint32_t cb_exp = 25;
+constexpr uint32_t cb_recip_sum_v1 = 26;  // V2b: per-chunk recip_sum
 // V2 persistent stats (1 tile each, persist across chunks within a tile-row/col)
 constexpr uint32_t cb_running_max = 27;
 constexpr uint32_t cb_running_sum = 28;
@@ -60,6 +62,8 @@ void kernel_main() {
     constexpr uint32_t origin_W = get_compile_time_arg_val(4);
     constexpr uint32_t origin_H = get_compile_time_arg_val(5);
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(6);
+    constexpr bool chunk_along_reduce = get_compile_time_arg_val(7);
+    constexpr bool chunk_along_non_reduce = !chunk_along_reduce;
 
     // Partial scaler: needed when the REDUCTION axis is non-tile-aligned.
     constexpr uint32_t partial_W = origin_W % 32;
@@ -71,7 +75,19 @@ void kernel_main() {
     uint32_t num_slabs = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t reduce_dim_tiles = (dim == -1) ? Wt : Ht;
-    constexpr uint32_t num_chunks = reduce_dim_tiles / BLOCK_SIZE;
+    constexpr uint32_t non_reduce_dim = (dim == -1) ? Ht : Wt;
+    // For chunk_along_reduce: chunk the reduce dim (3-pass)
+    // For chunk_along_non_reduce: chunk the non-reduce dim (1-pass V1-style per chunk)
+    constexpr uint32_t chunked_dim = chunk_along_reduce ? reduce_dim_tiles : non_reduce_dim;
+    constexpr uint32_t num_chunks = chunked_dim / BLOCK_SIZE;
+    // Per-chunk tile grid: (chunk_h, chunk_w)
+    // chunk_along_reduce: (non_reduce_dim, BLOCK_SIZE) for dim=-1, (BLOCK_SIZE, non_reduce_dim) for dim=-2
+    // chunk_along_non_reduce: (BLOCK_SIZE, reduce_dim_tiles) for dim=-1, (reduce_dim_tiles, BLOCK_SIZE) for dim=-2
+    constexpr uint32_t chunk_h =
+        chunk_along_reduce ? ((dim == -1) ? 1 : BLOCK_SIZE) : ((dim == -1) ? BLOCK_SIZE : reduce_dim_tiles);
+    constexpr uint32_t chunk_w =
+        chunk_along_reduce ? ((dim == -1) ? BLOCK_SIZE : 1) : ((dim == -1) ? reduce_dim_tiles : BLOCK_SIZE);
+    constexpr uint32_t tiles_per_chunk = chunk_h * chunk_w;
 
     if constexpr (is_rm) {
         compute_kernel_hw_startup(cb_rm_in, cb_input_tiles);
@@ -80,8 +96,182 @@ void kernel_main() {
     }
 
     for (uint32_t slab = 0; slab < num_slabs; ++slab) {
-        if constexpr (dim == -1) {
-            // ===== dim=-1 (W reduction): process one tile-row at a time =====
+        if constexpr (chunk_along_non_reduce) {
+            // ===== chunk_along_non_reduce: V1-style 4-phase per chunk =====
+            // Each chunk processes chunk_h × chunk_w tiles (BLOCK_SIZE along
+            // the non-reduce dim × full reduce dim).
+            // cb_max (24) and cb_recip_sum (26) are sized to BLOCK_SIZE tiles.
+            constexpr auto chunk_reduce_shape = (dim == -1) ? ckl::ReduceInputBlockShape::of(chunk_h, chunk_w, 1)
+                                                            : ckl::ReduceInputBlockShape::of(chunk_h, chunk_w, 1);
+            constexpr auto chunk_eltwise_shape = ckl::EltwiseShape::grid(chunk_h, chunk_w);
+
+            for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                // RM path: tilize this chunk
+                if constexpr (is_rm) {
+                    ckl::tilize<
+                        chunk_w,
+                        cb_rm_in,
+                        cb_input_tiles,
+                        ckl::tilize_config::InitUninitMode::InitAndUninit,
+                        ckl::tilize_config::WaitMode::WaitBlock,
+                        ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(chunk_h);
+                }
+
+                // Phase 1: max reduce (WaitUpfrontNoPop — input retained for Phase 2)
+                if constexpr (dim == -1) {
+                    ckl::reduce<
+                        ckernel::PoolType::MAX,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_input_tiles,
+                        cb_scaler_max,
+                        cb_max,
+                        ckl::ReduceInputPolicy::WaitUpfrontNoPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::NoAccumulation,
+                        ckl::NoOp>(
+                        chunk_reduce_shape,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::NoAccumulation{},
+                        ckl::NoOp{},
+                        partial_scaler);
+                } else {
+                    ckl::reduce<
+                        ckernel::PoolType::MAX,
+                        ckernel::ReduceDim::REDUCE_COL,
+                        cb_input_tiles,
+                        cb_scaler_max,
+                        cb_max,
+                        ckl::ReduceInputPolicy::WaitUpfrontNoPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::NoAccumulation,
+                        ckl::NoOp>(
+                        chunk_reduce_shape,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::NoAccumulation{},
+                        ckl::NoOp{},
+                        partial_scaler);
+                }
+
+                // Phase 2: sub + exp (fused chain)
+                if constexpr (dim == -1) {
+                    ckl::eltwise_chain(
+                        chunk_eltwise_shape,
+                        ckl::BinaryFpu<
+                            cb_input_tiles,
+                            cb_max,
+                            ckl::BinaryFpuOp::Sub,
+                            ckl::BroadcastDim::Col,
+                            ckl::InputLifecycle::Bulk,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Block,
+                            ckl::OperandKind::Col>{},
+                        ckl::Exp<>{},
+                        ckl::PackTile<cb_exp, ckl::OutputLifecycle::Streaming>{});
+                    cb_pop_front(cb_max, chunk_h);
+                } else {
+                    ckl::eltwise_chain(
+                        chunk_eltwise_shape,
+                        ckl::BinaryFpu<
+                            cb_input_tiles,
+                            cb_max,
+                            ckl::BinaryFpuOp::Sub,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Bulk,
+                            ckl::InputLifecycle::HeldBulk,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Block,
+                            ckl::OperandKind::Row>{},
+                        ckl::Exp<>{},
+                        ckl::PackTile<cb_exp, ckl::OutputLifecycle::Streaming>{});
+                    cb_pop_front(cb_max, chunk_w);
+                }
+
+                // Phase 3: sum + recip
+                auto recip_op = [](uint32_t dst_idx) {
+                    recip_tile_init();
+                    recip_tile(dst_idx);
+                };
+                if constexpr (dim == -1) {
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_exp,
+                        cb_scaler_sum,
+                        cb_recip_sum_v1,
+                        ckl::ReduceInputPolicy::WaitUpfrontNoPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::NoAccumulation,
+                        decltype(recip_op)>(
+                        chunk_reduce_shape,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::NoAccumulation{},
+                        recip_op,
+                        partial_scaler);
+                } else {
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_COL,
+                        cb_exp,
+                        cb_scaler_sum,
+                        cb_recip_sum_v1,
+                        ckl::ReduceInputPolicy::WaitUpfrontNoPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ckl::NoAccumulation,
+                        decltype(recip_op)>(
+                        chunk_reduce_shape,
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::NoAccumulation{},
+                        recip_op,
+                        partial_scaler);
+                }
+
+                // Phase 4: mul (broadcast recip_sum)
+                if constexpr (dim == -1) {
+                    ckl::mul<
+                        cb_exp,
+                        cb_recip_sum_v1,
+                        cb_output_tiles,
+                        ckl::BroadcastDim::Col,
+                        ckl::InputLifecycle::Bulk,
+                        ckl::InputLifecycle::HeldBulk,
+                        ckl::OutputLifecycle::Streaming,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Col>(chunk_eltwise_shape);
+                    cb_pop_front(cb_recip_sum_v1, chunk_h);
+                } else {
+                    ckl::mul<
+                        cb_exp,
+                        cb_recip_sum_v1,
+                        cb_output_tiles,
+                        ckl::BroadcastDim::Row,
+                        ckl::InputLifecycle::Bulk,
+                        ckl::InputLifecycle::HeldBulk,
+                        ckl::OutputLifecycle::Streaming,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Row>(chunk_eltwise_shape);
+                    cb_pop_front(cb_recip_sum_v1, chunk_w);
+                }
+
+                // RM path: untilize this chunk
+                if constexpr (is_rm) {
+                    ckl::untilize<
+                        chunk_w,
+                        cb_output_tiles,
+                        cb_rm_out,
+                        ckl::untilize_config::InitUninitMode::InitAndUninit,
+                        ckl::untilize_config::WaitMode::WaitBlock,
+                        ckl::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(chunk_h);
+                }
+            }
+        } else if constexpr (dim == -1) {
+            // ===== chunk_along_reduce, dim=-1 (W reduction): one tile-row at a time =====
             constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::row(BLOCK_SIZE);
             constexpr auto eltwise_shape = ckl::EltwiseShape::grid(1, BLOCK_SIZE);
 
@@ -268,8 +458,8 @@ void kernel_main() {
                 cb_pop_front(cb_recip_sum, 1);
                 // cb_running_sum was already popped by unary<Recip> (Streaming lifecycle)
             }
-        } else {
-            // ===== dim=-2 (H reduction): process one tile-column at a time =====
+        } else if constexpr (dim == -2) {
+            // ===== chunk_along_reduce, dim=-2 (H reduction): one tile-column at a time =====
             constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::col(BLOCK_SIZE);
             constexpr auto eltwise_shape = ckl::EltwiseShape::grid(BLOCK_SIZE, 1);
 

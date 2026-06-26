@@ -89,7 +89,8 @@ def create_program_descriptor(
     ) = ttnn.split_work_to_cores(ttnn.CoreCoord(num_cores_x, num_cores_y), NC)
 
     # ========== 2.5 V1 vs V2 DISPATCH ==========
-    reduce_dim_tiles = Ht if dim == -1 else Wt  # Ht for REDUCE_ROW, Wt for REDUCE_COL
+    reduce_dim_tiles = Wt if dim == -1 else Ht  # Wt for REDUCE_ROW, Ht for REDUCE_COL
+    non_reduce_dim = Ht if dim == -1 else Wt
     tiles_per_slab = Ht * Wt
 
     # Compute V1 per-core CB footprint (sum of all CB sizes)
@@ -109,7 +110,16 @@ def create_program_descriptor(
         v1_cb_footprint += tiles_per_slab * output_tile_size
 
     use_v2 = v1_cb_footprint > V1_CB_BUDGET
-    block_size = V2_BLOCK_SIZE if use_v2 else 0  # 0 = unused for V1
+
+    # V2 has two sub-modes:
+    #  - chunk_along_reduce: 3-pass approach, chunks the reduce dim.
+    #    Requires reduce_dim_tiles >= BLOCK_SIZE and divisible.
+    #  - chunk_along_non_reduce: V1-style 4-phase per chunk, chunks the
+    #    non-reduce dim. Used when reduce dim is too small to chunk.
+    chunk_along_reduce = use_v2 and reduce_dim_tiles >= V2_BLOCK_SIZE and reduce_dim_tiles % V2_BLOCK_SIZE == 0
+    chunk_along_non_reduce = use_v2 and not chunk_along_reduce
+
+    block_size = V2_BLOCK_SIZE if use_v2 else 0
 
     # ========== 3. CIRCULAR BUFFER DESCRIPTORS ==========
     CB_INPUT_TILES = 0
@@ -234,11 +244,17 @@ def create_program_descriptor(
             )
         )
     else:
-        # ===== V2 CBs (constant-bounded by BLOCK_SIZE) =====
-        # cb_input_tiles: BLOCK_SIZE tiles (reader→compute or tilize→compute)
+        # ===== V2 CBs (constant-bounded) =====
+        # chunk_along_reduce: CBs are BLOCK_SIZE tiles (3-pass, chunks reduce dim)
+        # chunk_along_non_reduce: CBs are BLOCK_SIZE * reduce_dim_tiles tiles
+        #   (V1-style 4-phase per chunk, chunks non-reduce dim)
+        chunk_tiles = block_size if chunk_along_reduce else block_size * reduce_dim_tiles
+        chunk_output_tiles = chunk_tiles  # same tile count for output
+
+        # cb_input_tiles: chunk_tiles (reader→compute or tilize→compute)
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=block_size * input_tile_size,
+                total_size=chunk_tiles * input_tile_size,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -270,10 +286,10 @@ def create_program_descriptor(
             )
         )
         if is_rm:
-            # cb_rm_in: double-buffered, BLOCK_SIZE tile-pages
+            # cb_rm_in: double-buffered, chunk_tiles tile-pages
             cbs.append(
                 ttnn.CBDescriptor(
-                    total_size=2 * block_size * input_tile_size,
+                    total_size=2 * chunk_tiles * input_tile_size,
                     core_ranges=all_cores,
                     format_descriptors=[
                         ttnn.CBFormatDescriptor(
@@ -282,10 +298,10 @@ def create_program_descriptor(
                     ],
                 )
             )
-        # cb_output_tiles: BLOCK_SIZE tiles (streaming compute→writer)
+        # cb_output_tiles: chunk_tiles (streaming compute→writer)
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=block_size * output_tile_size,
+                total_size=chunk_output_tiles * output_tile_size,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -297,7 +313,7 @@ def create_program_descriptor(
         if is_rm:
             cbs.append(
                 ttnn.CBDescriptor(
-                    total_size=2 * block_size * output_tile_size,
+                    total_size=2 * chunk_output_tiles * output_tile_size,
                     core_ranges=all_cores,
                     format_descriptors=[
                         ttnn.CBFormatDescriptor(
@@ -306,10 +322,10 @@ def create_program_descriptor(
                     ],
                 )
             )
-        # cb_exp: BLOCK_SIZE tiles (intermediate)
+        # cb_exp: chunk_tiles (intermediate)
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=block_size * intermediate_tile_size,
+                total_size=chunk_tiles * intermediate_tile_size,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -374,6 +390,31 @@ def create_program_descriptor(
                 ],
             )
         )
+        # For chunk_along_non_reduce: need cb_max (24) and cb_recip_sum (26)
+        # sized to BLOCK_SIZE tiles (one per non-reduce element in the chunk)
+        if chunk_along_non_reduce:
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=block_size * intermediate_tile_size,
+                    core_ranges=all_cores,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=CB_MAX, data_format=ttnn.float32, page_size=intermediate_tile_size
+                        )
+                    ],
+                )
+            )
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=block_size * intermediate_tile_size,
+                    core_ranges=all_cores,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=CB_RECIP_SUM, data_format=ttnn.float32, page_size=intermediate_tile_size
+                        )
+                    ],
+                )
+            )
 
     # ========== 4. KERNEL DESCRIPTORS ==========
     cores = ttnn.grid_to_cores(num_cores, num_cores_x, num_cores_y, row_wise=False)
@@ -396,10 +437,29 @@ def create_program_descriptor(
         reader_source = str(KERNEL_DIR / "softmax_reader_v2.cpp")
         writer_source = str(KERNEL_DIR / "softmax_writer_v2.cpp")
         compute_source = str(KERNEL_DIR / "softmax_compute_v2.cpp")
-        # CT args: Ht, Wt, dim, is_rm, origin_W, origin_H, BLOCK_SIZE
-        reader_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag, origin_W, origin_H, block_size]
-        writer_ct_args = [Ht, Wt, is_rm_flag, origin_W, origin_H, dim & 0xFFFFFFFF, block_size]
-        compute_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag, origin_W, origin_H, block_size]
+        # CT args: Ht, Wt, dim, is_rm, origin_W, origin_H, BLOCK_SIZE, chunk_along_reduce
+        chunk_along_reduce_flag = 1 if chunk_along_reduce else 0
+        reader_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag, origin_W, origin_H, block_size, chunk_along_reduce_flag]
+        writer_ct_args = [
+            Ht,
+            Wt,
+            is_rm_flag,
+            origin_W,
+            origin_H,
+            dim & 0xFFFFFFFF,
+            block_size,
+            chunk_along_reduce_flag,
+        ]
+        compute_ct_args = [
+            Ht,
+            Wt,
+            dim & 0xFFFFFFFF,
+            is_rm_flag,
+            origin_W,
+            origin_H,
+            block_size,
+            chunk_along_reduce_flag,
+        ]
 
     # --- Reader kernel ---
     reader_ct_args_full = list(reader_ct_args)

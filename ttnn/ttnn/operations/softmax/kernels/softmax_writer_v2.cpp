@@ -34,12 +34,15 @@ void kernel_main() {
     constexpr uint32_t origin_H = get_compile_time_arg_val(4);
     constexpr int32_t dim = static_cast<int32_t>(get_compile_time_arg_val(5));
     constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(6);
+    constexpr uint32_t chunk_along_reduce = get_compile_time_arg_val(7);
 
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr auto dst_args = TensorAccessorArgs<8>();
     const auto dst_accessor = TensorAccessor(dst_args, output_buffer_address);
 
     constexpr uint32_t reduce_dim_tiles = (dim == -1) ? Wt : Ht;
-    constexpr uint32_t num_chunks = reduce_dim_tiles / BLOCK_SIZE;
+    constexpr uint32_t non_reduce_dim = (dim == -1) ? Ht : Wt;
+    constexpr uint32_t num_chunks =
+        chunk_along_reduce ? (reduce_dim_tiles / BLOCK_SIZE) : (non_reduce_dim / BLOCK_SIZE);
 
     if constexpr (!is_rm) {
         // ===== TILE path: write tiles from cb_output_tiles =====
@@ -50,9 +53,18 @@ void kernel_main() {
         uint32_t slab_start_tile = start_id;
 
         for (uint32_t slab = 0; slab < num_slabs; ++slab) {
-            if constexpr (dim == -1) {
-                // dim=-1: tiles arrive in row-major order (ht, chunk*B+i)
-                // tile_id = slab_start + ht * Wt + chunk * BLOCK_SIZE + i
+            if constexpr (!chunk_along_reduce) {
+                // chunk_along_non_reduce: tiles arrive in row-major order (standard)
+                uint32_t tile_id = slab_start_tile;
+                for (uint32_t i = 0; i < Ht * Wt; ++i) {
+                    output_cb.wait_front(1);
+                    noc.async_write(output_cb, dst_accessor, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+                    noc.async_write_barrier();
+                    output_cb.pop_front(1);
+                    tile_id++;
+                }
+            } else if constexpr (dim == -1) {
+                // chunk_along_reduce dim=-1: tiles arrive in row-major order
                 uint32_t tile_id = slab_start_tile;
                 for (uint32_t i = 0; i < Ht * Wt; ++i) {
                     output_cb.wait_front(1);
