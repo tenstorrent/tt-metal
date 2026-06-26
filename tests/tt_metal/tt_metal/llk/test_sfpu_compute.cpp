@@ -69,6 +69,13 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
+    // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
+    {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
+    {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
+    {"ltz", {{"SFPU_OP_CHAIN_0", "ltz_tile_init(); ltz_tile(0);"}}},
+    {"gtz", {{"SFPU_OP_CHAIN_0", "gtz_tile_init(); gtz_tile(0);"}}},
+    {"gez", {{"SFPU_OP_CHAIN_0", "gez_tile_init(); gez_tile(0);"}}},
+    {"lez", {{"SFPU_OP_CHAIN_0", "lez_tile_init(); lez_tile(0);"}}},
 };
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
@@ -156,6 +163,24 @@ float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "mul_unary") {
         return bfloat16(static_cast<float>(input) * 2.0f);
     }
+    if (op_name == "eqz") {
+        return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
+    }
+    if (op_name == "nez") {
+        return bfloat16(static_cast<float>(input) != 0.0f ? 1.0f : 0.0f);
+    }
+    if (op_name == "ltz") {
+        return bfloat16(static_cast<float>(input) < 0.0f ? 1.0f : 0.0f);
+    }
+    if (op_name == "gtz") {
+        return bfloat16(static_cast<float>(input) > 0.0f ? 1.0f : 0.0f);
+    }
+    if (op_name == "gez") {
+        return bfloat16(static_cast<float>(input) >= 0.0f ? 1.0f : 0.0f);
+    }
+    if (op_name == "lez") {
+        return bfloat16(static_cast<float>(input) <= 0.0f ? 1.0f : 0.0f);
+    }
     TT_THROW("Unsupported op_name in test");
 }
 
@@ -238,11 +263,17 @@ std::vector<uint32_t> compute_packed_int8_binary_golden(
     return packed_golden;
 }
 vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std::string& op_name, const int seed) {
-    if ((op_name == "sqrt") or (op_name == "log") or (op_name == "rsqrt")) {
+    if ((op_name == "sqrt") || (op_name == "log") || (op_name == "rsqrt")) {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.0001f, 4.0f, numel, seed);
     }
-    if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
+    if ((op_name == "exponential") || (op_name == "gelu") || (op_name == "reciprocal")) {
         auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
+        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+    }
+    if ((op_name == "eqz") || (op_name == "nez") || (op_name == "ltz") || (op_name == "gtz") || (op_name == "gez") ||
+        (op_name == "lez")) {
+        // Include exact zeros so the eqz/nez/lez/gez at-zero branches are exercised.
+        auto possible_values = vector<bfloat16>({-1.0f, -0.5f, 0.0f, 0.5f, 1.0f});
         return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
     }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
@@ -309,7 +340,7 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name) {
     if (op_name == "tanh") {
         return {0.175f, 0.1f};
     }
-    if ((op_name == "gelu") or (op_name == "relu")) {
+    if ((op_name == "gelu") || (op_name == "relu")) {
         return {0.15f, 0.001f};
     }
     if (op_name == "exponential") {
@@ -440,6 +471,7 @@ bool run_sfpu_all_same_buffer(
     sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
 
     // Every existing parametrization of this test uses a single-core CoreRangeSet of {0, 0};
     // MakeProgramFromSpec models the kernel set per single-core WorkUnit.
@@ -1153,7 +1185,7 @@ void run_quasar_sfpu_unpack_to_dest_fp32(
 // so building the kernel would fail with "not declared in this scope". Skip them on
 // Quasar so the suite reflects actual coverage instead of a hard kernel-build failure.
 inline bool is_unary_sfpu_op_unsupported_on_quasar(const std::string& sfpu_op) {
-    return sfpu_op == "gelu" || sfpu_op == "log" || sfpu_op == "tanh" || sfpu_op == "sign";
+    return sfpu_op == "log" || sfpu_op == "sign";
 }
 
 class SingleCoreSingleMeshDeviceSfpuParameterizedFixture
@@ -1187,6 +1219,18 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleMeshDeviceSfpuParameterizedFixture,
     ::testing::Values(
+        std::make_tuple(1, "eqz"),
+        std::make_tuple(1, "nez"),
+        std::make_tuple(1, "ltz"),
+        std::make_tuple(1, "gtz"),
+        std::make_tuple(1, "gez"),
+        std::make_tuple(1, "lez"),
+        std::make_tuple(4, "eqz"),
+        std::make_tuple(4, "nez"),
+        std::make_tuple(4, "ltz"),
+        std::make_tuple(4, "gtz"),
+        std::make_tuple(4, "gez"),
+        std::make_tuple(4, "lez"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
@@ -1226,9 +1270,9 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
     if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
         GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
     }
-    if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
-        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
-        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
+    if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu")) ||
+        ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
+        ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "log"))) {
         GTEST_SKIP();
     }
     CoreRange core_range({0, 0}, {0, 0});
@@ -1347,9 +1391,9 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
     if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
         GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
     }
-    if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
-        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
-        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
+    if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu")) ||
+        ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
+        ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "log"))) {
         GTEST_SKIP();
     }
     CoreRange core_range({0, 0}, {0, 0});

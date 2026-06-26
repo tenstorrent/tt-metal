@@ -78,6 +78,13 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<14>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
+#ifdef HAS_PADDING_CONFIG
+    // padding_config accessor + scratch CB id appended LAST so the existing index layout is unchanged.
+    constexpr auto padding_cfg_args = TensorAccessorArgs<metadata_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_padding_config_id =
+        get_compile_time_arg_val(padding_cfg_args.next_compile_time_args_offset());
+#endif
+
     // ===== Runtime args =====
     uint32_t rt_idx = 0;
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_idx++);
@@ -88,6 +95,10 @@ void kernel_main() {
     uint32_t space_avail_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_idx++);
+#ifdef HAS_PADDING_CONFIG
+    // padding_config base address appended after the 8 base runtime args.
+    uint32_t padding_config_address = get_arg_val<uint32_t>(rt_idx++);
+#endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
@@ -142,8 +153,30 @@ void kernel_main() {
     DPRINT_DISPATCH(
         "Writer untilize: handshake done c4={} c5={} c6={}\n", sender_c4_l1_addr, sender_c5_l1_addr, sender_c6_l1_addr);
 
+    // Mirror the reader's right-padding loop reduction so reader and writer agree on how many batches
+    // are produced/consumed (the end-of-plan sentinel handshake below is independent of batch count).
+    uint32_t effective_total_batches = total_batches;
+#ifdef HAS_PADDING_CONFIG
+    {
+        const auto padding_cfg_gen = TensorAccessor(padding_cfg_args, padding_config_address);
+        cb_reserve_back(cb_padding_config_id, 1);
+        uint32_t pc_l1 = get_write_ptr(cb_padding_config_id);
+        noc_async_read_page(0, padding_cfg_gen, pc_l1);
+        noc_async_read_barrier();
+        tt_l1_ptr uint32_t* pc = reinterpret_cast<tt_l1_ptr uint32_t*>(pc_l1);
+        uint32_t real_count = pc[0];
+        uint32_t pad_side = pc[1];
+        if (pad_side == 0) {
+            uint32_t real_batches = (real_count + read_batch_size - 1) / read_batch_size;
+            if (real_batches < effective_total_batches) {
+                effective_total_batches = real_batches;
+            }
+        }
+    }
+#endif
+
     // ===== Per-batch loop — drains the route plan published by the reader RISC =====
-    for (uint32_t batch_idx = core_id; batch_idx < total_batches; batch_idx += total_workers) {
+    for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
         // Wait for compute to finish untilizing this batch
         cb_wait_front(cb_untilize_id, read_batch_size);
 

@@ -19,7 +19,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import get_variant
-from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import TtDeepSeekPrefillPipeline
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 # Variant-aware golden trace dir, used only when DEEPSEEK_PREFILL_TRACE_{PT,DIR} are unset.
 DEFAULT_PREFILL_TRACE_DIR = get_variant(
@@ -85,7 +85,7 @@ def _load_kv_post_transform(trace_dir: Path, layer: int, total_len: int) -> "tor
 
 
 def _kv_cache_pcc_check(
-    pipeline: TtDeepSeekPrefillPipeline,
+    pipeline: TtPrefillRuntime,
     slot_id: int,
     n_chunks: int,
     pt_path_override: str | None = None,
@@ -223,7 +223,7 @@ def _kv_cache_pcc_check(
 
 
 def validate_migration_kv(
-    pipeline: TtDeepSeekPrefillPipeline, src_slot: int, dst_slot: int, n_chunks: int, real_len: int | None = None
+    pipeline: TtPrefillRuntime, src_slot: int, dst_slot: int, n_chunks: int, real_len: int | None = None
 ):
     """Validate the KV cache BEFORE and AFTER a slot->slot migration.
 
@@ -255,7 +255,7 @@ def validate_migration_kv(
     return src_pcc, dst_pcc
 
 
-def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs):
+def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
     """Validate N concurrent slot->slot migrations of distinct prompts.
 
     Asserts each dst slot's KV equals its own src slot's (migration fidelity + cross-talk detection),
@@ -349,7 +349,7 @@ def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs):
 
 
 def validate_after_prefill(
-    pipeline: TtDeepSeekPrefillPipeline,
+    pipeline: TtPrefillRuntime,
     *,
     chunks_per_slot: dict,
     real_end_per_slot: dict,

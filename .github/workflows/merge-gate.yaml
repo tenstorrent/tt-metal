@@ -376,6 +376,23 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
+  # Fabric CPU-only tests removed from merge gate — https://github.com/tenstorrent/tt-metal/pull/47987
+  # Scaffolding kept for a future smoke subset (fabric_cpu_only_smoke_merge_gate_tests.yaml).
+  # When re-enabling: uncomment tests in that yaml, replace `if: false` with a real trigger,
+  # and add fabric-cpu-only-unit-tests back to workflow-status needs + optional-jobs below.
+  fabric-cpu-only-unit-tests:
+    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
+    if: false
+    secrets: inherit
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      tests-yaml-path: ./tests/pipeline_reorg/fabric_cpu_only_smoke_merge_gate_tests.yaml
+      test-category: smoke
+      runs-on-sku: ${{ github.event_name == 'merge_group' && 'cpu_medium_prio' || 'cpu_medium' }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
   triage-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     secrets: inherit
