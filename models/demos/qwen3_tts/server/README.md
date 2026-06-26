@@ -59,9 +59,3 @@ python models/demos/qwen3_tts/demo/demo_tts.py --backend tt \
   --text "テスト"
 ```
 `voice: "default"` (or any unknown name) uses the model's built-in voice.
-
-> Note: the reference voice audio (`voices/*.wav`, e.g. `jim_reference.wav`,
-> `female_reference_24k.wav`) is **not committed** to this repo — supply it in the build
-> context (`qwen3tts-server-build/voices/`) at image-build time. The Dockerfile bakes
-> whatever is in `voices/` to `/models/voices` and the env vars point the `jim`/`riata`
-> voices at those files.

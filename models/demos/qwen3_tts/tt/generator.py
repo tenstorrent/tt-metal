@@ -1,644 +1,638 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
-
 """
-Qwen3-TTS inference pipeline on TT hardware.
+2-Command-Queue Generator for Qwen3-TTS with Streaming Audio Support.
 
-Full pipeline:
-    Text -> Tokenize (CPU)
-    -> (Optional) Ref audio -> Mel (CPU) -> Speaker Encoder (TT) -> speaker_emb
-    -> Text tokens + speaker_emb -> Talker (TT, autoregressive) -> CB0 tokens
-    -> CB0 hidden states -> Code Predictor (TT) -> CB1-CB15 tokens
-    -> All 16 codebooks -> Vocoder (TT) -> 24kHz waveform
+This module provides:
+- Trace capture for prefill and decode modes
+- 2CQ support for async token transfer to host
+- Streaming audio decoding while generation continues
+- Pre-allocated tensors for efficient execution
 
-Input embedding construction (from HF modeling_qwen3_tts.py):
-    Each position in the prefill sequence has TWO embeddings added together:
-      text_side = text_embedding(text_token) -> text_projection (Linear->SiLU->Linear)
-      codec_side = codec_embedding(codec_token)
-      input = text_side + codec_side
-
-    Non-streaming layout (batch=1, language specified):
-      Pos  | text_side                          | codec_side
-      -----|------------------------------------|-----------------------------
-      0    | text_proj(<|im_start|>)            | -  (role prefix, no codec)
-      1    | text_proj(assistant)               | -
-      2    | text_proj(\n)                      | -
-      3    | tts_pad                            | codec(think_id)
-      4    | tts_pad                            | codec(think_bos_id)
-      5    | tts_pad                            | codec(language_id)
-      6    | tts_pad                            | codec(think_eos_id)
-     (7)   | tts_pad                            | speaker_embed  (voice cloning only)
-      N    | tts_bos                            | codec(pad_id)
-      N+1..| text_proj(text_tokens) + tts_eos   | codec_pad * (N_text+1)
-      last | tts_pad                            | codec_bos
-
-    During decode, the input at each step is:
-      sum(codec_embedding[i](cb_i_token) for all 16 codebooks) + trailing_text_hidden
+The 2CQ pattern overlaps:
+- CQ0: Model execution (traced)
+- CQ1: Async token transfer to host + position updates
+- CPU: Audio decoding in parallel
 """
 
-import math
-import time
-from typing import List, Optional, Tuple
+import queue as queue_module
+import threading
+from typing import Callable, List, Optional, Tuple
 
-import numpy as np
 import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import Mode
+from models.demos.qwen3_tts.tt.kv_cache import create_kv_cache
+from models.demos.qwen3_tts.tt.model_config import Qwen3TTSCodePredictorConfig, Qwen3TTSTalkerConfig
+from models.demos.qwen3_tts.tt.qwen3_tts import Qwen3TTS
+from models.demos.qwen3_tts.tt.rope import get_rope_tensors, get_transformation_mat
 
 
-class TTSGenerator:
+class StreamingAudioDecoder:
     """
-    End-to-end TTS inference pipeline on TT device.
-    Orchestrates all four model components.
+    Background thread for streaming audio decoding.
+
+    Receives token chunks and decodes them to audio in parallel
+    with token generation.
     """
 
     def __init__(
         self,
-        talker,
-        code_predictor,
-        speaker_encoder,
-        vocoder,
-        talker_args,
-        mesh_device,
-        tokenizer=None,
+        decoder_fn: Callable[[torch.Tensor], torch.Tensor],
+        chunk_size: int = 50,
+        sample_rate: int = 24000,
     ):
-        self.talker = talker
-        self.code_predictor = code_predictor
-        self.speaker_encoder = speaker_encoder
-        self.vocoder = vocoder
-        self.talker_args = talker_args
-        self.mesh_device = mesh_device
-        self.tokenizer = tokenizer
-
-    @classmethod
-    def build(cls, model_path, mesh_device, dtype=ttnn.bfloat16, max_batch_size=1, max_seq_len=4096):
         """
-        Build the full TTS pipeline from a HuggingFace checkpoint.
+        Initialize streaming decoder.
 
         Args:
-            model_path: Path to Qwen3-TTS checkpoint
-            mesh_device: TT mesh device
-            dtype: Weight dtype (default bfloat16)
-            max_batch_size: Maximum batch size
-            max_seq_len: Maximum sequence length for Talker
+            decoder_fn: Function that takes [batch, num_quantizers, seq_len] tokens
+                       and returns [batch, 1, num_samples] audio
+            chunk_size: Number of tokens per audio chunk
+            sample_rate: Audio sample rate for callback
         """
-        import os
+        self.decoder_fn = decoder_fn
+        self.chunk_size = chunk_size
+        self.sample_rate = sample_rate
 
-        from models.demos.qwen3_tts.tt.model_config import TalkerModelArgs
+        self.token_queue = queue_module.Queue()
+        self.audio_queue = queue_module.Queue()
+        self.stop_event = threading.Event()
+        self.decoder_thread = None
 
-        os.environ["HF_MODEL"] = model_path
+        # Accumulated tokens
+        self.all_tokens = []
+        self.decoded_up_to = 0
 
-        talker_args = TalkerModelArgs(
-            mesh_device=mesh_device,
-            max_batch_size=max_batch_size,
-            max_seq_len=max_seq_len,
-            use_hf_rope=True,
-        )
+    def start(self):
+        """Start the decoder thread."""
+        self.stop_event.clear()
+        self.all_tokens = []
+        self.decoded_up_to = 0
+        self.decoder_thread = threading.Thread(target=self._decode_loop, daemon=True)
+        self.decoder_thread.start()
+        logger.info("Streaming audio decoder started")
 
-        state_dict = talker_args.load_state_dict()
-        weight_cache_path = talker_args.weight_cache_path(dtype)
+    def stop(self):
+        """Stop the decoder thread and decode remaining tokens."""
+        self.stop_event.set()
+        self.token_queue.put(None)  # Signal to stop
+        if self.decoder_thread is not None:
+            self.decoder_thread.join(timeout=5.0)
+        logger.info("Streaming audio decoder stopped")
 
-        from models.demos.qwen3_tts.tt.talker import TalkerTransformer
+    def add_tokens(self, tokens: torch.Tensor):
+        """
+        Add generated tokens to the queue.
 
-        logger.info("Building Talker...")
-        talker = TalkerTransformer(
-            args=talker_args,
-            dtype=dtype,
-            mesh_device=mesh_device,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-        )
+        Args:
+            tokens: Token tensor [num_quantizers] for single step
+        """
+        self.token_queue.put(tokens.clone())
 
-        # Build Code Predictor (TT device, KV cache)
-        from models.demos.qwen3_tts.tt.code_predictor import CodePredictorTransformer
-        from models.demos.qwen3_tts.tt.model_config import CodePredictorModelArgs
+    def get_audio_chunk(self, timeout: float = 0.1) -> Optional[torch.Tensor]:
+        """
+        Get next decoded audio chunk (non-blocking).
 
-        logger.info("Building Code Predictor (TT)...")
-        cp_args = CodePredictorModelArgs(
-            mesh_device=mesh_device,
-            max_batch_size=max_batch_size,
-            max_seq_len=128,
-            use_hf_rope=True,
-        )
-        cp_state_dict = cp_args.load_state_dict()
-        cp_weight_cache = cp_args.weight_cache_path(dtype)
-        code_predictor = CodePredictorTransformer(
-            args=cp_args,
-            dtype=dtype,
-            mesh_device=mesh_device,
-            state_dict=cp_state_dict,
-            weight_cache_path=cp_weight_cache,
-        )
-
-        # Build Speaker Encoder (runs on host CPU, small model)
-        from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder
-
-        logger.info("Building Speaker Encoder...")
-        speaker_encoder = SpeakerEncoder.from_pretrained(model_path, mesh_device)
-
-        # Build Vocoder (Code2Wav, runs on host CPU, ~114M params)
-        from models.demos.qwen3_tts.tt.vocoder import Vocoder
-
-        logger.info("Building Vocoder...")
+        Returns:
+            Audio chunk [num_samples] or None if not available
+        """
         try:
-            vocoder = Vocoder.from_pretrained(model_path)
-        except Exception as e:
-            logger.warning(f"Vocoder weights not available: {e}")
-            vocoder = None
+            return self.audio_queue.get(timeout=timeout)
+        except queue_module.Empty:
+            return None
 
-        # Load tokenizer
-        from transformers import AutoTokenizer
-
-        logger.info("Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-
-        return cls(talker, code_predictor, speaker_encoder, vocoder, talker_args, mesh_device, tokenizer)
-
-    def generate(
-        self,
-        text: str,
-        language: str = "japanese",
-        ref_audio: Optional[np.ndarray] = None,
-        ref_sr: int = 24000,
-        speaker_emb_tt=None,
-        max_new_tokens: int = 2048,
-        temperature: float = 0.9,
-        top_k: int = 50,
-        top_p: float = 1.0,
-        repetition_penalty: float = 1.05,
-    ) -> Tuple[np.ndarray, int]:
+    def get_all_audio(self) -> torch.Tensor:
         """
-        Generate speech from text.
-
-        Args:
-            text: Input text to synthesize
-            language: Language code (e.g., "japanese")
-            ref_audio: Optional reference audio for voice cloning [num_samples]
-            ref_sr: Sample rate of reference audio
-            speaker_emb_tt: Optional pre-loaded speaker embedding (ttnn.Tensor).
-                           Takes priority over ref_audio if both are provided.
-            max_new_tokens: Maximum codec tokens to generate
-            temperature: Sampling temperature
-            top_k: Top-k sampling parameter
-            top_p: Top-p (nucleus) sampling parameter
+        Get all decoded audio after generation completes.
 
         Returns:
-            Tuple of (waveform_numpy, sample_rate)
+            Full audio tensor [batch, 1, num_samples]
         """
-        t0 = time.time()
-
-        # Step 1+2: Get speaker embedding as CPU tensor (if voice cloning)
-        speaker_emb_torch = None
-        if speaker_emb_tt is not None:
-            speaker_emb_torch = ttnn.to_torch(
-                speaker_emb_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
-            ).squeeze()[:self.talker_args.dim].unsqueeze(0)  # [1, dim]
-            logger.info(f"Using pre-loaded speaker embedding (norm={speaker_emb_torch.norm():.4f})")
-        elif ref_audio is not None:
-            speaker_emb_torch = self.speaker_encoder.extract_embedding(ref_audio, ref_sr)  # [1, dim]
-            logger.info(f"Speaker embedding extracted (norm={speaker_emb_torch.norm():.4f})")
-
-        # Build input embeddings with speaker position inserted (CPU + device)
-        input_embeds, trailing_text_hidden, tts_pad_embed = self._build_input_embeds(
-            text, language, speaker_emb_torch=speaker_emb_torch,
-        )
-        seq_len = input_embeds.shape[1]
-        logger.info(f"Built input embeddings: seq_len={seq_len}")
-
-        # Step 3+4: Talker (CB0) + Code Predictor (CB1-15) per decode step
-        all_codebooks = self._generate_and_predict(
-            input_embeds, trailing_text_hidden, tts_pad_embed,
-            None, max_new_tokens, temperature, top_k, top_p,
-            repetition_penalty=repetition_penalty,
-        )
-        num_frames = all_codebooks.shape[1]
-        logger.info(f"Generated {num_frames} frames (16 codebooks each)")
-
-        # Step 5: Vocoder -> waveform (TT)
-        waveform = self._decode_waveform(all_codebooks)
-
-        elapsed = time.time() - t0
-        duration = len(waveform) / 24000
-        logger.info(f"Generated {duration:.2f}s audio in {elapsed:.2f}s (RTF={elapsed/duration:.3f})")
-
-        return waveform, 24000
-
-    def _build_input_embeds(
-        self, text: str, language: str, speaker_emb_torch: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Build the full prefill input embeddings (text_side + codec_side).
-
-        Follows the HF Qwen3-TTS generate() logic (modeling_qwen3_tts.py:2082-2226).
-        Non-streaming mode: all text tokens are included in prefill.
-
-        Args:
-            text: Input text string
-            language: Language code (e.g., "japanese")
-            speaker_emb_torch: Optional [1, dim] CPU torch tensor from speaker encoder.
-                When provided, inserted as a codec-side position between think_eos
-                and codec_pad (paired with tts_pad on the text side).
-
-        Returns:
-            input_embeds: [1, seq_len, dim] combined text+codec embeddings
-            trailing_text_hidden: [1, N, dim] text hidden states for decode steps
-            tts_pad_embed: [1, 1, dim] tts_pad embedding (for decode steps beyond text)
-        """
-        args = self.talker_args
-
-        # --- Tokenize ---
-        formatted = f"<|im_start|>assistant\n{text}<|im_end|>\n<|im_start|>assistant\n"
-        token_ids = self.tokenizer.encode(formatted)
-        input_ids = torch.tensor([token_ids], dtype=torch.long)  # [1, total_len]
-        # Structure: [im_start, assistant, \n, ...text..., im_end, \n, im_start, assistant, \n]
-        # First 3 = role prefix, last 5 = suffix
-
-        # --- Text embeddings (host) ---
-        text_embed_all = self.talker.embed_text_tokens(input_ids)  # [1, total_len, text_hidden_size]
-
-        # --- Special TTS token embeddings via text_projection (on device, then back to host) ---
-        special_ids = torch.tensor(
-            [[args.tts_bos_token_id, args.tts_eos_token_id, args.tts_pad_token_id]],
-            dtype=torch.long,
-        )
-        special_embed = self.talker.embed_text_tokens(special_ids)  # [1, 3, text_hidden_size]
-        # Project to Talker dim on device
-        tt_special = ttnn.from_torch(
-            special_embed.unsqueeze(1),  # [1, 1, 3, text_hidden_size]
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        tt_special_proj = self.talker.text_projection(tt_special)
-        special_proj = ttnn.to_torch(
-            tt_special_proj,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
-        )[0, 0, :, : args.dim]  # [3, dim]
-        tts_bos_embed = special_proj[0:1].unsqueeze(0)  # [1, 1, dim]
-        tts_eos_embed = special_proj[1:2].unsqueeze(0)  # [1, 1, dim]
-        tts_pad_embed = special_proj[2:3].unsqueeze(0)  # [1, 1, dim]
-
-        # --- Codec embeddings (host) ---
-        codec_embed_weight = self.talker.codec_embed_weight  # [vocab, dim]
-
-        def codec_embed(token_ids_list):
-            ids = torch.tensor([token_ids_list], dtype=torch.long)
-            return torch.nn.functional.embedding(ids, codec_embed_weight)  # [1, N, dim]
-
-        # Language ID
-        lang_map = args.codec_language_id
-        if language.lower() in lang_map:
-            language_id = lang_map[language.lower()]
-        else:
-            raise ValueError(f"Language '{language}' not in codec_language_id: {list(lang_map.keys())}")
-
-        # Codec tag: [think_id, think_bos_id, language_id, think_eos_id]
-        codec_tag = codec_embed([args.codec_think_id, args.codec_think_bos_id, language_id, args.codec_think_eos_id])
-        # Codec suffix: [codec_pad_id, codec_bos_id]
-        codec_suffix = codec_embed([args.codec_pad_id, args.codec_bos_id])
-        # Full codec prefill: [think, think_bos, lang, think_eos, (speaker?), pad, bos]
-        if speaker_emb_torch is not None:
-            spk = speaker_emb_torch.float().view(1, 1, -1)  # [1, 1, dim]
-            codec_prefill = torch.cat([codec_tag, spk, codec_suffix], dim=1)  # [1, 7, dim]
-        else:
-            codec_prefill = torch.cat([codec_tag, codec_suffix], dim=1)  # [1, 6, dim]
-
-        # --- Role prefix: first 3 tokens through text_projection ---
-        role_ids = input_ids[:, :3]
-        role_embed = self.talker.embed_text_tokens(role_ids)  # [1, 3, text_hidden_size]
-        tt_role = ttnn.from_torch(
-            role_embed.unsqueeze(1),
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        tt_role_proj = self.talker.text_projection(tt_role)
-        role_proj = ttnn.to_torch(
-            tt_role_proj,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
-        )[0, 0, :, : args.dim].unsqueeze(0)  # [1, 3, dim]
-
-        # --- Build combined embedding sequence ---
-        # Part 1: Role prefix (text_projection only, no codec overlay)
-        # HF code: _talker_input_embed_role = text_projection(text_embed(input_id[:, :3]))
-        part_role = role_proj  # [1, 3, dim]
-
-        # Part 2: Codec tag with tts_pad/tts_bos overlay (text_side + codec_side)
-        # codec_prefill[:-1] = all entries except codec_bos (last)
-        # text_side: tts_pad * (len-2) + tts_bos, paired element-wise with codec_prefill[:-1]
-        # Without speaker: 5 positions, with speaker: 6 positions (extra tts_pad+speaker_emb)
-        num_codec_prefill_m1 = codec_prefill.shape[1] - 1
-        text_side_tag = torch.cat([
-            tts_pad_embed.expand(-1, num_codec_prefill_m1 - 1, -1),
-            tts_bos_embed,
-        ], dim=1)
-        part_tag = text_side_tag + codec_prefill[:, :-1, :]
-
-        # Part 3: Non-streaming mode — all text content tokens + tts_eos added with codec_pad
-        # Text content = input_ids[:, 3:-5] (skip role prefix and suffix)
-        text_content_ids = input_ids[:, 3:-5]  # [1, N_text]
-        N_text = text_content_ids.shape[1]
-
-        if N_text > 0:
-            text_content_embed = self.talker.embed_text_tokens(text_content_ids)  # [1, N_text, text_hidden_size]
-            # Project text content on device
-            # Pad to multiple of 32 for tile layout
-            pad_to = math.ceil((N_text + 1) / 32) * 32  # +1 for tts_eos
-            text_with_eos_raw = torch.cat([text_content_embed, torch.zeros(1, 1, text_content_embed.shape[-1])], dim=1)
-            if text_with_eos_raw.shape[1] < pad_to:
-                text_with_eos_raw = torch.nn.functional.pad(
-                    text_with_eos_raw, (0, 0, 0, pad_to - text_with_eos_raw.shape[1])
-                )
-            tt_text = ttnn.from_torch(
-                text_with_eos_raw.unsqueeze(1),
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            tt_text_proj = self.talker.text_projection(tt_text)
-            text_proj_all = ttnn.to_torch(
-                tt_text_proj,
-                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
-            )[0, 0, : N_text + 1, : args.dim].unsqueeze(0)  # [1, N_text+1, dim]
-
-            # Replace the last entry (zeros projected) with tts_eos
-            text_proj_all[:, -1:, :] = tts_eos_embed
-
-            # Codec side: codec_pad for each text position + tts_eos position
-            codec_pad_embed = codec_embed([args.codec_pad_id])  # [1, 1, dim]
-            codec_pad_expanded = codec_pad_embed.expand(-1, N_text + 1, -1)  # [1, N_text+1, dim]
-
-            part_text = text_proj_all + codec_pad_expanded  # [1, N_text+1, dim]
-        else:
-            part_text = torch.zeros(1, 0, args.dim)
-
-        # Part 4: Final position — tts_pad + codec_bos
-        part_final = tts_pad_embed + codec_prefill[:, -1:, :]  # [1, 1, dim] — codec_bos
-
-        # Concatenate all parts
-        input_embeds = torch.cat([part_role, part_tag, part_text, part_final], dim=1)  # [1, total, dim]
-
-        # Pad to multiple of 128 for ttnn attention alignment
-        total_len = input_embeds.shape[1]
-        padded_len = math.ceil(total_len / 128) * 128
-        if total_len < padded_len:
-            input_embeds = torch.nn.functional.pad(input_embeds, (0, 0, 0, padded_len - total_len))
-
-        # --- Trailing text hidden (for decode steps) ---
-        # In non-streaming mode: trailing_text_hidden = tts_pad_embed (single token)
-        trailing_text_hidden = tts_pad_embed  # [1, 1, dim]
-
-        return input_embeds, trailing_text_hidden, tts_pad_embed
-
-    def _encode_speaker(self, audio: np.ndarray, sr: int):
-        """Extract speaker embedding from reference audio."""
-        if self.speaker_encoder is None:
-            raise RuntimeError("Speaker encoder not initialized — cannot do voice cloning")
-        return self.speaker_encoder.encode(audio, sr=sr)
-
-    def _generate_and_predict(
-        self,
-        input_embeds,
-        trailing_text_hidden,
-        tts_pad_embed,
-        speaker_emb,
-        max_new_tokens,
-        temperature,
-        top_k,
-        top_p,
-        repetition_penalty=1.05,
-    ):
-        """Autoregressive generation: Talker (CB0) + Code Predictor (CB1-15) per step.
-
-        HF reference pattern (modeling_qwen3_tts.py:1664-1692):
-            Each decode step:
-              1. Talker forward → CB0 logits → sample CB0 token
-              2. Code Predictor(past_hidden, CB0_embed) → CB1-15 tokens
-              3. Sum all 16 codec embeddings + trailing_text_hidden → next Talker input
-
-        Returns:
-            all_codebooks: [B, num_frames, 16] all codebook tokens
-        """
-        B = input_embeds.shape[0]
-        assert B == 1, "Only batch_size=1 supported"
-        args = self.talker_args
-        codec_embed_weight = self.talker.codec_embed_weight  # [3072, 2048] on host
-
-        # --- Prefill ---
-        norms = input_embeds.squeeze(0).norm(dim=-1)
-        nonzero_mask = norms > 0
-        last_token_idx = nonzero_mask.nonzero()[-1].item() if nonzero_mask.any() else input_embeds.shape[1] - 1
-
-        tokens_embd, rot_mats, rot_mats_local, tt_page_table, tt_chunk_page_table = (
-            self.talker.prepare_inputs_prefill(
-                input_embeds,
-                start_pos=0,
-                last_token_idx=last_token_idx,
-            )
-        )
-
-        get_last_token = (last_token_idx // 32) * 32
-        logits_tt, prefill_hidden_tt = self.talker.ttnn_prefill_forward_with_hidden(
-            tokens_embd,
-            rot_mats_global=rot_mats,
-            rot_mats_local=rot_mats_local,
-            page_table=tt_page_table,
-            chunk_page_table=tt_chunk_page_table,
-            get_last_token=get_last_token,
-            speaker_emb=speaker_emb,
-            pre_projected=True,
-        )
-
-        logits = self.talker.process_output_prefill(logits_tt.cpu(), last_token_idx=last_token_idx % 32)
-        logits = logits.view(1, 1, args.vocab_size)
-
-        # Extract pre-norm hidden state at last token position for Code Predictor
-        prefill_hidden_torch = ttnn.to_torch(prefill_hidden_tt)
-        last_in_block = last_token_idx % 32
-        talker_hidden_torch = prefill_hidden_torch[:, :, last_in_block:last_in_block + 1, :args.dim]
-        talker_hidden_torch = talker_hidden_torch.permute(0, 2, 1, 3).reshape(B, 1, args.dim)
-
-        generated_tokens = []
-        cb0_token = self._sample_token(logits, temperature, top_k, top_p)
-        generated_tokens.append(cb0_token.item())
-        logger.info(f"Prefill done (last_tok_idx={last_token_idx}), first CB0: {cb0_token.item()}")
-
-        # --- Decode loop ---
-        prefill_len = last_token_idx + 1
-        all_frames = []  # list of [B, 16] per frame
-
-        for step in range(max_new_tokens):
-            if cb0_token.item() == args.codec_eos_token_id:
-                logger.info(f"EOS at step {step}")
+        # Collect any remaining chunks
+        chunks = []
+        while True:
+            try:
+                chunk = self.audio_queue.get_nowait()
+                if chunk is not None:
+                    chunks.append(chunk)
+            except queue_module.Empty:
                 break
 
-            # Run Code Predictor: generate CB1-15 for this frame
-            frame_all_cb = self.code_predictor.predict_codebooks(
-                talker_hidden_torch, cb0_token, codec_embed_weight
-            )  # [B, 16] — CB0 + CB1..CB15
+        # Decode any remaining tokens
+        if self.all_tokens and self.decoded_up_to < len(self.all_tokens):
+            remaining = torch.stack(self.all_tokens[self.decoded_up_to :], dim=-1)  # [16, remaining]
+            remaining = remaining.unsqueeze(0)  # [1, 16, remaining]
+            audio = self.decoder_fn(remaining)
+            chunks.append(audio.squeeze())
 
-            all_frames.append(frame_all_cb.unsqueeze(1))  # [B, 1, 16]
+        if chunks:
+            return torch.cat(chunks, dim=-1)
+        return torch.tensor([])
 
-            # Build next Talker input: sum of all 16 codec embeddings + trailing_text_hidden
-            cb0_emb = torch.nn.functional.embedding(
-                cb0_token.unsqueeze(-1), codec_embed_weight
-            )  # [B, 1, 2048]
+    def _decode_loop(self):
+        """Background decode loop."""
+        while not self.stop_event.is_set():
+            try:
+                tokens = self.token_queue.get(timeout=0.1)
+                if tokens is None:
+                    break
 
-            cb_emb_sum = cb0_emb
-            for cb_idx in range(args.num_code_groups - 1):
-                cb_token = frame_all_cb[:, cb_idx + 1]  # [B]
-                cb_emb = torch.nn.functional.embedding(
-                    cb_token.unsqueeze(-1),
-                    self.code_predictor.codec_embeddings[cb_idx],
-                )  # [B, 1, 2048]
-                cb_emb_sum = cb_emb_sum + cb_emb
+                self.all_tokens.append(tokens)
 
-            decode_input = cb_emb_sum + trailing_text_hidden  # [B, 1, 2048]
+                # Check if we have enough tokens for a chunk
+                num_tokens = len(self.all_tokens)
+                if num_tokens - self.decoded_up_to >= self.chunk_size:
+                    # Decode chunk
+                    chunk_tokens = self.all_tokens[self.decoded_up_to : self.decoded_up_to + self.chunk_size]
+                    chunk_tensor = torch.stack(chunk_tokens, dim=-1)  # [16, chunk_size]
+                    chunk_tensor = chunk_tensor.unsqueeze(0)  # [1, 16, chunk_size]
 
-            # Prepare decode inputs (position, rotation)
-            current_pos = torch.tensor([prefill_len + step], dtype=torch.int64)
-            padded_pos = torch.nn.functional.pad(
-                current_pos, (0, args.max_batch_size - 1), value=0
-            )
+                    try:
+                        audio_chunk = self.decoder_fn(chunk_tensor)
+                        self.audio_queue.put(audio_chunk.squeeze())
+                        self.decoded_up_to += self.chunk_size
+                        logger.debug(
+                            f"Decoded chunk: tokens {self.decoded_up_to - self.chunk_size}-{self.decoded_up_to}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Error decoding chunk: {e}")
 
-            dummy_tokens = torch.zeros(1, args.max_batch_size, dtype=torch.long)
-            _, tt_pos, tt_rot_idxs, tt_page_table = self.talker.prepare_inputs_decode(
-                dummy_tokens, padded_pos
-            )
+            except queue_module.Empty:
+                continue
 
-            # Send pre-embedded decode input to device [1, 1, 32, dim]
-            # Pad batch dimension to 32 for tile alignment (matching normal decode path)
-            decode_padded = torch.zeros(1, 1, 32, args.dim)
-            decode_padded[0, 0, 0, :] = decode_input[0, 0, :]
-            tt_decode_embed = ttnn.from_torch(
-                decode_padded,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
 
-            decode_residual_mem_cfg = self.talker.args.get_residual_mem_config(
-                Mode.DECODE, self.talker.prefetcher
-            )
-            tt_decode_embed = ttnn.to_memory_config(tt_decode_embed, decode_residual_mem_cfg)
+class Qwen3TTSGenerator2CQ:
+    """
+    2-Command-Queue Generator for Qwen3-TTS with streaming support.
 
-            # Decode forward — returns both logits and post-norm hidden state
-            tt_logits, tt_hidden = self.talker.ttnn_decode_forward_preembedded(
-                tt_decode_embed, tt_pos, rot_mat_idxs=tt_rot_idxs, page_table=tt_page_table
-            )
+    Features:
+    - Trace capture for prefill and decode modes
+    - 2CQ for async token transfer to host
+    - Streaming audio callback while generating
+    - Pre-allocated tensors to avoid allocation during trace
+    """
 
-            # Extract Talker hidden state for next Code Predictor call
-            hidden_torch = ttnn.to_torch(tt_hidden)
-            talker_hidden_torch = hidden_torch[:, :, :B, :args.dim].permute(0, 2, 1, 3).reshape(B, 1, args.dim)
+    def __init__(
+        self,
+        model: Qwen3TTS,
+        device,
+        talker_config: Qwen3TTSTalkerConfig,
+        code_predictor_config: Qwen3TTSCodePredictorConfig,
+        max_batch_size: int = 1,
+        max_seq_len: int = 2048,
+        use_2cq: bool = True,
+    ):
+        """
+        Initialize the 2CQ generator.
 
-            logits = self.talker.process_output_decode(tt_logits.cpu(), B=1)
-            logits = logits[:, :, : args.vocab_size]
+        Args:
+            model: Qwen3TTS model
+            device: TTNN device
+            talker_config: Talker configuration
+            code_predictor_config: CodePredictor configuration
+            max_batch_size: Maximum batch size
+            max_seq_len: Maximum sequence length
+            use_2cq: Enable 2-command-queue mode for async transfers
+        """
+        self.model = model
+        self.device = device
+        self.talker_config = talker_config
+        self.code_predictor_config = code_predictor_config
+        self.max_batch_size = max_batch_size
+        self.max_seq_len = max_seq_len
+        self.use_2cq = use_2cq
 
-            cb0_token = self._sample_token(
-                logits.view(1, 1, -1), temperature, top_k, top_p,
-                generated_tokens=generated_tokens, repetition_penalty=repetition_penalty,
-            )
-            generated_tokens.append(cb0_token.item())
+        # Trace IDs
+        self.prefill_trace_id = None
+        self.decode_trace_id = None
 
-        if all_frames:
-            all_codebooks = torch.cat(all_frames, dim=1)  # [B, num_frames, 16]
-        else:
-            all_codebooks = torch.zeros(B, 0, 16, dtype=torch.long)
+        # Pre-allocated tensors for trace execution
+        self.prefill_inputs = None
+        self.prefill_output = None
+        self.decode_inputs = None
+        self.decode_output = None
 
-        logger.info(
-            f"Generated {all_codebooks.shape[1]} frames, "
-            f"CB0 range: [{all_codebooks[:,:,0].min().item()}, {all_codebooks[:,:,0].max().item()}]"
+        # RoPE tensors
+        self.talker_trans_mat = None
+        self.cp_trans_mat = None
+
+        # KV caches
+        self.talker_kv_cache = None
+        self.cp_kv_cache = None
+
+        # Trace state
+        self.prefill_trace_captured = False
+        self.decode_trace_captured = False
+
+        # 2CQ event tracking
+        self.cq0_event = None  # Event recorded on CQ0
+        self.cq1_event = None  # Event recorded on CQ1
+
+        # Pre-allocated position tensor for CQ1 updates
+        self.position_tensor = None
+
+        # Streaming decoder
+        self.streaming_decoder = None
+
+    def setup(self):
+        """Setup generator with pre-allocated tensors."""
+        logger.info("Setting up Qwen3-TTS 2CQ generator...")
+
+        # Pre-compute transformation matrices
+        self.talker_trans_mat = get_transformation_mat(self.talker_config.head_dim, self.device)
+        self.cp_trans_mat = get_transformation_mat(self.code_predictor_config.head_dim, self.device)
+
+        # Create KV caches
+        self.talker_kv_cache = create_kv_cache(
+            self.device,
+            self.talker_config,
+            self.max_batch_size,
+            self.max_seq_len,
+        )
+        self.cp_kv_cache = create_kv_cache(
+            self.device,
+            self.code_predictor_config,
+            self.max_batch_size,
+            self.max_seq_len,
         )
 
-        return all_codebooks
+        # Pre-allocate position tensor for 2CQ updates
+        self.position_tensor = ttnn.from_torch(
+            torch.zeros(self.max_batch_size, dtype=torch.int32),
+            dtype=ttnn.int32,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-    @staticmethod
-    def _sample_token(logits, temperature, top_k, top_p, generated_tokens=None, repetition_penalty=1.0):
-        """Sample a single token from logits [B, 1, vocab_size]."""
-        logits = logits[:, -1, :].clone()  # [B, vocab_size]
+        logger.info("2CQ Generator setup complete")
 
-        if repetition_penalty != 1.0 and generated_tokens is not None and len(generated_tokens) > 0:
-            prev = torch.tensor(generated_tokens, dtype=torch.long)
-            score = logits[0, prev]
-            score = torch.where(score < 0, score * repetition_penalty, score / repetition_penalty)
-            logits[0, prev] = score
-
-        if temperature <= 0:
-            return torch.argmax(logits, dim=-1)
-
-        logits = logits / temperature
-
-        if top_k > 0:
-            top_k = min(top_k, logits.size(-1))
-            vals, _ = torch.topk(logits, top_k)
-            logits[logits < vals[:, [-1]]] = float("-inf")
-
-        probs = torch.softmax(logits, dim=-1)
-
-        if top_p < 1.0:
-            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-            mask = cumulative_probs - sorted_probs > top_p
-            sorted_probs[mask] = 0.0
-            sorted_probs /= sorted_probs.sum(dim=-1, keepdim=True)
-            next_token = sorted_indices.gather(-1, torch.multinomial(sorted_probs, num_samples=1))
-            return next_token.squeeze(-1)
-
-        return torch.multinomial(probs, num_samples=1).squeeze(-1)
-
-    def _predict_codebooks(self, cb0_tokens, talker_hidden):
-        """Generate CB1-CB15 via Code Predictor for each frame.
+    def set_streaming_decoder(self, decoder_fn: Callable, chunk_size: int = 50):
+        """
+        Set up streaming audio decoder.
 
         Args:
-            cb0_tokens: [B, num_frames] CB0 token IDs
-            talker_hidden: [B, num_frames, 2048] Talker hidden states per frame
-                          (None if hidden states not captured)
-
-        Returns:
-            all_codebooks: [B, num_frames, 16] all codebook tokens
+            decoder_fn: Function to decode tokens to audio
+            chunk_size: Tokens per audio chunk
         """
-        if self.code_predictor is None:
-            raise NotImplementedError("Code Predictor not built")
+        self.streaming_decoder = StreamingAudioDecoder(
+            decoder_fn=decoder_fn,
+            chunk_size=chunk_size,
+        )
+        logger.info(f"Streaming decoder configured with chunk_size={chunk_size}")
 
-        B, num_frames = cb0_tokens.shape
-        all_codebooks = []
-
-        for frame_idx in range(num_frames):
-            if talker_hidden is not None:
-                frame_hidden = talker_hidden[:, frame_idx : frame_idx + 1, :]  # [B, 1, 2048]
-            else:
-                frame_hidden = torch.zeros(B, 1, self.talker_args.dim)
-
-            frame_cb0 = cb0_tokens[:, frame_idx]  # [B]
-
-            frame_all_cb = self.code_predictor.predict_codebooks(
-                frame_hidden,
-                frame_cb0,
-                self.talker.codec_embed_weight,
-            )
-            all_codebooks.append(frame_all_cb.unsqueeze(1))  # [B, 1, 16]
-
-        return torch.cat(all_codebooks, dim=1)  # [B, num_frames, 16]
-
-    def _decode_waveform(self, all_codebooks):
-        """Convert codebook tokens to waveform via Vocoder.
+    def _update_position_async(self, position: int, cq_id: int = 1):
+        """
+        Update position tensor asynchronously on specified command queue.
 
         Args:
-            all_codebooks: [B, num_frames, 16] all codebook token IDs
+            position: New position value
+            cq_id: Command queue ID (default 1 for async)
+        """
+        pos_host = torch.full((self.max_batch_size,), position, dtype=torch.int32)
+        pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32)
+        ttnn.copy_host_to_device_tensor(pos_tensor_host, self.position_tensor, cq_id=cq_id)
+
+    def warmup_decode(self):
+        """Warmup decode forward pass."""
+        logger.info("Warming up decode...")
+
+        seq_len = 1
+        warmup_input = torch.zeros(self.max_batch_size, seq_len, dtype=torch.long)
+        warmup_input_tt = ttnn.from_torch(
+            warmup_input,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        position_ids = torch.tensor([128])
+        talker_cos, talker_sin = get_rope_tensors(
+            self.device,
+            self.talker_config.head_dim,
+            1,
+            position_ids,
+            self.talker_config.rope_theta,
+        )
+        cp_cos, cp_sin = get_rope_tensors(
+            self.device,
+            self.code_predictor_config.head_dim,
+            1,
+            position_ids,
+            self.code_predictor_config.rope_theta,
+        )
+
+        _ = self.model.forward(
+            warmup_input_tt,
+            talker_cos,
+            talker_sin,
+            self.talker_trans_mat,
+            cp_cos,
+            cp_sin,
+            self.cp_trans_mat,
+        )
+
+        ttnn.synchronize_device(self.device)
+        logger.info("Decode warmup complete")
+
+    def capture_decode_trace(self, start_pos: int = 128):
+        """Capture trace for decode mode."""
+        logger.info(f"Capturing decode trace at position {start_pos}...")
+
+        seq_len = 1
+
+        # Pre-allocate input tensor
+        input_tensor = ttnn.from_torch(
+            torch.zeros(self.max_batch_size, seq_len, dtype=torch.long),
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        position_ids = torch.tensor([start_pos])
+        talker_cos, talker_sin = get_rope_tensors(
+            self.device,
+            self.talker_config.head_dim,
+            1,
+            position_ids,
+            self.talker_config.rope_theta,
+        )
+        cp_cos, cp_sin = get_rope_tensors(
+            self.device,
+            self.code_predictor_config.head_dim,
+            1,
+            position_ids,
+            self.code_predictor_config.rope_theta,
+        )
+
+        # Begin trace capture on CQ0
+        self.decode_trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+
+        output = self.model.forward(
+            input_tensor,
+            talker_cos,
+            talker_sin,
+            self.talker_trans_mat,
+            cp_cos,
+            cp_sin,
+            self.cp_trans_mat,
+        )
+
+        ttnn.end_trace_capture(self.device, self.decode_trace_id, cq_id=0)
+
+        self.decode_inputs = {
+            "input_ids": input_tensor,
+            "talker_cos": talker_cos,
+            "talker_sin": talker_sin,
+            "cp_cos": cp_cos,
+            "cp_sin": cp_sin,
+        }
+        self.decode_output = output
+
+        self.decode_trace_captured = True
+        ttnn.synchronize_device(self.device)
+        logger.info("Decode trace captured")
+
+    def generate_streaming(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int = 100,
+        prefill_output: Optional[List[ttnn.Tensor]] = None,
+        start_pos: int = 0,
+        audio_callback: Optional[Callable[[torch.Tensor], None]] = None,
+        return_stats: bool = True,
+    ) -> Tuple[List[torch.Tensor], dict]:
+        """
+        Generate tokens with 2CQ streaming.
+
+        This method:
+        1. Executes decode trace on CQ0 (non-blocking)
+        2. Transfers tokens to host on CQ1 (async)
+        3. Calls audio_callback with decoded audio chunks (parallel)
+
+        Args:
+            input_ids: Initial input tokens [batch, seq_len]
+            max_new_tokens: Maximum tokens to generate
+            prefill_output: Optional prefill output to continue from
+            start_pos: Starting position in sequence
+            audio_callback: Optional callback for streaming audio chunks
+            return_stats: Whether to return detailed timing stats
 
         Returns:
-            waveform: numpy array [num_samples] at 24kHz
+            Tuple of (generated_tokens_list, stats_dict)
         """
-        if self.vocoder is None:
-            raise RuntimeError("Vocoder not initialized — download speech_tokenizer weights")
-        # Clamp token values to Vocoder's codebook range [0, 2047]
-        max_cb_val = all_codebooks.max().item()
-        if max_cb_val >= 2048:
-            logger.warning(f"Clamping {(all_codebooks >= 2048).sum().item()} tokens from max={max_cb_val} to 2047")
-            all_codebooks = all_codebooks.clamp(max=2047)
-        return self.vocoder.decode(all_codebooks)
+        import time
+
+        if not self.decode_trace_captured:
+            raise RuntimeError("Decode trace not captured. Call capture_decode_trace first.")
+
+        generated_tokens = []
+        current_pos = start_pos + input_ids.shape[1]
+
+        # Performance tracking
+        generation_start = time.time()
+        ttft = None  # Time to first token
+        decode_times = []
+        first_audio_chunk_time = None
+
+        # Start streaming decoder if configured
+        if self.streaming_decoder is not None:
+            self.streaming_decoder.start()
+
+        # Initialize 2CQ events
+        self.cq0_event = None
+        self.cq1_event = None
+
+        logger.info(f"Starting 2CQ generation: max_tokens={max_new_tokens}, use_2cq={self.use_2cq}")
+        decode_loop_start = time.time()
+
+        try:
+            for step in range(max_new_tokens):
+                step_start = time.time()
+
+                # 2CQ: Wait for previous CQ1 async work to complete
+                if self.use_2cq and self.cq1_event is not None:
+                    ttnn.wait_for_event(0, self.cq1_event)
+                    self.cq1_event = None
+
+                # Prepare input for this step
+                if step == 0 and prefill_output is not None:
+                    # Use last token from prefill
+                    current_input = input_ids[:, -1:]
+                else:
+                    # Use previously generated token
+                    current_input = generated_tokens[-1] if generated_tokens else input_ids[:, -1:]
+                    if isinstance(current_input, torch.Tensor) and current_input.dim() == 1:
+                        current_input = current_input.unsqueeze(0)
+
+                # Copy input to device
+                input_tt = ttnn.from_torch(
+                    current_input,
+                    device=None,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.copy_host_to_device_tensor(input_tt, self.decode_inputs["input_ids"])
+
+                # Execute decode trace (non-blocking for 2CQ overlap)
+                blocking = not self.use_2cq
+                ttnn.execute_trace(self.device, self.decode_trace_id, cq_id=0, blocking=blocking)
+
+                # Record event on CQ0 for synchronization
+                if self.use_2cq:
+                    self.cq0_event = ttnn.record_event(self.device, 0)
+
+                # Get output logits and sample token
+                # For 2CQ, this happens while CQ1 does async work
+                # decode_output is (codec_logits, cp_logits_list, talker_kv, cp_kv)
+                codec_logits, cp_logits_list, _, _ = self.decode_output
+
+                # Sample from all 16 code groups
+                tokens_per_group = []
+
+                # Code 0 from codec_head
+                codec_logits_torch = ttnn.to_torch(codec_logits)
+                token_0 = torch.argmax(codec_logits_torch, dim=-1)
+                tokens_per_group.append(token_0)
+
+                # Codes 1-15 from CodePredictor
+                for logits in cp_logits_list:
+                    logits_torch = ttnn.to_torch(logits)
+                    token = torch.argmax(logits_torch, dim=-1)
+                    tokens_per_group.append(token)
+
+                generated_token = torch.stack(tokens_per_group, dim=-1)  # [batch, 16]
+
+                generated_tokens.append(generated_token)
+
+                # Capture TTFT after first token is generated
+                if step == 0 and ttft is None:
+                    ttft = time.time() - generation_start
+
+                # 2CQ: Start async work on CQ1
+                if self.use_2cq and step < max_new_tokens - 1:
+                    # CQ1 waits for CQ0
+                    ttnn.wait_for_event(1, self.cq0_event)
+
+                    # Async position update for next iteration
+                    self._update_position_async(current_pos + 1, cq_id=1)
+
+                    # Record event on CQ1
+                    self.cq1_event = ttnn.record_event(self.device, 1)
+
+                # Send tokens to streaming decoder
+                if self.streaming_decoder is not None:
+                    self.streaming_decoder.add_tokens(generated_token.squeeze())
+
+                    # Check for audio chunk and call callback
+                    if audio_callback is not None:
+                        audio_chunk = self.streaming_decoder.get_audio_chunk(timeout=0.001)
+                        if audio_chunk is not None:
+                            if first_audio_chunk_time is None:
+                                first_audio_chunk_time = time.time() - generation_start
+                            audio_callback(audio_chunk)
+
+                current_pos += 1
+
+                # Track decode time
+                step_time = time.time() - step_start
+                decode_times.append(step_time)
+
+                # Progress logging
+                if (step + 1) % 20 == 0:
+                    avg_time = sum(decode_times[-20:]) / min(20, len(decode_times))
+                    logger.info(f"Step {step + 1}/{max_new_tokens}, avg decode: {avg_time*1000:.1f}ms")
+
+        finally:
+            # Stop streaming decoder
+            if self.streaming_decoder is not None:
+                self.streaming_decoder.stop()
+
+        # Calculate final stats
+        decode_loop_time = time.time() - decode_loop_start
+        total_time = time.time() - generation_start
+        num_tokens = len(generated_tokens)
+
+        avg_decode_time = sum(decode_times) / len(decode_times) if decode_times else 0
+        tokens_per_sec = num_tokens / decode_loop_time if decode_loop_time > 0 else 0
+
+        stats = {
+            "tokens_generated": num_tokens,
+            "ttft": ttft,
+            "ttft_ms": ttft * 1000 if ttft else 0,
+            "avg_decode_time": avg_decode_time,
+            "avg_decode_time_ms": avg_decode_time * 1000,
+            "tokens_per_sec": tokens_per_sec,
+            "decode_loop_time": decode_loop_time,
+            "total_time": total_time,
+            "first_audio_chunk_time": first_audio_chunk_time,
+            "first_audio_chunk_time_ms": first_audio_chunk_time * 1000 if first_audio_chunk_time else None,
+            "use_2cq": self.use_2cq,
+        }
+
+        logger.info(f"Generation complete: {num_tokens} tokens in {decode_loop_time:.2f}s")
+        logger.info(f"  TTFT: {stats['ttft_ms']:.1f}ms")
+        logger.info(f"  Throughput: {tokens_per_sec:.2f} tok/s")
+        logger.info(f"  Avg decode: {stats['avg_decode_time_ms']:.1f}ms/token")
+
+        return generated_tokens, stats
+
+    def get_final_audio(self) -> torch.Tensor:
+        """
+        Get final decoded audio after generation.
+
+        Returns:
+            Full audio tensor
+        """
+        if self.streaming_decoder is not None:
+            return self.streaming_decoder.get_all_audio()
+        return torch.tensor([])
+
+    def release_traces(self):
+        """Release all captured traces."""
+        if self.prefill_trace_id is not None:
+            ttnn.release_trace(self.device, self.prefill_trace_id)
+            self.prefill_trace_id = None
+            self.prefill_trace_captured = False
+
+        if self.decode_trace_id is not None:
+            ttnn.release_trace(self.device, self.decode_trace_id)
+            self.decode_trace_id = None
+            self.decode_trace_captured = False
+
+        logger.info("Traces released")
+
+
+def create_generator_2cq(
+    model: Qwen3TTS,
+    device,
+    max_batch_size: int = 1,
+    max_seq_len: int = 2048,
+    use_2cq: bool = True,
+) -> Qwen3TTSGenerator2CQ:
+    """
+    Factory function to create a 2CQ generator.
+
+    Args:
+        model: Qwen3TTS model
+        device: TTNN device
+        max_batch_size: Maximum batch size
+        max_seq_len: Maximum sequence length
+        use_2cq: Enable 2-command-queue mode
+
+    Returns:
+        Initialized 2CQ generator
+    """
+    return Qwen3TTSGenerator2CQ(
+        model=model,
+        device=device,
+        talker_config=model.talker_config,
+        code_predictor_config=model.code_predictor_config,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        use_2cq=use_2cq,
+    )

@@ -1,466 +1,510 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
-
 """
-Qwen3-TTS LM Talker implementation on TT hardware.
+Talker model implementation for Qwen3-TTS.
 
-The Talker is the core autoregressive component of Qwen3-TTS. It is architecturally
-identical to Qwen3-1.7B (28 layers, GQA 16Q/8KV, SwiGLU, RMSNorm) with these
-TTS-specific additions:
+The Talker is a 28-layer transformer decoder that processes codec embeddings
+and generates hidden states for the CodePredictor.
 
-  1. Dual embedding tables: text_vocab (151936) + codec_vocab (3072)
-  2. Codec head: predicts codebook-0 tokens instead of text tokens
-  3. Speaker embedding injection: projects speaker_emb into hidden state
-  4. MRoPE: Multi-dimensional RoPE with interleaved sections [24, 20, 20]
-     (for non-streaming mode with sequential positions, equivalent to standard RoPE)
-
-Subclasses the shared Transformer infrastructure from models/tt_transformers/.
-During prefill, text tokens are embedded on the host (torch) and passed as
-pre-embedded tensors. During decode, codec tokens use the on-device embedding.
+Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
 
-import math
+from typing import List, Optional, Tuple
 
 import torch
 
 import ttnn
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model import Transformer
+from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
+from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
 
 
-class TalkerTransformer(Transformer):
+class Talker(LightweightModule):
     """
-    Qwen3-TTS Talker: autoregressive transformer that generates CB0 codec tokens.
+    Qwen3-TTS Talker model.
 
-    Inherits the full decode/prefill infrastructure from the base Transformer.
-    Adds:
-      - text_embed_weight (torch, host): for CPU-side text token embedding during prefill
-      - text_projection (ttnn, device): 2-layer MLP (Linear→SiLU→Linear) projecting
-        text embeddings from text_hidden_size to Talker hidden_size
-      - Speaker embedding: directly added to hidden state (same dim, no projection needed)
+    Architecture:
+        - Codec embedding layer
+        - 28 decoder layers with MROPE
+        - Final RMSNorm
+
+    Args:
+        device: TTNN device
+        config: Talker configuration (Qwen3TTSTalkerConfig)
+        state_dict: Model weights
+        weight_cache_path: Optional path for weight caching
     """
 
     def __init__(
         self,
-        args,
-        dtype,
-        mesh_device,
-        state_dict,
-        weight_cache_path,
-        paged_attention_config=None,
-        use_paged_kv_cache=False,
+        device,
+        config,
+        state_dict: dict,
+        weight_cache_path=None,
     ):
-        super().__init__(
-            args=args,
-            dtype=dtype,
-            mesh_device=mesh_device,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
-        )
+        super().__init__()
+        self.device = device
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.num_layers = config.num_hidden_layers
+        self.vocab_size = config.audio_vocab_size
 
-        # Text embedding weights kept on host for CPU-side prefill embedding
-        # HF key: talker.model.text_embedding.weight → after meta conversion: talker.text_embedding.weight
-        text_key = "talker.text_embedding.weight"
-        if state_dict is not None and text_key in state_dict:
-            self.text_embed_weight = state_dict[text_key].clone()
-        else:
-            self.text_embed_weight = torch.randn(args.text_vocab_size, args.dim)
+        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _dram = ttnn.DRAM_MEMORY_CONFIG
 
-        # Codec embedding on host (for Code Predictor's CB0 embedding lookup)
-        # Device-side codec embedding is self.embd (inherited from Transformer)
-        codec_key = "talker.tok_embeddings.weight"
-        if state_dict is not None and codec_key in state_dict:
-            self.codec_embed_weight = state_dict[codec_key].clone()
-        else:
-            self.codec_embed_weight = torch.randn(args.vocab_size, args.dim)
+        def get_cache_name(name):
+            if weight_cache_path is None:
+                return None
+            return weight_cache_path / f"talker_{name}".replace(".", "_")
 
-        # Text projection MLP: 2-layer MLP with SiLU (projects text LM hidden → Talker hidden)
-        # HF keys: talker.text_projection.linear_fc1/fc2 (.weight + .bias)
-        def _load_linear(key_prefix, in_dim, out_dim, has_bias=True):
-            w_key = f"{key_prefix}.weight"
-            b_key = f"{key_prefix}.bias"
-            if state_dict is not None and w_key in state_dict:
-                w = state_dict[w_key].T.contiguous().unsqueeze(0).unsqueeze(0)
-            else:
-                w = torch.randn(1, 1, in_dim, out_dim)
+        def _linear_weight_torch_to_matmul_4d(w_torch: torch.Tensor) -> torch.Tensor:
+            """[out, in] checkpoint -> [1, 1, in, out] host tensor for ttnn.linear (transpose on CPU; single H2D upload)."""
+            return w_torch.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
 
-            tt_w = ttnn.as_tensor(
-                w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                cache_file_name=weight_cache_path / f"{w_key}" if weight_cache_path else None,
-            )
-
-            tt_b = None
-            if has_bias:
-                if state_dict is not None and b_key in state_dict:
-                    b = state_dict[b_key].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-                else:
-                    b = torch.zeros(1, 1, 1, out_dim)
-                tt_b = ttnn.as_tensor(
-                    b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                    cache_file_name=weight_cache_path / f"{b_key}" if weight_cache_path else None,
-                )
-            return tt_w, tt_b
-
-        self.text_proj_fc1_w, self.text_proj_fc1_b = _load_linear(
-            "talker.text_projection.linear_fc1", args.text_hidden_size, args.dim
-        )
-        self.text_proj_fc2_w, self.text_proj_fc2_b = _load_linear(
-            "talker.text_projection.linear_fc2", args.dim, args.dim
-        )
-
-    def embed_text_tokens(self, token_ids):
-        """Embed text tokens on the host using the text embedding table.
-
-        Args:
-            token_ids: torch.Tensor [batch, seq_len] of text token IDs
-
-        Returns:
-            torch.Tensor [batch, seq_len, dim] of embeddings
-        """
-        return torch.nn.functional.embedding(token_ids, self.text_embed_weight)
-
-    def prepare_inputs_prefill(
-        self,
-        tokens,
-        start_pos=0,
-        page_table=None,
-        chunk_page_table=None,
-        trace_enabled=False,
-        last_token_idx=None,
-        global_user_id=None,
-        batch_size=1,
-        user_id=0,
-        **kwargs,
-    ):
-        """Prepare prefill inputs, accepting pre-embedded text tensors.
-
-        For TTS prefill, `tokens` is a pre-embedded torch.Tensor [batch, seq_len, dim]
-        (produced by embed_text_tokens). This follows the Qwen3-VL pattern where
-        embeddings are computed on the host before being sent to device.
-
-        For decode or codec token input, `tokens` is a standard [batch, seq_len]
-        integer tensor, which falls through to the base class embedding.
-        """
-        if isinstance(tokens, torch.Tensor) and tokens.dim() == 3:
-            return self._prepare_preembedded_prefill(
-                tokens,
-                start_pos=start_pos,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                trace_enabled=trace_enabled,
-                last_token_idx=last_token_idx,
-                batch_size=batch_size,
-                user_id=user_id,
-            )
-
-        return super().prepare_inputs_prefill(
-            tokens,
-            start_pos=start_pos,
-            page_table=page_table,
-            chunk_page_table=chunk_page_table,
-            trace_enabled=trace_enabled,
-            last_token_idx=last_token_idx,
-            global_user_id=global_user_id,
-            batch_size=batch_size,
-            user_id=user_id,
-            **kwargs,
-        )
-
-    def _prepare_preembedded_prefill(
-        self,
-        embeddings,
-        start_pos=0,
-        page_table=None,
-        chunk_page_table=None,
-        trace_enabled=False,
-        last_token_idx=None,
-        batch_size=1,
-        user_id=0,
-    ):
-        """Prepare prefill inputs from pre-embedded tensor [batch, seq_len, dim]."""
-        device = None if trace_enabled else self.mesh_device
-        S = embeddings.shape[1]
-
-        tokens_embd = embeddings.unsqueeze(1)  # [batch, 1, seq_len, dim]
-        tokens_embd = ttnn.from_torch(
-            tokens_embd,
+        # Codec embedding (for audio codec tokens). Stored ROW_MAJOR so
+        # ttnn.embedding can index it directly without a per-call untilize of
+        # the [vocab, hidden] table. (CodePredictor's codec_embeddings_tt do the
+        # same; the inconsistency was costing ~3.2 ms one-time on text_embedding.)
+        codec_embedding_weight = state_dict["talker.model.codec_embedding.weight"]
+        self.codec_embedding = ttnn.as_tensor(
+            codec_embedding_weight.unsqueeze(0).unsqueeze(0),
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            cache_file_name=get_cache_name("codec_embedding_rm"),
+            mesh_mapper=_mesh_mapper,
         )
 
-        # Slice RoPE cos/sin to the prefill sequence length
-        mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
-        seq_len = last_token_idx + 1 if last_token_idx is not None else S
-        assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
-
-        required_end = start_pos + S
-        pad_len = max(0, required_end - mat_len)
-        prefill_start_pos = 0 if trace_enabled else start_pos
-        slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
-
-        cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-
-        if pad_len > 0:
-            padding = [(0, 0)] * 4
-            padding[2] = (0, pad_len)
-            cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
-            sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
-
-        tt_rot_mats_prefill = [cos_slice, sin_slice]
-        tt_rot_mats_prefill_local = None
-
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table,
+        # Text embedding (for text tokens — used in real TTS).
+        if "talker.model.text_embedding.weight" in state_dict:
+            text_embedding_weight = state_dict["talker.model.text_embedding.weight"]
+            self.text_embedding = ttnn.as_tensor(
+                text_embedding_weight.unsqueeze(0).unsqueeze(0),
                 device=device,
-                dtype=ttnn.int32,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=get_cache_name("text_embedding_rm"),
+                mesh_mapper=_mesh_mapper,
             )
+            self.text_vocab_size = text_embedding_weight.shape[0]
         else:
-            tt_page_table = None
+            self.text_embedding = None
+            self.text_vocab_size = 0
 
-        if chunk_page_table is not None:
-            tt_chunk_page_table = ttnn.from_torch(
-                chunk_page_table,
+        # Decoder layers — matmul (QKV/o_proj/MLP) weights at bfloat16.
+        # RMSNorm weights stay bfloat16 (small, dynamic-range-sensitive).
+        _matmul_dtype = ttnn.bfloat16
+        self.layers = []
+        for i in range(self.num_layers):
+            layer = DecoderLayer(
                 device=device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                hidden_size=config.hidden_size,
+                num_heads=config.num_attention_heads,
+                num_kv_heads=config.num_key_value_heads,
+                head_dim=config.head_dim,
+                intermediate_size=config.intermediate_size,
+                state_dict=state_dict,
+                layer_idx=i,
+                layer_prefix="talker.model",
+                rms_norm_eps=config.rms_norm_eps,
+                weight_dtype=_matmul_dtype,
+                weight_cache_path=weight_cache_path,
             )
-        else:
-            tt_chunk_page_table = None
+            self.layers.append(layer)
 
-        return (
-            tokens_embd,
-            tt_rot_mats_prefill,
-            tt_rot_mats_prefill_local,
-            tt_page_table,
-            tt_chunk_page_table,
+        # Final layer norm
+        self.norm = RMSNorm(
+            device=device,
+            dim=config.hidden_size,
+            state_dict=state_dict,
+            weight_key="talker.model.norm.weight",
+            eps=config.rms_norm_eps,
+            weight_dtype=ttnn.bfloat16,
+            weight_cache_path=weight_cache_path,
         )
+        # Sharded LN configs for the FINAL norm (mirrors per-layer setup).
+        # Drops the final norm from 1-core (~26 µs) to 64-core (~6 µs).
+        from models.demos.qwen3_tts.tt.decoder_layer import _PREFILL_SEQS, _build_sharded_rmsnorm_configs
 
-    def text_projection(self, x):
-        """Apply the 2-layer text projection MLP: Linear → SiLU → Linear.
-
-        Projects text embeddings from text_hidden_size to Talker hidden_size.
-        Called on pre-embedded text tensors before the main Transformer forward.
-        """
-        h = ttnn.matmul(x, self.text_proj_fc1_w)
-        if self.text_proj_fc1_b is not None:
-            h = ttnn.add(h, self.text_proj_fc1_b)
-        h = ttnn.silu(h)
-        h = ttnn.matmul(h, self.text_proj_fc2_w)
-        if self.text_proj_fc2_b is not None:
-            h = ttnn.add(h, self.text_proj_fc2_b)
-        return h
-
-    def ttnn_prefill_forward(
-        self,
-        x,
-        rot_mats_global=None,
-        rot_mats_local=None,
-        user_id=0,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        get_last_token=-1,
-        kv_cache=None,
-        batch_size=1,
-        speaker_emb=None,
-        pre_projected=False,
-        **kwargs,
-    ):
-        """Prefill forward with text projection and optional speaker embedding.
-
-        Args:
-            pre_projected: If True, skip text_projection (input already includes
-                projected text + codec embeddings from _build_input_embeds).
-        """
-        if not pre_projected:
-            x = self.text_projection(x)
-
-        # Add speaker embedding if provided (speaker_emb is already 2048-dim = hidden_size)
-        if speaker_emb is not None:
-            x = ttnn.add(x, speaker_emb)
-
-        return super().ttnn_prefill_forward(
-            x,
-            rot_mats_global=rot_mats_global,
-            rot_mats_local=rot_mats_local,
-            user_id=user_id,
-            page_table=page_table,
-            chunk_page_table=chunk_page_table,
-            chunk_start_idx=chunk_start_idx,
-            get_last_token=get_last_token,
-            kv_cache=kv_cache,
-            batch_size=batch_size,
+        _dim_tiles = config.hidden_size // 32
+        _final_ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if _dim_tiles % c == 0)
+        self._final_ln_decode_in_memcfg, self._final_ln_decode_progcfg = _build_sharded_rmsnorm_configs(
+            device, config.hidden_size, _final_ln_num_cores, m=32
         )
+        self._final_ln_prefill_configs = {
+            m: _build_sharded_rmsnorm_configs(device, config.hidden_size, _final_ln_num_cores, m=m)
+            for m in _PREFILL_SEQS
+        }
 
-    def ttnn_prefill_forward_with_hidden(
-        self,
-        x,
-        rot_mats_global=None,
-        rot_mats_local=None,
-        user_id=0,
-        page_table=None,
-        chunk_page_table=None,
-        get_last_token=-1,
-        kv_cache=None,
-        batch_size=1,
-        speaker_emb=None,
-        pre_projected=False,
-    ):
-        """Prefill forward returning both logits and pre-norm hidden state.
-
-        Runs the standard prefill path but also captures the pre-norm hidden
-        state at the last-token block, needed by Code Predictor at step 0.
-
-        Returns:
-            (tt_logits, tt_hidden_block) — logits from standard path,
-            pre-norm hidden at the last-token 32-wide block (untilized on DRAM)
-        """
-        from models.tt_transformers.tt.model_config import TensorGroup
-
-        if not pre_projected:
-            x = self.text_projection(x)
-        if speaker_emb is not None:
-            x = ttnn.add(x, speaker_emb)
-
-        for i, layer in enumerate(self.layers):
-            activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
-                decoder_id=i, tensor=TensorGroup.ACTIVATION
+        # Codec head for predicting first RVQ codebook (vocab 3072)
+        # This is used during autoregressive generation
+        codec_head_key = "talker.codec_head.weight"
+        if codec_head_key in state_dict:
+            codec_head_weight = _linear_weight_torch_to_matmul_4d(state_dict[codec_head_key])
+            self.codec_head = ttnn.as_tensor(
+                codec_head_weight,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=get_cache_name("codec_head"),
+                mesh_mapper=_mesh_mapper,
             )
-            if activation_dtype is not None and x.dtype != activation_dtype:
-                x = ttnn.typecast(x, activation_dtype)
-            x = layer(
-                x, current_pos=None,
-                rot_mats_global=rot_mats_global, rot_mats_local=rot_mats_local,
-                user_id=user_id, mode=Mode.PREFILL,
-                page_table=page_table, chunk_page_table=chunk_page_table,
-                kv_cache=kv_cache[i] if kv_cache is not None else None,
-                batch_size=batch_size,
-            )
-
-        # Extract last-token block for norm + lm_head
-        if get_last_token != -1:
-            x_block = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+            self.codec_head_vocab_size = state_dict[codec_head_key].shape[0]  # 3072
         else:
-            x_block = x
+            self.codec_head = None
+            self.codec_head_vocab_size = 0
 
-        # Apply norm first — Code Predictor needs POST-NORM hidden (matches HF last_hidden_state)
-        x_normed = self.norm(x_block, mode=Mode.PREFILL,
-                             norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher))
-
-        # Capture POST-NORM hidden for Code Predictor
-        tt_hidden_block = ttnn.untilize(x_normed, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
-        if lm_head_input_mem_cfg.is_sharded():
-            x_normed = ttnn.interleaved_to_sharded(x_normed, lm_head_input_mem_cfg)
-
-        tt_logits = self.lm_head(x_normed)
-        tt_logits = ttnn.to_memory_config(tt_logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        return tt_logits, tt_hidden_block
-
-    def ttnn_decode_forward_preembedded(self, x_embed, current_pos, rot_mat_idxs=None, page_table=None):
-        """Decode forward with pre-embedded input, returning both logits and hidden state.
-
-        Runs the Transformer layers inline (rather than calling self.forward) so we
-        can capture the hidden state before norm+lm_head.  The hidden state is needed
-        by the Code Predictor to generate CB1-15.
-
-        Args:
-            x_embed: ttnn.Tensor [1, 1, batch, dim] pre-embedded decode input on device
-            current_pos: ttnn.Tensor position IDs
-            rot_mat_idxs: ttnn.Tensor rotation matrix indices
-            page_table: optional page table
-
-        Returns:
-            (tt_logits, tt_hidden) — logits after lm_head, post-norm hidden state
-        """
-        from models.tt_transformers.tt.model_config import TensorGroup
-
-        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
-        rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
-
-        x = x_embed
-        for i, layer in enumerate(self.layers):
-            activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
-                decoder_id=i, tensor=TensorGroup.ACTIVATION
+        # Text projection MLP (projects text embeddings before combining with codec)
+        # Architecture: linear_fc1 -> SiLU -> linear_fc2
+        text_proj_fc1_key = "talker.text_projection.linear_fc1.weight"
+        if text_proj_fc1_key in state_dict:
+            fc1_weight = _linear_weight_torch_to_matmul_4d(state_dict[text_proj_fc1_key])
+            self.text_proj_fc1 = ttnn.as_tensor(
+                fc1_weight,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=get_cache_name("text_proj_fc1"),
+                mesh_mapper=_mesh_mapper,
             )
-            if not self.args.is_galaxy:
-                x = ttnn.to_memory_config(
-                    x,
-                    self.args.get_residual_mem_config(Mode.DECODE, self.prefetcher),
-                    activation_dtype,
+            # FC1 bias
+            fc1_bias_key = "talker.text_projection.linear_fc1.bias"
+            if fc1_bias_key in state_dict:
+                fc1_bias = state_dict[fc1_bias_key].unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                self.text_proj_fc1_bias = ttnn.as_tensor(
+                    fc1_bias,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_file_name=get_cache_name("text_proj_fc1_bias"),
+                    mesh_mapper=_mesh_mapper,
                 )
-            elif activation_dtype is not None and x.dtype != activation_dtype:
-                x = ttnn.typecast(x, activation_dtype)
+            else:
+                self.text_proj_fc1_bias = None
 
-            x = layer(
-                x,
-                current_pos,
-                rot_mats_global=rot_mats_global,
-                rot_mats_local=rot_mats_local,
-                mode=Mode.DECODE,
-                page_table=page_table,
+            fc2_weight = _linear_weight_torch_to_matmul_4d(state_dict["talker.text_projection.linear_fc2.weight"])
+            self.text_proj_fc2 = ttnn.as_tensor(
+                fc2_weight,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=get_cache_name("text_proj_fc2"),
+                mesh_mapper=_mesh_mapper,
             )
+            # FC2 bias
+            fc2_bias_key = "talker.text_projection.linear_fc2.bias"
+            if fc2_bias_key in state_dict:
+                fc2_bias = state_dict[fc2_bias_key].unsqueeze(0).unsqueeze(0).unsqueeze(0)
+                self.text_proj_fc2_bias = ttnn.as_tensor(
+                    fc2_bias,
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cache_file_name=get_cache_name("text_proj_fc2_bias"),
+                    mesh_mapper=_mesh_mapper,
+                )
+            else:
+                self.text_proj_fc2_bias = None
+            self.has_text_projection = True
+        else:
+            self.has_text_projection = False
 
-        # Apply norm — Code Predictor needs POST-NORM hidden (matches HF last_hidden_state)
-        x = self.norm(x, mode=Mode.DECODE, norm_config=self.args.get_norm_config("lm_head", Mode.DECODE, self.prefetcher))
-
-        # Capture POST-NORM hidden for Code Predictor
-        tt_hidden = ttnn.untilize(x, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        x = self.lm_head(x)
-        tt_logits = ttnn.untilize(x, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        return tt_logits, tt_hidden
-
-    def prefill(self, text_tokens, start_pos=0, page_table=None, kv_cache=None, speaker_emb=None):
-        """High-level prefill: embed text on host, send to device, run forward.
-
-        Args:
-            text_tokens: torch.Tensor [batch, seq_len] text token IDs
-            start_pos: starting position in KV cache
-            page_table: optional paged attention table
-            kv_cache: KV cache tensors
-            speaker_emb: optional ttnn.Tensor [1, 1, batch, spk_enc_dim] speaker embedding on device
-
-        Returns:
-            logits: ttnn.Tensor of codec token logits
-        """
-        embeddings = self.embed_text_tokens(text_tokens)
-        last_token_idx = text_tokens.shape[1] - 1
-
-        tokens_embd, rot_mats, rot_mats_local, tt_page_table, tt_chunk_page_table = (
-            self.prepare_inputs_prefill(
-                embeddings,
-                start_pos=start_pos,
-                page_table=page_table,
-                last_token_idx=last_token_idx,
-            )
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
-        get_last_token = (last_token_idx // 32) * 32
+    def forward(
+        self,
+        input_ids: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        transformation_mat: ttnn.Tensor,
+        attention_mask: ttnn.Tensor = None,
+        use_text_embedding: bool = False,
+        kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
+        start_pos: int = 0,
+        mode: str = "prefill",
+    ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
+        """
+        Forward pass of the Talker model.
 
-        return self.ttnn_prefill_forward(
-            tokens_embd,
-            rot_mats_global=rot_mats,
-            rot_mats_local=rot_mats_local,
-            page_table=tt_page_table,
-            chunk_page_table=tt_chunk_page_table,
-            get_last_token=get_last_token,
-            kv_cache=kv_cache,
-            speaker_emb=speaker_emb,
+        Supports both prefill (full sequence) and decode (single token) modes.
+
+        Args:
+            input_ids: Input token IDs [batch, seq_len]
+            cos: Cosine frequencies for RoPE
+            sin: Sine frequencies for RoPE
+            transformation_mat: Transformation matrix for RoPE
+            attention_mask: Optional attention mask
+            use_text_embedding: If True, use text embedding (for text tokens in TTS)
+                               If False, use codec embedding (for audio codec tokens)
+            kv_caches: Optional list of (k_cache, v_cache) tuples, one per layer
+            start_pos: Starting position in sequence (for KV cache)
+            mode: "prefill" for full sequence or "decode" for single token
+
+        Returns:
+            Tuple of (hidden_states, updated_kv_caches) where:
+            - hidden_states: [batch, 1, seq_len, hidden_size]
+            - updated_kv_caches: list of (k_cache, v_cache) tuples or None
+        """
+        # Choose embedding based on input type
+        if use_text_embedding and self.text_embedding is not None:
+            embedding_weight = self.text_embedding
+        else:
+            embedding_weight = self.codec_embedding
+
+        # Embedding lookup
+        hidden_states = ttnn.embedding(
+            input_ids,
+            embedding_weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        return self._forward_layers(
+            hidden_states,
+            cos,
+            sin,
+            transformation_mat,
+            attention_mask,
+            kv_caches=kv_caches,
+            start_pos=start_pos,
+            mode=mode,
+        )
+
+    def forward_from_hidden(
+        self,
+        hidden_states: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        transformation_mat: ttnn.Tensor,
+        attention_mask: ttnn.Tensor = None,
+        kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
+        start_pos: int = 0,
+        mode: str = "prefill",
+        cur_pos_tensor: Optional[ttnn.Tensor] = None,
+        decode_attn_mask: Optional[ttnn.Tensor] = None,
+        prefill_attn_mask: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
+        """
+        Forward pass starting from hidden states (for mixed embeddings).
+
+        Args:
+            hidden_states: Pre-computed hidden states [batch, 1, seq_len, hidden_size]
+            cos: Cosine frequencies for RoPE
+            sin: Sine frequencies for RoPE
+            transformation_mat: Transformation matrix for RoPE
+            attention_mask: Optional attention mask
+            kv_caches: Optional list of (k_cache, v_cache) tuples, one per layer
+            start_pos: Starting position in sequence (for KV cache, non-trace path)
+            mode: "prefill" for full sequence or "decode" for single token
+            cur_pos_tensor: Optional int32 device tensor [1] for trace-compatible decode
+            decode_attn_mask: Optional float32 device tensor [1,1,1,max_seq] for decode
+            prefill_attn_mask: Optional float32 device tensor [1,heads,padded_seq,max_seq]
+                for trace-compatible Talker prefill
+
+        Returns:
+            Tuple of (hidden_states, updated_kv_caches)
+        """
+        return self._forward_layers(
+            hidden_states,
+            cos,
+            sin,
+            transformation_mat,
+            attention_mask,
+            kv_caches=kv_caches,
+            start_pos=start_pos,
+            mode=mode,
+            cur_pos_tensor=cur_pos_tensor,
+            decode_attn_mask=decode_attn_mask,
+            prefill_attn_mask=prefill_attn_mask,
+        )
+
+    def _forward_layers(
+        self,
+        hidden_states: ttnn.Tensor,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        transformation_mat: ttnn.Tensor,
+        attention_mask: ttnn.Tensor = None,
+        kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
+        start_pos: int = 0,
+        mode: str = "prefill",
+        cur_pos_tensor: Optional[ttnn.Tensor] = None,
+        decode_attn_mask: Optional[ttnn.Tensor] = None,
+        prefill_attn_mask: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
+        """Internal: Apply decoder layers and final norm.
+
+        Args:
+            hidden_states: Input tensor
+            cos, sin: RoPE frequencies
+            transformation_mat: RoPE transformation matrix
+            attention_mask: Optional attention mask
+            kv_caches: Optional list of (k_cache, v_cache) tuples per layer
+            start_pos: Starting position for KV cache (non-trace path)
+            mode: "prefill" or "decode"
+            cur_pos_tensor: Optional int32 device tensor [1] for trace-compatible decode
+            decode_attn_mask: Optional float32 device tensor [1,1,1,max_seq] for decode
+            prefill_attn_mask: Optional float32 device tensor [1,heads,padded_seq,max_seq]
+                for trace-compatible Talker prefill
+
+        Returns:
+            Tuple of (output, updated_kv_caches)
+        """
+        # Add batch dimension if needed: [batch, seq_len, hidden] -> [batch, 1, seq_len, hidden]
+        if len(hidden_states.shape) == 3 or hidden_states.shape[1] != 1:
+            if len(hidden_states.shape) == 3:
+                hidden_states = ttnn.reshape(
+                    hidden_states,
+                    (hidden_states.shape[0], 1, hidden_states.shape[1], hidden_states.shape[2]),
+                )
+
+        # Apply decoder layers
+        updated_kv_caches = [] if kv_caches is not None else None
+        for i, layer in enumerate(self.layers):
+            layer_kv_cache = kv_caches[i] if kv_caches is not None else None
+            hidden_states, updated_kv_cache = layer(
+                hidden_states,
+                cos,
+                sin,
+                transformation_mat,
+                attention_mask,
+                kv_cache=layer_kv_cache,
+                start_pos=start_pos,
+                mode=mode,
+                cur_pos_tensor=cur_pos_tensor,
+                decode_attn_mask=decode_attn_mask,
+                prefill_attn_mask=prefill_attn_mask,
+            )
+            if updated_kv_caches is not None:
+                updated_kv_caches.append(updated_kv_cache)
+
+        # Final norm — sharded multi-core for both decode (M=32) and prefill (seq_len).
+        _is_decode = mode == "decode"
+        if _is_decode or (not _is_decode and hidden_states.shape[-2] in self._final_ln_prefill_configs):
+            if _is_decode:
+                _ln_in_mc, _ln_pc = self._final_ln_decode_in_memcfg, self._final_ln_decode_progcfg
+            else:
+                _ln_in_mc, _ln_pc = self._final_ln_prefill_configs[hidden_states.shape[-2]]
+            h_sh = ttnn.to_memory_config(hidden_states, _ln_in_mc)
+            ttnn.deallocate(hidden_states)
+            normed_sh = self.norm(h_sh, program_config=_ln_pc, memory_config=_ln_in_mc)
+            ttnn.deallocate(h_sh)
+            hidden_states = ttnn.to_memory_config(normed_sh, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed_sh)
+        else:
+            hidden_states = self.norm(hidden_states)
+
+        return hidden_states, updated_kv_caches
+
+    def get_codec_logits(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Apply codec_head to get logits for first RVQ codebook prediction.
+
+        Args:
+            hidden_states: Hidden states from Talker [batch, 1, seq_len, hidden_size]
+
+        Returns:
+            Logits [batch, 1, seq_len, 3072]
+        """
+        if self.codec_head is None:
+            raise ValueError("codec_head not loaded. Cannot compute codec logits.")
+
+        logits = ttnn.linear(
+            hidden_states,
+            self.codec_head,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        return logits
+
+    def project_text(self, text_embeds: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Apply text projection MLP to text embeddings.
+
+        This projects text embeddings before combining with codec embeddings
+        in ICL (In-Context Learning) mode.
+
+        Architecture: linear_fc1 -> SiLU -> linear_fc2
+
+        Args:
+            text_embeds: Text embeddings [batch, 1, seq_len, hidden_size]
+
+        Returns:
+            Projected text embeddings [batch, 1, seq_len, hidden_size]
+        """
+        if not self.has_text_projection:
+            raise ValueError("text_projection not loaded. Cannot project text embeddings.")
+
+        # FC1 + bias
+        h = ttnn.linear(
+            text_embeds,
+            self.text_proj_fc1,
+            bias=self.text_proj_fc1_bias,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # SiLU activation
+        h = ttnn.silu(h)
+
+        # FC2 + bias
+        output = ttnn.linear(
+            h,
+            self.text_proj_fc2,
+            bias=self.text_proj_fc2_bias,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return output
+
+    def get_text_embedding(self, text_ids: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Get text embeddings for given token IDs.
+
+        Args:
+            text_ids: Text token IDs [batch, seq_len]
+
+        Returns:
+            Text embeddings [batch, seq_len, hidden_size]
+        """
+        if self.text_embedding is None:
+            raise ValueError("text_embedding not loaded.")
+
+        return ttnn.embedding(
+            text_ids,
+            self.text_embedding,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    def get_codec_embedding(self, codec_ids: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Get codec embeddings for given token IDs.
+
+        Args:
+            codec_ids: Codec token IDs [batch, seq_len]
+
+        Returns:
+            Codec embeddings [batch, seq_len, hidden_size]
+        """
+        return ttnn.embedding(
+            codec_ids,
+            self.codec_embedding,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )

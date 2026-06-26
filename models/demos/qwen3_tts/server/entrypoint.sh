@@ -17,5 +17,7 @@ fi
 # no decoder-extraction step needed (unlike the ASR server).
 # Port: TTS_PORT (tt-home compose contract) takes priority, else QWEN3TTS_PORT, else 8003.
 PORT="${TTS_PORT:-${QWEN3TTS_PORT:-8003}}"
-exec python3 -m uvicorn models.demos.qwen3_tts.server.qwen3_tts_server:app \
-  --host 0.0.0.0 --port "${PORT}"
+# App module: default to the fast (trace+2cq) server; override with QWEN3TTS_APP to use the
+# eager TTSGenerator server (models.demos.qwen3_tts.server.qwen3_tts_server:app).
+APP="${QWEN3TTS_APP:-models.demos.qwen3_tts.server.qwen3_tts_fast_server:app}"
+exec python3 -m uvicorn "${APP}" --host 0.0.0.0 --port "${PORT}"
