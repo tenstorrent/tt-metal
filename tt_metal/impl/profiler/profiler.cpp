@@ -2350,8 +2350,36 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
             ->device_programs_perf_analyses_map.at(this->device_id);
     device_programs_perf_analyses.push_back(translateProgramsPerfResults(programs_perf_results));
 
+    // HW perf-counter columns on the fast path. Reads the per-(op,core) counter markers straight
+    // from the in-memory device markers, so a counter run no longer falls back to the legacy Python
+    // path that pandas-reads the full per-core device log (the mesh-scale OOM). Returns empty (no
+    // added columns) when no counter markers were captured, leaving the default path byte-identical.
+    std::map<experimental::ProgramExecutionUID, double> kernel_cycles_by_uid;
+    {
+        std::optional<size_t> kernel_idx;
+        for (size_t i = 0; i < programs_perf_results.analysis_results_configs.size(); ++i) {
+            if (programs_perf_results.analysis_results_configs[i].analysis_name == "DEVICE KERNEL DURATION [ns]") {
+                kernel_idx = i;
+                break;
+            }
+        }
+        if (kernel_idx.has_value()) {
+            for (const auto& [uid, single] : programs_perf_results.program_execution_uid_to_perf_results) {
+                if (kernel_idx.value() < single.analysis_results.size()) {
+                    const auto& kr = single.analysis_results[kernel_idx.value()];
+                    if (kr.end_timestamp >= kr.start_timestamp) {
+                        kernel_cycles_by_uid[uid] = static_cast<double>(kr.end_timestamp - kr.start_timestamp);
+                    }
+                }
+            }
+        }
+    }
+    const profiler_perf_counters::PerfCounterColumns counter_columns =
+        profiler_perf_counters::computePerfCounterColumns(
+            device_markers, this->max_compute_cores, kernel_cycles_by_uid);
+
     writeProgramsPerfResultsToCSV(
-        programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME);
+        programs_perf_results, this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME, counter_columns);
 #endif
 }
 

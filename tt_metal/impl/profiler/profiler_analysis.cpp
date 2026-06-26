@@ -426,7 +426,9 @@ ProgramsPerfResults generatePerfResultsForPrograms(
 }
 
 void writeProgramsPerfResultsToCSV(
-    const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path) {
+    const ProgramsPerfResults& programs_perf_results,
+    const std::filesystem::path& report_path,
+    const profiler_perf_counters::PerfCounterColumns& counter_columns) {
     ZoneScoped;
 
     std::scoped_lock lock(
@@ -630,14 +632,35 @@ void writeProgramsPerfResultsToCSV(
 
         header_string += ",OP TO OP LATENCY [ns],OP TO OP LATENCY BR/NRISC START [ns]";
 
+        // HW perf-counter columns (computed on the fast path; see perf_counter_metrics). The schema
+        // is fixed across devices so per-device appended blocks stay column-aligned.
+        for (const auto& counter_header : counter_columns.active_headers) {
+            header_string += "," + counter_header;
+        }
+
         log_file_ofs << header_string << std::endl;
     }
 
     for (const auto& [uid, row] : rows_per_uid) {
-        (void)uid;
         log_file_ofs << row.base_columns << ",";
         log_file_ofs << row.kernel_latency_ns;
-        log_file_ofs << "," << row.dm_latency_ns << "\n";
+        log_file_ofs << "," << row.dm_latency_ns;
+
+        if (!counter_columns.active_headers.empty()) {
+            const auto uid_it = counter_columns.values_per_uid.find(uid);
+            const std::map<std::string, std::string>* vals =
+                (uid_it != counter_columns.values_per_uid.end()) ? &uid_it->second : nullptr;
+            for (const auto& counter_header : counter_columns.active_headers) {
+                log_file_ofs << ",";
+                if (vals != nullptr) {
+                    const auto v_it = vals->find(counter_header);
+                    if (v_it != vals->end()) {
+                        log_file_ofs << v_it->second;
+                    }
+                }
+            }
+        }
+        log_file_ofs << "\n";
     }
 
     log_file_ofs.close();

@@ -125,16 +125,32 @@ Verified: an 8192² bf16 eltwise add reports exactly 402,653,184 bytes
 (2 reads + 1 write). Single-chip `--collect-noc-traces` works; the documented
 ethernet hang is fabric/multi-chip init only.
 
+## C++ fast-path counters (Phase 2a — also the Phase 2b OOM fix)
+
+Counter capture now stays on the C++ fast post-process path; it no longer forces
+the legacy `pd.read_csv` of the full per-core device log (the 140 GB OOM at mesh
+scale). `impl/profiler/perf_counter_metrics.{hpp,cpp}` ports the full
+`tools/tracy/perf_counter_analysis.py::compute_perf_counter_metrics` (~200 columns)
+to C++: it reads the per-(op,core,counter) values straight from the in-memory
+`id==9090` device markers (`PerfCounter(marker.data, marker.data_high)` →
+value/ref_cnt/type), pivots first-wins per (op,core,counter), and emits the
+canonical `PERF_COUNTER_CSV_HEADERS` columns into `cpp_device_perf_report.csv`.
+Memory stays bounded (only the 9090 markers, not every per-core marker). The CLI
+gate that disabled cpp post-process for `--profiler-capture-perf-counters` is
+removed (`tools/tracy/__main__.py`).
+
+Verified by `tests/ttnn/tracy/test_counter_utilization_sanity.py` (3/3 on BH
+p150b): FPU utilization counter matches achieved FLOPS, eltwise reads
+bandwidth-bound, and compute vs bandwidth separate — all on the cpp path.
+
+Build gotcha (cost a full debug loop): an incremental `cmake --build build` links
+`libtt_metal.so`/`_ttnncpp.so` into `build_Release/{tt_metal,ttnn}/`, but the
+process loads them from `build_Release/lib/` via RUNPATH — only `cmake --install
+build` refreshes `lib/`. Build **and** install, or the device silently runs stale
+profiler code.
+
 ## Open items (not yet implemented)
 
-- **Counters on the C++ fast post-process path (Phase 2a) — this is also the
-  Phase 2b OOM fix.** Verified: `load_device_perf_report` (the cpp path) already
-  streams row-by-row and is bounded (~ops×devices). The 140 GB OOM is the
-  *legacy* `pd.read_csv` of the full per-core device log, and capturing counters
-  currently *forces* that legacy path (the CLI disables cpp post-process when
-  `--profiler-capture-perf-counters` is set). Teaching the cpp path to carry
-  per-core/per-RISC counters removes the OOM for the counter case outright;
-  chunking the legacy path is a strictly worse band-aid.
 - **NoC BW % vs analytical for a CCL op** (Phase 3 full gate) and **the
   noc-trace fabric/ethernet hang** (Phase 3b) — need a multi-chip run.
 - **Tracy GUI zone tooltips** (Phase 4) — a vendored-fork change

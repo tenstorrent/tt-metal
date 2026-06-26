@@ -75,6 +75,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/perf_counter_metrics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_state_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/memory_stats_shm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/memory_tracking/shm_tracking_processor.cpp

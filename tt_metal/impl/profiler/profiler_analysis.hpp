@@ -18,6 +18,7 @@
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include "impl/threading/thread_pool.hpp"
+#include "tt_metal/impl/profiler/perf_counter_metrics.hpp"
 
 namespace tt::tt_metal {
 
@@ -94,7 +95,9 @@ ProgramsPerfResults generatePerfResultsForPrograms(
     ThreadPool& thread_pool);
 
 void writeProgramsPerfResultsToCSV(
-    const ProgramsPerfResults& programs_perf_results, const std::filesystem::path& report_path);
+    const ProgramsPerfResults& programs_perf_results,
+    const std::filesystem::path& report_path,
+    const profiler_perf_counters::PerfCounterColumns& counter_columns = {});
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
 
