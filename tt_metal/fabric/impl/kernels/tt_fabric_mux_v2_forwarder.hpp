@@ -7,6 +7,7 @@
 #include <array>
 
 #include "tt_metal/fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp"
+#include "api/debug/device_print.h"
 
 namespace tt::tt_fabric::mux_v2::kernel {
 
@@ -77,7 +78,6 @@ inline void try_forward_channel_packet(
         if (cached_downstream_free_slots == 0) {
             wait_until_downstream_slot_available(shared_trid_ring, cached_downstream_free_slots, fabric_connection);
         }
-
         if (!shared_trid_ring.has_free_slot()) {
             wait_for_trid_slot_available(shared_trid_ring);
         }
@@ -159,7 +159,6 @@ inline void run_forwarder(ForwarderContext& context) {
              service_pass < kForwarderServiceBurstSize && shared_control_ptr->drain_initiated == 0;
              ++service_pass) {
             invalidate_l1_cache();
-
             if (!service_channels<false>(context, shared_trid_ring, noc, fabric_connection)) {
                 break;
             }
@@ -167,9 +166,7 @@ inline void run_forwarder(ForwarderContext& context) {
     }
 
     shared_control_ptr->forwarder_stop_tracking = 1;
-
     noc_clear_packet_tag(noc, data_noc_cmd_buf);
-
     while (!tt::tt_fabric::got_immediate_termination_signal<true>(termination_signal_ptr)) {
         invalidate_l1_cache();
 
@@ -177,7 +174,6 @@ inline void run_forwarder(ForwarderContext& context) {
             break;
         }
     }
-
     fabric_connection.close();
     noc_async_write_barrier();
     noc_async_atomic_barrier();

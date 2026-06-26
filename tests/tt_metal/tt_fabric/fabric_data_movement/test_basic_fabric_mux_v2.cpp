@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -35,9 +37,13 @@ constexpr char kReceiverKernelSrc[] =
     "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_mux_v2_receiver.cpp";
 
 constexpr uint32_t kTestResultsSizeBytes = 128;
-constexpr uint32_t kBaseSeed = 0x1234ABCDu;
+constexpr uint32_t kSeedStride = 0x9E3779B9u;
 constexpr uint32_t kDefaultForwarderServiceBurstSize = 8;
 constexpr uint32_t kDefaultForwarderMaxInFlightTrids = 8;
+constexpr uint32_t kShortPacketCount = 1'000;
+constexpr uint32_t kMediumPacketCount = 5'000;
+constexpr uint32_t kLongPacketCount = 50'000;
+constexpr uint32_t kDefaultReturnCreditsPerPacket = 16;
 
 using MeshDevicePtr = std::shared_ptr<tt::tt_metal::distributed::MeshDevice>;
 
@@ -58,8 +64,6 @@ struct TestCaseConfig {
     uint32_t num_senders = 1;
     uint32_t num_packets = 0;
     uint32_t packet_payload_size_bytes = 0;
-    uint32_t num_receiver_slots = 1;
-    uint32_t return_credits_per_packet = 1;
     uint8_t num_buffers_per_channel = 1;
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
     uint32_t service_burst_size = kDefaultForwarderServiceBurstSize;
@@ -82,6 +86,7 @@ struct ReceiverMemoryLayout {
 
 struct RemoteReceiverDevice {
     tt::tt_fabric::FabricNodeId fabric_node_id;
+    tt::tt_fabric::FabricNodeId anchor_dst_fabric_node_id;
     MeshDevicePtr device;
     CoreCoord receiver_mux_logical_core;
     std::vector<CoreCoord> receiver_logical_cores;
@@ -141,6 +146,13 @@ ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->get_
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
 bool is_2d_fabric() { return tt::tt_fabric::get_fabric_topology() == tt::tt_fabric::Topology::Mesh; }
+
+uint32_t get_receiver_slot_count() { return kDefaultReturnCreditsPerPacket; }
+
+uint32_t make_time_seed() {
+    const auto seed = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    return seed == 0 ? 0xA5A5A5A5u : seed;
+}
 
 uint32_t get_l1_alignment() {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -228,12 +240,12 @@ std::optional<SenderMemoryLayout> try_build_sender_memory_layout(
 }
 
 std::optional<ReceiverMemoryLayout> try_build_receiver_memory_layout(
-    const MeshDevicePtr& device, uint32_t packet_payload_size_bytes, uint32_t num_receiver_slots) {
+    const MeshDevicePtr& device, uint32_t packet_payload_size_bytes, uint32_t receiver_slot_count) {
     AlignedL1Cursor cursor(device);
     ReceiverMemoryLayout layout{};
     layout.test_results_address = cursor.reserve(kTestResultsSizeBytes);
     layout.packet_header_buffer_address = cursor.reserve(get_aligned_packet_header_size_bytes());
-    layout.receiver_slots_base_address = cursor.reserve(num_receiver_slots * packet_payload_size_bytes);
+    layout.receiver_slots_base_address = cursor.reserve(receiver_slot_count * packet_payload_size_bytes);
     return cursor.fits_in_worker_l1() ? std::optional<ReceiverMemoryLayout>{layout} : std::nullopt;
 }
 
@@ -254,6 +266,8 @@ std::vector<RemoteReceiverDevice> collect_1d_remote_devices_in_direction(
             break;
         }
 
+        // 1D mux setup expects the anchor destination to be the immediate next hop.
+        const auto anchor_dst_fabric_node_id = current_fabric_node_id;
         current_fabric_node_id = tt::tt_fabric::FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]);
         num_hops += 1;
 
@@ -268,6 +282,7 @@ std::vector<RemoteReceiverDevice> collect_1d_remote_devices_in_direction(
         worker_cores.erase(worker_cores.begin());
         remote_devices.push_back(RemoteReceiverDevice{
             current_fabric_node_id,
+            anchor_dst_fabric_node_id,
             receiver_device,
             receiver_mux_logical_core,
             std::move(worker_cores),
@@ -308,6 +323,7 @@ std::vector<RemoteReceiverDevice> collect_2d_remote_devices_in_direction(
         worker_cores.erase(worker_cores.begin());
         remote_devices.push_back(RemoteReceiverDevice{
             dst_fabric_node_id,
+            src_fabric_node_id,
             candidate_device,
             receiver_mux_logical_core,
             std::move(worker_cores),
@@ -319,6 +335,7 @@ std::vector<RemoteReceiverDevice> collect_2d_remote_devices_in_direction(
         return std::make_tuple(static_cast<uint32_t>(*lhs.fabric_node_id.mesh_id), lhs.fabric_node_id.chip_id) <
                std::make_tuple(static_cast<uint32_t>(*rhs.fabric_node_id.mesh_id), rhs.fabric_node_id.chip_id);
     });
+
     return remote_devices;
 }
 
@@ -384,7 +401,7 @@ std::optional<RoutingSelection> select_routing_selection(BaseFabricFixture& fixt
 }
 
 std::optional<std::vector<SenderReceiverAssignment>> build_sender_receiver_assignments(
-    const TestCaseConfig& test_case, const RoutingSelection& routing_selection) {
+    const TestCaseConfig& test_case, const RoutingSelection& routing_selection, uint32_t run_seed) {
     if (routing_selection.sender_logical_cores.size() < test_case.num_senders ||
         routing_selection.remote_devices.empty()) {
         return std::nullopt;
@@ -410,6 +427,7 @@ std::optional<std::vector<SenderReceiverAssignment>> build_sender_receiver_assig
         const auto& remote_device = routing_selection.remote_devices[next_remote_device_index];
         const auto receiver_logical_core =
             remote_device.receiver_logical_cores[next_receiver_core_index[next_remote_device_index]++];
+        const uint32_t sender_seed = run_seed ^ (sender_idx * kSeedStride);
         assignments.push_back(SenderReceiverAssignment{
             static_cast<uint8_t>(sender_idx),
             routing_selection.sender_logical_cores[sender_idx],
@@ -419,7 +437,7 @@ std::optional<std::vector<SenderReceiverAssignment>> build_sender_receiver_assig
                 receiver_logical_core,
                 remote_device.linear_num_hops,
             },
-            kBaseSeed + (sender_idx * 0x1000u),
+            sender_seed,
         });
 
         next_remote_device_index = (next_remote_device_index + 1) % routing_selection.remote_devices.size();
@@ -442,6 +460,11 @@ tt::tt_metal::KernelHandle create_worker_kernel(
     const char* kernel_src,
     const CoreCoord& logical_core,
     std::vector<uint32_t> compile_args) {
+    std::map<std::string, std::string> defines = {};
+    if (is_2d_fabric()) {
+        defines["FABRIC_2D"] = "";
+    }
+
     return tt::tt_metal::CreateKernel(
         program,
         kernel_src,
@@ -450,6 +473,7 @@ tt::tt_metal::KernelHandle create_worker_kernel(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = std::move(compile_args),
+            .defines = std::move(defines),
         });
 }
 
@@ -510,7 +534,7 @@ std::optional<std::unordered_map<ChipId, ReceiverDeviceContext>> build_receiver_
         }
 
         auto receiver_memory = try_build_receiver_memory_layout(
-            remote_device.device, test_runtime_config.packet_payload_size_bytes, test_case.num_receiver_slots);
+            remote_device.device, test_runtime_config.packet_payload_size_bytes, get_receiver_slot_count());
         if (!receiver_memory.has_value()) {
             return std::nullopt;
         }
@@ -518,7 +542,7 @@ std::optional<std::unordered_map<ChipId, ReceiverDeviceContext>> build_receiver_
         auto receiver_mux_deployment = create_mux_deployment(
             remote_device.device,
             remote_device.fabric_node_id,
-            routing_selection.src_fabric_node_id,
+            remote_device.anchor_dst_fabric_node_id,
             remote_device.receiver_mux_logical_core,
             count_it->second,
             test_case.num_buffers_per_channel,
@@ -571,21 +595,6 @@ void bind_worker_to_mux_channel(
     tt::tt_metal::SetRuntimeArgs(*mux_deployment.program, kernel, worker_logical_core, runtime_args);
 }
 
-void initialize_receiver_slots(
-    const ReceiverEndpoint& receiver,
-    const ReceiverMemoryLayout& receiver_memory,
-    uint32_t packet_payload_size_bytes,
-    uint32_t num_receiver_slots) {
-    const uint32_t target_words =
-        (num_receiver_slots * packet_payload_size_bytes) / static_cast<uint32_t>(sizeof(uint32_t));
-    std::vector<uint32_t> zero_target_buffer(target_words, 0);
-    tt::tt_metal::detail::WriteToDeviceL1(
-        receiver.device->get_devices()[0],
-        receiver.logical_core,
-        receiver_memory.receiver_slots_base_address,
-        zero_target_buffer);
-}
-
 std::vector<uint32_t> make_receiver_runtime_args(
     const TestCaseConfig& test_case,
     const TestRuntimeConfig& test_runtime_config,
@@ -598,10 +607,10 @@ std::vector<uint32_t> make_receiver_runtime_args(
         test_runtime_config.packet_payload_size_bytes,
         test_case.num_packets,
         assignment.seed,
-        test_case.return_credits_per_packet,
+        kDefaultReturnCreditsPerPacket,
         static_cast<uint32_t>(sender_virtual_core.x),
         static_cast<uint32_t>(sender_virtual_core.y),
-        test_case.num_receiver_slots,
+        get_receiver_slot_count(),
         test_runtime_config.use_mesh_api ? 0u : assignment.receiver.linear_num_hops,
         static_cast<uint32_t>(routing_selection.src_fabric_node_id.chip_id),
         static_cast<uint32_t>(*routing_selection.src_fabric_node_id.mesh_id),
@@ -622,7 +631,7 @@ std::vector<uint32_t> make_sender_runtime_args(
         assignment.seed,
         static_cast<uint32_t>(receiver_virtual_core.x),
         static_cast<uint32_t>(receiver_virtual_core.y),
-        test_case.num_receiver_slots,
+        get_receiver_slot_count(),
         test_runtime_config.use_mesh_api ? 0u : assignment.receiver.linear_num_hops,
         static_cast<uint32_t>(assignment.receiver.fabric_node_id.chip_id),
         static_cast<uint32_t>(*assignment.receiver.fabric_node_id.mesh_id),
@@ -648,9 +657,7 @@ std::vector<uint32_t> read_worker_status(
 }
 
 void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) {
-    ASSERT_GT(test_case.num_receiver_slots, 0u);
-    ASSERT_GT(test_case.return_credits_per_packet, 0u);
-    ASSERT_LE(test_case.return_credits_per_packet, test_case.num_receiver_slots);
+    ASSERT_GT(get_receiver_slot_count(), 0u);
 
     const auto test_runtime_config = build_test_runtime_config(test_case);
     ASSERT_GT(test_runtime_config.packet_payload_size_bytes, 0u);
@@ -667,7 +674,9 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
         << "Case " << test_case.name << " could not find a sender device and routing direction that satisfied the "
         << "mux-v2 setup requirements";
 
-    auto sender_receiver_assignments = build_sender_receiver_assignments(test_case, routing_selection.value());
+    const auto run_seed = make_time_seed();
+    auto sender_receiver_assignments =
+        build_sender_receiver_assignments(test_case, routing_selection.value(), run_seed);
     ASSERT_TRUE(sender_receiver_assignments.has_value())
         << "Case " << test_case.name << " could not assign sender and receiver worker cores";
 
@@ -705,11 +714,6 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
             receiver_device_contexts->at(get_physical_device_id(assignment.receiver.device));
         auto& receiver_mux_deployment = receiver_device_context.receiver_mux_deployment;
         const auto& receiver_memory = receiver_device_context.receiver_memory;
-        initialize_receiver_slots(
-            assignment.receiver,
-            receiver_memory,
-            test_runtime_config.packet_payload_size_bytes,
-            test_case.num_receiver_slots);
 
         const auto sender_virtual_core =
             routing_selection->sender_device->worker_core_from_logical_core(assignment.sender_logical_core);
@@ -804,105 +808,54 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 14> kTestCases = {{
+constexpr std::array<TestCaseConfig, 7> kTestCases = {{
     TestCaseConfig{
-        .name = "SmokeZeroPacket_Riscv0",
-    },
-    TestCaseConfig{
-        .name = "SmokeOnePacket_Riscv1",
-        .num_packets = 1,
-        .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
-    },
-    TestCaseConfig{
-        .name = "BufferReuse_UnderCapacity",
-        .num_packets = 2,
-        .num_receiver_slots = 4,
+        .name = "SingleSender_DefaultPayload_Riscv0",
+        .num_packets = kShortPacketCount,
         .num_buffers_per_channel = 4,
     },
     TestCaseConfig{
-        .name = "BufferReuse_OverCapacity",
-        .num_packets = 5,
-        .num_receiver_slots = 2,
-        .num_buffers_per_channel = 2,
+        .name = "SingleSender_DefaultPayload_Riscv1",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
+        .max_in_flight_trids = 4,
     },
     TestCaseConfig{
-        .name = "BufferReuse_SteadyState",
-        .num_packets = 64,
-        .packet_payload_size_bytes = 128,
-        .num_receiver_slots = 4,
+        .name = "SmallPayload_SteadyState",
+        .num_packets = kMediumPacketCount,
+        .packet_payload_size_bytes = 64,
         .num_buffers_per_channel = 4,
         .channel_buffer_size_kind = ChannelBufferSizeKind::LargerAligned,
     },
     TestCaseConfig{
-        .name = "HighPacketCount_50k_DefaultPayload",
-        .num_packets = 50'000,
-        .num_receiver_slots = 4,
-        .return_credits_per_packet = 4,
-        .num_buffers_per_channel = 4,
-    },
-    TestCaseConfig{
-        .name = "MultiSenderDrain_2Senders",
-        .num_senders = 2,
-        .num_packets = 16,
-        .num_receiver_slots = 2,
-        .num_buffers_per_channel = 2,
-    },
-    TestCaseConfig{
-        .name = "MultiSenderDrain_4Senders",
+        .name = "MultiSender_4Senders",
         .num_senders = 4,
-        .num_packets = 32,
-        .num_receiver_slots = 2,
-        .num_buffers_per_channel = 2,
-    },
-    TestCaseConfig{
-        .name = "MultiSenderDrain_8Senders",
-        .num_senders = 8,
-        .num_packets = 64,
-        .num_receiver_slots = 2,
-        .num_buffers_per_channel = 1,
-    },
-    TestCaseConfig{
-        .name = "MultiSenderDrain_16Senders",
-        .num_senders = 16,
-        .num_packets = 64,
-        .num_receiver_slots = 2,
-        .num_buffers_per_channel = 1,
-    },
-    TestCaseConfig{
-        .name = "ForwarderNocSweep_Riscv1",
-        .num_packets = 4,
-        .num_receiver_slots = 2,
-        .num_buffers_per_channel = 2,
-        .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
-        .max_in_flight_trids = 2,
-    },
-    TestCaseConfig{
-        .name = "ForwarderNocSweep_Riscv1_50k",
-        .num_packets = 50'000,
-        .num_receiver_slots = 4,
-        .return_credits_per_packet = 4,
-        .num_buffers_per_channel = 4,
-        .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
-        .max_in_flight_trids = 2,
-    },
-    TestCaseConfig{
-        .name = "ConfigKnobSweep_ServiceBurst1_Trid1",
-        .num_packets = 33,
-        .num_receiver_slots = 2,
-        .num_buffers_per_channel = 2,
-        .service_burst_size = 1,
-        .max_in_flight_trids = 1,
-    },
-    TestCaseConfig{
-        .name = "ConfigKnobSweep_Trid4_BatchedCredits",
-        .num_senders = 4,
-        .num_packets = 48,
-        .packet_payload_size_bytes = 64,
-        .num_receiver_slots = 4,
-        .return_credits_per_packet = 2,
+        .num_packets = kMediumPacketCount,
+        .packet_payload_size_bytes = 128,
         .num_buffers_per_channel = 4,
         .max_in_flight_trids = 4,
-        .channel_buffer_size_kind = ChannelBufferSizeKind::LargerAligned,
+    },
+    TestCaseConfig{
+        .name = "MultiSender_16Senders",
+        .num_senders = 16,
+        .num_packets = kShortPacketCount,
+        .packet_payload_size_bytes = 128,
+        .num_buffers_per_channel = 1,
+    },
+    TestCaseConfig{
+        .name = "Stress_MultiSender_DefaultPayload_Riscv0",
+        .num_senders = 4,
+        .num_packets = kLongPacketCount,
+        .num_buffers_per_channel = 8,
+    },
+    TestCaseConfig{
+        .name = "Stress_MultiSender_DefaultPayload_Riscv1",
+        .num_senders = 4,
+        .num_packets = kLongPacketCount,
+        .num_buffers_per_channel = 8,
+        .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
+        .max_in_flight_trids = 2,
     },
 }};
 

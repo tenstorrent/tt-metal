@@ -11,6 +11,7 @@
 #endif
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
+#include "api/debug/device_print.h"
 
 constexpr uint32_t test_results_address = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
