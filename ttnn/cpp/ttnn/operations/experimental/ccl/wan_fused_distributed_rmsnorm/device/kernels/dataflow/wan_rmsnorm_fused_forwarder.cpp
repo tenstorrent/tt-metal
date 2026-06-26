@@ -9,8 +9,8 @@
  * num_workers)). It owns a contiguous GROUP of worker cores on this chip and
  * holds the fwd+bwd fabric connections for its link. Its job: coalesce the
  * group's tiny 128 B stat "sticks" into one large fabric packet per row-round
- * and ring-multicast it, instead of each worker pinging a shared MUX with a
- * 128 B (≈3% utilization) packet.
+ * and ring-multicast it, instead of each worker sending its own tiny 128 B
+ * (≈3% utilization) fabric packet.
  *
  * Per row-round r (r in [0, max_rounds)):
  *   1. Wait for present_count(r) arrivals on fwd_arrival_sem — each present
@@ -140,7 +140,6 @@ void kernel_main() {
         const uint64_t dram_dest = tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram, page_idx, 0);
         {
             DeviceZoneScopedN("F_FABRIC");
-#ifndef WAN_ABL_SKIP_FABRIC
             size_t l1_read_addr = packet_addr;
             fused_write_atomic_and_advance_local_read_address_for_fabric_write(
                 dram_dest,
@@ -158,7 +157,6 @@ void kernel_main() {
             }
             noc_async_write_barrier();
             noc_async_atomic_barrier();
-#endif
         }
 
         // Release this round's POST: inc each PRESENT group worker's go-sem. The

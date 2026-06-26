@@ -98,11 +98,102 @@ composite); phn1 does not use the all-gather / worker-cap path.
 
 ---
 
-## Blackhole 4×8 torus (TARGET — 2 links, 12×10 grid) — TO FILL
+## Blackhole 4×8 torus (TARGET — 2 links, 12×10 grid, worker cap 48)
 
-Re-run on BH with `WAN_GALAXY_LINKS=2` (and re-sweep the worker cap — the WH "64" is geometric,
-see findings doc). Paste the same three tables (Wan TP4 / LTX TP4 / FLUX TP4+TP8) here so each
-BH row sits directly under its WH counterpart for comparison. Key question: does the forwarder
-still give significant speedup over the composite baseline on BH (the real goal)?
+Traced `test_bench` on the **BH 4×8 galaxy** (`bh4x8links2`, 32 chips), forwarder fused op
+(origin `2d56fbdd64e`), `WAN_GALAXY_LINKS=2`. `baseline µs` = on-device composite (measured
+fresh on BH); `fused µs` = forwarder fused; `↑BH` = baseline/fused; `↑WH` = the Wormhole-proxy
+`↑F` above for the same config. Correctness re-validated on BH first (det=OK, PCC 99.99–100%
+across all ring configs). **chunk=1.**
 
-_(empty — populate from the first BH bench run)_
+> **Two BH-specific findings (see FINDINGS "Blackhole port"):**
+> 1. **Worker cap must be clamped to ≤ 2×sticks_per_packet = 64 on BH.** The grid-derived
+>    default (~108 on 12×10) is *invalid*: with only 2 forwarders it puts 54 workers/forwarder,
+>    exceeding the coalesced fabric packet (32 sticks) → `TT_FATAL: sticks_per_packet >=
+>    workers_per_forwarder` on every large config. `derive_worker_cap` needs that clamp for BH.
+> 2. **The BH perf optimum is ~48, not 64.** Re-sweep (large configs, fused µs):
+>    N16384 389(c32) / **276(c48)** / 335(c64); self_sp4 457 / **411** / 477; self_sp8 282 /
+>    220 / **204(c64)**. 48 ≈ the DRAM/compute knee — the forwarder made fabric cheap so the op
+>    is compute/DRAM-bound (matches the WH ablation). cap48 wins most; the 296-tile-row
+>    self_sp8 prefers 64. All numbers below are **cap48**.
+
+> **`eff GB/s` = effective per-chip DRAM bandwidth of the fused op** = (input read + output
+> write) ÷ fused µs = `N × feat_local × 4` (bf16 activation in **and** out, 2 B each) ÷ `t`.
+> It is a *lower bound* on total DRAM traffic — it excludes the RoPE cos/sin and weight/bias
+> reads (which add ~10–20% on the `+rope` configs) and the tiny AG stat sticks. **BH per-chip
+> DRAM peak ≈ 512 GB/s**, so the `% peak` in parens is `eff GB/s / 512`. The large all-gather
+> configs land at ~35–53% of peak; small/low-row shapes are latency/dispatch-bound (low GB/s).
+
+### Wan2.2 — TP=4 ring (feat 1280/dev)
+
+| config | rows | pattern | baseline µs | fused µs | eff GB/s | ↑BH | ↑WH |
+|---|---:|---|---:|---:|---:|---:|---:|
+| self_sp4_N18944    | 18944 | qk+rope | 584.4 | 410.6 | 236 (46%) | **1.42×** | 1.82× |
+| self_sp8_N9472     | 9472  | qk+rope | 313.3 | 220.2 | 220 (43%) | **1.42×** (1.54× @c64) | 1.65× |
+| self_sp32_N2368    | 2368  | qk+rope | 104.2 | 79.0  | 154 (30%) | 1.32× | 1.45× |
+| cross_q_sp4_N18944 | 18944 | qk      | 512.2 | 356.7 | 272 (53%) | **1.44×** | 1.82× |
+| cross_q_sp8_N9472  | 9472  | qk      | 272.6 | 187.0 | 259 (51%) | **1.46×** | 1.70× |
+| cross_q_sp32_N2368 | 2368  | qk      | 93.4  | 66.7  | 182 (36%) | 1.40× | 1.38× |
+| cross_k_prompt_L512| 512   | qk      | 51.3  | 29.3  | 90 (17%)  | **1.75×** | 1.59× |
+
+### LTX-2.3 AV — TP=4 ring
+
+| config | rows | feat | pattern | baseline µs | fused µs | eff GB/s | ↑BH | ↑WH |
+|---|---:|---:|---|---:|---:|---:|---:|---:|
+| tp4_v_block_s1       | 1216 | 1024 | block+addcmul | 86.9  | 38.7  | 129 (25%) | **2.25×** | 2.04× |
+| tp4_v_block_s2       | 4864 | 1024 | block+addcmul | 253.3 | 102.5 | 194 (38%) | **2.47×** | 2.71× |
+| tp4_a_block          | 32   | 512  | block+addcmul | 28.1  | 57.4  | 1 (0%) | **0.49×** ⚠ | 1.21× |
+| tp4_v_selfattn_qk_s1 | 1216 | 1024 | qk+rope       | 94.0  | 44.5  | 112 (22%) | **2.11×** | 1.84× |
+| tp4_v_selfattn_qk_s2 | 4864 | 1024 | qk+rope       | 264.4 | 169.9 | 117 (23%) | 1.56× | 1.96× |
+| tp4_a_selfattn_qk    | 32   | 512  | qk+rope       | 38.1  | 27.4  | 2 (0%) | 1.39× | 1.59× |
+| tp4_a2v_videoQ_s1    | 1216 | 512  | qk+rope       | 73.8  | 31.2  | 80 (16%) | **2.37×** | 1.96× |
+| tp4_a2v_videoQ_s2    | 4864 | 512  | qk+rope       | 171.2 | 143.7 | 69 (14%) | 1.19× | 2.13× |
+| tp4_a2v_audioK       | 256  | 512  | qk+rope       | 54.9  | 24.7  | 21 (4%) | **2.23×** | 2.06× |
+| tp4_v_textcross_q_s1 | 1216 | 1024 | qk            | 62.5  | 36.2  | 138 (27%) | 1.72× | 1.38× |
+| tp4_v_textcross_q_s2 | 4864 | 1024 | qk            | 153.8 | 109.0 | 183 (36%) | 1.41× | 1.68× |
+| tp4_v_textcross_k    | 1024 | 1024 | qk            | 59.9  | 34.9  | 120 (23%) | 1.72× | 1.49× |
+| tp4_a_textcross_q    | 32   | 512  | qk            | 54.4  | 17.8  | 4 (1%) | **3.05×** | 1.26× |
+| tp4_a_textcross_k    | 1024 | 512  | qk            | 51.9  | 26.8  | 78 (15%) | **1.94×** | — |
+
+⚠ `tp4_a_block` regresses (fused 57.4 > base 28.1). Tiny 1-tile-row audio block (1 worker,
+legacy path); was 1.21× on WH — the new block-major POST likely adds overhead on the
+single-worker path. Small absolute cost; flagged for follow-up.
+
+### FLUX — TP=4 + TP=8 ring (`phn0` = whole-row qk+rope; `phn1` = per-head QK-norm, no AG)
+
+| config | tp | rows | feat | baseline µs | fused µs | eff GB/s | ↑BH |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| flux_tp4_N512_phn0   | 4 | 512   | 1536 | 69.1  | 39.5  | 80 (16%) | **1.75×** |
+| flux_tp4_N512_phn1   | 4 | 512   | 1536 | 69.1  | 43.8  | 72 (14%) | 1.58× |
+| flux_tp4_N64_phn0    | 4 | 64    | 1536 | 65.5  | 58.1  | 7 (1%) | 1.13× |
+| flux_tp4_N64_phn1    | 4 | 64    | 1536 | 65.5  | 41.1  | 10 (2%) | 1.60× |
+| flux_tp4_N2048_phn0  | 4 | 2048  | 1536 | 104.2 | 82.3  | 153 (30%) | 1.27× |
+| flux_tp4_N2048_phn1  | 4 | 2048  | 1536 | 104.1 | 70.2  | 179 (35%) | 1.48× |
+| flux_tp4_N8192_phn0  | 4 | 8192  | 1536 | 310.7 | 272.2 | 185 (36%) | 1.14× |
+| flux_tp4_N8192_phn1  | 4 | 8192  | 1536 | 310.8 | 197.1 | 255 (50%) | 1.58× |
+| flux_tp8_N1024_phn0  | 8 | 1024  | 768  | 77.3  | 36.7  | 86 (17%) | **2.10×** |
+| flux_tp8_N1024_phn1  | 8 | 1024  | 768  | 76.9  | 32.3  | 97 (19%) | **2.38×** |
+| flux_tp8_N128_phn0   | 8 | 128   | 768  | 58.8  | 28.2  | 14 (3%) | **2.08×** |
+| flux_tp8_N128_phn1   | 8 | 128   | 768  | 58.7  | 24.1  | 16 (3%) | **2.43×** |
+| flux_tp8_N4096_phn0  | 8 | 4096  | 768  | 175.9 | 82.8  | 152 (30%) | **2.12×** |
+| flux_tp8_N4096_phn1  | 8 | 4096  | 768  | 175.8 | 79.4  | 158 (31%) | **2.22×** |
+| flux_tp8_N16384_phn0 | 8 | 16384 | 768  | 552.5 | 276.6 | 182 (36%) | **2.00×** (WH 2.34×) |
+| flux_tp8_N16384_phn1 | 8 | 16384 | 768  | 550.3 | 208.7 | 241 (47%) | **2.64×** |
+
+### Bottom line (BH)
+The forwarder fused op gives a **strong, real speedup on BH**: **~2× on all FLUX TP=8**,
+**1.4–2.5× across Wan/LTX/FLUX**, far above the old transpose-MUX op. BH runs ~15–25% below the
+WH proxy ↑ (2 links vs 4), as expected, but the goal — significant speedup over composite on the
+real target — is met. Open items: clamp `derive_worker_cap` to ≤64 on BH (validity), default to
+~48 (perf), and the `tp4_a_block` regression.
+
+**Effective DRAM bandwidth (`eff GB/s`):** the largest all-gather-bound configs reach
+**~46–53% of the ~512 GB/s per-chip peak** (cross_q_sp4 **272 GB/s / 53%**, self_sp4 236/46%,
+flux_tp8_N16384_phn1 241/47%, flux_tp4_N8192_phn1 255/50%), with the no-AG `phn1` per-head path
+consistently higher than its `phn0` twin (no fabric round-trip diluting the BW). This is the
+**DRAM-balanced ceiling** the device profiling pinned down: at these sizes read, compute, and
+write are all co-busy at ~42–44 µs/tile-row, so the op is moving bytes at roughly half of peak
+DRAM BW and is **not** leaving a large overlap win on the table (software-pipelining the AG was a
+measured no-op — see `ABLATION_LEVERS.md`). Smaller / low-row shapes are latency- and
+dispatch-bound (single-digit % of peak), which is expected — they don't have enough rows to
+amortize fixed costs, not a bandwidth problem.

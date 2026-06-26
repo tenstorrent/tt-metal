@@ -31,26 +31,20 @@ namespace ttnn::experimental::prim {
 //
 // Two execution modes:
 //
-//   TP=1 (ring_size==1): the compute kernel pushes per-row stats directly into
-//     stats_gathered_cb (is_tp_1 compile-time flag); the writer kernel just
-//     drains output_cb to DRAM. No fabric setup. Multiple worker cores per
-//     chip OK — they each take a slice of rows.
+//   is_tp_1 (ring_size==1, or per_head_norm): no all-gather — the compute kernel
+//     reduces stats locally and the writer just drains output_cb to DRAM. No
+//     fabric. Multiple worker cores per chip each take a slice of tile-rows.
 //
-//   TP>1 (ring_size>1) — MUX-based multi-worker ring AG:
-//     - num_workers_per_chip worker cores per chip (default 2).
-//     - 1 fabric MUX core per direction with a valid neighbor (so 0, 1, or 2
-//       MUX cores per chip). Each MUX has num_workers_per_chip channels (one
-//       per worker).
-//     - Worker layout: [worker_0, ..., worker_N-1, fwd_mux, bwd_mux].
-//     - Each worker connects to BOTH MUX cores (its channel_id == worker_id)
-//       and uses `fabric_multicast_noc_fused_unicast_with_atomic_inc` to
-//       multicast its stats tile to every other chip in the ring axis. The
-//       remote chip's matching-position worker (same noc_x, noc_y) receives
-//       the data + atomic_inc on its GlobalSemaphore.
-//     - Termination: one designated worker per MUX acts as termination master
-//       and graceful-terminates the MUX once all peer workers have signaled
-//       completion. See `wan_rmsnorm_fused_writer_mux.cpp` for the kernel-side
-//       handshake.
+//   All-gather path (ring_size>1, whole-row norm): per chip, num_workers worker
+//     cores + num_forwarders (= num_links) forwarder cores. Each worker computes
+//     its tile-rows' partial sum-of-squares (PRE), transposes the stat tile, and
+//     NoC-writes a 128 B "stick" into its forwarder's coalesced packet. The
+//     forwarder ring-multicasts the whole group's packet over fabric (one fused
+//     write+atomic per round), so the gathered partial stats land in a DRAM
+//     scratch page on every chip; workers read them back, finish the norm (POST,
+//     + optional RoPE), and drain output. Kernels: reader (input/weight/rope),
+//     compute (PRE+POST), worker_writer (stick push + gather read + output
+//     drain), forwarder (coalesce + fabric mcast + cross-chip sync).
 // =============================================================================
 
 namespace {
@@ -63,149 +57,54 @@ uint32_t float_to_u32(float v) {
 
 }  // namespace
 
-// Upper cap on TP>1 worker cores per chip. The MUX channel count is uint8_t
-// but in practice the fabric MUX rejects (or deadlocks) above ~64 full-size
-// channels per core. For big shapes (Wan N=18944 with ~592 tile rows),
-// more workers means fewer chunks-per-worker, which keeps each worker's
-// chunk loop short and the per-chunk fabric overhead amortized.
-// num_tile_rows below this uses a single worker — the per-row forwarder overhead
-// doesn't pay off with <4 tile-rows of compute per chip.
+// num_tile_rows below this uses a single worker — spinning up forwarders + the
+// per-round AG handshake doesn't pay off with <4 tile-rows of compute per chip.
 constexpr uint32_t kMuxRowsThreshold = 4u;
+// input_cb double-buffer depth (chunks): reader fills chunk N+1 while compute is in
+// chunk N's post phase. 2 = one in flight + one filling.
+constexpr uint32_t kInputCbChunks = 2u;
+// Depth (in block_size groups) of the STREAMED per-head cos/sin CBs — a couple of
+// blocks of reader look-ahead (one in flight + one filling).
+constexpr uint32_t kRopeStreamBlocks = 2u;
 
-// Worker-count ceiling, derived from the device core grid (no hardcoded constant).
-// The fabric forwarder removed the shared-MUX contention that previously capped this
-// at 32 (a Wormhole-galaxy-specific number); a worker sweep then showed parallelism
-// keeps helping with more workers — but only up to WHOLE GRID ROWS. Workers are placed
-// row-major, so a count that is a multiple of grid.x tiles complete rows; pushing past
-// that into a ragged final row (and leaving zero idle cores) costs 3–9% to NoC/dispatch
-// contention (the 8x9 galaxy peaks at 64 = 8 full rows, regresses at the full-grid 68).
-// So: budget = grid − one forwarder core per link, rounded DOWN to whole rows. The few
-// idle cores that fall out (budget mod grid.x) are the slack that avoids the all-cores-
-// busy contention — derived from geometry, not a magic margin. Adapts to any grid.
-// `WAN_RMSNORM_WORKER_CAP` overrides for sweeps. Read inside the single-source-of-truth
-// sizing path so the op + create_stats_buffer agree on num_workers / buffer geometry.
-uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links) {
-    const char* env = std::getenv("WAN_RMSNORM_WORKER_CAP");
-    if (env != nullptr) {
-        const long v = std::strtol(env, nullptr, 10);
-        if (v > 0) {
-            return static_cast<uint32_t>(v);
-        }
-    }
+// Worker-count ceiling. Three bounds, smallest wins (details in the body):
+//   1. grid budget: cores − one forwarder per link, rounded DOWN to whole grid rows
+//      (workers are placed row-major; a ragged final row costs NoC/dispatch contention,
+//      and the leftover idle cores are useful slack).
+//   2. fabric-packet validity: workers_per_forwarder must fit one coalesced packet
+//      (sticks_per_packet * num_forwarders).
+//   3. measured DRAM/compute knee (arch-specific; Blackhole = 48).
+// Read inside the single-source-of-truth sizing path so the op + create_stats_buffer
+// agree on num_workers / buffer geometry.
+uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links, tt::ARCH arch) {
     const uint32_t max_cores = grid_size.x * grid_size.y;
     const uint32_t num_forwarders = std::max<uint32_t>(1u, num_links);  // one forwarder per link
     const uint32_t budget = max_cores > num_forwarders ? max_cores - num_forwarders : 1u;
     // Round down to whole grid rows (grid.x cores each); fall back to the raw budget if
     // even a single row doesn't fit.
     const uint32_t whole_rows = (grid_size.x > 0) ? (budget / grid_size.x) * grid_size.x : 0u;
-    return whole_rows > 0u ? whole_rows : budget;
-}
-// Diagnostic override: WAN_RMSNORM_INPUT_CB_CHUNKS dials how many chunks deep
-// the input_cb is buffered (default 2 = Phase-5 double-buffer). Deeper buffering
-// lets the reader run further ahead of compute, keeping more DRAM input reads
-// outstanding (the read path runs well below peak because the reader stalls on
-// input_cb space once it is ~2 chunks ahead). Read once, clamped to [2, 8].
-uint32_t input_cb_chunks() {
-    static const uint32_t d = [] {
-        const char* env = std::getenv("WAN_RMSNORM_INPUT_CB_CHUNKS");
-        if (env != nullptr) {
-            const long v = std::strtol(env, nullptr, 10);
-            if (v >= 2 && v <= 8) {
-                return static_cast<uint32_t>(v);
-            }
-        }
-        return 2u;
-    }();
-    return d;
-}
-// Diagnostic override: WAN_RMSNORM_FORCE_WORKERS pins the exact worker count
-// (still capped by num_tile_rows so we never over-provision). Lets a perf sweep
-// push small shapes PAST the rows/2 heuristic to test whether more parallelism
-// keeps shrinking the latency-bound wall. Read once.
-uint32_t force_num_workers() {
-    static const uint32_t v = [] {
-        const char* env = std::getenv("WAN_RMSNORM_FORCE_WORKERS");
-        if (env != nullptr) {
-            const long n = std::strtol(env, nullptr, 10);
-            if (n > 0) {
-                return static_cast<uint32_t>(n);
-            }
-        }
-        return 0u;
-    }();
-    return v;
-}
-// Diagnostic sweep knob: WAN_RMSNORM_FORCE_CHUNK=N forces chunk_size_rows=N
-// (applied last in both compute_sizing and the program factory so the stats
-// buffer stays consistent with the kernel). Timing-only. Note the per-head /
-// streaming clamps still pin chunk=1 afterward for those paths.
-uint32_t force_chunk_size() {
-    static const uint32_t v = [] {
-        const char* env = std::getenv("WAN_RMSNORM_FORCE_CHUNK");
-        if (env != nullptr) {
-            const long n = std::strtol(env, nullptr, 10);
-            if (n > 0) {
-                return static_cast<uint32_t>(n);
-            }
-        }
-        return 0u;
-    }();
-    return v;
-}
-// Depth (in block_size groups) of the STREAMED per-head cos/sin CBs. Per-head
-// RoPE has a distinct cos/sin per head, so the whole-row resident footprint is
-// O(num_heads*head_dim) and overflows L1 at wide shards (TP=2 feat-2048). The
-// reader already pushes block_size groups and the compute pops per block, so the
-// CB only needs a couple of blocks of look-ahead. Smaller = less L1; larger =
-// more reader prefetch. Default 2 (one block in flight + one filling). Broadcast
-// RoPE is unaffected (its tiny head_dim_tiles buffer stays fully resident).
-uint32_t rope_stream_blocks() {
-    static const uint32_t v = [] {
-        const char* env = std::getenv("WAN_RMSNORM_ROPE_STREAM_BLOCKS");
-        if (env != nullptr) {
-            const long n = std::strtol(env, nullptr, 10);
-            if (n > 0) {
-                return static_cast<uint32_t>(n);
-            }
-        }
-        return 2u;
-    }();
-    return v;
-}
-// DIAGNOSTIC ABLATIONS (WAN_ABLATION env): inject a per-ablation -D into the
-// reader/writer kernels so we can selectively skip NoC traffic and measure
-// where kernel time goes. These BREAK correctness — perf attribution only.
-//   1 = skip rope cos/sin reads   2 = skip input read   3 = skip output write
-//   4 = skip fabric mcast+sem inc+sem wait   5 = skip writer gather/scatter
-//   6 = skip weight/bias reads
-std::map<std::string, std::string> ablation_defines() {
-    std::map<std::string, std::string> d;
-    const char* env = std::getenv("WAN_ABLATION");
-    if (env != nullptr) {
-        switch (std::strtol(env, nullptr, 10)) {
-            case 1: d["WAN_ABL_SKIP_ROPE_READ"] = "1"; break;
-            case 2: d["WAN_ABL_SKIP_INPUT_READ"] = "1"; break;
-            case 3: d["WAN_ABL_SKIP_OUTPUT_WRITE"] = "1"; break;
-            case 4: d["WAN_ABL_SKIP_FABRIC"] = "1"; break;
-            case 5: d["WAN_ABL_SKIP_GATHER_SCATTER"] = "1"; break;
-            case 6: d["WAN_ABL_SKIP_WEIGHT_READ"] = "1"; break;
-            case 7: d["WAN_ABL_SKIP_COMPUTE"] = "1"; break;
-            // 8: pure-compute — stub ALL DRAM reads/writes + fabric/AG while
-            // keeping every CB reserve/push/wait/pop (they live outside the
-            // per-skip #ifndef guards), so compute runs full-speed LLKs on
-            // garbage. Inverse of case 7: isolates compute from all I/O.
-            case 8:
-                d["WAN_ABL_SKIP_INPUT_READ"] = "1";
-                d["WAN_ABL_SKIP_WEIGHT_READ"] = "1";
-                d["WAN_ABL_SKIP_ROPE_READ"] = "1";
-                d["WAN_ABL_SKIP_OUTPUT_WRITE"] = "1";
-                d["WAN_ABL_SKIP_FABRIC"] = "1";
-                d["WAN_ABL_SKIP_GATHER_SCATTER"] = "1";
-                break;
-            default: break;
-        }
+    uint32_t cap = whole_rows > 0u ? whole_rows : budget;
+    // Validity clamp: a forwarder coalesces at most sticks_per_packet 128 B sticks
+    // into one fabric packet, so workers_per_forwarder (= ceil(cap/num_forwarders))
+    // must not exceed it. Bound cap by sticks_per_packet * num_forwarders. On BH the
+    // raw grid budget is 108 (12x10) -> 54 workers/forwarder > 32 -> would TT_FATAL;
+    // this clamps it to the valid 64.
+    const uint32_t sticks_per_packet =
+        std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / 128u);
+    cap = std::min(cap, sticks_per_packet * num_forwarders);
+    // Perf knee is ARCH-SPECIFIC. On Blackhole the worker sweep
+    // (REBENCH_baseline_vs_fused.md) put the DRAM/compute optimum at ~48 — well below
+    // the 64 validity ceiling; beyond it per-round DRAM/NoC contention rises and
+    // latency plateaus then regresses (w64 is frequently slower than w48). So BH gets
+    // an explicit 48 knee. On Wormhole the grid-derived budget (64 on 8x9) IS the
+    // optimum (the forwarder sweep showed 32->64 = +29..44%), so no extra knee is
+    // applied there — it falls through at its grid/validity bound. Other arches also
+    // fall through.
+    if (arch == tt::ARCH::BLACKHOLE) {
+        constexpr uint32_t kBlackholeWorkerKnee = 48u;
+        cap = std::min(cap, kBlackholeWorkerKnee);
     }
-    return d;
+    return cap;
 }
 // Streaming low-L1 fallback decision. The fast path keeps a whole tile-row of
 // `input_cb` resident from PRE through POST (one DRAM read). On very wide
@@ -218,28 +117,10 @@ std::map<std::string, std::string> ablation_defines() {
 // stay resident (they fit once input_cb shrinks). The PRE accumulation order is
 // unchanged, so the streamed path is bit-exact with the resident path.
 //
-// WAN_RMSNORM_FORCE_STREAMING overrides the heuristic: "1" forces streaming on
-// (for testing the path on small shapes), "0" forces it off. Read once.
-//
 // The byte estimate below mirrors the big-CB sizes allocated further down and
 // is calibrated against the observed overflow (resident TP=2 allocates
 // ~1,666,432 B). `kFixedOverheadBytes` covers the remaining small CBs (rope,
 // stats, scalars, packed-AG, packet headers).
-uint32_t streaming_force_mode() {
-    static const uint32_t mode = [] {
-        const char* env = std::getenv("WAN_RMSNORM_FORCE_STREAMING");
-        if (env != nullptr) {
-            if (std::strcmp(env, "1") == 0) {
-                return 1u;  // force on
-            }
-            if (std::strcmp(env, "0") == 0) {
-                return 2u;  // force off
-            }
-        }
-        return 0u;  // auto
-    }();
-    return mode;
-}
 bool decide_streaming_low_l1(
     uint32_t num_tile_cols,
     uint32_t block_size,
@@ -249,13 +130,6 @@ bool decide_streaming_low_l1(
     uint32_t output_tile_bytes,
     bool has_weight,
     bool per_head_norm) {
-    const uint32_t mode = streaming_force_mode();
-    if (mode == 1u) {
-        return true;
-    }
-    if (mode == 2u) {
-        return false;
-    }
     // per_head_norm uses head-block reduces over small head_dim shards; its L1
     // profile never overflows and the streamed compute path only handles the
     // whole-row reduce, so never auto-enable streaming for it.
@@ -264,7 +138,7 @@ bool decide_streaming_low_l1(
     }
     const uint32_t padded_row = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
     const uint64_t input_bytes =
-        static_cast<uint64_t>(input_cb_chunks()) * chunk_size_rows * num_tile_cols * input_tile_bytes;
+        static_cast<uint64_t>(kInputCbChunks) * chunk_size_rows * num_tile_cols * input_tile_bytes;
     // intermediate_cb + rotated_input_cb (both row-sized, intermediate_tile_bytes).
     const uint64_t intermediate_bytes = 2ull * padded_row * intermediate_tile_bytes;
     // output_cb is 2 padded rows.
@@ -308,7 +182,7 @@ bool decide_block_major_post(
     whole_row += has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;          // weight_cb (bf16)
     whole_row += has_bias ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;            // bias_cb (bf16)
     // Streamed input_cb + resident cos/sin + the dozen small fp32 stat/scalar CBs +
-    // (mux) packet/header. Calibrated against the observed FLUX TP=2 feat-3072
+    // forwarder packet/header. Calibrated against the observed FLUX TP=2 feat-3072
     // streamed-input allocation (1,601,824 B at the same big-CB sum).
     constexpr uint64_t kSmallCbOverheadBytes = 225000ull;
     return whole_row + kSmallCbOverheadBytes > l1_cap_bytes;
@@ -346,10 +220,6 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
     }
-    const uint32_t forced = force_num_workers();
-    if (forced > 0u) {
-        return std::min<uint32_t>(forced, num_tile_rows);
-    }
     // One worker per tile-row, capped at the core budget (grid − forwarders). A worker
     // sweep on the forwarder showed parallelism keeps helping up to the grid limit, so
     // we provision as many workers as fit; `cap` already excludes the forwarder cores.
@@ -363,23 +233,24 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     const WanFusedDistributedRmsnormParams& args,
     const Tensor& input,
     const WanFusedDistributedRmsnormInputs& tensor_args) {
-    (void)tensor_args;  // page geometry no longer depends on rope/streaming detection
+    (void)tensor_args;  // page geometry does not depend on rope/streaming detection
     WanFusedDistributedRmsnormSizing s;
     const auto& padded = input.padded_shape();
     const uint32_t W = padded[-1];
     const uint32_t folded_H = input.physical_volume() / W;
     s.num_tile_rows = folded_H / TILE_HEIGHT;
     // per_head_norm reduces locally over head_dim per head — no AG needed even
-    // when ring_size > 1. From the kernel's perspective, this is "is_tp_1" =
-    // no fabric, no MUX, legacy writer path.
+    // when ring_size > 1. From the kernel's perspective this is "is_tp_1" =
+    // no fabric, no all-gather, drain-only writer.
     s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
     // Worker cap = device compute grid − forwarder cores. Derived from the input's
     // device so create_stats_buffer / validate / compute_output_specs / create_at all
     // agree on num_workers (they share this single-source-of-truth path).
-    const uint32_t worker_cap = derive_worker_cap(input.device()->compute_with_storage_grid_size(), args.num_links);
+    const uint32_t worker_cap =
+        derive_worker_cap(input.device()->compute_with_storage_grid_size(), args.num_links, input.device()->arch());
     s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows, worker_cap);
-    // `use_mux` now means "uses the fabric-forwarder all-gather (+ DRAM scratch)".
-    // The MUX and legacy single-worker writers are gone — one fabric path.
+    // use_mux selects the fabric-forwarder all-gather path (+ DRAM scratch);
+    // !use_mux (is_tp_1) reduces locally with no fabric.
     s.use_mux = !s.is_tp_1;
     // The forwarder round == one tile-row; sticks are coalesced across the
     // forwarder's worker group, so chunk/window are not row-batching knobs here.
@@ -414,9 +285,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const WanFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     Tensor& output_tensor = tensor_return_value.at(0);
-    // Stats DRAM scratch: only allocated for the MUX writer path (TP>1 with
-    // multiple workers). When not allocated (TP=1 or num_workers=1) the
-    // legacy writer doesn't reference it.
+    // Stats DRAM scratch: only allocated for the all-gather path (TP>1, whole-row
+    // norm). When not allocated (is_tp_1) the drain-only writer doesn't reference it.
     Tensor* stats_dram_tensor = tensor_return_value.size() > 1 ? &tensor_return_value[1] : nullptr;
     const auto& input_tensor = tensor_args.input;
     const auto& weight = tensor_args.weight;
@@ -500,7 +370,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
 
     // per_head_norm reduces over head_dim locally per head — no AG, no fabric,
-    // legacy writer path even with ring_size > 1.
+    // drain-only writer even with ring_size > 1.
     const bool is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
     // Will be finalized after we pick num_workers below — set initial estimate.
     bool use_mux = !is_tp_1;
@@ -520,14 +390,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // TP>1 (forwarder AG): one worker per tile-row, capped at the core budget
         // (grid − forwarders). Same derivation as compute_sizing so the stats-buffer
         // geometry matches. Tiny shapes (<kMuxRowsThreshold) collapse to 1 worker.
-        num_workers = pick_num_workers_tp_gt_1(num_tile_rows, derive_worker_cap(grid_size, args.num_links));
+        num_workers =
+            pick_num_workers_tp_gt_1(num_tile_rows, derive_worker_cap(grid_size, args.num_links, device->arch()));
     }
     use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
 
     // Forwarder model: one coalescing forwarder core per independent routing
     // plane (num_forwarders = min(num_links, num_workers)). Each forwarder owns a
-    // contiguous worker group and holds fwd+bwd fabric. No MUX cores, no legacy
-    // single-worker path.
+    // contiguous worker group and holds the fwd+bwd fabric connections for its link.
     const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
     const uint32_t num_forwarders = use_mux ? std::min<uint32_t>(num_links_requested, num_workers) : 0u;
     const uint32_t total_cores_needed = num_workers + num_forwarders;
@@ -575,7 +445,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         return e - s;
     };
 
-    // chunk_size_rows: aim for ≥2 chunks per worker so Phase 5's double-buffered
+    // chunk_size_rows: aim for ≥2 chunks per worker so the double-buffered
     // input_cb can overlap chunk N+1's reader fill + chunk N+1's AG with chunk
     // N's compute and chunk N's output drain. When the worker has ≥2 rows, pick
     // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
@@ -584,7 +454,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // chunk 1-4 at W up to 64) showed chunk=1 is best or tied EVERYWHERE: fabric/AG
     // is only ~2us exposed so bigger chunks buy no amortization, and chunk>1 is ~10%
     // SLOWER on the large (152-row) shapes (the prefetch-overlap win never
-    // materialized). So pin chunk=1; WAN_RMSNORM_FORCE_CHUNK still overrides for sweeps.
+    // materialized). So pin chunk=1.
     constexpr uint32_t kMaxChunkSizeRows = 1u;
     // L1 budget cap (matches compute_sizing): chunk * num_tile_cols ≤ 128
     // keeps input_cb under ~512 KB per worker.
@@ -644,7 +514,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     //    head_dim_tiles cols fully processed: per-head 1/rms -> affine -> rope ->
     //    output, head-local CBs). No streaming needed (input stays resident through
     //    PRE+POST), so it engages on per_head_norm directly. per_head_norm forces
-    //    is_tp_1, so there's no fabric/mux ordering to worry about.
+    //    is_tp_1, so there's no fabric/AG ordering to worry about.
     const uint64_t l1_cap_bytes = static_cast<uint64_t>(device->l1_size_per_core()) - 112640ull;
     const bool overflows_resident_post = decide_block_major_post(
         num_tile_cols,
@@ -671,9 +541,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     if (per_head_rope || streaming_low_l1) {
         chunk_size_rows = 1u;
     }
-    if (use_mux && force_chunk_size() > 0u) {
-        chunk_size_rows = force_chunk_size();
-    }
     // Forwarder AG: DRAM pages per device = num_forwarders * max_rounds (one page
     // per forwarder per row-round). Page idx = my_device*num_chunks_per_device +
     // forwarder*max_rounds + round.
@@ -692,7 +559,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         block_size);
 
     // ------------------------------------------------------------------------
-    // Persistent DRAM stats buffer (Phase 1, TP>1 only).
+    // Persistent DRAM stats scratch (all-gather path only).
     //
     // The previous design had each worker fabric-mcast stats tiles directly
     // into the remote chip's `stats_gathered_cb` L1 region. That's unsafe
@@ -736,33 +603,25 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     constexpr uint32_t rope_sin_cb_id = tt::CBIndex::c_13;
     constexpr uint32_t rotated_input_cb_id = tt::CBIndex::c_14;
     constexpr uint32_t reserved_packet_header_cb_id = tt::CBIndex::c_15;
-    // Phase 9 packed-page AG (use_mux only):
-    //   stats_transposed_local_cb : window_size fp32 tiles, post-transpose.
-    //       Real per-token sum-of-squares now lives in row 0 of each tile
-    //       (2 contiguous 64-byte spans at face_00[0] and face_01[0]).
-    //       Compute pushes, writer pops.
-    //   stats_packed_local_cb     : 2 staging slots of page_size_bytes
-    //       (= TILE_HEIGHT * window_size * sizeof(float)). Writer packs row 0
-    //       of W tiles into one row-major span, then fabric-mcasts that
-    //       single packet. Double-buffered so it can prep packet N+1 while
-    //       packet N is in flight.
-    //   stats_packed_gathered_cb  : ring_size slots of page_size_bytes.
-    //       Writer NoC-reads the (ring_size-1) remote-device pages from DRAM
-    //       here; the local-device page is L1-copied from stats_packed_local
-    //       (Phase 1.1 skip-local-roundtrip pattern, applied at the page
-    //       granularity).
-    //   stats_transposed_gathered_cb : ring_size fp32 tiles. Compute
-    //       transposes each row-0 gathered tile (stats_gathered_cb) back to
-    //       col 0 here, so the existing post-reduce<AVG,REDUCE_ROW> chain
-    //       runs unchanged on it.
+    // Forwarder all-gather CBs (use_mux path):
+    //   stats_transposed_local_cb : 1 fp32 tile, post-transpose. The per-token
+    //       sum-of-squares lives in row 0 (2 contiguous 64-byte spans at
+    //       face_00[0] and face_01[0]). Compute pushes; the worker writer pops it
+    //       to emit its 128 B stick.
+    //   packet_cb : the forwarder's coalesced fabric packet (grid-uniform L1
+    //       address, depth 2). Workers NoC-write their sticks into it; the
+    //       forwarder ring-mcasts it.
+    //   stats_transposed_gathered_cb : ring_size fp32 tiles. The worker writer
+    //       lands the ring gather in row 0 of these; compute transposes them back
+    //       to col 0 so the post-reduce<AVG,REDUCE_ROW> chain runs unchanged.
     constexpr uint32_t stats_transposed_local_cb_id = tt::CBIndex::c_16;
     constexpr uint32_t packet_cb_id = tt::CBIndex::c_17;  // forwarder coalesced packet (grid-wide, depth 2)
     constexpr uint32_t stats_transposed_gathered_cb_id = tt::CBIndex::c_19;
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_20;
 
-    // Double-buffer input_cb (Phase 5): reader can fill chunk N+1 while compute
-    // is in chunk N's post phase. Cumulative cb_wait_front in compute (Phase 4)
-    // pairs naturally with this — compute uses absolute indices within the
+    // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
+    // chunk N's post phase. The cumulative cb_wait_front in compute pairs
+    // naturally with this — compute uses absolute indices within the
     // current chunk, and cb_pop_front at end of chunk frees that chunk's slots
     // back to the reader.
     //
@@ -774,7 +633,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
     constexpr uint32_t kStreamingInputBlocks = 4u;
     const uint32_t input_cb_tiles =
-        streaming_low_l1 ? (kStreamingInputBlocks * block_size) : (input_cb_chunks() * chunk_input_tiles);
+        streaming_low_l1 ? (kStreamingInputBlocks * block_size) : (kInputCbChunks * chunk_input_tiles);
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
     // per_head_norm produces num_heads_per_device stat tiles per row instead
@@ -786,13 +645,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t per_row_stats_count = args.per_head_norm ? args.num_heads_per_device : args.ring_size;
     const uint32_t stats_local_tiles = (args.ring_size > 1 && !args.per_head_norm) ? chunk_size_rows : 1;
     create_cb(stats_local_cb_id, program, worker_core_set, fp32_tile_size, stats_local_tiles, fp32_format);
-    // The MUX writer scatters one chunk's gathered stats at a time; the legacy
-    // single-worker writer (!is_tp_1 && !use_mux) instead all-gathers the worker's
-    // WHOLE row range, addressing slots as base + (r*ring_size + device). Size
-    // stats_gathered for num_tile_rows rows on that path — otherwise its
-    // cb_reserve_back(num_tile_rows*ring_size) blocks forever on a chunk-sized CB
-    // (the TP=2 small-shape hang). is_tp_1 / MUX push per chunk, so chunk-sized is fine.
-    const uint32_t stats_gathered_rows = (!is_tp_1 && !use_mux) ? num_tile_rows : chunk_size_rows;
+    // Both paths (forwarder AG and is_tp_1) push gathered stats one chunk at a time,
+    // so a chunk-sized CB suffices.
+    const uint32_t stats_gathered_rows = chunk_size_rows;
     const uint32_t stats_gathered_tiles = stats_gathered_rows * per_row_stats_count;
     create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
 
@@ -885,7 +740,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // row's cos/sin before the deferred POST input re-read pass), so never
         // stream them when block_major_post — keep the whole-row resident size.
         const uint32_t rope_cb_tiles = (per_head_rope && fuse_mm_rope && !block_major_post)
-                                           ? std::min(rope_resident_tiles, rope_stream_blocks() * block_size)
+                                           ? std::min(rope_resident_tiles, kRopeStreamBlocks * block_size)
                                            : rope_resident_tiles;
         create_cb(rope_cos_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
         create_cb(rope_sin_cb_id, program, worker_core_set, rope_tile_size, rope_cb_tiles, rope_format);
@@ -895,10 +750,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
 
     // intermediate_cb and rotated_input_cb are compute-only (producer and
-    // consumer are the same TRISC pipeline within the post phase). Phase 7
-    // restructures the post phase to do each sub-phase (mul-rms, weight,
-    // matmul, cos-mul, sin-mul, add) across ALL col-blocks before moving to
-    // the next, requiring these CBs to hold a full row between sub-phases.
+    // consumer are the same TRISC pipeline within the post phase). The post phase
+    // is sub-phase-major — it runs each sub-phase (mul-rms, weight, matmul,
+    // cos-mul, sin-mul, add) across ALL col-blocks before moving to the next, so
+    // these CBs must hold a full row between sub-phases.
     // The pack always pushes block_size tiles (LLK packer requirement) even
     // when only `tiles_in_block = num_tile_cols % block_size` are valid, so
     // we round the CB size UP to a multiple of block_size.
@@ -940,8 +795,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // 4-tile CB capped write concurrency at block_size, leaving the output
     // drain at ~22% of POST as back-pressure (P_ADD's 5.9× core-to-core spread
     // = shared DRAM-write contention). A row-deep CB lets writes pipeline at
-    // DRAM depth, mirroring the deep-read reader change. The MUX writer drains
-    // per-block (overlap preserved) but flushes+pops once per row.
+    // DRAM depth (the writer drains the whole row under one flush).
     const uint32_t output_cb_tiles = 2u * intermediate_cb_tiles;
     create_cb(output_cb_id, program, worker_core_set, output_tile_size, output_cb_tiles, output_format);
 
@@ -995,8 +849,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // Defer the streaming input past the resident side-inputs ONLY on the is_tp_1
         // block-major path: there's no all-gather between PRE and POST to give the
         // reader a window to push weight/cos before the POST block loop needs them, so
-        // it must push them first. The mux (ring>1) block-major path keeps input-first
-        // (the AG window covers the side-input pushes) — deferring there raced the AG.
+        // it must push them first. The all-gather (ring>1) block-major path keeps
+        // input-first (the AG window covers the side-input pushes) — deferring raced the AG.
         static_cast<uint32_t>(block_major_post && is_tp_1 && streaming_low_l1),  // reader "defer_input" (CT arg 17)
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
@@ -1023,7 +877,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
         "wan_rmsnorm_fused_reader.cpp",
         worker_core_set,
-        ReaderDataMovementConfig(reader_compile_args, ablation_defines()));
+        ReaderDataMovementConfig(reader_compile_args));
 
     // ------------------------------------------------------------------------
     // Writer kernel (on worker cores). Two variants:
@@ -1072,7 +926,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "wan_rmsnorm_fused_writer.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args, ablation_defines()));
+            WriterDataMovementConfig(writer_compile_args));
     } else {
         // Forwarder-model worker writer (AG path): no fabric. Per row it pushes
         // its 128 B stick into the forwarder's grid-uniform packet CB, waits the
@@ -1109,13 +963,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         } else {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
-
         writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "wan_rmsnorm_fused_worker_writer.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args, ablation_defines()));
+            WriterDataMovementConfig(writer_compile_args));
     }
 
     // ------------------------------------------------------------------------
@@ -1148,7 +1001,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "wan_rmsnorm_fused_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
-            WriterDataMovementConfig(fwd_ct, ablation_defines()));
+            WriterDataMovementConfig(fwd_ct));
     }
 
     // ------------------------------------------------------------------------
@@ -1186,9 +1039,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // ring>1 routed PRE to stats_local_cb (sized 1 tile, no consumer) and
         // wedged on the 2nd head's cb_reserve_back.
         /*is_tp_1=*/static_cast<uint32_t>(is_tp_1 ? 1u : 0u),
-        // Phase 9 packed AG CBs (used when is_tp_1 == 0 AND use_mux). For
-        // is_tp_1 the compute kernel sidesteps the packed path entirely
-        // (pushes col-0 stats straight into stats_gathered_cb).
+        // Packed AG CBs (all-gather path). For is_tp_1 the compute kernel
+        // sidesteps the packed path entirely (pushes col-0 stats straight into
+        // stats_gathered_cb).
         stats_transposed_local_cb_id,
         stats_transposed_gathered_cb_id,
         static_cast<uint32_t>(use_mux ? 1u : 0u),  // packed_ag_enabled
@@ -1231,12 +1084,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_args,
-            .defines = ablation_defines(),
         });
 
-    // ------------------------------------------------------------------------
-    // MUX kernels (only TP>1; one per (direction, link))
-    // ------------------------------------------------------------------------
     // ------------------------------------------------------------------------
     // Common runtime args
     // ------------------------------------------------------------------------
@@ -1391,9 +1240,9 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
         tensor_args.rope_sin.has_value() ? tensor_args.rope_sin.value().buffer()->address() : 0;
     // Stats DRAM scratch is reallocated per launch (it's a regular device
     // tensor), so its address changes and must be refreshed on cache hits.
-    // The MUX writer reads it from a fixed runtime-arg slot whose host-side
+    // The worker writer reads it from a fixed runtime-arg slot whose host-side
     // index is captured in shared.stats_dram_addr_writer_arg_idx (set at
-    // create_at time, only when use_mux).
+    // create_at time, only on the all-gather path).
     const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
