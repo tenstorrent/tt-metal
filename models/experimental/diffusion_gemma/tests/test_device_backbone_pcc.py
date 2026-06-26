@@ -27,8 +27,11 @@ Run on QB2 (4x Blackhole):
 
 Target threshold is env-driven (`DG_BACKBONE_PCC`, default 0.99). The current
 Blackhole-1x4 Gemma4 MoE fidelity lands around 0.85-0.88; values above the known
-floor (`DG_BACKBONE_KNOWN_QB2_PCC_FLOOR`, default 0.83) are recorded as xfail so
-the gap stays visible without weakening shared Gemma4 thresholds.
+floor (`DG_BACKBONE_KNOWN_QB2_PCC_FLOOR`, default 0.84) are recorded as xfail so
+the gap stays visible without weakening shared Gemma4 thresholds. Values above
+the ratchet ceiling (`DG_BACKBONE_KNOWN_QB2_PCC_CEILING`, default 0.90) fail
+instead of xfail, forcing this local exception to be tightened when fidelity
+improves.
 
 ## Precision investigation (2026-06-24) — why PCC caps at ~0.88, not 0.98
 
@@ -88,7 +91,8 @@ DG_CKPT = os.getenv("DG_CKPT", "google/diffusiongemma-26B-A4B-it")
 GEMMA_CONFIG_DIR = os.getenv("GEMMA_CONFIG_DIR", os.path.join(_REPO, "models/demos/gemma4/configs/gemma-4-26B-A4B-it"))
 PROMPT = os.getenv("DG_PROMPT", "The capital of France is")
 PCC_THRESHOLD = float(os.getenv("DG_BACKBONE_PCC", "0.99"))
-KNOWN_QB2_PCC_FLOOR = float(os.getenv("DG_BACKBONE_KNOWN_QB2_PCC_FLOOR", "0.83"))
+KNOWN_QB2_PCC_FLOOR = float(os.getenv("DG_BACKBONE_KNOWN_QB2_PCC_FLOOR", "0.84"))
+KNOWN_QB2_PCC_CEILING = float(os.getenv("DG_BACKBONE_KNOWN_QB2_PCC_CEILING", "0.90"))
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("DG_RUN_DEVICE") != "1",
@@ -269,9 +273,15 @@ def test_diffusiongemma_backbone_logits_pcc(mesh_device, reset_seeds, request):
     logger.info(f"argmax match: {argmatch}/{seq_len}  (greedy-decode equivalence)")
 
     if not passing and pcc_value >= KNOWN_QB2_PCC_FLOOR:
+        assert pcc_value < KNOWN_QB2_PCC_CEILING, (
+            "DiffusionGemma backbone PCC improved beyond the known QB2 xfail band; "
+            f"ratchet the local threshold/floor before xfail: PCC={pcc_value:.5f}, "
+            f"ceiling={KNOWN_QB2_PCC_CEILING}, target={PCC_THRESHOLD}"
+        )
         pytest.xfail(
             "Known QB2 Gemma4 MoE fidelity gap for DiffusionGemma causal backbone: "
-            f"PCC={pcc_value:.5f}, target={PCC_THRESHOLD}, floor={KNOWN_QB2_PCC_FLOOR}. "
+            f"PCC={pcc_value:.5f}, target={PCC_THRESHOLD}, floor={KNOWN_QB2_PCC_FLOOR}, "
+            f"ceiling={KNOWN_QB2_PCC_CEILING}. "
             "Keep this local to DiffusionGemma instead of lowering shared Gemma4 thresholds."
         )
 
