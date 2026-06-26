@@ -489,8 +489,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             auto [bit, binserted] = scratchpad_binder.try_emplace(binding.scratchpad_spec_name, &kernel);
             TT_FATAL(
                 binserted,
-                "ScratchpadSpec '{}' is bound by more than one kernel ('{}' and '{}'). A scratchpad is private "
-                "to a single kernel — it may be bound exactly once.",
+                "ScratchpadSpec '{}' is bound more than once (already bound by kernel '{}', bound again by kernel "
+                "'{}'). A scratchpad is private to a single kernel and may be bound exactly once (the two kernel "
+                "names are identical when one kernel binds it twice).",
                 binding.scratchpad_spec_name,
                 bit->second->unique_id,
                 kernel.unique_id);
@@ -2334,7 +2335,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 //  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
 //    each binding's absolute CRTA word index (and thus addr_crta_offset) is fixed at codegen time
 //    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
-// The allocated_address is left 0 here; allocate_dataflow_buffers fills it once L1 is allocated.
+// The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
 struct ScratchpadBindingsForKernel {
     std::vector<ScratchpadBindingHandle> handles;
     uint32_t section_words = 0;  // == number of scratchpad bindings
@@ -2355,7 +2356,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
-        // handle.allocated_address stays 0 until allocate_dataflow_buffers runs.
+        // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
     }
@@ -2997,7 +2998,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         }
 
         // Attach the resolved scratchpad bindings to the kernel (set post-construction: their sizes are
-        // part of the kernel cache key, so this must run before the kernel is compiled). allocate_dataflow_buffers
+        // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 

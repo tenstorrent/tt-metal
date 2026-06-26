@@ -128,7 +128,7 @@ struct ScratchpadBindingHandle {
     std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
     uint32_t size_bytes = 0;         // per-node size; emitted as the token's compile-time SIZE_BYTES
     uint32_t addr_crta_offset = 0;   // byte offset of the base-address slot within the kernel's CRTA buffer
-    uint32_t allocated_address = 0;  // L1 base address; filled by allocate_dataflow_buffers (0 until allocated)
+    uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
 };
 
 class Kernel : public JitBuildSettings {
@@ -201,7 +201,7 @@ public:
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_offset)>)
         const override;
     // Scratchpad binding handles are set post-construction (their size is part of compute_hash, so this
-    // must run before the kernel is compiled). Non-const accessor lets allocate_dataflow_buffers fill
+    // must run before the kernel is compiled). Non-const accessor lets allocate_scratchpads fill
     // each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {
         return scratchpad_binding_handles_;
@@ -303,7 +303,7 @@ protected:
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
     // NON-const (unlike tensor_binding_handles_): set post-construction via set_scratchpad_binding_handles,
-    // and allocate_dataflow_buffers fills each handle's allocated_address after L1 allocation.
+    // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
