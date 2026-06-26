@@ -147,36 +147,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Download ACE-Step v1.5 checkpoints
-        if: ${{ !inputs.mlperf-read-only && contains(matrix.test-group.name, 'ACE-Step') }}
-        timeout-minutes: 60
-        run: |
-          set -e
-          mkdir -p /mnt/MLPerf/huggingface/hub
-          python3 - <<'PY'
-          import os
-          from huggingface_hub import snapshot_download
-
-          snapshot_download(
-              repo_id="ACE-Step/Ace-Step1.5",
-              local_dir="/mnt/MLPerf/huggingface/hub/ACE-Step-1.5-checkpoints",
-              token=os.environ.get("HF_TOKEN"),
-              resume_download=True,
-          )
-          PY
-      - name: Verify ACE-Step v1.5 checkpoints
-        if: ${{ contains(matrix.test-group.name, 'ACE-Step') }}
-        run: |
-          set -e
-          CKPT_DIR="${ACE_STEP_CHECKPOINT_DIR:-/mnt/MLPerf/huggingface/hub/ACE-Step-1.5-checkpoints}"
-          TURBO="$CKPT_DIR/acestep-v15-turbo"
-          if [ -f "$TURBO/model.safetensors" ] || compgen -G "$TURBO/model-*.safetensors" > /dev/null; then
-            echo "ACE-Step checkpoints present at $CKPT_DIR"
-            exit 0
-          fi
-          echo "::error::ACE-Step v1.5 checkpoints not found at $TURBO"
-          echo "::error::Re-run this workflow with mlperf-read-only disabled to populate the cache."
-          exit 1
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log

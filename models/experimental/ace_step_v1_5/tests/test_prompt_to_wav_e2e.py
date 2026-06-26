@@ -13,34 +13,60 @@ from pathlib import Path
 
 import pytest
 
-
-def _checkpoint_root() -> Path:
-    for key in ("ACE_STEP_CHECKPOINT_DIR", "ACESTEP_CHECKPOINTS_DIR"):
-        val = os.environ.get(key)
-        if val:
-            return Path(val).expanduser().resolve()
-    return Path.home() / ".cache" / "huggingface" / "hub" / "ACE-Step-1.5-checkpoints"
+# BH QuietBox 2 shared MLPerf volume; downloaded on first test run if absent.
+_CI_CHECKPOINT_ROOT = Path("/mnt/MLPerf/huggingface/hub/ACE-Step-1.5-checkpoints")
 
 
-def _checkpoints_available() -> bool:
-    turbo = _checkpoint_root() / "acestep-v15-turbo"
-    if (turbo / "model.safetensors").is_file():
-        return True
-    return bool(list(turbo.glob("model-*.safetensors")))
+def _running_in_ci() -> bool:
+    return os.environ.get("CI", "").lower() == "true"
+
+
+def _require_ci_checkpoints() -> Path:
+    turbo = _CI_CHECKPOINT_ROOT / "acestep-v15-turbo"
+    has_weights = (turbo / "model.safetensors").is_file() or bool(list(turbo.glob("model-*.safetensors")))
+    if has_weights:
+        return _CI_CHECKPOINT_ROOT
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        pytest.fail(f"huggingface_hub is required to download ACE-Step checkpoints: {exc}")
+
+    _CI_CHECKPOINT_ROOT.mkdir(parents=True, exist_ok=True)
+    offline = os.environ.pop("HF_HUB_OFFLINE", None)
+    try:
+        print(f"[ace_step_v1_5] Downloading ACE-Step/Ace-Step1.5 -> {_CI_CHECKPOINT_ROOT} ...", flush=True)
+        snapshot_download(
+            repo_id="ACE-Step/Ace-Step1.5",
+            local_dir=str(_CI_CHECKPOINT_ROOT),
+            token=os.environ.get("HF_TOKEN") or None,
+            resume_download=True,
+            local_files_only=False,
+        )
+    except OSError as exc:
+        pytest.fail(
+            f"Failed to download ACE-Step v1.5 checkpoints to {_CI_CHECKPOINT_ROOT}: {exc}. "
+            "Ensure the MLPerf volume is writable (mlperf-read-only disabled) and HF_TOKEN is set."
+        )
+    except Exception as exc:
+        pytest.fail(f"Failed to download ACE-Step v1.5 checkpoints to {_CI_CHECKPOINT_ROOT}: {exc}")
+    finally:
+        if offline is not None:
+            os.environ["HF_HUB_OFFLINE"] = offline
+
+    if not (turbo / "model.safetensors").is_file() and not list(turbo.glob("model-*.safetensors")):
+        pytest.fail(f"ACE-Step v1.5 checkpoints still missing at {turbo} after download.")
+    return _CI_CHECKPOINT_ROOT
 
 
 @pytest.mark.parametrize("duration_label,duration_sec", [("15s", 15)])
 def test_prompt_to_wav_bh_demo(tmp_path, monkeypatch, duration_label: str, duration_sec: int):
     """Turbo mesh smoke: LM preprocess → DiT denoise → VAE decode → WAV."""
-    if not _checkpoints_available():
-        msg = (
-            "ACE-Step v1.5 checkpoints not found; set ACE_STEP_CHECKPOINT_DIR. "
-            "In Blackhole demo CI, re-run workflow_dispatch with "
-            "'Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)' enabled."
-        )
-        if os.environ.get("TT_GH_CI_INFRA", "").lower() in ("1", "true", "yes", "on"):
-            pytest.fail(msg)
-        pytest.skip(msg)
+    if not _running_in_ci():
+        pytest.skip("ACE-Step BH_QB e2e smoke runs in CI only (requires bh_quietbox_2 hardware).")
+
+    ckpt_root = _require_ci_checkpoints()
+    monkeypatch.setenv("ACE_STEP_CHECKPOINT_DIR", str(ckpt_root))
 
     demo_script = Path(__file__).resolve().parent.parent / "demo" / "run_prompt_to_wav.py"
     out = tmp_path / f"ace_step_bh_demo_{duration_label}.wav"

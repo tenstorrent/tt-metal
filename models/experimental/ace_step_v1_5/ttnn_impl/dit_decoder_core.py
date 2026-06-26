@@ -17,6 +17,16 @@ def _ace_step_env_truthy(name: str) -> bool:
     return v in ("1", "true", "yes", "on", "y")
 
 
+def _sliding_window_attn_bias_np(*, seq_len: int, window: int, batch: int = 1) -> np.ndarray:
+    """Additive SDPA mask [B,1,S,S]: 0 inside |i-j|<=window, -1e9 outside (bidirectional)."""
+    s = int(seq_len)
+    i = np.arange(s, dtype=np.int32)[:, None]
+    j = np.arange(s, dtype=np.int32)[None, :]
+    keep = np.abs(i - j) <= int(window)
+    sw = np.where(keep, np.float32(0.0), np.float32(-1e9)).astype(np.float32)
+    return np.broadcast_to(sw.reshape(1, 1, s, s), (int(batch), 1, s, s)).copy()
+
+
 def _ace_step_logical_seq_len_dim2(t) -> int:
     """
     Sequence length on dim=2 for tensors shaped [B, 1, S, ...] (e.g. cross encoder states).
@@ -744,6 +754,7 @@ class TtAceStepAttentionSDPA:
         #   - cross-attn tail mask:(B, S_q0, W, s_enc_log)         pads keys past s_enc_log up to W
         self._self_pad_mask_cache: dict[tuple[int, int, int], "ttnn.Tensor"] = {}
         self._cross_tail_mask_cache: dict[tuple[int, int, int, int], "ttnn.Tensor"] = {}
+        self._sliding_window_mask_cache: dict[tuple[int, int, int], "ttnn.Tensor"] = {}
 
     def _get_self_pad_mask(self, *, batch: int, target_sdpa: int, s_rope: int) -> "ttnn.Tensor":
         """Return a cached additive self-attn pad mask ``[B,1,target_sdpa,target_sdpa]``.
@@ -792,6 +803,27 @@ class TtAceStepAttentionSDPA:
         )
         self._cross_tail_mask_cache[key] = pad_m
         return pad_m
+
+    def _get_sliding_window_mask(self, *, batch: int, seq_len: int, window: int) -> "ttnn.Tensor":
+        """Return a cached additive bidirectional sliding-window mask ``[B,1,S,S]``."""
+        ttnn = self.ttnn
+        key = (int(batch), int(seq_len), int(window))
+        cached = self._sliding_window_mask_cache.get(key)
+        if cached is not None:
+            return cached
+        sw_np = _sliding_window_attn_bias_np(seq_len=int(seq_len), window=int(window), batch=int(batch))
+        mem_m = ace_step_sdpa_mask_memory_config(ttnn) or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        mapper_m = ace_step_dit_weight_mesh_mapper(self.mesh_device)
+        sw_m = ttnn.as_tensor(
+            sw_np,
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem_m,
+            mesh_mapper=mapper_m,
+        )
+        self._sliding_window_mask_cache[key] = sw_m
+        return sw_m
 
     def _l1_activation(self, t):
         if self._act_l1 is None:
@@ -1225,9 +1257,21 @@ class TtAceStepAttentionSDPA:
                 eltwise_memory_config=_dram_mc if use_dram_activations else self._act_l1,
             )
         else:
+            # TTNN SDPA rejects sliding_window_size together with a dense attn_mask; bake the
+            # bidirectional sliding window into the additive mask instead (matches condition_encoder).
+            effective_sliding = sliding_window_size
+            if is_self_attn and sliding_window_size is not None and sdpa_attn_mask is not None:
+                sw_m = self._get_sliding_window_mask(
+                    batch=B,
+                    seq_len=int(q.shape[2]),
+                    window=int(sliding_window_size),
+                )
+                _mask_mc = ace_step_sdpa_mask_memory_config(ttnn)
+                sdpa_attn_mask = ttnn.add(sdpa_attn_mask, sw_m, memory_config=_mask_mc)
+                effective_sliding = None
             sdpa_kwargs = dict(attn_mask=sdpa_attn_mask, is_causal=is_causal, scale=self.scale)
-            if sliding_window_size is not None:
-                sdpa_kwargs["sliding_window_size"] = int(sliding_window_size)
+            if effective_sliding is not None:
+                sdpa_kwargs["sliding_window_size"] = int(effective_sliding)
             sdpa_kwargs.update(ace_step_sdpa_activation_kwargs(ttnn, _op_mc))
             ctx = self._sdpa(q, k, v, **sdpa_kwargs)
         if _trace:

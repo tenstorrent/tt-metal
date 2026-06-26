@@ -646,7 +646,7 @@ class QwenModelTtTransformers:
             rot_mat_idxs=rope_idxs,
             page_table=tt_page_table,
             kv_cache=self.tt_kv_cache,
-            sampling_on_device=False,
+            on_device_logits=False,
         )
         # ``ttnn_decode_forward`` returns either (logits, None) when sampling is off-device, or
         # (tokens, log_probs) when on-device sampling is engaged. We disable on-device sampling
@@ -680,7 +680,7 @@ class QwenModelTtTransformers:
             warm = self.tt_model.ttnn_decode_forward(
                 *device_inputs,
                 kv_cache=self.tt_kv_cache,
-                sampling_on_device=False,
+                on_device_logits=False,
             )
             if isinstance(warm, tuple):
                 warm_logits = warm[0]
@@ -697,7 +697,7 @@ class QwenModelTtTransformers:
             out = self.tt_model.ttnn_decode_forward(
                 *device_inputs,
                 kv_cache=self.tt_kv_cache,
-                sampling_on_device=False,
+                on_device_logits=False,
             )
             ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
             ttnn.synchronize_device(self.device)
