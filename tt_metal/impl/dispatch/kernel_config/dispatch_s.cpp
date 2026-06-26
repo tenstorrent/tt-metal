@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
@@ -177,39 +178,46 @@ void DispatchSKernel::GenerateStaticConfigs() {
             const uint32_t noc_locations_size =
                 static_cast<uint32_t>(sizeof(device_print_dispatch::NocLocationInputInfo)) * num_print_cores;
             const uint32_t l1_cache_size = my_dispatch_constants.dispatch_s_device_print_l1_cache_size();
-            TT_FATAL(
-                noc_locations_size <= l1_cache_size,
-                "DPRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
-                "({} bytes). Bump TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES.",
-                noc_locations_size,
-                num_print_cores,
-                l1_cache_size);
 
-            const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-            const uint64_t dram_base = hal.get_dev_addr(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
-            const uint32_t dram_total_size = hal.get_dev_size(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
+            // Check if there is enough space in the buffer
+            if (noc_locations_size > l1_cache_size) {
+                log_warning(
+                    tt::LogMetal,
+                    "DPRINT dispatch_s DRAM aggregation disabled on device {}: l1_cache ({} bytes) is too "
+                    "small to hold noc_locations for {} print cores ({} bytes). Falling back to per-core L1 "
+                    "polling; raise TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES to re-enable.",
+                    device_->id(),
+                    l1_cache_size,
+                    num_print_cores,
+                    noc_locations_size);
+            } else {
+                const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+                const uint64_t dram_base = hal.get_dev_addr(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
+                const uint32_t dram_total_size = hal.get_dev_size(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
 
-            // dram_view 0's preferred worker NOC coords for the dispatch_s NOC.
-            auto dram_logical = device_->logical_core_from_dram_channel(0);
-            auto dram_virtual = device_->virtual_core_from_logical_core(dram_logical, CoreType::DRAM);
-            auto dram_noc = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, dram_virtual);
+                // dram_view 0's preferred worker NOC coords for the dispatch_s NOC.
+                auto dram_logical = device_->logical_core_from_dram_channel(0);
+                auto dram_virtual = device_->virtual_core_from_logical_core(dram_logical, CoreType::DRAM);
+                auto dram_noc = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, dram_virtual);
 
-            const auto& rtoptions = descriptor_.rtoptions();
-            const uint64_t clock_mhz = static_cast<uint64_t>(device_->get_clock_rate_mhz());
+                const auto& rtoptions = descriptor_.rtoptions();
+                const uint64_t clock_mhz = static_cast<uint64_t>(device_->get_clock_rate_mhz());
 
-            static_config_.device_print_dispatch_enabled = 1;
-            static_config_.device_print_noc_locations_addr =
-                my_dispatch_constants.device_print_dispatch_noc_locations_addr();
-            static_config_.device_print_noc_locations_count = num_print_cores;
-            static_config_.device_print_l1_cache_addr = my_dispatch_constants.device_print_dispatch_l1_cache_addr();
-            static_config_.device_print_l1_cache_size = l1_cache_size;
-            static_config_.device_print_dram_x = dram_noc.x;
-            static_config_.device_print_dram_y = dram_noc.y;
-            static_config_.device_print_dram_rw_ptrs = dram_base;
-            static_config_.device_print_dram_buf_addr = dram_base + dram_alignment;
-            static_config_.device_print_dram_buf_size = dram_total_size - dram_alignment;
-            static_config_.device_print_cycles_for_stall = clock_mhz * rtoptions.get_device_print_dispatch_stall_us();
-            static_config_.device_print_cycles_for_full = clock_mhz * rtoptions.get_device_print_dispatch_full_us();
+                static_config_.device_print_dispatch_enabled = 1;
+                static_config_.device_print_noc_locations_addr =
+                    my_dispatch_constants.device_print_dispatch_noc_locations_addr();
+                static_config_.device_print_noc_locations_count = num_print_cores;
+                static_config_.device_print_l1_cache_addr = my_dispatch_constants.device_print_dispatch_l1_cache_addr();
+                static_config_.device_print_l1_cache_size = l1_cache_size;
+                static_config_.device_print_dram_x = dram_noc.x;
+                static_config_.device_print_dram_y = dram_noc.y;
+                static_config_.device_print_dram_rw_ptrs = dram_base;
+                static_config_.device_print_dram_buf_addr = dram_base + dram_alignment;
+                static_config_.device_print_dram_buf_size = dram_total_size - dram_alignment;
+                static_config_.device_print_cycles_for_stall =
+                    clock_mhz * rtoptions.get_device_print_dispatch_stall_us();
+                static_config_.device_print_cycles_for_full = clock_mhz * rtoptions.get_device_print_dispatch_full_us();
+            }
         }
     }
 }
