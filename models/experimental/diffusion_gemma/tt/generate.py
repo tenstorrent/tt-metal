@@ -658,6 +658,10 @@ def generate_text_from_checkpoint_state(
             vocab_size=vocab_size,
             seed=noise_seed if noise_seed is not None else seed + 1,
         )
+    if "eos_token_id" not in generate_kwargs:
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
+        if eos_token_id is not None:
+            generate_kwargs["eos_token_id"] = eos_token_id
     logits_fn_builder = logits_fn_builder_factory(
         dg_state_dict,
         **(adapter_kwargs or {}),

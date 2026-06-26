@@ -575,6 +575,58 @@ def test_generate_text_from_checkpoint_state_preserves_explicit_noise_tokens(mon
     assert calls["generate"]["noise_tokens_fn"] == "explicit-noise"
 
 
+def test_generate_text_from_checkpoint_state_uses_tokenizer_eos_by_default():
+    calls = {}
+
+    class _Tokenizer:
+        eos_token_id = 9
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    out = generate_text_from_checkpoint_state(
+        "model",
+        _Tokenizer(),
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["generate"]["eos_token_id"] == 9
+
+
+def test_generate_text_from_checkpoint_state_preserves_explicit_eos():
+    calls = {}
+
+    class _Tokenizer:
+        eos_token_id = 9
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    generate_text_from_checkpoint_state(
+        "model",
+        _Tokenizer(),
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        eos_token_id=None,
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert calls["generate"]["eos_token_id"] is None
+
+
 def test_generate_text_from_checkpoint_state_requires_canvas_source():
     with pytest.raises(ValueError, match="init_canvas_fn"):
         generate_text_from_checkpoint_state(
