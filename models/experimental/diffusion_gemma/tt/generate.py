@@ -618,13 +618,26 @@ def generate_text_from_checkpoint_state(
     dg_state_dict,
     num_blocks: int,
     config: DiffusionConfig,
-    init_canvas_fn: Callable[[int, int], object],
+    init_canvas_fn: Callable[[int, int], object] | None = None,
+    vocab_size: int | None = None,
+    seed: int | None = None,
+    batch: int = 1,
     adapter_kwargs: dict | None = None,
     logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
     generate_text_fn=generate_text,
     **generate_kwargs,
 ) -> DeviceTextGeneration:
     """Run prompt-to-text generation using raw DiffusionGemma checkpoint state."""
+    if init_canvas_fn is None:
+        if vocab_size is None or seed is None:
+            raise ValueError("init_canvas_fn is required unless vocab_size and seed are provided")
+        init_canvas_fn = make_seeded_host_canvas_init_fn(
+            tt_model.mesh_device,
+            batch=batch,
+            canvas_len=config.canvas_length,
+            vocab_size=vocab_size,
+            seed=seed,
+        )
     logits_fn_builder = logits_fn_builder_factory(
         dg_state_dict,
         **(adapter_kwargs or {}),

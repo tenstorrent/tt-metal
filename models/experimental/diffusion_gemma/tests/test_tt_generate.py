@@ -452,6 +452,69 @@ def test_generate_text_from_checkpoint_state_builds_logits_and_delegates():
     assert kwargs["max_new_tokens"] == 8
 
 
+def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monkeypatch):
+    calls = {}
+    result = object()
+
+    class _Model:
+        mesh_device = "mesh"
+
+    def fake_canvas_init_fn(mesh_device, **kwargs):
+        calls["canvas_init"] = (mesh_device, kwargs)
+        return "init"
+
+    def fake_builder_factory(dg_state_dict, **kwargs):
+        calls["builder"] = (dg_state_dict, kwargs)
+        return "builder"
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = (tt_model, logits_fn, tokenizer, prompt, kwargs)
+        return result
+
+    monkeypatch.setattr(G, "make_seeded_host_canvas_init_fn", fake_canvas_init_fn)
+
+    out = generate_text_from_checkpoint_state(
+        _Model(),
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        vocab_size=99,
+        seed=123,
+        batch=2,
+        logits_fn_builder_factory=fake_builder_factory,
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out is result
+    assert calls["canvas_init"] == (
+        "mesh",
+        {
+            "batch": 2,
+            "canvas_len": 4,
+            "vocab_size": 99,
+            "seed": 123,
+        },
+    )
+    assert calls["generate"][4]["init_canvas_fn"] == "init"
+    assert calls["generate"][4]["logits_fn_builder"] == "builder"
+
+
+def test_generate_text_from_checkpoint_state_requires_canvas_source():
+    with pytest.raises(ValueError, match="init_canvas_fn"):
+        generate_text_from_checkpoint_state(
+            object(),
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generation_sequences_appends_prompt_and_generated_tokens():
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
     generation = G.DeviceGeneration(
