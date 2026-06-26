@@ -20,8 +20,12 @@
 ///     (e.g. 8x 4x2 on M0 + 32x 1x2 on M1), the build_topology_multimesh case.
 ///
 /// The resolved layout is then validated the way the silicon pipeline relies on it:
-/// distinct entry/exit chips per stage, active fabric eth channels, a direct PSD
-/// ethernet link + matching fabric hop per edge, and no socket-endpoint chip reuse.
+/// active fabric eth channels on every socket chip, and a direct PSD ethernet link +
+/// matching fabric hop per edge.  A chip MAY serve as more than one socket endpoint —
+/// including a stage whose entry and exit land on the same chip — because blaze's
+/// PipelineBlock places a colliding exit-send kernel on SECOND_PIPELINE_CORE_COORD (a
+/// second core on that chip, see blaze/models/pipeline_block.py).  Same-chip / reused
+/// socket endpoints are therefore valid and are NOT rejected here.
 
 #include <gtest/gtest.h>
 
@@ -30,7 +34,6 @@
 #include <algorithm>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -118,11 +121,11 @@ FabricNodeId fabric_node_at_local_coord(
 }
 
 // Returns first validation error, or nullopt if all checks pass.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
     const ControlPlane& control_plane, const std::vector<SubmeshLayout>& layouts, const GraphLayoutResult& result) {
     const std::size_t num_stages = result.stage_order.size();
 
+    // (1) Structural shape: exactly one resolved edge and one submesh assignment per stage.
     if (result.resolved_edges.size() != num_stages) {
         return fmt::format("resolved_edges size {} != stage count {}", result.resolved_edges.size(), num_stages);
     }
@@ -130,6 +133,7 @@ std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
         return fmt::format("node_to_submesh size {} != stage count {}", result.node_to_submesh.size(), num_stages);
     }
 
+    // Is there a physical ethernet cable between the two ASICs (either direction)?
     auto psd_has_direct_eth_link = [&](const FabricNodeId& a, const FabricNodeId& b) {
         const auto& psd = control_plane.get_physical_system_descriptor();
         const auto asic_a = control_plane.get_asic_id_from_fabric_node_id(a);
@@ -140,6 +144,10 @@ std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
         return !psd.get_eth_connections(asic_b, asic_a).empty();
     };
 
+    // Link kinds: planar N/S/E/W (the in-mesh torus) and Z (the stacking dimension). A real
+    // hop uses the same kind on both ends; pairing planar with Z means a cross-wired hop.
+    // Kind != intra/inter: inter-mesh links may be planar or Z, and intra-mesh is planar
+    // today but will gain Z links soon.
     using EthDir = tt::tt_fabric::eth_chan_directions;
     auto is_z_eth_dir = [](EthDir d) { return d == EthDir::Z; };
     auto is_nesw_eth_dir = [](EthDir d) {
@@ -149,31 +157,27 @@ std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
         return (is_z_eth_dir(a) && is_z_eth_dir(b)) || (is_nesw_eth_dir(a) && is_nesw_eth_dir(b));
     };
 
-    std::unordered_set<FabricNodeId> used_socket_nodes;
-    used_socket_nodes.reserve(num_stages * 4);
-
+    // (2) Per-edge: confirm the two socket chips can actually exchange data over the fabric.
     for (const auto& edge : result.resolved_edges) {
         const std::size_t src_sub = result.node_to_submesh.at(edge.src);
         const std::size_t dst_sub = result.node_to_submesh.at(edge.dst);
         const FabricNodeId exit_fn = fabric_node_at_local_coord(layouts, src_sub, edge.exit_row, edge.exit_col);
         const FabricNodeId entry_fn = fabric_node_at_local_coord(layouts, dst_sub, edge.entry_row, edge.entry_col);
 
+        // (2a) Both socket chips must have active fabric ethernet channels.
         if (control_plane.get_active_fabric_eth_channels(exit_fn).empty()) {
             return fmt::format("Edge exit {} has no active fabric ethernet channels", exit_fn);
         }
         if (control_plane.get_active_fabric_eth_channels(entry_fn).empty()) {
             return fmt::format("Edge entry {} has no active fabric ethernet channels", entry_fn);
         }
-        if (!used_socket_nodes.insert(exit_fn).second) {
-            return fmt::format("Exit fabric node {} reused across pipeline socket endpoints", exit_fn);
-        }
-        if (!used_socket_nodes.insert(entry_fn).second) {
-            return fmt::format("Entry fabric node {} reused across pipeline socket endpoints", entry_fn);
-        }
+        // (2b) The exit and entry chips must be directly wired by a physical cable.
         if (!psd_has_direct_eth_link(exit_fn, entry_fn)) {
             return fmt::format("No direct PSD ethernet edge for {} -> {}", exit_fn, entry_fn);
         }
 
+        // (2c) An active fabric hop must run from exit to entry (saw_hop), with both ends on
+        // the same link kind (the direction check catches a cross-wired hop).
         bool saw_hop = false;
         for (const auto& [src_chan, src_dir] : control_plane.get_active_fabric_eth_channels(exit_fn)) {
             auto [peer_fn, peer_chan] = control_plane.get_connected_mesh_chip_chan_ids(exit_fn, src_chan);
@@ -191,6 +195,9 @@ std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
         }
     }
 
+    // (3) Stage-0 host-IO sockets (H2D/D2H) must also have active fabric ethernet channels.
+    // No chip-distinctness needed: they may share a chip with each other or an edge, since
+    // PipelineBlock separates colliding sockets by core.
     const std::size_t stage0_sub = result.node_to_submesh.at(result.stage_order.front());
     const FabricNodeId h2d_fn =
         fabric_node_at_local_coord(layouts, stage0_sub, result.h2d_entry_row, result.h2d_entry_col);
@@ -204,40 +211,9 @@ std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
         return fmt::format("D2H exit {} has no active fabric ethernet channels", d2h_fn);
     }
 
-    // Each forwarding stage must place its entry and exit on DIFFERENT chips of its own
-    // submesh — two persistent kernels on the same core would deadlock.  This is the
-    // property the resolver's deconfliction step (pipeline_builder.cpp) guarantees.
-    for (std::size_t stage_idx = 1; stage_idx < num_stages; ++stage_idx) {
-        const std::string& stage_name = result.stage_order[stage_idx];
-
-        uint32_t entry_row = 0;
-        uint32_t entry_col = 0;
-        for (const auto& edge : result.resolved_edges) {
-            if (!edge.is_loopback && edge.dst == stage_name) {
-                entry_row = edge.entry_row;
-                entry_col = edge.entry_col;
-                break;
-            }
-        }
-
-        uint32_t exit_row = 0;
-        uint32_t exit_col = 0;
-        for (const auto& edge : result.resolved_edges) {
-            if (edge.src == stage_name) {
-                exit_row = edge.exit_row;
-                exit_col = edge.exit_col;
-                break;
-            }
-        }
-
-        if (std::make_pair(entry_row, entry_col) == std::make_pair(exit_row, exit_col)) {
-            return fmt::format(
-                "Stage {} ({}) has colliding entry/exit on submesh for rank shape {}",
-                stage_idx,
-                stage_name,
-                layouts.at(result.node_to_submesh.at(stage_name)).rank_shape);
-        }
-    }
+    // Same-chip entry/exit per stage is intentionally allowed: PipelineBlock moves the
+    // exit-send kernel to SECOND_PIPELINE_CORE_COORD (blaze/models/pipeline_block.py), so
+    // the two kernels never share a core. No distinct entry/exit chip requirement.
 
     return std::nullopt;
 }
@@ -273,12 +249,14 @@ TEST_F(ControlPlaneFixture, TestPipelineBuilderGraphLayout) {
         GTEST_SKIP() << "MGD has fewer than 2 host-rank submeshes; no pipeline ring to resolve";
     }
 
-    // A 1x1 host-rank slice has a single chip, so its entry and exit sockets cannot land
-    // on different chips.  blaze never builds 1x1-stage pipelines, so skip rather than fail.
+    // A 1x1 host-rank slice has a single chip.  Same-chip entry/exit sockets are valid at
+    // runtime (PipelineBlock splits them across two cores), but resolve_graph_layout still
+    // requires a distinct exit chip per stage, so it cannot resolve an all-1x1 ring.  blaze
+    // never builds 1x1-stage pipelines, so skip rather than exercise that resolver path.
     if (std::all_of(layouts.begin(), layouts.end(), [](const SubmeshLayout& layout) {
             return layout.rank_shape.mesh_size() == 1;
         })) {
-        GTEST_SKIP() << "1x1 host-rank slices cannot place distinct pipeline entry/exit socket coords";
+        GTEST_SKIP() << "all-1x1 host-rank slices: resolve_graph_layout requires a distinct exit chip per stage";
     }
 
     const GraphLayoutResult result = resolve_graph_layout(build_ring_edges(layouts.size()), to_submesh_chips(layouts));
