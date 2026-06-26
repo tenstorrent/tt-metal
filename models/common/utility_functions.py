@@ -485,7 +485,7 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
-def comp_pcc(golden, calculated, pcc=0.99):
+def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
 
@@ -545,9 +545,12 @@ def comp_pcc(golden, calculated, pcc=0.99):
     denom = torch.sqrt(g_centered.pow(2).sum(dtype=torch.float64) * c_centered.pow(2).sum(dtype=torch.float64))
     cal_pcc = (cov / denom).item()
 
-    # Zero variance -> denom == 0 -> cal_pcc is nan: treat as a perfect match.
+    # Zero variance -> denom == 0 -> cal_pcc is nan: PCC is undefined for constant tensors.
+    # Fall back to allclose rather than returning a misleading 1.0.
     if math.isnan(cal_pcc):
-        return True, 1.0
+        logger.warning("PCC is NaN (zero variance / constant tensor). Falling back to allclose check.")
+        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        return result, float(result)
 
     return cal_pcc >= pcc, cal_pcc
 
@@ -739,7 +742,7 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     passing &= passing_allclose
     output += output_allclose
     if torch.numel(golden) != 1:
-        passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc)
+        passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc, rtol=rtol, atol=atol)
         passing &= passing_pcc
         output += f", pcc={output_pcc}"
 
