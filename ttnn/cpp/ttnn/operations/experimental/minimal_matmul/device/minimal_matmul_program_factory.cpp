@@ -403,19 +403,20 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     if (const char* s = std::getenv("TT_MM_NUM_SLICES"); s != nullptr && no_fuse_ops) {
         num_slices = std::max(1u, static_cast<uint32_t>(std::atoi(s)));
     }
-    TT_FATAL(
-        num_slices >= 1 && grid_size.y % num_slices == 0,
-        "TT_MM_NUM_SLICES ({}) must be a divisor of grid.y ({})",
-        num_slices,
-        grid_size.y);
+    TT_FATAL(num_slices >= 1, "TT_MM_NUM_SLICES ({}) must be >= 1", num_slices);
     if (k_slices_pinned && no_fuse_ops) {
         num_k_slices = std::max(1u, static_cast<uint32_t>(std::atoi(std::getenv("TT_MM_K_SLICES"))));
         const char* kf = std::getenv("TT_MM_K_FUSED");
         num_k_fused = (kf != nullptr && std::atoi(kf) != 0);
     }
+    // Step-1 sub-grid round-down: (S,Pk) no longer need to DIVIDE grid.y. We run on the largest sub-grid
+    // whose row count is a multiple of (num_slices*num_k_slices) and idle the leftover rows (applied just
+    // below, before rows_per_group). This unlocks arbitrary K/N partitionings on unfriendly grids (e.g.
+    // Pk=2 on grid.y=9 -> two grid.x*4 bands, the 9th row idle). The only hard requirement is that at
+    // least one row per group fits. Divisor (S,Pk) are unchanged (active_rows == grid.y, nothing idled).
     TT_FATAL(
-        num_k_slices >= 1 && grid_size.y % (num_slices * num_k_slices) == 0,
-        "num_slices*num_k_slices ({}) must divide grid.y ({})",
+        num_k_slices >= 1 && num_slices * num_k_slices <= grid_size.y,
+        "num_slices*num_k_slices ({}) must be <= grid.y ({})",
         num_slices * num_k_slices,
         grid_size.y);
     TT_FATAL(K_tiles % num_k_slices == 0, "num_k_slices ({}) must divide K_tiles ({})", num_k_slices, K_tiles);
@@ -436,6 +437,25 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // padded to K_block=8 = 2x wasted K work). Pure win; only reduces K_block when K is tiny.
     if (!config.has_value()) {
         K_block_tiles = std::min(K_block_tiles, std::max(1u, K_tiles));
+    }
+    // Apply the round-down: shrink the active grid to grid.x x active_rows (largest multiple of S*Pk
+    // that fits in grid.y) and idle the leftover rows -- idled rows are excluded from core_grid, so they
+    // get no CB/semaphore/kernel (no work, no deadlock). Equivalent to the caller passing a smaller
+    // compute_with_storage_grid_size, but derived automatically per (S,Pk). Bands remain equal contiguous
+    // row-strips, so the fused column-reduction's 1:1 vertical correspondence is preserved.
+    const uint32_t spk_rows = num_slices * num_k_slices;
+    const uint32_t active_rows = (grid_size.y / spk_rows) * spk_rows;
+    if (active_rows != grid_size.y) {
+        log_debug(
+            tt::LogOp,
+            "minimal_matmul sub-grid round-down: grid.y {} -> {} (S*Pk={}, {} row(s) idle)",
+            grid_size.y,
+            active_rows,
+            spk_rows,
+            grid_size.y - active_rows);
+        grid_size = CoreCoord{grid_size.x, active_rows};
+        core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+        num_cores = core_grid.size();
     }
     // Rows are partitioned as num_k_slices (K-bands, outer) x num_slices (N-slice groups) x
     // rows_per_group (small-dim parallelism, innermost). K-bands do NOT add output parallelism (they
@@ -1242,12 +1262,16 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
             num_in0_recv = grid_size.x - 1;
             in1_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
-            in1_rf_l = {(std::size_t)core.x, (std::size_t)(base_row + 1)};
+            // rows_per_group==1 => no receivers (num_in1_recv==0); clamp the (unused) receiver-first row
+            // to the group's last row so it never indexes y==grid.y (off-by-one on the last group).
+            in1_rf_l = {(std::size_t)core.x, std::min<std::size_t>(base_row + 1, grp_last_row)};
             in1_rl_l = {(std::size_t)core.x, grp_last_row};
             num_in1_recv = rows_per_group - 1;
         } else {
             in0_inj_l = {(std::size_t)core.x, (std::size_t)base_row};  // big: down group rows
-            in0_rf_l = {(std::size_t)core.x, (std::size_t)(base_row + 1)};
+            // rows_per_group==1 => no receivers (num_in0_recv==0); clamp the (unused) receiver-first row
+            // to the group's last row so it never indexes y==grid.y (off-by-one on the last group).
+            in0_rf_l = {(std::size_t)core.x, std::min<std::size_t>(base_row + 1, grp_last_row)};
             in0_rl_l = {(std::size_t)core.x, grp_last_row};
             num_in0_recv = rows_per_group - 1;
             in1_inj_l = {(std::size_t)0, (std::size_t)core.y};  // small: across cols
