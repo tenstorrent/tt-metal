@@ -104,6 +104,26 @@ std::string normalize_cache_root(std::string cache_root) {
     return cache_root;
 }
 
+// This server's own build root (TT_METAL_HOME, trailing-slash), set at startup. Used to re-root
+// client-shipped toolchain/link paths onto THIS server's tree. Empty => re-root disabled.
+std::string g_server_root;
+
+// Replace every occurrence of `client_root` with `g_server_root` in `s`. The client ships absolute
+// paths rooted at its TT_METAL_HOME (sfpi g++, linker script, hw link objects); when the server's
+// tree lives at a different path, those paths don't exist here, so we swap the root prefix to
+// resolve them against the server's own tree. No-op when the roots match, either is empty, or the
+// path is not under the client root (e.g. a machine-global toolchain present on the server too).
+void reroot_to_server(std::string& s, const std::string& client_root) {
+    if (client_root.empty() || g_server_root.empty() || client_root == g_server_root || s.empty()) {
+        return;
+    }
+    std::string::size_type pos = 0;
+    while ((pos = s.find(client_root, pos)) != std::string::npos) {
+        s.replace(pos, client_root.size(), g_server_root);
+        pos += g_server_root.size();
+    }
+}
+
 // All client-supplied path components (kernel_name, target_name, obj names, generated file
 // names) are validated by validate_safe_relative_path() before reaching these helpers.
 std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
@@ -121,8 +141,8 @@ std::string firmware_cache_dir(std::uint64_t build_key, const std::string& targe
 }
 
 // Resolve firmware path from the server cache populated by uploadFirmware RPC.
-// PoC limitation: uploaded firmware is assumed durable in the configured server cache root.
-// If the server cache is cleared after upload, compile will fail until the client re-uploads.
+// Note: uploaded firmware is assumed durable in the configured server cache root; if the cache is
+// cleared after upload, compile fails until the client re-uploads.
 fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_metal::jit_server::TargetRecipe& target) {
     if (target.weakened_firmware_name.empty()) {
         throw std::runtime_error(
@@ -188,30 +208,47 @@ void compile_one(
     const std::string& out_dir,
     size_t src_index,
     const std::string& temp_obj) {
-    std::vector<std::string> args;
-    append_tokenized(args, gpp);
-    args.push_back("-" + target.compiler_opt_level);
-    append_tokenized(args, target.cflags);
-    append_tokenized(args, target.includes);
-
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
-    args.push_back("-c");
-    args.push_back("-o");
-    args.push_back(obj_temp_path);
-    args.push_back(target.srcs[src_index]);
-    args.push_back("-MF");
-    args.push_back(temp_d_path);
-    args.insert(args.end(), target.defines.begin(), target.defines.end());
+    // Build the g++ argv via the shared jit_build_utils builder and run it directly (posix_spawn,
+    // no shell), the same path used by the local compile.
+    std::vector<std::string> defines(target.defines.begin(), target.defines.end());
+    std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
+        gpp,
+        target.compiler_opt_level,
+        target.cflags,
+        target.includes,
+        defines,
+        target.srcs[src_index],
+        tt::jit_build::utils::GppAction::Compile,
+        obj_temp_path,
+        temp_d_path);
 
     tt::jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::exec_command(args, out_dir, log_file.path())) {
         build_failure(target.target_name, "compile", format_args(args), log_file.path());
     }
-    tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    const std::string dephash_path = obj_temp_path + ".dephash";
+    tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, dephash_path);
     fs::remove(temp_d_path);
+
+    // A preprocessed .ii has no #includes, so -MMD emits no usable .d and the dephash above isn't
+    // written -> the object looks stale on every request and the server recompiles it every time. The
+    // .ii is self-contained (headers expanded inline), so record it as the sole dependency: an
+    // identical re-shipped .ii then validates the hash and the server reuses the cached .o.
+    const std::string& src = target.srcs[src_index];
+    const bool is_preprocessed = src.size() >= 3 && src.compare(src.size() - 3, 3, ".ii") == 0;
+    if (is_preprocessed && !fs::exists(dephash_path)) {
+        std::ofstream hash_file(dephash_path);
+        tt::jit_build::ParsedDependencies deps{{obj_temp_path, {src}}};
+        tt::jit_build::write_dependency_hashes(deps, out_dir, obj_temp_path, hash_file);
+        hash_file.close();
+        if (hash_file.fail()) {
+            fs::remove(dephash_path);
+        }
+    }
 }
 
 void link_one(
@@ -322,7 +359,11 @@ void build_target(
         fs::path dst_path = out_dir + target.objs[i];
         if (compiled[i]) {
             fs::rename(src_path, dst_path);
-            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
+            // A preprocessed (.ii) input has no #includes, so -MMD yields an empty .d and no
+            // .dephash is written. Tolerate its absence: a missing dephash conservatively forces
+            // a recompile next time, which is correct (and the common fresh-cache farm case).
+            std::error_code dephash_ec;
+            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"), dephash_ec);
         } else if (fs::exists(src_path)) {
             fs::remove(src_path);
         }
@@ -379,14 +420,27 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             }
         }
 
+        // Re-root the client's toolchain path onto this server's tree (sfpi g++ lives under the
+        // client's TT_METAL_HOME, which is absent here when the client's tree is at a different
+        // path). No-op if the roots match or the toolchain is a machine-global /opt sfpi.
+        std::string gpp = request.gpp;
+        reroot_to_server(gpp, request.client_root);
+
         for (const auto& target : request.targets) {
             tt::tt_metal::jit_server::TargetRecipe resolved_target = target;
             if (!resolved_target.weakened_firmware_name.empty()) {
                 resolved_target.weakened_firmware_name =
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
+            // Re-root the remaining client-absolute paths: the -T linker script (in lflags), the
+            // linker script (dephash), the hw link objects, and any -I includes (cleared under
+            // preprocess-and-ship, harmless otherwise).
+            reroot_to_server(resolved_target.includes, request.client_root);
+            reroot_to_server(resolved_target.lflags, request.client_root);
+            reroot_to_server(resolved_target.linker_script, request.client_root);
+            reroot_to_server(resolved_target.extra_link_objs, request.client_root);
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            build_target(request.gpp, resolved_target, out_dir, response);
+            build_target(gpp, resolved_target, out_dir, response);
         }
 
         response.success = true;
@@ -464,6 +518,15 @@ int main() {
     const char* cache_root_env = std::getenv(kServerCacheRootEnv);
     g_server_cache_root = normalize_cache_root(cache_root_env != nullptr ? cache_root_env : kDefaultServerCacheRoot);
 
+    // Server's own build root — the re-root target for client-shipped toolchain/link paths.
+    const char* home_env = std::getenv("TT_METAL_HOME");
+    if (home_env != nullptr && *home_env != '\0') {
+        g_server_root = home_env;
+        if (g_server_root.back() != '/') {
+            g_server_root.push_back('/');
+        }
+    }
+
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
@@ -471,6 +534,10 @@ int main() {
     server.start(endpoint);
     log_info(tt::LogMetal, "JIT compile server listening on {}", endpoint);
     log_info(tt::LogMetal, "JIT compile server cache root: {}", g_server_cache_root);
+    log_info(
+        tt::LogMetal,
+        "JIT compile server build root (re-root target): {}",
+        g_server_root.empty() ? "<TT_METAL_HOME unset; re-root disabled>" : g_server_root);
 
     while (g_keep_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
