@@ -557,3 +557,114 @@ def test_tilize_fp8_input(device, shape, out_dtype, min_pcc):
     tt_out = ttnn.tilize(tt_in, dtype=out_dtype)
     assert tt_out.layout == ttnn.TILE_LAYOUT and tt_out.dtype == out_dtype
     assert_with_pcc(golden, ttnn.to_torch(tt_out).float(), min_pcc)
+
+
+def _make_fp32_precision_tensor(shape):
+    """Build a fp32 tensor with values that require full 23-bit mantissa precision.
+
+    These values are NOT representable in bfloat16 (7-bit mantissa) or TF32
+    (10-bit mantissa).  Any silent truncation will cause torch.equal to fail.
+    """
+    torch.manual_seed(35303)
+    t = torch.randn(shape, dtype=torch.float32)
+    precision_values = torch.tensor(
+        [
+            1.0000001192092896,  # smallest fp32 > 1.0  (bit 0x3F800001)
+            -1.0000001192092896,
+            0.693147182464599609,
+            -0.693147182464599609,
+            3.14159265358979,  # pi at full fp32 precision
+            -3.14159265358979,
+            16777217.0,  # 2^24 + 1, not representable in bf16
+            -16777217.0,
+            8388609.0,  # 2^23 + 1
+            -8388609.0,
+            1.41421353816986084,
+            -1.41421353816986084,
+            1.1920928955078125e-07,  # machine epsilon for fp32
+            -1.1920928955078125e-07,
+            1.9908e-05,  # regression value from issue #39310
+            -1.9908e-05,
+            1234567.125,  # large with fractional low bits
+            -1234567.125,
+            1.17549435e-38,  # smallest positive normal fp32
+            -1.17549435e-38,
+            3.40282347e38,  # FLT_MAX
+            -3.40282347e38,
+            0.333333343267440796,  # 1/3 at full fp32 precision
+            -0.333333343267440796,
+            2.7182817459106445,  # e at full fp32 precision
+            -2.7182817459106445,
+        ],
+        dtype=torch.float32,
+    )
+    n = min(precision_values.numel(), t.shape[-1])
+    t.view(-1, t.shape[-1])[0, :n] = precision_values[:n]
+    return t
+
+
+@pytest.mark.parametrize("shape", [(32, 32), (64, 128), (256, 512)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_fp32_lossless(device, shape, use_multicore):
+    """Tilize must preserve fp32 values with perfect bitwise equality."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [(32, 32), (128, 256)])
+def test_tilize_untilize_fp32_roundtrip(device, shape):
+    """Full tilize -> untilize round-trip must be bit-exact for fp32."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_tiled = ttnn.tilize(tt_input)
+    tt_rm = ttnn.untilize(tt_tiled)
+    output_tensor = ttnn.to_torch(tt_rm)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [(48, 80), (33, 65)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_with_zero_padding_fp32_lossless(device, shape, use_multicore):
+    """tilize_with_zero_padding must preserve fp32 data region exactly."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize_with_zero_padding(tt_input, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    H, W = shape
+    assert torch.equal(input_tensor, output_tensor[:H, :W])
+
+
+@pytest.mark.parametrize("shape", [(48, 80), (33, 65)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_with_val_padding_fp32_lossless(device, shape, use_multicore):
+    """tilize_with_val_padding must preserve fp32 data region exactly."""
+    input_tensor = _make_fp32_precision_tensor(shape)
+    H, W = shape
+    padded_H = math.ceil(H / 32) * 32
+    padded_W = math.ceil(W / 32) * 32
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize_with_val_padding(tt_input, [padded_H, padded_W], 1.0075, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor[:H, :W])
+
+
+def test_tilize_fp32_lossless_via_to_layout(device):
+    """to_layout (host→device tilize path) must be bit-exact for fp32."""
+    input_tensor = _make_fp32_precision_tensor((64, 128))
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)
