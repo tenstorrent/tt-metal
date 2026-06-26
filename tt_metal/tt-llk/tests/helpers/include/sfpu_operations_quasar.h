@@ -84,7 +84,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
-        _init_zero_comp_();
+        init_zero_comp();
     }
 }
 
@@ -111,24 +111,24 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
     switch (sfpu_format)
     {
         case DataFormat::Int32:
-            _llk_math_eltwise_unary_sfpu_params_(_calculate_zero_comp_<false, DataFormat::Int32, OPERATION, ITERATIONS>, dst_index);
+            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int32, OPERATION, ITERATIONS>, dst_index);
             break;
         case DataFormat::Int16:
-            _llk_math_eltwise_unary_sfpu_params_(_calculate_zero_comp_<false, DataFormat::Int16, OPERATION, ITERATIONS>, dst_index);
+            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Int16, OPERATION, ITERATIONS>, dst_index);
             break;
         case DataFormat::Int8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::Int8;
-            _llk_math_eltwise_unary_sfpu_params_(_calculate_zero_comp_<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
             break;
         }
         case DataFormat::UInt16:
-            _llk_math_eltwise_unary_sfpu_params_(_calculate_zero_comp_<false, DataFormat::UInt16, OPERATION, ITERATIONS>, dst_index);
+            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::UInt16, OPERATION, ITERATIONS>, dst_index);
             break;
         case DataFormat::UInt8:
         {
             constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::UInt8;
-            _llk_math_eltwise_unary_sfpu_params_(_calculate_zero_comp_<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
+            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, sfpu_fmt, OPERATION, ITERATIONS>, dst_index);
             break;
         }
         case DataFormat::Float16:
@@ -136,7 +136,7 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
         case DataFormat::Float32:
             // Float widths share the width-agnostic Float32 path: its sfpmem::DEFAULT access mode
             // resolves the actual width from ALU_FORMAT_SPEC_REG / ACC_CTRL.
-            _llk_math_eltwise_unary_sfpu_params_(_calculate_zero_comp_<false, DataFormat::Float32, OPERATION, ITERATIONS>, dst_index);
+            _llk_math_eltwise_unary_sfpu_params_(calculate_zero_comp<false, DataFormat::Float32, OPERATION, ITERATIONS>, dst_index);
             break;
         default:
             LLK_ASSERT(false, "Unsupported Quasar comp-to-zero SFPU format");
