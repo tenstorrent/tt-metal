@@ -432,7 +432,13 @@ class TtMSDeformableAttention3D:
             )
 
         elif reference_points.shape[-1] == 4:
-            assert False
+            # Already unused (was `assert False`); also incompatible with the folded
+            # offset_normalizer — sampling_offsets is pre-scaled by 1/[W,H] in the
+            # Linear weights, so any 4-D path would need unscaled offsets.
+            raise NotImplementedError(
+                "4-D reference_points is incompatible with the folded offset_normalizer "
+                "(see build_folded_sampling_offsets)."
+            )
         else:
             raise ValueError(
                 f"Last dim of reference_points must be" f" 2 or 4, but get {reference_points.shape[-1]} instead."

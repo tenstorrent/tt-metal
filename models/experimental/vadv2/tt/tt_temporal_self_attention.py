@@ -151,12 +151,15 @@ class TtTemporalSelfAttention:
             sampling_locations = reference_points + sampling_offsets
             reference_points = ttnn.reshape(reference_points, reference_points_shape)
         elif reference_points.shape[-1] == 4:
-            reference_points_reshape = ttnn.reshape(
-                reference_points,
-                [reference_points.shape[0], reference_points.shape[1], 1, reference_points.shape[2], 1, 2],
-            )
-            sampling_locations = (
-                reference_points_reshape + sampling_offsets / self.num_points * reference_points_reshape * 0.5
+            # 4-D (box-refine) reference path. Its formula
+            # (reference + sampling_offsets / num_points * reference * 0.5) consumes
+            # sampling_offsets WITHOUT the offset_normalizer division — but offsets
+            # are now pre-scaled by 1/[W,H] folded into the sampling_offsets Linear
+            # weights, so this path would silently miscompute. It is unused in VADv2
+            # (callers pass 2-D reference_points); guard loudly for future enablement.
+            raise NotImplementedError(
+                "4-D reference_points is incompatible with the folded offset_normalizer "
+                "(see build_folded_sampling_offsets); this path needs unscaled sampling_offsets."
             )
         else:
             raise ValueError(

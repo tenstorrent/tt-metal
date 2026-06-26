@@ -18,6 +18,9 @@ def fold_offset_normalizer_into_weight(weight, bias, W, H, device):
     static) and cached by the caller.
     """
     out_features = weight.shape[-1]  # preprocess_linear_weight stores (in, out)
+    # The x/y pair is the innermost output dim, so out_features must be even for
+    # the even=x / odd=y channel split below to align. Guard the layout contract.
+    assert out_features % 2 == 0, f"sampling_offsets out_features must be even (x/y pairs), got {out_features}"
     sc = torch.ones(out_features, dtype=torch.float32)
     sc[0::2] = 1.0 / float(W)
     sc[1::2] = 1.0 / float(H)
