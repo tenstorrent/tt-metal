@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import os
-import socket
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -1545,7 +1544,6 @@ def test_demo_text(
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
-            device_hostname=socket.gethostname(),
         )
 
         # check measurements against CI performance targets -- for batch size 32

@@ -315,9 +315,7 @@ def test_qwen_model_acc(
     logger.info("Compiling model...")
     profiler = BenchmarkProfiler()
     profiler.start("run")
-    profiler.start("compile")
     tt_out_tok, tt_out = run_model()
-    profiler.end("compile")
 
     # Capturing trace
     logger.info("Capturing trace...")

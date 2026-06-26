@@ -1333,15 +1333,16 @@ def test_demo_text(
                 )
 
             # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+            num_iterations_for_avg = min(128, iteration)
             inference_decode_time_first_128 = sum(
-                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
             )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 "inference_decode",
                 "avg_decode_time_first_128",
-                inference_decode_time_first_128 * 1000 / 127,
+                inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
                 step_warm_up_num_iterations=None,
                 target=None,
             )
