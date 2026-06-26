@@ -709,7 +709,7 @@ def _gemma3_text_demo_device_params():
             ],  # input_prompts: list of 8 files, one per sweep step
             True,  # instruct mode
             8,  # repeat_batches (one per seqlen step)
-            64 * 1024,  # max_seq_len # NOTE: might have to halve this to 64 * 1024
+            64 * 1024,  # max_seq_len (capped for single-N150 memory; steps above this are filtered out)
             1,  # batch_size
             32,  # max_generated_tokens (minimal decode to verify prefill works)
             True,  # paged_attention

@@ -317,20 +317,11 @@ models:
     bh_quietbox_2: 280
   sweep_tier1:
     wh_n150: 155
-    wh_llmbox_perf: 485
     wh_galaxy: 215
-    bh_p150: 35
-    bh_galaxy: 125
-    bh_loudbox: 125
     wh_galaxy_perf: 125
   sweep_tier2:
     wh_n150: 155
     wh_llmbox_perf: 485
-    wh_galaxy: 215
-    bh_p150: 35
-    bh_galaxy: 125
-    bh_loudbox: 125
-    wh_galaxy_perf: 125
 umd:
   unit:
     wh_galaxy_perf: 35

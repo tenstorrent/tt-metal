@@ -39,7 +39,7 @@
 - name: Llama 3.3-70B seqlen sweep (Galaxy)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct MESH_DEVICE=TG
-    pytest --timeout 7200 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "seqlen-sweep"
+    pytest --timeout 3600 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "seqlen-sweep"
   model: llama3.3-70b
   skus:
     wh_galaxy_perf:
@@ -62,8 +62,7 @@
 
 - name: GPT-OSS 120B seqlen sweep
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b MESH_DEVICE=TG
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2 MESH_DEVICE=TG
     pytest --timeout 3600 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
   model: gpt-oss-120b
   skus:
@@ -111,8 +110,7 @@
 
 - name: GPT-OSS 20B seqlen sweep
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b
+    export HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/
     pytest --timeout 1800 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
   model: gpt-oss-20b
   skus:
