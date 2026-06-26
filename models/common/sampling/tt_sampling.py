@@ -325,13 +325,25 @@ class TTSampling(LightweightModule):
         self._invalid_vocab_tail_width = 0
 
         vocab_shard_dims = get_vocab_shard_dims(self.cluster_shape, self.sampling_all_gather_axis)
-        tail_mask = build_tail_invalid_vocab_mask(
-            self.vocab_size,
-            self.padded_vocab_size,
-            self.max_batch_size,
-            self.cluster_shape,
-            self.sampling_all_gather_axis,
-            tile_size=ttnn.TILE_SIZE,
+        # The compact tail-mask path slices off the valid region, masks the tail,
+        # and concats back. That reassembly is only safe when sampling runs on the
+        # full compute grid: on a sampling sub-core grid (e.g. Llama TG) the slice
+        # and concat are placed on different cores and the columns are stitched back
+        # incorrectly, so padded-vocab tokens (id >= vocab_size) survive into top-k
+        # and get sampled -> garbage / non-deterministic output. Fall back to the
+        # plain full-width additive mask (a single elementwise add, no reassembly)
+        # whenever a sub-core grid is in use.
+        tail_mask = (
+            build_tail_invalid_vocab_mask(
+                self.vocab_size,
+                self.padded_vocab_size,
+                self.max_batch_size,
+                self.cluster_shape,
+                self.sampling_all_gather_axis,
+                tile_size=ttnn.TILE_SIZE,
+            )
+            if self.sub_core_grids is None
+            else None
         )
         if tail_mask is not None:
             self._invalid_vocab_tail_width = tail_mask.tail_width
