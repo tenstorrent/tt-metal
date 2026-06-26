@@ -350,3 +350,31 @@ def generate_from_prompt_tokens(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
+
+
+def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGeneration) -> torch.Tensor:
+    """Return HF-style ``[prompt, generated]`` token sequences for decode/e2e checks."""
+    if prompt_tokens.dim() != 2:
+        raise ValueError("prompt_tokens must have shape [batch, seq_len]")
+    if generation.generated.dim() != 2:
+        raise ValueError("generation.generated must have shape [batch, seq_len]")
+    if prompt_tokens.shape[0] != generation.generated.shape[0]:
+        raise ValueError("prompt_tokens and generation.generated batch sizes must match")
+    if prompt_tokens.shape[1] != generation.prompt_len:
+        raise ValueError("prompt_tokens length must match generation.prompt_len")
+    return torch.cat([prompt_tokens, generation.generated], dim=1)
+
+
+def decode_generation(
+    tokenizer, prompt_tokens: torch.Tensor, generation: DeviceGeneration, *, skip_prompt: bool = True, **decode_kwargs
+):
+    """Decode generated token ids with a HuggingFace-style tokenizer.
+
+    ``skip_prompt=True`` mirrors the common text-generation UX: return only the
+    generated continuation. Set it to ``False`` for HF-style full sequences.
+    """
+    tokens = generation.generated if skip_prompt else generation_sequences(prompt_tokens, generation)
+    token_ids = tokens.tolist()
+    if hasattr(tokenizer, "batch_decode"):
+        return tokenizer.batch_decode(token_ids, **decode_kwargs)
+    return [tokenizer.decode(ids, **decode_kwargs) for ids in token_ids]

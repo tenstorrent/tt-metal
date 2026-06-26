@@ -9,9 +9,11 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 from models.experimental.diffusion_gemma.tt import generate as G
 from models.experimental.diffusion_gemma.tt.generate import (
     GeneratedBlock,
+    decode_generation,
     denoise_and_commit_block,
     generate_blocks,
     generate_from_prompt_tokens,
+    generation_sequences,
     host_canvas_to_device,
     host_tokens_to_device,
     make_host_canvas_init_fn,
@@ -30,6 +32,15 @@ class _FakeMesh:
 
     def get_num_devices(self):
         return 4
+
+
+class _FakeTokenizer:
+    def __init__(self):
+        self.calls = []
+
+    def batch_decode(self, token_ids, **kwargs):
+        self.calls.append((token_ids, kwargs))
+        return [" ".join(str(token) for token in row) for row in token_ids]
 
 
 def test_denoise_and_commit_block_threads_position_and_commits():
@@ -186,6 +197,57 @@ def test_generate_from_prompt_tokens_prefills_then_runs_blocks():
     assert kwargs["noise_tokens_fn"] is noise_tokens_fn
     assert kwargs["page_table"] == "page-table"
     assert kwargs["page_tables_per_layer"] == ["layer-pages"]
+
+
+def test_generation_sequences_appends_prompt_and_generated_tokens():
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    assert torch.equal(generation_sequences(prompt_tokens, generation), torch.tensor([[1, 2, 3, 4, 5]]))
+
+
+def test_generation_sequences_rejects_prompt_len_mismatch():
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=4,
+        next_pos=6,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match="generation.prompt_len"):
+        generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
+
+
+def test_decode_generation_defaults_to_generated_continuation():
+    tokenizer = _FakeTokenizer()
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    assert decode_generation(tokenizer, prompt_tokens, generation, skip_special_tokens=True) == ["4 5"]
+    assert tokenizer.calls == [([[4, 5]], {"skip_special_tokens": True})]
+
+
+def test_decode_generation_can_include_prompt_tokens():
+    tokenizer = _FakeTokenizer()
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    assert decode_generation(tokenizer, prompt_tokens, generation, skip_prompt=False) == ["1 2 3 4 5"]
 
 
 def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
