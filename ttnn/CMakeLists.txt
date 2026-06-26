@@ -269,7 +269,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
-        TTNN::Ops::Experimental::DeepSeekPrefill::PrefillTest
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
@@ -492,6 +491,50 @@ if(WITH_PYTHON_BINDINGS)
             COMPONENT
             tt_pybinds
     )
+
+    # ── Test-only `_prefill_test` extension ───────────────────────────────────
+    # A standalone nanobind module for the layer-completion scheduler stand-in
+    # (LayerCompletionConsumer). Deliberately NOT linked into _ttnn and NOT on the
+    # ttnn API — it links only TT::Metalium and is imported via
+    # `models.demos.test.prefill_test`. Built here (where the nanobind tooling and
+    # TT::Metalium are in scope) but its sources live under tests/ttnn/prefill_test.
+    # The .so is emitted straight into the importable models/demos/test/ dir.
+    # Built the same way as the `ttnn` module above: link TT::Nanobind (which already carries the
+    # nanobind + Python3 include dirs) rather than nanobind_add_module (which would spin up its own
+    # support lib lacking Python.h). Target name `prefill_test_ext` + PREFIX "_" → `_prefill_test.so`.
+    add_library(prefill_test_ext SHARED)
+    target_sources(
+        prefill_test_ext
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests/ttnn/prefill_test/prefill_test_module.cpp
+            ${PROJECT_SOURCE_DIR}/tests/ttnn/prefill_test/layer_completion_consumer.cpp
+    )
+    target_link_libraries(
+        prefill_test_ext
+        PRIVATE
+            TT::Nanobind
+            TT::Metalium
+    )
+    nanobind_compile_options(prefill_test_ext)
+    nanobind_link_options(prefill_test_ext)
+    set_target_properties(
+        prefill_test_ext
+        PROPERTIES
+            OUTPUT_NAME
+                prefill_test
+            PREFIX
+                "_"
+            CXX_VISIBILITY_PRESET
+                "default"
+            LIBRARY_OUTPUT_DIRECTORY
+                "${PROJECT_SOURCE_DIR}/models/demos/test"
+            BUILD_RPATH
+                "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+            INSTALL_RPATH
+                "${PROJECT_BINARY_DIR}/lib"
+            ADDITIONAL_CLEAN_FILES
+                "${PROJECT_SOURCE_DIR}/models/demos/test/_prefill_test.so"
+    )
 endif()
 if(TT_INSTALL)
     install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
@@ -542,7 +585,6 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_
 add_subdirectory(cpp/ttnn/operations/experimental/tensor_prefetcher)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/prefill_test)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)

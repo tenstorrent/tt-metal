@@ -1,0 +1,2 @@
+# Build-emitted test-only nanobind extension (see ttnn/CMakeLists.txt / tests/ttnn/prefill_test)
+_prefill_test*.so
