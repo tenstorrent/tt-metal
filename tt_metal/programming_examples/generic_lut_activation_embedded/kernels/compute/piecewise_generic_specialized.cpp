@@ -185,6 +185,9 @@ __attribute__((always_inline)) inline void unroll_segment(
 #if defined(POLY_PARITY_ODD) || defined(POLY_PARITY_EVEN)
     ,
     vFloat x2
+#elif defined(BASIS_INPUT_ABS_X)
+    ,
+    vFloat x_eval
 #endif
 ) {
     if constexpr (SEG < NUM_SEGMENTS) {
@@ -198,6 +201,8 @@ __attribute__((always_inline)) inline void unroll_segment(
         v_if(x_clamped >= lut[SEG]) {
 #if defined(POLY_PARITY_ODD) || defined(POLY_PARITY_EVEN)
             result = eval_polynomial_parity<DEG>(&lut[CO + SEG * CPS], x, x2);
+#elif defined(BASIS_INPUT_ABS_X)
+            result = eval_polynomial<DEG>(&lut[CO + SEG * CPS], x_eval);
 #else
             result = eval_polynomial<DEG>(&lut[CO + SEG * CPS], x);
 #endif
@@ -211,6 +216,9 @@ __attribute__((always_inline)) inline void unroll_segment(
 #if defined(POLY_PARITY_ODD) || defined(POLY_PARITY_EVEN)
             ,
             x2
+#elif defined(BASIS_INPUT_ABS_X)
+            ,
+            x_eval
 #endif
         );
     }
@@ -252,9 +260,14 @@ inline void piecewise_generic_lut_specialized_N(const std::array<float, LUT_SIZE
         vFloat x = x_orig;
 #endif
 
+#if defined(BASIS_INPUT_ABS_X)
+        vFloat x_eval = setsgn(x_orig, 0);
+        vFloat& x_clamped = x_eval;
+#else
         // Clamping unnecessary: segment cascade v_if(x >= boundary) naturally selects
         // the edge segment for out-of-range inputs. Removing saves SFPU registers.
         vFloat& x_clamped = x;
+#endif
 
 #if defined(POLY_PARITY_ODD) || defined(POLY_PARITY_EVEN)
         vFloat x2 = x * x;
@@ -266,6 +279,12 @@ inline void piecewise_generic_lut_specialized_N(const std::array<float, LUT_SIZE
         vFloat result = eval_polynomial_parity<SEGMENT_DEGREES[0]>(&lut[COEFF_OFFSET], x, x2);
 #else
         vFloat result = eval_polynomial_parity<POLY_DEGREE>(&lut[COEFF_OFFSET], x, x2);
+#endif
+#elif defined(BASIS_INPUT_ABS_X)
+#ifdef HAS_SEGMENT_DEGREES
+        vFloat result = eval_polynomial<SEGMENT_DEGREES[0]>(&lut[COEFF_OFFSET], x_eval);
+#else
+        vFloat result = eval_polynomial<POLY_DEGREE>(&lut[COEFF_OFFSET], x_eval);
 #endif
 #else
 #ifdef HAS_SEGMENT_DEGREES
@@ -284,8 +303,24 @@ inline void piecewise_generic_lut_specialized_N(const std::array<float, LUT_SIZE
 #if defined(POLY_PARITY_ODD) || defined(POLY_PARITY_EVEN)
             ,
             x2
+#elif defined(BASIS_INPUT_ABS_X)
+            ,
+            x_eval
 #endif
         );
+
+#if defined(BASIS_MUL_ABS_X_BEFORE_POST)
+        result = result * x_eval;
+#endif
+
+#if defined(BASIS_CLAMP_MAX)
+        vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
+        vec_min_max(result, basis_clamp_max_value);
+#endif
+
+#if defined(BASIS_POST_SIGN_X)
+        result = copysgn(result, x_orig);
+#endif
 
 #if defined(RANGE_REDUCTION_EXP)
         v_if(x_orig > EXP_OVERFLOW) { result = std::numeric_limits<float>::infinity(); }
@@ -493,6 +528,11 @@ inline void piecewise_generic_lut_specialized_N_dual(const std::array<float, LUT
         vFloat x2 = x_orig2;
 #endif
 
+#if defined(BASIS_INPUT_ABS_X)
+        x1 = setsgn(x_orig1, 0);
+        x2 = setsgn(x_orig2, 0);
+#endif
+
         // Dual-eval: skip clamping to avoid SFPU register spill from vec_min_max temporaries.
         // Segment boundaries still gate correctly — out-of-range x just picks the edge segment.
         vFloat& x1_clamped = x1;
@@ -534,6 +574,23 @@ inline void piecewise_generic_lut_specialized_N_dual(const std::array<float, LUT
             x2_sq
 #endif
         );
+
+#if defined(BASIS_MUL_ABS_X_BEFORE_POST)
+        result1 = result1 * x1;
+        result2 = result2 * x2;
+#endif
+
+#if defined(BASIS_CLAMP_MAX)
+        vFloat basis_clamp_max_value1 = BASIS_CLAMP_MAX_VALUE;
+        vFloat basis_clamp_max_value2 = BASIS_CLAMP_MAX_VALUE;
+        vec_min_max(result1, basis_clamp_max_value1);
+        vec_min_max(result2, basis_clamp_max_value2);
+#endif
+
+#if defined(BASIS_POST_SIGN_X)
+        result1 = copysgn(result1, x_orig1);
+        result2 = copysgn(result2, x_orig2);
+#endif
 
 #if defined(RANGE_REDUCTION_EXP)
         v_if(x_orig1 > EXP_OVERFLOW) { result1 = std::numeric_limits<float>::infinity(); }
@@ -747,7 +804,12 @@ inline void piecewise_generic_lut_specialized_N_blend(const std::array<float, LU
     constexpr uint32_t NSLOTS = T::NSLOTS;
 
     for (int d = 0; d < 32; d++) {
-        vFloat x = dst_reg[d];
+        vFloat x_orig = dst_reg[d];
+#if defined(BASIS_INPUT_ABS_X)
+        vFloat x = setsgn(x_orig, 0);
+#else
+        vFloat x = x_orig;
+#endif
 
         // Blended parity coefficients, initialized to segment 0's coefficients.
         vFloat coeffs[NSLOTS];
@@ -766,6 +828,19 @@ inline void piecewise_generic_lut_specialized_N_blend(const std::array<float, LU
         }
 #if defined(POLY_PARITY_ODD)
         acc = acc * x;  // final *x for odd parity
+#endif
+
+#if defined(BASIS_MUL_ABS_X_BEFORE_POST)
+        acc = acc * x;
+#endif
+
+#if defined(BASIS_CLAMP_MAX)
+        vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
+        vec_min_max(acc, basis_clamp_max_value);
+#endif
+
+#if defined(BASIS_POST_SIGN_X)
+        acc = copysgn(acc, x_orig);
 #endif
 
 #ifdef HAS_CRITICAL_POINT
@@ -842,7 +917,12 @@ inline void piecewise_generic_lut_specialized_N_blend_dense(const std::array<flo
     constexpr uint32_t NSLOTS = POLY_DEGREE + 1;
 
     for (int d = 0; d < 32; d++) {
-        vFloat x = dst_reg[d];
+        vFloat x_orig = dst_reg[d];
+#if defined(BASIS_INPUT_ABS_X)
+        vFloat x = setsgn(x_orig, 0);
+#else
+        vFloat x = x_orig;
+#endif
 
         // Blended coefficients, initialized to segment 0's coefficients.
         vFloat coeffs[NSLOTS];
@@ -858,6 +938,19 @@ inline void piecewise_generic_lut_specialized_N_blend_dense(const std::array<flo
         for (int k = (int)NSLOTS - 2; k >= 0; k--) {
             acc = acc * x + coeffs[k];
         }
+
+#if defined(BASIS_MUL_ABS_X_BEFORE_POST)
+        acc = acc * x;
+#endif
+
+#if defined(BASIS_CLAMP_MAX)
+        vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
+        vec_min_max(acc, basis_clamp_max_value);
+#endif
+
+#if defined(BASIS_POST_SIGN_X)
+        acc = copysgn(acc, x_orig);
+#endif
 
 #ifdef HAS_CRITICAL_POINT
         v_if(x == lut[CRITICAL_IDX]) { acc = CRITICAL_VALUE; }
@@ -981,6 +1074,11 @@ inline void piecewise_generic_lut_dispatch(const std::array<float, LUT_SIZE>& lu
 // pushing total SFPU register pressure beyond the hardware limit.
 // Fall back to single-eval when reduce-then-poly (REDUCED_POLY) is active.
 #if defined(EVAL_METHOD_REDUCED_POLY)
+    piecewise_generic_lut_specialized_N<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
+#elif defined(BASIS_INPUT_ABS_X)
+    // signed_abs/odd_factored basis keeps abs(x), original-sign postprocess,
+    // and optional clamp/mul temporaries live. The dual path crosses SFPI's
+    // reload limit even at low degree with adaptive-degree metadata.
     piecewise_generic_lut_specialized_N<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
 #elif defined(POLY_PARITY_ODD) || defined(POLY_PARITY_EVEN)
     // Parity x²-Horner threads x² through BOTH dual lanes; at higher degree the combined

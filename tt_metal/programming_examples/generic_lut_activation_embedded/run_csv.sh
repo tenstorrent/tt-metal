@@ -10,6 +10,7 @@
 #   ./run_csv.sh my_coeffs.csv --activation gelu --precision bf16 --tiles 64
 # =============================================================================
 set -e
+set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)
@@ -157,6 +158,7 @@ echo "Runs/shape: $NUM_RUNS"
 echo ""
 
 mkdir -p "$KERNEL_DIR"
+rm -f "$KERNEL_DIR/adhoc.cpp"
 
 # Inline Python: parse CSV, auto-detect degree/segments, write kernel .cpp
 python3 -c "
@@ -164,6 +166,7 @@ import csv, sys, os
 
 csv_path = '$CSV_FILE'
 kernel_path = '$KERNEL_DIR/adhoc.cpp'
+kernel_tmp_path = f'{kernel_path}.tmp.{os.getpid()}'
 range_min_override = '$RANGE_MIN' or None
 range_max_override = '$RANGE_MAX' or None
 
@@ -289,10 +292,130 @@ if any(d < degree for d in segment_degrees):
     avg_deg = sum(segment_degrees) / len(segment_degrees)
     print(f'Adaptive degree: {reduced}/{num_segments} segments reduced (avg effective degree: {avg_deg:.1f} vs max {degree})')
 
+# Explicit evaluator basis metadata. This is a kernel eval contract, not an
+# activation-name special case. odd_factored accepts either expanded
+# P(u)=u*Q(u) coefficients or quotient Q(u) coefficients; only Q form needs the
+# kernel to multiply by abs(x) before post-processing.
+eval_basis_macro = ''
+basis_kind = metadata.get('basis_kind', '').strip()
+basis_kind_norm = basis_kind.lower().replace('-', '_')
+basis_clamp_max = metadata.get('basis_clamp_max', '').strip()
+plain_basis_kinds = ('', 'natural', 'monomial', 'power', 'polynomial', 'poly')
+
+def _meta_norm(*keys):
+    for key in keys:
+        val = metadata.get(key, '').strip()
+        if val:
+            return val.lower().replace('-', '_').replace(' ', '_')
+    return ''
+
+def _meta_truthy(*keys):
+    return _meta_norm(*keys) in ('1', 'true', 'yes', 'y', 'q')
+
+def _basis_coeff_form():
+    form = _meta_norm(
+        'basis_coefficients',
+        'basis_coeffs',
+        'basis_coefficient_basis',
+        'basis_coeff_form',
+        'coefficient_basis',
+        'coeff_basis',
+        'coefficients_basis',
+    )
+    q_forms = {
+        'q',
+        'q_abs',
+        'q_abs_x',
+        'q_absx',
+        'q_coefficients',
+        'q_coeffs',
+        'factored',
+        'factored_q',
+        'odd_factored',
+        'odd_factored_q',
+        'odd_factor_q',
+        'quotient',
+    }
+    p_forms = {
+        '',
+        'p',
+        'p_abs',
+        'p_abs_x',
+        'p_absx',
+        'p_coefficients',
+        'p_coeffs',
+        'expanded',
+        'expanded_p',
+        'u_times_q',
+        'abs_x_times_q',
+        'abs_times_q',
+    }
+    if (
+        basis_kind_norm in ('odd_factored_q', 'odd_factor_q') or
+        form in q_forms or
+        _meta_truthy('basis_coefficients_are_q', 'coefficients_are_q', 'basis_q_coefficients')
+    ):
+        return form, True, True
+    if form in p_forms:
+        return form, False, True
+    return form, False, False
+
+basis_coeff_form, basis_coeffs_are_q, basis_coeff_form_supported = _basis_coeff_form()
+
+has_abs_sign_basis = (not is_rational) and basis_kind_norm in (
+    'signed_abs_poly',
+    'signed_abs',
+    'abs_signed_poly',
+    'odd_factored',
+    'odd_factored_poly',
+    'odd_factored_q',
+    'odd_factor_q',
+)
+if has_abs_sign_basis:
+    is_odd_factored = basis_kind_norm.startswith('odd_factored') or basis_kind_norm == 'odd_factor_q'
+    odd_factored_q_coeffs = is_odd_factored and basis_coeffs_are_q
+    if is_odd_factored and not basis_coeff_form_supported:
+        raise ValueError(
+            f'unsupported odd_factored coefficient form {basis_coeff_form!r}; '
+            'expected expanded/P(abs(x)) or quotient/Q(abs(x)) metadata'
+        )
+
+    basis_comment = 'basis_kind=signed_abs_poly: y = copysign(clamp(P(abs(x))), x)'
+    if is_odd_factored:
+        if odd_factored_q_coeffs:
+            basis_comment = 'basis_kind=odd_factored: y = copysign(post(abs(x) * Q(abs(x))), x); CSV coeffs are Q'
+        else:
+            basis_comment = 'basis_kind=odd_factored: y = copysign(post(P(abs(x))), x); CSV coeffs are expanded P(u)=u*Q(u)'
+
+    eval_basis_macro = (
+        f'\n// {basis_comment}\n'
+        '#define BASIS_SIGNED_ABS_POLY\n'
+        '#define BASIS_INPUT_ABS_X\n'
+        '#define BASIS_POST_SIGN_X\n'
+    )
+    if is_odd_factored:
+        eval_basis_macro += '#define BASIS_ODD_FACTORED\n'
+    if odd_factored_q_coeffs:
+        eval_basis_macro += '#define BASIS_MUL_ABS_X_BEFORE_POST\n'
+    if basis_clamp_max:
+        eval_basis_macro += (
+            '#define BASIS_CLAMP_MAX\n'
+            f'constexpr float BASIS_CLAMP_MAX_VALUE = {float(basis_clamp_max):.16e}f;\n'
+        )
+    coeff_label = 'Q(abs(x))' if odd_factored_q_coeffs else 'P(abs(x))'
+    clamp_label = basis_clamp_max if basis_clamp_max else 'none'
+    print(f'Basis: {basis_kind_norm} coeffs={coeff_label} clamp_max={clamp_label}')
+elif basis_kind_norm not in plain_basis_kinds:
+    raise ValueError(f'unsupported basis_kind={basis_kind!r}; refusing to generate a normal polynomial kernel')
+
 # Detect parity from coefficient values
 poly_parity_macro = ''
 threshold = 1e-30
-if is_rational and num_degree >= 2:
+if has_abs_sign_basis:
+    # Do not infer parity: abs/sign basis coefficients are dense in abs(x),
+    # not expanded odd/even coefficients in x.
+    pass
+elif is_rational and num_degree >= 2:
     # Rational parity: check num (odd-index) and den (even-index) separately
     num_even_zero = True  # even-index num coeffs zero → odd numerator
     den_odd_zero = True   # odd-index den coeffs zero → even denominator
@@ -435,7 +558,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         scale = metadata.get('expalu_log_scale', metadata.get('log_scale', '1.0'))
         basis = metadata.get('expalu_log2_basis', 'natural')
         coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
-        basis_macro = '#define LOG_HW_BASIS_M_MINUS_1\n' if basis == 'm_minus_1' else ''
+        log_basis_macro = '#define LOG_HW_BASIS_M_MINUS_1\n' if basis == 'm_minus_1' else ''
         # log1p decomposes (x + 1) before log2 -> expalu_input_offset = 1.0.
         offset = float(metadata.get('expalu_input_offset', '0.0') or '0.0')
         offset_macro = f'#define LOG_HW_INPUT_OFFSET {clamp(offset):.10e}f\n' if offset != 0.0 else ''
@@ -443,7 +566,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             '\n// eval_method: exponent_alu / log2 (exexp -> e, exman -> m), natural coeffs. STANDALONE\n'
             '#define EVAL_METHOD_EXPONENT_ALU\n'
             '#define EXPONENT_ALU_LOG2\n'
-            f'{basis_macro}'
+            f'{log_basis_macro}'
             f'{offset_macro}'
             f'{hw_preload_macro}'
             f'constexpr uint32_t LOG_HW_DEGREE = {degree};\n'
@@ -573,7 +696,7 @@ if any(asymptotic_flags):
 # one SFPMAD. Generic — any activation whose fit reduces to this shape qualifies.
 # (Rational / range-reduced fits never collapse this way.)
 affine_macro = ''
-if (not is_rational) and rr_method in ('', 'none') and num_segments == 1:
+if (not is_rational) and (not has_abs_sign_basis) and rr_method in ('', 'none') and num_segments == 1:
     seg0_coeffs = coefficients[0:degree + 1]
     higher_zero = all(c == 0.0 for c in seg0_coeffs[2:])
     if higher_zero:
@@ -657,12 +780,17 @@ constexpr std::array<float, LUT_SIZE_FP32> LUT_DATA_FP32 = {{{{
     constexpr auto& LUT_DATA = LUT_DATA_FP32;
     constexpr uint32_t LUT_SIZE = LUT_SIZE_FP32;
 #endif
-{eval_method_macro}{degree_macros}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}
+{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}
 #include \"../piecewise_generic.cpp\"
 '''
 
-with open(kernel_path, 'w') as f:
-    f.write(kernel)
+try:
+    with open(kernel_tmp_path, 'w') as f:
+        f.write(kernel)
+    os.replace(kernel_tmp_path, kernel_path)
+finally:
+    if os.path.exists(kernel_tmp_path):
+        os.unlink(kernel_tmp_path)
 
 print(f'Generated: {kernel_path}')
 

@@ -2092,21 +2092,40 @@ inline void piecewise_generic_lut(const std::array<float, LUT_SIZE>& lut) {
         vFloat x = x_orig;
 #endif
 
+#if defined(BASIS_INPUT_ABS_X)
+        vFloat x_eval = setsgn(x_orig, 0);
+        vFloat& x_clamped = x_eval;
+#else
+        vFloat& x_eval = x;
         // Clamping unnecessary: segment cascade v_if(x >= boundary) naturally selects
         // the edge segment for out-of-range inputs. Removing saves SFPU registers.
         vFloat& x_clamped = x;
+#endif
 
         // Start with segment 0 coefficients
-        vFloat result = eval_polynomial<POLY_DEGREE>(&lut[COEFF_OFFSET], x);
+        vFloat result = eval_polynomial<POLY_DEGREE>(&lut[COEFF_OFFSET], x_eval);
 
         // Update with correct segment using plain for-loop
         // Works correctly on all architectures without kernel bloat
         for (uint32_t seg = 1; seg < NUM_SEGMENTS; seg++) {
             v_if(x_clamped >= lut[seg]) {
-                result = eval_polynomial<POLY_DEGREE>(&lut[COEFF_OFFSET + seg * COEFFS_PER_SEGMENT], x);
+                result = eval_polynomial<POLY_DEGREE>(&lut[COEFF_OFFSET + seg * COEFFS_PER_SEGMENT], x_eval);
             }
             v_endif;
         }
+
+#if defined(BASIS_MUL_ABS_X_BEFORE_POST)
+        result = result * x_eval;
+#endif
+
+#if defined(BASIS_CLAMP_MAX)
+        vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
+        vec_min_max(result, basis_clamp_max_value);
+#endif
+
+#if defined(BASIS_POST_SIGN_X)
+        result = copysgn(result, x_orig);
+#endif
 
 #if defined(RANGE_REDUCTION_EXP)
         // Expand: result = poly_result * 2^k, with overflow/underflow clamping
