@@ -1533,7 +1533,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         TT_FATAL(
                             input_tensor_a.shard_spec()->grid.bounding_box().start_coord.x ==
                                 input_tensor_a.shard_spec()->grid.bounding_box().end_coord.x,
-                            "Grid bounding box x coordinates must match, got start: {} vs end: {}",
+                            "MatmulMultiCoreReuseMultiCastProgramConfig requires HEIGHT_SHARDED in0 on a single "
+                            "column (got x={} to x={}). Use MatmulMultiCoreReuseProgramConfig for multi-column "
+                            "inputs.",
                             input_tensor_a.shard_spec()->grid.bounding_box().start_coord.x,
                             input_tensor_a.shard_spec()->grid.bounding_box().end_coord.x);
                     }
