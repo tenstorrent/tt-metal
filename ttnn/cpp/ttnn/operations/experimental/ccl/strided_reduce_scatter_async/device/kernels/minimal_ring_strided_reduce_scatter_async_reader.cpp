@@ -86,7 +86,6 @@ void kernel_main() {
     // Load the input tensor spec
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     const address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
     const size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
@@ -227,8 +226,6 @@ void kernel_main() {
                     // Wait for the neighboring device's writer to signal that it has finished
                     // writing this chunk's tiles into our intermediate buffer.
                     if (do_reduce) {
-                        // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
-                        // GlobalSemaphore
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), out_ready_sem_target + 1);
                         out_ready_sem_target++;
@@ -378,7 +375,6 @@ void kernel_main() {
             }
         }
         // Reset between batches so the counter doesn't overflow across batches.
-        // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
 
@@ -389,6 +385,5 @@ void kernel_main() {
     }
 
     // Explicit cleanup: guarantee the semaphore is 0 when this kernel exits
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

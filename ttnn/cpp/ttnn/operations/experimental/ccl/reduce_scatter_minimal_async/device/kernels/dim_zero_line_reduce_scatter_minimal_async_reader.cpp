@@ -182,8 +182,6 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                     cb_in0.reserve_back(tile_granularity);
-                    // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
-                    // noc_traits_t specialization, so Noc::async_read rejects it at compile time.
                     uint32_t l1_write_addr = cb_in0.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = input_tile_id_start + tiles_read + j;
@@ -211,8 +209,6 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                     cb_in0.reserve_back(tile_granularity);
-                    // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
-                    // noc_traits_t specialization, so Noc::async_read rejects it at compile time.
                     uint32_t l1_write_addr = cb_in0.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = input_tile_id_start + tiles_read + j;
@@ -222,9 +218,6 @@ void kernel_main() {
                     }
 
                     if (chunk_count % chunks_per_sync == 0) {
-                        // Device 2.0 migration: legacy primitive retained: out_ready_sem is a precomposed L1
-                        // semaphore address passed via a runtime arg (not a per-program id Semaphore<> can
-                        // wrap)
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
                     }
@@ -288,8 +281,6 @@ void kernel_main() {
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                 cb_in0.reserve_back(tile_granularity);
-                // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
-                // noc_traits_t specialization, so Noc::async_read rejects it at compile time.
                 uint32_t l1_write_addr = cb_in0.get_write_ptr();
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t tile_id = tile_id_start + tiles_read + j;
@@ -304,9 +295,6 @@ void kernel_main() {
                 }
 
                 if (chunk_count % chunks_per_sync == 0) {
-                    // Device 2.0 migration: legacy primitive retained: out_ready_sem is a precomposed L1
-                    // semaphore address passed via a runtime arg (not a per-program id Semaphore<> can
-                    // wrap)
                     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
                 }
                 chunk_count++;
@@ -332,7 +320,5 @@ void kernel_main() {
     }
 
     // Reset my output ready semaphore
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem is a precomposed L1 semaphore
-    // address passed via a runtime arg (not a per-program id Semaphore<> can wrap)
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

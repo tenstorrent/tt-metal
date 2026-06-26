@@ -196,8 +196,6 @@ void kernel_main() {
             pkt_hdr_mcastseminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
-        // Device 2.0 migration: legacy primitive retained: barrier_sem is a precomposed L1 semaphore
-        // address passed via a runtime arg (not a per-program id Semaphore<> can wrap)
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2 * (ring_size - 1));
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -507,8 +505,6 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
         noc_obj.async_writes_flushed();
 
-        // Device 2.0 migration: legacy primitive retained: batch_ready_sem is a precomposed L1 semaphore
-        // address passed via a runtime arg (not a per-program id Semaphore<> can wrap)
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 2 * (ring_size - 1));
         noc_semaphore_set(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset semaphore before next batch
@@ -519,14 +515,10 @@ void kernel_main() {
 #ifdef USE_WORKER_MUX
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     if (is_termination_master) {
-        // Device 2.0 migration: legacy primitive retained: termination_sync_address is a precomposed L1
-        // semaphore address passed via a runtime arg (not a per-program id Semaphore<> can wrap).
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
-        // Device 2.0 migration: legacy primitive retained: dest_addr is a precomposed uint64_t NoC
-        // address; Semaphore<> wraps a Metal semaphore id, not a raw address
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
         noc_semaphore_inc(dest_addr, 1);

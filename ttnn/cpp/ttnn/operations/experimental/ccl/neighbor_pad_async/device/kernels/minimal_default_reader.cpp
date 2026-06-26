@@ -131,7 +131,6 @@ void kernel_main() {
                 // Using cumulative waits (od+1) instead of resetting to 0 each iteration
                 // avoids a race where the writer sends multiple sem incs before the reader
                 // processes them — resetting to 0 would discard pending incs and cause a hang.
-                // Device 2.0 migration: legacy primitive retained: h_neighbor_sem is a GlobalSemaphore address.
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), od + 1);
 
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
@@ -140,8 +139,6 @@ void kernel_main() {
                     for (uint32_t iter = 0; iter < num_l1_recv_sticks_per_row; iter++) {
                         cb_output.reserve_back(1);
                         uint32_t dst_l1_addr = cb_output.get_write_ptr();
-                        // Device 2.0 migration: legacy primitive retained: local-L1 self-read via
-                        // get_noc_addr(local_l1_addr); no LocalL1 source endpoint on main
                         noc_async_read(get_noc_addr(recv_buf_addr + buf_offset), dst_l1_addr, stick_size);
                         noc_obj.async_read_barrier();
                         cb_output.push_back(1);
@@ -150,13 +147,10 @@ void kernel_main() {
                 }
             }
             // Reset after all waits are complete (safe: no more fabric increments expected)
-            // Device 2.0 migration: legacy primitive retained: h_neighbor_sem is a GlobalSemaphore address.
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         } else {
             // 1D case: fabric wrote directly to DRAM; just wait for all outer_dims
-            // Device 2.0 migration: legacy primitive retained: h_neighbor_sem is a GlobalSemaphore address.
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), outer_dim_size);
-            // Device 2.0 migration: legacy primitive retained: h_neighbor_sem is a GlobalSemaphore address.
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), 0);
         }
     }

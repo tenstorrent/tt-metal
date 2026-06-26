@@ -242,8 +242,6 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
         }
 
-        // Device 2.0 migration: legacy primitive retained: barrier_sem is a precomposed L1 semaphore
-        // address passed via a runtime arg (not a per-program id Semaphore<> can wrap)
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -372,8 +370,6 @@ void kernel_main() {
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                 cb_compute_output.wait_front(tile_granularity);
-                // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
-                // noc_traits_t specialization, so Noc::async_write rejects it at compile time.
                 uint32_t l1_read_addr = cb_compute_output.get_read_ptr();
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t output_tile_id = output_tile_id_start + tiles_read;
@@ -406,16 +402,10 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
         if (is_termination_master) {
-            // Device 2.0 migration: legacy primitive retained: termination_sync_address is a precomposed
-            // L1 semaphore address obtained via get_semaphore(id); the kernel uses it as a raw pointer
-            // alongside a precomposed uint64_t NoC address from safe_get_noc_addr, so Semaphore<> cannot
-            // wrap it cleanly
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
-            // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-            // (dest_addr) cannot be wrapped by Noc::async_* or Semaphore<>::up
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
             noc_semaphore_inc(dest_addr, 1);

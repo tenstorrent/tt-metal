@@ -109,12 +109,9 @@ void kernel_main() {
     const address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
     const size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: batch_ready_sem is a GlobalSemaphore address.
     const size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
     const size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
@@ -129,8 +126,6 @@ void kernel_main() {
     const size_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
     const size_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: termination_sync_address is a fabric-mux sync address (not a
-    // get_semaphore<>(id) address)
     const uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t local_flow_control_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -235,9 +230,7 @@ void kernel_main() {
                 pkt_hdr_mcastseminc,
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
-            // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
-            // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
         }
 
@@ -485,9 +478,7 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
             noc_obj.async_writes_flushed();
 
-            // Device 2.0 migration: legacy primitive retained: batch_ready_sem is a GlobalSemaphore address.
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
-            // Device 2.0 migration: legacy primitive retained: batch_ready_sem is a GlobalSemaphore address.
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
         }
 
@@ -498,15 +489,11 @@ void kernel_main() {
 
         if (is_termination_master) {
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-            // Device 2.0 migration: legacy primitive retained: termination_sync_address is a fabric-mux sync address
-            // (not a get_semaphore<>(id) address)
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             const uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-            // Device 2.0 migration: legacy primitive retained: termination_sync_address is a fabric-mux sync address
-            // (not a get_semaphore<>(id) address)
             noc_semaphore_inc(dest_addr, 1);
             noc_obj.async_atomic_barrier();
         }

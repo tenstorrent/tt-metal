@@ -22,14 +22,10 @@ inline void zeroWrite(uint64_t dst_noc_addr) {
     constexpr uint32_t num_full_writes = stick_size_bytes / MEM_ZEROS_SIZE;
     constexpr uint32_t partial_write_size = stick_size_bytes % MEM_ZEROS_SIZE;
     for (uint32_t i = 0; i < num_full_writes; ++i) {
-        // Device 2.0 migration: legacy primitive retained: MEM_ZEROS_BASE source (local L1); no LocalL1 source
-        // endpoint on main
         noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, MEM_ZEROS_SIZE);
         dst_noc_addr += MEM_ZEROS_SIZE;
     }
     if constexpr (partial_write_size > 0) {
-        // Device 2.0 migration: legacy primitive retained: MEM_ZEROS_BASE source (local L1); no LocalL1 source
-        // endpoint on main
         noc_async_write((uint32_t)MEM_ZEROS_BASE, dst_noc_addr, partial_write_size);
     }
 }

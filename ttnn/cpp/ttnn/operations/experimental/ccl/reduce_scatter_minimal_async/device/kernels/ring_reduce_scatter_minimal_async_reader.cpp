@@ -221,16 +221,10 @@ void kernel_main() {
                         // Wait for intermediate_tensor data to be available
                         if (reduce_interm) {
                             if (chunk_count == 0) {
-                                // Device 2.0 migration: legacy primitive retained: out_ready_sem is a
-                                // precomposed L1 semaphore address passed via a runtime arg (not a per-program
-                                // id Semaphore<> can wrap)
                                 noc_semaphore_wait_min(
                                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                                 ++sem_target;
                                 if (reduce_output) {
-                                    // Device 2.0 migration: legacy primitive retained: out2_ready_sem is a
-                                    // precomposed L1 semaphore address passed via a runtime arg (not a
-                                    // per-program id Semaphore<> can wrap)
                                     noc_semaphore_wait_min(
                                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem),
                                         sem2_target + 1);
@@ -310,8 +304,6 @@ void kernel_main() {
         }
 
         // Reset the semaphore before the next batch
-        // Device 2.0 migration: legacy primitive retained: out_ready_sem and out2_ready_sem are precomposed
-        // L1 semaphore addresses passed via runtime args (not per-program ids Semaphore<> can wrap).
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem), 0);
         sem_target = 0;

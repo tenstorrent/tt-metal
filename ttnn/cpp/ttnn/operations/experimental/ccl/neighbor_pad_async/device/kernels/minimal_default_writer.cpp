@@ -193,7 +193,6 @@ void kernel_main() {
             }
 
             if constexpr (ring_size > 1) {
-                // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
             }
         } else {
@@ -239,12 +238,9 @@ void kernel_main() {
             // Wait for 1 barrier inc from each adjacent W device (if it exists)
             uint32_t w_barrier_wait = (is_first_chip ? 0u : 1u) + (is_last_chip ? 0u : 1u);
             if (w_barrier_wait > 0) {
-                // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), w_barrier_wait);
             }
         }
-        // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address. Semaphore<> binds
-        // to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -535,10 +531,7 @@ void kernel_main() {
     // Uses barrier_sem from CRTA[3] — same for all targets.
     noc_obj.async_write_barrier();
     for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
-        // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address. Semaphore<> binds
-        // to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore
         uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         noc_semaphore_inc(sem_noc_addr, 1);
     }
     noc_obj.async_atomic_barrier();
