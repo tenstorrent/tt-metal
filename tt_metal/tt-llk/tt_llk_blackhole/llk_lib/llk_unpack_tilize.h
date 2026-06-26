@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -295,11 +296,15 @@ inline void _llk_unpack_tilize_(
  * reprogrammed by the next operation's init (see tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
- * @param num_faces: Number of faces, used to restore the Z dimension, valid values = <1, 2, 4>.
+ * @param tensor_shape: Tile geometry; total_num_faces() restores the Z dimension (valid values
+ *                      = <1, 2, 4>) and face_r_dim restores the canonical Tile_x_dim.
  * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 

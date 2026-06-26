@@ -35,7 +35,8 @@
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
-std::uint32_t tile_size                = 128;
+// Regular 32x32 (4-face) matmul-operand tile size used by the run-1 matmul.
+std::uint32_t tile_size = ckernel::FACE_R_DIM * ckernel::FACE_C_DIM * 4 / 8;
 
 // Scratch L1 address for the discarded run-0 (polluter) tilize output.
 constexpr std::uint32_t buffer_polluter_scratch = 0xA0000;

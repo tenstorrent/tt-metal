@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../../common/tensor_shape.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -531,8 +532,11 @@ inline void _llk_unpack_tilizeA_B_(
     }
 }
 
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+
     // Stalling SETDMAREG done by THCON until UNPACK finishes
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
