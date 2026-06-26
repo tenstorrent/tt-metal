@@ -72,23 +72,25 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
 template <bool is_fp32_acc_to_dest_mode>
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(-x) = -tanh(x)
-    sfpi::vFloat val = sfpi::setsgn(x, 0);
-    sfpi::vFloat result = val * sfpi::vConstFloatPrgm0 + sfpi::vConstFloatPrgm1;
-    sfpi::vFloat tmp = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(val) - 1);
+    sfpi::vFloat val = sfpi::abs(x);  // set positive
 
     // Polynomial coefficients found using Sollya
     // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
     // (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
     // (5.876733921468257904052734375e-3))))));
-    result = PolynomialEvaluator::eval(
-        val, 0.999004364013671875, 3.0897438526153564453125e-2, -0.4890659749507904052734375, sfpi::vConstFloatPrgm2);
+    sfpi::vFloat result = PolynomialEvaluator::eval(
+        val,
+        sfpi::vConst0,
+        0.999004364013671875,
+        3.0897438526153564453125e-2,
+        -0.4890659749507904052734375,
+        sfpi::vConstFloatPrgm2,
+        sfpi::vConstFloatPrgm1,
+        sfpi::vConstFloatPrgm0);
 
     // For larger x, the polynomial approximation may exceed 1.0.
     // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
-    sfpi::vFloat threshold_value = tmp * 0.0f + 1.0f;
-
-    result *= val;
-
+    sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
     result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
