@@ -335,28 +335,20 @@ class DropInVisionTransformer(torch.nn.Module):
 
 
 class Transformer(TTTransformer):
-    # Re-stage the decode trace inputs (token / current_pos / mROPE idxs / page table)
-    # from host on every decode step instead of relying on the on-device self-update
-    # of those buffers between steps. The on-device self-update path regressed
-    # (see #48037): from the 2nd decode step the device re-processed a stale token,
-    # producing gibberish (BERTScore F1 ~0.34). Confirmed by forcing host argmax
-    # sampling, which re-stages inputs from host every step and restored correct
-    # output (F1 0.791). This flag keeps that correctness while staying on the cheap
-    # on-device sampling path (no per-step logits read-back), so the decode perf
-    # target is preserved. It also fixes the repeat-batch staleness (#45522): the
-    # first decode of each new prefill re-stages host token/pos rather than reusing
-    # the previous batch's device buffers. With this flag the sampled token is not
-    # fed back into the trace token buffer (host re-stages it), so
-    # Generator._decode_token_feedback_buffer returns None for this model.
+    # --- On-device greedy decode correctness on batch-32 (#48037) ---
+    # Symptom: on-device sampling produced gibberish at batch-32 (BERTScore F1 ~0.34)
+    # but is correct at batch-1, and host argmax of the same batch-32 run is correct
+    # (F1 0.791) -> the decode forward is fine; only the on-device sampling path is wrong
+    # at batch-32. Root cause: with allow_force_argmax disabled (the non-Galaxy default),
+    # greedy decode (temperature=0 -> k=1,p=0,temp=1) goes through the heavy top-k/top-p
+    # multi-all-gather sampling pipeline, which is what corrupts at batch-32, rather than
+    # the simple single-gather argmax path.
+    #
+    # Fix: route greedy decode through the force-argmax path (enabled in __init__ below),
+    # and re-stage the decode trace inputs from host every step + run the sampling op
+    # eagerly so the all-gather re-acquires a fresh multi_device_global_semaphore each
+    # step instead of reusing a stale one frozen into a captured trace.
     _tt_vllm_always_refresh_decode_trace_inputs = True
-
-    # Run the on-device sampling op eagerly instead of from its own captured trace.
-    # The force-argmax path all-gathers logits via all_gather_async, whose
-    # multi_device_global_semaphore is acquired from get_and_cycle_*() at capture time
-    # and then frozen into the sampling trace. Replaying that trace reuses the stale
-    # semaphore, so the gather corrupts from the 2nd decode step -> correct first token
-    # then gibberish (#48037). Eager sampling re-acquires a fresh semaphore each step.
-    # The heavy decode forward stays traced, so decode throughput is preserved.
     _tt_disable_sampling_trace = True
 
     def __init__(
@@ -369,6 +361,14 @@ class Transformer(TTTransformer):
         paged_attention_config=None,
         use_paged_kv_cache=False,
     ):
+        # Enable the single-gather force-argmax sampling path for greedy decode. The
+        # non-Galaxy default (default_sampling_force_argmax) sets allow_force_argmax=False,
+        # which forces greedy decode onto the heavy top-k/top-p pipeline that corrupts at
+        # batch-32 (#48037). Must be set before super().__init__ builds the sampling module.
+        ag_cfg = dict(args.model_config.get("SAMPLING_AG_CONFIG", {}) or {})
+        ag_cfg["allow_force_argmax"] = True
+        args.model_config["SAMPLING_AG_CONFIG"] = ag_cfg
+
         # Call parent constructor with vision-specific classes
         super().__init__(
             args=args,
