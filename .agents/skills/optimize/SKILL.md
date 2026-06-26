@@ -439,6 +439,14 @@ This matters especially when more cores shrink the activation shard and reduce t
 
 The final report must make the cross-product explicit: for each material geometry candidate, list dtype/fidelity, core/grid source, input shard shape, `in0_block_w`, `per_core_N`, row latency, whole-layer latency, correctness, and kept/rejected decision. If a candidate is impossible, record the exact TTNN/op-contract blocker. Do not mix evidence from different dtype/fidelity policies to declare a geometry optimized.
 
+### OPT-005: Keep logical decode batch separate from tile padding
+
+Decoder kernels often use tile-padded activation rows, such as one logical token padded to 32 rows. Those padded rows are a tensor-layout contract, not extra active users. Do not change logical batch, active user count, page-table semantics, or KV-cache indexing just to satisfy an op shape check. A result with the right matmul shape but the wrong active batch is a different workload.
+
+When reporting or comparing decode attention, list logical user batch, tile-padded activation rows, current-position tensor shape, page-table shape/distribution, KV-cache shape, page block size, active cache slots updated, and SDPA/FlashDecode row time. Compare SDPA or FlashDecode only against a prior path with the same logical batch and context length. If a helper requires padded RoPE, current-position, or head-layout metadata, create padded metadata that preserves the original logical batch semantics instead of treating padding rows as real users.
+
+If an optimized decoder candidate changes logical batch from the target workload, the stage is not optimized for that target, even if PCC passes and the matmul rows look good. Such a run can be kept only as a separate throughput-scaling experiment, clearly labeled with active batch and excluded from single-user decoder signoff.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
