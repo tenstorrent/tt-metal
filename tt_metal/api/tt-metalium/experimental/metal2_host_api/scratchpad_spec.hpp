@@ -25,7 +25,7 @@ namespace tt::tt_metal::experimental {
 // PLACEMENT: Derived — the scratchpad's effective node set is the union of its bound
 //   kernels' WorkUnitSpec target_nodes.
 //
-// BINDING SCOPE: TODO.
+// BINDING SCOPE: At most one kernel can bind to a given ScratchpadSpec.
 //
 // ============================================================================
 
