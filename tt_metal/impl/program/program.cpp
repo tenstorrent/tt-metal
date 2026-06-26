@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -51,6 +52,8 @@
 #include "tt-metalium/mesh_device.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
+#include "jit_build/depend.hpp"
+#include "profiler_paths.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
@@ -167,6 +170,110 @@ void generate_kernel_source_files(
     }
 }
 
+// Returns true if every expected ELF for this kernel is already present locally with unchanged
+// source+header dependencies. The client then skips the remote round-trip (preprocess + RPC + ELF
+// transfer) entirely and read_binaries() loads the cached ELF. The validating ".dephash" sidecar was
+// written during a prior compile's preprocess step, from the real-source .d the compiler emits. A
+// source change moves the kernel-hash path and a header change invalidates the dephash, so both
+// still force a recompile.
+bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+    int num_binaries = kernel->expected_num_binaries();
+    if (num_binaries <= 0) {
+        return false;
+    }
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const std::string elf_path = bs.get_target_out_path(kernel->get_full_kernel_name());
+        std::filesystem::path p(elf_path);
+        const std::string out_dir = p.parent_path().string() + "/";
+        const std::string elf_name = p.filename().string();
+        if (!std::filesystem::exists(elf_path) || !tt::jit_build::dependencies_up_to_date(out_dir, elf_name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Harvest profiler zone-source locations from a preprocessed (.ii) translation unit and append them
+// to the profiler's zone-source-location log.
+//
+// The device profiler stores only a 16-bit hash per zone; the host rebuilds the
+// hash -> (zone_name, file, line) table by grepping the compiler's `#pragma message(...,KERNEL_PROFILER)`
+// notes out of *.o.log (see jit_build/build.cpp). That harvest runs only on the LOCAL compile path, so
+// kernels compiled on the JIT server never contribute their zones and `DEVICE KERNEL DURATION [ns]`
+// reads 0 for every test.
+//
+// In preprocess-and-ship the `_Pragma(message(...))` survives `-E` as a literal
+// `#pragma message("zone" "," "file" "," "line" ",KERNEL_PROFILER")` directive in the shipped .ii.
+// Reconstruct the same string the device hashed (mirroring C++ string-literal concatenation) and append
+// it, in the exact shape profiler.cpp::populateZoneSrcLocations parses, to the zone-source log. The host
+// dedupes by zone string, so re-appending an already-seen zone is harmless. Best-effort: profiler
+// bookkeeping must never block kernel compilation.
+void harvest_zone_src_locations_from_ii(const std::vector<std::uint8_t>& ii_content) {
+    const auto concat_pragma_literals = [](const std::string& line, std::size_t open_paren) {
+        std::string zone;
+        bool in_str = false;
+        for (std::size_t i = open_paren + 1; i < line.size(); ++i) {
+            const char c = line[i];
+            if (in_str) {
+                if (c == '\\' && i + 1 < line.size()) {
+                    zone.push_back(line[++i]);  // keep the escaped character verbatim
+                } else if (c == '"') {
+                    in_str = false;
+                } else {
+                    zone.push_back(c);
+                }
+            } else if (c == '"') {
+                in_str = true;
+            } else if (c == ')') {
+                break;  // end of message(...) argument list
+            }
+        }
+        return zone;
+    };
+
+    std::ofstream log_file;
+    const char* data = reinterpret_cast<const char*>(ii_content.data());
+    const std::size_t n = ii_content.size();
+    std::size_t pos = 0;
+    while (pos < n) {
+        std::size_t eol = pos;
+        while (eol < n && data[eol] != '\n') {
+            ++eol;
+        }
+        const std::string line(data + pos, eol - pos);
+        pos = eol + 1;
+
+        if (line.find("#pragma message(") == std::string::npos || line.find("KERNEL_PROFILER") == std::string::npos) {
+            continue;
+        }
+        const std::size_t open_paren = line.find('(');
+        if (open_paren == std::string::npos) {
+            continue;
+        }
+        const std::string zone = concat_pragma_literals(line, open_paren);
+        if (zone.empty()) {
+            continue;
+        }
+        if (!log_file.is_open()) {
+            std::error_code ec;
+            std::filesystem::create_directories(
+                std::filesystem::path(NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).parent_path(), ec);
+            log_file.open(NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, std::ios::app);
+            if (!log_file.is_open()) {
+                return;  // best-effort: never block compilation on profiler bookkeeping
+            }
+        }
+        // populateZoneSrcLocations() locates the delimiter "'#pragma message: " and strips the final
+        // character of the line, so wrap the zone string in a trailing sentinel quote to match.
+        log_file << "'#pragma message: " << zone << "'\n";
+    }
+}
+
 // Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
 KernelCompileDescriptor build_kernel_descriptor(
     IDevice* device,
@@ -185,6 +292,10 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.build_key = build_env.build_key();
     desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
     desc.request.gpp = build_env.build_env.get_gpp();
+    // Ship our build root so the server can re-root the sfpi toolchain / linker script / hw link
+    // objects to its own tree — lets a client whose tree is at a different path compile remotely
+    // without the server needing the client's filesystem layout.
+    desc.request.client_root = build_env.build_env.get_root_path();
     static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
     desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
 
@@ -196,6 +307,87 @@ KernelCompileDescriptor build_kernel_descriptor(
                     device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
+    }
+
+    // Preprocess-and-ship (TT_METAL_JIT_PREPROCESS=1): run each source through the
+    // preprocessor (-E) on the client and ship the self-contained .ii as content. The
+    // server then compiles the .ii with no include tree, no defines, and no source file
+    // on its filesystem -- only the toolchain. Reuses the generated_files content channel
+    // (written into the per-kernel cache dir on the server), so no RPC/server change is
+    // required: the .ii is referenced as a sibling of the target output dir ("../<name>").
+    static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
+    if (preprocess_and_ship) {
+        // When the device profiler is on, the remotely-compiled kernels' zone-source locations are
+        // never harvested locally (the compiler ran on the server), so recover them from each .ii below.
+        const bool profiler_enabled = MetalContext::instance().rtoptions().get_profiler_enabled();
+        for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
+            auto& target = desc.request.targets[t];
+            const std::string client_out_dir = std::filesystem::path(desc.expected_elf_paths[t]).parent_path().string();
+            std::filesystem::create_directories(client_out_dir);
+            for (std::size_t i = 0; i < target.srcs.size(); ++i) {
+                const std::string ii_name =
+                    target.target_name + "__" + std::filesystem::path(target.objs[i]).filename().string() + ".ii";
+                const std::string ii_path = client_out_dir + "/" + ii_name;
+                // Preprocess with the EXACT compile flags via the shared argv builder + exec_command
+                // (posix_spawn, NO shell). A shell command string would mangle map-valued defines
+                // like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... (braces/quotes/commas/spaces)
+                // and drop named compile-time args. cwd = client_out_dir so -I. / -I.. resolve to
+                // the target + generated-files dirs, identical to the real compile env.
+                const auto args = tt::jit_build::utils::build_gpp_argv(
+                    desc.request.gpp,
+                    target.compiler_opt_level,
+                    target.cflags,
+                    target.includes,
+                    target.defines,
+                    target.srcs[i],
+                    tt::jit_build::utils::GppAction::Preprocess,
+                    ii_path);
+                if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
+                }
+                const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                if (profiler_enabled) {
+                    harvest_zone_src_locations_from_ii(bytes);
+                }
+                tt::jit_build::GeneratedFile gf;
+                gf.name = ii_name;
+                gf.content.assign(bytes.begin(), bytes.end());
+                desc.request.generated_files.push_back(std::move(gf));
+                // Server compiles this self-contained unit instead of the original source path.
+                target.srcs[i] = "../" + ii_name;
+                // For a single-source target, record a .dephash next to the expected ELF from the
+                // real-source .d the preprocessor just emitted (-MMD lists the kernel source + every
+                // header). A later run validates it in remote_kernel_cached() and skips the round-trip.
+                // The .d's filename derives from the .ii while its internal target key is the bare obj,
+                // so parse it and write via the explicit-deps overload using the .d's own key.
+                if (target.srcs.size() == 1) {
+                    const std::filesystem::path d_path =
+                        std::filesystem::path(client_out_dir) / std::filesystem::path(ii_name).replace_extension(".d");
+                    std::ifstream d_file(d_path);
+                    if (d_file.is_open()) {
+                        tt::jit_build::ParsedDependencies deps = tt::jit_build::parse_dependency_file(d_file);
+                        if (!deps.empty()) {
+                            const std::string& dep_key = deps.begin()->first;
+                            const std::string dephash_path = desc.expected_elf_paths[t] + ".dephash";
+                            std::ofstream hash_file(dephash_path);
+                            tt::jit_build::write_dependency_hashes(deps, client_out_dir + "/", dep_key, hash_file);
+                            hash_file.close();
+                            if (hash_file.fail()) {
+                                std::filesystem::remove(dephash_path);
+                            }
+                        }
+                    }
+                }
+            }
+            // The .ii has includes + defines baked in; the server must not need the tree.
+            target.includes.clear();
+            target.defines.clear();
+            // -P drops the system-header markers that normally suppress warnings inside
+            // libstdc++; without them -Werror trips on standard-library internals. Downgrade
+            // warnings-to-errors for the preprocessed compile (codegen is unaffected, and the
+            // original source compiled clean, so this only tolerates now-unmasked system warnings).
+            target.cflags += " -Wno-error";
+        }
     }
 
     return desc;
@@ -2239,21 +2431,58 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                coordinator.submit(kernel_hash, [&]() {
-                    generate_kernel_source_files(device, build_options, kernel);
-                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
-                });
+                // Skip the remote round-trip when the ELF is already validly cached locally.
+                if (!remote_kernel_cached(device, kernel)) {
+                    coordinator.submit(kernel_hash, [&]() {
+                        generate_kernel_source_files(device, build_options, kernel);
+                        return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                    });
+                }
+                // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
                 submitted_kernels.emplace_back(kernel, std::move(build_options));
             }
         }
 
-        coordinator.finish();
+        bool remote_ok = true;
+        try {
+            coordinator.finish();
+        } catch (const jit_server::RemoteCompileTransportError& e) {
+            // The compile server became unavailable mid-batch (a response wedged / the
+            // connection went half-open under load). This is infrastructure failure, NOT a
+            // real compile error, so fall back to a LOCAL compile of this program instead of
+            // failing it. The kernels are already prepped (submitted_kernels), so we reuse
+            // them directly — re-running prep_kernel would re-add reserved defines and assert.
+            // ensure_kernel_binaries is cache-aware: kernels the server did finish are read
+            // from disk; only the undelivered ones actually recompile.
+            log_warning(
+                tt::LogBuildKernels,
+                "Remote JIT compile unavailable ({}); falling back to local compile for program {}.",
+                e.what(),
+                this->get_id());
+            remote_ok = false;
+        }
 
-        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
-        for (const auto& [kernel, build_options] : submitted_kernels) {
-            kernel->read_binaries(device, binary_root);
-            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+        if (remote_ok) {
+            const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+            for (const auto& [kernel, build_options] : submitted_kernels) {
+                kernel->read_binaries(device, binary_root);
+                kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+                Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+            }
+        } else {
+            for (auto& [kernel, build_options] : submitted_kernels) {
+                launch_build_step(
+                    [&, kernel] {
+                        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+                        const std::string binary_root =
+                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                        kernel->read_binaries(device, binary_root);
+                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+                    },
+                    events);
+            }
+            sync_build_steps(events);
         }
     } else {
         // Local path: parallel build via thread pool.
