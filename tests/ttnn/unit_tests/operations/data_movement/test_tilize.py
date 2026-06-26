@@ -11,8 +11,8 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose
-from models.common.utility_functions import skip_for_slow_dispatch
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
+from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
 
@@ -532,3 +532,28 @@ def test_tilize_width_sharded_dram_input_45331(device, shard_shape):
     assert tt_tile.layout == ttnn.TILE_LAYOUT
     torch_out = ttnn.to_torch(tt_tile)
     assert torch.equal(torch_tensor, torch_out), "tilize round-trip mismatch"
+
+
+# fp8 is a valid tile INPUT (it tilizes to any float TILE output) though ROW_MAJOR-only as a dtype. Even
+# tile-widths only (odd fp8 widths hit a separate reader NoC bug); golden is the host-quantized fp8 source.
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "out_dtype,min_pcc",
+    [(ttnn.float32, 0.9999), (ttnn.bfloat16, 0.9999), (ttnn.bfloat8_b, 0.999), (ttnn.bfloat4_b, 0.98)],
+    ids=["out_fp32", "out_bf16", "out_bfp8", "out_bfp4"],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 64, 128), (1, 32, 64, 512)], ids=["small", "wide"])
+def test_tilize_fp8_input(device, shape, out_dtype, min_pcc):
+    torch.manual_seed(0)
+    torch_input = torch.randn(*shape, dtype=torch.float32)
+    golden = torch_input.to(torch.float8_e4m3fn).to(torch.float32)  # match device fp8 quantization
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.tilize(tt_in, dtype=out_dtype)
+    assert tt_out.layout == ttnn.TILE_LAYOUT and tt_out.dtype == out_dtype
+    assert_with_pcc(golden, ttnn.to_torch(tt_out).float(), min_pcc)
