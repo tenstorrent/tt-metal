@@ -7,8 +7,10 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <optional>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
@@ -84,8 +86,15 @@ void LayerCompletionRouter::run_master() {
         }
     };
 
+    // Coordinated teardown: keep draining the local ring and receiving subordinate messages until
+    // this rank is done producing (stop_) AND its ring is empty AND every subordinate has sent its
+    // end-of-stream sentinel. Then no blocking subordinate send is ever left without a receiver, and
+    // no already-arrived completion is dropped by a cancel. teardown_timeout_ms bounds the wait in
+    // case a rank crashed without sending its sentinel.
+    std::size_t sentinels_remaining = subs.size();
+    std::optional<std::chrono::steady_clock::time_point> deadline;
     LayerCompletionMessage m{};
-    while (!stop_.load(std::memory_order_acquire)) {
+    while (true) {
         bool progressed = false;
 
         while (queue_->try_pop(m)) {
@@ -97,10 +106,35 @@ void LayerCompletionRouter::run_master() {
             if (reqs[i] && reqs[i]->test().has_value()) {
                 LayerCompletionMessage recv{};
                 std::memcpy(&recv, bufs[i].data(), sizeof(recv));
-                ingest(recv);
-                reqs[i] = ctx->irecv(
-                    ttsl::Span<std::byte>(bufs[i].data(), bufs[i].size()), mh::Rank(subs[i]), kLayerCompletionTag);
                 progressed = true;
+                if (is_layer_completion_sentinel(recv)) {
+                    // End of stream from this subordinate — it sends nothing more; stop re-arming.
+                    reqs[i].reset();
+                    --sentinels_remaining;
+                } else {
+                    ingest(recv);
+                    reqs[i] = ctx->irecv(
+                        ttsl::Span<std::byte>(bufs[i].data(), bufs[i].size()), mh::Rank(subs[i]), kLayerCompletionTag);
+                }
+            }
+        }
+
+        if (stop_.load(std::memory_order_acquire)) {
+            // The runner stops pushing before it sets stop_, so the ring drain above leaves it empty.
+            // Exit once every subordinate has also signalled end of stream — no cancel needed.
+            if (sentinels_remaining == 0) {
+                break;
+            }
+            if (!deadline) {
+                deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.teardown_timeout_ms);
+            } else if (std::chrono::steady_clock::now() >= *deadline) {
+                log_warning(
+                    LogMetal,
+                    "LayerCompletionRouter master: teardown timed out after {} ms with {} subordinate "
+                    "sentinel(s) outstanding; cancelling — a stalled/crashed rank's tail completions may be lost",
+                    cfg_.teardown_timeout_ms,
+                    sentinels_remaining);
+                break;
             }
         }
 
@@ -109,36 +143,8 @@ void LayerCompletionRouter::run_master() {
         }
     }
 
-    // Drain completions this (master) rank produced into its own ring between the last pop
-    // and stop_ being set — mirror run_subordinate(); the master is itself a producer to this
-    // ring, so without this its own last chunk's trailing layers are silently dropped (never
-    // injected into the scheduler channel). (Subordinate-side in-flight messages still depend
-    // on coordinated cross-rank teardown — tracked separately.)
-    while (queue_->try_pop(m)) {
-        ingest(m);
-    }
-
-    // Final sweep: harvest any subordinate completion that already landed in its receive buffer
-    // before stop_ was observed — otherwise the cancel() below would discard a physically-arrived
-    // message (and a lost seq head-of-line-blocks the reorder buffer). Then cancel whatever is still
-    // genuinely outstanding so MPI can release it.
-    //
-    // RESIDUAL RACE (uncoordinated-teardown future work): a message that completes the irecv in the
-    // window between this test() returning nullopt and the cancel() below is still lost — cancel()
-    // does MPI_Cancel + MPI_Request_free with no MPI_Wait/MPI_Test_cancelled, so a request that
-    // actually received data is freed and its bytes dropped, and that missing seq head-of-line-blocks
-    // the reorder buffer. Closing it needs coordinated shutdown (subordinates send an end-of-stream
-    // sentinel; the master drains until it has seen one per subordinate, then stops without cancel),
-    // not a test-after-cancel (the request is already freed). Same root cause as the run_subordinate
-    // blocking-send hang below.
-    for (std::size_t i = 0; i < subs.size(); ++i) {
-        if (reqs[i] && reqs[i]->test().has_value()) {
-            LayerCompletionMessage recv{};
-            std::memcpy(&recv, bufs[i].data(), sizeof(recv));
-            ingest(recv);
-            reqs[i].reset();
-        }
-    }
+    // Only non-empty if we broke on the timeout above (a subordinate never sent its sentinel); in the
+    // clean path every irecv was consumed or reset. Cancel so MPI can release the buffers.
     for (auto& r : reqs) {
         if (r && r->active()) {
             r->cancel();
@@ -147,33 +153,36 @@ void LayerCompletionRouter::run_master() {
 }
 
 void LayerCompletionRouter::run_subordinate() {
-    // TEARDOWN HANG (uncoordinated-teardown future work): the ctx->send() below is blocking. If this
-    // rank sends after the master has already broken out of run_master and cancelled its matching
-    // irecv (steady-state or in the post-stop drain), the send has no receiver and blocks forever, so
-    // this thread never returns and stop()/~LayerCompletionRouter's join() hangs. The fix is the same
-    // coordinated shutdown noted in run_master (drain to an end-of-stream sentinel, no mid-stream
-    // cancel); a blocking send with no teardown handshake cannot be made safe on its own.
     const mh::ContextPtr ctx = mh::DistributedContext::get_current_world();
+    auto send_msg = [&](const LayerCompletionMessage& msg) {
+        std::array<std::byte, sizeof(msg)> buf{};
+        std::memcpy(buf.data(), &msg, sizeof(msg));
+        ctx->send(ttsl::Span<std::byte>(buf.data(), buf.size()), mh::Rank(cfg_.master_rank), kLayerCompletionTag);
+    };
+
     LayerCompletionMessage m{};
     while (!stop_.load(std::memory_order_acquire)) {
         if (queue_->try_pop(m)) {
-            std::array<std::byte, sizeof(m)> buf{};
-            std::memcpy(buf.data(), &m, sizeof(m));
-            ctx->send(ttsl::Span<std::byte>(buf.data(), buf.size()), mh::Rank(cfg_.master_rank), kLayerCompletionTag);
+            send_msg(m);
             processed_.fetch_add(1, std::memory_order_relaxed);
         } else {
             std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
         }
     }
-    // Drain any messages that arrived in the ring between the last pop and
-    // stop_ being set — otherwise they would be silently dropped and the
-    // master would never receive them.
+    // Drain any messages that arrived in the ring between the last pop and stop_ being set —
+    // otherwise they would be silently dropped and the master would never receive them.
     while (queue_->try_pop(m)) {
-        std::array<std::byte, sizeof(m)> buf{};
-        std::memcpy(buf.data(), &m, sizeof(m));
-        ctx->send(ttsl::Span<std::byte>(buf.data(), buf.size()), mh::Rank(cfg_.master_rank), kLayerCompletionTag);
+        send_msg(m);
         processed_.fetch_add(1, std::memory_order_relaxed);
     }
+    // Coordinated teardown: send one end-of-stream sentinel as the final message. The master keeps a
+    // receive posted until it sees this (run_master), so this blocking send always has a receiver and
+    // the master can then stop without cancelling a live recv. The sentinel is not a real completion
+    // (not counted in processed_, never fed through the reorder buffer).
+    LayerCompletionMessage sentinel{};
+    sentinel.source_rank = static_cast<uint32_t>(cfg_.rank);
+    sentinel.reserved = kLayerCompletionSentinel;
+    send_msg(sentinel);
 }
 
 }  // namespace tt::tt_metal::distributed

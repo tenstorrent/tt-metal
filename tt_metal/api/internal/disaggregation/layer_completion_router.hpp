@@ -15,6 +15,14 @@
 //     owns) for each completion that becomes contiguous-in-order.
 //
 // world_size == 1 ⇒ master path uses no MPI (local ring only).
+//
+// Coordinated teardown: at stop(), each subordinate drains its ring and then
+// sends one end-of-stream SENTINEL (see layer_completion_message.hpp). The
+// master does NOT cancel mid-stream — it keeps receiving until it has seen a
+// sentinel from every subordinate (and its own ring is drained), so no
+// blocking subordinate send is ever left without a receiver and no
+// already-arrived completion is dropped by a cancel. A teardown_timeout_ms
+// safety net bounds the wait if a rank crashed without sending its sentinel.
 
 #pragma once
 
@@ -36,6 +44,10 @@ struct LayerCompletionRouterConfig {
     std::string ring_shm_name;
     std::string scheduler_channel_shm_name;  // master-only
     int poll_idle_us = 100;
+    // Master-only safety net: max time to wait at teardown for outstanding subordinate sentinels
+    // before giving up and cancelling (so a crashed/stalled rank can't hang the listener join
+    // forever). The clean path returns as soon as all sentinels arrive, well under this.
+    int teardown_timeout_ms = 5000;
 };
 
 class LayerCompletionRouter {
