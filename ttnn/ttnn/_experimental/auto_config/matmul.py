@@ -90,6 +90,24 @@ def _serialize_topology(tensor: Any) -> dict[str, Any] | None:
         return None
 
 
+def _serialize_tile(tensor: Any) -> dict[str, Any] | None:
+    try:
+        tile = tensor.get_tile()
+    except Exception:
+        tile = getattr(tensor, "tile", None)
+    if tile is None:
+        return None
+
+    tile_shape = getattr(tile, "tile_shape", None)
+    if tile_shape is None:
+        return None
+
+    return {
+        "tile_shape": [int(tile_shape[0]), int(tile_shape[1])],
+        "transpose_of_faces": _stringify(getattr(tile, "transpose_of_faces", None)),
+    }
+
+
 def _serialize_tensor(tensor: Any) -> dict[str, Any] | None:
     if tensor is None:
         return None
@@ -103,6 +121,7 @@ def _serialize_tensor(tensor: Any) -> dict[str, Any] | None:
         "shape": list(_shape_to_tuple(getattr(tensor, "shape", ()))),
         "dtype": _stringify(getattr(tensor, "dtype", None)),
         "layout": _stringify(getattr(tensor, "layout", None)),
+        "tile": _serialize_tile(tensor),
         "memory_config": _serialize_memory_config(memory_config),
         "topology": _serialize_topology(tensor),
     }
@@ -182,6 +201,15 @@ def _minimal_matmul_preserves_linear_bias_shape(signature: "AutoMatmulSignature"
     except (IndexError, TypeError, ValueError):
         return False
     return linear_shape == matmul_shape
+
+
+def _uses_standard_tile_shape(tensor_descriptor: dict[str, Any] | None) -> bool:
+    if not tensor_descriptor:
+        return True
+    tile_descriptor = tensor_descriptor.get("tile")
+    if not tile_descriptor:
+        return True
+    return tuple(int(dim) for dim in tile_descriptor.get("tile_shape", (32, 32))) == (32, 32)
 
 
 def _is_distributed(signature: "AutoMatmulSignature") -> bool:
@@ -660,6 +688,12 @@ def _can_use_minimal_matmul_common(signature: AutoMatmulSignature, bias: Any | N
     if signature.input_tensor_a.get("layout") != str(ttnn.TILE_LAYOUT):
         return False
     if signature.input_tensor_b.get("layout") != str(ttnn.TILE_LAYOUT):
+        return False
+    if not _uses_standard_tile_shape(signature.input_tensor_a):
+        return False
+    if not _uses_standard_tile_shape(signature.input_tensor_b):
+        return False
+    if not _uses_standard_tile_shape(signature.bias):
         return False
     if bias is not None and (_serialize_tensor(bias) or {}).get("layout") != str(ttnn.TILE_LAYOUT):
         return False

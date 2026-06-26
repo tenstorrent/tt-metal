@@ -32,6 +32,7 @@ def _make_signature():
             "shape": [1, 64, 96],
             "dtype": "bfloat16",
             "layout": "Layout.TILE",
+            "tile": {"tile_shape": [32, 32], "transpose_of_faces": "False"},
             "memory_config": "DRAM_MEMORY_CONFIG",
             "topology": None,
         },
@@ -39,6 +40,7 @@ def _make_signature():
             "shape": [96, 128],
             "dtype": "bfloat16",
             "layout": "Layout.TILE",
+            "tile": {"tile_shape": [32, 32], "transpose_of_faces": "False"},
             "memory_config": "DRAM_MEMORY_CONFIG",
             "topology": None,
         },
@@ -103,6 +105,7 @@ def _make_distributed_signature(*, lhs_shard_dim=None, rhs_shard_dim=None):
             "shape": [1, 1, 32, 64],
             "dtype": "bfloat16",
             "layout": "Layout.TILE",
+            "tile": {"tile_shape": [32, 32], "transpose_of_faces": "False"},
             "memory_config": "DRAM_MEMORY_CONFIG",
             "topology": lhs_topology,
         },
@@ -110,6 +113,7 @@ def _make_distributed_signature(*, lhs_shard_dim=None, rhs_shard_dim=None):
             "shape": [1, 1, 64, 128],
             "dtype": "bfloat16",
             "layout": "Layout.TILE",
+            "tile": {"tile_shape": [32, 32], "transpose_of_faces": "False"},
             "memory_config": "DRAM_MEMORY_CONFIG",
             "topology": rhs_topology,
         },
@@ -146,6 +150,27 @@ def test_linear_bias_broadcast_that_preserves_output_shape_allows_minimal_candid
 
     assert auto_matmul._minimal_matmul_preserves_linear_bias_shape(signature)
     assert auto_matmul._can_use_minimal_matmul_common(signature, bias)
+
+
+def test_tiny_tile_shapes_disable_minimal_candidates():
+    signature = _make_signature()
+    signature = dataclasses.replace(
+        signature,
+        input_tensor_a={**signature.input_tensor_a, "tile": {"tile_shape": [8, 32], "transpose_of_faces": "False"}},
+        input_tensor_b={**signature.input_tensor_b, "tile": {"tile_shape": [32, 16], "transpose_of_faces": "False"}},
+    )
+
+    assert not auto_matmul._uses_standard_tile_shape(signature.input_tensor_a)
+    assert not auto_matmul._uses_standard_tile_shape(signature.input_tensor_b)
+    assert not auto_matmul._can_use_minimal_matmul_common(signature, bias=None)
+
+
+def test_standard_tile_shapes_allow_minimal_candidates():
+    signature = _make_signature()
+
+    assert auto_matmul._uses_standard_tile_shape(signature.input_tensor_a)
+    assert auto_matmul._uses_standard_tile_shape(signature.input_tensor_b)
+    assert auto_matmul._can_use_minimal_matmul_common(signature, bias=None)
 
 
 def test_cache_round_trip_and_force_retune(monkeypatch, tmp_path):
