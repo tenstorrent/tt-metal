@@ -26,7 +26,12 @@ from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
-from models.experimental.diffusion_gemma.tt.generate import commit_canvas_tokens
+from models.experimental.diffusion_gemma.tt.generate import (
+    commit_canvas_tokens,
+    generate_blocks,
+    make_host_canvas_init_fn,
+)
+from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -120,6 +125,38 @@ def _build_tiny_gemma4_model(
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
     )
     return model
+
+
+class _PositionDependentDeviceLogits:
+    def __init__(self, mesh_device, *, canvas_len, vocab_size):
+        self.mesh_device = mesh_device
+        self.canvas_len = canvas_len
+        self.vocab_size = vocab_size
+        self.q_rope_offset = 0
+        self._last_logits = None
+        self.offsets = []
+
+    def __call__(self, canvas_tokens, step):
+        del canvas_tokens, step
+        self.offsets.append(self.q_rope_offset)
+        target = (self.q_rope_offset // self.canvas_len) % self.vocab_size
+        logits = torch.full((1, 1, self.canvas_len, self.vocab_size), -100.0, dtype=torch.float32)
+        logits[..., target] = 100.0
+        self._last_logits = ttnn.from_torch(
+            logits,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+            if hasattr(self.mesh_device, "shape") and self.mesh_device.get_num_devices() > 1
+            else None,
+        )
+        return self._last_logits
+
+    def reset(self):
+        if self._last_logits is not None:
+            self._last_logits.deallocate(True)
+            self._last_logits = None
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
@@ -412,3 +449,98 @@ def test_commit_append_canvas_kv_matches_reencode_pcc(mesh_device, reset_seeds):
         _cache_region(commit_v, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh),
         _cache_region(reencode_v, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh),
     )
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds):
+    torch.manual_seed(5)
+    prompt_len = 32
+    canvas_len = 32
+    num_blocks = 2
+    vocab_size = 256
+    model = _build_tiny_gemma4_model(mesh_device, vocab_size=vocab_size, max_seq_len=128)
+
+    prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
+    prompt_logits = model(
+        _embed_tokens(model, prompt_tokens, mesh_device),
+        is_decode=False,
+        input_ids_torch=prompt_tokens,
+        kv_phase=KVCachePhase.PREFILL_WRITE,
+    )
+    prompt_logits.deallocate(True)
+
+    k_cache, v_cache = model.tt_kv_cache[0]
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    k_block0_before = _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+    v_block0_before = _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+    k_block1_before = _cache_region(k_cache, prompt_len + canvas_len, prompt_len + 2 * canvas_len, is_mesh=is_mesh)
+    v_block1_before = _cache_region(v_cache, prompt_len + canvas_len, prompt_len + 2 * canvas_len, is_mesh=is_mesh)
+
+    created_noise = []
+
+    def _to_device_noise(value, *, dtype=ttnn.float32):
+        tensor = ttnn.from_torch(
+            value,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
+        )
+        created_noise.append(tensor)
+        return tensor
+
+    def gumbel_noise_for_block(block_idx):
+        del block_idx
+        return lambda step: _to_device_noise(torch.zeros(1, 1, canvas_len, vocab_size, dtype=torch.float32))
+
+    def noise_tokens_for_block(block_idx):
+        del block_idx
+        return lambda step: _to_device_noise(
+            torch.zeros(1, 1, canvas_len, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+        )
+
+    init_canvases = [torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long) for _ in range(num_blocks)]
+    logits_fn = _PositionDependentDeviceLogits(mesh_device, canvas_len=canvas_len, vocab_size=vocab_size)
+    out = generate_blocks(
+        model,
+        logits_fn,
+        prompt_len=prompt_len,
+        num_blocks=num_blocks,
+        config=DiffusionConfig(
+            canvas_length=canvas_len,
+            max_denoise_steps=1,
+            entropy_budget=0.0,
+        ),
+        init_canvas_fn=make_host_canvas_init_fn(mesh_device, init_canvases),
+        gumbel_noise_fn=gumbel_noise_for_block,
+        noise_tokens_fn=noise_tokens_for_block,
+    )
+
+    assert out.prompt_len == prompt_len
+    assert out.next_pos == prompt_len + num_blocks * canvas_len
+    assert logits_fn.offsets == [prompt_len, prompt_len + canvas_len]
+    expected = torch.cat(
+        [
+            torch.full((1, canvas_len), prompt_len // canvas_len, dtype=torch.long),
+            torch.full((1, canvas_len), (prompt_len + canvas_len) // canvas_len, dtype=torch.long),
+        ],
+        dim=1,
+    )
+    assert torch.equal(out.generated, expected)
+    _assert_regions_changed(
+        k_block0_before, _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+    )
+    _assert_regions_changed(
+        v_block0_before, _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
+    )
+    _assert_regions_changed(
+        k_block1_before,
+        _cache_region(k_cache, prompt_len + canvas_len, prompt_len + 2 * canvas_len, is_mesh=is_mesh),
+    )
+    _assert_regions_changed(
+        v_block1_before,
+        _cache_region(v_cache, prompt_len + canvas_len, prompt_len + 2 * canvas_len, is_mesh=is_mesh),
+    )
+    for tensor in created_noise:
+        tensor.deallocate(True)
