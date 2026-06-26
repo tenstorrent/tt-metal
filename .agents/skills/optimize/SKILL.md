@@ -259,6 +259,16 @@ When SDPA or FlashDecode is material, do not rely on the op default configuratio
 
 The final report for an optimized decoder must list the SDPA or FlashDecode row, KV-cache dtype/layout, attention program config, reduced-cache candidate result, and kept/rejected decision. If SDPA or FlashDecode is one of the largest regressions versus the prior same-context correct candidate, if BF16 cache remains without a reduced-cache trial or precise blocker, or if a material SDPA path uses default program config without an explicit-config candidate, the stage is not optimized.
 
+### OPT-003: Preserve the decode residual layout through norms and residual adds
+
+For decoder optimization, the residual stream is a contract across the layer, not a temporary tensor between ops. Before tuning local matmul or attention knobs, choose the decode residual memory config and carry it through input RMSNorm, attention residual add, post-attention RMSNorm, MLP input, and final residual add when the ops legally support it. A residual path that repeatedly falls back to DRAM interleaved because it is convenient is not optimized.
+
+When RMSNorm or LayerNorm is material, use a sharded norm program config with sharded L1 input and output. The common single-chip Wormhole starting point is a width-sharded L1 residual over a clean core grid, paired with `ttnn.LayerNormShardedMultiCoreProgramConfig`; adapt the grid, shard shape, and subblocks to the model shape and hardware. If the norm output is DRAM interleaved, or if a residual add writes DRAM interleaved before the next norm or matmul, measure a sharded-residual candidate before accepting the stage.
+
+Do not let an attention or MLP helper force the whole layer back to DRAM. Pay required layout conversions only at the narrow API boundary, then restore the residual contract before the next residual add or norm. If a candidate keeps a slower residual layout because a downstream op rejects the sharded tensor, record the exact op, shape, memory config, error or PCC failure, and the measured cost of the fallback.
+
+The final report for an optimized decoder must list both norm rows, norm program configs, residual-add output memory configs, residual memory config before attention and MLP, and any `InterleavedToSharded`, `ShardedToInterleaved`, or reshape/slice rows used to cross helper boundaries. If norm rows are one of the largest regressions versus the prior same-context correct path, or if norms/residual adds use DRAM interleaved without a measured sharded candidate or precise blocker, the stage is not optimized.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
