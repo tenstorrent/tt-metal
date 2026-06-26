@@ -425,7 +425,14 @@ class Pi0_5LiberoAdapter:
                 int(lang_mask[0].to(torch.bool).sum().item()),
             )
             if cache_key != self._glx1x8_trace_key:
-                self.model.num_denoising_steps = num_denoising_steps
+                # set_num_denoising_steps() rebuilds the per-step schedule
+                # (_timesteps, _dts, _adarms_per_step, _block_mods_per_step,
+                # _final_mods_per_step). Bare assignment used to silently
+                # leave the precomputes built for config.num_denoising_steps
+                # (default 10), so a sweep into N=5 ran 5 iters but indexed
+                # the first 5 entries of a 10-step schedule (dt=-0.1 instead
+                # of -0.2) → half-denoise → tanked LIBERO accuracy.
+                self.model.set_num_denoising_steps(num_denoising_steps)
                 self.model.capture_trace(
                     images,
                     lang_tokens=tokens,

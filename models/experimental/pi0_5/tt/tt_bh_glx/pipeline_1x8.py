@@ -96,6 +96,11 @@ class Pi0_5GLX1x8Pipeline:
         self._patch_size = config.siglip_config.patch_size
         self._image_size = config.siglip_config.image_size
         self._vlm_hidden = config.vlm_config.width
+        # Keep weights for set_num_denoising_steps() — the per-step block /
+        # final modulation precomputes are derived from action_expert weights
+        # and the timestep schedule, so they must be rebuilt whenever the
+        # step count changes at runtime.
+        self._weights = weights
 
         # ---- Stage 0: SigLIP DP — full encoder per chip (weights replicated) ----
         self.vision = SigLIPCameraSlice(
@@ -132,35 +137,15 @@ class Pi0_5GLX1x8Pipeline:
         self.denoise_head = _DenoiseHead(weights["action_expert"], mesh)
 
         # ---- Pre-computed denoising schedule ----
-        self._timesteps = [1.0 - i / self.num_denoising_steps for i in range(self.num_denoising_steps + 1)]
-        self._dts = [self._timesteps[i + 1] - self._timesteps[i] for i in range(self.num_denoising_steps)]
-
-        # Pre-compute adarms_cond per step on the mesh (replicated). Since the
-        # timestep schedule is deterministic, these are constant across calls —
-        # building once at init keeps the per-step loop body matmul-only
-        # (no ttnn.from_torch inside the trace body).
-        self._adarms_per_step: List["ttnn.Tensor"] = []
-        for i in range(self.num_denoising_steps):
-            t_ttnn = ttnn.from_torch(
-                torch.tensor([self._timesteps[i]], dtype=torch.float32),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh,
-            )
-            cond = self.suffix.embed_adarms_cond(t_ttnn)
-            ttnn.deallocate(t_ttnn)
-            self._adarms_per_step.append(cond)
-
-        # TIER A precompute: per-step, per-layer block-mod tuples (sa1, ta, ga, sf1,
-        # tf, gf) + per-step final-norm tuples (scale1, shift). Replicates the
-        # single-chip ttnn_pi0_5_model.py:163 `_precompute_bs1_modulations` path.
-        # All 6W and 3W mod-Dense matmuls happen on host once at init; per-step
-        # device matmuls (18 layers × num_steps + num_steps final) are eliminated
-        # at every inference. Saves ~5 ms / inference on this pipeline (denoise
-        # 24.6 ms → ~20 ms target).
+        # All depend on self.num_denoising_steps. When the rollout switches N
+        # at runtime (e.g. LIBERO sweep N=10 → N=5), set_num_denoising_steps()
+        # must be called to rebuild these — otherwise the loop would run the
+        # new step count but index entries built for the old schedule (e.g.
+        # first 5 entries of a 10-step schedule → dt=-0.1 instead of the
+        # correct -0.2, halving the denoise traversal and tanking accuracy).
         self._block_mods_per_step: List[List[Tuple["ttnn.Tensor", ...]]] = []
         self._final_mods_per_step: List[Tuple["ttnn.Tensor", "ttnn.Tensor"]] = []
-        self._precompute_block_and_final_mods(weights)
+        self._build_denoise_schedule()
 
         # Real camera count comes from PI0_NUM_CAMERAS (production env) — 5
         # zero-dummy cams pad to 8 regardless. Range checked at upload time.
@@ -612,6 +597,62 @@ class Pi0_5GLX1x8Pipeline:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
             ttnn.copy_host_to_device_tensor(host_t, self.lang_tokens_buf)
+
+    def _build_denoise_schedule(self) -> None:
+        """(Re)build the per-step denoising schedule tensors from
+        self.num_denoising_steps. Called from __init__ and from
+        set_num_denoising_steps() when the step count changes at runtime
+        (e.g. LIBERO rollout sweeping N=10 → N=5)."""
+        self._timesteps = [1.0 - i / self.num_denoising_steps for i in range(self.num_denoising_steps + 1)]
+        self._dts = [self._timesteps[i + 1] - self._timesteps[i] for i in range(self.num_denoising_steps)]
+
+        # Pre-compute adarms_cond per step on the mesh (replicated). Since the
+        # timestep schedule is deterministic, these are constant across calls —
+        # building once at init keeps the per-step loop body matmul-only
+        # (no ttnn.from_torch inside the trace body).
+        self._adarms_per_step: List["ttnn.Tensor"] = []
+        for i in range(self.num_denoising_steps):
+            t_ttnn = ttnn.from_torch(
+                torch.tensor([self._timesteps[i]], dtype=torch.float32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+            )
+            cond = self.suffix.embed_adarms_cond(t_ttnn)
+            ttnn.deallocate(t_ttnn)
+            self._adarms_per_step.append(cond)
+
+        # TIER A precompute: per-step, per-layer block-mod tuples (sa1, ta, ga,
+        # sf1, tf, gf) + per-step final-norm tuples (scale1, shift). Replicates
+        # the single-chip ttnn_pi0_5_model.py:163 `_precompute_bs1_modulations`
+        # path. All 6W and 3W mod-Dense matmuls happen on host once at init;
+        # per-step device matmuls (18 layers × num_steps + num_steps final)
+        # are eliminated at every inference. Saves ~5 ms / inference on this
+        # pipeline (denoise 24.6 ms → ~20 ms target).
+        self._block_mods_per_step = []
+        self._final_mods_per_step = []
+        self._precompute_block_and_final_mods(self._weights)
+
+    def set_num_denoising_steps(self, num_steps: int) -> None:
+        """Public setter: update num_denoising_steps AND rebuild the schedule
+        tensors. Required when the rollout changes the step count at runtime
+        (e.g. LIBERO sweeping N=10 → N=5). Bare assignment to
+        `num_denoising_steps` without rebuilding leaves the loop indexing
+        entries from the OLD schedule (e.g. first 5 entries of a 10-step
+        schedule → dt=-0.1 instead of the correct -0.2 for N=5), tanking
+        LIBERO accuracy on N=5.
+
+        Also invalidates the trace cache (the trace recorded N_old denoise
+        steps with N_old block_mods tensors — those tensor IDs no longer
+        match the new schedule)."""
+        if num_steps == self.num_denoising_steps:
+            return
+        self.num_denoising_steps = num_steps
+        # Trace becomes stale — op count + precomputed tensor IDs changed.
+        if self._trace_id is not None:
+            ttnn.release_trace(self.mesh, self._trace_id)
+            self._trace_id = None
+        self._build_denoise_schedule()
 
     def _refresh_noise_buffer(self) -> None:
         """Refill self.x_t_fp32 in-place with fresh noise. Logical [:ah] gets
