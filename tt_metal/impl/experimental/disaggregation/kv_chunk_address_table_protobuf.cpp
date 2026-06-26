@@ -73,16 +73,21 @@ namespace detail {
     return pb;
 }
 
-KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
-    KvChunkAddressTableConfig cfg{
+namespace {
+
+KvChunkAddressTableConfig config_from_proto(const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
+    return KvChunkAddressTableConfig{
         .num_layers = pb.num_layers(),
         .max_sequence_length = pb.max_sequence_length(),
         .num_slots = pb.num_slots(),
         .chunk_n_tokens = pb.chunk_n_tokens(),
         .chunk_size_bytes = pb.chunk_size_bytes(),
     };
-    KvChunkAddressTable table(cfg);
+}
 
+// Populate an already-constructed table (device groups, host mappings, entries)
+// from its proto message. Shared by the single-table and set deserializers.
+void populate_from_proto(KvChunkAddressTable& table, const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
     for (const auto& pb_group : pb.device_groups()) {
         std::vector<tt::tt_fabric::FabricNodeId> fnids;
         fnids.reserve(pb_group.fabric_node_ids_size());
@@ -105,8 +110,36 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
         };
         table.set(entry.layer(), entry.position(), entry.slot(), loc);
     }
+}
 
+}  // namespace
+
+KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
+    KvChunkAddressTable table(config_from_proto(pb));
+    populate_from_proto(table, pb);
     return table;
+}
+
+::tt::disaggregation::proto::KvChunkAddressTableSet to_proto_message(const KvChunkAddressTableSet& table_set) {
+    ::tt::disaggregation::proto::KvChunkAddressTableSet pb;
+    for (const auto& group : table_set.groups()) {
+        *pb.add_groups() = to_proto_message(group);
+    }
+    return pb;
+}
+
+KvChunkAddressTableSet from_proto_message(const ::tt::disaggregation::proto::KvChunkAddressTableSet& pb) {
+    std::vector<KvChunkAddressTableConfig> configs;
+    configs.reserve(pb.groups_size());
+    for (const auto& pb_group : pb.groups()) {
+        configs.push_back(config_from_proto(pb_group));
+    }
+
+    KvChunkAddressTableSet table_set(configs);
+    for (int i = 0; i < pb.groups_size(); ++i) {
+        populate_from_proto(table_set.group(static_cast<size_t>(i)), pb.groups(i));
+    }
+    return table_set;
 }
 
 }  // namespace detail
@@ -148,6 +181,43 @@ KvChunkAddressTable import_from_protobuf_file(const std::string& path) {
     return import_from_protobuf(data);
 }
 
+// --- Binary wire format (set of grouped tables, issue #184) ---
+
+std::string export_to_protobuf(const KvChunkAddressTableSet& table_set) {
+    auto pb = detail::to_proto_message(table_set);
+    std::string out;
+    if (!pb.SerializeToString(&out)) {
+        throw std::runtime_error("Failed to serialize KvChunkAddressTableSet to protobuf");
+    }
+    return out;
+}
+
+void export_to_protobuf_file(const KvChunkAddressTableSet& table_set, const std::string& path) {
+    std::string data = export_to_protobuf(table_set);
+    std::ofstream out(path, std::ios::binary);
+    if (!out.is_open()) {
+        throw std::runtime_error("Failed to open file for writing: " + path);
+    }
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+}
+
+KvChunkAddressTableSet import_set_from_protobuf(const std::string& data) {
+    ::tt::disaggregation::proto::KvChunkAddressTableSet pb;
+    if (!pb.ParseFromString(data)) {
+        throw std::runtime_error("Failed to parse protobuf data as KvChunkAddressTableSet");
+    }
+    return detail::from_proto_message(pb);
+}
+
+KvChunkAddressTableSet import_set_from_protobuf_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        throw std::runtime_error("Failed to open file for reading: " + path);
+    }
+    std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return import_set_from_protobuf(data);
+}
+
 // --- Text format (debug only) ---
 
 std::string export_to_protobuf_text(const KvChunkAddressTable& table) {
@@ -183,6 +253,43 @@ KvChunkAddressTable import_from_protobuf_text_file(const std::string& path) {
     }
     std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     return import_from_protobuf_text(text);
+}
+
+// --- Text format for a set (debug only) ---
+
+std::string export_to_protobuf_text(const KvChunkAddressTableSet& table_set) {
+    auto pb = detail::to_proto_message(table_set);
+    std::string out;
+    if (!google::protobuf::TextFormat::PrintToString(pb, &out)) {
+        throw std::runtime_error("Failed to serialize KvChunkAddressTableSet to protobuf text format");
+    }
+    return out;
+}
+
+void export_to_protobuf_text_file(const KvChunkAddressTableSet& table_set, const std::string& path) {
+    std::string text = export_to_protobuf_text(table_set);
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        throw std::runtime_error("Failed to open file for writing: " + path);
+    }
+    out << text;
+}
+
+KvChunkAddressTableSet import_set_from_protobuf_text(const std::string& text) {
+    ::tt::disaggregation::proto::KvChunkAddressTableSet pb;
+    if (!google::protobuf::TextFormat::ParseFromString(text, &pb)) {
+        throw std::runtime_error("Failed to parse protobuf text format as KvChunkAddressTableSet");
+    }
+    return detail::from_proto_message(pb);
+}
+
+KvChunkAddressTableSet import_set_from_protobuf_text_file(const std::string& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        throw std::runtime_error("Failed to open file for reading: " + path);
+    }
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return import_set_from_protobuf_text(text);
 }
 
 }  // namespace tt::tt_metal::experimental::disaggregation
