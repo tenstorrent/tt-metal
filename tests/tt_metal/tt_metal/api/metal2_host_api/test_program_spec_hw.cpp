@@ -847,8 +847,9 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 //      L1 shard address — verified by comparing the reported address to the bound tensor's address.
 //
 // Pipeline (compute-only producer, no DM producer needed):
-//   Compute kernel (TRISC) — constructs LocalTensorAccessor, deposits {base_address, page_size, rank,
-//       get_unsafe_ptr, &operator[]} into each out_dfb entry (raw L1 writes from PACK).
+//   Compute kernel (TRISC) — constructs LocalTensorAccessor (token ctor) and a second via the legacy
+//       base-address ctor, deposits {base_address, get_unsafe_ptr, &operator[], legacy-ctor base} into
+//       each out_dfb entry (raw L1 writes from PACK); all four should equal the bound tensor's address.
 //   DM consumer (NCRISC)   — out_dfb → DRAM output.
 //
 // The tensor is a single-shard L1 tensor on core (0,0) (the compute kernel's core), so its shard base
@@ -928,10 +929,9 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     for (uint32_t e = 0; e < num_tiles; ++e) {
         const uint32_t* entry = output_data.data() + e * words_per_entry;
         EXPECT_EQ(entry[0], expected_address) << "entry " << e << ": get_bank_base_address mismatch";
-        EXPECT_GT(entry[1], 0u) << "entry " << e << ": get_aligned_page_size should be non-zero";
-        EXPECT_GT(entry[2], 0u) << "entry " << e << ": rank should be non-zero";
-        EXPECT_EQ(entry[3], expected_address) << "entry " << e << ": get_unsafe_ptr mismatch";
-        EXPECT_EQ(entry[4], expected_address) << "entry " << e << ": &operator[] mismatch";
+        EXPECT_EQ(entry[1], expected_address) << "entry " << e << ": get_unsafe_ptr mismatch";
+        EXPECT_EQ(entry[2], expected_address) << "entry " << e << ": &operator[] mismatch";
+        EXPECT_EQ(entry[3], expected_address) << "entry " << e << ": legacy base-address ctor mismatch";
     }
 }
 

@@ -10,9 +10,9 @@
 // not define). LocalTensorAccessor carries no NOC machinery, so it compiles here.
 //
 // The accessor is constructed on all three TRISC threads (UNPACK/MATH/PACK) — the strongest compile
-// proof — and its full surface (get_bank_base_address / get_aligned_page_size / rank / get_unsafe_ptr /
-// operator[]) is exercised so every method is instantiated. The PACK thread deposits the reported
-// values into each output DFB entry; a DM consumer carries them to DRAM for host verification.
+// proof — and its full surface (get_bank_base_address / get_unsafe_ptr / operator[]) is exercised so
+// every method is instantiated. The PACK thread deposits the reported values into each output DFB
+// entry; a DM consumer carries them to DRAM for host verification.
 //
 // The host checks that the reported base address equals the bound tensor's address — proving the
 // binding token reached the compute kernel and resolved to the correct local L1 shard address. The
@@ -34,12 +34,15 @@ void kernel_main() {
     LocalTensorAccessor<uint32_t> acc(tensor::local_t);
 
     const uint32_t base_address = acc.get_bank_base_address();
-    const uint32_t page_size = acc.get_aligned_page_size();
-    const uint32_t rank = acc.rank();
     // Instantiate the element-access surface too, so it is compile-proven on TRISC. Both resolve to the
     // base address; address-of avoids an actual L1 load/store.
     const uint32_t via_unsafe_ptr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(acc.get_unsafe_ptr()));
     const uint32_t via_subscript = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&acc[0]));
+
+    // Also exercise the legacy (raw base-address) ctor: compile-proves it on TRISC and confirms it
+    // agrees with the token-built accessor.
+    LocalTensorAccessor<uint32_t> acc_legacy(base_address);
+    const uint32_t legacy_base = acc_legacy.get_bank_base_address();
 
     DataflowBuffer dfb_out(dfb::out_dfb);
 
@@ -52,12 +55,11 @@ void kernel_main() {
         {
             volatile tt_l1_ptr uint32_t* out_ptr = (volatile tt_l1_ptr uint32_t*)(dfb_out.get_write_ptr() << 4);
             out_ptr[0] = base_address;
-            out_ptr[1] = page_size;
-            out_ptr[2] = rank;
-            out_ptr[3] = via_unsafe_ptr;
-            out_ptr[4] = via_subscript;
+            out_ptr[1] = via_unsafe_ptr;
+            out_ptr[2] = via_subscript;
+            out_ptr[3] = legacy_base;
             const uint32_t words = entry_size / sizeof(uint32_t);
-            for (uint32_t w = 5; w < words; ++w) {
+            for (uint32_t w = 4; w < words; ++w) {
                 out_ptr[w] = 0;
             }
         }
