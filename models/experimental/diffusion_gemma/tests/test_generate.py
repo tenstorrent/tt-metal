@@ -207,3 +207,26 @@ def test_can_replay_fixed_initial_canvases(monkeypatch):
     assert [call[0] for call in calls] == [0, 1]
     assert torch.equal(calls[0][1], prompt)
     assert torch.equal(calls[1][1], torch.cat([prompt, out.trajectories[0].committed], dim=1))
+
+
+@pytest.mark.parametrize(
+    "bad_canvas",
+    [
+        torch.zeros(4, dtype=torch.long),
+        torch.zeros(1, 5, dtype=torch.long),
+    ],
+)
+def test_replayed_initial_canvas_shape_is_validated(bad_canvas):
+    batch, canvas_len, vocab, blocks = 1, 4, 16, 1
+    prompt = torch.zeros(batch, canvas_len, dtype=torch.long)
+    model = _PrefixDependentModel(batch, canvas_len, vocab)
+
+    with pytest.raises(ValueError, match="init_canvas_fn must return shape"):
+        generate_blocks(
+            model,
+            prompt,
+            blocks,
+            _cfg(canvas_len),
+            vocab,
+            init_canvas_fn=lambda block_idx, prefix_tokens: bad_canvas,
+        )

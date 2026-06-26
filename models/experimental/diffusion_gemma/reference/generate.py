@@ -40,6 +40,11 @@ class Generation(NamedTuple):
     trajectories: List[DenoiseTrajectory]  # one per block
 
 
+def _validate_canvas_shape(canvas: torch.Tensor, *, batch: int, canvas_len: int) -> None:
+    if canvas.shape != (batch, canvas_len):
+        raise ValueError(f"init_canvas_fn must return shape [{batch}, {canvas_len}]")
+
+
 def generate_blocks(
     model: BlockModel,
     prompt_tokens: torch.Tensor,
@@ -77,6 +82,7 @@ def generate_blocks(
             if init_canvas_fn is not None
             else S.random_canvas((batch, canvas_len), vocab_size, generator=generator)
         )
+        _validate_canvas_shape(init_canvas, batch=batch, canvas_len=canvas_len)
         frozen_prefix = prefix  # read-only during this block's denoise
 
         traj = denoise_block(
