@@ -58,6 +58,7 @@ def denoise_attention_forward(
     prompt_kv=None,
     canvas_hidden,
     attn_mask=None,
+    q_rope_offset: int | None = None,
 ):
     """Run one DiffusionGemma denoise attention layer on canvas hidden states.
 
@@ -78,17 +79,18 @@ def denoise_attention_forward(
         raise ValueError("pass exactly one of prompt_hidden or prompt_kv")
     prompt_len = prompt_kv[0].shape[-2] if prompt_kv is not None else prompt_hidden.shape[-2]
     canvas_len = canvas_hidden.shape[-2]
+    q_rope_offset = prompt_len if q_rope_offset is None else q_rope_offset
     kv_hidden = None if prompt_kv is not None else ttnn.concat([prompt_hidden, canvas_hidden], dim=2)
     out = tt_model.layers[layer_idx].self_attn(
         canvas_hidden,
-        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=prompt_len + canvas_len),
+        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=q_rope_offset + canvas_len),
         is_decode=False,
         is_causal=False,
         kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
         prefix_kv=prompt_kv,
-        q_rope_offset=prompt_len,
+        q_rope_offset=q_rope_offset,
     )
     if kv_hidden is not None:
         kv_hidden.deallocate(True)
@@ -99,7 +101,7 @@ def _prompt_source_len(prompt_source):
     return prompt_source[0].shape[-2] if isinstance(prompt_source, (tuple, list)) else prompt_source.shape[-2]
 
 
-def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, prompt_len):
+def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, prompt_len, q_rope_offset):
     layer = tt_model.layers[layer_idx]
     residual = hidden_states
     normed = layer.input_layernorm.forward(hidden_states)
@@ -107,14 +109,14 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, at
     kv_hidden = None if prefix_kv is not None else ttnn.concat([prompt_source, normed], dim=2)
     attn_output = layer.self_attn(
         normed,
-        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=prompt_len + hidden_states.shape[-2]),
+        rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=q_rope_offset + hidden_states.shape[-2]),
         is_decode=False,
         is_causal=False,
         kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
         prefix_kv=prefix_kv,
-        q_rope_offset=prompt_len,
+        q_rope_offset=q_rope_offset,
     )
     normed.deallocate(True)
     if kv_hidden is not None:
@@ -160,6 +162,7 @@ def denoise_hidden_forward(
     *,
     prompt_hidden_by_layer,
     canvas_hidden,
+    q_rope_offset: int | None = None,
 ):
     """Run the short-prompt DiffusionGemma denoise backbone to final hidden states.
 
@@ -174,6 +177,7 @@ def denoise_hidden_forward(
 
     hidden_states = canvas_hidden
     prompt_len = _prompt_source_len(prompt_hidden_by_layer[0])
+    q_rope_offset = prompt_len if q_rope_offset is None else q_rope_offset
     attn_mask = None
     for layer_idx in range(len(tt_model.layers)):
         hidden_states = _denoise_layer_forward(
@@ -183,6 +187,7 @@ def denoise_hidden_forward(
             prompt_hidden_by_layer[layer_idx],
             attn_mask,
             prompt_len,
+            q_rope_offset,
         )
     return tt_model.norm.forward(hidden_states)
 
@@ -192,6 +197,7 @@ def denoise_logits_forward(
     *,
     prompt_hidden_by_layer,
     canvas_hidden,
+    q_rope_offset: int | None = None,
 ):
     """Run a short-prompt DiffusionGemma denoise logits forward.
 
@@ -202,6 +208,7 @@ def denoise_logits_forward(
         tt_model,
         prompt_hidden_by_layer=prompt_hidden_by_layer,
         canvas_hidden=canvas_hidden,
+        q_rope_offset=q_rope_offset,
     )
     return tt_model._apply_lm_head(hidden_states, is_decode=False)
 
@@ -310,6 +317,7 @@ def denoise_logits_from_tokens(
     canvas_tokens,
     self_conditioning=None,
     prev_logits=None,
+    q_rope_offset: int | None = None,
     self_conditioning_embedding_weight=None,
     self_conditioning_compute_kernel_config=None,
 ):
@@ -328,6 +336,7 @@ def denoise_logits_from_tokens(
         tt_model,
         prompt_hidden_by_layer=prompt_hidden_by_layer,
         canvas_hidden=canvas_hidden,
+        q_rope_offset=q_rope_offset,
     )
 
 
@@ -347,6 +356,7 @@ class DenoiseLogitsAdapter:
         self_conditioning=None,
         self_conditioning_embedding_weight=None,
         self_conditioning_compute_kernel_config=None,
+        q_rope_offset: int | None = None,
         logits_from_tokens=denoise_logits_from_tokens,
     ):
         self.tt_model = tt_model
@@ -354,6 +364,7 @@ class DenoiseLogitsAdapter:
         self.self_conditioning = self_conditioning
         self.self_conditioning_embedding_weight = self_conditioning_embedding_weight
         self.self_conditioning_compute_kernel_config = self_conditioning_compute_kernel_config
+        self.q_rope_offset = q_rope_offset
         self.logits_from_tokens = logits_from_tokens
         self.prev_logits = None
 
@@ -365,6 +376,7 @@ class DenoiseLogitsAdapter:
             canvas_tokens=canvas_tokens,
             self_conditioning=self.self_conditioning,
             prev_logits=old_prev_logits,
+            q_rope_offset=self.q_rope_offset,
             self_conditioning_embedding_weight=self.self_conditioning_embedding_weight,
             self_conditioning_compute_kernel_config=self.self_conditioning_compute_kernel_config,
         )
