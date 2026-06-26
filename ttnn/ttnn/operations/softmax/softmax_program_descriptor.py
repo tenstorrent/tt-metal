@@ -398,7 +398,7 @@ def create_program_descriptor(
         compute_source = str(KERNEL_DIR / "softmax_compute_v2.cpp")
         # CT args: Ht, Wt, dim, is_rm, origin_W, origin_H, BLOCK_SIZE
         reader_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag, origin_W, origin_H, block_size]
-        writer_ct_args = [Ht, Wt, is_rm_flag, origin_W, origin_H]
+        writer_ct_args = [Ht, Wt, is_rm_flag, origin_W, origin_H, dim & 0xFFFFFFFF, block_size]
         compute_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag, origin_W, origin_H, block_size]
 
     # --- Reader kernel ---
