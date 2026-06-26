@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE, TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
@@ -61,9 +61,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
 # First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
 # trace stores its post-attention RMSNorm output, i.e. the MoE block input.
 _MOE_LAYER_IDX = 3
-
-# L1_SMALL region reserved global semaphore allocation.
-MOE_L1_SMALL_REGION_SIZE = 2048
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
@@ -710,7 +707,6 @@ def test_ds_moe(
     request,
     padded_percent,
 ):
-    num_links = 1  # Only temporarily here for debugging purpose (See #47650)
     run_model(
         variant,
         config_only,
@@ -756,6 +752,7 @@ def test_ds_moe(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -769,6 +766,7 @@ def test_ds_moe(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -808,7 +806,6 @@ def test_kimi_moe(
     gate_fallback_mode,
     request,
 ):
-    num_links = 1  # Only temporarily here for debugging purpose (See #47650)
     run_model(
         variant,
         config_only,

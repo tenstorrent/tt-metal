@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
@@ -79,7 +80,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
     [
         pytest.param(
             (1, 1),
-            {},
+            {"l1_small_size": MOE_L1_SMALL_REGION_SIZE},
             1,
             ttnn.Topology.Linear,
             id="mesh-1x1",
@@ -89,6 +90,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             1,
             ttnn.Topology.Linear,
@@ -100,6 +102,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,  # num_links = 2
             ttnn.Topology.Linear,
@@ -111,6 +114,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
