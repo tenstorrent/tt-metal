@@ -271,6 +271,21 @@ public:
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
 
+    // Optional realtime-profiler clock anchor: host_anchor (TSC), device_anchor (device
+    // cycle at host_anchor on the shared wall clock), frequency (GHz). Set by
+    // RealtimeProfilerManager and kept in lockstep with the rt-profiler's OWN Tracy
+    // context calibration (its AddDevice/CalibrateDevice points), so the rt records and
+    // these worker zones render against the same anchor. When present, updateTracyContext
+    // anchors the worker Tracy context to this line (keeping device_time = smallest worker
+    // marker, but deriving cpu_time from the line) instead of the read-time fallback.
+    // Valid only because worker and rt/dispatch cores share one device wall clock.
+    struct RealtimeSyncLine {
+        double host_anchor = 0.0;
+        double device_anchor = 0.0;
+        double frequency = 0.0;
+    };
+    std::optional<RealtimeSyncLine> realtime_sync_line;
+
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
