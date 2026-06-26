@@ -1538,16 +1538,22 @@ def test_make_host_canvas_init_fn_replays_fixed_canvases(monkeypatch):
     calls = []
 
     def fake_host_canvas_to_device(mesh_device, canvas):
+        first_token = int(canvas[0, 0])
         calls.append((mesh_device, canvas.clone()))
-        return f"device-{int(canvas[0, 0])}"
+        canvas[0, 0] = 99
+        return f"device-{first_token}"
 
     monkeypatch.setattr(G, "host_canvas_to_device", fake_host_canvas_to_device)
-    init_fn = make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]]), torch.tensor([[6, 7]])])
+    canvases = [torch.tensor([[4, 5]]), torch.tensor([[6, 7]])]
+    init_fn = make_host_canvas_init_fn("mesh", canvases)
+    canvases[0][0, 0] = 88
 
     assert init_fn(0, 32) == "device-4"
     assert init_fn(1, 34) == "device-6"
+    assert init_fn(0, 36) == "device-4"
     assert torch.equal(calls[0][1], torch.tensor([[4, 5]]))
     assert torch.equal(calls[1][1], torch.tensor([[6, 7]]))
+    assert torch.equal(calls[2][1], torch.tensor([[4, 5]]))
 
 
 def test_make_seeded_host_canvas_init_fn_generates_reproducible_tokens(monkeypatch):

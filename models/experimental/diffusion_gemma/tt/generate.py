@@ -193,11 +193,11 @@ def _validate_logits_fn_args(logits_fn, logits_fn_builder) -> None:
 
 def make_host_canvas_init_fn(mesh_device, host_canvases):
     """Create a ``generate_blocks`` init hook from fixed host canvas tensors."""
-    canvases = list(host_canvases)
+    canvases = [canvas.clone() for canvas in host_canvases]
 
     def init_canvas_fn(block_idx: int, start_pos: int):
         del start_pos
-        return host_canvas_to_device(mesh_device, canvases[block_idx])
+        return host_canvas_to_device(mesh_device, canvases[block_idx].clone())
 
     return init_canvas_fn
 
