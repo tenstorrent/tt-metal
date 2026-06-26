@@ -24,26 +24,6 @@
   save-perf-data: true
   model-type: SD3.5
 
-# TEMPORARILY DISABLED - see https://github.com/tenstorrent/tt-metal/issues/47355
-# The 4x8 Flux.1 pipeline perf test (test_flux1_pipeline_performance_determinism, which runs
-# the full pipeline 3x in a loop) hangs the device mid-pipeline in an uninterruptible driver
-# call (pytest --timeout does not fire). The hung process is SIGKILLed by the CI action timeout,
-# leaking TLB windows that `tt-smi reset` reports as successfully reset but does not actually
-# reclaim. This bricks the runner so that all subsequent jobs fail with "Failed to allocate TLB
-# window (tt_tlb_alloc -12)". Same mechanism as the previously-disabled Qwen-Image perf test.
-# Re-enable once the hang is fixed / the runner reset reliably reclaims TLB windows.
-# - name: Galaxy DiT Flux.1 model perf tests
-#   cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "wh_4x8sp0tp1" --timeout=500
-#   model: flux1-dev
-#   skus:
-#     wh_galaxy_perf:
-#       timeout: 15
-#   owner_id: U08TED0JM9D # Samuel Adesoye
-#   team: models
-#   arch: wormhole_b0
-#   save-perf-data: true
-#   model-type: Flux.1-Dev
-
 - name: Galaxy DiT Motif model perf tests
   cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_performance_motif.py -k "4x8cfg1sp0tp1" --timeout=1000
   model: motif
