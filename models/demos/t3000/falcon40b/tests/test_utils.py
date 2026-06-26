@@ -93,6 +93,7 @@ def _native_falcon_state_dict(model_version, num_hidden_layers):
     return state_dict
 
 
+@lru_cache(maxsize=1)
 def load_falcon_reference_model(model_version, num_hidden_layers=None):
     """Load the vendored Falcon CPU reference with weights correctly populated, as float32.
 
@@ -104,6 +105,10 @@ def load_falcon_reference_model(model_version, num_hidden_layers=None):
     ``tie_weights`` restores ``lm_head`` if the checkpoint ties it to the input embeddings; it is
     a no-op for the (untied) falcon-40b checkpoint. The final ``.to(torch.float32)`` matches the
     float32 test inputs (avoids "mixed dtype (CPU)" LayerNorm errors).
+
+    Cached (the reference is used read-only): constructing the model re-initialises the large
+    embedding/lm_head tensors, so rebuilding it for every parametrization made the decoder sweep
+    exceed its step timeout. Building once and reusing it keeps the sweep within budget.
     """
     ci = os.getenv("CI") == "true"
     config_kwargs = {"local_files_only": ci}
