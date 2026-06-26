@@ -43,6 +43,13 @@ struct operation_attributes_t {
     // (M3 block selection). Compile-time (block_tiles = block_size/TILE_WIDTH; bs==0 byte-identical). >0 needs
     // bs % TILE_WIDTH == 0, T % bs == 0, k_chunk_size % bs == 0, and blocks-per-unit <= TILE_HEIGHT.
     uint32_t block_size{0};
+    // MSA has no learned gates, only a constant 1/sqrt(d) scale: when true the reader fills cb_w with
+    // gate_scale in L1 (no weights tensor, no extra fill op) instead of reading DRAM. The weights handle in
+    // tensor_args is then an unused placeholder (the caller passes q). Compile-time + hashed (changes the
+    // reader binary); gate_scale is hashed too so distinct scales get distinct programs. DSA: false (reads
+    // its learned weights), byte-identical to before.
+    bool synthesize_gate{false};
+    float gate_scale{1.0f};
     IndexerScoreProgramConfig program_config{};
     // Resolved (not optional) so it is part of the program-cache key; the callable fills it from the user's
     // optional config, defaulting math_fidelity to the dtype-derived choice.

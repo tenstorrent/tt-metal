@@ -11,24 +11,28 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
-#include "kernels/indexer_score_work_split.hpp"    // banded grid mapping (rows_for_groups / cols_for_bands)
-#include "ttnn/operations/ccl/ccl_common.hpp"      // get_linearized_index_from_physical_coord
-#include "ttnn/operations/creation/creation.hpp"  // ttnn::full for the synthesized constant gate
+#include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (rows_for_groups / cols_for_bands)
+#include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
 
 namespace ttnn::operations::experimental::indexer_score {
 
 namespace {
-// Largest per-device chunk_start = base + max_rank*Sq (max_rank = largest linearized index along
-// cluster_axis, 0 on a single device). Used by the worst-case window check.
-uint32_t max_chunk_start(const operation_attributes_t& attrs, const Tensor& q, uint32_t Sq) {
+// Largest linearized index of q's devices along cluster_axis (0 on a single device). Single source for the
+// worst-case window check (max_chunk_start) and the host-side chunk_start deduction, so a future change to
+// the coord/linearization semantics can't desync the deduced base from the validated window.
+uint32_t max_linearized_rank(const Tensor& q, std::optional<uint32_t> cluster_axis) {
     uint32_t max_rank = 0;
     if (q.device_storage().get_coords().size() > 1) {
         for (const auto& coord : q.device_storage().get_coords()) {
-            max_rank =
-                std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, attrs.cluster_axis));
+            max_rank = std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, cluster_axis));
         }
     }
-    return attrs.chunk_start_idx + max_rank * Sq;
+    return max_rank;
+}
+
+// Largest per-device chunk_start = base + max_rank*Sq. Used by the worst-case window check.
+uint32_t max_chunk_start(const operation_attributes_t& attrs, const Tensor& q, uint32_t Sq) {
+    return attrs.chunk_start_idx + max_linearized_rank(q, attrs.cluster_axis) * Sq;
 }
 
 // Miss-only checks: hash-pinned (placement, non-indexed k batch shape) so they can't differ on a hit. The
@@ -136,6 +140,8 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.apply_relu,
         attrs.num_groups,
         attrs.block_size,
+        attrs.synthesize_gate,  // gate read from DRAM vs filled in-kernel -> different reader binary
+        attrs.gate_scale,       // the in-kernel fill value; distinct scales get distinct programs
         attrs.program_config,
         attrs.compute_kernel_config,
         attrs.cluster_axis.has_value(),
@@ -182,19 +188,24 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_values(attrs, tensor_args);
 
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
-    TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4 && w_shape.rank() == 4, "q, k, weights must be rank 4");
+    TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4, "q, k must be rank 4");
     TT_FATAL(k_shape[1] == 1, "k must be single-head [B, 1, T, D], got {} heads", k_shape[1]);
     TT_FATAL(q_shape[3] == k_shape[3], "q head dim {} != k head dim {}", q_shape[3], k_shape[3]);
-    TT_FATAL(
-        w_shape[1] == q_shape[1] && w_shape[2] == q_shape[2] && w_shape[3] == 1,
-        "weights must be [B, Hi, Sq, 1] matching q [B, Hi, Sq, D]");
-    // q/weights are always batch 1; k's batch is the cache-slot count B, so it is NOT tied to q here.
-    TT_FATAL(q_shape[0] == w_shape[0], "q/weights batch mismatch ({} vs {})", q_shape[0], w_shape[0]);
-    TT_FATAL(q_shape[0] == 1, "q/weights batch 1 only, got {}", q_shape[0]);
+    TT_FATAL(q_shape[0] == 1, "q batch 1 only, got {}", q_shape[0]);
+    // The learned-gate weights are validated only when present; MSA synthesizes a constant gate in-kernel
+    // (the weights handle is an unused q placeholder), so its shape/dtype carry no meaning.
+    if (!attrs.synthesize_gate) {
+        TT_FATAL(w_shape.rank() == 4, "weights must be rank 4");
+        TT_FATAL(
+            w_shape[1] == q_shape[1] && w_shape[2] == q_shape[2] && w_shape[3] == 1,
+            "weights must be [B, Hi, Sq, 1] matching q [B, Hi, Sq, D]");
+        TT_FATAL(q_shape[0] == w_shape[0], "q/weights batch mismatch ({} vs {})", q_shape[0], w_shape[0]);
+        TT_FATAL(w.dtype() == DataType::BFLOAT16, "weights must be bfloat16 (got {})", w.dtype());
+        TT_FATAL(w.layout() == Layout::TILE, "weights must be TILE layout");
+    }
 
     // q/k are matmul inputs (never packed), so each may be bfp8_b (halves BW); both bfp8 -> LoFi, any bf16
-    // -> HiFi2. weights are bf16.
-    TT_FATAL(w.dtype() == DataType::BFLOAT16, "weights must be bfloat16 (got {})", w.dtype());
+    // -> HiFi2.
     TT_FATAL(
         q.dtype() == DataType::BFLOAT16 || q.dtype() == DataType::BFLOAT8_B,
         "q must be bfloat16 or bfloat8_b (got {})",
@@ -203,9 +214,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         k.dtype() == DataType::BFLOAT16 || k.dtype() == DataType::BFLOAT8_B,
         "k must be bfloat16 or bfloat8_b (got {})",
         k.dtype());
-    TT_FATAL(
-        q.layout() == Layout::TILE && k.layout() == Layout::TILE && w.layout() == Layout::TILE,
-        "q, k, weights must be TILE layout");
+    TT_FATAL(q.layout() == Layout::TILE && k.layout() == Layout::TILE, "q, k must be TILE layout");
 
     // Tile alignment and the causal chunk window.
     const uint32_t Hi = q_shape[1];
@@ -379,6 +388,8 @@ IndexerScoreDeviceOperation::invoke(
     bool apply_relu,
     uint32_t num_groups,
     uint32_t block_size,
+    bool synthesize_gate,
+    float gate_scale,
     const IndexerScoreProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
@@ -391,6 +402,8 @@ IndexerScoreDeviceOperation::invoke(
             .apply_relu = apply_relu,
             .num_groups = num_groups,
             .block_size = block_size,
+            .synthesize_gate = synthesize_gate,
+            .gate_scale = gate_scale,
             .program_config = program_config,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
@@ -414,6 +427,8 @@ ttnn::Tensor launch_indexer_score(
     bool apply_relu,
     uint32_t num_groups,
     uint32_t block_size,
+    bool synthesize_gate,
+    float gate_scale,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
@@ -431,12 +446,9 @@ ttnn::Tensor launch_indexer_score(
         const uint32_t Sq = q.logical_shape()[2];
         const uint32_t T = k.logical_shape()[2];
         // sp_ring = max_rank + 1 (get_linearized_index returns coord-min; get_topological_dimension would
-        // over-count on a nonzero-offset sub-mesh).
-        uint32_t max_rank = 0;
-        for (const auto& coord : q.device_storage().get_coords()) {  // single device -> max_rank 0
-            max_rank = std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, cluster_axis));
-        }
-        const uint32_t sp_ring = max_rank + 1;
+        // over-count on a nonzero-offset sub-mesh). max_linearized_rank is shared with the validated window.
+        const uint32_t sp_ring =
+            ttnn::operations::experimental::indexer_score::max_linearized_rank(q, cluster_axis) + 1;
         TT_FATAL(
             T >= sp_ring * Sq,
             "indexer_score: cannot deduce chunk_start_idx -- T={} < sp_ring({})*Sq({}). Pass chunk_start_idx "
@@ -465,6 +477,8 @@ ttnn::Tensor launch_indexer_score(
         apply_relu,
         num_groups,
         block_size,
+        synthesize_gate,
+        gate_scale,
         program_config,
         resolved,
         cache_batch_idx,
@@ -485,7 +499,7 @@ ttnn::Tensor indexer_score_dsa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
     std::optional<uint32_t> cluster_axis) {
-    // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling.
+    // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
         k,
@@ -494,6 +508,8 @@ ttnn::Tensor indexer_score_dsa(
         /*apply_relu=*/true,
         /*num_groups=*/1,
         /*block_size=*/0,
+        /*synthesize_gate=*/false,
+        /*gate_scale=*/1.0f,
         program_config,
         compute_kernel_config,
         cache_batch_idx,
@@ -504,27 +520,27 @@ ttnn::Tensor indexer_score_dsa(
 ttnn::Tensor indexer_score_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
+    uint32_t num_groups,
     std::optional<uint32_t> chunk_start_idx,
     float scale,
-    uint32_t num_groups,
     uint32_t block_size,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cluster_axis) {
-    // M3 has no learned gates, only a 1/sqrt(d) scale: synthesize a constant gate (= scale) of shape
-    // [B,Hi,Sq,1] so the kernel's gate-multiply path is reused unchanged. The local lives until launch()
-    // returns (where its buffer is read). MSA fixes apply_relu=false; num_groups/block_size are selection knobs.
-    const auto& qs = q.logical_shape();
-    const ttnn::Tensor w =
-        ttnn::full(ttnn::Shape({qs[0], qs[1], qs[2], 1}), scale, DataType::BFLOAT16, Layout::TILE, *q.device());
+    // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
+    // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
+    // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
+    // on-device tensor. MSA fixes apply_relu=false; num_groups/block_size are selection knobs.
     return launch_indexer_score(
         q,
         k,
-        w,
+        /*weights=*/q,
         chunk_start_idx,
         /*apply_relu=*/false,
         num_groups,
         block_size,
+        /*synthesize_gate=*/true,
+        /*gate_scale=*/scale,
         program_config,
         compute_kernel_config,
         /*cache_batch_idx=*/std::nullopt,

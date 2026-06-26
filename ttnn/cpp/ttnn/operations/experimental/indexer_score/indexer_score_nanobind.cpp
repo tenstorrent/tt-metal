@@ -99,8 +99,8 @@ void bind_indexer_score(nb::module_& mod) {
                 OMIT on a mesh -> deduced as T - sp_ring*Sq; single device: set to
                 history + rank*Sq per rank (same semantics as indexer_score_dsa).
             scale: constant gate applied to every head (e.g. 1/sqrt(d))
-            num_groups: 1 sums all Hi heads into one plane (the TP=4 group-aligned
-                deployment, Hi=1/device). G>1 partitions the heads into G groups
+            num_groups: REQUIRED (no default). 1 sums all Hi heads into one plane
+                (the TP=4 group-aligned deployment, Hi=1/device). G>1 partitions the heads into G groups
                 of Hi/G and sums within each group -> output [B, G, Sq, T] (multiple
                 GQA groups on one chip). G>1 needs all heads resident
                 (head_group_size 0 or Hi) and k_chunk_size >= 64.
@@ -126,9 +126,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("q"),
         nb::arg("k"),
         nb::kw_only(),
+        nb::arg("num_groups"),  // required: per-GQA-group selection is MSA's purpose, no implicit default
         nb::arg("chunk_start_idx") = std::nullopt,
         nb::arg("scale") = 1.0f,
-        nb::arg("num_groups") = 1,
         nb::arg("block_size") = 0,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = std::nullopt,

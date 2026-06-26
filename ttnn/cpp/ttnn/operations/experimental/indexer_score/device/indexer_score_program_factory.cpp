@@ -257,8 +257,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
     // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
-    // hoisting the matmul<->eltwise reinit out of the per-head loop. QC==1 batches the whole group; QC>1 caps at 32.
-    const uint32_t qk_batch_cap = (QC == 1) ? subblock_basis : 32u;
+    // hoisting the matmul<->eltwise reinit out of the per-head loop. QC==1 batches the whole group; QC>1 caps
+    // at one tile-row of heads (TILE_HEIGHT).
+    const uint32_t qk_batch_cap = (QC == 1) ? subblock_basis : tt::constants::TILE_HEIGHT;
     const uint32_t qk_batch_heads = std::min<uint32_t>(subblock_basis, qk_batch_cap);  // multiple of qk_subblock_h
     // Per-plane head count must be a whole multiple of qk_batch_heads or the last chunk over-reads (only
     // reachable when the 32-cap engages; deployed cases never hit it).
@@ -301,10 +302,16 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
+    // MSA synthesizes the constant gate in-kernel (no weights tensor / no fill op): the reader fills cb_w
+    // with `gate_scale` instead of reading DRAM, and the weights accessor below is the unused q placeholder.
+    // Pack the scale into a bf16 pair (two values per word) for the reader's word-wise fill.
+    const uint16_t gate_scale_bf16 = static_cast<uint16_t>(__builtin_bit_cast(uint32_t, args.gate_scale) >> 16);
+    const uint32_t gate_scale_bits = (static_cast<uint32_t>(gate_scale_bf16) << 16) | gate_scale_bf16;
+
     std::vector<uint32_t> reader_ct = common_ct;
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
+    tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);  // q placeholder when synthesize_gate
     // multicast: on/off per direction (q_mcast_on covers q and w) then the 6 semaphore ids.
     reader_ct.push_back(k_mcast_on);
     reader_ct.push_back(q_mcast_on);
@@ -317,6 +324,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // Fused single-head: reader reads q+w FIRST (the matmul gate needs them), then streams k (when no mcast).
     reader_ct.push_back(fuse_single ? 1u : 0u);
     reader_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: stream k (no mcast) vs whole mcast block
+    reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
+    reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
 
     std::vector<uint32_t> writer_ct = common_ct;
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today

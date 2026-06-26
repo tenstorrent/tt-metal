@@ -48,26 +48,40 @@ GLX_CASES = [("glm5", 8), ("dsv32", 16)]
 GLX_IDS = [c[0] for c in GLX_CASES]
 
 
-def indexer_score_ref(q, k, w, chunk_start, apply_relu=True):
-    """Per-head fp32 accumulation (a full [Hi,Sq,T] tensor is many GB at GLX sizes).
-
-    apply_relu=True  -> sum_h relu(q.kT) * w   (DeepSeek-V3.2 / GLM-5 lightning indexer)
-    apply_relu=False -> sum_h (q.kT)    * w    (MiniMax M3 MSA: raw dot, scale folded into w)
+def indexer_score_dsa_ref(q, k, w, chunk_start):
+    """DeepSeek-V3.2 / GLM-5 DSA reference: sum_h relu(q.kT) * w over ALL Hi heads into one plane
+    -> [b, 1, sq, t]. Per-head fp32 accumulation (a full [Hi,Sq,T] tensor is many GB at GLX sizes).
     """
     b, hi, sq, _ = q.shape
     t = k.shape[2]
     q, k, w = q.float(), k.float(), w.float()
     score = torch.zeros(b, sq, t)
     for h in range(hi):
-        qk = q[:, h] @ k[:, 0].transpose(-2, -1)
-        score += (torch.relu(qk) if apply_relu else qk) * w[:, h]
+        score += torch.relu(q[:, h] @ k[:, 0].transpose(-2, -1)) * w[:, h]
     future = torch.arange(t).unsqueeze(0) > chunk_start + torch.arange(sq).unsqueeze(1)
     return score.masked_fill(future, float("-inf")).unsqueeze(1)
 
 
-def indexer_score_grouped_ref(q, k, w, chunk_start, num_groups, apply_relu=True):
-    """Per-GQA-group reference: partition the Hi heads into num_groups contiguous groups of Hi/num_groups
-    and sum act(q.kT)*w WITHIN each group only -> [b, num_groups, sq, t]. num_groups==1 == indexer_score_ref.
+def msa_block_max_pool(scores, block_size, chunk_start):
+    """MSA block-max-pool + forced-local (the M3 selection step, MSA-only): max over each block_size-key
+    block of the causal-masked scores [b,g,sq,t] -> [b,g,sq,t//block_size]. A fully-future block is -inf.
+    Then forced-local (sparse_local_block=1): each query's own block (= (chunk_start + s) // block_size) is
+    set to +inf. Used both inside indexer_score_msa_ref (block_size>0) and to pool the op's own unpooled
+    output in the exact-vs-unpooled cross-checks."""
+    b, g, sq, t = scores.shape
+    nb = t // block_size
+    pooled = scores.reshape(b, g, sq, nb, block_size).amax(dim=-1)
+    local = (chunk_start + torch.arange(sq)) // block_size  # each query's own block column [sq]
+    pooled[:, :, torch.arange(sq), local] = float("inf")
+    return pooled
+
+
+def indexer_score_msa_ref(q, k, w, chunk_start, num_groups=1, block_size=0):
+    """MiniMax-M3 MSA reference (mirrors the indexer_score_msa op): raw dot (NO relu), gated by w (the
+    constant 1/sqrt(d) scale), partitioned into num_groups contiguous GQA groups of Hi/num_groups and summed
+    WITHIN each group only -> [b, num_groups, sq, t]. num_groups==1 sums all heads into one plane.
+
+    block_size>0 block-max-pools the planes into the M3 block selection -> [b, num_groups, sq, t//block_size].
     """
     b, hi, sq, _ = q.shape
     t = k.shape[2]
@@ -78,10 +92,10 @@ def indexer_score_grouped_ref(q, k, w, chunk_start, num_groups, apply_relu=True)
     for g in range(num_groups):
         score = torch.zeros(b, sq, t)
         for h in range(g * hog, (g + 1) * hog):
-            qk = q[:, h] @ k[:, 0].transpose(-2, -1)
-            score += (torch.relu(qk) if apply_relu else qk) * w[:, h]
+            score += (q[:, h] @ k[:, 0].transpose(-2, -1)) * w[:, h]
         planes.append(score.masked_fill(future, float("-inf")))
-    return torch.stack(planes, dim=1)  # [b, num_groups, sq, t]
+    scores = torch.stack(planes, dim=1)  # [b, num_groups, sq, t]
+    return msa_block_max_pool(scores, block_size, chunk_start) if block_size else scores
 
 
 def make_inputs(heads, dim, sq, t, seed=42):
@@ -187,18 +201,6 @@ def assert_grouped_match(out, ref, num_groups, sq, t):
     assert pcc >= 0.999, f"PCC {pcc} < 0.999"
 
 
-def block_max_pool_ref(scores, block_size, chunk_start):
-    """Reference block-max-pool: max over each block_size-key block of the causal-masked scores
-    [b,g,sq,t] -> [b,g,sq,t//block_size]. A fully-future block is -inf. Then forced-local (M3
-    sparse_local_block=1): each query's own block (= (chunk_start + s) // block_size) is set to +inf."""
-    b, g, sq, t = scores.shape
-    nb = t // block_size
-    pooled = scores.reshape(b, g, sq, nb, block_size).amax(dim=-1)
-    local = (chunk_start + torch.arange(sq)) // block_size  # each query's own block column [sq]
-    pooled[:, :, torch.arange(sq), local] = float("inf")
-    return pooled
-
-
 def assert_pooled_match(out, ref, num_groups, sq, nblocks, pcc_floor=0.999):
     """Pooled [1,G,Sq,nblocks] check: exact -inf map + exact +inf (forced-local) map + PCC on the rest.
     block-max amplifies the bf16 per-token error, so the PCC floor is relaxed for the large-T shape."""
@@ -240,7 +242,7 @@ def test_indexer_score_accuracy(device, sp_rank, q_dtype, case_id, heads):
     out = run_dsa(
         q, k, w, chunk_start, device, program_config=glx_config(heads), q_dtype=q_dtype, k_dtype=ttnn.bfloat8_b
     )
-    ref = indexer_score_ref(q, k, w, chunk_start)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T, check_neg=True)
 
 
@@ -256,7 +258,7 @@ def _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, hea
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
     q, k, w = make_inputs(heads, dim, sq, t)
     out = run_dsa(q, k, w, chunk_start, device, program_config=cfg)
-    ref = indexer_score_ref(q, k, w, chunk_start)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
@@ -341,7 +343,7 @@ def _indexed_inputs(num_slots, seed=11):
 def _check_slot(out, q, k_cache, w, b):
     """Compare a slot's device output against the reference computed on that [1,1,T,D] slice."""
     c = IDX_CACHE
-    ref = indexer_score_ref(q, k_cache[b : b + 1], w, c["chunk_start"])
+    ref = indexer_score_dsa_ref(q, k_cache[b : b + 1], w, c["chunk_start"])
     assert_indexer_match(out, ref, c["sq"], c["t"], check_neg=True)
 
 
@@ -468,7 +470,7 @@ def test_indexer_score_nd_sharded_k_multi_T(device):
         out = ttnn.to_torch(
             ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
         )
-        assert_indexer_match(out, indexer_score_ref(q, k, w, chunk_start), sq, t, check_neg=True)
+        assert_indexer_match(out, indexer_score_dsa_ref(q, k, w, chunk_start), sq, t, check_neg=True)
     assert device.num_program_cache_entries() == 2, "two distinct T must build two programs (T is hashed)"
 
 
@@ -494,7 +496,7 @@ def _check_kv_len(out, q, k, w, kv_len):
     of the [1,1,Sq,T] output is the stale tail and is sliced off)."""
     c = KV_LEN
     assert out.shape == (1, 1, c["sq"], c["t"])
-    ref = indexer_score_ref(q, k[:, :, :kv_len, :], w, c["chunk_start"])  # [1,1,Sq,kv_len]
+    ref = indexer_score_dsa_ref(q, k[:, :, :kv_len, :], w, c["chunk_start"])  # [1,1,Sq,kv_len]
     assert_indexer_match(out[:, :, :, :kv_len], ref, c["sq"], kv_len, check_neg=True)
 
 
@@ -609,7 +611,7 @@ def test_indexer_score_msa_compute_paths(device, q_chunk, k_chunk, head_group):
     q, k, _ = make_inputs(heads, dim, sq, t)
     out = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg)
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # MSA's constant gate = scale
-    ref = indexer_score_ref(q, k, w_scale, chunk_start, apply_relu=False)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start)
     assert_indexer_match(out, ref, sq, t)
 
 
@@ -642,7 +644,7 @@ def test_indexer_score_m3_per_group(device, k_dtype, q_dtype, sp_rank):
     q, k, _ = make_inputs(heads, dim, sq, t)
     out = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg, q_dtype=q_dtype, k_dtype=k_dtype)
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = indexer_score_ref(q, k, w_scale, chunk_start, apply_relu=False)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start)
     assert_indexer_match(out, ref, sq, t)
 
 
@@ -666,7 +668,7 @@ def test_indexer_score_multigroup(device, heads, num_groups):
     q, k, _ = make_inputs(heads, dim, sq, t)
     out = run_msa(q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg)
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # MSA's constant gate = scale
-    ref = indexer_score_grouped_ref(q, k, w_scale, chunk_start, num_groups, apply_relu=False)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups)
     assert_grouped_match(out, ref, num_groups, sq, t)
 
 
@@ -682,7 +684,7 @@ def test_indexer_score_multigroup_m3(device):
     q, k, _ = make_inputs(heads, dim, sq, t)
     out = run_msa(q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg)
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = indexer_score_grouped_ref(q, k, w_scale, chunk_start, num_groups, apply_relu=False)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups)
     assert_grouped_match(out, ref, num_groups, sq, t)
 
 
@@ -736,7 +738,7 @@ def test_indexer_score_compute_kernel_config(device, math_fidelity):
     ckc = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=math_fidelity)
     q, k, w = make_inputs(heads, dim, sq, t)
     out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, compute_kernel_config=ckc)
-    ref = indexer_score_ref(q, k, w, chunk_start)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
@@ -932,7 +934,7 @@ def _per_sp_ref(q_g, k_g, w_g, sp_count, history):
     refs = []
     for sp in range(sp_count):
         sl = slice(sp * QB_SQ, (sp + 1) * QB_SQ)
-        refs.append(indexer_score_ref(q_g[:, :, sl, :], k_g, w_g[:, :, sl, :], history + sp * QB_SQ))
+        refs.append(indexer_score_dsa_ref(q_g[:, :, sl, :], k_g, w_g[:, :, sl, :], history + sp * QB_SQ))
     return torch.cat(refs, dim=2)
 
 
@@ -1055,12 +1057,12 @@ M3_QB_SCALE = QB_DIM**-0.5  # 1/sqrt(d), the M3 indexer scale (folded into the c
 
 def _msa_per_sp_ref(q_g, k_g, sp_count, history):
     """MSA reference: each SP rank's raw-dot, scale-gated, head-summed score (chunk_start = history + sp*Sq),
-    concatenated along seq. No learned gates -> a constant M3_QB_SCALE gate with apply_relu=False."""
+    concatenated along seq. No learned gates -> a constant M3_QB_SCALE gate, raw dot (no relu)."""
     w = torch.full((1, q_g.shape[1], QB_SQ, 1), M3_QB_SCALE, dtype=torch.bfloat16)
     refs = []
     for sp in range(sp_count):
         sl = slice(sp * QB_SQ, (sp + 1) * QB_SQ)
-        refs.append(indexer_score_ref(q_g[:, :, sl, :], k_g, w, history + sp * QB_SQ, apply_relu=False))
+        refs.append(indexer_score_msa_ref(q_g[:, :, sl, :], k_g, w, history + sp * QB_SQ))
     return torch.cat(refs, dim=2)
 
 
@@ -1194,7 +1196,7 @@ _MATH_UTIL_CASES = [
         "test_indexer_score_msa_m3_perf_impl",
         "ttnn_indexer_score_msa_m3",
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
-        44.1,
+        43.55,
     ),
 ]
 
@@ -1258,7 +1260,7 @@ BLOCK_POOL_BS = 128  # MiniMax M3 sparse_block_size
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["k_bf16", "k_bfp8"])
 def test_indexer_score_block_pool(device, k_dtype, num_groups):
     """block_size=128 block-max-pool on a small MSA shape. Small chunk_start -> some blocks fully future
-    (-inf) and one straddles the causal boundary. Checked per group against block_max_pool_ref. 0.995 PCC
+    (-inf) and one straddles the causal boundary. Checked per group against indexer_score_msa_ref. 0.995 PCC
     floor: block-max amplifies the bf16 raw-dot error; the pool itself is pinned exact by the tests below."""
     heads, dim, sq, t = 4, GLX_DIM, 128, 2048
     chunk_start = 512  # leaves fully-future blocks for early queries + a straddling block
@@ -1277,9 +1279,7 @@ def test_indexer_score_block_pool(device, k_dtype, num_groups):
         program_config=cfg,
     )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = block_max_pool_ref(
-        indexer_score_grouped_ref(q, k, w_scale, chunk_start, num_groups, apply_relu=False), BLOCK_POOL_BS, chunk_start
-    )
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups, block_size=BLOCK_POOL_BS)
     assert_pooled_match(out, ref, num_groups, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
 
 
@@ -1305,9 +1305,7 @@ def test_indexer_score_block_pool_m3(device, k_dtype, sp_rank):
         program_config=cfg,
     )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
-    ref = block_max_pool_ref(
-        indexer_score_grouped_ref(q, k, w_scale, chunk_start, heads, apply_relu=False), BLOCK_POOL_BS, chunk_start
-    )
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, heads, block_size=BLOCK_POOL_BS)
     # 0.995 floor: block-max amplifies the bf16 raw-dot error; the exact pool logic is pinned by the -inf
     # map here and by test_indexer_score_block_pool_exact_vs_unpooled.
     assert_pooled_match(out, ref, heads, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
@@ -1324,7 +1322,7 @@ def test_indexer_score_block_pool_exact_vs_unpooled(device):
     unpooled = run_msa(q, k, chunk_start, device, num_groups=heads, program_config=cfg)
     pooled = run_msa(q, k, chunk_start, device, num_groups=heads, block_size=BLOCK_POOL_BS, program_config=cfg)
     # torch max over the op's own [1,G,Sq,T] scores, with the same forced-local (+inf) the pooled path applies.
-    ref = block_max_pool_ref(unpooled.float(), BLOCK_POOL_BS, chunk_start)
+    ref = msa_block_max_pool(unpooled.float(), BLOCK_POOL_BS, chunk_start)
     masked = ref == float("-inf")
     assert torch.equal(pooled <= torch.finfo(torch.bfloat16).min, masked)
     # bf16 max is exact selection of identical values -> the visible block maxes must match bit-for-bit
@@ -1353,7 +1351,7 @@ def test_indexer_score_block_pool_large_blocks_per_unit(device, num_groups, bloc
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk_size, head_group_size=0)
     unpooled = run_msa(q, k, chunk_start, device, num_groups=num_groups, program_config=cfg)
     pooled = run_msa(q, k, chunk_start, device, num_groups=num_groups, block_size=block_size, program_config=cfg)
-    ref = block_max_pool_ref(unpooled.float(), block_size, chunk_start)
+    ref = msa_block_max_pool(unpooled.float(), block_size, chunk_start)
     masked = ref == float("-inf")
     assert torch.equal(pooled <= torch.finfo(torch.bfloat16).min, masked)
     assert torch.equal(pooled[~masked].float(), ref[~masked])

@@ -17,6 +17,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool: calculate_and_prepare_reduce_scaler
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 
@@ -44,6 +45,9 @@ constexpr uint32_t q_valid_sem = get_compile_time_arg_val(mc_ct_base + 7);
 constexpr uint32_t fuse_single = get_compile_time_arg_val(mc_ct_base + 8);
 // Fused + no mcast: STREAM k in column sub-chunks (overlap the DRAM read). With mcast, read whole.
 constexpr uint32_t fused_stream_k = get_compile_time_arg_val(mc_ct_base + 9);
+// MSA constant gate: fill cb_w with gate_scale in L1 (no DRAM read, no mcast) instead of reading weights.
+constexpr uint32_t synthesize_gate = get_compile_time_arg_val(mc_ct_base + 10);
+constexpr uint32_t gate_scale_bits = get_compile_time_arg_val(mc_ct_base + 11);  // bf16 pair (two per word)
 
 // Receiver rectangle / sender coords for one mcast direction (physical NoC), set per core on host.
 struct McastDir {
@@ -129,19 +133,6 @@ inline void build_mask_tiles(Noc noc) {
     cb.push_back(num_mask_tiles);
 }
 
-/** Fill cb_scaler with one bf16 tile of 1.0 (the reduce-MAX scaler; never popped). */
-inline void build_scaler_tile() {
-    CircularBuffer cb(cb_scaler);
-    cb.reserve_back(1);
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
-    constexpr uint32_t total_words = bf16_tile_bytes / sizeof(uint32_t);
-    constexpr uint32_t one_bf16_pair = 0x3F803F80;  // two bf16 1.0 values per word
-    for (uint32_t i = 0; i < total_words; ++i) {
-        ptr[i] = one_bf16_pair;
-    }
-    cb.push_back(1);
-}
-
 /** Read ONE q-row (heads_per_group heads x head_dim_tiles tiles from first_head) into L1 at `ptr`;
  *  returns the advanced ptr. Shared by resident (read_q_rows) and streaming (read_q_block) paths.
  *  q page layout is [Hi][q_len_tiles][head_dim_tiles]. */
@@ -198,9 +189,27 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
     }
 }
 
-/** resident w (gates) group [q_tiles_per_unit][num_heads], role-aware (q row mcast). */
+/** MSA constant gate: fill the resident w group with gate_scale in L1 (no DRAM read, no mcast). Every core
+ *  fills its own cb_w -- the gate is the same scalar for every (head, query). Mirrors the mask/scaler fills. */
+inline void fill_w_group_const() {
+    CircularBuffer cb(cb_w);
+    cb.reserve_back(w_group_tiles);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
+    constexpr uint32_t total_words = w_group_tiles * (bf16_tile_bytes / sizeof(uint32_t));
+    for (uint32_t i = 0; i < total_words; ++i) {
+        ptr[i] = gate_scale_bits;
+    }
+    cb.push_back(w_group_tiles);
+}
+
+/** resident w (gates) group [q_tiles_per_unit][num_heads], role-aware (q row mcast). MSA fills a constant
+ *  scale in L1 instead (no weights tensor); the q placeholder accessor is then unused. */
 template <typename WAcc>
 inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const McastDir& q_dir) {
+    if constexpr (synthesize_gate) {
+        fill_w_group_const();
+        return;
+    }
     read_block_or_mcast<cb_w, q_mcast_on, q_send_sem, q_recv_sem, q_valid_sem>(
         noc, w_group_tiles, w_group_tiles * bf16_tile_bytes, q_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
@@ -301,7 +310,9 @@ void kernel_main() {
 
     build_mask_tiles(noc);
     if constexpr (block_pool) {
-        build_scaler_tile();  // 1.0 reduce-MAX scaler for the block-max-pool
+        // 1.0 reduce-MAX scaler for the block-max-pool (row-0 fill, the layout reduce_block_max_row expects).
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     }
 
     WorkUnitSpan span;

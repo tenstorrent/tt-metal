@@ -47,6 +47,8 @@ struct IndexerScoreDeviceOperation {
         bool apply_relu,
         uint32_t num_groups,
         uint32_t block_size,
+        bool synthesize_gate,
+        float gate_scale,
         const IndexerScoreProgramConfig& program_config,
         const DeviceComputeKernelConfig& compute_kernel_config,
         std::optional<uint32_t> cache_batch_idx,
@@ -85,12 +87,14 @@ ttnn::Tensor indexer_score_dsa(
 // num_groups: G output planes (no cross-group sum); G==1 = TP=4 group-aligned (Hi=1/device), G>1 needs all
 //   heads resident + k_chunk>=64. block_size: 0 = full [B,G,Sq,T]; >0 = block-max-pool -> [B,G,Sq,T/bs].
 // chunk_start_idx / cluster_axis: same SP-ring semantics as indexer_score_dsa.
+// num_groups is required (no default): per-GQA-group selection is MSA's purpose, so the caller must state
+// the group count explicitly. It is placed before the defaulted optionals so the signature stays well-formed.
 ttnn::Tensor indexer_score_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
+    uint32_t num_groups,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     float scale = 1.0f,
-    uint32_t num_groups = 1,
     uint32_t block_size = 0,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
