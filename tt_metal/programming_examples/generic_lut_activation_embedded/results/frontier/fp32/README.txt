@@ -1,6 +1,6 @@
 frontier 4-chip FP32 sweep
-generated_at=2026-06-25T12:57:48-04:00
-run_id=20260625_082403
+generated_at=canonical
+run_id=frontier_fp32
 source_branch=nkapre/tt-polynomial-fitter
 source_commit=94e95d88578d926182c69fdbff8ef8ed15f897c1
 coefficients=7666

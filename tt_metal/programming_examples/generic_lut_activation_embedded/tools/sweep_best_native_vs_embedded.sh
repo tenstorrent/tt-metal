@@ -63,13 +63,14 @@ fi
 
 stem="$(basename "${BEST_CSV%.csv}")"
 WL="$(mktemp /tmp/sweep_wl_XXXX.txt)"
+DEFAULT_RUN_DIR="$SCRIPT_DIR/../results/native_vs_embedded/${PREC_FILTER}"
 if [[ -n "$RUN_DIR" ]]; then
   [[ -z "$OUT" ]] && OUT="$RUN_DIR/logs/worker/${stem}_chip${SHARD}.txt"
   [[ -z "$CSV_OUT" ]] && CSV_OUT="$RUN_DIR/data/csv/shards/chip${SHARD}/${stem}_chip${SHARD}.csv"
   [[ -z "$DUMP_DIR" ]] && DUMP_DIR="$RUN_DIR/data/dumps"
 fi
-[[ -z "$OUT" ]] && OUT="/tmp/sweep_${stem}_${PREC_FILTER}_shard${SHARD}.txt"
-[[ -z "$CSV_OUT" ]] && CSV_OUT="/tmp/sweep_${stem}_${PREC_FILTER}_shard${SHARD}.csv"
+[[ -z "$OUT" ]] && OUT="$DEFAULT_RUN_DIR/logs/worker/${stem}_chip${SHARD}.txt"
+[[ -z "$CSV_OUT" ]] && CSV_OUT="$DEFAULT_RUN_DIR/data/csv/shards/chip${SHARD}/${stem}_chip${SHARD}.csv"
 trap 'rm -f "$WL"' EXIT
 mkdir -p "$(dirname "$OUT")" "$(dirname "$CSV_OUT")"
 if [[ -n "$DUMP_DIR" ]]; then

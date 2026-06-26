@@ -1,6 +1,6 @@
 native vs embedded 4-chip sweep
-generated_at=2026-06-25T08:07:29-04:00
-run_id=20260625_074850
+generated_at=canonical
+run_id=native_vs_embedded_bf16
 source_branch=nkapre/tt-polynomial-fitter
 source_commit=938027758be61ffcd7d5ac4722654d55dda2064a
 tiers=best,best99,best95

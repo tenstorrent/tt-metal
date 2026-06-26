@@ -40,7 +40,7 @@ done
 if [[ -n "$RUN_DIR" && -z "$OUT" ]]; then
   OUT="$RUN_DIR/data/csv/ttnn_ref_chip${SHARD}.csv"
 fi
-[[ -z "$OUT" ]] && OUT="/tmp/ttnn_ref_${PRECISION}_shard${SHARD}.csv"
+[[ -z "$OUT" ]] && OUT="$WORK_DIR/results/frontier/${PRECISION}/data/csv/ttnn_ref_chip${SHARD}.csv"
 mkdir -p "$(dirname "$OUT")"
 if [[ ! -f "$OUT" ]]; then
   echo "activation,dtype,ttnn_maxulp,ttnn_meanulp,ttnn_us,ttnn_pure,ttnn_ml,range_min,range_max,tiles,status" > "$OUT"
@@ -153,12 +153,13 @@ while IFS=, read -r act lo hi; do
   if [[ -n "$RUN_DIR" ]]; then
     dump="$RUN_DIR/data/dumps/ttnn/${PRECISION}/${act}/ttnn.npz"
     mkdir -p "$(dirname "$dump")"
-    acc_dump="/tmp/ttnn_ref_${act}_${PRECISION}_${SHARD}.csv"
+    acc_dump="$RUN_DIR/data/tmp/ttnn_ref_${act}_chip${SHARD}.csv"
   else
-    dump="/tmp/ttnn_ref_${act}_${PRECISION}_${SHARD}.csv"
+    dump="$WORK_DIR/results/frontier/${PRECISION}/data/tmp/ttnn_ref_${act}_chip${SHARD}.csv"
     acc_dump="$dump"
   fi
-  prof_dir="/tmp/ttnn_ref_prof_${act}_${PRECISION}_${SHARD}"
+  mkdir -p "$(dirname "$acc_dump")" "$(dirname "$dump")"
+  prof_dir="$WORK_DIR/results/frontier/${PRECISION}/data/tmp/profiler/ttnn_ref_${act}_chip${SHARD}"
   rm -rf "$prof_dir"; mkdir -p "$prof_dir"
   set +e
   ( source "$VENV"; TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$prof_dir" \

@@ -68,7 +68,7 @@ if [[ -n "$RUN_DIR" && -z "$OUT" ]]; then
   OUT="$RUN_DIR/data/csv/frontier_chip${SHARD}.csv"
 fi
 FILTER="${FILTER//,/ }"
-[[ -z "$OUT" ]] && OUT="/tmp/frontier_chip${SHARD}.csv"
+[[ -z "$OUT" ]] && OUT="$WORK_DIR/results/frontier/${PRECISION}/data/csv/frontier_chip${SHARD}.csv"
 [[ -z "$CACHE" ]] && CACHE="/tmp/tt-metal-cache-frontier-${SHARD}"
 [[ -x "$RUN_CSV" ]] || { echo "ERROR: run_csv.sh not found at $RUN_CSV (set TT_METAL_HOME)" >&2; exit 1; }
 [[ -d "$COEFFS" ]] || { echo "ERROR: corpus not found at $COEFFS (set TT_POLY_FIT_DIR)" >&2; exit 1; }

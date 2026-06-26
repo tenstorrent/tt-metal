@@ -24,6 +24,7 @@ import os
 import re
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 try:
     from .style import apply_tufte_style
@@ -348,7 +349,8 @@ def parse_args():
         metavar="LABEL=CSV",
         help="Optional native-vs-embedded tier CSV for summary overlays; can be repeated",
     )
-    parser.add_argument("--outdir", default="plots", help="Output plot directory")
+    default_outdir = Path(__file__).resolve().parents[2] / "results" / "frontier" / "bf16" / "plots"
+    parser.add_argument("--outdir", default=str(default_outdir), help="Output plot directory")
     return parser.parse_args()
 
 
