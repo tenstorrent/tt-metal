@@ -182,16 +182,14 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                     cb_in0.reserve_back(tile_granularity);
-                    uint32_t l1_write_offset = 0;
+                    // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
+                    // noc_traits_t specialization, so Noc::async_read rejects it at compile time.
+                    uint32_t l1_write_addr = cb_in0.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = input_tile_id_start + tiles_read + j;
-                        noc_obj.async_read(
-                            input_tensor_addrgen,
-                            cb_in0,
-                            page_size,
-                            {.page_id = tile_id},
-                            {.offset_bytes = l1_write_offset});
-                        l1_write_offset += page_size;
+                        uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
+                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                        l1_write_addr += page_size;
                     }
                     tiles_read += num_pages_to_read;
 
@@ -213,16 +211,14 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                     cb_in0.reserve_back(tile_granularity);
-                    uint32_t l1_write_offset = 0;
+                    // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
+                    // noc_traits_t specialization, so Noc::async_read rejects it at compile time.
+                    uint32_t l1_write_addr = cb_in0.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = input_tile_id_start + tiles_read + j;
-                        noc_obj.async_read(
-                            input_tensor_addrgen,
-                            cb_in0,
-                            page_size,
-                            {.page_id = tile_id},
-                            {.offset_bytes = l1_write_offset});
-                        l1_write_offset += page_size;
+                        uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
+                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                        l1_write_addr += page_size;
                     }
 
                     if (chunk_count % chunks_per_sync == 0) {
@@ -236,16 +232,12 @@ void kernel_main() {
 
                     // read the next intermediate slice out of intermediate buffer, and put it in intermediate CB
                     cb_intermediate.reserve_back(tile_granularity);
-                    l1_write_offset = 0;
+                    l1_write_addr = cb_intermediate.get_write_ptr();
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = intermediate_tile_id_start + tiles_read + j;
-                        noc_obj.async_read(
-                            intermediate_tensor_addrgen,
-                            cb_intermediate,
-                            page_size,
-                            {.page_id = tile_id},
-                            {.offset_bytes = l1_write_offset});
-                        l1_write_offset += page_size;
+                        uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(tile_id);
+                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                        l1_write_addr += page_size;
                     }
 
                     tiles_read += num_pages_to_read;
@@ -296,25 +288,19 @@ void kernel_main() {
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                 cb_in0.reserve_back(tile_granularity);
-                uint32_t l1_write_offset = 0;
+                // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
+                // noc_traits_t specialization, so Noc::async_read rejects it at compile time.
+                uint32_t l1_write_addr = cb_in0.get_write_ptr();
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t tile_id = tile_id_start + tiles_read + j;
+                    uint64_t noc_read_addr;
                     if (detail::do_accumulate_output(is_forward)) {
-                        noc_obj.async_read(
-                            output_tensor_addrgen,
-                            cb_in0,
-                            page_size,
-                            {.page_id = tile_id},
-                            {.offset_bytes = l1_write_offset});
+                        noc_read_addr = output_tensor_addrgen.get_noc_addr(tile_id);
                     } else {
-                        noc_obj.async_read(
-                            input_tensor_addrgen,
-                            cb_in0,
-                            page_size,
-                            {.page_id = tile_id},
-                            {.offset_bytes = l1_write_offset});
+                        noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
                     }
-                    l1_write_offset += page_size;
+                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                    l1_write_addr += page_size;
                 }
 
                 if (chunk_count % chunks_per_sync == 0) {
@@ -327,16 +313,12 @@ void kernel_main() {
 
                 // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                 cb_intermediate.reserve_back(tile_granularity);
-                l1_write_offset = 0;
+                l1_write_addr = cb_intermediate.get_write_ptr();
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t intermediate_tile_id = intermediate_tile_id_start + tiles_read + j;
-                    noc_obj.async_read(
-                        intermediate_tensor_addrgen,
-                        cb_intermediate,
-                        page_size,
-                        {.page_id = intermediate_tile_id},
-                        {.offset_bytes = l1_write_offset});
-                    l1_write_offset += page_size;
+                    uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(intermediate_tile_id);
+                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                    l1_write_addr += page_size;
                 }
 
                 tiles_read += num_pages_to_read;
