@@ -48,33 +48,19 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # Expected metrics
 # =============================================================================
 
-# Gated metrics for T3K. top1/top5 gate token-accuracy; tok_s_u/ttft_ms gate the perf cases and are
-# keyed by BATCH because both differ between batch-1 and batch-32.
+# Gated metrics for T3K (keyed by batch — both tok_s_u and ttft_ms differ between batch-1/32).
+# Numbers are MEASURED, not from PERF.md (whose 22.9/19.6 tok/s/u are unreachable on either stack).
 #
-# Numbers are MEASURED, not from PERF.md (which is stale — its 22.9/19.6 tok/s/u are unreachable on
-# either stack). The perf cases default to SAMPLING_MODE=on_device_topk — the TTTv1-comparable path
-# (host pays a full-vocab all-gather + PCIe readback; TTTv1 auto-uses on-device sampling). Comparing
-# the WRONG path (host) vs TTTv1 was the entire apparent "decode gap" (host 7.9 vs TTTv1 13.0).
+# Perf cases default to SAMPLING_MODE=on_device_topk, the path comparable to TTTv1's auto on-device
+# sampling; the host path pays a full-vocab all-gather + PCIe readback, and measuring it vs TTTv1
+# was the entire apparent "decode gap" (host 7.9 vs TTTv1 13.0). On on_device_topk, TTTv2 is at
+# parity with TTTv1 (perf b1/b32 12.4/12.3 vs 12.99/12.15; acc 9.0/8.8 vs 9.32/8.82) — both stacks
+# dropped equally from the 16.x baseline, i.e. a shared upstream decode/topk regression, not a port
+# regression.
 #
-# Decode tok/s/u · TTFT ms/user on the rebased base 5a5db2e2aee (2026-06-25, device-MCP T3K),
-# TTTv2 on_device_topk (jobs 195730-40, 203620-42) vs TTTv1 simple_text_demo auto on-device
-# (job 200605-41) — SAME base, apples-to-apples:
-#     cell                 TTTv2 on_device_topk   TTTv1        TTTv2/TTTv1
-#     performance/batch-1  12.4 · 111.8           12.99 · —    0.95×  (within 5% tol)
-#     performance/batch-32 12.3 ·  96.8           12.15 · —    1.01×  (TTTv2 ≥ TTTv1)
-#     accuracy/batch-1      9.0 · 124.5            9.32 · —    0.97×  (within 5% tol)
-#     accuracy/batch-32     8.8 · 114.4            8.82 · —    1.00×  (parity)
-# => TTTv2 on_device_topk is at PARITY with TTTv1 (batch-32 ≥ TTTv1; batch-1 within the 5% gate
-#    tolerance). BOTH stacks dropped equally from the 2026-06-17 16.x baseline (TTTv1 16.6→13.0,
-#    TTTv2 16.8→12.4) — a shared UPSTREAM decode/topk regression in the rebase window, NOT a port
-#    regression. See REBASE_UPDATE.md §4 and DECODE_PERF_GAP_HANDOFF_2026-06-25.md.
-#
-# tok_s_u is a FLOOR at the ACHIEVED on_device_topk number; the gate's PERF_TOLERANCE (5%) supplies
-# the headroom (e.g. perf/batch-1 floor 12.4·0.95 = 11.78, comfortably below the steady 12.4–12.5
-# measured), so the gate is robust to run-to-run noise yet still catches a real decode regression.
-# ttft_ms is a CEILING above the worst observed (sequential-prefill) TTFT plus headroom; it's
-# ~mode-independent and the batched-prefill path only lowers it. top1/top5 are floors the measured
-# book accuracy clears (perf 90.2/98.4, acc 95.5/100.0; REBASE_UPDATE §4.2).
+# tok_s_u is a FLOOR at the achieved number (PERF_TOLERANCE gives run-to-run headroom while still
+# catching a real regression); ttft_ms is a CEILING above the worst observed TTFT; top1/top5 are
+# floors the measured accuracy clears.
 EXPECTED_METRICS = {
     "performance": {
         "T3K": {

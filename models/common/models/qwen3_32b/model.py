@@ -82,14 +82,9 @@ class Qwen3_32BExecutorRuntimeConfig:
     optimizations: Any = None
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
-        # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
-        # only trace the seq lens TTTv1 lists — bigger seq lens already have small op2op gaps, so
-        # tracing buys nothing. Qwen3-32B has NO model-specific entry, so it uses the family default
-        # for T3K: [128, 1024]. (The old "capture hits TT_FATAL under LazyWeight + distributed norms"
-        # note generalizes away — the same TT_FATAL no longer reproduces on the sibling 1B port.)
-        # On-device confirmation (Captured prefill trace for seq_len=128, no TT_FATAL) is NOT RUN on
-        # this pass — device-MCP denied this session; see REBASE_UPDATE.md §3. Decode trace remains
-        # enabled at the engine layer regardless.
+        # Only trace the seq lens TTTv1 traces; bigger ones have small op2op gaps so tracing buys
+        # nothing. Qwen3-32B has no model-specific entry, so it uses the T3K family default
+        # [128, 1024]. Decode trace stays enabled at the engine layer regardless.
         num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
         allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
         return (
