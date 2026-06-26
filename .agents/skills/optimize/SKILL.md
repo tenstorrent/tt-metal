@@ -279,6 +279,14 @@ For dense MLP or expert gate/up/down geometry work, include the best legal reduc
 
 For each dominant matmul role, the final report must list shape, dtype/fidelity, program class, logical program core count or grid source, `in0_block_w`, `per_core_M`, `per_core_N`, output subblock fields when exposed, input and output memory configs, bandwidth classification, traced latency, correctness result, and kept/rejected decision. If `tt-perf-report` marks a dominant DRAM-sharded matmul `SLOW`, or reports missing output subblock information, do not accept the stage until a precision-locked block-geometry sweep has been tried or a precise op-contract blocker is recorded.
 
+### OPT-005: Keep logical decode batch separate from tile padding
+
+Decoder kernels often use tile-padded activation rows, such as one logical token padded to 32 rows. Those padded rows are a tensor-layout contract, not extra active users. Do not change logical batch, active user count, page-table semantics, or KV-cache indexing just to satisfy an op shape check. A result with the right matmul shape but the wrong active batch is a different workload.
+
+When reporting or comparing decode attention, list logical user batch, tile-padded activation rows, current-position tensor shape, page-table shape/distribution, KV-cache shape, page block size, active cache slots updated, and SDPA/FlashDecode row time. Compare SDPA or FlashDecode only against a prior path with the same logical batch and context length. If a helper requires padded RoPE, current-position, or head-layout metadata, create padded metadata that preserves the original logical batch semantics instead of treating padding rows as real users.
+
+If an optimized decoder candidate changes logical batch from the target workload, the stage is not optimized for that target, even if PCC passes and the matmul rows look good. Such a run can be kept only as a separate throughput-scaling experiment, clearly labeled with active batch and excluded from single-user decoder signoff.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
