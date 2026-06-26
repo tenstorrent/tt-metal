@@ -56,6 +56,13 @@ void kernel_main() {
     const uint32_t tok_count = get_arg_val<uint32_t>(4);
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(5);
+#ifdef BC_ENABLE
+    // Block-cyclic remap constants (appended after kv_batch_page_offset by the factory): {chunk, chunk_local,
+    // seq_len_local}. Passed to the shared gather helper, which maps natural indices -> physical pages.
+    const uint32_t bc_chunk = get_arg_val<uint32_t>(6);
+    const uint32_t bc_chunk_local = get_arg_val<uint32_t>(7);
+    const uint32_t bc_seq_len_local = get_arg_val<uint32_t>(8);
+#endif
 
     constexpr uint32_t q_row_bytes = k_dim * q_elem_bytes;     // Q row (bf16)
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;    // K row (native dtype: fp8 or bf16)
@@ -136,7 +143,22 @@ void kernel_main() {
                 kreq_cb.push_back(1);
                 // Reader gathers its half [half, valid) on its NoC (depth-4 trid ring, shared helper).
                 sparse_sdpa::trid_ring_gather(
-                    noc, kv, k_cb, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
+                    noc,
+                    kv,
+                    k_cb,
+                    idx_ptr,
+                    base,
+                    half,
+                    valid,
+                    k_row_bytes,
+                    kv_batch_page_offset
+#ifdef BC_ENABLE
+                    ,
+                    bc_chunk,
+                    bc_chunk_local,
+                    bc_seq_len_local
+#endif
+                );
                 kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
                 kack_cb.pop_front(1);
                 // Zero-fill the sentinel suffix: masked-key scores become a defined 0 (compute adds -inf).

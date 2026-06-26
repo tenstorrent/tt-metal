@@ -24,6 +24,11 @@ namespace ttnn::transformer {
 // to (indices are page ids within that slot). kv may then also be ND-sharded across DRAM banks. The value is
 // a dynamic runtime arg, so changing the slot (or the cache length T) does not recompile the kernels.
 //
+// block_cyclic_sp / block_cyclic_chunk: when both set, `indices` are NATURAL token positions but kv is stored
+// block-cyclic across block_cyclic_sp SP shards with global chunk block_cyclic_chunk (the DeepSeek
+// chunked-prefill KVPE cache). The gather kernels remap each index natural -> physical page on the fly, so the
+// caller does NOT need to reorder kv back to natural order. Both must be set together, chunk % sp == 0, T % sp == 0.
+//
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
 // valid key, and all non-sentinel indices are < T.
 ttnn::Tensor sparse_sdpa(
@@ -34,6 +39,8 @@ ttnn::Tensor sparse_sdpa(
     std::optional<float> scale = std::nullopt,
     uint32_t k_chunk_size = 128,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<uint32_t> cache_batch_idx = std::nullopt);
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> block_cyclic_sp = std::nullopt,
+    std::optional<uint32_t> block_cyclic_chunk = std::nullopt);
 
 }  // namespace ttnn::transformer

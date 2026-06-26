@@ -202,6 +202,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     {
         std::map<std::string, std::string> rdefs{
             {"CB_KREQ", std::to_string(cb_kreq)}, {"CB_KACK", std::to_string(cb_kack)}};
+        if (attrs.has_block_cyclic()) {
+            rdefs["BC_ENABLE"] = "1";  // gate the natural->block-cyclic page-id remap in the shared gather helper
+        }
         reader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(rdefs.begin(), rdefs.end());
     }
 
@@ -220,6 +223,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             {"CB_IDX", std::to_string(cb_idx)},
             {"K_DIM", std::to_string(k_dim)},
             {"KV_ELEM_BYTES", std::to_string(kv_elem_bytes)}};
+        if (attrs.has_block_cyclic()) {
+            wdefs["BC_ENABLE"] = "1";  // gate the natural->block-cyclic page-id remap in the shared gather helper
+        }
         writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(wdefs.begin(), wdefs.end());
     }
 
@@ -279,16 +285,50 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // (so changing the slot doesn't recompile). 0 when not indexed (kv is a single [1,1,T,K_DIM] cache).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
+    // Block-cyclic remap constants (only consumed when BC_ENABLE; appended after kv_batch_page_offset). The
+    // kernel maps a natural index n to physical page: slab=n/chunk, rem=n%chunk, c=rem/chunk_local,
+    // off=rem%chunk_local, page=c*seq_len_local + slab*chunk_local + off. seq_len_local depends on the runtime
+    // cache length T, so these ride runtime args (not compile-time) — changing T does not recompile.
+    const bool bc_on = attrs.has_block_cyclic();
+    const uint32_t bc_chunk = bc_on ? attrs.block_cyclic->chunk_size : 0u;
+    const uint32_t bc_chunk_local = bc_on ? bc_chunk / attrs.block_cyclic->sp : 0u;
+    const uint32_t bc_seq_len_local = bc_on ? kv_T / attrs.block_cyclic->sp : 0u;
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        // kv_batch_page_offset is the LAST positional arg of each list; its index is encoded once in
-        // sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg (used by get_dynamic_runtime_args to re-apply it on a
-        // cache hit). If you reorder these lists, update those constants or the re-apply targets the wrong slot.
-        reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
-        writer_desc.emplace_runtime_args(
-            core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather
+        // kv_batch_page_offset sits at a fixed index (sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg, used by
+        // get_dynamic_runtime_args to re-apply it on a cache hit); the block-cyclic constants follow it (only
+        // when enabled). If you reorder the args before it, update those constants or the re-apply targets the
+        // wrong slot.
+        if (bc_on) {
+            reader_desc.emplace_runtime_args(
+                core,
+                {q_buf,
+                 kv_buf,
+                 idx_buf,
+                 tok_start,
+                 tok_count,
+                 kv_batch_page_offset,
+                 bc_chunk,
+                 bc_chunk_local,
+                 bc_seq_len_local});
+            writer_desc.emplace_runtime_args(
+                core,
+                {out_buf,
+                 tok_start,
+                 tok_count,
+                 kv_buf,
+                 kv_batch_page_offset,
+                 bc_chunk,
+                 bc_chunk_local,
+                 bc_seq_len_local});
+        } else {
+            reader_desc.emplace_runtime_args(
+                core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
+            writer_desc.emplace_runtime_args(
+                core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather
+        }
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
 

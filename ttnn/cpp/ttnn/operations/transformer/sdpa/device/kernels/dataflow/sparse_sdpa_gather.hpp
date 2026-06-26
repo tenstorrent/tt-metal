@@ -19,6 +19,12 @@ constexpr uint32_t K_TRID_RING = 4;
 // trid ring: idx_ptr[base + p] -> k_cb at byte offset p * k_row_bytes, for p in [lo, hi). Used by the
 // reader for its half [half, valid) and by the writer for its half [0, half). `page_offset` selects the
 // batch slot of an indexed KV cache (cache_batch_idx * T); 0 for a single [1,1,T,K_DIM] cache.
+//
+// When BC_ENABLE is defined, the kv cache is stored block-cyclic across `sp` SP shards (the DeepSeek
+// chunked-prefill KVPE cache), so the natural-position index is remapped to its physical page on the fly via
+// invP (the inverse of blockcyclic_positions): slab=n/chunk, rem=n%chunk, c=rem/chunk_local, off=rem%chunk_local,
+// page = c*seq_len_local + slab*chunk_local + off. The {chunk, chunk_local, seq_len_local} constants come from
+// runtime args. Sentinels (0xFFFFFFFF) never reach here — the reader only gathers the valid (< nv) prefix.
 template <typename Accessor>
 FORCE_INLINE void trid_ring_gather(
     Noc& noc,
@@ -29,7 +35,10 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t lo,
     uint32_t hi,
     uint32_t k_row_bytes,
-    uint32_t page_offset) {
+    uint32_t page_offset,
+    [[maybe_unused]] uint32_t bc_chunk = 0,
+    [[maybe_unused]] uint32_t bc_chunk_local = 0,
+    [[maybe_unused]] uint32_t bc_seq_len_local = 0) {
     constexpr uint32_t D = K_TRID_RING;
     const uint32_t cnt = hi - lo;
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -39,8 +48,16 @@ FORCE_INLINE void trid_ring_gather(
             experimental::async_read_barrier_with_trid(noc, trid);  // free this trid slot before reuse
         }
         experimental::set_read_trid(noc, trid);
-        noc.async_read(
-            kv, k_cb, k_row_bytes, {.page_id = page_offset + idx_ptr[base + p]}, {.offset_bytes = p * k_row_bytes});
+        uint32_t page = idx_ptr[base + p];
+#ifdef BC_ENABLE
+        // natural token position -> block-cyclic physical row (invP, inverse of blockcyclic_positions)
+        const uint32_t slab = page / bc_chunk;
+        const uint32_t rem = page - slab * bc_chunk;
+        const uint32_t c = rem / bc_chunk_local;
+        const uint32_t off = rem - c * bc_chunk_local;
+        page = c * bc_seq_len_local + slab * bc_chunk_local + off;
+#endif
+        noc.async_read(kv, k_cb, k_row_bytes, {.page_id = page_offset + page}, {.offset_bytes = p * k_row_bytes});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
     for (uint32_t d = 0; d < to_drain; ++d) {

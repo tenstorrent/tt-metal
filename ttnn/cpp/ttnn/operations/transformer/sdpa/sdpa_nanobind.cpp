@@ -342,6 +342,11 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
                 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+            block_cyclic_sp (int, optional): when set (with block_cyclic_chunk), `indices` are NATURAL token
+                positions and kv is stored block-cyclic across this many SP shards; the kernel remaps each
+                index natural->physical page on the fly (no host reorder needed). Both must be set together.
+            block_cyclic_chunk (int, optional): the global chunk granularity (chunk_size_global) the cache was
+                written with. Required iff block_cyclic_sp is set; chunk % sp == 0 and T % sp == 0.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
@@ -355,7 +360,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("k_chunk_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("cache_batch_idx") = nb::none());
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("block_cyclic_sp") = nb::none(),
+        nb::arg("block_cyclic_chunk") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(

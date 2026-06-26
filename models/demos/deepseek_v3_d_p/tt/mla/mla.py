@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -314,6 +315,11 @@ class ttMLA:
 
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ccl_topology = topology
+
+        # TEMPORARY TOGGLE (A/B): when on, the sparse_chunked path leaves the gathered KVPE prefix in
+        # block-cyclic order and lets sparse_sdpa remap the natural-position indices -> physical pages in
+        # kernel (invP), instead of reordering the whole [1,1,T,576] buffer host-side via blockcyclic_to_natural.
+        self._bc_remap_in_kernel = os.environ.get("MLA_BC_REMAP_IN_KERNEL", "0") == "1"
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
@@ -1049,8 +1055,11 @@ class ttMLA:
             kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx)
             ttnn.deallocate(tt_kvpe_b8)
 
-            # Sparse attention runs over latent V; project to v_head_dim afterwards.
-            attn_out = self._sparse_mla(tt_q, kvpe_dev, indices)
+            # Sparse attention runs over latent V; project to v_head_dim afterwards. When the in-kernel remap
+            # is on, kvpe_dev is still block-cyclic — hand sparse_sdpa (sp, chunk_size_global) so it remaps the
+            # natural indices to physical pages itself. chunk_size_global = seq_len_local * sp_factor (line above).
+            bc = (self.sp_factor, seq_len_local * self.sp_factor) if self._bc_remap_in_kernel else None
+            attn_out = self._sparse_mla(tt_q, kvpe_dev, indices, block_cyclic=bc)
             ttnn.deallocate(kvpe_dev)
             ttnn.deallocate(tt_q)
             attn_out = self._apply_wkv_b2(attn_out, seq_len_local)
@@ -1203,7 +1212,9 @@ class ttMLA:
         h_local = self.num_heads // self.tp_factor
         return self.tp_factor > 1 and (h_local < 32 or h_local % 32 != 0)
 
-    def _sparse_mla(self, q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
+    def _sparse_mla(
+        self, q: ttnn.Tensor, kvpe: ttnn.Tensor, indices: ttnn.Tensor, block_cyclic: Optional[tuple] = None
+    ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
         each chip runs the single-chip ``ttnn.transformer.sparse_sdpa`` over its own q shard, so q's
@@ -1248,8 +1259,17 @@ class ttMLA:
             idx = idx_tp
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
+        # block_cyclic=(sp, chunk_size_global): kvpe is the block-cyclic KVPE cache and idx are natural
+        # positions; sparse_sdpa remaps them to physical pages in-kernel (no host reorder). None => natural kvpe.
         out = ttnn.transformer.sparse_sdpa(
-            q_rm, kvpe, idx, v_dim=self.kv_lora_rank, scale=self.scale, k_chunk_size=k_chunk
+            q_rm,
+            kvpe,
+            idx,
+            v_dim=self.kv_lora_rank,
+            scale=self.scale,
+            k_chunk_size=k_chunk,
+            block_cyclic_sp=block_cyclic[0] if block_cyclic else None,
+            block_cyclic_chunk=block_cyclic[1] if block_cyclic else None,
         )
         ttnn.deallocate(q_rm)
         if idx is not indices:
@@ -1286,6 +1306,10 @@ class ttMLA:
         ttnn.deallocate(full)
         full_rm = ttnn.to_layout(full16, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(full16)
+        if self._bc_remap_in_kernel:
+            # Leave the prefix block-cyclic; sparse_sdpa remaps the natural indices -> physical pages in-kernel.
+            # (The op accepts an oversized cache, so the unwritten suffix past end_pos is fine — never addressed.)
+            return full_rm
         out = blockcyclic_to_natural(full_rm, self.sp_factor, seq_len_local, end_pos)
         ttnn.deallocate(full_rm)
         return out

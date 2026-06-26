@@ -10,6 +10,16 @@
 
 namespace ttnn::prim {
 
+// Block-cyclic KV layout. When set, the gathered `indices` are NATURAL token positions, but the kv cache is
+// stored block-cyclic across `sp` SP shards with global chunk `chunk_size` (the DeepSeek chunked-prefill KVPE
+// cache, written by update_padded_kv_cache). The gather kernels remap each natural index -> physical page id
+// on the fly (invP, the inverse of the cache writer's blockcyclic_positions), so the host does NOT have to
+// reorder the kv buffer back to natural order before the op.
+struct BlockCyclicLayout {
+    uint32_t sp;          // SP shard count the cache was written across
+    uint32_t chunk_size;  // global chunk granularity (chunk_size_global) the cache writer used
+};
+
 // Sparse MLA prefill (DeepSeek DSA).
 struct SparseSDPAParams {
     float scale = 1.0f;  // compile-time (folded into the program hash)
@@ -21,6 +31,11 @@ struct SparseSDPAParams {
     // (excluded from the program hash, re-applied every dispatch), so changing it does NOT recompile.
     std::optional<uint32_t> cache_batch_idx = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Block-cyclic index remap (see BlockCyclicLayout). The enable bit is folded into the program hash so a
+    // remapping program is distinct from the identity one; the sp/chunk-derived constants ride per-dispatch
+    // runtime args (they depend on the runtime cache length T), so changing T does not recompile.
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
+    bool has_block_cyclic() const { return block_cyclic.has_value(); }
 };
 
 struct SparseSDPAInputs {

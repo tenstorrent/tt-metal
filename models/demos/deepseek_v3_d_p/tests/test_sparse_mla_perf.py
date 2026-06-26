@@ -51,6 +51,12 @@ CHUNK_TOKENS = int(os.environ.get("DS_PERF_CHUNK", 5120))  # 5 * 1024 processed 
 SUBDIR = "deepseek_v32_sparse_mla_perf"
 CSV_OUT = os.environ.get("DS_PERF_CSV", "deepseek_v32_sparse_mla_perf.csv")
 
+# Variant + mesh are env-selectable so one (variant, mesh) is profiled per tracy process (the driver runs
+# every impl parametrization in a single tracy session, so keep it to one). DS_PERF_VARIANT picks the model
+# (deepseek_v32 | glm_5_1), DS_PERF_MESH the SPxTP shape e.g. "4x2" (deepseek perf) or "2x4" (glm tp=4 reshard).
+_PERF_VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
+_PERF_MESH = tuple(int(x) for x in os.environ.get("DS_PERF_MESH", "4x2").split("x"))
+
 pytestmark = pytest.mark.perf
 
 
@@ -64,7 +70,9 @@ def _require_perf(request):
 # ============================================================================
 # Inner: the work to profile (run under tracy by the driver below)
 # ============================================================================
-@pytest.mark.parametrize("mesh_device", [(4, 2)], ids=["sp4xtp2"], indirect=True)  # SP=4, TP=2
+@pytest.mark.parametrize(
+    "mesh_device", [_PERF_MESH], ids=[f"sp{_PERF_MESH[0]}xtp{_PERF_MESH[1]}"], indirect=True
+)  # SPxTP (env DS_PERF_MESH)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -76,7 +84,7 @@ def _require_perf(request):
     ids=["line"],
     indirect=True,
 )
-@pytest.mark.parametrize("variant", ["deepseek_v32"], indirect=True, ids=["deepseek_v32"])
+@pytest.mark.parametrize("variant", [_PERF_VARIANT], indirect=True, ids=[_PERF_VARIANT])
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only):
     from tracy import signpost
@@ -90,8 +98,9 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
 
     config = config_only
     config.max_seq_len = total  # rope-table / buffer length (same hack as the correctness tests)
-    # Weights only — projections are sequence-length independent, so a small build is fine.
-    _, _, weights, _ = build_cpu_reference(_DSV32, 2048, seed=42)
+    # Weights only — projections are sequence-length independent, so a small build is fine. `variant` (the
+    # env-selected TestVariant) drives the weight shapes so glm_5_1 builds its own dims, not deepseek_v32's.
+    _, _, weights, _ = build_cpu_reference(variant, 2048, seed=42)
 
     # Indexer rope now scales from config.max_seq_len (set above) — no manual bump needed.
     mla = ttMLA(

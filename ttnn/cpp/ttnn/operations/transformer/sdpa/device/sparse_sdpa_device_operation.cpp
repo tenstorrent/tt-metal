@@ -102,6 +102,19 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // to. No valid-length bound is needed — reads are index-driven (indices < populated length, sentinels mark
     // unused slots), so the unpopulated suffix is never addressed.
     validate_non_hashed(attrs, t);
+    // Block-cyclic remap: indices are natural positions; the kernel maps them to physical pages with sp/chunk
+    // (chunk_local = chunk_size/sp, seq_len_local = T/sp must be integral). Both invariants checked here.
+    if (attrs.has_block_cyclic()) {
+        const auto& bc = attrs.block_cyclic.value();
+        const uint32_t T = kv.logical_shape()[2];
+        TT_FATAL(bc.sp > 0, "block_cyclic.sp must be > 0");
+        TT_FATAL(
+            bc.chunk_size > 0 && bc.chunk_size % bc.sp == 0,
+            "block_cyclic.chunk_size ({}) must be a positive multiple of sp ({})",
+            bc.chunk_size,
+            bc.sp);
+        TT_FATAL(T % bc.sp == 0, "kv length T ({}) must be divisible by block_cyclic.sp ({})", T, bc.sp);
+    }
     TT_FATAL(is.rank() == 4 && is[0] == 1 && is[1] == 1 && is[2] == S, "indices must be [1,1,S,TOPK]");
     const uint32_t TOPK = is[3];
     TT_FATAL(S > 0 && TOPK > 0, "S/TOPK must be > 0");
@@ -197,6 +210,9 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is a dynamic runtime arg
         // (see get_dynamic_runtime_args), so indexing into a different slot reuses the same program.
         attrs.has_indexed_kv_cache(),
+        // Only WHETHER block-cyclic remap is on (it gates a compile-time #ifdef in the gather kernels); the
+        // sp/chunk-derived constants are runtime args, so the same program serves any sp/chunk/T.
+        attrs.has_block_cyclic(),
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -248,7 +264,8 @@ Tensor sparse_sdpa(
     uint32_t v_dim,
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<uint32_t> cache_batch_idx) {
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<BlockCyclicLayout> block_cyclic) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -257,6 +274,7 @@ Tensor sparse_sdpa(
             .k_chunk_size = k_chunk_size,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
+            .block_cyclic = block_cyclic,
         },
         OperationType::tensor_args_t{
             .q = q,
