@@ -1118,7 +1118,7 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         if producer is not None:
             producer.shutdown()
         if router is not None:
-            router.stop()  # joins the listener; on the master, unlinks the scheduler counter channel
+            router.stop()  # joins the listener; the master's final ring-drain + inject happens HERE
         if completion_check is not None:
             # Tally AFTER router.stop(): the master injects its own trailing completions during the
             # listener's final drain (inside stop()). The consumer's mapping survives the owner's
