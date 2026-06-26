@@ -281,26 +281,6 @@ AllReduceCreateQkvHeadsDeviceOperation::create_output_tensors(
         .v = create_device_tensor(output_specs.v, device)};
 }
 
-ttsl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.padded_shape();
-    auto input_memory_layout = input_tensor.layout();
-    auto input_dtype = input_tensor.dtype();
-    auto input_memory_config = input_tensor.memory_config();
-    // Hash individual fields to avoid hashing non-hashable types like GlobalSemaphore
-    return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeadsDeviceOperation>(
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.all_reduce_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

@@ -13,7 +13,7 @@ global_env:
   # ttrun does NOT propagate PREFILL_* from the shell -- migration knobs must live here.
   # (TT_MIGRATION_* vars DO propagate via ttrun's TT_* forwarding, so they stay in cluster_env.sh.)
   PREFILL_ENABLE_MIGRATION: "0"
-  # Worker shmem queue names -- must match the running migration_endpoint (see cluster_env.sh).
+  # Worker shmem queue names -- must match the running migration_endpoint
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"

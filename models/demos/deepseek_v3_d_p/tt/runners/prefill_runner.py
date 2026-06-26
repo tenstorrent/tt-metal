@@ -24,6 +24,7 @@ The model class is the single source of truth — this driver wires rank topolog
 and the per-chunk schedule; it does not reimplement embed / layers / forward.
 """
 
+import json
 import os
 import signal
 import time
@@ -44,6 +45,65 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     resolve_weight_cache_path,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+
+
+def _apply_manifest_env():
+    """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
+    the runner (and migration/validation helpers) read. setdefault => an explicitly
+    exported env var still wins over the manifest. Must be invoked before the
+    module-level env reads below (e.g. PREFILL_MAX_SEQ_LEN) so the values take effect."""
+    manifest_path = os.environ.get("PREFILL_MANIFEST")
+    if not manifest_path:
+        return
+
+    with open(manifest_path) as mp:
+        manifest = json.load(mp)
+    users = manifest["users"]
+    N = len(users)
+
+    def sd(key, val):
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+    model = manifest.get("model", {})
+    mig = manifest.get("migration", {})
+    paths = manifest.get("paths", {})
+
+    sd("PREFILL_MODEL_VARIANT", model.get("variant"))
+    sd("DEEPSEEK_PREFILL_TRACE_DIR", paths.get("trace_dir"))
+    sd("PREFILL_MIGRATION_CLIENT_DIR", paths.get("migration_client_dir"))
+    sd("PREFILL_NUM_USERS", 2 * N)
+    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
+    sd("PREFILL_STANDALONE_CHUNKED_NCHUNKS", sum(u["n_chunks"] for u in users))
+    sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
+    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u.get("kv_cache", "") for u in users))
+
+    # Mode: default to pairwise
+    mode = mig.get("mode") or "pairwise"
+    # Loud failure for incorrect mode
+    if mode != "pairwise":
+        raise ValueError(f"manifest migration.mode must be 'pairwise', got: {mode}")
+    # Loud failure for empty users
+    if N < 1:
+        raise ValueError(f"manifest migration.mode 'pairwise' requires at least 1 user, got {N}")
+    sd("PREFILL_MIGRATE", mode)
+
+    # Each non-empty kv_cache must exist on disk.
+    for i, u in enumerate(users):
+        kv = u.get("kv_cache", "")
+        if kv and not os.path.exists(kv):
+            raise FileNotFoundError(f"PREFILL_MANIFEST user {i} kv_cache not found: {kv}")
+
+    # PREFILL_NUM_USERS (derived or explicitly exported) must equal 2*N.
+    num_users = int(os.environ["PREFILL_NUM_USERS"])
+    if num_users != 2 * N:
+        raise ValueError(
+            f"PREFILL_NUM_USERS ({num_users}) inconsistent with manifest " f"({N} users => expected {2 * N})"
+        )
+
+
+# Populate env from the manifest BEFORE the module-level env reads below.
+_apply_manifest_env()
 
 # Both socket transports (H2D input on rank 0, D2D between ranks) share a 1x1 push/sync worker grid and
 # the same 3-word PrefillMetadata (slot_id, actual_start, actual_end). The 1x1 grid is the cheapest
@@ -82,6 +142,9 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+# Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
+# compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
+SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
 # L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
 # requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
@@ -220,34 +283,12 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
-def _d2d_recv(inbound) -> tuple:
-    """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
-    decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
-    feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
-    import torch
-
-    t0 = time.perf_counter()
-    act, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound, metadata_size_bytes=METADATA_SIZE_BYTES
-    )
-    m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
-    meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
-    logger.info(
-        f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
-        f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
-    )
-    return act, meta
-
-
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
-    """Push this rank's output hidden state + metadata to the downstream rank's receiver. Coerce the
-    activation to the sender backing's memory layout first so the op's page-for-page copy lines up,
-    then free it."""
+    """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
+    The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
+    TT_FATALs on any spec mismatch, so no host-side relayout is needed."""
     t0 = time.perf_counter()
     backing = outbound.get_backing_tensor()
-    if activation.memory_config() != backing.memory_config() or activation.layout != backing.layout:
-        activation = ttnn.to_layout(activation, backing.layout)
-        activation = ttnn.to_memory_config(activation, backing.memory_config())
     import torch
 
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
@@ -290,6 +331,11 @@ def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: d
     out = runtime.prefill(
         inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
+    if SYNC_PER_CHUNK:
+        # Block on device completion before the send so the delta is this rank's forward alone, not the
+        # downstream-start proxy. Serializes dispatch (no overlap) — measurement runs only.
+        ttnn.synchronize_device(runtime.mesh_device)
+        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
         _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
     if d2d_out is not None:

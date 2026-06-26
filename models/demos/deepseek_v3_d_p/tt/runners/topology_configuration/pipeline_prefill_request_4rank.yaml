@@ -14,7 +14,7 @@ global_env:
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
 
   PREFILL_ENABLE_MIGRATION: "0"
-  # Worker shmem queue names -- must match the running migration_endpoint (see cluster_env.sh).
+  # Worker shmem queue names -- must match the running migration_endpoint
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"

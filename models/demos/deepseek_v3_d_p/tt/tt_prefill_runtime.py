@@ -274,7 +274,7 @@ class TtPrefillRuntime:
         out = self.model.forward(
             input_tensor,
             self.kvpe_cache,
-            number_of_non_padded_tokens=actual_end - actual_start,
+            actual_isl=actual_end - actual_start,
             on_layer_complete=self._on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,
