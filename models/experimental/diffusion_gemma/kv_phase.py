@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""KV-cache phase mapping helpers for DiffusionGemma."""
+"""Reference/spec KV-cache phase mapping helpers for DiffusionGemma.
+
+This module documents the logical positions and bounded-sliding slot math used
+by the device tests. Runtime Gemma4 cache updates use the shared
+``models.demos.gemma4.tt.attention`` phase enum plus paged page-table/modulo
+plumbing, not this helper directly.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ def _validate_positive(name: str, value: int) -> None:
 
 @dataclass(frozen=True)
 class KVPhaseMapping:
-    """Logical-to-physical KV positions for one denoise/commit canvas."""
+    """Reference logical-to-physical KV positions for one denoise/commit canvas."""
 
     prompt_len: int
     canvas_len: int = 256

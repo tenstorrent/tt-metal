@@ -3,7 +3,14 @@
 
 import pytest
 
+import models.experimental.diffusion_gemma.kv_phase as kv_phase
 from models.experimental.diffusion_gemma.kv_phase import KVPhaseMapping
+
+
+def test_mapping_module_is_reference_spec_not_runtime_path():
+    assert "Reference/spec" in kv_phase.__doc__
+    assert "Runtime Gemma4 cache updates" in kv_phase.__doc__
+    assert "Reference logical-to-physical" in KVPhaseMapping.__doc__
 
 
 def test_commit_positions_append_after_prompt():
