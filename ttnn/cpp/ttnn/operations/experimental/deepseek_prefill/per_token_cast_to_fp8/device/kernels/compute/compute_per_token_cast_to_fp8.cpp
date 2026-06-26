@@ -9,8 +9,9 @@
 //   1. tilize cb_in -> cb_tile.
 //   2. compute per-row amax over the 128-element block, clamp(>=1e-4), multiply by 1/448
 //      -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
-//   3. divide: out_tile = cb_tile * bcast_col(cb_inv_scale_tiles) per tile -> cb_out_tile.
-//   4. untilize cb_out_tile -> cb_output_e4m3 (scaled, cast to e4m3).
+//   3+4. divide: cb_tile * bcast_col(cb_inv_scale_tiles), then pack_untilize_dest the divided
+//      tiles straight from DST into cb_output_e4m3 (scaled, cast to e4m3) -- no cb_out_tile
+//      L1 round-trip and no separate untilize math pass.
 // The writer extracts column 0 of cb_scale_tiles into the scale output [..., M, H/128].
 //
 // fp32_dest_acc_en=True (required for e4m3 on Blackhole; also gives fp32 reduce/divide precision).
@@ -19,7 +20,6 @@
 
 #include "api/compute/common.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -29,6 +29,7 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/pack_untilize.h"
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
@@ -37,22 +38,21 @@ void kernel_main() {
     constexpr uint32_t cb_abs = get_compile_time_arg_val(3);
     constexpr uint32_t cb_scale_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t cb_inv_scale_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_out_tile = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_output_e4m3 = get_compile_time_arg_val(7);
-    constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(8);
-    constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(9);
-    constexpr uint32_t inv_448_bits = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_output_e4m3 = get_compile_time_arg_val(6);
+    constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(7);
+    constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(8);
+    constexpr uint32_t inv_448_bits = get_compile_time_arg_val(9);
 
     // Tile width from the tensor's tile spec.
     constexpr uint32_t block_w = 128;  // BlockW
-    constexpr uint32_t tile_w = get_compile_time_arg_val(11);
+    constexpr uint32_t tile_w = get_compile_time_arg_val(10);
     constexpr uint32_t block_wt = block_w / tile_w;              // BlockWt
-    constexpr uint32_t block_ht = get_compile_time_arg_val(12);  // BlockHt (tile-rows per block)
+    constexpr uint32_t block_ht = get_compile_time_arg_val(11);  // BlockHt (tile-rows per block)
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
     // Tiles processed per tile_regs acquire for abs/divide. Must divide tiles_per_block.
     // Set to tiles_per_block (with dst_full_sync_en) to batch the whole block in one acquire,
     // or to block_wt (half-sync) to keep math<->pack double-buffering across tile-rows.
-    constexpr uint32_t acq_tiles = get_compile_time_arg_val(13);
+    constexpr uint32_t acq_tiles = get_compile_time_arg_val(12);
 
     uint32_t num_blocks = get_arg_val<uint32_t>(0);  // block_ht*tile_h x 128 blocks for this core
 
@@ -146,13 +146,16 @@ void kernel_main() {
         cb_push_back(cb_inv_scale_tiles, block_ht);
         cb_pop_front(cb_abs, tiles_per_block);
 
-        // ----- 3. divide: cb_out_tile = cb_tile * bcast_col(1/scale), all tiles under one acquire -----
+        // ----- 3+4 fused: divide (cb_tile * bcast_col(1/scale)) then pack_untilize DST -> e4m3 -----
+        // mul_tiles_bcast_cols leaves the divided tiles in DST; pack_untilize_dest untilizes them
+        // straight into cb_output_e4m3, skipping the cb_out_tile L1 round-trip and the separate
+        // untilize math pass. Each acquire holds acq_tiles tiles == acq_tiles/block_wt tile-rows.
         reconfig_data_format(cb_tile, cb_inv_scale_tiles);
-        pack_reconfig_data_format(cb_out_tile);
         mul_bcast_cols_init_short(cb_tile, cb_inv_scale_tiles);
+        pack_untilize_dest_init<block_wt>(cb_output_e4m3);
         cb_wait_front(cb_inv_scale_tiles, block_ht);
-        cb_reserve_back(cb_out_tile, tiles_per_block);
         for (uint32_t c = 0; c < tiles_per_block; c += acq_tiles) {
+            cb_reserve_back(cb_output_e4m3, acq_tiles);
             tile_regs_acquire();
             for (uint32_t j = 0; j < acq_tiles; ++j) {
                 const uint32_t gt = c + j;         // global tile index in the block
@@ -161,28 +164,12 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t j = 0; j < acq_tiles; ++j) {
-                pack_tile(j, cb_out_tile);
-            }
+            pack_untilize_dest<block_wt>(cb_output_e4m3, acq_tiles / block_wt);
             tile_regs_release();
+            cb_push_back(cb_output_e4m3, acq_tiles);
         }
-        cb_push_back(cb_out_tile, tiles_per_block);
+        pack_untilize_uninit(cb_output_e4m3);
         cb_pop_front(cb_tile, tiles_per_block);
         cb_pop_front(cb_inv_scale_tiles, block_ht);
-
-        // ----- 4. untilize cb_out_tile -> output e4m3 (one untilize_block per tile-row) -----
-        // untilize_block reads from the CB read pointer (no tile offset), so advance it with
-        // pop_front between tile-rows; e4m3 pages land in row order for the writer.
-        reconfig_data_format_srca(cb_out_tile);
-        pack_reconfig_data_format(cb_output_e4m3);
-        untilize_init(cb_out_tile);
-        cb_wait_front(cb_out_tile, tiles_per_block);
-        for (uint32_t r = 0; r < block_ht; ++r) {
-            cb_reserve_back(cb_output_e4m3, block_wt);
-            untilize_block(cb_out_tile, block_wt, cb_output_e4m3);
-            cb_push_back(cb_output_e4m3, block_wt);
-            cb_pop_front(cb_out_tile, block_wt);
-        }
-        untilize_uninit(cb_out_tile);
     }
 }
