@@ -515,7 +515,7 @@ ALWI void reduce(
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
                 }
 
-                // Call post-reduce operation (e.g., recip_tile for softmax)
+                // Call post-reduce operation (e.g., recip_tile after a SUM reduce)
                 // User's lambda can include reduce_uninit() if needed before custom ops
                 post_reduce_op(dst_idx);
 
