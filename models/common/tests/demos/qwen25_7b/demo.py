@@ -7,8 +7,11 @@ TTTv2 Qwen2.5-7B-Instruct demo — accuracy and performance measurement.
 Uses ``EagerQwenExecutor`` / ``TracedQwenExecutor`` directly (no vLLM adapter).
 
 **Mesh note:** Default Qwen2.5-7B has 28 attention heads and 4 KV heads; both must be
-divisible by the mesh device count. Use N150 (1), N300 (2), or a 4-device row mesh —
-not 8 devices (e.g. T3K), which is incompatible with this checkpoint.
+divisible by the mesh device count. Use N150 (1) or N300 (2); 8 devices (e.g. T3K) are
+incompatible (8 ∤ 4 KV heads). 4-device (N150x4) is **not** a validated mesh for this
+model on TTTv2 — fabric routing fails to form a path across the 4-device row, and the
+Qwen HiFi4 attention precision floor is only wired for 1–2 devices — so it is not
+advertised here.
 
 Usage:
     # Token accuracy test
@@ -17,8 +20,8 @@ Usage:
     # Batch-1 latency test
     MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen2.5-7B-Instruct pytest models/common/tests/demos/qwen25_7b/demo.py -k "batch-1" -v
 
-    # Batch-32 throughput test (prefer 4-device mesh if available)
-    MESH_DEVICE=N150x4 HF_MODEL=Qwen/Qwen2.5-7B-Instruct pytest models/common/tests/demos/qwen25_7b/demo.py -k "batch-32" -v
+    # Batch-32 throughput test
+    MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen2.5-7B-Instruct pytest models/common/tests/demos/qwen25_7b/demo.py -k "batch-32" -v
 
 LazyWeight tensor cache (same rules as ``models/tt_transformers`` ``ModelArgs``):
 ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` is set, otherwise
@@ -50,30 +53,30 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 
 # Top-1 / top-5 / tok_s_u / ttft_ms: N300 matches ``models/tt_transformers/PERF.md``
 # (Qwen2.5-7B rows in Performance and Accuracy; same numbers in both tables).
-# PERF.md only publishes N300 for this checkpoint; N150 / N150x4 throughput and TTFT
-# are scaled from the N300 baseline using Llama-3.1-8B N150 vs N300 device ratios until
-# we have measured Qwen rows for those meshes.
+# PERF.md only publishes N300 for this checkpoint; the N150 throughput and TTFT are
+# scaled from the N300 baseline using Llama-3.1-8B N150 vs N300 device ratios until we
+# have measured Qwen rows for that mesh. N150x4 (4-device) is not validated on TTTv2
+# (see module docstring) and is intentionally absent.
 EXPECTED_METRICS = {
     "performance": {
         "N150": {"top1": 84, "top5": 96, "tok_s_u": 15.7, "ttft_ms": 143},
         "N300": {"top1": 84, "top5": 96, "tok_s_u": 24.6, "ttft_ms": 92},
-        "N150x4": {"top1": 84, "top5": 96, "tok_s_u": 30.0, "ttft_ms": 80},
     },
     # Accuracy mode: teacher-forcing top-1 slightly below PERF.md parity on some meshes; keep margin vs measured ~83.8% on N300.
     "accuracy": {
         "N150": {"top1": 82, "top5": 95, "tok_s_u": 15.7, "ttft_ms": 143},
         "N300": {"top1": 82, "top5": 95, "tok_s_u": 24.6, "ttft_ms": 92},
-        "N150x4": {"top1": 82, "top5": 95, "tok_s_u": 30.0, "ttft_ms": 80},
     },
 }
 
 PERF_TOLERANCE = 0.05
 
 # Mesh topology comes only from ``MESH_DEVICE`` (same naming as vLLM / other tt demos).
+# N150x4 (1, 4) is intentionally omitted: not a validated mesh for this model on TTTv2
+# (fabric routing failure + 1–2-device-only attention precision floor — see module docstring).
 _MESH_DEVICE_TO_SHAPE: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
-    "N150x4": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
@@ -83,7 +86,7 @@ def _ttnn_mesh_device_param_from_env() -> dict:
     env = os.environ.get("MESH_DEVICE", "").strip()
     if not env:
         pytest.skip(
-            "MESH_DEVICE must be set (e.g. N300 or N150x4). See module docstring.",
+            "MESH_DEVICE must be set (e.g. N300). See module docstring.",
             allow_module_level=True,
         )
     shape = _MESH_DEVICE_TO_SHAPE.get(env)
@@ -133,7 +136,7 @@ def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice, hf_model_id: st
     pytest.skip(
         f"Incompatible mesh for {hf_model_id}: {n_dev} devices need "
         f"num_attention_heads ({n_h}) and num_key_value_heads ({n_kv}) each divisible by {n_dev}. "
-        f"Try MESH_DEVICE=N300 (2) or N150x4 (4)."
+        f"Try MESH_DEVICE=N300 (2)."
     )
 
 

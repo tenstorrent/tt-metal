@@ -22,8 +22,9 @@ N150 best-effort::
     MESH_DEVICE=N150 QWEN25_DEMO_NUM_LAYERS=1 \\
       pytest models/common/models/qwen25_7b/demo.py -v -k prefill_smoke
 
-``Attention1D`` shards heads across the mesh: use ``MESH_DEVICE=N300`` (2) or ``N150x4`` (4)
-for the default 7B checkpoint (28 / 4 heads); T3K (8) is incompatible.
+``Attention1D`` shards heads across the mesh: use ``MESH_DEVICE=N300`` (2) for the default
+7B checkpoint (28 / 4 heads); T3K (8) is incompatible, and N150x4 (4) is not a validated
+mesh for this model on TTTv2 (fabric routing + 1–2-device-only attention precision floor).
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice, hf_model_id: st
     pytest.skip(
         f"Incompatible mesh for {hf_model_id}: {n_dev} devices need "
         f"num_attention_heads ({n_h}) and num_key_value_heads ({n_kv}) each divisible by {n_dev}. "
-        f"Try MESH_DEVICE=N300 (2) or N150x4 (4)."
+        f"Try MESH_DEVICE=N300 (2)."
     )
 
 
@@ -64,7 +65,8 @@ def device_params(request, galaxy_type):
     """Match ``models/tt_transformers/conftest.py`` so ``fabric_config: True`` maps to a real fabric."""
     params = getattr(request, "param", {}).copy()
 
-    mesh_device = {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
+    # N150x4 (1, 4) intentionally omitted — not a validated mesh for this model on TTTv2 (see docstring).
+    mesh_device = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
         os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
     )
     is_single_device = (mesh_device == (1, 1)) if isinstance(mesh_device, tuple) else (mesh_device == 1)
@@ -434,7 +436,9 @@ def test_qwen25_7b_numerical_divergence_vs_hf(mesh_device, hf_model_id, tmp_path
                     position_ids=position_ids,
                     position_embeddings=(cos, sin),
                 )[0]
-            h = hf.model.norm(h)
+            # Run the final norm purely for its forward hook (captures the reference activation);
+            # the return value is unused.
+            hf.model.norm(h)
 
     for h_ in handles:
         h_.remove()

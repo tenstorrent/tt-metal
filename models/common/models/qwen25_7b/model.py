@@ -86,7 +86,10 @@ class Qwen25ExecutorRuntimeConfig:
         # old "prefill trace capture hits TT_FATAL under LazyWeight + distributed norms" no longer
         # reproduces. Decode trace remains enabled at the engine layer regardless.
         num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
-        allowed = {1: (128,), 2: (128, 1024), 4: (128, 1024)}.get(num_devices, (128,))
+        # 4-device (N150x4) is intentionally absent: not a validated mesh for this model on
+        # TTTv2 (fabric routing failure + the Qwen HiFi4 attention floor is only wired for 1–2
+        # devices in _resolve_qwen_wh_tuning, so 4-dev would silently run degraded HiFi2 attention).
+        allowed = {1: (128,), 2: (128, 1024)}.get(num_devices, (128,))
         return (
             prefill_seq_len in allowed
             and prefill_seq_len <= self.max_prefill_chunk_size
