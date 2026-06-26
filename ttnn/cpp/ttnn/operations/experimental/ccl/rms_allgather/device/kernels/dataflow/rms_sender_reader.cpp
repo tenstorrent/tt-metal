@@ -59,7 +59,6 @@ void kernel_main() {
 
     const DataFormat data_format = get_dataformat(cb_ex_partial2);
 
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     uint64_t remote_noc_addrs[num_blocks];
 
     uint32_t x = start_x, y = start_y;
@@ -105,7 +104,6 @@ void kernel_main() {
         cb_external.reserve_back(num_blocks_first_stage);
         uint32_t l1_write_addr_external = cb_external.get_write_ptr();
         for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
-            // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
             uint64_t noc_addr_ex_par = remote_noc_addrs[block] | (l1_read_addr_ex_par);
             noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
             l1_write_addr_external += single_tile_size_bytes;
@@ -123,7 +121,6 @@ void kernel_main() {
 
             uint32_t curr_block_index = block_index_stride;
             for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                 uint64_t noc_addr_ex = remote_noc_addrs[curr_block_index] | (l1_read_addr_ex);
                 noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
                 l1_write_addr_external += single_tile_size_bytes;

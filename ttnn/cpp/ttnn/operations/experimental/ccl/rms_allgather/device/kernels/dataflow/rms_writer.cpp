@@ -107,7 +107,6 @@ void kernel_main() {
     const uint32_t eps = get_arg_val<uint32_t>(base_post_rt + 1);
     generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
@@ -181,20 +180,16 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
         if constexpr (num_links == 1) {
             // We deduct the local increment from the target semaphore value as we don't need internal synchronization
-            // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
             noc_semaphore_wait(out_ready_sem_bank_addr_ptr, out_ready_sem_wait_value - 1);
         } else {
             // if multiple links then we need to also ensure the local ones have completed by having them also
             // increment the semaphore and including them in the total
-            // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
             noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-            // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
             noc_semaphore_wait(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
         }
 
         // 4. global semaphore reset
-        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
         noc_semaphore_set(out_ready_sem_bank_addr_ptr, 0);
         // Signal the other local cores that the semaphore has returned
 
@@ -232,8 +227,6 @@ void kernel_main() {
             uint32_t tile_id = gamma_tile_start_id + w;
             noc_obj.async_read(
                 gamma, CoreLocalMem<uint8_t>(l1_write_addr_gamma), bytes_in_two_facelines, {.page_id = tile_id}, {});
-            // Device 2.0 migration: legacy primitive retained: local-L1 self-read via get_noc_addr(local_l1_addr); no
-            // LocalL1 source endpoint on main
             uint64_t gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + bytes_in_faceline);
             noc_obj.async_read_barrier();  // might be faster to do two separate read instead of barrier.
             noc_async_read(gamma_noc_addr, l1_write_addr_gamma + mask_read_tile_offset_bytes, bytes_in_faceline);

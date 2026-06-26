@@ -48,7 +48,6 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
     const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
@@ -129,8 +128,6 @@ void kernel_main() {
             size_t l1_write_addr = cb_output.get_write_ptr();
             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                 uint32_t tile_id = output_tile_id_start + tiles_read;
-                // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no noc_traits_t
-                // specialization, so Noc::async_read rejects it at compile time.
                 uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
@@ -300,7 +297,6 @@ void kernel_main() {
                 while (sem_iter_pos < input_tile_id_end) {
                     // Wait for semaphore (sender's full slice pattern)
                     if (chunk_count % chunks_per_sync == 0) {
-                        // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;
@@ -322,8 +318,6 @@ void kernel_main() {
 
                             for (uint32_t j = 0; j < num_tiles_to_read; ++j) {
                                 uint32_t tile_id = output_tile_id_start + cb_row_offset + cb_pages_read_in_row;
-                                // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
-                                // noc_traits_t specialization, so Noc::async_read rejects it at compile time.
                                 uint64_t noc_read_addr = output_tensor_addrgen.get_noc_addr(tile_id);
                                 noc_async_read(noc_read_addr, l1_write_addr, page_size);
 
@@ -379,7 +373,6 @@ void kernel_main() {
 
                 while (tiles_read < tiles_to_read) {
                     if (chunk_count % chunks_per_sync == 0) {
-                        // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;
@@ -404,6 +397,5 @@ void kernel_main() {
         }
     }
 
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

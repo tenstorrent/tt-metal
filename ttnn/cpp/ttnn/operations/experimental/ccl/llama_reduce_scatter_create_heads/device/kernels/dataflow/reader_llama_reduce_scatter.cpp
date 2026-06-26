@@ -67,7 +67,6 @@ void kernel_main() {
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
     // Runtime arguments
-    // Device 2.0 migration: legacy primitive retained: receiver_semaphore_address is a GlobalSemaphore address.
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     Semaphore<> local_sem(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
@@ -119,7 +118,6 @@ void kernel_main() {
                 const uint32_t transfer_size = read_size * page_size_bytes;
 
                 cb_fabric_sender.reserve_back(num_pages_reserve_push);
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
 
                 if (num_pages_reserve_push >= curr_packet_num_pages) {
@@ -154,11 +152,9 @@ void kernel_main() {
             const uint64_t output_noc_address = get_noc_addr(core_x, core_y, base_input_tensor_addr + tile_offset);
             const uint32_t receiver_l1_address = base_receiver_l1_addresses + i * page_size_bytes;
 
-            // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
 
-        // Device 2.0 migration: legacy primitive retained: receiver_semaphore_address is a GlobalSemaphore address.
         noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
 
         noc_obj.async_read_barrier();
@@ -212,6 +208,5 @@ void kernel_main() {
         noc_obj.async_write_barrier();
     }
     local_sem.set(INVALID);
-    // Device 2.0 migration: legacy primitive retained: receiver_semaphore_address is a GlobalSemaphore address.
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
 }

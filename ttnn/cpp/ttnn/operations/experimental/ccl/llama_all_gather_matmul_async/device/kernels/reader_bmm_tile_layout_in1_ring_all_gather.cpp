@@ -57,17 +57,13 @@ void do_signaling(Noc& noc, uint32_t& rt_args_idx) {
         const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t signalling_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         const uint64_t signalling_semaphore_address =
             get_noc_multicast_addr(multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, 0) |
             signalling_semaphore;
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-        // (noc_semaphore_set_multicast has no Device 2.0 wrapper equivalent.)
         noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
     } else {
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         const uint64_t sem_addr = get_noc_addr(pv_core_x, pv_core_y, pv_semaphore);
         noc_semaphore_inc(sem_addr, 1);
     }
@@ -176,8 +172,6 @@ void kernel_main() {
                 cb_in1.reserve_back(in1_block_num_tiles);
                 l1_write_addr_in1 = cb_in1.get_write_ptr();
 
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-                // (noc_async_read_one_packet_set_state / with_state state-machine has no Device 2.0 wrapper.)
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {

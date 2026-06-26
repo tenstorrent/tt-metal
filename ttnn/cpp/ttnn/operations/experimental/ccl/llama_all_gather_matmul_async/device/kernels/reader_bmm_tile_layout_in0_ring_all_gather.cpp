@@ -62,9 +62,6 @@ void kernel_main() {
 
     cb_in0.reserve_back(multicast_chunk_size_in_tiles * num_multicast_steps);
     for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
-        // (fused_op_receiver_signal_semaphore_addr[] is a runtime-indexed array of L1 semaphore addresses
-        // already resolved via get_semaphore(id); Semaphore<> wraps a single id, not an array of addresses.)
         volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 fused_op_receiver_signal_semaphore_addr[chunk_indices[istep]]);

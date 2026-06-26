@@ -50,9 +50,7 @@ void kernel_main() {
 
     const DataFormat data_format = get_dataformat(cb_ex_partial2);  // data format
 
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     uint64_t remote_noc_addrs_first_stage[is_all_to_all_worker ? num_blocks_first_stage : 1];
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     uint64_t remote_noc_addrs_second_stage[is_all_to_all_worker ? num_blocks_second_stage : 1];
     if constexpr (is_all_to_all_worker) {
         if constexpr (use_two_stage_reduce) {
@@ -113,7 +111,6 @@ void kernel_main() {
         uint32_t l1_write_addr_external = cb_ex_external2_obj.get_write_ptr();
 
         for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
-            // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
             uint64_t noc_addr_ex_par =
                 remote_noc_addrs_first_stage[block] | (l1_read_addr_ex_par);  // Updating read address for reading
                                                                               // SUm(X) and Sum(X2) per core
@@ -131,7 +128,6 @@ void kernel_main() {
                 reduce_second_stage_sem.set(0);
                 // read data from other cores - second stage reduce
                 for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                     uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
                     noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
                     l1_write_addr_external += single_tile_size_bytes;
@@ -144,7 +140,6 @@ void kernel_main() {
 
         // sync with the gather worker
         cb_ex2_obj.wait_front(1);
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         const uint64_t reduce_second_stage_receiver_semaphore_noc_addr =
             remote_noc_addrs_second_stage[0] | get_semaphore(reduce_second_stage_semaphore_id);
         noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);

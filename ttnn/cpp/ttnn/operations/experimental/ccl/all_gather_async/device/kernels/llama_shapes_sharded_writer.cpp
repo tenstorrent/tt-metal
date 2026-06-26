@@ -49,7 +49,6 @@ void kernel_main() {
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -60,7 +59,6 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -123,7 +121,6 @@ void kernel_main() {
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
 
-        // Device 2.0 migration: legacy primitive retained: barrier_sem is a GlobalSemaphore address.
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -183,19 +180,16 @@ void kernel_main() {
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
-        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address
         noc_semaphore_wait_min(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
