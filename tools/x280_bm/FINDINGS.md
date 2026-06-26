@@ -280,6 +280,45 @@ Supporting files:
   512 MB sustained run holding. A host-wall (`release → footer`) cross-check is the
   remaining belt-and-suspenders measurement if an independent number is wanted.
 
+### 14. Closing the loop — relay the real device profiler to host (in progress)
+Goal: a normal workload makes **all RISCs on all cores** emit device-profiler
+timestamps to L1; the X280 drains those L1 profiler buffers (§12 scatter-read) and
+relays them to the host D2H socket (§13 write) — replacing tt-metal's profiler
+readback path — then validate via Tracy capture/`csvexport`.
+- **Increment 1 DONE (bh-8):** `profiler_test_full_buffer` (built via
+  `--build-metal-tests`) run with `TT_METAL_DEVICE_PROFILER=1` → **110/110 cores ×
+  all 5 RISCs** (BRISC/NCRISC/TRISC0-2) emit FW + kernel zones; ground truth in
+  `generated/profiler/.logs/profile_log_device.csv` (3.2 M markers, chip 1350 MHz).
+- **L1 source layout (Blackhole):** `profiler_msg_t` lives in the L1 mailbox region
+  (`MEM_MAILBOX_BASE=0x60` + offsetof; query via HAL `HalL1MemAddrType::PROFILER`).
+  = `control_vector[32]` (128 B) + 5 × `buffer[risc]` (2048 B) = 10368 B/core.
+  Marker = 8 B: `data[i] = 0x80000000 | (timer_id<<12) | time_H`, `data[i+1] =
+  time_L` (44-bit wall clock). **Guaranteed FW/kernel start+end markers at fixed
+  offsets `buffer[risc]+0x10..0x2F`** — persist until next launch, so the X280
+  drains a clean live snapshot. Each RISC L1 buffer is only 2048 B (~256 markers);
+  the run's 3.2 M total came from the profiler draining/refilling repeatedly.
+- **Increment 2 DONE + VERIFIED (bh-8):** FW `src/profrelay.c` + host
+  `test_x280_profrelay`. Host launches the all-5-RISC workload (`full_buffer` kernels
+  on RISCV_0/1 + compute, full grid, blocking), leaves L1 intact, queries
+  `hal.get_dev_addr(TENSIX, PROFILER)` (= L1 `0xb50`), boots the X280; the FW drains
+  all 110 cores' `profiler_msg_t` (10496 B/core) and posted-writes them to host D2H.
+  **Result: 1,154,560 B relayed @ 493 MB/s (pull-bound); relayed core-0 == direct
+  `read_core` EXACT MATCH; 550/550 (core×RISC) valid FW+kernel markers, ordering
+  sane.** The X280 replaces tt-metal's profiler readback, proven bit-exact. Relayed
+  bytes dumped to `$TT_METAL_PROFILER_DIR/x280_relayed_profiler.bin` for Tracy.
+- **Increment 3 DONE (bh-8):** built `tracy-capture` + `tracy-csvexport`
+  (`cmake --build build_Release --target tracy-capture tracy-csvexport` →
+  `build_Release/tools/profiler/bin/`). Ran the profiler workload with
+  `TT_METAL_DEVICE_PROFILER=1 TRACY_NO_EXIT=1`, `tracy-capture` pulled **3,215,157
+  zones** → `.tracy` (20 MB), `tracy-csvexport` → CSV showing all-RISC FW+kernel
+  zones (BRISC-FW/KERNEL, NCRISC-FW/KERNEL, TRISC-FW×3 / TRISC-KERNEL×3, TEST-FULL).
+- **LOOP CLOSED:** all RISCs/all cores emit profiler timestamps → X280 relays them
+  to host D2H (bit-exact vs `read_core`) → Tracy capture/`csvexport` validates the
+  same FW/kernel zones. The X280-relayed bytes are bit-identical to the device
+  profiler source that feeds Tracy, so the relay reproduces the Tracy-exported data.
+  (bh-8 is single-chip / no `tt-run`+MPI, so the literal multi-host smoke test can't
+  run multi-rank here; the loop is validated single-host.)
+
 ---
 
 ## Hardware facts established

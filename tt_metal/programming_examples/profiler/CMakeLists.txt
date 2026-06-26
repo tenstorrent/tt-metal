@@ -27,6 +27,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_poll6n1)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_pollmp)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_gridilp)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_d2hbw)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_profrelay)
 
 add_custom_target(
     profiler_examples
@@ -44,4 +45,5 @@ add_custom_target(
         test_x280_pollmp
         test_x280_gridilp
         test_x280_d2hbw
+        test_x280_profrelay
 )
