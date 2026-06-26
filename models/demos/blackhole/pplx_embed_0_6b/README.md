@@ -475,13 +475,21 @@ excluding host overhead, post-processing and D2H copy.
 |------:|-----:|----------:|----------:|-------------:|---------:|-------------|
 |     1 |  512 |     7.3ms |     7.2ms |        138.1 |   70,718 | L1 + big grid |
 |     8 |  512 |    44.0ms |    43.9ms |        182.2 |   93,275 | L1 batched  |
-|    32 |  512 |   197.9ms |   197.7ms |        161.8 |   82,856 | DRAM        |
+|    16 |  512 |    95.0ms |    94.8ms |        168.7 |   86,393 | DRAM resid + L1 intermediates |
+|    32 |  512 |   192.4ms |   192.3ms |        166.4 |   85,216 | DRAM resid + L1 intermediates |
 |     1 | 1024 |    18.3ms |    18.2ms |         55.1 |   56,397 | L1          |
 |     1 | 2048 |    33.3ms |    33.2ms |         30.1 |   61,661 | L1          |
 |     8 | 1024 |   134.7ms |   134.6ms |         59.4 |   60,860 | DRAM        |
 |     8 | 2048 |   270.3ms |   270.2ms |         29.6 |   60,633 | DRAM        |
 |    32 | 1024 |   524.9ms |   524.7ms |         61.0 |   62,449 | DRAM        |
 |    32 | 2048 |  1027.4ms |  1027.1ms |         31.2 |   63,805 | DRAM        |
+
+> **bs=8/ISL=512 is the single-chip throughput peak** (93.3k tok/s): it is the
+> largest batch whose full activation stream fits in P150 L1. For bs≥16 the
+> residual (`bs·ISL·dim·2 B`) spills to DRAM, but the short-lived per-layer
+> matmul outputs are still pinned to L1 (`DRAM resid + L1 intermediates`),
+> recovering **+6.8 %** at bs=16 (80.9k→86.4k) and **+2.2 %** at bs=32
+> (83.4k→85.2k) vs. the all-DRAM placement. See Section 5.
 
 ### 3.2 Full pipeline (end-to-end)
 
@@ -585,6 +593,16 @@ Applied by default across all workloads (centralized in
   `nlp_create_qkv_heads` / `nlp_concat_heads` (≈ −1.3ms in the masked path).
 - **Workload-tuned memory placement** — L1 activations + large core grid for
   bs=1; batched L1 for bs=8/ISL=512; DRAM for the large shapes.
+- **Per-op L1 intermediates for batched prefill (bs≥16, ISL≤512)** — at bs≥16 the
+  persistent residual stream no longer fits L1 and falls back to DRAM, but the
+  short-lived matmul outputs inside each layer (produced, consumed, and
+  immediately deallocated) are still pinned to L1 so they skip the DRAM
+  round-trip. Which outputs are pinned is shape-specific: the big FF-gate/up and
+  QKV tensors fit at bs=16 but clash with the matmul static circular buffers at
+  bs=32, so only SDPA/FF-down/concat-heads are pinned there. Net: **+6.8 %** at
+  bs=16, **+2.2 %** at bs=32 (ISL=512); embeddings are bit-identical (memory
+  location only, no math change). Gated by `TT_PREFILL_INTERMEDIATE_L1` /
+  per-op `TT_PREFILL_<OP>_L1` env vars and wired per shape in `demo/_common.py`.
 - **Block-sharded LayerNorm**, **KV-cache fill skip** (prefill-only, no decode),
   and **bidirectional SDPA** (`is_causal=False`).
 - **Hardware trace capture** with an *extended trace* that folds the RMSNorm +
@@ -601,8 +619,10 @@ here — the per-request token input is tiny and the model is compute-bound).
 
 ## Implementation notes
 
-- All changes are localized to this directory (plus a one-line `trust_remote_code`
-  fix in `tt_transformers/.../model_config.py`); no other `tt_transformers` edits.
+- Changes are localized to this directory, plus two additions in
+  `tt_transformers/.../model_config.py`: the one-line `trust_remote_code` fix and
+  the env-gated per-op prefill L1 placement (`_prefill_op_mem_config` /
+  `_use_prefill_intermediate_l1`, default-off so all other models are unaffected).
 - `PplxBidirectionalAttention` (`tt/attention.py`) wraps SDPA with `is_causal=False`
   and applies the LoFi RoPE kernel config.
 - `PplxModelArgs` loads weights directly from safetensors, avoiding the custom HF

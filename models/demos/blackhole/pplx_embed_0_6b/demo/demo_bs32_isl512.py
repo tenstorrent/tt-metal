@@ -5,9 +5,12 @@
 """
 pplx-embed-v1-0.6B perf demo, fixed at batch=32 / ISL=512.
 
-bs=32 ISL=512 activation (32*512*1024*2 B = 32 MB) exceeds P150 L1 budget,
-so activations are DRAM-resident.  The freed L1 budget allows widening the
-MinimalMatmul grid from (8,8)=64 to (8,10)=80 cores via QWEN_MM_BIG_GRID_BH=1.
+bs=32 ISL=512 residual stream (32*512*1024*2 B = 32 MB) exceeds the P150 L1
+budget, so the persistent residual is DRAM-resident and the MinimalMatmul grid
+is widened to (8,10)=80 cores via QWEN_MM_BIG_GRID_BH=1.  The short-lived
+per-layer matmul outputs that still fit alongside the static CBs (SDPA / FF-down /
+concat-heads) are pinned to L1 (TT_PREFILL_{SDPA,FF2,CONCAT}_L1=1, wired in
+_common.WORKLOAD_CONFIGS) — recovering ~+2.2% over the all-DRAM placement.
 
 Usage:
     pytest models/demos/blackhole/pplx_embed_0_6b/demo/demo_bs32_isl512.py -sv

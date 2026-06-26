@@ -198,6 +198,21 @@ def apply_recommended_env(batched_l1: bool) -> None:
 # "dram_grid"   – when activations spill to DRAM, the per-core L1 budget
 #                 is freed and we can widen the MinimalMatmul grid from
 #                 (8,8)=64 to (8,10)=80 cores via QWEN_MM_BIG_GRID_BH=1.
+# "intermediate_l1" – list of per-op prefill intermediates to force into L1
+#                 even though the persistent residual stays in DRAM.  This is
+#                 the BGE-M3 bs32 memory strategy: the residual (bs*seq*dim*2 B)
+#                 is too big for L1 at bs>8, but the short-lived matmul outputs
+#                 inside a layer (produced, consumed, deallocated) can still
+#                 ride in L1 — saving the DRAM round-trip on the hottest
+#                 tensors.  Each entry sets TT_PREFILL_<OP>_L1=1.  Only the
+#                 outputs that fit alongside the matmul static circular buffers
+#                 are listed per shape (the big FF13/QKV tensors clash with the
+#                 matmul CBs at bs=32 but fit at bs=16).  Measured on P150:
+#                   bs16/isl512: +6.8%  (80.9k -> 86.4k tok/s)
+#                   bs32/isl512: +2.2%  (83.4k -> 85.2k tok/s)
+
+_INTERM_L1_BS16 = ["SDPA", "FF2", "CONCAT", "FF13", "QKV"]
+_INTERM_L1_BS32 = ["SDPA", "FF2", "CONCAT"]
 
 WORKLOAD_CONFIGS = {
     # L1-backed activations (total activation < 10 MB fits in P150 L1)
@@ -205,11 +220,11 @@ WORKLOAD_CONFIGS = {
     (1, 1024): {"batched_l1": False, "dram_grid": True},  # 2 MB
     (1, 2048): {"batched_l1": False, "dram_grid": True},  # 4 MB
     (8, 512): {"batched_l1": True, "dram_grid": False},  # 8 MB
-    # DRAM-backed activations (> 10 MB, use wider matmul grid)
-    (16, 512): {"batched_l1": False, "dram_grid": True},  # 16 MB
+    # DRAM-backed residual (> 10 MB) — wider matmul grid + per-op L1 intermediates
+    (16, 512): {"batched_l1": False, "dram_grid": True, "intermediate_l1": _INTERM_L1_BS16},  # 16 MB
     (8, 1024): {"batched_l1": False, "dram_grid": True},  # 16 MB
     (8, 2048): {"batched_l1": False, "dram_grid": True},  # 32 MB
-    (32, 512): {"batched_l1": False, "dram_grid": True},  # 32 MB
+    (32, 512): {"batched_l1": False, "dram_grid": True, "intermediate_l1": _INTERM_L1_BS32},  # 32 MB
     (32, 1024): {"batched_l1": False, "dram_grid": True},  # 64 MB
     (32, 2048): {"batched_l1": False, "dram_grid": True},  # 128 MB
 }
@@ -233,6 +248,11 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         os.environ.setdefault("QWEN_MM_BIG_GRID_BH", "1")
     if cfg.get("minimal_mm_bs1"):
         os.environ.setdefault("QWEN_MINIMAL_MM_BS1", "1")
+    # Per-op L1 placement for short-lived prefill intermediates (BGE-M3-style):
+    # residual stays in DRAM but the hot matmul outputs that fit alongside the
+    # static CBs are kept in L1. No-op unless this shape lists any.
+    for op in cfg.get("intermediate_l1", []):
+        os.environ.setdefault(f"TT_PREFILL_{op}_L1", "1")
 
 
 def pplx_optimizations(model_args):

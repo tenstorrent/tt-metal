@@ -1240,6 +1240,49 @@ class ModelArgs:
         """Preferred prefill activation memory placement (L1 for guarded short-seq path)."""
         return ttnn.L1_MEMORY_CONFIG if self.use_short_seq_l1_prefill(seq_len) else ttnn.DRAM_MEMORY_CONFIG
 
+    def _use_prefill_intermediate_l1(self, seq_len: int = None, knob: str = None) -> bool:
+        """Whether a *short-lived* per-op prefill intermediate should be placed in L1.
+
+        This is the high-batch analogue of ``use_short_seq_l1_prefill``: at bs>8 the
+        persistent residual stream (bs*seq*dim*2 B) no longer fits L1, so
+        ``get_prefill_activation_mem_config`` (and hence the residual) falls back to
+        DRAM. But the transient matmul outputs inside a layer (QKV / heads / SDPA /
+        concat / FF1-3 / FF2) are produced, consumed, and immediately deallocated, so
+        they can still ride in L1 — saving the DRAM round-trip on the hottest tensors.
+        (This mirrors the BGE-M3 bs32 strategy: residual in DRAM, op-outputs in L1.)
+
+        Fully opt-in and a no-op unless explicitly enabled, so all other models /
+        shapes are unaffected:
+          * ``TT_PREFILL_INTERMEDIATE_L1=1`` enables the curated default set.
+          * Each call site also honours its own per-op knob (e.g. ``TT_PREFILL_FF13_L1``)
+            which overrides the master for A/B isolation.
+        Guarded to single-chip Blackhole, short per-user seq, and only when the
+        residual is already in DRAM (otherwise the short-seq path already L1s
+        everything and there is nothing to do).
+        """
+        if self.use_short_seq_l1_prefill(seq_len):
+            return False
+        if self.is_galaxy or self.num_devices != 1 or not is_blackhole():
+            return False
+        max_short = int(os.getenv("TT_SHORT_SEQ_L1_PREFILL_MAX", "512"))
+        per_user_seq = self.max_seq_len if seq_len is None else seq_len
+        if per_user_seq > self.max_seq_len:  # already flattened across batch
+            per_user_seq = per_user_seq // max(1, self.max_batch_size)
+        if per_user_seq > max_short:
+            return False
+        if knob is not None:
+            override = os.getenv(knob)
+            if override is not None:
+                return override == "1"
+        return os.getenv("TT_PREFILL_INTERMEDIATE_L1", "0") == "1"
+
+    def _prefill_op_mem_config(self, seq_len: int = None, knob: str = None):
+        """L1 for a transient prefill op-output when intermediate-L1 is enabled,
+        else the default residual/activation placement."""
+        if self._use_prefill_intermediate_l1(seq_len, knob):
+            return ttnn.L1_MEMORY_CONFIG
+        return self.get_prefill_activation_mem_config(seq_len=seq_len)
+
     def use_minimal_matmul_prefill(self, seq_len: int) -> bool:
         """Return True iff the QKV / FF2 prefill matmul should route to
         ``ttnn.experimental.minimal_matmul`` (vs. plain ``ttnn.linear``).
@@ -1286,6 +1329,25 @@ class ModelArgs:
         ):
             return (8, 10)
         return grid
+
+    def _resolve_mm_blocks(self, knob: str = None, default=(8, 8, 8)):
+        """MinimalMatmul (M, K, N) block sizes, overridable for experiments.
+
+        Smaller blocks shrink the static circular-buffer footprint, freeing L1
+        for L1-resident op outputs at high batch (the documented "shrink to free
+        L1" lever) — at some cost to matmul efficiency. Read from a per-op knob
+        first (e.g. ``QWEN_MM_BLOCK_FF13=4,8,8``) then the global
+        ``QWEN_MM_BLOCK=M,K,N``; default unchanged so other models are unaffected.
+        """
+        for env in (knob, "QWEN_MM_BLOCK"):
+            if not env:
+                continue
+            override = os.getenv(env)
+            if override:
+                parts = override.split(",")
+                if len(parts) == 3:
+                    return (int(parts[0]), int(parts[1]), int(parts[2]))
+        return default
 
     # =========================================================================
     # MLP PROGRAM AND MEMORY CONFIGS
@@ -1361,10 +1423,11 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             if self.use_minimal_matmul_prefill(seq_len):
                 grid = self._resolve_mm_grid(self.mlp1_3_grid(seq_len), seq_len)
+                mb, kb, nb = self._resolve_mm_blocks("QWEN_MM_BLOCK_FF13")
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
-                    K_block_size=8,
-                    N_block_size=8,
+                    M_block_size=mb,
+                    K_block_size=kb,
+                    N_block_size=nb,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             return self.matmul_config(
@@ -1420,10 +1483,11 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             if self.use_minimal_matmul_prefill(seq_len):
                 grid = self._resolve_mm_grid(self.mlp2_grid(seq_len), seq_len)
+                mb, kb, nb = self._resolve_mm_blocks("QWEN_MM_BLOCK_FF2")
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
-                    K_block_size=8,
-                    N_block_size=8,
+                    M_block_size=mb,
+                    K_block_size=kb,
+                    N_block_size=nb,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             else:
@@ -1456,7 +1520,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
+            return self._prefill_op_mem_config(seq_len=prefill_seq_len, knob="TT_PREFILL_FF13_L1")
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1475,7 +1539,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
+            return self._prefill_op_mem_config(seq_len=prefill_seq_len, knob="TT_PREFILL_FF2_L1")
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1781,10 +1845,11 @@ class ModelArgs:
             self.MAX_QKV_MM_SEQ_LEN = 2048
             if self.use_minimal_matmul_prefill(seq_len):
                 qkv_grid = self._resolve_mm_grid((8, 10) if is_blackhole() else (8, 8), seq_len)
+                mb, kb, nb = self._resolve_mm_blocks("QWEN_MM_BLOCK_QKV")
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
-                    K_block_size=8,
-                    N_block_size=8,
+                    M_block_size=mb,
+                    K_block_size=kb,
+                    N_block_size=nb,
                     compute_with_storage_grid_size=ttnn.CoreCoord(qkv_grid[0], qkv_grid[1]),
                 )
             else:
@@ -1853,7 +1918,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
+            return self._prefill_op_mem_config(seq_len=prefill_seq_len, knob="TT_PREFILL_QKV_L1")
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1924,7 +1989,7 @@ class ModelArgs:
                 else:
                     return ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
+            return self._prefill_op_mem_config(seq_len=prefill_seq_len, knob="TT_PREFILL_HEADS_L1")
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1961,7 +2026,7 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             # Match concat_heads / WO: keeps SDPA output off DRAM when use_short_seq_l1_prefill (embedding <512)
-            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
+            return self._prefill_op_mem_config(seq_len=prefill_seq_len, knob="TT_PREFILL_SDPA_L1")
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1998,7 +2063,7 @@ class ModelArgs:
                     ),
                 )
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
+            return self._prefill_op_mem_config(seq_len=prefill_seq_len, knob="TT_PREFILL_CONCAT_L1")
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2181,7 +2246,7 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return self.get_prefill_activation_mem_config(seq_len=prefill_seq_len)
+            return self._prefill_op_mem_config(seq_len=prefill_seq_len, knob="TT_PREFILL_WO_L1")
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
