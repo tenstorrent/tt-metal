@@ -16,24 +16,15 @@ def test_pow_fractional_composite(device):
     C = 2
     H = 32
     W = 32
-    x = torch.randn((N, C, H, W)).bfloat16().float()
+    x = (torch.rand((N, C, H, W)) + 0.01).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     y = 3 + torch.randn(1, 1, 1, 1).bfloat16().float()
     yt = y
     yt_floor = math.floor(yt)
     yt_trunc = yt - yt_floor
-    pow_trunc_log = ttnn.multiply(ttnn.log(xt, fast_and_approximate_mode=True), yt_trunc)
+    pow_trunc_log = ttnn.multiply(ttnn.log(xt), yt_trunc)
     pow_frac = ttnn.exp(pow_trunc_log)
     xtt = ttnn.mul(ttnn.pow(xt, yt_floor), pow_frac)
     assert list(xtt.padded_shape) == [N, C, H, W]
