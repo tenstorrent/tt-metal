@@ -81,7 +81,7 @@ _SUBTORUS_Y4_ENV = {
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            49_760_000,  # Re-centered 2026-06-25 for the rebase onto main, which now carries BOTH
+            49_760_000,  # Re-centered 2026-06-25 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (drop the separate output buffer + per-layer fill;
             # measured 50.61 ms alone) AND #47536 (update_padded_kv_cache RM/fp8; measured 51.29 ms
             # alone). The combined 2x4-2link number can't be measured on the galaxy, so the target is
@@ -119,7 +119,7 @@ _SUBTORUS_Y4_ENV = {
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4 and layer3 and gate_device and no_ref and isl_6k4'",
-            63_200_000,  # Re-centered 2026-06-25 for the rebase onto main, which now carries BOTH
+            63_200_000,  # Re-centered 2026-06-25 for two stacked speedups now in the tree -- BOTH
             # the in-place direct-write change (measured 64.30 ms alone) AND #47536
             # (update_padded_kv_cache RM/fp8; measured 64.80 ms alone). The combined 2x4-2link number
             # can't be measured on the galaxy, so the target is the midpoint of the plausible combined
@@ -135,11 +135,11 @@ _SUBTORUS_Y4_ENV = {
         # FABRIC_2D_TORUS_Y variants — single-galaxy 8x4 with the SP axis (dim 0) closed into a ring
         # (Ring on SP-axis dispatch/combine, Linear on TP-axis collectives). Only the 8x4 cases are
         # meaningful: TORUS_Y wraps the SP axis, and on a 2x4 mesh that axis is 2-wide so the ring
-        # degenerates to Linear. All entries calibrated 2026-06-24 on the 110-c78 BH galaxy at the
+        # degenerates to Linear. All entries calibrated 2026-06-26 on the 110-c78 BH galaxy at the
         # standard 0.03 margin (real weights).
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-8x4 and layer0 and gate_device and no_ref and isl_25k'",
-            25_212_114,  # Calibrated 2026-06-24 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer0 dense, isl_25k).
+            25_236_993,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer0 dense, isl_25k).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer0_dense_torus_y",
             1,
@@ -149,7 +149,7 @@ _SUBTORUS_Y4_ENV = {
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-8x4 and layer3 and gate_device and no_ref and isl_25k'",
-            71_349_925,  # Calibrated 2026-06-24 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer3 MoE, device gate).
+            67_193_413,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-8 (layer3 MoE, device gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_8x4_layer3_moe_torus_y",
             1,
@@ -162,7 +162,7 @@ _SUBTORUS_Y4_ENV = {
         # extra_env below). Uses isl_12k8 (12800 = half of 25k) so the 4-wide SP axis shards to
         # 3200 tokens/chip — the same per-chip load as the 8x4 at isl_25k, which fits L1. isl_25k
         # here would be 6400/chip and overflow L1 (MoE circular buffers exceed the 1.5 MB budget).
-        # Calibrated 2026-06-24 on 110-c78 (Ring-4 SP axis, 128-expert / HOST gate) at the standard 0.03 margin.
+        # Recalibrated 2026-06-26 on 110-c78 (Ring-4 SP axis, 128-expert / HOST gate) at the standard 0.03 margin.
         #
         # Gate: on the (4,4) mesh the loop test auto-halves the routed experts to 128 (128/16 = 8
         # per chip, matching the 8x4 at 256/32) and runs the HOST gate, because the device
@@ -172,7 +172,7 @@ _SUBTORUS_Y4_ENV = {
         # moe-gate_host_all was added) and is deliberately NOT exercised here.
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer0 and gate_device and no_ref and isl_12k8'",
-            18_437_605,  # Calibrated 2026-06-24 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer0 dense, 3200 tok/chip).
+            17_978_418,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer0 dense, 3200 tok/chip).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer0_dense_torus_y",
             1,
@@ -182,7 +182,7 @@ _SUBTORUS_Y4_ENV = {
         ),
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer3 and gate_device and no_ref and isl_12k8'",
-            63_540_139,  # Calibrated 2026-06-24 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 128 experts / HOST gate).
+            56_528_886,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 128 experts / HOST gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y",  # 128 experts / HOST gate (see note above)
             1,
@@ -194,7 +194,7 @@ _SUBTORUS_Y4_ENV = {
         # Same 128-expert / HOST-gate behavior as the isl_12k8 layer3 entry above (see note).
         (
             f"pytest {_TEST_PATH} -k 'fabric2d-torus-y-4x4 and layer3 and gate_device and no_ref and isl_2k56'",
-            16_990_086,  # Calibrated 2026-06-24 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 640 tok/chip, HOST gate).
+            15_570_232,  # Recalibrated 2026-06-26 on 110-c78 BH galaxy; FABRIC_2D_TORUS_Y Ring-4 (layer3 MoE, 640 tok/chip, HOST gate).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_4x4_layer3_moe_torus_y_isl2k56",  # 128 experts / HOST gate
             1,
