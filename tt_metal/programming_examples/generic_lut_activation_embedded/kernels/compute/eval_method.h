@@ -41,6 +41,20 @@
  *                                  "exponent_alu kind"), STANDALONE: bypasses the
  *                                  cascade and ignores the LUT entirely.
  *   EVAL_METHOD_AFFINE_COLLAPSE  - y = c0 + c1*x (one SFPMAD), or identity y = x.
+ *   EVAL_METHOD_CLAMPED_AFFINE_COLLAPSE
+ *                                - y = min(max(c0 + c1*x, low), high). Exact
+ *                                  whole-function algebraic collapse detected
+ *                                  from CSV coefficients; bypasses segment
+ *                                  selection and Horner.
+ *
+ * Selection policy:
+ *   1. Prefer whole-function collapses when the coefficient algebra proves the
+ *      entire fit is identity, affine, or clamped-affine.
+ *   2. Use standalone methods when the CSV metadata declares a non-cascade
+ *      evaluator (exponent-ALU or Newton-root).
+ *   3. Use reduced-poly when the metadata declares real range reduction.
+ *   4. Otherwise use the poly/rational cascade; future per-segment lowering
+ *      belongs inside that family, not as activation-name branches.
  *
  * Data-detail macros (coefficient arrays, magic constants, scales, degrees)
  * keep their established names (EXP_HW_COEFFS, NEWTON_ROOT_MAGIC, LOG_HW_SCALE,

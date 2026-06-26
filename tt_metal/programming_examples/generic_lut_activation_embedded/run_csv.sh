@@ -748,10 +748,14 @@ if any(asymptotic_flags):
     elif len(unique_factors) > 1:
         print(f'WARNING: mixed dominant factors not supported: {unique_factors}')
 
-# Affine collapse: whole fit is y = c0 + c1*x (single segment, effective degree
-# <= 1, NO range reduction). Identity (c0=0,c1=1) -> pure copy bypass; otherwise
-# one SFPMAD. Generic — any activation whose fit reduces to this shape qualifies.
-# (Rational / range-reduced fits never collapse this way.)
+# Whole-function algebraic collapses, in priority order. These are intentionally
+# coefficient-pattern recognizers, not activation-name branches:
+#   1. affine/identity:        y = c0 + c1*x
+#   2. clamped affine:         y = min(max(c0 + c1*x, low), high)
+#
+# More granular segment_kind lowering belongs inside the cascade family later;
+# these collapses bypass the segment selector only when the whole CSV proves the
+# simpler algebra exactly.
 affine_macro = ''
 if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and num_segments == 1:
     seg0_coeffs = coefficients[0:degree + 1]
@@ -772,10 +776,9 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
             )
             print(f'AFFINE COLLAPSE: y = {c0:.6g} + {c1:.6g}*x -> single SFPMAD bypass')
 
-# Clamped affine collapse: the whole fit is exactly
-# y = min(max(c0 + c1*x, low), high), with either clamp bound optional.
-# This is generic algebraic lowering from CSV coefficients, not an
-# activation-name special case.
+# Clamped affine collapse: same whole-function policy as affine collapse, with
+# either clamp bound optional. Constant regions before/after the affine region
+# become lower/upper clamps based on coefficient slope and segment order.
 clamped_affine_macro = ''
 if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and num_segments >= 2:
     cps = degree + 1
@@ -822,6 +825,8 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
                 continue
             if hi_values and any(abs(v - hi) > tol for v in hi_values):
                 continue
+            if lo is not None and hi is not None and lo > hi + tol:
+                continue
 
             def clamp_affine(x):
                 y = c0 + c1 * x
@@ -841,16 +846,16 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
                     break
             if ok:
                 clamped_affine_macro = (
-                    '\n// eval_method: clamped_affine_collapse. fit is y = clamp(c0 + c1*x, low, high).\n'
+                    '\n// eval_method: clamped_affine_collapse. fit is y = min(max(c0 + c1*x, min), max).\n'
                     '#define EVAL_METHOD_CLAMPED_AFFINE_COLLAPSE\n'
                     '#define CLAMPED_AFFINE_COLLAPSE\n'
                     f'#define CLAMPED_AFFINE_C0 {clamp(c0):.10e}f\n'
                     f'#define CLAMPED_AFFINE_C1 {clamp(c1):.10e}f\n'
                 )
                 if lo is not None:
-                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_LOW\n#define CLAMPED_AFFINE_LOW {clamp(lo):.10e}f\n'
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MIN\n#define CLAMPED_AFFINE_MIN {clamp(lo):.10e}f\n'
                 if hi is not None:
-                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_HIGH\n#define CLAMPED_AFFINE_HIGH {clamp(hi):.10e}f\n'
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MAX\n#define CLAMPED_AFFINE_MAX {clamp(hi):.10e}f\n'
                 low_label = '-inf' if lo is None else f'{lo:.6g}'
                 high_label = '+inf' if hi is None else f'{hi:.6g}'
                 print(
@@ -859,17 +864,15 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
                 )
                 break
 
-# Exactly one EVAL_METHOD_* selector. rr_macro emits EXPONENT_ALU / NEWTON_ROOT /
-# REDUCED_POLY; affine_macro emits AFFINE_COLLAPSE; clamped_affine_macro emits
-# CLAMPED_AFFINE_COLLAPSE. Otherwise the method is the default poly_cascade
-# (parity / dual / adaptive / blend are orthogonal modifiers).
+# Exactly one EVAL_METHOD_* selector. Metadata-driven methods (rr_macro) and
+# whole-function collapses emit their own selector; otherwise default to the
+# poly cascade. Parity / dual / adaptive / blend are orthogonal modifiers.
 eval_method_macro = ''
+has_codegen_eval_method = any(
+    'EVAL_METHOD_' in macro for macro in (rr_macro, affine_macro, clamped_affine_macro)
+)
 if not is_rational:
-    if (
-        ('EVAL_METHOD_' not in rr_macro)
-        and ('EVAL_METHOD_' not in affine_macro)
-        and ('EVAL_METHOD_' not in clamped_affine_macro)
-    ):
+    if not has_codegen_eval_method:
         eval_method_macro = '\n// eval_method: poly_cascade (default piecewise polynomial cascade)\n#define EVAL_METHOD_POLY_CASCADE\n'
 else:
     # rational_cascade is the base method; reduced_poly may layer on via rr_macro.
