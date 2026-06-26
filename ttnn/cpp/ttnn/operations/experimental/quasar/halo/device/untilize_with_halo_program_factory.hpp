@@ -21,7 +21,7 @@ namespace ttnn::prim::qsr {
 // reader kernels as pure address sources.
 struct UntilizeWithHaloProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const HaloParams& operation_attributes, const Tensor& tensor_args, Tensor& output_tensor);
+        const HaloParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
 };
 
 }  // namespace ttnn::prim::qsr
