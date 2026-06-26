@@ -34,6 +34,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.runners.prefill_test import LayerCompletionConsumer
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -245,6 +246,52 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, get_reques
             raise RuntimeError(f"layer-completion ring full (seq={seq}); router not draining")
 
     return on_layer_complete
+
+
+class _CompletionCheckConsumer:
+    """Test-only scheduler stand-in (enabled by PREFILL_CHECK_COMPLETIONS=1).
+
+    Thin Python wrapper over the C++ ttnn.experimental.deepseek_prefill.LayerCompletionConsumer
+    (the `prefill_test` component). The C++ consumer drains the master router's scheduler counter
+    channel on a NATIVE thread — immune to the GIL. An earlier Python daemon-thread version stalled at
+    a partial count because the master rank's main thread blocks in a GIL-holding request-loop call
+    and starves any Python drain thread, even though the router had already injected every completion.
+
+    In production a real scheduler consumes this channel; this only fakes the consumer side under test.
+    Pre-configured with the expected total (PREFILL_CHECK_EXPECTED_CHUNKS, else PREFILL_STANDALONE_NCHUNKS)
+    so the C++ thread self-terminates + logs PASS on its own — no dependency on Python teardown.
+    """
+
+    def __init__(self, ack_shm_name: str, *, num_layers: int):
+        self._num_layers = num_layers
+        self._expected_chunks = int(
+            os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS", os.environ.get("PREFILL_STANDALONE_NCHUNKS", "11"))
+        )
+        self._expected_total = self._expected_chunks * num_layers
+        # Internal C++ native-thread consumer (re-exported from prefill_test; see that module).
+        self._impl = LayerCompletionConsumer(
+            channel_shm_name=ack_shm_name,
+            expected=self._expected_total,
+            connect_timeout_ms=30000,
+            log_step=num_layers,
+        )
+        logger.info(
+            f"[completion-check] C++ consumer draining {ack_shm_name}; expecting {self._expected_total} "
+            f"completions ({self._expected_chunks} chunks x {num_layers} layers), then self-terminates"
+        )
+
+    def stop_and_report(self) -> None:
+        self._impl.stop()  # join the native thread + final drain
+        got = self._impl.total
+        logger.info(
+            f"[completion-check] master aggregated {got} completions "
+            f"(expected {self._expected_total} = {self._expected_chunks} x {self._num_layers})"
+        )
+        assert got > 0, "[completion-check] FAIL: master received ZERO completions (router not aggregating)"
+        if got >= self._expected_total:
+            logger.success(f"[completion-check] PASS: {got} >= {self._expected_total}")
+        else:
+            logger.warning(f"[completion-check] count short: got {got}, expected {self._expected_total}")
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +767,12 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     ack_channel = None
     router = None
     producer = None
+    # Completion checking (master rank only, test-only): a consumer that stands in for the scheduler
+    # on the master's counter channel, to verify aggregated per-(chunk, layer) completions. See
+    # _CompletionCheckConsumer. Gated by PREFILL_CHECK_COMPLETIONS=1 so it never competes with a real
+    # scheduler consuming the same channel in production.
+    completion_check = None
+    check_completions = os.environ.get("PREFILL_CHECK_COMPLETIONS", "0") == "1"
 
     def _unlink_stale_shm(name: str) -> None:
         # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
@@ -794,6 +847,9 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
             + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
         )
 
+        if rank == master_rank and check_completions:
+            completion_check = _CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
+
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     run_request_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
 
@@ -808,6 +864,8 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     # cross-rank router teardown (barrier + end-of-request sentinel) is future work.
     if producer is not None:
         producer.shutdown()
+    if completion_check is not None:
+        completion_check.stop_and_report()  # drain + tally BEFORE router.stop() unlinks the channel
     if router is not None:
         router.stop()  # joins the listener; on the master, unlinks the scheduler counter channel
     if ack_channel is not None:
