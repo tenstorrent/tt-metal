@@ -6,7 +6,7 @@ import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
-from models.experimental.diffusion_gemma.tt.generate import denoise_and_commit_block
+from models.experimental.diffusion_gemma.tt.generate import GeneratedBlock, denoise_and_commit_block, generate_blocks
 
 
 class _FakeLogitsFn:
@@ -65,3 +65,54 @@ def test_denoise_and_commit_block_rejects_missing_commit():
             denoise_block_fn=lambda *args, **kwargs: trajectory,
             commit_fn=lambda *args, **kwargs: None,
         )
+
+
+def test_generate_blocks_advances_position_and_concatenates_commits():
+    calls = []
+
+    def init_canvas_fn(block_idx, start_pos):
+        calls.append(("init", block_idx, start_pos))
+        return f"canvas-{block_idx}"
+
+    def noise_factory(kind):
+        def outer(block_idx):
+            calls.append((kind, block_idx))
+            return f"{kind}-{block_idx}"
+
+        return outer
+
+    def fake_block(tt_model, logits_fn, init_canvas, config, **kwargs):
+        block_idx = len([call for call in calls if call[0] == "block"])
+        committed = torch.full((1, config.canvas_length), block_idx, dtype=torch.long)
+        trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
+        calls.append(("block", init_canvas, kwargs["start_pos"], kwargs["gumbel_noise_fn"], kwargs["noise_tokens_fn"]))
+        return GeneratedBlock(
+            committed=committed, next_pos=kwargs["start_pos"] + config.canvas_length, trajectory=trajectory
+        )
+
+    out = generate_blocks(
+        "model",
+        "logits",
+        prompt_len=32,
+        num_blocks=3,
+        config=DiffusionConfig(canvas_length=3),
+        init_canvas_fn=init_canvas_fn,
+        gumbel_noise_fn=noise_factory("gumbel"),
+        noise_tokens_fn=noise_factory("noise"),
+        block_fn=fake_block,
+    )
+
+    assert out.prompt_len == 32
+    assert out.next_pos == 41
+    assert torch.equal(out.generated, torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2]]))
+    assert len(out.trajectories) == 3
+    assert [call for call in calls if call[0] == "init"] == [
+        ("init", 0, 32),
+        ("init", 1, 35),
+        ("init", 2, 38),
+    ]
+    assert [call for call in calls if call[0] == "block"] == [
+        ("block", "canvas-0", 32, "gumbel-0", "noise-0"),
+        ("block", "canvas-1", 35, "gumbel-1", "noise-1"),
+        ("block", "canvas-2", 38, "gumbel-2", "noise-2"),
+    ]

@@ -27,6 +27,13 @@ class GeneratedBlock(NamedTuple):
     trajectory: DenoiseTrajectory
 
 
+class DeviceGeneration(NamedTuple):
+    generated: torch.Tensor
+    prompt_len: int
+    next_pos: int
+    trajectories: list[DenoiseTrajectory]
+
+
 def _deallocate_decode_inputs(device_inputs) -> None:
     for value in device_inputs:
         if value is not None and hasattr(value, "deallocate"):
@@ -121,3 +128,49 @@ def denoise_and_commit_block(
         next_pos=start_pos + trajectory.committed.shape[1],
         trajectory=trajectory,
     )
+
+
+def generate_blocks(
+    tt_model,
+    logits_fn,
+    *,
+    prompt_len: int,
+    num_blocks: int,
+    config: DiffusionConfig,
+    init_canvas_fn: Callable[[int, int], object],
+    gumbel_noise_fn=None,
+    noise_tokens_fn=None,
+    page_table=None,
+    page_tables_per_layer=None,
+    block_fn: Callable[..., GeneratedBlock] = denoise_and_commit_block,
+) -> DeviceGeneration:
+    """Run the minimal device outer loop for ``num_blocks`` canvases.
+
+    ``init_canvas_fn(block_idx, start_pos)`` supplies the initial device canvas
+    for each block. The full prompt/tokenizer path will later own how those
+    canvases are created; this helper owns commit-append and absolute position
+    advancement.
+    """
+    next_pos = prompt_len
+    committed_blocks: list[torch.Tensor] = []
+    trajectories: list[DenoiseTrajectory] = []
+
+    for block_idx in range(num_blocks):
+        init_canvas = init_canvas_fn(block_idx, next_pos)
+        block = block_fn(
+            tt_model,
+            logits_fn,
+            init_canvas,
+            config,
+            start_pos=next_pos,
+            gumbel_noise_fn=gumbel_noise_fn(block_idx) if gumbel_noise_fn else None,
+            noise_tokens_fn=noise_tokens_fn(block_idx) if noise_tokens_fn else None,
+            page_table=page_table,
+            page_tables_per_layer=page_tables_per_layer,
+        )
+        committed_blocks.append(block.committed)
+        trajectories.append(block.trajectory)
+        next_pos = block.next_pos
+
+    generated = torch.cat(committed_blocks, dim=1) if committed_blocks else torch.zeros((1, 0), dtype=torch.long)
+    return DeviceGeneration(generated=generated, prompt_len=prompt_len, next_pos=next_pos, trajectories=trajectories)
