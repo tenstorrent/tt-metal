@@ -524,10 +524,12 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 
 - **`debug_helpers.hpp::GetAllCores`** — include soc dispatch-engine tiles as `{logical, CoreType::DISPATCH}` (synthetic index coords)
 - **`DPrintServer::init_device` / `attach_device`** — iterate **`CoreType::DISPATCH`** (or equivalent) so dispatch-engine cores get init/enable magic on their L1 print buffers
-- **`TT_METAL_DPRINT_CORES=dispatch`** — when `resolve_dispatch_core_type()` is `DISPATCH`, match entries from **`GetDispatchCores()`** with `CoreType::DISPATCH` (today the filter runs under the `CoreType::WORKER` loop and never matches)
+- **`TT_METAL_DPRINT_CORES=dispatch`** — when `resolve_dispatch_core_type()` is `DISPATCH`, match entries from **`GetDispatchCores()`** with `CoreType::DISPATCH` (today the filter runs under the `CoreType::WORKER` loop and never matches). The selection is parsed as a **class name** stored under `CoreType::WORKER`, so the enable loop **reroutes** it to the `CoreType::DISPATCH` iteration and **`continue`s past the WORKER iteration**. ⚠️ Do **not** clear WORKER by setting its class to `RunTimeDebugClassNoneSpecified` — that falls through to the explicit-cores branch which calls `get_feature_cores(...).at(CoreType::WORKER)`; matching a class name makes `ParseFeatureCoreRange` return early without inserting a `WORKER` key, so `.at` throws `map::at` during `attach_device` (surfaces as a `map::at` exception in test `SetUp()`). Use `continue` instead. *(Fixed during Phase 4a bringup.)*
 - **Explicit core targeting** — support synthetic dispatch logical coords (e.g. `(0,0)` → dispatch index 0) via env (extend `TT_METAL_DPRINT_CORES` parsing and/or add **`TT_METAL_DPRINT_DISPATCH_CORES`** with same syntax as worker/ETH/DRAM)
 - **`get_enable_symbols_info()`** — `HalProgrammableCoreType::DISPATCH` legend (8-DM hex mask, same style as Quasar Tensix DM / ETH)
 - **`device_print.h`** — kernel callstack PC/RA adjustment uses **`FD_CORE_TYPE` / `ProgrammableCoreType::DISPATCH`** slot in `kernel_config_base[]`, not hardcoded `ProgrammableCoreType::TENSIX`
+- **`DPrintServer::Impl::get_core_buffers` DM sub-buffer split** — Quasar's on-device `DevicePrintMemoryLayout` always lays out the **TRISC sub-buffer first (3264 B)** then the **DM sub-buffer (1632 B)**. Dispatch-engine firmware compiles with **`COMPILE_FOR_DM`**, so `get_device_print_buffer()` returns `dprint_buf.buffer` = the **DM sub-buffer at offset +3264**. The host must therefore read/enable the DM sub-buffer at `structure_address + compute_size`, mirroring the DM half of the existing Quasar **TENSIX** split. Without this, `CoreType::DISPATCH` fell into the generic single-buffer path (offset 0 = TRISC region): firmware wrote at +3264 while host enabled/polled at +0 → **no prints** (and the buffer was never enabled). *(Fixed during Phase 4a bringup.)*
+- **`GetRiscName` `DE-` prefix** — prepend **`DE-`** to the RISC name for `HalProgrammableCoreType::DISPATCH` cores so the DPRINT line prefix distinguishes dispatch-engine DMs from Tensix DMs (e.g. `0:0-0:DE-DM4: ...` vs `0:0-0:DM4: ...`) without baking the distinction into each DPRINT message. *(Added during Phase 4a bringup.)*
 - **Kernel defines** — ensure **`DISPATCH_KERNEL=1`** on both **`cq_prefetch.cpp`** and **`cq_dispatch.cpp`** SD/FD define blocks (profiler/sanitize/device-print paths; plan requirement)
 
 **Out of Phase 3b (later phases):**
@@ -537,9 +539,10 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 
 **Acceptance criteria (2×3 emulator):**
 
-- With DPRINT enabled (`TT_METAL_DPRINT_CORES=dispatch` or explicit dispatch logical coord), host collects prints from **`dispatch_dm.cc`** at `CreateDevice` (e.g. `"DM0-FW: initialized"`) on NOC0 `(0,2)`
+- With DPRINT enabled (`TT_METAL_DPRINT_CORES=dispatch` or `TT_METAL_DPRINT_DISPATCH_CORES=all` / explicit dispatch logical coord), host collects prints from **`dispatch_dm.cc`** at `CreateDevice` (e.g. `"DM0-FW: initialized"`) on NOC0 `(0,2)` — line prefix marks the core as **`DE-DM<n>`** (e.g. `0:0-0:DE-DM4: ...`)
 - After Phase 4a SD launch, DPRINT from **`cq_prefetch.cpp` / `cq_dispatch.cpp`** on DM0/DM1 appears on the host
 - **`TT_METAL_TENSIX_DISPATCH_CORES=1`** — unchanged WH/BH-style DPRINT on Tensix dispatch cores from YAML (no regression)
+- **Status: ✅ verified on 2×3 emulator** — `DispatchLinearWriteSDTestFixture.LinearWrite/49152B_3iter_4194304words_unicast` passes with end-to-end dispatch-engine DPRINT (`DE-DM*`) collected.
 
 **Key files:** `impl/debug/dprint_server.cpp`, `impl/debug/debug_helpers.hpp`, `hw/inc/api/debug/device_print.h`, `llrt/rtoptions.cpp` (if new env var), SD `common.h` `make_sd_prefetch_defines` (`DISPATCH_KERNEL=1`)
 
@@ -550,6 +553,7 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 - Port `test_prefetcher` / `test_dispatcher` SD paths: `cq_prefetch.cpp` + `cq_dispatch.cpp` on dispatch engine NOC0 `(0,2)`, DM0/DM1, core index 0
 - `CreateSemaphore` / memmap / coordinate lookup on `CoreType::DISPATCH`
 - Kernel placement validation allows dispatch-engine cores for cq kernels (`DISPATCH_KERNEL=1` unchanged)
+- **`DispatchEngineKernel::configure` must write binaries into the kernel-config ring buffer** via `llrt::write_binary_to_address(base_address + offsets[riscv_id])` — the same path as `DataMovementKernel` / `QuasarDataMovementKernel`. It must **not** use `test_load_write_read_risc_binary` (which loads to the JIT default address): SD `finalize_kernel_bins` places binaries in the kernel-config ring buffer and records `kernel_text_offset[]` accordingly, and `dispatch_dm.cc` jumps to `kernel_config_base + kernel_text_offset`. Loading to the wrong address makes the FW jump into empty/garbage memory after GO, so the kernels never complete and **`LaunchProgram` hangs** (no validation, no progress). *(Fixed during Phase 4a bringup.)*
 - Confirm `test_dispatch` (dispatch_program) SD tests still pass with full Tensix compute grid
 
 ### Phase 4b — Full FD kernel integration
@@ -586,7 +590,7 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | FW init | `risc_firmware_initializer.cpp`, `dispatch_kernel_initializer.cpp` |
 | Allocator | `l1_banking_allocator.cpp` |
 | Validation | `program.cpp`, `metal_context.cpp` (`is_coord_in_range` accepts DISPATCH coords) |
-| Debug (DPRINT) | **Phase 3b:** `debug_helpers.hpp`, `dprint_server.cpp`, `device_print.h`, `rtoptions.cpp` |
+| Debug (DPRINT) | **Phase 3b:** `debug_helpers.hpp`, `dprint_server.cpp` (attach reroute, `get_core_buffers` DM split, `GetRiscName` `DE-` prefix), `device_print.h`, `rtoptions.cpp` |
 | Debug (other) | **Phase 5:** `profiler.cpp`, inspector, watcher, NOC sanitize |
 
 ---
@@ -607,7 +611,7 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | **`dispatch_dm.cc` load** | **Every `CreateDevice`** on default dispatch-engine path via `risc_firmware_initializer` (slow + fast dispatch); required before Phase 4a SD `LaunchProgram` |
 | **DPRINT on dispatch engine** | **Phase 3b** — host DPrint server attaches to `CoreType::DISPATCH`; device-side buffers from Phase 3 HAL; end-to-end before Phase 4a debug |
 | **`dispatch_kernel_initializer`** | **Phase 4b only** — `DispatchMemMap(CoreType::DISPATCH)` + execution kernels; **skipped in slow dispatch / Phase 4a** (`!using_fast_dispatch()` early return) |
-| **`DispatchEngineKernel`** | Dedicated configure path (like `DramKernel`); used by SD, FDKernel, and `CreateDispatchEngineKernel` |
+| **`DispatchEngineKernel`** | Dedicated configure path (like `DramKernel`); used by SD, FDKernel, and `CreateDispatchEngineKernel`. **`configure` writes binaries into the kernel-config ring buffer** via `write_binary_to_address(base + offsets[riscv_id])` (same as `DataMovementKernel`), **not** `test_load_write_read_risc_binary` — otherwise SD `LaunchProgram` hangs (FW jumps to wrong L1 address). |
 | **`kernel_config_base[]` index** | Dispatch-engine kernels use **`ProgrammableCoreType::DISPATCH`** slot (new enum index), not Tensix |
 | **`dispatch_engine_cores.hpp`** | **Required** internal header — coordinates, resolver helpers, `CreateDispatchEngineKernel` |
 | **Execution kernel init** | **`dispatch_kernel_initializer`** (Phase 4b) — `DispatchMemMap(CoreType::DISPATCH)` + prefetch/dispatch execution kernels |
