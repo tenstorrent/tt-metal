@@ -33,6 +33,13 @@ pytestmark = [
 
 CANVAS_LEN = 256
 ORACLE_K_CHUNK = 2048
+S_SWEEP = (8192, 32768, 33000, 65536, 131072, 262144)
+HEAD_DIM_SWEEP = (256, 512)
+SMOKE_CASES = {
+    (8192, 256, False),
+    (33000, 256, False),
+    (8192, 256, True),
+}
 
 
 def _requires_full_sweep():
@@ -40,6 +47,17 @@ def _requires_full_sweep():
         os.environ.get("DG_W2B_SDPA_SWEEP") != "full",
         reason="set DG_W2B_SDPA_SWEEP=full to run the expensive W2b acceptance sweep",
     )
+
+
+def _w2b_sweep_params():
+    params = []
+    for masked in (False, True):
+        spike = "s2-masked" if masked else "s1-maskless"
+        for head_dim in HEAD_DIM_SWEEP:
+            for sk in S_SWEEP:
+                marks = () if (sk, head_dim, masked) in SMOKE_CASES else (_requires_full_sweep(),)
+                params.append(pytest.param(sk, head_dim, masked, marks=marks, id=f"{spike}-sk{sk}-d{head_dim}"))
+    return params
 
 
 def _torch_online_sdpa(q, k, v, *, k_chunk=ORACLE_K_CHUNK):
@@ -118,24 +136,7 @@ def _run_long_noncausal_sdpa(device, *, sk, head_dim, masked, pcc=0.99):
 
 @pytest.mark.parametrize(
     ("sk", "head_dim", "masked"),
-    [
-        pytest.param(8192, 256, False, id="s1-maskless-sk8192-d256-smoke"),
-        pytest.param(33000, 256, False, id="s1-maskless-sk33000-d256-smoke"),
-        pytest.param(8192, 256, True, id="s2-masked-sk8192-d256-smoke"),
-        pytest.param(32768, 256, False, marks=_requires_full_sweep(), id="s1-maskless-sk32768-d256"),
-        pytest.param(65536, 256, False, marks=_requires_full_sweep(), id="s1-maskless-sk65536-d256"),
-        pytest.param(131072, 256, False, marks=_requires_full_sweep(), id="s1-maskless-sk131072-d256"),
-        pytest.param(262144, 256, False, marks=_requires_full_sweep(), id="s1-maskless-sk262144-d256"),
-        pytest.param(32768, 512, False, marks=_requires_full_sweep(), id="s1-maskless-sk32768-d512"),
-        pytest.param(33000, 512, False, marks=_requires_full_sweep(), id="s1-maskless-sk33000-d512"),
-        pytest.param(65536, 512, False, marks=_requires_full_sweep(), id="s1-maskless-sk65536-d512"),
-        pytest.param(131072, 512, False, marks=_requires_full_sweep(), id="s1-maskless-sk131072-d512"),
-        pytest.param(262144, 512, False, marks=_requires_full_sweep(), id="s1-maskless-sk262144-d512"),
-        pytest.param(32768, 256, True, marks=_requires_full_sweep(), id="s2-masked-sk32768-d256"),
-        pytest.param(33000, 256, True, marks=_requires_full_sweep(), id="s2-masked-sk33000-d256"),
-        pytest.param(32768, 512, True, marks=_requires_full_sweep(), id="s2-masked-sk32768-d512"),
-        pytest.param(33000, 512, True, marks=_requires_full_sweep(), id="s2-masked-sk33000-d512"),
-    ],
+    _w2b_sweep_params(),
 )
 def test_w2b_long_prompt_noncausal_sdpa(device, sk, head_dim, masked):
     _run_long_noncausal_sdpa(device, sk=sk, head_dim=head_dim, masked=masked)

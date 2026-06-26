@@ -150,7 +150,7 @@ S1 (maskless non-causal at [256 × Sk], Sk→262144)
 | Date | Spike / step | Result |
 |---|---|---|
 | 2026-06-26 | Plan authored (source-grounded design + adversarial feasibility) | S1 is the gating experiment; D1 is the target pending S1; D3 ruled out as a localized edit. |
-| 2026-06-26 | S1/S2 harness + smoke | Added `tests/test_device_long_sdpa_w2b.py` with a memory-bounded fp32 online-softmax oracle and opt-in full sweep. QB2 smoke passed: S1 maskless `Sk=8192,DH=256`; S1 maskless non-tile `Sk=33000,DH=256`; S2 masked `Sk=8192,DH=256` (3 passed, 13 full-sweep cases skipped pending `DG_W2B_SDPA_SWEEP=full`). |
-| | S1 maskless non-causal `[256 × Sk]` PCC sweep | _pending_ |
-| | S2 masked A/B control | _pending_ |
+| 2026-06-26 | S1/S2 harness + smoke | Added `tests/test_device_long_sdpa_w2b.py` with a memory-bounded fp32 online-softmax oracle and opt-in full sweep. QB2 smoke passed: S1 maskless `Sk=8192,DH=256`; S1 maskless non-tile `Sk=33000,DH=256`; S2 masked `Sk=8192,DH=256`. |
+| 2026-06-26 | S1 maskless non-causal `[256 × Sk]` PCC sweep | ✅ PASS on QB2: `Sk ∈ {8192, 32768, 33000, 65536, 131072, 262144}`, `head_dim ∈ {256,512}`, PCC ≥ 0.99 vs fp32 online-softmax oracle (`DG_RUN_DEVICE=1 DG_W2B_SDPA_SWEEP=full pytest models/experimental/diffusion_gemma/tests/test_device_long_sdpa_w2b.py -x -q`). Routes W2b to D1; no kernel work needed for this spike. |
+| 2026-06-26 | S2 masked A/B control | ✅ PASS on QB2 for the same `Sk × head_dim` sweep with explicit all-zero bf16 mask; no path-specific cliff observed between maskless and masked regular SDPA. |
 | | S4 RoPE cache ≥ 262144 | _pending_ |
