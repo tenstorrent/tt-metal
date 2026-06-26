@@ -8,6 +8,7 @@ enum class SfpuType {
     tanh,
     hardtanh,
     gelu,
+    gelu_tanh,
     exponential,
     exp_with_base,
     sigmoid,
