@@ -355,6 +355,11 @@ def _validate_max_new_tokens_capacity(num_blocks: int, canvas_length: int, max_n
         raise ValueError("num_blocks is too small for max_new_tokens")
 
 
+def _validate_batch_size(batch_size: int) -> None:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -412,6 +417,7 @@ def generate_blocks(
     page_table=None,
     page_tables_per_layer=None,
     stop_token_ids=None,
+    batch_size: int = 1,
     block_fn: Callable[..., GeneratedBlock] = denoise_and_commit_block,
 ) -> DeviceGeneration:
     """Run the minimal device outer loop for ``num_blocks`` canvases.
@@ -423,6 +429,7 @@ def generate_blocks(
     """
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
+    _validate_batch_size(batch_size)
     init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []
@@ -447,7 +454,9 @@ def generate_blocks(
         if _contains_stop_token(block.committed, stop_token_ids):
             break
 
-    generated = torch.cat(committed_blocks, dim=1) if committed_blocks else torch.zeros((1, 0), dtype=torch.long)
+    generated = (
+        torch.cat(committed_blocks, dim=1) if committed_blocks else torch.zeros((batch_size, 0), dtype=torch.long)
+    )
     return DeviceGeneration(generated=generated, prompt_len=prompt_len, next_pos=next_pos, trajectories=trajectories)
 
 
@@ -506,6 +515,7 @@ def generate_from_prompt_tokens(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
         stop_token_ids=stop_token_ids,
+        batch_size=prompt_tokens.shape[0],
     )
 
 

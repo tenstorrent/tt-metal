@@ -196,12 +196,13 @@ def test_generate_blocks_allows_zero_blocks_without_init_canvas():
         prompt_len=32,
         num_blocks=0,
         config=DiffusionConfig(canvas_length=4),
+        batch_size=2,
     )
 
     assert out.prompt_len == 32
     assert out.next_pos == 32
     assert out.trajectories == []
-    assert torch.equal(out.generated, torch.empty((1, 0), dtype=torch.long))
+    assert torch.equal(out.generated, torch.empty((2, 0), dtype=torch.long))
 
 
 def test_generate_blocks_stops_after_committed_stop_token():
@@ -370,6 +371,23 @@ def test_generate_from_prompt_tokens_allows_zero_blocks_without_logits():
     assert calls[0][0] == "prefill"
     assert calls[1][0:3] == ("blocks", "model", None)
     assert calls[1][3]["num_blocks"] == 0
+
+
+def test_generate_from_prompt_tokens_zero_blocks_preserves_prompt_batch():
+    prompt_tokens = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long)
+
+    out = generate_from_prompt_tokens(
+        "model",
+        None,
+        prompt_tokens,
+        num_blocks=0,
+        config=DiffusionConfig(canvas_length=4),
+        prefill_fn=lambda *args, **kwargs: prompt_tokens.shape[1],
+    )
+
+    assert out.prompt_len == 3
+    assert out.next_pos == 3
+    assert torch.equal(out.generated, torch.empty((2, 0), dtype=torch.long))
 
 
 def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
