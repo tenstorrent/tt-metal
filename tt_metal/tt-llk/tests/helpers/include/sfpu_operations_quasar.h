@@ -43,6 +43,7 @@
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
 #include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h" // calculate_binary_max_min / _init_binary_max_min_
+#include "llk_sfpu/ckernel_sfpu_quant.h"          // _quant_family_ / _quant_family_init_ (quant/requant/dequant)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_add.h"         // _add_int_ (int add)
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
@@ -285,14 +286,30 @@ constexpr bool quasar_binary_op_is_max_min(ckernel::BinaryOp op)
     return op == ckernel::BinaryOp::MAX || op == ckernel::BinaryOp::MIN;
 }
 
+constexpr bool quasar_binary_op_is_quant(ckernel::BinaryOp op)
+{
+    return op == ckernel::BinaryOp::QUANT || op == ckernel::BinaryOp::REQUANT || op == ckernel::BinaryOp::DEQUANT;
+}
+
+// Map the shared BinaryOp enum onto the quant kernel's op-templated QuantVariant.
+constexpr ckernel::sfpu::QuantVariant quant_variant_of(ckernel::BinaryOp op)
+{
+    return op == ckernel::BinaryOp::QUANT     ? ckernel::sfpu::QuantVariant::Quant
+           : op == ckernel::BinaryOp::REQUANT ? ckernel::sfpu::QuantVariant::Requant
+                                              : ckernel::sfpu::QuantVariant::Dequant;
+}
+
 /**
  * @brief Run the per-operation init step for a Quasar binary SFPU op.
  *
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
+ * @param zero_point fp32 bit-pattern of the zero-point loaded once by the quant
+ *        family init (DEQUANT expects the bits of -zero_point); ignored by the
+ *        other ops, which have no runtime init argument.
  * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
  */
 template <ckernel::BinaryOp OP>
-void init_binary_sfpu_operation_quasar()
+void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point = 0)
 {
     if constexpr (OP == BinaryOp::MUL)
     {
@@ -305,6 +322,11 @@ void init_binary_sfpu_operation_quasar()
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
         _init_binary_max_min_();
+    }
+    else if constexpr (quasar_binary_op_is_quant(OP))
+    {
+        // One op-templated quant kernel; DEQUANT's caller passes bits of -zero_point.
+        _quant_family_init_<quant_variant_of(OP)>(zero_point);
     }
     // ADD / SUB / GT / LT / LE / GE are stateless — no init.
 }
@@ -406,6 +428,11 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src1_tile,
             dst_tile,
             VectorMode::RC);
+    }
+    else if constexpr (quasar_binary_op_is_quant(OP))
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, _quant_family_, (quant_variant_of(OP), ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
