@@ -55,7 +55,7 @@ def _distribution_metrics(sample_ids, expected_probs):
     return max_top1_freq_error, float(kl.mean())
 
 
-def test_canvas_sample_consumes_regenerated_device_noise(device):
+def test_canvas_sample_matches_torch_argmax_with_readback_device_noise(device):
     num_samples = 64
     length = 32
     vocab_size = 32
