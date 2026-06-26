@@ -2333,6 +2333,13 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    // Accumulate mode interleaves zones from many program invocations in one L1 buffer
+    // and does not store per-program op IDs, so the markers cannot be attributed to ops.
+    // A per-program perf report would be meaningless, so skip report generation entirely.
+    if (MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
+        return;
+    }
+
     const std::filesystem::path analysis_configs_path =
         std::filesystem::path(MetalContext::instance(context_id).rtoptions().get_root_dir()) /
         "tt_metal/tools/profiler/cpp_device_analyses.json";
