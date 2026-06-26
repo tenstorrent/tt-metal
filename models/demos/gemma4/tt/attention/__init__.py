@@ -140,6 +140,7 @@ class Gemma4Attention:
         kv_hidden_states=None,
         prefix_kv=None,
         q_rope_offset=0,
+        is_causal=True,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -202,6 +203,7 @@ class Gemma4Attention:
                 kv_hidden_states=kv_hidden_states,
                 prefix_kv=prefix_kv,
                 q_rope_offset=q_rope_offset,
+                is_causal=is_causal,
             )
             self._last_kv = kept_kv
             return tt_out

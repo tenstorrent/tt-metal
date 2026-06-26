@@ -3,10 +3,11 @@
 
 """TTNN denoise-forward helpers for DiffusionGemma canvas attention.
 
-This is the short-prompt W2 path: canvas queries attend to the frozen prompt
-prefix plus the current canvas through an explicit all-attend mask. Sampling,
+Canvas queries attend to the frozen prompt prefix plus the current canvas as an
+all-attend rectangle. The canonical path is maskless non-causal SDPA; explicit
+masks are kept only for op A/B tests and non-canonical experiments. Sampling,
 self-conditioning, and the multi-layer generation loop live in later W3/W4
-helpers; this module owns the real masked attention wiring.
+helpers; this module owns the real denoise attention wiring.
 """
 
 from __future__ import annotations
@@ -68,6 +69,7 @@ def denoise_attention_forward(
             cache-shaped input used by the eventual paged encoder KV read path.
         canvas_hidden: current canvas hidden states `[1, 1, C, H]` on device.
         attn_mask: optional prebuilt `[1, 1, C, P+C]` additive mask on device.
+            Leave unset for the canonical all-attend denoise path.
 
     Returns:
         The attention output for the canvas positions `[1, 1, C, H]`.
@@ -77,18 +79,11 @@ def denoise_attention_forward(
     prompt_len = prompt_kv[0].shape[-2] if prompt_kv is not None else prompt_hidden.shape[-2]
     canvas_len = canvas_hidden.shape[-2]
     kv_hidden = None if prompt_kv is not None else ttnn.concat([prompt_hidden, canvas_hidden], dim=2)
-    created_mask = attn_mask is None
-    if created_mask:
-        attn_mask = build_device_canvas_denoise_mask(
-            tt_model.mesh_device,
-            prompt_len=prompt_len,
-            canvas_len=canvas_len,
-        )
-
     out = tt_model.layers[layer_idx].self_attn(
         canvas_hidden,
         rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=prompt_len + canvas_len),
         is_decode=False,
+        is_causal=False,
         kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
@@ -97,8 +92,6 @@ def denoise_attention_forward(
     )
     if kv_hidden is not None:
         kv_hidden.deallocate(True)
-    if created_mask:
-        attn_mask.deallocate(True)
     return out
 
 
@@ -116,6 +109,7 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, at
         normed,
         rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=prompt_len + hidden_states.shape[-2]),
         is_decode=False,
+        is_causal=False,
         kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
@@ -180,12 +174,7 @@ def denoise_hidden_forward(
 
     hidden_states = canvas_hidden
     prompt_len = _prompt_source_len(prompt_hidden_by_layer[0])
-    canvas_len = canvas_hidden.shape[-2]
-    attn_mask = build_device_canvas_denoise_mask(
-        tt_model.mesh_device,
-        prompt_len=prompt_len,
-        canvas_len=canvas_len,
-    )
+    attn_mask = None
     for layer_idx in range(len(tt_model.layers)):
         hidden_states = _denoise_layer_forward(
             tt_model,
@@ -195,7 +184,6 @@ def denoise_hidden_forward(
             attn_mask,
             prompt_len,
         )
-    attn_mask.deallocate(True)
     return tt_model.norm.forward(hidden_states)
 
 

@@ -63,6 +63,7 @@ def _prefill_forward_single(
     kv_hidden_states=None,
     prefix_kv=None,
     q_rope_offset=0,
+    is_causal=True,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations."""
     tp = mesh_config.tp if mesh_config else 1
@@ -165,7 +166,7 @@ def _prefill_forward_single(
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
-    # 6. SDPA (causal prefill, scale=1.0)
+    # 6. SDPA (prefill, scale=1.0)
     # The non-chunked SDPA silently returns WRONG results for seq_len > 32768
     # (2^15) — generation degrades to garbage. For long context we chunk prefill:
     #   - full-attention layers: chunk Q and attend the full K prefix from the
@@ -174,11 +175,10 @@ def _prefill_forward_single(
     #     windowed chunking over the in-memory K/V (each slice stays <=32768).
     # Both stay correct past 32768 and reduce to the non-chunked op at <=32768.
     seq_len = tt_q.shape[-2]
-    long_seq = seq_len > PREFILL_SDPA_MAX_SEQ
-    sliding_window = config.sliding_window if config.is_sliding else None
+    k_seq_len = tt_k.shape[-2]
+    long_seq = k_seq_len > PREFILL_SDPA_MAX_SEQ
+    sliding_window = config.sliding_window if is_causal and config.is_sliding else None
     if attn_mask is not None:
-        if long_seq:
-            raise ValueError("masked non-causal prefill is only wired for seq_len <= 32768")
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
@@ -187,6 +187,15 @@ def _prefill_forward_single(
             is_causal=False,
             scale=1.0,
             program_config=prefill_sdpa_program_config(config.head_dim, seq_len, tt_k.shape[-2]),
+        )
+    elif not is_causal:
+        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            scale=1.0,
+            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, k_seq_len),
         )
     elif long_seq and config.is_sliding and sliding_window is not None:
         tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
@@ -239,6 +248,7 @@ def prefill_forward(
     kv_hidden_states=None,
     prefix_kv=None,
     q_rope_offset=0,
+    is_causal=True,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -268,6 +278,7 @@ def prefill_forward(
             kv_hidden_states=kv_hidden_states,
             prefix_kv=prefix_kv,
             q_rope_offset=q_rope_offset,
+            is_causal=is_causal,
         )
 
     if kv_hidden_states is not None:
@@ -347,7 +358,7 @@ def prefill_forward(
                 ttnn.fill_cache(k_cache, tt_k[slot_idx : slot_idx + 1], batch_idx=slot_idx)
                 ttnn.fill_cache(v_cache, tt_v[slot_idx : slot_idx + 1], batch_idx=slot_idx)
 
-    sliding_window = config.sliding_window if config.is_sliding else None
+    sliding_window = config.sliding_window if is_causal and config.is_sliding else None
     if attn_mask is not None:
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
@@ -362,7 +373,7 @@ def prefill_forward(
             tt_q,
             tt_k,
             tt_v,
-            is_causal=True,
+            is_causal=is_causal,
             scale=1.0,
             sliding_window_size=sliding_window,
         )
