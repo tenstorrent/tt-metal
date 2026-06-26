@@ -151,7 +151,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "#include <cstdint>\n";
         }
         if (!ta_entries.empty()) {
-            content << "#include \"api/tensor/tensor_accessor.h\"\n";
+            // This header defines TensorBindingToken, a type which can be used
+            // to construct a TensorAccessor or LocalTensorAccessor.
+            content << "#include \"api/tensor/tensor_binding_token.h\"\n";
         }
         content << "\n";
 
@@ -172,17 +174,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!ta_entries.empty()) {
-            // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA. The kernel-side TensorAccessor(token) constructor
-            // unpacks both pieces.
+            // its implicit base-address CRTA.
+            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
-                content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
-                        << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
+                        << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             content << "}  // namespace tensor\n";

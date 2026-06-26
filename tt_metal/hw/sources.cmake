@@ -23,6 +23,8 @@ set(HW_JIT_API_HEADERS
     inc/api/kernel_thread_globals.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
+    inc/api/tensor/tensor_binding_token.h
+    inc/api/tensor/local_tensor_accessor.h
     inc/api/tensor/shard_pages_address_iterator.h
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
