@@ -323,6 +323,41 @@ def test_generate_from_prompt_tokens_can_build_logits_after_prefill():
     assert calls[2][0:3] == ("blocks", "model", "built-logits")
 
 
+def test_generate_from_prompt_tokens_allows_zero_blocks_without_logits():
+    calls = []
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.empty((1, 0), dtype=torch.long),
+        prompt_len=3,
+        next_pos=3,
+        trajectories=[],
+    )
+
+    def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
+        calls.append(("prefill", tt_model, tokens))
+        return tokens.shape[1]
+
+    def fake_blocks(tt_model, logits_fn, **kwargs):
+        calls.append(("blocks", tt_model, logits_fn, kwargs))
+        return generation
+
+    out = generate_from_prompt_tokens(
+        "model",
+        None,
+        prompt_tokens,
+        num_blocks=0,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        prefill_fn=fake_prefill,
+        blocks_fn=fake_blocks,
+    )
+
+    assert out is generation
+    assert calls[0][0] == "prefill"
+    assert calls[1][0:3] == ("blocks", "model", None)
+    assert calls[1][3]["num_blocks"] == 0
+
+
 def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
     with pytest.raises(ValueError, match="either logits_fn or logits_fn_builder"):
         generate_from_prompt_tokens(
@@ -623,6 +658,37 @@ def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tok
     assert out == "result"
     assert calls["generate"]["num_blocks"] == 3
     assert calls["generate"]["max_new_tokens"] == 9
+
+
+def test_generate_text_from_checkpoint_state_allows_zero_new_tokens_without_canvas_or_logits():
+    calls = {}
+
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder is not needed for zero generated blocks")
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = (tt_model, logits_fn, tokenizer, prompt, kwargs)
+        return "result"
+
+    out = generate_text_from_checkpoint_state(
+        object(),
+        object(),
+        "hello",
+        dg_state_dict={"raw": "state"},
+        max_new_tokens=0,
+        noise_seed=123,
+        gumbel_seed=456,
+        logits_fn_builder_factory=fail_builder_factory,
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["generate"][1] is None
+    assert calls["generate"][3] == "hello"
+    kwargs = calls["generate"][4]
+    assert kwargs["num_blocks"] == 0
+    assert kwargs["logits_fn_builder"] is None
+    assert callable(kwargs["init_canvas_fn"])
 
 
 def test_generate_text_from_checkpoint_state_defaults_diffusion_config():

@@ -482,15 +482,16 @@ def generate_from_prompt_tokens(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
-    logits_fn = _resolve_generation_logits_fn(
-        tt_model,
-        logits_fn,
-        logits_fn_builder,
-        prompt_tokens=prompt_tokens,
-        prompt_len=prompt_len,
-        page_table=page_table,
-        page_tables_per_layer=page_tables_per_layer,
-    )
+    if num_blocks > 0:
+        logits_fn = _resolve_generation_logits_fn(
+            tt_model,
+            logits_fn,
+            logits_fn_builder,
+            prompt_tokens=prompt_tokens,
+            prompt_len=prompt_len,
+            page_table=page_table,
+            page_tables_per_layer=page_tables_per_layer,
+        )
     return blocks_fn(
         tt_model,
         logits_fn,
@@ -609,6 +610,11 @@ def _infer_generation_vocab_size(tokenizer, tt_model=None):
     return getattr(hf_config, "vocab_size", None)
 
 
+def _unused_canvas_init_fn(block_idx: int, start_pos: int):
+    del block_idx, start_pos
+    raise RuntimeError("init_canvas_fn should not be called when num_blocks is zero")
+
+
 def generate_text(
     tt_model,
     logits_fn,
@@ -709,6 +715,8 @@ def generate_text_from_checkpoint_state(
     _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, generate_kwargs.get("max_new_tokens"))
     if vocab_size is None:
         vocab_size = _infer_generation_vocab_size(tokenizer, tt_model)
+    if init_canvas_fn is None and num_blocks == 0:
+        init_canvas_fn = _unused_canvas_init_fn
     if init_canvas_fn is None:
         if vocab_size is None or seed is None:
             raise ValueError("init_canvas_fn is required unless vocab_size and seed are provided")
@@ -719,7 +727,7 @@ def generate_text_from_checkpoint_state(
             vocab_size=vocab_size,
             seed=seed,
         )
-    if "noise_tokens_fn" not in generate_kwargs and (seed is not None or noise_seed is not None):
+    if num_blocks > 0 and "noise_tokens_fn" not in generate_kwargs and (seed is not None or noise_seed is not None):
         if vocab_size is None:
             raise ValueError("noise_tokens_fn requires vocab_size or tokenizer/model vocab metadata")
         generate_kwargs["noise_tokens_fn"] = make_seeded_host_noise_tokens_fn(
@@ -729,7 +737,7 @@ def generate_text_from_checkpoint_state(
             vocab_size=vocab_size,
             seed=noise_seed if noise_seed is not None else seed + 1,
         )
-    if "gumbel_noise_fn" not in generate_kwargs and (seed is not None or gumbel_seed is not None):
+    if num_blocks > 0 and "gumbel_noise_fn" not in generate_kwargs and (seed is not None or gumbel_seed is not None):
         if vocab_size is None:
             raise ValueError("gumbel_noise_fn requires vocab_size or tokenizer/model vocab metadata")
         generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
@@ -750,10 +758,12 @@ def generate_text_from_checkpoint_state(
         adapter_config = getattr(tt_model, "hf_config", None)
         if adapter_config is not None:
             adapter_kwargs["config"] = adapter_config
-    logits_fn_builder = logits_fn_builder_factory(
-        dg_state_dict,
-        **adapter_kwargs,
-    )
+    logits_fn_builder = None
+    if num_blocks > 0:
+        logits_fn_builder = logits_fn_builder_factory(
+            dg_state_dict,
+            **adapter_kwargs,
+        )
     return generate_text_fn(
         tt_model,
         None,
