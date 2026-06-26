@@ -13,6 +13,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
@@ -1495,3 +1496,69 @@ def test_group_norm_optional_weight_bias(
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# Welford GroupNorm FP32 sharded path. FP32 input + FP32/bf16 gamma/beta, TILE and
+# ROW_MAJOR output, with bf16 input as control. FP32 is welford-gated (legacy truncates to TF32 on
+# SrcA and is validation-rejected) and requires fp32_dest_acc_en=True.
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
+def test_group_norm_sharded_welford_all_config(device, layout, in_dtype, gb_dtype):
+    N, C, H, W, num_groups = 1, 320, 32, 32, 16
+    grid = ttnn.CoreGrid(y=1, x=8)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32 on the Welford path
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(xt, dtype=in_dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.DataType.BFLOAT8_B), device)
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_shape = N * H * W // grid.x, C // grid.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+    xt = ttnn.to_memory_config(xt, mem)
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=mem,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=True,
+        output_layout=layout,
+        inplace=(layout == ttnn.ROW_MAJOR_LAYOUT),  # in-place only valid for sharded ROW_MAJOR
+    )
+    out = (
+        ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
+    )
+
+    passing, pcc = comp_pcc(ref, out, pcc=0.999)
+    assert passing, f"sharded welford {in_dtype} gamma={gb_dtype} {layout} PCC failed: {pcc}"

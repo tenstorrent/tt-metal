@@ -14,6 +14,7 @@ import math
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
@@ -523,3 +524,54 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         atol=0.09,
         frobenius_threshold=0.03,
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# Welford GroupNorm FP32 (issue #44650), interleaved/DRAM path (mcast/no_mcast factory). FP32 input
+# + FP32/bf16 gamma/beta, TILE output, bf16 input as control. FP32 is welford-gated and requires
+# fp32_dest_acc_en=True. (Interleaved ROW_MAJOR output is unsupported for any dtype, not covered.)
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_group_norm_interleaved_welford_all_config(device, in_dtype, gb_dtype):
+    N, C, H, W, num_groups = 1, 320, 32, 32, 16
+    grid = ttnn.CoreGrid(y=1, x=8)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32 on the Welford path
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    [gt, bt], mask = ttnn.dram_group_norm_params_from_torch(
+        [w, b], C, num_groups, device, core_grid=grid, return_mask=True, dtype=gb_dtype
+    )
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=True,
+        num_out_blocks=1,
+        inplace=False,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+
+    passing, pcc = comp_pcc(ref, out, pcc=0.999)
+    assert passing, f"interleaved welford {in_dtype} gamma={gb_dtype} PCC failed: {pcc}"
