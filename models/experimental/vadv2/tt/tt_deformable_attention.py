@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
+from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn, fold_offset_normalizer_into_weight
 from models.experimental.vadv2.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -56,6 +56,11 @@ class TtCustomMSDeformableAttention:
         # the host-sync `.item()` cost on warm calls.
         self._hw_cache = None
 
+        # sampling_offsets Linear weight/bias pre-scaled by 1/offset_normalizer,
+        # folding the per-call offset_normalizer DIV away. Built once (static).
+        self._so_w = None
+        self._so_b = None
+
     def __call__(
         self,
         query,
@@ -98,9 +103,13 @@ class TtCustomMSDeformableAttention:
         value = ttnn.reshape(value, (bs, num_value, self.num_heads, -1))
 
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = linear_flatten_batch(
-            query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias
-        )
+        if self._so_w is None:
+            W = int(spatial_shapes[0, 1].item())
+            H = int(spatial_shapes[0, 0].item())
+            self._so_w, self._so_b = fold_offset_normalizer_into_weight(
+                params.sampling_offsets.weight, params.sampling_offsets.bias, W, H, self.device
+            )
+        sampling_offsets = linear_flatten_batch(query, self._so_w, bias=self._so_b)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
         )
@@ -118,20 +127,14 @@ class TtCustomMSDeformableAttention:
         )
 
         if reference_points.shape[-1] == 2:
-            offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
             bs_r, num_query, num_levels, _ = reference_points.shape
             reference_xy = ttnn.reshape(reference_points, (bs_r, num_query, 1, num_levels, 1, 2))
-            offset_normalizer_xy = ttnn.reshape(
-                offset_normalizer, (1, 1, 1, offset_normalizer.shape[0], 1, offset_normalizer.shape[1])
-            )
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
-            offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
             sampling_offsets = ttnn.squeeze(sampling_offsets, 0)
             sampling_offsets = ttnn.squeeze(sampling_offsets, 2)
-            offset_normalizer_xy = ttnn.squeeze(offset_normalizer_xy, 0)
-            offset_normalizer_xy = ttnn.squeeze(offset_normalizer_xy, 0)
-
-            sampling_locations = ttnn.divide(sampling_offsets, offset_normalizer_xy)
+            # sampling_offsets is already divided by offset_normalizer (folded into
+            # the sampling_offsets Linear weight).
+            sampling_locations = sampling_offsets
 
             sampling_locations = ttnn.unsqueeze(sampling_locations, 2)
             sampling_locations = ttnn.unsqueeze(sampling_locations, 0)

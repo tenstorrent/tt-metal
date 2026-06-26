@@ -3,6 +3,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import torch
+
+
+def fold_offset_normalizer_into_weight(weight, bias, W, H, device):
+    """Pre-scale a deformable-attention `sampling_offsets` Linear so its output is
+    already divided by the offset_normalizer [W, H], eliminating the per-call
+    broadcast SFPU DIV (`sampling_offsets / [W, H]`).
+
+    The Linear output is laid out (..., num_points, 2) with the x/y pair
+    innermost, so even output channels are x (÷W) and odd are y (÷H). Folding the
+    static division into the weight is mathematically exact:
+    `s · (Wx + b) == (Wx + b) / normalizer`. Computed once (offset_normalizer is
+    static) and cached by the caller.
+    """
+    out_features = weight.shape[-1]  # preprocess_linear_weight stores (in, out)
+    sc = torch.ones(out_features, dtype=torch.float32)
+    sc[0::2] = 1.0 / float(W)
+    sc[1::2] = 1.0 / float(H)
+    sc_t = ttnn.from_torch(sc.reshape(1, out_features), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    w2 = ttnn.mul(weight, sc_t)
+    b2 = ttnn.mul(bias, sc_t) if bias is not None else None
+    ttnn.deallocate(sc_t)
+    return w2, b2
 
 
 # Switch the num_levels==1 path over to the fused
