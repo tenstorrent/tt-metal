@@ -43,11 +43,8 @@ void LayerCompletionConsumer::run() {
     uint64_t logged = 0;
     while (!stop_.load(std::memory_order_acquire)) {
         const uint32_t n = channel_->try_consume_all();
-        uint64_t cur = total_.load(std::memory_order_relaxed);
-        if (n > 0) {
-            cur += n;
-            total_.store(cur, std::memory_order_relaxed);
-        }
+        // Only this thread writes total_, so a plain accumulate suffices (fetch_add(0) is a no-op).
+        const uint64_t cur = total_.fetch_add(n, std::memory_order_relaxed) + n;
         if (cur - logged >= log_step_) {
             std::fprintf(
                 stderr,
