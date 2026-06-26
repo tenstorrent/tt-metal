@@ -6,6 +6,7 @@ from math import prod
 import pytest
 import torch
 
+from models.experimental.audiox.tt import oobleck as tt_oobleck
 from models.experimental.audiox.reference.oobleck import (
     DecoderBlock,
     EncoderBlock,
@@ -14,7 +15,11 @@ from models.experimental.audiox.reference.oobleck import (
     ResidualUnit,
     SnakeBeta,
 )
-from models.experimental.audiox.tt.decoder_policy import should_stream_decoder_block
+from models.experimental.audiox.tt.decoder_policy import (
+    decoder_transpose_input_chunk_size,
+    should_stream_decoder_block,
+    should_use_long_transpose_profile,
+)
 
 
 def test_snake_beta_at_zero_init_is_identity():
@@ -126,4 +131,204 @@ def test_oobleck_encoder_param_names_match_upstream_convention():
 def test_should_stream_decoder_block_only_for_really_long_low_channel_tail():
     assert should_stream_decoder_block(input_length=221184, stride=2, out_channels=128) is False
     assert should_stream_decoder_block(input_length=165376, stride=4, out_channels=128) is True
-    assert should_stream_decoder_block(input_length=165376, stride=4, out_channels=256) is False
+    assert should_stream_decoder_block(input_length=27584, stride=4, out_channels=256) is True
+    assert should_stream_decoder_block(input_length=20000, stride=4, out_channels=256) is False
+    assert should_stream_decoder_block(input_length=165376, stride=4, out_channels=512) is False
+
+
+def test_targeted_transpose_chunking_only_kicks_in_for_mid_decoder_long_audio():
+    assert should_use_long_transpose_profile(input_length=27584, stride=4, out_channels=256) is True
+    assert should_use_long_transpose_profile(input_length=41472, stride=4, out_channels=256) is True
+    assert should_use_long_transpose_profile(input_length=41472, stride=4, out_channels=128) is False
+    assert should_use_long_transpose_profile(input_length=165376, stride=4, out_channels=128) is True
+    assert (
+        decoder_transpose_input_chunk_size(input_length=27584, stride=4, out_channels=256, default_chunk_size=32768)
+        == 8192
+    )
+    assert (
+        decoder_transpose_input_chunk_size(input_length=41472, stride=4, out_channels=256, default_chunk_size=32768)
+        == 8192
+    )
+    assert (
+        decoder_transpose_input_chunk_size(input_length=41472, stride=4, out_channels=128, default_chunk_size=32768)
+        == 0
+    )
+
+
+def test_chunked_transpose_keeps_original_long_profile_length(monkeypatch):
+    class FakeTensor:
+        def __init__(self, length):
+            self.shape = (1, length, 1, 256)
+
+        def memory_config(self):
+            return "fake-memory"
+
+    calls = []
+
+    def fake_slice_time(_x, start, end):
+        return FakeTensor(end - start)
+
+    def fake_conv_transpose1d_impl(
+        x,
+        weight,
+        bias,
+        device,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        batch_size,
+        input_length,
+        profile_input_length=None,
+        label="",
+    ):
+        calls.append((input_length, profile_input_length, label))
+        return FakeTensor(x.shape[1] * stride), x.shape[1] * stride
+
+    monkeypatch.setattr(tt_oobleck, "_slice_time", fake_slice_time)
+    monkeypatch.setattr(tt_oobleck, "_concat_time", lambda chunks, memory_config=None: chunks[0])
+    monkeypatch.setattr(tt_oobleck, "_conv_transpose1d_impl", fake_conv_transpose1d_impl)
+
+    out, out_length = tt_oobleck._conv_transpose1d(
+        FakeTensor(41472),
+        weight=None,
+        bias=None,
+        device=None,
+        in_channels=256,
+        out_channels=256,
+        kernel_size=8,
+        stride=4,
+        padding=2,
+        batch_size=1,
+        input_length=41472,
+        label="test",
+    )
+
+    assert out is not None
+    assert out_length == 41472 * 4
+    assert calls
+    assert all(profile_input_length == 41472 for _, profile_input_length, _ in calls)
+
+
+def test_stream_upsample_keeps_original_long_profile_length(monkeypatch):
+    class FakeTensor:
+        def __init__(self, length, channels=128):
+            self.shape = (1, length, 1, channels)
+
+        def memory_config(self):
+            return "fake-memory"
+
+    calls = []
+
+    def fake_slice_time(_x, start, end):
+        return FakeTensor(end - start)
+
+    def fake_conv_transpose1d_impl(
+        x,
+        weight,
+        bias,
+        device,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        batch_size,
+        input_length,
+        profile_input_length=None,
+        label="",
+    ):
+        calls.append((input_length, profile_input_length, label))
+        return FakeTensor(x.shape[1] * stride, out_channels), x.shape[1] * stride
+
+    monkeypatch.setattr(tt_oobleck, "_slice_time", fake_slice_time)
+    monkeypatch.setattr(tt_oobleck, "_gather_chunk_with_halo", lambda chunks, index, halo: (chunks[index], 0))
+    monkeypatch.setattr(tt_oobleck, "_conv_transpose1d_impl", fake_conv_transpose1d_impl)
+    monkeypatch.setattr(tt_oobleck.ttnn, "deallocate", lambda tensor, force=True: None)
+
+    block = tt_oobleck.TtDecoderBlock.__new__(tt_oobleck.TtDecoderBlock)
+    block.up_w = None
+    block.up_b = None
+    block.mesh_device = None
+    block.in_channels = 256
+    block.out_channels = 128
+    block.kernel_size = 4
+    block.stride = 2
+    block.padding = 1
+
+    outputs = block._stream_upsample(FakeTensor(300000, 256))
+
+    assert outputs
+    assert calls
+    assert all(profile_input_length == 300000 for _, profile_input_length, _ in calls)
+    assert block.last_stream_profile["input_length"] == 300000
+    assert block.last_stream_profile["base_chunk_count"] == 10
+    assert block.last_stream_profile["base_chunk_length"] == 32768
+    assert block.last_stream_profile["upsampled_chunk_count"] == 10
+
+
+def test_streamed_chunk_chain_keeps_original_long_profile_length(monkeypatch):
+    class FakeTensor:
+        def __init__(self, length, channels=128):
+            self.shape = (1, length, 1, channels)
+
+        def memory_config(self):
+            return "fake-memory"
+
+    calls = []
+
+    def fake_slice_time(_x, start, end):
+        return FakeTensor(end - start)
+
+    def fake_conv_transpose1d_impl(
+        x,
+        weight,
+        bias,
+        device,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        batch_size,
+        input_length,
+        profile_input_length=None,
+        label="",
+    ):
+        calls.append((input_length, profile_input_length, label))
+        return FakeTensor(x.shape[1] * stride, out_channels), x.shape[1] * stride
+
+    monkeypatch.setattr(tt_oobleck, "_slice_time", fake_slice_time)
+    monkeypatch.setattr(tt_oobleck, "_gather_chunk_with_halo", lambda chunks, index, halo: (chunks[index], 0))
+    monkeypatch.setattr(tt_oobleck, "_conv_transpose1d_impl", fake_conv_transpose1d_impl)
+    monkeypatch.setattr(tt_oobleck, "_split_stream_chunks", lambda chunks, max_chunk_length: chunks)
+    monkeypatch.setattr(tt_oobleck.ttnn, "to_layout", lambda tensor, layout: tensor)
+    monkeypatch.setattr(tt_oobleck.ttnn, "deallocate", lambda tensor, force=True: None)
+
+    block = tt_oobleck.TtDecoderBlock.__new__(tt_oobleck.TtDecoderBlock)
+    block.up_w = None
+    block.up_b = None
+    block.mesh_device = None
+    block.in_channels = 256
+    block.out_channels = 128
+    block.kernel_size = 4
+    block.stride = 2
+    block.padding = 1
+    block.act = lambda x: x
+    block.res1 = type("FakeRes", (), {"stream": staticmethod(lambda chunks: chunks)})()
+    block.res2 = type("FakeRes", (), {"stream": staticmethod(lambda chunks: chunks)})()
+    block.res3 = type("FakeRes", (), {"stream": staticmethod(lambda chunks: chunks)})()
+    block.last_stream_profile = {}
+
+    outputs = block._stream([FakeTensor(120000, 256), FakeTensor(180000, 256)])
+
+    assert outputs
+    assert calls
+    assert all(profile_input_length == 300000 for _, profile_input_length, _ in calls)
+    assert block.last_stream_profile["input_length"] == 300000
+    assert block.last_stream_profile["base_chunk_count"] == 2
+    assert block.last_stream_profile["base_chunk_length"] is None
+    assert block.last_stream_profile["upsampled_chunk_count_before_split"] == 2
+    assert block.last_stream_profile["residual_chunk_count"] == 2
+    assert block.last_stream_profile["residual_chunk_length"] == 16384

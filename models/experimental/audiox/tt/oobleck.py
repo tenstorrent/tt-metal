@@ -18,14 +18,17 @@ import torch
 import ttnn
 
 from models.experimental.audiox.tt.common import to_tt
-from models.experimental.audiox.tt.decoder_policy import should_stream_decoder_block
+from models.experimental.audiox.tt.decoder_policy import (
+    decoder_transpose_input_chunk_size,
+    should_stream_decoder_block,
+    should_use_long_transpose_profile,
+)
 
 
 _LONG_SEQUENCE_THRESHOLD = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_THRESHOLD", "131072"))
 _LONG_SEQUENCE_CHUNK = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_CHUNK", "65536"))
-_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "96"))
-_CONV_TRANSPOSE_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_SLICES", "128"))
-_CONV_TRANSPOSE_LONG_THRESHOLD = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD", "131072"))
+_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "32"))
+_CONV_TRANSPOSE_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_SLICES", "64"))
 _CONV_TRANSPOSE_LONG_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_HEIGHT_SLICES", "512"))
 _CONV_TRANSPOSE_LONG_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_ACT_BLOCK_H", "0"))
 _CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H", "32"))
@@ -401,6 +404,7 @@ def _conv_transpose1d_impl(
     padding: int,
     batch_size: int,
     input_length: int,
+    profile_input_length: int | None = None,
     label: str = "",
 ):
     """Emulate ConvTranspose1d via ``ttnn.conv_transpose2d`` over ``[B, T, 1, C]``.
@@ -411,7 +415,11 @@ def _conv_transpose1d_impl(
     out_length = (input_length - 1) * stride - 2 * padding + kernel_size
     act_block_h = _CONV_TRANSPOSE_STRIDE4_ACT_BLOCK_H if stride == 4 else _CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H
     num_height_slices = _CONV_TRANSPOSE_HEIGHT_SLICES
-    if input_length >= _CONV_TRANSPOSE_LONG_THRESHOLD:
+    profile_length = input_length if profile_input_length is None else profile_input_length
+    use_long_profile = should_use_long_transpose_profile(
+        input_length=profile_length, stride=stride, out_channels=out_channels
+    )
+    if use_long_profile:
         if _CONV_TRANSPOSE_LONG_ACT_BLOCK_H > 0:
             act_block_h = min(act_block_h, _CONV_TRANSPOSE_LONG_ACT_BLOCK_H)
         else:
@@ -429,6 +437,7 @@ def _conv_transpose1d_impl(
     _debug_decoder(
         f"conv_transpose1d {label} in_ch={in_channels} out_ch={out_channels} "
         f"k={kernel_size} stride={stride} pad={padding} batch={batch_size} input_length={input_length} "
+        f"profile_length={profile_length} long_profile={int(use_long_profile)} "
         f"act_block_h={act_block_h} slices={num_height_slices}"
     )
     dram_slice_config = ttnn.Conv2dSliceConfig(
@@ -479,11 +488,17 @@ def _conv_transpose1d(
     With the AudioX decoder's kernel/stride pairs, each input position only
     overlaps with its immediate neighbors, so a one-sample halo on each side is
     enough to reconstruct the exact full output after cropping."""
+    chunk_length = decoder_transpose_input_chunk_size(
+        input_length=input_length,
+        stride=stride,
+        out_channels=out_channels,
+        default_chunk_size=_CONV_TRANSPOSE_INPUT_CHUNK,
+    )
     _debug_decoder(
         f"conv_transpose1d wrapper {label} input_length={input_length} "
-        f"threshold={_CONV_TRANSPOSE_LONG_THRESHOLD} chunk={_CONV_TRANSPOSE_INPUT_CHUNK}"
+        f"chunk={chunk_length or _CONV_TRANSPOSE_INPUT_CHUNK}"
     )
-    if input_length < _CONV_TRANSPOSE_LONG_THRESHOLD or _CONV_TRANSPOSE_INPUT_CHUNK <= 0:
+    if chunk_length <= 0:
         return _conv_transpose1d_impl(
             x,
             weight,
@@ -500,13 +515,14 @@ def _conv_transpose1d(
         )
 
     chunks = []
-    for start in range(0, input_length, _CONV_TRANSPOSE_INPUT_CHUNK):
-        end = min(start + _CONV_TRANSPOSE_INPUT_CHUNK, input_length)
+    chunk_count = (input_length + chunk_length - 1) // chunk_length
+    _debug_decoder(f"conv_transpose1d wrapper {label} chunk_count={chunk_count}")
+    for start in range(0, input_length, chunk_length):
+        end = min(start + chunk_length, input_length)
         left_ctx = 1 if start > 0 else 0
         right_ctx = 1 if end < input_length else 0
         _debug_decoder(
-            f"conv_transpose1d chunk {label} start={start} end={end} "
-            f"left_ctx={left_ctx} right_ctx={right_ctx}"
+            f"conv_transpose1d chunk {label} start={start} end={end} " f"left_ctx={left_ctx} right_ctx={right_ctx}"
         )
         x_chunk = _slice_time(x, start - left_ctx, end + right_ctx)
         chunk_label = f"{label}[{start}:{end}]"
@@ -522,6 +538,7 @@ def _conv_transpose1d(
             padding,
             batch_size,
             x_chunk.shape[1],
+            profile_input_length=input_length,
             label=chunk_label,
         )
         crop_start = stride * left_ctx
@@ -584,6 +601,7 @@ class TtDecoderBlock:
                 self.padding,
                 chunk.shape[0],
                 ext.shape[1],
+                profile_input_length=x.shape[1],
                 label=ext_label,
             )
             crop_start = self.stride * left_len
@@ -597,6 +615,12 @@ class TtDecoderBlock:
         if base_chunks:
             ttnn.deallocate(base_chunks[-1], force=True)
 
+        self.last_stream_profile = {
+            "input_length": x.shape[1],
+            "base_chunk_count": len(base_chunks),
+            "base_chunk_length": _CONV_TRANSPOSE_INPUT_CHUNK,
+            "upsampled_chunk_count": len(outputs),
+        }
         return outputs
 
     def _stream(self, x: ttnn.Tensor | list[ttnn.Tensor]) -> list[ttnn.Tensor]:
@@ -607,6 +631,8 @@ class TtDecoderBlock:
                 current_chunks.append(ttnn.to_layout(act_chunk, ttnn.ROW_MAJOR_LAYOUT))
                 ttnn.deallocate(chunk, force=True)
             upsampled = []
+            profile_input_length = sum(chunk.shape[1] for chunk in current_chunks)
+            input_chunk_count = len(current_chunks)
             for index, chunk in enumerate(current_chunks):
                 ext, left_len = _gather_chunk_with_halo(current_chunks, index, 1)
                 ext_label = f"decoder_block[stride={self.stride}].upsample[{index}]"
@@ -622,6 +648,7 @@ class TtDecoderBlock:
                     self.padding,
                     chunk.shape[0],
                     ext.shape[1],
+                    profile_input_length=profile_input_length,
                     label=ext_label,
                 )
                 crop_start = self.stride * left_len
@@ -633,12 +660,22 @@ class TtDecoderBlock:
                     ttnn.deallocate(current_chunks[index - 1], force=True)
             if current_chunks:
                 ttnn.deallocate(current_chunks[-1], force=True)
+            self.last_stream_profile = {
+                "input_length": profile_input_length,
+                "base_chunk_count": input_chunk_count,
+                "base_chunk_length": None,
+                "upsampled_chunk_count": len(upsampled),
+            }
         else:
             h = self.act(x)
             h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
             upsampled = self._stream_upsample(h)
 
+        upsampled_chunk_count_before_split = len(upsampled)
         upsampled = _split_stream_chunks(upsampled, _STREAM_RESIDUAL_CHUNK)
+        self.last_stream_profile["residual_chunk_count"] = len(upsampled)
+        self.last_stream_profile["residual_chunk_length"] = _STREAM_RESIDUAL_CHUNK
+        self.last_stream_profile["upsampled_chunk_count_before_split"] = upsampled_chunk_count_before_split
         upsampled = self.res1.stream(upsampled)
         upsampled = self.res2.stream(upsampled)
         return self.res3.stream(upsampled)
@@ -654,7 +691,9 @@ class TtDecoderBlock:
             out = self._stream(x)
             profile["streamed"] = True
             profile["seconds"] = time.perf_counter() - started_at
+            profile.update(self.last_stream_profile)
             self.last_profile = profile
+            _debug_decoder(f"decoder_block profile {profile}")
             return out
 
         batch_size, input_length = x.shape[0], x.shape[1]
@@ -700,6 +739,7 @@ class TtDecoderBlock:
             + profile["res3_seconds"]
         )
         self.last_profile = profile
+        _debug_decoder(f"decoder_block profile {profile}")
         return h
 
     def deallocate(self) -> None:

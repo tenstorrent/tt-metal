@@ -119,6 +119,34 @@ def _summarize_case(case: dict, details: dict, elapsed_seconds: float) -> dict:
     return summary
 
 
+def _prepare_case_conditioning(
+    session, cases: list[dict], *, synthetic_video_prompt, duration_seconds: int
+) -> tuple[dict, list[dict], float]:
+    conditioning = {}
+    reports = []
+    started_at = time.perf_counter()
+
+    for case in cases:
+        case_started_at = time.perf_counter()
+        cross_attn_cond = session.prepare_conditioning(
+            prompt=case["prompt"],
+            video_path=case["video_path"],
+            video_prompt_tensor=synthetic_video_prompt if case["video_prompt_tensor"] else None,
+            duration_seconds=duration_seconds,
+        )
+        conditioning[case["name"]] = cross_attn_cond
+        reports.append(
+            {
+                "name": case["name"],
+                "conditioning_mode": case["mode_label"],
+                "conditioning_seconds": time.perf_counter() - case_started_at,
+                "conditioning_tokens": int(cross_attn_cond.shape[1]),
+            }
+        )
+
+    return conditioning, reports, time.perf_counter() - started_at
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -144,6 +172,12 @@ def main(argv: list[str] | None = None) -> int:
     device = _open_tt_device(device_id=args.tt_device_id)
     session = _build_session(args.checkpoint, device, seed=args.seed)
     session_setup_seconds = time.perf_counter() - setup_started_at
+    case_conditioning, conditioning_reports, conditioning_prep_seconds = _prepare_case_conditioning(
+        session,
+        cases,
+        synthetic_video_prompt=synthetic_video_prompt,
+        duration_seconds=args.duration_seconds,
+    )
     measured_started_at = time.perf_counter()
 
     try:
@@ -156,12 +190,15 @@ def main(argv: list[str] | None = None) -> int:
                 output=warmup_output,
                 video_path=warmup_case["video_path"],
                 video_prompt_tensor=synthetic_video_prompt if warmup_case["video_prompt_tensor"] else None,
+                cross_attn_cond_torch=case_conditioning[warmup_case["name"]],
                 steps=args.steps,
                 seed=args.seed,
                 duration_seconds=args.duration_seconds,
                 return_details=True,
             )
-            warmup_reports.append(_summarize_case({**warmup_case, "steps": args.steps}, details, time.perf_counter() - started_at))
+            warmup_reports.append(
+                _summarize_case({**warmup_case, "steps": args.steps}, details, time.perf_counter() - started_at)
+            )
 
         for case in cases:
             case_output = args.output_dir / case["name"] / "tt_output.wav"
@@ -171,12 +208,15 @@ def main(argv: list[str] | None = None) -> int:
                 output=case_output,
                 video_path=case["video_path"],
                 video_prompt_tensor=synthetic_video_prompt if case["video_prompt_tensor"] else None,
+                cross_attn_cond_torch=case_conditioning[case["name"]],
                 steps=args.steps,
                 seed=args.seed,
                 duration_seconds=args.duration_seconds,
                 return_details=True,
             )
-            case_reports.append(_summarize_case({**case, "steps": args.steps}, details, time.perf_counter() - started_at))
+            case_reports.append(
+                _summarize_case({**case, "steps": args.steps}, details, time.perf_counter() - started_at)
+            )
     finally:
         session.deallocate()
         _close_tt_device(device)
@@ -189,13 +229,16 @@ def main(argv: list[str] | None = None) -> int:
         "seed": args.seed,
         "duration_seconds": int(args.duration_seconds),
         "session_setup_seconds": session_setup_seconds,
+        "conditioning_prep_seconds": conditioning_prep_seconds,
+        "conditioning_reports": conditioning_reports,
         "measured_elapsed_seconds": measured_elapsed_seconds,
         "warmup_runs": warmup_reports,
         "cases": case_reports,
         "stage3_checks": {
             "all_required_modes_present": len(case_reports) == 4,
             "all_valid_16khz": all(case["valid_16khz"] for case in case_reports),
-            "all_tt_runs_without_error": True,
+            "all_runs_without_error": True,
+            "all_tt_decode": all(case.get("timings", {}).get("decode_backend") == "tt" for case in case_reports),
         },
     }
     summary_path = args.output_dir / "stage3_switch_summary.json"
