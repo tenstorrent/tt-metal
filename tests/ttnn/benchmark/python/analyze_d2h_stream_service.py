@@ -67,6 +67,13 @@ CASE_KEY = [
     "fifo_socket_pages_configured",
 ]
 PRIMARY_METRIC = "aggregate_gbps"
+LATENCY_PLOT_METRICS = ("latency_p50_us", "latency_p90_us", "latency_max_us")
+LATENCY_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*")
+LATENCY_LINESTYLES = {
+    "latency_p50_us": "-",
+    "latency_p90_us": "--",
+    "latency_max_us": ":",
+}
 
 AXIS_SHORT = {
     "per_device_bytes": "size",
@@ -102,6 +109,10 @@ NUMERIC_COLUMNS = [
     "pipeline_depth_transfers",
     "barrier_tail_ms",
     "producer_finish_tail_ms",
+    "latency_avg_us",
+    "latency_p50_us",
+    "latency_p90_us",
+    "latency_max_us",
     "real_time",
     "cpu_time",
     "iterations",
@@ -157,7 +168,15 @@ def metric_label(metric: str) -> str:
     return {
         "aggregate_gbps": "aggregate D2H throughput (GB/s)",
         "global_payload_gbps": "global payload throughput (GB/s)",
+        "latency_avg_us": "serialized release-to-read latency avg (us)",
+        "latency_p50_us": "serialized release-to-read latency p50 (us)",
+        "latency_p90_us": "serialized release-to-read latency p90 (us)",
+        "latency_max_us": "serialized release-to-read latency max (us)",
     }.get(metric, metric)
+
+
+def latency_percentile_label(metric: str) -> str:
+    return metric.removeprefix("latency_").removesuffix("_us").upper()
 
 
 def load_gbench_results(path: str | Path) -> pd.DataFrame:
@@ -303,6 +322,118 @@ def plot_compare_family_lines(merged: pd.DataFrame, out_dir: Path, prefix: str, 
         _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_{metric}.png")
 
 
+def plot_latency_stat_lines(df: pd.DataFrame, out_dir: Path, prefix: str) -> None:
+    if not HAS_MATPLOTLIB:
+        print("  Skipping latency plots: matplotlib is not installed")
+        return
+    metrics = [metric for metric in LATENCY_PLOT_METRICS if metric in df.columns and df[metric].notna().any()]
+    if not metrics:
+        return
+    latency_df = df[df[metrics].notna().any(axis=1)].copy()
+    for (family, mode), sub in latency_df.groupby(["family", "mode"]):
+        xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
+        held = held_cols(mode, xcol)
+        varying = [c for c in held if c in sub.columns and sub[c].nunique() > 1]
+        fig, ax = plt.subplots(figsize=(7.5, 4.8))
+        plotted = False
+        groups = sub.groupby(held) if held else [("anchor", sub)]
+        for line_idx, (key, group) in enumerate(groups):
+            group = group.sort_values(xcol)
+            base_label = line_label(held, key, varying)
+            marker = LATENCY_MARKERS[line_idx % len(LATENCY_MARKERS)]
+            for metric in metrics:
+                metric_group = group[group[metric].notna()]
+                if metric_group.empty:
+                    continue
+                label = latency_percentile_label(metric)
+                if base_label != "anchor":
+                    label = f"{base_label}, {label}"
+                ax.plot(
+                    metric_group[xcol],
+                    metric_group[metric],
+                    marker=marker,
+                    linestyle=LATENCY_LINESTYLES.get(metric, "-"),
+                    label=label,
+                )
+                plotted = True
+        if not plotted:
+            continue
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("serialized release-to-read latency (us)")
+        ax.set_ylim(bottom=0)
+        ax.grid(True, linestyle=":", alpha=0.5)
+        ax.set_title(f"{family}/{mode} serialized latency stats")
+        ax.legend(fontsize=8)
+        _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_latency_stats_us.png")
+
+
+def plot_compare_latency_stat_lines(merged: pd.DataFrame, out_dir: Path, prefix: str) -> None:
+    if not HAS_MATPLOTLIB:
+        print("  Skipping compare latency plots: matplotlib is not installed")
+        return
+    metrics = [
+        metric
+        for metric in LATENCY_PLOT_METRICS
+        if f"{metric}_baseline" in merged.columns and f"{metric}_candidate" in merged.columns
+    ]
+    if not metrics:
+        return
+    shared = merged[merged["_merge"] == "both"].copy()
+    if shared.empty:
+        return
+    cmap = plt.get_cmap("tab10")
+    for (family, mode), sub in shared.groupby(["family", "mode"]):
+        xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
+        held = held_cols(mode, xcol)
+        varying = [c for c in held if c in sub.columns and sub[c].nunique() > 1]
+        fig, ax = plt.subplots(figsize=(7.5, 4.8))
+        plotted = False
+        color_idx = 0
+        groups = sub.groupby(held) if held else [("anchor", sub)]
+        for line_idx, (key, group) in enumerate(groups):
+            group = group.sort_values(xcol)
+            base_label = line_label(held, key, varying)
+            marker = LATENCY_MARKERS[line_idx % len(LATENCY_MARKERS)]
+            for metric in metrics:
+                base_col, cand_col = f"{metric}_baseline", f"{metric}_candidate"
+                metric_group = group[group[base_col].notna() & group[cand_col].notna()]
+                if metric_group.empty:
+                    continue
+                label = latency_percentile_label(metric)
+                if base_label != "anchor":
+                    label = f"{base_label}, {label}"
+                color = cmap(color_idx % 10)
+                ax.plot(
+                    metric_group[xcol],
+                    metric_group[base_col],
+                    marker=marker,
+                    linestyle="-",
+                    color=color,
+                    label=f"{label} baseline",
+                )
+                ax.plot(
+                    metric_group[xcol],
+                    metric_group[cand_col],
+                    marker=marker,
+                    linestyle="--",
+                    color=color,
+                    label=f"{label} candidate",
+                )
+                plotted = True
+                color_idx += 1
+        if not plotted:
+            continue
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("serialized release-to-read latency (us)")
+        ax.set_ylim(bottom=0)
+        ax.grid(True, linestyle=":", alpha=0.5)
+        ax.legend(fontsize=8)
+        ax.set_title(f"{family}/{mode} serialized latency stats: baseline (solid) vs candidate (dashed)")
+        _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_latency_stats_us.png")
+
+
 def _case_id(row) -> str:
     return (
         f"{row.family}/{row.mode}/size={format_payload_bytes(row.per_device_bytes)}/"
@@ -349,6 +480,7 @@ def write_run_outputs(df: pd.DataFrame, out_dir: Path, prefix: str) -> None:
     df.to_csv(cases_path, index=False, float_format="%.6f")
     print(f"  Saved {cases_path}")
     plot_family_lines(df, out_dir, prefix)
+    plot_latency_stat_lines(df, out_dir, prefix)
 
 
 def compare_runs(baseline_df: pd.DataFrame, candidate_df: pd.DataFrame) -> pd.DataFrame:
@@ -404,6 +536,7 @@ def write_compare_outputs(merged: pd.DataFrame, out_dir: Path, prefix: str) -> N
     merged.to_csv(compare_path, index=False, float_format="%.6f")
     print(f"  Saved {compare_path}")
     plot_compare_family_lines(merged, out_dir, prefix)
+    plot_compare_latency_stat_lines(merged, out_dir, prefix)
 
 
 def default_out_dir(path: str | Path) -> Path:

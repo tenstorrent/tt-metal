@@ -35,6 +35,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_configs.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/services/d2h_socket_service.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -45,6 +46,7 @@ namespace {
 using ::tt::tt_metal::BufferType;
 using ::tt::tt_metal::CoreCoord;
 using ::tt::tt_metal::CoreRange;
+using ::tt::tt_metal::CoreRangeSet;
 using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
@@ -61,7 +63,7 @@ using ::tt::tt_metal::distributed::MeshWorkload;
 constexpr uint32_t kMinWarmupIters = 4;
 constexpr uint32_t kWarmupSettlingIters = 2;
 constexpr uint32_t kPerfIters = 300;
-constexpr uint32_t kLatencyIters = 0;  // D2H serialized latency needs explicit per-transfer gating.
+constexpr uint32_t kLatencyIters = 50;
 
 constexpr uint32_t kElemBytes = sizeof(uint32_t);
 constexpr uint32_t kDefaultTargetSocketPageBytes = 64 * 1024;
@@ -98,6 +100,13 @@ struct WarmupPlan {
     uint32_t warmup_iters = 0;
     uint64_t host_fifo_depth_transfers = 0;
     uint64_t pipeline_depth_transfers = 0;
+};
+
+struct LatencyStats {
+    double avg_us = 0.0;
+    double p50_us = 0.0;
+    double p90_us = 0.0;
+    double max_us = 0.0;
 };
 
 template <typename T>
@@ -193,6 +202,22 @@ WarmupPlan compute_warmup_plan(uint32_t fifo_size_bytes, uint64_t per_shard_payl
     };
 }
 
+LatencyStats summarize_latency_us(std::vector<double> latencies_us) {
+    TT_FATAL(!latencies_us.empty(), "latencies_us must not be empty");
+    std::sort(latencies_us.begin(), latencies_us.end());
+    const auto percentile = [&](double fraction) {
+        const auto idx = static_cast<std::size_t>((latencies_us.size() - 1) * fraction + 0.5);
+        return latencies_us[idx];
+    };
+    const double sum = std::accumulate(latencies_us.begin(), latencies_us.end(), 0.0);
+    return LatencyStats{
+        .avg_us = sum / static_cast<double>(latencies_us.size()),
+        .p50_us = percentile(0.50),
+        .p90_us = percentile(0.90),
+        .max_us = latencies_us.back(),
+    };
+}
+
 bool benchmark_supported(benchmark::State& state) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     if (!cluster.is_ubb_galaxy()) {
@@ -210,7 +235,9 @@ MeshWorkload build_producer_workload(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const tt::tt_metal::D2HStreamService& service,
     const CoreRange& producer_cores,
-    uint32_t total_iters) {
+    uint32_t total_iters,
+    uint32_t ungated_iters,
+    uint32_t latency_gate_sem_addr) {
     const Tensor& backing = service.get_backing_tensor();
     auto* backing_buf = backing.buffer();
     TT_FATAL(backing_buf != nullptr, "build_producer_workload: backing tensor has no buffer");
@@ -238,7 +265,7 @@ MeshWorkload build_producer_workload(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = {transfer_done_sem_addr, total_iters},
+                .compile_args = {transfer_done_sem_addr, total_iters, ungated_iters, latency_gate_sem_addr},
             });
 
         for (uint32_t y = producer_cores.start_coord.y; y <= producer_cores.end_coord.y; ++y) {
@@ -313,6 +340,9 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     };
 
     tt::tt_metal::D2HStreamService service(g_mesh_device, std::move(cfg));
+    auto latency_gate_sem = ttnn::global_semaphore::create_global_semaphore(
+        g_mesh_device.get(), CoreRangeSet(kProducerCores), /*initial_value=*/0, BufferType::L1);
+    const uint32_t latency_gate_sem_addr = static_cast<uint32_t>(latency_gate_sem.address());
     const auto sockets = service.get_sockets();
     TT_FATAL(!sockets.empty(), "benchmark requires at least one socket");
 
@@ -334,7 +364,8 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     const WarmupPlan warmup_plan = compute_warmup_plan(geometry.fifo_size_bytes, per_shard_payload_bytes);
     const uint32_t warmup_iters = warmup_plan.warmup_iters;
     const uint32_t latency_iters = kLatencyIters;
-    const uint32_t total_iters = warmup_iters + kPerfIters;
+    const uint32_t ungated_iters = warmup_iters + kPerfIters;
+    const uint32_t total_iters = ungated_iters + latency_iters;
 
     log_info(
         tt::LogTest,
@@ -352,7 +383,8 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         warmup_plan.host_fifo_depth_transfers,
         warmup_iters);
 
-    auto producer_workload = build_producer_workload(g_mesh_device, service, kProducerCores, total_iters);
+    auto producer_workload = build_producer_workload(
+        g_mesh_device, service, kProducerCores, total_iters, ungated_iters, latency_gate_sem_addr);
     log_info(
         tt::LogTest,
         "[{}] Enqueuing bounded persistent D2H ready/ack workload for {} iterations across {} coords",
@@ -369,6 +401,18 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(host_storage, global_spec), *host_mapper);
 
     auto read_once = [&]() { service.read_from_tensor(host_output); };
+    std::vector<uint32_t> latency_gate_word{1};
+    auto release_latency_gate = [&]() {
+        for (const auto& coord : coords) {
+            auto* device = g_mesh_device->get_device(coord);
+            for (uint32_t y = kProducerCores.start_coord.y; y <= kProducerCores.end_coord.y; ++y) {
+                for (uint32_t x = kProducerCores.start_coord.x; x <= kProducerCores.end_coord.x; ++x) {
+                    tt::tt_metal::detail::WriteToDeviceL1(
+                        device, CoreCoord{x, y}, latency_gate_sem_addr, latency_gate_word);
+                }
+            }
+        }
+    };
 
     for ([[maybe_unused]] auto _ : state) {
         log_info(tt::LogTest, "[{}] Starting warmup phase with {} iterations", cs.label, warmup_iters);
@@ -388,6 +432,33 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         const auto barrier_t0 = std::chrono::steady_clock::now();
         service.barrier();
         const auto barrier_t1 = std::chrono::steady_clock::now();
+
+        LatencyStats latency_stats;
+        if (latency_iters > 0) {
+            log_info(tt::LogTest, "[{}] Starting serialized latency phase with {} iterations", cs.label, latency_iters);
+            std::vector<double> latency_us;
+            latency_us.reserve(latency_iters);
+            for (uint32_t iter = 0; iter < latency_iters; ++iter) {
+                // Host-side gate write is deliberately outside the timed window. The latency metric starts
+                // immediately after release and measures serialized D2H release-to-read completion.
+                release_latency_gate();
+                const auto latency_t0 = std::chrono::steady_clock::now();
+                read_once();
+                service.barrier();
+                const auto latency_t1 = std::chrono::steady_clock::now();
+                latency_us.push_back(std::chrono::duration<double, std::micro>(latency_t1 - latency_t0).count());
+            }
+            latency_stats = summarize_latency_us(std::move(latency_us));
+            log_info(
+                tt::LogTest,
+                "[{}] Serialized latency phase complete: avg_us={:.3f}, p50_us={:.3f}, p90_us={:.3f}, "
+                "max_us={:.3f}",
+                cs.label,
+                latency_stats.avg_us,
+                latency_stats.p50_us,
+                latency_stats.p90_us,
+                latency_stats.max_us);
+        }
 
         log_info(tt::LogTest, "[{}] Starting final untimed producer Finish() tail", cs.label);
         const auto finish_t0 = std::chrono::steady_clock::now();
@@ -431,6 +502,12 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["pipeline_depth_transfers"] = static_cast<double>(warmup_plan.pipeline_depth_transfers);
         state.counters["barrier_tail_ms"] = barrier_tail_ms;
         state.counters["producer_finish_tail_ms"] = producer_finish_tail_ms;
+        if (latency_iters > 0) {
+            state.counters["latency_avg_us"] = latency_stats.avg_us;
+            state.counters["latency_p50_us"] = latency_stats.p50_us;
+            state.counters["latency_p90_us"] = latency_stats.p90_us;
+            state.counters["latency_max_us"] = latency_stats.max_us;
+        }
 
         log_info(
             tt::LogTest,

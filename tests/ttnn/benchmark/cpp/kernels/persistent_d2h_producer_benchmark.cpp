@@ -11,6 +11,8 @@
 
 constexpr uint32_t transfer_done_sem_addr = get_compile_time_arg_val(0);
 constexpr uint32_t total_iters = get_compile_time_arg_val(1);
+constexpr uint32_t ungated_iters = get_compile_time_arg_val(2);
+constexpr uint32_t latency_gate_sem_addr = get_compile_time_arg_val(3);
 
 void kernel_main() {
     const uint32_t service_noc_x = get_arg_val<uint32_t>(0);
@@ -19,6 +21,7 @@ void kernel_main() {
 
     Noc noc;
     volatile tt_l1_ptr uint32_t* transfer_done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(transfer_done_sem_addr);
+    volatile tt_l1_ptr uint32_t* latency_gate = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(latency_gate_sem_addr);
     const uint64_t write_ack_noc = get_noc_addr(service_noc_x, service_noc_y, write_ack_counter_addr);
 
     for (uint32_t iter = 0; iter < total_iters; ++iter) {
@@ -27,6 +30,16 @@ void kernel_main() {
             if (*transfer_done > 0) {
                 *transfer_done = 0;
                 break;
+            }
+        }
+
+        if (iter >= ungated_iters) {
+            while (true) {
+                invalidate_l1_cache();
+                if (*latency_gate > 0) {
+                    *latency_gate = 0;
+                    break;
+                }
             }
         }
 
