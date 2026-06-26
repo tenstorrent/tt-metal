@@ -113,30 +113,37 @@ def _attach_migration_client():
 def _deliver_local_device_map(device_map) -> None:
     """Push THIS rank's local FNID->UMD device map to its co-located host migration worker(s).
 
-    Direct port of tt-blaze's ``_deliver_local_device_map``: a worker is co-located with every host,
-    and a rank knows only its own mesh's chips, so EVERY rank delivers its slice -- the worker
-    accumulates entries across writers. We DISCOVER the local worker's queues by globbing /dev/shm
-    on THIS host (POSIX shm is host-local, so the glob finds exactly the worker(s) co-located with
-    this rank) instead of assuming one fixed endpoint. This is what lets every rank, on every host,
-    reach its own worker -- the fixed-name attach only ever resolved on host 0.
+    Direct port of tt-blaze's ``_deliver_local_device_map``. The migration endpoint spawns TWO
+    internal device workers per host -- an "A" master/sender and a "B" loopback receiver -- each with
+    its OWN shmem queues named ``/ep_<pid>_{a,b}_{cmd,table,resp}`` (endpoint_orchestrator.cpp::
+    run_loopback); a subordinate rank adds a ``_r<rank>`` suffix. BOTH the A worker and the B receiver
+    need the map, so we deliver to every match.
 
-    The cmd-queue env name (e.g. /mig_ep1_cmd) gives the discovery stem; table/resp are derived by
-    name substitution. Both the exact name and any rank/pid-suffixed variants are matched.
+    The device map does NOT go to the outward control queues (``PREFILL_MIGRATION_*_QUEUE``, e.g.
+    ``/mig_ep1_*``) -- those are a DIFFERENT, master-only channel used for SET_TABLE/WORKER_READY. We
+    discover the worker queues by globbing ``/dev/shm/ep_*_{a,b}_cmd*`` on THIS host (POSIX shm is
+    host-local, so the glob finds exactly the worker(s) co-located with this rank), exactly like blaze
+    -- NOT the ``mig_ep*`` control name, which never matches a device-map queue.
     """
-    cmd_q, _, _ = _resolve_queue_names()
-    stem = os.path.basename(cmd_q)  # e.g. "mig_ep1_cmd"
     mod = _import_migration_client()
 
     trios = []
-    for c in sorted(set(glob.glob(f"/dev/shm/{stem}") + glob.glob(f"/dev/shm/{stem}_*"))):
-        name = "/" + os.path.basename(c)  # POSIX shm name: "/mig_ep1_cmd[_<suffix>]"
-        trios.append((name, name.replace("_cmd", "_table"), name.replace("_cmd", "_resp")))
+    for side in ("a", "b"):
+        for c in sorted(glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")):
+            name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
+            trios.append(
+                (
+                    name,
+                    name.replace(f"_{side}_cmd", f"_{side}_table"),
+                    name.replace(f"_{side}_cmd", f"_{side}_resp"),
+                )
+            )
 
     if not trios:
         raise RuntimeError(
-            f"[migration] no local worker queues (/dev/shm/{stem}*) on this host -- is the "
-            f"migration_endpoint for THIS host running? POSIX shm is host-local, so every host "
-            f"that owns KV must run its own co-located worker."
+            "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
+            "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
+            "master-only control channel, NOT the device-map queues.)"
         )
 
     for cmd, table, resp in trios:
