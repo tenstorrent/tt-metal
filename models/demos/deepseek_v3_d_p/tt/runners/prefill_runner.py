@@ -273,6 +273,11 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
             if push():
                 logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
                 return
+            if _shutdown:
+                # Operator asked to stop (SIGTERM/SIGINT). Abort the spin immediately instead of
+                # ignoring the signal for up to the full timeout; teardown runs via run_request_loop's
+                # finally. Raising (vs. silently dropping) keeps the failure visible.
+                raise RuntimeError(f"layer-completion ring full (seq={seq}); shutdown requested while spinning")
             now = time.monotonic()
             if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
                 logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
@@ -885,7 +890,11 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
     else:
         # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
-        ring_shm_name = os.environ.get("PREFILL_LAYER_COMPLETION_RING", f"/tt_prefill_layer_completion_ring_{rank}")
+        # Each rank's router OWNS its own ring, so the name must be per-rank — append _{rank} even to
+        # the env override (a single literal would make colocated ranks unlink each other's live ring
+        # and collide on O_EXCL create).
+        ring_base = os.environ.get("PREFILL_LAYER_COMPLETION_RING", "/tt_prefill_layer_completion_ring")
+        ring_shm_name = f"{ring_base}_{rank}"
         _unlink_stale_shm(ring_shm_name)
         if rank == master_rank:
             _unlink_stale_shm(ack_shm_name)
@@ -936,10 +945,14 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         # Clean cross-rank router teardown (barrier + end-of-request sentinel) is future work.
         if producer is not None:
             producer.shutdown()
-        if completion_check is not None:
-            completion_check.stop_and_report()  # drain + tally BEFORE router.stop() unlinks the channel
         if router is not None:
-            router.stop()  # joins the listener; on the master, unlinks the scheduler counter channel
+            router.stop()  # joins the listener; the master's final ring-drain + inject happens HERE
+        if completion_check is not None:
+            # Tally AFTER router.stop(): the master injects its own trailing completions during the
+            # listener's final drain (inside stop()). The consumer's mapping survives the owner's
+            # shm_unlink (POSIX), so it still reads those — tallying earlier would miss them and
+            # falsely report "count short". router.stop() unlinks the channel on the master.
+            completion_check.stop_and_report()
         if ack_channel is not None:
             ack_channel.shutdown()  # munmap + shm_unlink
             ack_channel = None
