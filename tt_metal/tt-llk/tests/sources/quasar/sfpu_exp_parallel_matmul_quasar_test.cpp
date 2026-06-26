@@ -69,6 +69,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
             }
+            // End timing on completion, not issue: block until this thread's Tensix work drains.
+            tensix_sync();
         });
 }
 
@@ -100,6 +102,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_matmul_block_(CT_DIM, RT_DIM);
             }
             _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+            // End timing on completion, not issue: block until this thread's Tensix work drains.
+            tensix_sync();
         });
 }
 
@@ -194,11 +198,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
                 }
             }
+            // End timing on completion of the full TRISC3 path (UNP_S -> SFPU -> PACK1), not
+            // issue: block until this thread's Tensix work drains.
+            tensix_sync();
         });
-
-    wait_sfpu_idle();
-    wait_unpack_idle();
-    wait_pack_idle();
 }
 
 #endif
@@ -236,6 +239,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_pack_matmul_(0, 0);
             _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            // End timing on completion, not issue: block until this thread's Tensix work drains.
+            tensix_sync();
         });
 }
 
