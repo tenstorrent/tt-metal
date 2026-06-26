@@ -5,7 +5,10 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+
 #include "api/core_local_mem.h"
+#include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 
 // Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
@@ -34,44 +37,95 @@ private:
     uint32_t size_in_bytes_;  // static per-node size
 };
 
+/**
+ * @brief Kernel-side typed view over a Program-scope scratchpad.
+ *
+ * A Scratchpad is the device-side counterpart to the host ScratchpadSpec: it provides indexed
+ * access to the scratchpad region reserved in per-node SRAM ("L1") for the duration of a Program.
+ *
+ * This region is provided as-is. It is the user's responsibility to:
+ * 1. Not read uninitialized data.
+ * 2. Synchronize read/write to the same Scratchpad over multiple threads.
+ *
+ * The interface of the scratchpad roughly models std::span.
+ *
+ * @tparam T Element type the region is viewed as.
+ */
 template <typename T>
 class Scratchpad {
 public:
+    using element_type = T;
+    using value_type = std::remove_cv_t<T>;
+    using size_type = uint32_t;
+
+    // Use CoreLocalMem as pointer type as Scratchpad will always be in CoreLocal memory space (SRAM).
+    using pointer = CoreLocalMem<T>;
+    using const_pointer = CoreLocalMem<const T>;
+    using reference = T&;
+    using const_reference = const T&;
+
     // Resolve a scratchpad from its binding token: read the per-node base L1 address from the CRTA
     // slot at the token's crta offset; size is the static spec value.
     [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept :
-        Scratchpad(
-            CoreLocalMem<T>{get_common_arg_val<uint32_t>(static_cast<int>(accessor.crta_offset_))},
-            accessor.size_in_bytes_) {}
+        Scratchpad(pointer{get_common_arg_val<uint32_t>(accessor.crta_offset_)}, accessor.size_in_bytes_) {}
 
-    [[nodiscard]] constexpr Scratchpad(CoreLocalMem<T> base_addr, uint32_t size_in_bytes) noexcept :
-        start_addr_(base_addr), end_addr_(CoreLocalMem<T>{base_addr.get_address() + size_in_bytes}) {
+    [[nodiscard]] constexpr Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
+        start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {
         ASSERT(base_addr.get_address() % alignof(T) == 0);
         ASSERT(size_in_bytes % sizeof(T) == 0);
     }
 
     /** @brief Get the element at the given index
      *
+     * The index is bounds-checked via ASSERT (debug/watcher builds only; no check in release).
+     *
      * @param index The index of the element to get
      * @return Reference to the element at the given index
      */
-    [[nodiscard]] T& operator[](uint32_t index) const {
+    [[nodiscard]] reference operator[](uint32_t index) const {
         auto location = start_addr_ + index;
-        ASSERT(location < end_addr_);
+        ASSERT(location < sentinel_addr_);
         return *location;
     }
 
-    [[nodiscard]] constexpr uint32_t size() const noexcept { return size_in_bytes() / sizeof(T); }
+    /** @brief Get the size of this scratchpad in number of T elements
+     *
+     * @return number of element T sized elements in this scratchpad.
+     */
+    [[nodiscard]] constexpr size_type size() const noexcept { return size_type{size_in_bytes() / sizeof(T)}; }
 
-    [[nodiscard]] constexpr uint32_t size_in_bytes() const noexcept {
-        return end_addr_.get_address() - start_addr_.get_address();
+    /** @brief Get the size of this scratchpad in number of bytes.
+     *
+     * This reflects the configuration put in at ScratchpadSpec.
+     *
+     * @return size of the scratchpad in bytes.
+     */
+    [[nodiscard]] constexpr size_type size_in_bytes() const noexcept {
+        return size_type{sentinel_addr_.get_address() - start_addr_.get_address()};
     }
 
-    [[nodiscard]] constexpr CoreLocalMem<T> get_base_addr() const noexcept { return start_addr_; }
+    /** @brief Get the base address of the scratchpad.
+     *
+     * This is a facility to escape the index accessors while getting the base address directly.
+     * Indexed accessors should be preferred whenever possible as they have a bounds check enabled at debug time.
+     *
+     * @return the base address of the scratchpad
+     */
+    [[nodiscard]] constexpr pointer get_base_addr() const noexcept { return start_addr_; }
+
+    // begin/end pair to enable range-based-for over the entire scratchpad region.
+    // This does not support standard-library algorithms that require a conforming iterator:
+    // `CoreLocalMem<T>` does not satisfy the named iterator requirements.
+    using iterator = pointer;
+    [[nodiscard]] constexpr iterator begin() const noexcept { return start_addr_; }
+    [[nodiscard]] constexpr iterator end() const noexcept { return sentinel_addr_; }
 
 private:
     // Invariant:
-    // - start_addr_ and end_addr_ is always aligned to the alignment of T.
-    // - `end_addr_` - `start_addr_` should always be a multiple of sizeof(T).
-    CoreLocalMem<T> start_addr_, end_addr_;
+    // - `start_addr_` and `sentinel_addr_` are always aligned to the alignment of T.
+    // - `sentinel_addr_` - `start_addr_` is always a multiple of sizeof(T).
+    //
+    // Note:
+    // sentinel_addr_ could be omitted in class layout if we inject the size information as a template parameter.
+    pointer start_addr_, sentinel_addr_;
 };
