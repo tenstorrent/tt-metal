@@ -25,8 +25,19 @@ from .operations import (
 )
 from .weights import AttentionWeights
 
+TILE_SIZE = 32
+
+
+def _validate_q_rope_offset(q_rope_offset: int, *, batch_size: int) -> None:
+    if q_rope_offset % TILE_SIZE != 0:
+        raise ValueError(f"q_rope_offset must be a multiple of {TILE_SIZE}, got {q_rope_offset}")
+    if batch_size > 1 and q_rope_offset != 0:
+        raise ValueError("nonzero q_rope_offset is only supported for single-user prefill")
+
 
 def _slice_rope_cache(cache, start, length):
+    if start % TILE_SIZE != 0:
+        raise ValueError(f"RoPE cache start must be a multiple of {TILE_SIZE}, got {start}")
     if start == 0 and cache.shape[-2] == length:
         return cache
     return ttnn.slice(cache, [0, 0, start, 0], [cache.shape[0], cache.shape[1], start + length, cache.shape[3]])
@@ -235,6 +246,7 @@ def prefill_forward(
         hidden_states: [1, 1, seq_len, hidden_size] or [B, 1, S, hidden_size] on device
         batch_size: padded batch for batched prefill (1 for single-user / test_full_model)
     """
+    _validate_q_rope_offset(q_rope_offset, batch_size=batch_size)
     if batch_size <= 1:
         return _prefill_forward_single(
             hidden_states,
