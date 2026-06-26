@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp"
+#include "tt_metal/api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -13,7 +13,7 @@
 
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::experimental::disaggregation {
+namespace tt::tt_metal::internal::disaggregation {
 
 namespace {
 
@@ -137,4 +137,4 @@ std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(uint32_t layer, uint
         std::span<uint8_t>(buf));
     return buf;
 }
-}  // namespace tt::tt_metal::experimental::disaggregation
+}  // namespace tt::tt_metal::internal::disaggregation

@@ -30,6 +30,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/core_subset_write/tensor.hpp
     api/tt-metalium/experimental/device.hpp
     api/tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp
+    api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/experimental/dispatch_context.hpp
     api/tt-metalium/experimental/fabric/control_plane.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
