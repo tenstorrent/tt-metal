@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_reduce.h"
 
@@ -16,7 +17,7 @@ template <
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
     bool is_int_fpu_en = false>
-inline void llk_math_reduce(const uint dst_index, const ckernel::TensorShape& tensor_shape) {
+inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape) {
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
     _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
 }
