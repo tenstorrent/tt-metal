@@ -690,5 +690,10 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
     assert ref.num_steps == tt.num_steps == max_steps
     assert not ref.halted and not tt.halted
     assert len(accept_flips) == max_steps
-    if enable_moe:
-        assert sum(accept_flips) == 0
+    # This remains a diagnostic for the known bf16 decision-bar blocker, but it
+    # should still fail loudly if the real-logits path stops resembling torch.
+    min_logits_pcc = 0.96 if enable_moe else 0.975
+    max_total_accept_flips = 0 if enable_moe else 4
+    assert min(logits_pcc) >= min_logits_pcc
+    assert min(logits_top8_contains_ref_argmax) >= 0.80
+    assert sum(accept_flips) <= max_total_accept_flips
