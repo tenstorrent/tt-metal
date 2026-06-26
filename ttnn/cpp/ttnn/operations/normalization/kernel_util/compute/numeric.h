@@ -75,8 +75,7 @@ inline void accumulate_compute_loop(
         if constexpr (swap_operands) {
             reconfig_data_format(cb_scalar.get_cb_id(), cb.get_cb_id());
         }
-        reduce_init<reduce_type, reduce_dim, FLOAT32_REDUCTION>(
-            cb.get_cb_id(), cb_scalar.get_cb_id(), cb_out.get_cb_id());
+        reduce_init<reduce_type, reduce_dim>(cb.get_cb_id(), cb_scalar.get_cb_id(), cb_out.get_cb_id());
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
@@ -85,7 +84,7 @@ inline void accumulate_compute_loop(
             for (auto j : block.local()) {
                 // If it's the last tile and it's partial, use the second tile in cb_scalar
                 const auto scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
-                reduce_tile<reduce_type, reduce_dim, FLOAT32_REDUCTION>(
+                reduce_tile<reduce_type, reduce_dim>(
                     cb.get_cb_id(), cb_scalar.get_cb_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
@@ -107,7 +106,7 @@ inline void accumulate_compute_loop(
         }
     }
 
-    reduce_uninit<FLOAT32_REDUCTION>();
+    reduce_uninit();
     reconfig_data_format(cb_in.get_cb_id(), cb_scalar.get_cb_id());
 }
 
