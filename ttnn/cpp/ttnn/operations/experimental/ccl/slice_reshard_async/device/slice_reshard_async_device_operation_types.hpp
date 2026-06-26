@@ -60,24 +60,6 @@ struct SliceReshardAsyncParams {
         topology(topology),
         ring_size(ring_size) {}
 
-    // Add attributes method for reflection
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("output_dim_offset", output_dim_offset);
-        attrs.emplace_back("output_dim_shape", output_dim_shape);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("final_semaphore", final_semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("ring_size", ring_size);
-        return attrs;
-    }
-
     // Program-cache hash / canonical-key fields. Lists exactly the structural fields the former
     // custom compute_program_hash included; `devices` (raw IDevice* pointers) and the two
     // GlobalSemaphore members are runtime-only and intentionally excluded.
