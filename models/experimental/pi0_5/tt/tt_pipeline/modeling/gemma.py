@@ -387,9 +387,21 @@ class TTNNPi05AdaRMSGemmaBlock(StatefulTTNNModule):
             *self._compute_modulation(adarms_cond, self.tt_pre_ffw_mod_w, self.tt_pre_ffw_mod_b),
         )
 
-    def _apply_ada(self, x: ttnn.Tensor, scale1: ttnn.Tensor, shift: ttnn.Tensor, eps: float) -> ttnn.Tensor:
+    def _apply_ada(
+        self,
+        x: ttnn.Tensor,
+        scale1: ttnn.Tensor,
+        shift: ttnn.Tensor,
+        eps: float,
+        *,
+        out_block_sharded: bool = False,
+    ) -> ttnn.Tensor:
         # FUSED adaRMS: fold the modulation into the norm kernel (weight=(1+scale), bias=shift).
-        return sharded_rms_norm(x, scale1, eps, x.shape[-2], x.shape[-1], bias=shift)
+        # out_block_sharded: emit the block-sharded norm directly (skip trailing S2I) for a
+        # downstream matmul_decode(reshard_input=True) consumer.
+        return sharded_rms_norm(
+            x, scale1, eps, x.shape[-2], x.shape[-1], bias=shift, out_block_sharded=out_block_sharded
+        )
 
     @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
     def forward(

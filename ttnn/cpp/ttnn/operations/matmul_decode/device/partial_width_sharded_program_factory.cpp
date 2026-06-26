@@ -123,9 +123,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     // ---- in0 (A) geometry ----
     // Default (buffer-backed in0): A is ALREADY width-sharded, so its geometry comes from its
-    // shard spec. reshard_input: A is INTERLEAVED and the reader reshards it internally, so we
-    // SYNTHESIZE the same geometry _ws_in_mc would have produced (A sharded [M, K/reshard_cores]
-    // across the first reshard_cores cores, row-major).
+    // shard spec. reshard_input: A is passed un-resharded (interleaved OR block/width-sharded) and
+    // the reader reshards it internally via a TensorAccessor over A's buffer, so we SYNTHESIZE the
+    // staging geometry the gather wants (A staged [M, K/reshard_cores] across the first
+    // reshard_cores cores, row-major) independent of A's actual source layout.
     const bool reshard_input = operation_attributes.reshard_input;
     std::array<uint32_t, 2> inputA_shard_shape;
     CoreRangeSet inputA_core_range_set;
