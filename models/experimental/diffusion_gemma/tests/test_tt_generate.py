@@ -177,6 +177,18 @@ def test_generate_blocks_rejects_negative_num_blocks():
         )
 
 
+def test_generate_blocks_rejects_non_positive_canvas_length():
+    with pytest.raises(ValueError, match="canvas_length must be positive"):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=0),
+            init_canvas_fn=lambda *args: "canvas",
+        )
+
+
 def test_generate_blocks_stops_after_committed_stop_token():
     calls = []
 
@@ -410,6 +422,24 @@ def test_generate_text_rejects_negative_num_blocks_before_tokenize():
             "hello",
             num_blocks=-1,
             config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_generate_text_rejects_non_positive_canvas_length_before_tokenize():
+    class _FailTokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            raise AssertionError("tokenizer should not run for invalid canvas_length")
+
+    with pytest.raises(ValueError, match="canvas_length must be positive"):
+        generate_text(
+            "model",
+            "logits",
+            _FailTokenizer(),
+            "hello",
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=0),
             init_canvas_fn="init",
             blocks_fn=lambda *args, **kwargs: None,
         )
@@ -998,6 +1028,21 @@ def test_generate_text_from_checkpoint_state_requires_length_budget():
             dg_state_dict={"raw": "state"},
             config=DiffusionConfig(canvas_length=4),
             init_canvas_fn="init",
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_generate_text_from_checkpoint_state_rejects_non_positive_canvas_length():
+    with pytest.raises(ValueError, match="canvas_length must be positive"):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            config=DiffusionConfig(canvas_length=0),
+            init_canvas_fn="init",
+            max_new_tokens=1,
             logits_fn_builder_factory=lambda *args, **kwargs: "builder",
             generate_text_fn=lambda *args, **kwargs: None,
         )

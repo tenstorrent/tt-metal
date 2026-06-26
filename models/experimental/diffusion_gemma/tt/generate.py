@@ -341,6 +341,11 @@ def _validate_num_blocks(num_blocks: int) -> None:
         raise ValueError("num_blocks must be non-negative")
 
 
+def _validate_canvas_length(config: DiffusionConfig) -> None:
+    if config.canvas_length <= 0:
+        raise ValueError("config.canvas_length must be positive")
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -408,6 +413,7 @@ def generate_blocks(
     creation. This helper owns commit-append and absolute position advancement.
     """
     _validate_num_blocks(num_blocks)
+    _validate_canvas_length(config)
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []
     trajectories: list[DenoiseTrajectory] = []
@@ -460,6 +466,7 @@ def generate_from_prompt_tokens(
     and per-step noise are injected exactly.
     """
     _validate_num_blocks(num_blocks)
+    _validate_canvas_length(config)
     prompt_len = prefill_fn(
         tt_model,
         prompt_tokens,
@@ -619,6 +626,7 @@ def generate_text(
 ) -> DeviceTextGeneration:
     """Tokenize a prompt, run device generation, and decode host-visible text."""
     _validate_num_blocks(num_blocks)
+    _validate_canvas_length(config)
     prompt_tokens = tokenize_prompt(
         tokenizer,
         prompt,
@@ -679,6 +687,7 @@ def generate_text_from_checkpoint_state(
 ) -> DeviceTextGeneration:
     """Run prompt-to-text generation using raw DiffusionGemma checkpoint state."""
     config = DiffusionConfig() if config is None else config
+    _validate_canvas_length(config)
     if num_blocks is None:
         max_new_tokens = generate_kwargs.get("max_new_tokens")
         if max_new_tokens is None:
