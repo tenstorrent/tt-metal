@@ -579,7 +579,12 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        # Greedy decode samples on the HOST (full-precision argmax), not on-device. The on-device decode
+        # sampler introduced by the #45166 sampling-separation refactor selects wrong tokens for qwen3-vl
+        # (sporadic garbage during greedy decode, BERTScore F1 collapse); a host fp32 argmax over the same
+        # logits is correct and restores quality. See #47818. TODO: re-enable on-device sampling once the
+        # shared tt_transformers on-device decode sampler is fixed (tracked in #48222).
+        argmax_on_device = False
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -629,6 +634,9 @@ def test_demo(
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                # Normalize to the device-path feedback shape [batch, 1] so the next decode_forward and
+                # the out_tok[user].item() reads below behave identically to the on-device path.
+                out_tok = out_tok.reshape(batch_size, 1)
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
