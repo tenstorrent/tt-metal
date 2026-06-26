@@ -197,6 +197,7 @@ class TtMoe(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
+        self.layer_idx = layer_idx  # used by the optional gate-indices dump (TT_DS_PREFILL_DUMP_GATE_INDICES)
         # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
         # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
         self.tt_ccl = get_tt_ccl(mesh_device)
@@ -410,6 +411,57 @@ class TtMoe(LightweightModule):
 
         logger.debug("TtMoe initialization complete")
 
+    def _inject_routing(self, inj_dir: str, scores: ttnn.Tensor, indices: ttnn.Tensor):
+        """GLM_INJECT_ROUTING: load the GPU trace's expert_ids_layer_{L} [S_global, 8] int32 +
+        expert_weights_layer_{L} [S_global, 8] bf16 and return (scores, indices) device tensors in the
+        SAME layout/dtype as the flat gate output [S_global, 8]: ROW_MAJOR, SP-sharded on the row axis
+        (dim0) / TP-replicated, indices uint16 (dispatch requirement), scores bfloat16. The incoming
+        device scores/indices are deallocated. The trace weights are the final per-token routing weights,
+        injected directly (no re-normalization)."""
+        import glob
+
+        from safetensors.torch import load_file
+
+        def _load(sub, layer):
+            fs = sorted(glob.glob(f"{inj_dir}/{sub}_layer_{layer}/rows_*.safetensors"))
+            assert fs, f"no {sub} trace for layer {layer} under {inj_dir}"
+            return torch.cat([next(iter(load_file(f).values())) for f in fs], dim=0)  # [S_global, 8]
+
+        ids = _load("expert_ids", self.layer_idx)  # int32 [S_global, 8]
+        wts = _load("expert_weights", self.layer_idx)  # bf16  [S_global, 8]
+        topk = self.num_experts_per_tok
+        assert ids.shape[-1] == topk and wts.shape[-1] == topk, f"trace topk {ids.shape} != {topk}"
+        ids = ids.to(torch.int32)  # [S_global, 8]
+        wts = wts.to(torch.bfloat16)  # [S_global, 8]
+        if self.layer_idx == 3:  # first MoE layer — confirm the hook fires
+            logger.info(
+                f"[GLM_INJECT_ROUTING] layer {self.layer_idx}: injecting trace routing ids/weights "
+                f"shape {tuple(ids.shape)}; ids row0={ids[0].tolist()} "
+                f"wts row0={[round(v,4) for v in wts[0].float().tolist()]}"
+            )
+        # SP-sharded on the row axis (mesh axis 0 -> tensor dim 0) / TP-replicated (mesh axis 1 -> None):
+        # the layout of the flat gate output (the gate's own host path uses this same mapper).
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(0, None))
+        new_scores = ttnn.from_torch(
+            wts,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        new_indices = ttnn.from_torch(
+            ids.to(torch.int16),  # uint16 carrier: expert ids 0..255 fit; dispatch requires UINT16
+            device=self.mesh_device,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        ttnn.deallocate(scores)
+        ttnn.deallocate(indices)
+        return new_scores, new_indices
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -439,6 +491,22 @@ class TtMoe(LightweightModule):
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
 
         scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
+
+        # DIAGNOSTIC (GLM_INJECT_ROUTING=<trace_dir>): teacher-force the GPU's exact expert selection +
+        # final per-token weights for this layer, replacing the device gate's top-8 indices and scores.
+        # Done HERE (before routing_setup) so the dispatch offsets/token-counts/region-offsets are
+        # recomputed from the INJECTED indices — not the stale device ones. Isolates the GATE / ROUTING:
+        # does the GPU's routing (everything else on device) recover the chained PCC? Trace tensors are
+        # routing/expert_ids_layer_{L} [S_global, 8] int32 + expert_weights_layer_{L} [S_global, 8] bf16.
+        # The trace weights are ALREADY the final per-token routing weights (unbiased-sigmoid normalized *
+        # route_scale), so they go straight in as `scores` (no re-normalization). At this point scores /
+        # indices are the flat 2D gate output [batch*seq_per_chip, 8] (batch == 1), SP-sharded on the row
+        # axis (dim0) / TP-replicated — so the trace [S_global, 8] is injected with dims=(0, None) (the
+        # same mapper the gate's own host path uses), dtypes matched (indices uint16 as dispatch requires,
+        # scores bfloat16). Dense layers have no MoE, so this never fires there.
+        _inj_route = os.environ.get("GLM_INJECT_ROUTING")
+        if _inj_route is not None:
+            scores, indices = self._inject_routing(_inj_route, scores, indices)
 
         signpost(header="moe_gate_calculate_dispatch_offsets")
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
@@ -478,6 +546,19 @@ class TtMoe(LightweightModule):
 
         logger.debug(f"  {scores.shape=} {scores.memory_config()=}")
         logger.debug(f"  {indices.shape=} {indices.memory_config()=}")
+
+        # DIAGNOSTIC (TT_DS_PREFILL_DUMP_GATE_INDICES=<dir>): save this layer's device-selected top-k
+        # expert ids [seq, topk] (SP-sharded on seq, TP-replicated) to compare against the GPU trace's
+        # routing/expert_ids_layer_L. Gather: SP(axis0)->seq(dim2), TP(axis1) replicas->dim0, take [0].
+        _gi_dir = os.environ.get("TT_DS_PREFILL_DUMP_GATE_INDICES")
+        if _gi_dir:
+            import torch as _torch
+
+            _i4 = ttnn.unsqueeze_to_4D(indices)  # [1,1,seq_pc,topk]
+            _comp = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 0), mesh_shape=tuple(self.mesh_device.shape))
+            _ih = ttnn.to_torch(_i4, mesh_composer=_comp)[0, 0].to(_torch.int32)  # [seq, topk]
+            _torch.save(_ih.cpu(), f"{_gi_dir}/gate_indices_layer_{self.layer_idx}.pt")
+            logger.info(f"[TtMoe.forward] dumped gate indices L{self.layer_idx} {tuple(_ih.shape)} -> {_gi_dir}")
 
         # ========================================
         # Step 0: All-gather x to get full emb_dim (replicated across TP axis)

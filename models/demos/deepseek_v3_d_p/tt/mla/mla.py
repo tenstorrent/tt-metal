@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -80,6 +81,12 @@ class ttMLA:
 
         def _cache_name(name):
             return str(cache_path / f"layer_{layer_idx}.mla.{name}") if cache_path else None
+
+        # GLM_MLA_WUV_BF16=1: keep W_UV (wkv_b2) in bf16 instead of bf8 to match the GPU, which stores
+        # W_UV at bf16 (W_UK/wkv_b1 is already bf16). This is a WEIGHT-storage dtype change; the cache
+        # filename encodes the dtype (`..._dtype_BFLOAT16_layout_TILE.tensorbin`), so flipping it writes
+        # a *new* cache file rather than colliding with the bf8 one — no manual cache delete needed.
+        wkv_b2_dtype = ttnn.bfloat16 if os.environ.get("GLM_MLA_WUV_BF16") else ttnn.bfloat8_b
 
         # Prepare tensors — real weights or placeholders
         if state_dict and "q_a_layernorm.weight" in state_dict:
@@ -177,7 +184,7 @@ class ttMLA:
                     "wkv_b2": ttnn.as_tensor(
                         wkv_b2,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wkv_b2_dtype,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
@@ -301,6 +308,25 @@ class ttMLA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+        # GLM_MLA_FP32_ACC=1: match the GPU's fp32-everywhere accumulation by routing all MLA matmuls
+        # (q_a/q_b/kv_a, W_UK/W_UV absorbed bmms, o_proj, and the sparse_sdpa path) through HiFi4 +
+        # fp32_dest_acc instead of the default HiFi2 + bf16-accum. The GPU (vLLM) accumulates fp32 at
+        # every GEMM/softmax; our default bf16 accumulation is a systemic divergence source.
+        #
+        # fp32_dest_acc halves the usable DST register count (16 -> 8 tiles, and the matmul subblock
+        # must fit in <= half of those: out_subblock_h * out_subblock_w <= 4). The tuned MLA program
+        # configs (MLA_MATMUL_CONFIG) and the batched-matmul builder (_make_batched_mm_kwargs) target
+        # the bf16-accum budget of 8, so every program_config that feeds an MLA matmul is rebuilt with a
+        # capped out_subblock when this knob is on (see _cap_subblock / _get_mm_kwargs). The SDPA path
+        # is unaffected (SDPAProgramConfig has no out_subblock; it tiles via q_chunk/k_chunk).
+        self._fp32_acc = bool(os.environ.get("GLM_MLA_FP32_ACC"))
+        if self._fp32_acc:
+            logger.info(
+                "[GLM_MLA_FP32_ACC] MLA matmuls -> HiFi4 + fp32_dest_acc (match GPU fp32 accum); "
+                "capping matmul out_subblock_h*out_subblock_w <= 4 to fit halved DST"
+            )
+            self.default_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
 
         self.ring_sdpa_compute_grid = (
             mesh_device.compute_with_storage_grid_size().x - 1,
@@ -477,6 +503,28 @@ class ttMLA:
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         return cfg["act_mem_config"] if cfg is not None else ttnn.DRAM_MEMORY_CONFIG
 
+    @staticmethod
+    def _cap_subblock(program_config, budget: int) -> None:
+        """Clamp a matmul program_config's out_subblock so out_subblock_h*out_subblock_w <= budget,
+        in place. fp32_dest_acc halves the DST register budget (8 -> 4 tiles), so the tuned MLA
+        configs (built for the bf16-accum budget of 8) must be shrunk or the op TT_FATALs on
+        ``out_subblock_h * out_subblock_w <= available_reg_count``. We shrink width first (keeping the
+        accumulation height where possible); if width alone can't get under budget, shrink height too.
+        per_core_M/per_core_N are unconstrained by DST, so they stay — only the inner subblock changes.
+        No-op when the product is already within budget."""
+        h = program_config.out_subblock_h
+        w = program_config.out_subblock_w
+        if h * w <= budget:
+            return
+        # Shrink width to the largest value that fits with the current height (>=1).
+        new_w = max(1, budget // h)
+        if h * new_w > budget:
+            # height alone exceeds budget -> clamp height too (square-ish, then width=budget//h)
+            new_h = min(h, budget)
+            new_w = max(1, budget // new_h)
+            program_config.out_subblock_h = new_h
+        program_config.out_subblock_w = new_w
+
     def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
         """Get matmul kwargs from config, falling back to defaults."""
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
@@ -484,9 +532,13 @@ class ttMLA:
             if weight_name in self._BATCHED_MM_DIMS:
                 return self._make_batched_mm_kwargs(weight_name, seq_len_local)
             return {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": self.MM_DEFAULT_DTYPES[weight_name]}
+        pc = cfg["program_config"]
+        if self._fp32_acc:
+            # fp32_dest_acc -> DST budget halved (4). Cap the tuned subblock so the op doesn't TT_FATAL.
+            self._cap_subblock(pc, budget=4)
         return {
             "memory_config": cfg["out_mem_config"],
-            "program_config": cfg["program_config"],
+            "program_config": pc,
             "dtype": cfg["out_dtype"],
         }
 
@@ -506,11 +558,13 @@ class ttMLA:
         while M_tiles % per_core_M != 0:
             per_core_M += 1
 
-        # out_subblock: h * w <= 8, h divides per_core_M, w divides N_tiles
-        out_subblock_w = min(N_tiles, 8)
+        # out_subblock: h * w <= DST budget, h divides per_core_M, w divides N_tiles.
+        # Default DST budget is 8 tiles; fp32_dest_acc (GLM_MLA_FP32_ACC) halves it to 4.
+        subblock_budget = 4 if self._fp32_acc else 8
+        out_subblock_w = min(N_tiles, subblock_budget)
         while N_tiles % out_subblock_w != 0:
             out_subblock_w -= 1
-        out_subblock_h = min(per_core_M, 8 // out_subblock_w)
+        out_subblock_h = min(per_core_M, subblock_budget // out_subblock_w)
         while per_core_M % out_subblock_h != 0:
             out_subblock_h -= 1
 
@@ -1213,6 +1267,24 @@ class ttMLA:
         replicated (K = full 576, V = leading kv_lora_rank). indices: [1, 1, S_global, k] uint32 replicated,
         re-sharded onto SP (dim2) to match q when sp > 1 (or already SP-sharded → pass through)."""
         assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
+        # DIAGNOSTIC (GLM_INJECT_SPARSE_SDPA=<trace_dir>): teacher-force the GPU's sparse_sdpa output for
+        # this layer instead of computing it on device — isolates how much of the chained drop the
+        # sparse-attention path (q proj + RoPE + indexer + sparse_sdpa) accounts for. Everything else
+        # (projections, wkv_b2, o_proj, MoE, gate) still runs on device. Requires is_balanced=False
+        # (contiguous SP seq shard) so the natural-order trace matches dims=(2,1).
+        _inj = os.environ.get("GLM_INJECT_SPARSE_SDPA")
+        if _inj is not None:
+            return self._inject_sparse_sdpa(_inj)
+        # DIAGNOSTIC (GLM_INJECT_TOPK=<trace_dir>): teacher-force the GPU's exact top-2048 DSA selection
+        # for this layer, replacing the on-device indexer's `indices`. Isolates the INDEXER SELECTION:
+        # does using the GPU's top-k indices (everything else on device) recover the chained PCC? The
+        # trace tensor is dsa/dsa_topk_indices_layer_{L} [S_global, 2048] int32 (sentinel -1 == the
+        # 0xFFFFFFFF the op drops). It is injected REPLICATED full-glob [1,1,S_global,2048] uint32
+        # ROW_MAJOR; the reshard logic below then re-shards it onto SP (and TP under head-reshard) to
+        # match q exactly as it does for the real indexer's replicated output.
+        _inj_topk = os.environ.get("GLM_INJECT_TOPK")
+        if _inj_topk is not None:
+            indices = self._inject_topk_indices(_inj_topk)
         sp = self.sp_factor
         s_local = q.shape[2]  # per-chip query rows == S / sp
 
@@ -1265,6 +1337,61 @@ class ttMLA:
             ret = ttnn.mesh_partition(full, dim=1, cluster_axis=self.tp_axis)  # [1, H/tp, S/sp, v_dim]
             ttnn.deallocate(full)
         return ret
+
+    def _inject_sparse_sdpa(self, inj_dir: str) -> ttnn.Tensor:
+        """GLM_INJECT_SPARSE_SDPA: load the GPU trace's sparse_sdpa_output_layer_{L} [S,H,kv_lora] and
+        shard it to the device _sparse_mla output layout [1, H/tp, S/sp, kv_lora] (heads→TP dim1,
+        seq→SP dim2). Natural-order trace ⇒ requires is_balanced=False so the SP seq shard is contiguous."""
+        import glob
+
+        from safetensors.torch import load_file
+
+        fs = sorted(glob.glob(f"{inj_dir}/sparse_sdpa_output_layer_{self.layer_idx}/rows_*.safetensors"))
+        assert fs, f"no sparse_sdpa_output trace for layer {self.layer_idx} under {inj_dir}"
+        t = next(iter(load_file(fs[0]).values()))  # [S, H, kv_lora] = [5120, 64, 512]
+        t = t.permute(1, 0, 2).unsqueeze(0).contiguous().to(torch.bfloat16)  # [1, H, S, kv_lora]
+        if self.layer_idx == 0:
+            logger.info(f"[GLM_INJECT_SPARSE_SDPA] injecting trace sparse_sdpa output, full shape {tuple(t.shape)}")
+        return ttnn.from_torch(
+            t,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=(2, 1)),
+        )
+
+    def _inject_topk_indices(self, inj_dir: str) -> ttnn.Tensor:
+        """GLM_INJECT_TOPK: load the GPU trace's dsa_topk_indices_layer_{L} [S_global, k] int32 (sentinel
+        -1) and inject it as the device sparse_sdpa `indices`: REPLICATED full-glob [1, 1, S_global, k]
+        uint32 ROW_MAJOR. The int32 -1 sentinel is bit-reinterpreted to uint32 0xFFFFFFFF (what the op
+        treats as a masked/empty slot), matching topk_large_indices' output. _sparse_mla's existing
+        reshard logic re-shards this onto SP (dim2), and onto TP under head-reshard, to match q."""
+        import glob
+
+        import numpy as np
+        from safetensors.torch import load_file
+
+        fs = sorted(glob.glob(f"{inj_dir}/dsa_topk_indices_layer_{self.layer_idx}/rows_*.safetensors"))
+        assert fs, f"no dsa_topk_indices trace for layer {self.layer_idx} under {inj_dir}"
+        parts = [next(iter(load_file(f).values())) for f in fs]  # each [rows, k] int32
+        t = torch.cat(parts, dim=0)  # [S_global, k] int32, -1 sentinel
+        # int32 -> uint32 bit reinterpret: -1 (0xFFFFFFFF) stays 0xFFFFFFFF == the op's empty-slot mask.
+        t = torch.from_numpy(t.contiguous().numpy().view(np.uint32).copy())  # torch.uint32 [S_global, k]
+        t = t.unsqueeze(0).unsqueeze(0)  # [1, 1, S_global, k]
+        if self.layer_idx == 0 or self.layer_idx == 3:
+            logger.info(
+                f"[GLM_INJECT_TOPK] layer {self.layer_idx}: injecting trace top-k indices, shape {tuple(t.shape)} "
+                f"(sentinel count row0={(t[0,0,0] == 0xFFFFFFFF).sum().item()}/{t.shape[-1]})"
+            )
+        return ttnn.from_torch(
+            t,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
     def _gather_kvpe_prefix(self, kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is

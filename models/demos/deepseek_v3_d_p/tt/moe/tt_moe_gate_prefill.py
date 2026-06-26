@@ -191,6 +191,14 @@ class TtMoEGatePrefill(LightweightModule):
 
         if torch_bias is None:
             torch_bias = torch.empty(config.n_routed_experts)
+        else:
+            # noaux_tc selection is top-k(sigmoid(logits) + bias); a constant added to every
+            # expert's bias cancels in top-k (and the weights come from sigmoid scores, not
+            # sigmoid+bias). GLM's bias is mean ~34.5 with only +/-0.3 variation — the part that
+            # actually balances load. Stored in bf16 (step ~0.25 at magnitude 34) that +/-0.3 is
+            # crushed to ~3 levels, collapsing routing onto a few experts. Mean-centering moves the
+            # variation to magnitude ~0 where bf16 has full resolution, with ZERO change to routing.
+            torch_bias = torch_bias - torch_bias.mean()
 
         # Convert weight
         weight_tt = ttnn.as_tensor(
