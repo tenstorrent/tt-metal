@@ -13,9 +13,9 @@
 #include <tt-metalium/distributed_context.hpp>
 
 #include <internal/service/inter_process_counter_channel.hpp>
-#include <internal/service/layer_completion_message.hpp>
-#include <internal/service/layer_completion_queue.hpp>
-#include <internal/service/layer_completion_router.hpp>
+#include <internal/disaggregation/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_queue.hpp>
+#include <internal/disaggregation/layer_completion_router.hpp>
 
 namespace tt::tt_metal::distributed::test {
 

@@ -21,7 +21,7 @@
 #include <memory>
 #include <string>
 
-#include <internal/service/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_message.hpp>
 
 namespace tt::tt_metal::distributed {
 

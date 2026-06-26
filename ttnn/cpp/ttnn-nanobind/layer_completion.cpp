@@ -16,9 +16,9 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include <internal/service/layer_completion_message.hpp>
-#include <internal/service/layer_completion_queue.hpp>
-#include <internal/service/layer_completion_router.hpp>
+#include <internal/disaggregation/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_queue.hpp>
+#include <internal/disaggregation/layer_completion_router.hpp>
 
 namespace ttnn::layer_completion {
 
