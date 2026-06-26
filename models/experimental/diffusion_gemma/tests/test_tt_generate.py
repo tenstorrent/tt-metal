@@ -21,6 +21,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     make_seeded_host_canvas_init_fn,
     make_seeded_host_noise_tokens_fn,
     prefill_prompt_tokens,
+    tokenize_prompt,
 )
 
 
@@ -42,6 +43,18 @@ class _FakeTokenizer:
     def batch_decode(self, token_ids, **kwargs):
         self.calls.append((token_ids, kwargs))
         return [" ".join(str(token) for token in row) for row in token_ids]
+
+
+class _FakeChatTokenizer(_FakeTokenizer):
+    def apply_chat_template(self, messages, *, add_generation_prompt, tokenize):
+        self.calls.append((messages, add_generation_prompt, tokenize))
+        return [len(messages), int(add_generation_prompt), 99]
+
+
+class _FakeCallableTokenizer(_FakeTokenizer):
+    def __call__(self, prompt, *, return_tensors):
+        self.calls.append((prompt, return_tensors))
+        return {"input_ids": torch.tensor([[7, 8, 9]], dtype=torch.int32)}
 
 
 def test_denoise_and_commit_block_threads_position_and_commits():
@@ -347,6 +360,44 @@ def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
     assert kwargs["layout"] == "row-major"
     assert kwargs["dtype"] == "uint32"
     assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
+
+
+def test_tokenize_prompt_applies_chat_template_to_string_prompt():
+    tokenizer = _FakeChatTokenizer()
+
+    out = tokenize_prompt(tokenizer, "hello", system_prompt="be helpful")
+
+    assert torch.equal(out, torch.tensor([[2, 1, 99]], dtype=torch.long))
+    assert tokenizer.calls == [
+        (
+            [{"role": "system", "content": "be helpful"}, {"role": "user", "content": "hello"}],
+            True,
+            True,
+        )
+    ]
+
+
+def test_tokenize_prompt_passes_chat_messages_through():
+    tokenizer = _FakeChatTokenizer()
+    messages = [{"role": "user", "content": "hello"}]
+
+    out = tokenize_prompt(tokenizer, messages, add_generation_prompt=False)
+
+    assert torch.equal(out, torch.tensor([[1, 0, 99]], dtype=torch.long))
+    assert tokenizer.calls == [(messages, False, True)]
+
+
+def test_tokenize_prompt_uses_callable_tokenizer_without_chat_template():
+    tokenizer = _FakeCallableTokenizer()
+
+    out = tokenize_prompt(tokenizer, "plain prompt")
+
+    assert torch.equal(out, torch.tensor([[7, 8, 9]], dtype=torch.long))
+    assert tokenizer.calls == [("plain prompt", "pt")]
+
+
+def test_tokenize_prompt_accepts_existing_token_tensor():
+    assert torch.equal(tokenize_prompt(object(), torch.tensor([1, 2, 3], dtype=torch.int32)), torch.tensor([[1, 2, 3]]))
 
 
 def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):

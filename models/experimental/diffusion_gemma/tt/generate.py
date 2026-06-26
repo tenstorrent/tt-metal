@@ -73,6 +73,55 @@ def host_tokens_to_device(mesh_device, tokens: torch.Tensor):
     )
 
 
+def _as_prompt_token_tensor(input_ids) -> torch.Tensor:
+    if isinstance(input_ids, dict):
+        input_ids = input_ids["input_ids"]
+    if isinstance(input_ids, torch.Tensor):
+        tokens = input_ids.to(torch.long)
+    else:
+        tokens = torch.tensor(input_ids, dtype=torch.long)
+    if tokens.dim() == 1:
+        tokens = tokens.unsqueeze(0)
+    if tokens.dim() != 2:
+        raise ValueError("prompt token ids must have shape [batch, seq_len]")
+    return tokens
+
+
+def tokenize_prompt(
+    tokenizer,
+    prompt,
+    *,
+    system_prompt: str | None = None,
+    add_generation_prompt: bool = True,
+) -> torch.Tensor:
+    """Tokenize a prompt string or chat messages into host ids ``[batch, seq_len]``."""
+    if isinstance(prompt, torch.Tensor):
+        return _as_prompt_token_tensor(prompt)
+
+    if hasattr(tokenizer, "apply_chat_template"):
+        if isinstance(prompt, str):
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            if prompt:
+                messages.append({"role": "user", "content": prompt})
+        else:
+            messages = prompt
+        return _as_prompt_token_tensor(
+            tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=add_generation_prompt,
+                tokenize=True,
+            )
+        )
+
+    if not isinstance(prompt, str):
+        raise ValueError("chat messages require a tokenizer with apply_chat_template")
+    if callable(tokenizer):
+        return _as_prompt_token_tensor(tokenizer(prompt, return_tensors="pt"))
+    return _as_prompt_token_tensor(tokenizer.encode(prompt))
+
+
 def embed_host_tokens(tt_model, tokens: torch.Tensor):
     """Embed host token ids as ``[1, 1, seq_len, hidden]`` TILE states."""
     tt_tokens = host_tokens_to_device(tt_model.mesh_device, tokens)
