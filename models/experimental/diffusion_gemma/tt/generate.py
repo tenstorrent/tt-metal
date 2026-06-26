@@ -761,7 +761,7 @@ def generate_text_from_checkpoint_state(
         num_blocks = (max_new_tokens + config.canvas_length - 1) // config.canvas_length
     _validate_num_blocks(num_blocks)
     _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, generate_kwargs.get("max_new_tokens"))
-    if vocab_size is None:
+    if vocab_size is None and num_blocks > 0:
         vocab_size = _infer_generation_vocab_size(tokenizer, tt_model)
     if init_canvas_fn is None and num_blocks == 0:
         init_canvas_fn = _unused_canvas_init_fn

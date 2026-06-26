@@ -744,6 +744,15 @@ def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tok
 def test_generate_text_from_checkpoint_state_allows_zero_new_tokens_without_canvas_or_logits():
     calls = {}
 
+    class _Tokenizer:
+        def __len__(self):
+            raise AssertionError("vocab inference is not needed for zero generated blocks")
+
+    class _Model:
+        @property
+        def vocab_size(self):
+            raise AssertionError("model vocab inference is not needed for zero generated blocks")
+
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder is not needed for zero generated blocks")
 
@@ -752,8 +761,8 @@ def test_generate_text_from_checkpoint_state_allows_zero_new_tokens_without_canv
         return "result"
 
     out = generate_text_from_checkpoint_state(
-        object(),
-        object(),
+        _Model(),
+        _Tokenizer(),
         "hello",
         dg_state_dict={"raw": "state"},
         max_new_tokens=0,
