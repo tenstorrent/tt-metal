@@ -1993,11 +1993,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
             progress = true;
-            // [debug] Packet drained from a receiver/forwarding buffer (traffic from another eth-core):
-            // record into the same global detection counters as the tensix-sender path.
-            if (combine_window_active) {
-                record_combine_packet(packet_header->get_payload_size_including_header());
-            }
+            // [debug] Packet drained from a receiver/forwarding buffer (traffic from another eth-core).
+            // Intentionally NOT recorded into the combine packet counters: total_pkt_bytes is meant to
+            // reflect bytes this core *originates* on its sender channel (line ~1799). Counting relayed/
+            // received traffic here made a connected-but-not-sending core (e.g. the middle chip's eth core
+            // facing upstream) report transit bytes with enq=0, which read as phantom traffic. Received
+            // bytes ~= the upstream end's sent bytes, so dropping them here loses nothing for this purpose.
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
