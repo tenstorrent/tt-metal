@@ -35,7 +35,6 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_m
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
-    MESH_DEVICE_PARAMETRIZE_FULL,
     mesh_default_device,
 )
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_seamless_m4t_v2_model_parameters
@@ -64,6 +63,26 @@ _TT_EXTRA = dict(use_kv_cache=True, use_decode_trace=False, use_2cq=False, retur
 
 SAMPLES_PATH_FMT = "/tmp/seamless_dperf_{task}_samples.txt"
 TIMINGS_PATH_FMT = "/tmp/seamless_dperf_{task}_timings.json"
+
+
+def _mesh_device_param():
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    if "TT_MESH_WIDTH" in os.environ:
+        return (1, int(os.environ["TT_MESH_WIDTH"]))
+    try:
+        return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
+    except Exception:
+        return (1, 1)
+
+
+def _device_params():
+    mesh_param = _mesh_device_param()
+    params = {"l1_small_size": 65536}
+    if mesh_param not in ((1, 1), 1):
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return params
 
 
 def _weights_dir_or_skip() -> str:
@@ -191,7 +210,8 @@ def _release_and_record(task: str, tt_out: Any, generate_speech: bool) -> None:
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_t2tt(mesh_device, device_params):
     _ = device_params
     weights_dir = _weights_dir_or_skip()
@@ -212,7 +232,8 @@ def test_t2tt(mesh_device, device_params):
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_t2st(mesh_device, device_params):
     _ = device_params
     weights_dir = _weights_dir_or_skip()
@@ -234,7 +255,8 @@ def test_t2st(mesh_device, device_params):
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_s2tt(mesh_device, device_params):
     _ = device_params
     weights_dir = _weights_dir_or_skip()
@@ -255,7 +277,8 @@ def test_s2tt(mesh_device, device_params):
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_s2st(mesh_device, device_params):
     _ = device_params
     weights_dir = _weights_dir_or_skip()
@@ -277,7 +300,8 @@ def test_s2st(mesh_device, device_params):
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_FULL, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 def test_asr(mesh_device, device_params):
     _ = device_params
     weights_dir = _weights_dir_or_skip()
