@@ -528,6 +528,29 @@ def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tok
     assert calls["generate"]["max_new_tokens"] == 9
 
 
+def test_generate_text_from_checkpoint_state_defaults_diffusion_config():
+    calls = {}
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    out = generate_text_from_checkpoint_state(
+        "model",
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        init_canvas_fn="init",
+        max_new_tokens=257,
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["generate"]["config"] == DiffusionConfig()
+    assert calls["generate"]["num_blocks"] == 2
+
+
 def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monkeypatch):
     calls = {}
     result = object()
