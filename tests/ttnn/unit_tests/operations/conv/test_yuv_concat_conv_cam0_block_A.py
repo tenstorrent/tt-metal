@@ -385,6 +385,7 @@ def test_yuv_concat_conv_cam0_block_A(device, batch, yuv_ic, yuv_oc, input_h, in
     # %10/%11 — to_memory_config(DRAM) on already-DRAM tensor: skip (no-op)
 
     # %12 linear [1,1,73728,96] @ [1,1,96,96] + bias
+    # IR: output #ttnn_layout29 = TILE L1 HEIGHT_SHARDED; test forces DRAM for simplicity.
     tt12 = ttnn.linear(tt9, tt_yuv_w, bias=tt_yuv_b, memory_config=DRAM)
     _check("%12 linear", tt12, [batch, 1, yuv_packed_sp, yuv_packed_ic], TILE, "DRAM")
     ttnn.deallocate(tt9)
@@ -392,6 +393,7 @@ def test_yuv_concat_conv_cam0_block_A(device, batch, yuv_ic, yuv_oc, input_h, in
     ttnn.deallocate(tt_yuv_b)
 
     # %13 reshape → [1,48,1536,96]  — FREE VIEW of tt12
+    # IR: output #ttnn_layout30 = TILE L1 HEIGHT_SHARDED; test has TILE DRAM (follows from %12).
     tt13 = ttnn.reshape(tt12, (batch, yuv_h, input_w, yuv_packed_ic))
     _check("%13 reshape→[1,48,1536,96]", tt13, [batch, yuv_h, input_w, yuv_packed_ic], TILE, "DRAM")
 
@@ -453,23 +455,21 @@ def test_yuv_concat_conv_cam0_block_A(device, batch, yuv_ic, yuv_oc, input_h, in
     assert tt23.layout == TILE, "%23 slice UV not TILE"
     ttnn.deallocate(tt17)
 
-    # %24 reshape → [1,32,96,1536]  — FREE VIEW of tt23
+    # %24 reshape → [1,32,96,1536]  — FREE VIEW of tt23  (#ttnn_layout37: TILE L1)
     tt24 = ttnn.reshape(tt23, (batch, dw_packed_ic, dw_packed_h, input_w))
     _check("%24 reshape→[1,32,96,1536]", tt24, [batch, dw_packed_ic, dw_packed_h, input_w], TILE, "L1")
 
-    # to_layout ROW_MAJOR  — consumes tt24 (view of tt23)
-    tt24_rm = ttnn.to_layout(tt24, RM, memory_config=DRAM)
-    ttnn.deallocate(tt23)  # safe
+    # %25 permute {0,2,3,1} → [1,96,1536,32]  (#ttnn_layout38: TILE L1)
+    # IR: permutes TILE L1 directly → TILE L1 (no intermediate ROW_MAJOR step).
+    # consumes tt24 (FREE VIEW of tt23) — deallocate tt23 after permute.
+    tt25 = ttnn.permute(tt24, dims=(0, 2, 3, 1), memory_config=L1)
+    _check("%25 permute→[1,96,1536,32]", tt25, [batch, dw_packed_h, input_w, dw_packed_ic], TILE, "L1")
+    ttnn.deallocate(tt23)  # safe: permute finished reading tt24 (view of tt23)
     ttnn.deallocate(tt24)
 
-    # %25 permute {0,2,3,1} → [1,96,1536,32] ROW_MAJOR DRAM
-    tt25 = ttnn.permute(tt24_rm, dims=(0, 2, 3, 1), memory_config=DRAM)
-    _check("%25 permute→[1,96,1536,32]", tt25, [batch, dw_packed_h, input_w, dw_packed_ic], RM, "DRAM")
-    ttnn.deallocate(tt24_rm)
-
-    # %26 reshape → [1,1,147456,32]  — FREE VIEW of tt25
+    # %26 reshape → [1,1,147456,32]  — FREE VIEW of tt25  (#ttnn_layout39: TILE L1)
     tt26 = ttnn.reshape(tt25, (batch, 1, dw_packed_sp, dw_packed_ic))
-    _check("%26 reshape→[1,1,147456,32]", tt26, [batch, 1, dw_packed_sp, dw_packed_ic], RM, "DRAM")
+    _check("%26 reshape→[1,1,147456,32]", tt26, [batch, 1, dw_packed_sp, dw_packed_ic], TILE, "L1")
 
     # %27 conv2d (deallocate_activation=True frees tt26 internally)
     tt27 = ttnn.conv2d(
@@ -536,36 +536,34 @@ def test_yuv_concat_conv_cam0_block_A(device, batch, yuv_ic, yuv_oc, input_h, in
 
     # ── Concat path ───────────────────────────────────────────────────────────
 
-    # %35 permute Y [1,16,384,384]→[1,384,384,16] NHWC DRAM
-    #   consumes tt22 (FREE VIEW of tt21)
-    tt35_tile = ttnn.permute(tt22, dims=(0, 2, 3, 1), memory_config=DRAM)
-    _check("%35 permute Y→NHWC TILE", tt35_tile, [batch, final_h, final_w, r * r], TILE, "DRAM")
+    # %35 permute Y [1,16,384,384]→[1,384,384,16] NHWC  (#ttnn_layout48: TILE L1)
+    #   consumes tt22 (FREE VIEW of tt21); IR permutes TILE L1 → TILE L1
+    tt35 = ttnn.permute(tt22, dims=(0, 2, 3, 1), memory_config=L1)
+    _check("%35 permute Y→NHWC", tt35, [batch, final_h, final_w, r * r], TILE, "L1")
     ttnn.deallocate(tt21)  # safe: permute finished reading tt22 (view of tt21)
     ttnn.deallocate(tt22)
-    # Untilize: reshape on TILE is NOT a free view — must convert to ROW_MAJOR first
-    tt35 = ttnn.to_layout(tt35_tile, RM, memory_config=DRAM)
-    ttnn.deallocate(tt35_tile)
 
-    # %36 permute UV [1,8,384,384]→[1,384,384,8] NHWC DRAM
-    #   consumes tt34 (FREE VIEW of tt33)
-    tt36_tile = ttnn.permute(tt34, dims=(0, 2, 3, 1), memory_config=DRAM)
-    _check("%36 permute UV→NHWC TILE", tt36_tile, [batch, final_h, final_w, uv_r * uv_r * uv_c], TILE, "DRAM")
+    # %36 permute UV [1,8,384,384]→[1,384,384,8] NHWC  (#ttnn_layout48: TILE L1)
+    #   consumes tt34 (FREE VIEW of tt33); IR permutes TILE L1 → TILE L1
+    tt36 = ttnn.permute(tt34, dims=(0, 2, 3, 1), memory_config=L1)
+    _check("%36 permute UV→NHWC", tt36, [batch, final_h, final_w, uv_r * uv_r * uv_c], TILE, "L1")
     ttnn.deallocate(tt33)  # safe: permute finished reading tt34 (view of tt33)
     ttnn.deallocate(tt34)
-    tt36 = ttnn.to_layout(tt36_tile, RM, memory_config=DRAM)
-    ttnn.deallocate(tt36_tile)
 
-    # %37 reshape Y → [1,1,147456,16] ROW_MAJOR  — FREE VIEW of tt35
+    # %37 reshape Y → [1,1,147456,16]  — FREE VIEW of tt35  (#ttnn_layout39: TILE L1)
+    #   tt35 kept alive until concat has consumed tt37
     tt37 = ttnn.reshape(tt35, (batch, 1, concat_sp, r * r))
-    _check("%37 reshape Y→flat", tt37, [batch, 1, concat_sp, r * r], RM, "DRAM")
+    _check("%37 reshape Y→flat", tt37, [batch, 1, concat_sp, r * r], TILE, "L1")
 
-    # %38 reshape UV → [1,1,147456,8] ROW_MAJOR  — FREE VIEW of tt36
+    # %38 reshape UV → [1,1,147456,8]  — FREE VIEW of tt36  (#ttnn_layout39: TILE L1)
+    #   tt36 kept alive until concat has consumed tt38
     tt38 = ttnn.reshape(tt36, (batch, 1, concat_sp, uv_r * uv_r * uv_c))
-    _check("%38 reshape UV→flat", tt38, [batch, 1, concat_sp, uv_r * uv_r * uv_c], RM, "DRAM")
+    _check("%38 reshape UV→flat", tt38, [batch, 1, concat_sp, uv_r * uv_r * uv_c], TILE, "L1")
 
-    # %39 concat dim=3 → [1,1,147456,24] ROW_MAJOR  — consumes tt37 and tt38
+    # %39 concat dim=3 → [1,1,147456,24]  (#ttnn_layout49: TILE DRAM)
+    #   IR: TILE L1 inputs + memory_config=DRAM → TILE DRAM output
     tt39 = ttnn.concat([tt37, tt38], dim=3, memory_config=DRAM)
-    _check("%39 concat→[1,1,147456,24]", tt39, [batch, 1, concat_sp, final_ic], RM, "DRAM")
+    _check("%39 concat→[1,1,147456,24]", tt39, [batch, 1, concat_sp, final_ic], TILE, "DRAM")
     ttnn.deallocate(tt35)  # safe: concat finished reading tt37 (view of tt35)
     ttnn.deallocate(tt37)
     ttnn.deallocate(tt36)  # safe: concat finished reading tt38 (view of tt36)
