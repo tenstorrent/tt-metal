@@ -500,19 +500,10 @@ class TtMoe(LightweightModule):
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+            self.mesh_device.set_sub_device_stall_group([self.shared_sd_id])
 
         # ========================================
-        # Step 1: Shared expert (enabled)
-        # ========================================
-        # Shared expert expects replicated input (full emb_dim)
-        # Convert x to TILE_LAYOUT for shared expert
-        logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
-
-        shared_output = self.shared_expert(x)
-        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
-
-        # ========================================
-        # Step 2: Dispatch (enabled)
+        # Step 1: Dispatch (enabled)
         # ========================================
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
@@ -523,14 +514,24 @@ class TtMoe(LightweightModule):
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
+
+        # ========================================
+        # Step 2: Shared expert (enabled)
+        # ========================================
+        # Shared expert expects replicated input (full emb_dim)
+        # Convert x to TILE_LAYOUT for shared expert
+        shared_output = self.shared_expert(x)
+        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+
         if self.overlap_shared_expert_with_dispatch:
+            self.mesh_device.reset_sub_device_stall_group()
             self.mesh_device.clear_loaded_sub_device_manager()
-        x = ttnn.deallocate(x)
+        signpost("shared_expert_and_dispatch_end")
+
+        ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
-
-        signpost("shared_expert_and_dispatch_end")
 
         # ========================================
         # Step 3: Routed experts (enabled)
