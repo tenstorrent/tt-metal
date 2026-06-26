@@ -2139,6 +2139,7 @@ class UnarySFPUGolden:
             MathOperation.Celu: self._celu,
             MathOperation.Silu: self._silu,
             MathOperation.Gelu: self._gelu,
+            MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
@@ -2440,6 +2441,16 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.gelu(input_tensor).item()
+
+    def _gelu_tanh(self, x):
+        # Matches calculate_gelu_tanh: the tanh approximation of GELU,
+        # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
 
     def _fill(self, x, const_value=5):
         input_tensor = (
