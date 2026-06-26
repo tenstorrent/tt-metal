@@ -26,6 +26,7 @@ from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.experimental.diffusion_gemma.tt.generate import commit_canvas_tokens
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -238,7 +239,6 @@ def test_commit_append_decode_writes_full_256_token_canvas(mesh_device, reset_se
 
     k_cache, v_cache = model.tt_kv_cache[0]
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
     k_prompt_before = _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh)
     v_prompt_before = _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh)
     k_canvas_before = _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
@@ -391,31 +391,7 @@ def test_commit_append_canvas_kv_matches_reencode_pcc(mesh_device, reset_seeds):
     )
     prompt_logits.deallocate(True)
 
-    for offset in range(canvas_len):
-        position = prompt_len + offset
-        append_tokens = canvas_tokens[:, offset : offset + 1]
-        pos_u32 = ttnn.from_torch(
-            F.pad(torch.tensor([[position]], dtype=torch.int32), (0, 31), "constant", 0),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            mesh_mapper=mesh_mapper,
-        )
-        pos_i32 = ttnn.from_torch(
-            torch.tensor([position], dtype=torch.int32),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.int32,
-            mesh_mapper=mesh_mapper,
-        )
-        append_logits = commit_model(
-            _embed_tokens(commit_model, append_tokens, mesh_device),
-            position_idx=pos_u32,
-            position_idx_cache=pos_i32,
-            is_decode=True,
-            kv_phase=KVCachePhase.COMMIT_APPEND,
-        )
-        append_logits.deallocate(True)
+    commit_canvas_tokens(commit_model, canvas_tokens, start_pos=prompt_len)
 
     full_tokens = torch.cat([prompt_tokens, canvas_tokens], dim=-1)
     reencode_logits = reencode_model(
