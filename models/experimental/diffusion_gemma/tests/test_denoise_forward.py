@@ -10,6 +10,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_denoise_logits_adapter_from_kv_cache,
     make_denoise_logits_adapter_from_checkpoint_state,
     make_denoise_logits_adapter_from_remapped_state,
+    make_generation_logits_fn_builder_from_checkpoint_state,
     make_generation_logits_fn_builder_from_remapped_state,
     read_prompt_kv_cache_by_layer,
 )
@@ -319,3 +320,33 @@ def test_make_generation_logits_fn_builder_from_remapped_state_matches_generate_
             "seq_len_start": 32,
         },
     )
+
+
+def test_make_generation_logits_fn_builder_from_checkpoint_state_remaps_once():
+    calls = {}
+    dg_state = {"raw": "state"}
+
+    def fake_remap(state_dict):
+        calls["remap"] = state_dict
+        return {"backbone": "state"}, {"self": "conditioning"}, ["ignored"]
+
+    def fake_remapped_builder(**kwargs):
+        calls["builder"] = kwargs
+        return "builder"
+
+    out = make_generation_logits_fn_builder_from_checkpoint_state(
+        dg_state,
+        config="config",
+        seq_len_start=32,
+        remap_fn=fake_remap,
+        remapped_builder=fake_remapped_builder,
+    )
+
+    assert out == "builder"
+    assert calls["remap"] is dg_state
+    assert calls["builder"] == {
+        "backbone_state": {"backbone": "state"},
+        "self_conditioning_state": {"self": "conditioning"},
+        "config": "config",
+        "seq_len_start": 32,
+    }

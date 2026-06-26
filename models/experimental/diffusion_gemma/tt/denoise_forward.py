@@ -21,7 +21,7 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
     build_self_conditioning,
     build_self_conditioning_embedding_weight,
 )
-from models.experimental.diffusion_gemma.weight_mapping import GEMMA4_LM_PREFIX
+from models.experimental.diffusion_gemma.weight_mapping import GEMMA4_LM_PREFIX, remap_state_dict
 
 NEG = -1.0e9
 
@@ -536,3 +536,19 @@ def make_generation_logits_fn_builder_from_remapped_state(
         )
 
     return logits_fn_builder
+
+
+def make_generation_logits_fn_builder_from_checkpoint_state(
+    dg_state_dict,
+    *,
+    remap_fn=remap_state_dict,
+    remapped_builder=make_generation_logits_fn_builder_from_remapped_state,
+    **adapter_kwargs,
+):
+    """Return a generation logits builder directly from raw DiffusionGemma state."""
+    backbone_state, self_conditioning_state, _ignored_keys = remap_fn(dg_state_dict)
+    return remapped_builder(
+        backbone_state=backbone_state,
+        self_conditioning_state=self_conditioning_state,
+        **adapter_kwargs,
+    )
