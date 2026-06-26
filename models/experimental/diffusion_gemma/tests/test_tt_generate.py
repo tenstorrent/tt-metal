@@ -189,6 +189,21 @@ def test_generate_blocks_rejects_non_positive_canvas_length():
         )
 
 
+def test_generate_blocks_allows_zero_blocks_without_init_canvas():
+    out = generate_blocks(
+        "model",
+        "logits",
+        prompt_len=32,
+        num_blocks=0,
+        config=DiffusionConfig(canvas_length=4),
+    )
+
+    assert out.prompt_len == 32
+    assert out.next_pos == 32
+    assert out.trajectories == []
+    assert torch.equal(out.generated, torch.empty((1, 0), dtype=torch.long))
+
+
 def test_generate_blocks_stops_after_committed_stop_token():
     calls = []
 
@@ -347,7 +362,6 @@ def test_generate_from_prompt_tokens_allows_zero_blocks_without_logits():
         prompt_tokens,
         num_blocks=0,
         config=DiffusionConfig(canvas_length=4),
-        init_canvas_fn="init",
         prefill_fn=fake_prefill,
         blocks_fn=fake_blocks,
     )
@@ -497,6 +511,39 @@ def test_generate_text_rejects_max_new_tokens_beyond_block_capacity_before_token
             max_new_tokens=5,
             blocks_fn=lambda *args, **kwargs: None,
         )
+
+
+def test_generate_text_allows_zero_blocks_without_init_canvas():
+    tokenizer = _FakeChatTokenizer()
+    generation = G.DeviceGeneration(
+        generated=torch.empty((1, 0), dtype=torch.long),
+        prompt_len=3,
+        next_pos=3,
+        trajectories=[],
+    )
+
+    def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
+        return tokens.shape[1]
+
+    def fake_blocks(tt_model, logits_fn, **kwargs):
+        assert kwargs["num_blocks"] == 0
+        assert callable(kwargs["init_canvas_fn"])
+        return generation
+
+    out = generate_text(
+        "model",
+        None,
+        tokenizer,
+        "hello",
+        num_blocks=0,
+        config=DiffusionConfig(canvas_length=4),
+        max_new_tokens=0,
+        prefill_fn=fake_prefill,
+        blocks_fn=fake_blocks,
+    )
+
+    assert out.text == [""]
+    assert torch.equal(out.generation.generated, torch.empty((1, 0), dtype=torch.long))
 
 
 def test_generate_text_can_build_logits_after_prompt_prefill():

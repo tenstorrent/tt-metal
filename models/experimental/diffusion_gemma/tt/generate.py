@@ -406,7 +406,7 @@ def generate_blocks(
     prompt_len: int,
     num_blocks: int,
     config: DiffusionConfig,
-    init_canvas_fn: Callable[[int, int], object],
+    init_canvas_fn: Callable[[int, int], object] | None = None,
     gumbel_noise_fn=None,
     noise_tokens_fn=None,
     page_table=None,
@@ -423,6 +423,7 @@ def generate_blocks(
     """
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
+    init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []
     trajectories: list[DenoiseTrajectory] = []
@@ -457,7 +458,7 @@ def generate_from_prompt_tokens(
     *,
     num_blocks: int,
     config: DiffusionConfig,
-    init_canvas_fn: Callable[[int, int], object],
+    init_canvas_fn: Callable[[int, int], object] | None = None,
     gumbel_noise_fn=None,
     noise_tokens_fn=None,
     page_table=None,
@@ -476,6 +477,7 @@ def generate_from_prompt_tokens(
     """
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
+    init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     prompt_len = prefill_fn(
         tt_model,
         prompt_tokens,
@@ -615,6 +617,14 @@ def _unused_canvas_init_fn(block_idx: int, start_pos: int):
     raise RuntimeError("init_canvas_fn should not be called when num_blocks is zero")
 
 
+def _resolve_init_canvas_fn(num_blocks: int, init_canvas_fn):
+    if init_canvas_fn is not None:
+        return init_canvas_fn
+    if num_blocks == 0:
+        return _unused_canvas_init_fn
+    raise ValueError("init_canvas_fn is required unless num_blocks is zero")
+
+
 def generate_text(
     tt_model,
     logits_fn,
@@ -623,7 +633,7 @@ def generate_text(
     *,
     num_blocks: int,
     config: DiffusionConfig,
-    init_canvas_fn: Callable[[int, int], object],
+    init_canvas_fn: Callable[[int, int], object] | None = None,
     system_prompt: str | None = None,
     add_generation_prompt: bool = True,
     gumbel_noise_fn=None,
@@ -643,6 +653,7 @@ def generate_text(
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
     _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, max_new_tokens)
+    init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     prompt_tokens = tokenize_prompt(
         tokenizer,
         prompt,
@@ -727,6 +738,7 @@ def generate_text_from_checkpoint_state(
             vocab_size=vocab_size,
             seed=seed,
         )
+    init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     if num_blocks > 0 and "noise_tokens_fn" not in generate_kwargs and (seed is not None or noise_seed is not None):
         if vocab_size is None:
             raise ValueError("noise_tokens_fn requires vocab_size or tokenizer/model vocab metadata")
