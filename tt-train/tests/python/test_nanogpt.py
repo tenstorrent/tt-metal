@@ -262,9 +262,9 @@ class TestMultiHeadAttention:
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
-    def test_attention_head_dim_validation(self):
+    def test_attention_head_dim_validation(self, expect_error):
         """Test that attention validates head dimension."""
-        with pytest.raises(AssertionError):
+        with expect_error(AssertionError, "embedding_dim must be divisible by num_heads"):
             # embedding_dim (65) not divisible by num_heads (4)
             MultiHeadAttention(65, 4, dropout=0.0)
 
@@ -365,7 +365,7 @@ class TestGPTBlock:
 class TestMemoryEfficientRunner:
     """Tests for memory efficient runner."""
 
-    def test_no_intermediate_backward_functions(self):
+    def test_no_intermediate_backward_functions(self, expect_error):
         """Test that intermediate backward functions are not recorded."""
         input = ttml.autograd.Tensor.from_numpy(
             np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
@@ -391,7 +391,7 @@ class TestMemoryEfficientRunner:
         # Memory-efficient runner
         _ = memory_efficient_runner(forward_fn, input, mask)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "This backward function should not be called"):
             captured["inter"].backward(retain_graph=False)
 
 
