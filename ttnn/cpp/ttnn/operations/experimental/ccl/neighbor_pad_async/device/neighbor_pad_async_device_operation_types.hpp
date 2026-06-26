@@ -82,9 +82,7 @@ struct NeighborPadAsyncParams {
         logical_h(logical_h),
         t_front_pad(t_front_pad) {}
 
-    // Program-cache hash / canonical-key fields. Lists exactly the structural fields the former
-    // custom compute_program_hash included; the three GlobalSemaphore members and
-    // using_persistent_buffers are runtime-only and intentionally excluded.
+    // Program-cache hash / canonical-key fields
     static constexpr auto attribute_names = std::make_tuple(
         "dim",
         "padding_left",
