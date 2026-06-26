@@ -94,3 +94,6 @@ if(TT_UMD_BUILD_SIMULATION)
 endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
+# The layer-completion impls live in the peer tt_metal/disaggregation/ dir but compile into this
+# library and include distributed-local headers (e.g. named_shm.hpp) by name; expose this dir.
+target_include_directories(distributed PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

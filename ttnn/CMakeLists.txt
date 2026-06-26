@@ -497,8 +497,8 @@ if(WITH_PYTHON_BINDINGS)
     # (LayerCompletionConsumer). Deliberately NOT linked into _ttnn and NOT on the
     # ttnn API — it links only TT::Metalium and is imported via
     # `models.demos.test.prefill_test`. Built here (where the nanobind tooling and
-    # TT::Metalium are in scope) but its sources live under tests/ttnn/prefill_test.
-    # The .so is emitted straight into the importable models/demos/test/ dir.
+    # TT::Metalium are in scope) but its sources live under models/demos/test/,
+    # alongside the Python wrapper. The .so is emitted into that same importable dir.
     # Built the same way as the `ttnn` module above: link TT::Nanobind (which already carries the
     # nanobind + Python3 include dirs) rather than nanobind_add_module (which would spin up its own
     # support lib lacking Python.h). Target name `prefill_test_ext` + PREFIX "_" → `_prefill_test.so`.
@@ -506,8 +506,8 @@ if(WITH_PYTHON_BINDINGS)
     target_sources(
         prefill_test_ext
         PRIVATE
-            ${PROJECT_SOURCE_DIR}/tests/ttnn/prefill_test/prefill_test_module.cpp
-            ${PROJECT_SOURCE_DIR}/tests/ttnn/prefill_test/layer_completion_consumer.cpp
+            ${PROJECT_SOURCE_DIR}/models/demos/test/prefill_test_module.cpp
+            ${PROJECT_SOURCE_DIR}/models/demos/test/layer_completion_consumer.cpp
     )
     target_link_libraries(
         prefill_test_ext

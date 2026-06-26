@@ -216,6 +216,12 @@ def _load_token_ids() -> list[int]:
 # Layer-completion routing (pipeline / num_ranks > 1)
 # ---------------------------------------------------------------------------
 
+# When the completion ring is full, spin waiting for the router to drain rather than
+# dropping/failing immediately. Bounded so a genuinely stalled router still surfaces.
+LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
+LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
+LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001  # tiny yield so the spin doesn't peg a core
+
 
 def build_layer_completion_sink(producer, *, source_rank, num_layers):
     """Build the per-layer completion sink the runtime fires once per layer.
@@ -476,11 +482,14 @@ def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: d
     """Run one chunk: prefill, forward the output downstream (non-last rank) and grant the outbound
     sender so it ships over fabric, log CHUNK_START. Returns the compute-start epoch (NTP-comparable)."""
     t_start = time.time()
-    # Record the chunk index so the pipelined layer-completion sink (if registered) can build its
-    # globally-dense seq = current_chunk_idx * NUM_LAYERS + global_layer_idx. No-op single-rank.
-    runtime.current_chunk_idx = c
+    # Pass the chunk index as request_id so the pipelined layer-completion sink (if registered) can
+    # build its globally-dense seq = request_id * NUM_LAYERS + global_layer_idx. Ignored single-rank.
     out = runtime.prefill(
-        inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+        inp,
+        slot_id=meta["slot_id"],
+        actual_start=meta["actual_start"],
+        actual_end=meta["actual_end"],
+        request_id=c,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion before the send so the delta is this rank's forward alone, not the
@@ -926,7 +935,8 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         )
         producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
         # seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this rank's slice; the layer_idx
-        # arriving at the sink is already global; the chunk index is set per chunk in _compute_and_send.
+        # arriving at the sink is already global; the chunk index is bound per prefill() call as
+        # request_id (passed by _compute_and_send), so the sink reads no shared mutable state.
         runtime.set_layer_completion_sink(
             build_layer_completion_sink(
                 producer,
