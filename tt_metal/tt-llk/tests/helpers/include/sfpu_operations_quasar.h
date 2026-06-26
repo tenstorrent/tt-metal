@@ -89,7 +89,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
-        _init_typecast_();
+        init_typecast();
     }
 }
 
@@ -216,7 +216,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // bakes in as the compile-time constants TYPECAST_IN_FORMAT / TYPECAST_OUT_FORMAT (set
         // by the TYPECAST_FORMATS variant). The functor picks the conversion sequence from the
         // pair at compile time.
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_typecast_<TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_typecast<TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS>, dst_index);
     }
     else
     {
