@@ -20,6 +20,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.attention.prefill import _slice_rope_cache
 from models.demos.gemma4.tt.attention.operations import prefill_sdpa_program_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -140,3 +141,22 @@ def _run_long_noncausal_sdpa(device, *, sk, head_dim, masked, pcc=0.99):
 )
 def test_w2b_long_prompt_noncausal_sdpa(device, sk, head_dim, masked):
     _run_long_noncausal_sdpa(device, sk=sk, head_dim=head_dim, masked=masked)
+
+
+def test_w2b_rope_slice_reaches_256k(device):
+    cache_len = 262144
+    canvas_len = 256
+    prompt_len = cache_len - canvas_len
+    cache = ttnn.from_torch(
+        torch.zeros(1, 1, cache_len, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    sliced = _slice_rope_cache(cache, prompt_len, canvas_len)
+    assert sliced.shape[-2] == canvas_len
+    sliced.deallocate(True)
+    with pytest.raises(ValueError, match="exceeds cache length"):
+        _slice_rope_cache(cache, cache_len, 32)
+    cache.deallocate(True)

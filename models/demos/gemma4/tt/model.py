@@ -52,7 +52,9 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
-    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
+    # Gemma4TextRotaryEmbedding uses x only for dtype/device, not hidden width.
+    # Keep this tiny so 256K RoPE caches do not allocate a multi-GB dummy.
+    x_dummy = torch.empty(1, max_seq_len, 1)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}
@@ -473,6 +475,8 @@ class Gemma4Model:
             return self.rope_caches_2d[layer_type]
         cos, sin = self.rope_caches[layer_type]
         if seq_len is not None:
+            if seq_len > cos.shape[-2]:
+                raise ValueError(f"requested RoPE seq_len {seq_len} exceeds cache length {cos.shape[-2]}")
             cos = cos[:, :, :seq_len, :]
             sin = sin[:, :, :seq_len, :]
         return (cos, sin)

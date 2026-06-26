@@ -38,6 +38,8 @@ def _validate_q_rope_offset(q_rope_offset: int, *, batch_size: int) -> None:
 def _slice_rope_cache(cache, start, length):
     if start % TILE_SIZE != 0:
         raise ValueError(f"RoPE cache start must be a multiple of {TILE_SIZE}, got {start}")
+    if start + length > cache.shape[-2]:
+        raise ValueError(f"RoPE cache slice [{start}, {start + length}) exceeds cache length {cache.shape[-2]}")
     # Fast path is correct only when callers pre-slice RoPE caches to the active seq_len.
     if start == 0 and cache.shape[-2] == length:
         return cache
