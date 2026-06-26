@@ -27,11 +27,7 @@ struct StridedAllGatherMinimalMatmulAsyncParams {
     const StridedAllGatherAsync ag_op;
 
     // Compile-time attributes select exactly the program-structure-affecting fields for the default
-    // program-cache reflection hash + canonical key. This mirrors the field set of the (now-removed)
-    // custom compute_program_hash. From `strided_all_gather_async_struct` only the structural
-    // sub-fields are hashed (its `devices`/`semaphore` members are runtime-only and excluded).
-    // Excluded as runtime-only / non-hashable: `devices` (raw IDevice* pointers, per-device cache)
-    // and `ag_op` (a stateless operation tag struct that carries no program-affecting state).
+    // program-cache reflection hash + canonical key
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",
