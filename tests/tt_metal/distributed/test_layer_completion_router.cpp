@@ -10,9 +10,9 @@
 #include <thread>
 
 #include <internal/service/inter_process_counter_channel.hpp>
-#include <internal/disaggregation/layer_completion_message.hpp>
-#include <internal/disaggregation/layer_completion_queue.hpp>
-#include <internal/disaggregation/layer_completion_router.hpp>
+#include <layer_completion_message.hpp>
+#include <layer_completion_queue.hpp>
+#include <layer_completion_router.hpp>
 
 namespace tt::tt_metal::distributed::test {
 

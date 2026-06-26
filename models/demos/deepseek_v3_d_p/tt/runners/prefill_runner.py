@@ -46,10 +46,10 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-# NOTE: LayerCompletionConsumer (the test-only `_prefill_test` extension) is imported lazily inside
-# _CompletionCheckConsumer.__init__ — its .so is built only under WITH_PYTHON_BINDINGS and may be
+# NOTE: the pipelined_prefill layer-completion classes (the standalone `_layer_completion` extension)
+# are imported lazily at point-of-use — its .so is built only under WITH_PYTHON_BINDINGS and may be
 # absent in a packaged/wheel build, so a top-level import would hard-fail the runner for everyone
-# (including single-rank runs that never enable PREFILL_CHECK_COMPLETIONS).
+# (including single-rank runs that never touch layer completion).
 
 
 def _apply_manifest_env():
@@ -232,7 +232,7 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
     """Build the per-layer completion sink the runtime fires once per layer.
 
     Computes a globally-dense ordering key and pushes a full completion
-    into `producer` (a ttnn.layer_completion.LayerCompletionQueue). The
+    into `producer` (a pipelined_prefill.LayerCompletionQueue). The
     master router re-emits completions strictly in ascending `seq`.
 
     seq = request_id * num_layers + layer_idx — dense across all (request,
@@ -296,9 +296,9 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
 class _CompletionCheckConsumer:
     """Test-only scheduler stand-in (enabled by PREFILL_CHECK_COMPLETIONS=1).
 
-    Thin Python wrapper over the C++ LayerCompletionConsumer from the standalone, test-only
-    `_prefill_test` extension (models/demos/test; imported via models.demos.test.prefill_test —
-    NOT part of the ttnn module). The C++ consumer drains the master router's scheduler counter
+    Thin Python wrapper over the C++ LayerCompletionConsumer from the standalone `_layer_completion`
+    extension (models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill — NOT part of the ttnn
+    module). The C++ consumer drains the master router's scheduler counter
     channel on a NATIVE thread — immune to the GIL. An earlier Python daemon-thread version stalled at
     a partial count because the master rank's main thread blocks in a GIL-holding request-loop call
     and starves any Python drain thread, even though the router had already injected every completion.
@@ -310,8 +310,8 @@ class _CompletionCheckConsumer:
 
     def __init__(self, ack_shm_name: str, *, num_layers: int):
         # Imported here (not at module top) so the runner doesn't hard-fail when the test-only
-        # _prefill_test extension is absent; only PREFILL_CHECK_COMPLETIONS=1 runs reach this.
-        from models.demos.test.prefill_test import LayerCompletionConsumer
+        # _layer_completion extension is absent; only PREFILL_CHECK_COMPLETIONS=1 runs reach this.
+        from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import LayerCompletionConsumer
 
         self._num_layers = num_layers
         # This consumer only runs in (unbounded) request mode, where the external producer — NOT
@@ -823,7 +823,7 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     #     request_id} completions into a host-local LayerCompletionQueue; a per-host
     #     LayerCompletionRouter forwards them to the master rank, which re-emits them in
     #     global seq order into the SAME counter channel the scheduler connects to. See
-    #     build_layer_completion_sink() and ttnn.layer_completion.
+    #     build_layer_completion_sink() and the pipelined_prefill package.
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
@@ -889,6 +889,13 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
     else:
         # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
+        # Imported here (not at module top) so single-rank / no-extension builds never need the
+        # standalone _layer_completion .so (built only with WITH_PYTHON_BINDINGS).
+        from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import (
+            LayerCompletionQueue,
+            LayerCompletionRouter,
+        )
+
         # Each rank's router OWNS its own ring, so the name must be per-rank — append _{rank} even to
         # the env override (a single literal would make colocated ranks unlink each other's live ring
         # and collide on O_EXCL create).
@@ -899,14 +906,14 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
             _unlink_stale_shm(ack_shm_name)
         # The router owns the host-local ring (and, on the master, the scheduler counter channel,
         # which it inject()s in order). Subordinate ranks MPI-forward completions to the master.
-        router = ttnn.layer_completion.LayerCompletionRouter(
+        router = LayerCompletionRouter(
             rank=rank,
             world_size=num_ranks,
             master_rank=master_rank,
             ring_shm_name=ring_shm_name,
             scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
         )
-        producer = ttnn.layer_completion.LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+        producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
         # seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this rank's slice; the layer_idx
         # arriving at the sink is already global; the chunk index is bound per prefill() call as
         # request_id (passed by _compute_and_send), so the sink reads no shared mutable state.

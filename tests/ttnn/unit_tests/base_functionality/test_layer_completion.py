@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Same-process smoke tests for ttnn.layer_completion.
+"""Same-process smoke tests for the pipelined-prefill layer_completion module.
 
 The SHM ring + router are exercised from one process (world_size == 1,
 master), so no MPI is needed. The router's master path drains the local
@@ -13,6 +13,7 @@ import os
 import time
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import LayerCompletionQueue, LayerCompletionRouter
 
 
 def _unlink(shm_name: str) -> None:
@@ -25,8 +26,8 @@ def _unlink(shm_name: str) -> None:
 def test_queue_roundtrip():
     name = "/tt_lc_py_queue"
     _unlink(name)
-    owner = ttnn.layer_completion.LayerCompletionQueue.create(name)
-    conn = ttnn.layer_completion.LayerCompletionQueue.connect(name, connect_timeout_ms=5000)
+    owner = LayerCompletionQueue.create(name)
+    conn = LayerCompletionQueue.connect(name, connect_timeout_ms=5000)
 
     assert owner.try_push(seq=0, source_rank=1, layer_idx=2, request_id=3)
     popped = conn.try_pop()
@@ -41,7 +42,7 @@ def test_router_single_rank_orders_into_counter_channel():
     _unlink(ring)
     _unlink(sched)
 
-    router = ttnn.layer_completion.LayerCompletionRouter(
+    router = LayerCompletionRouter(
         rank=0,
         world_size=1,
         master_rank=0,
@@ -51,7 +52,7 @@ def test_router_single_rank_orders_into_counter_channel():
     assert router.is_master
 
     consumer = ttnn.InterProcessCounterChannel.connect(sched, connect_timeout_ms=5000)
-    producer = ttnn.layer_completion.LayerCompletionQueue.connect(ring, connect_timeout_ms=5000)
+    producer = LayerCompletionQueue.connect(ring, connect_timeout_ms=5000)
 
     # Push 0..5 out of order; the router must inject them in order.
     for s in (0, 2, 1, 4, 3, 5):

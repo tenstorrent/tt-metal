@@ -63,7 +63,6 @@ TENSOR_FORWARD_CHECK_EXCLUDE = {f"ttnn/api/{path}" for path in EXPERIMENTAL_TENS
 
 ALLOWED_PREFIXES = {
     "hostdevcommon",
-    "internal",
     "tt-metalium",
     "tt_stl",
     "umd",
