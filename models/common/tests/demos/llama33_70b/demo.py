@@ -13,8 +13,7 @@ TTFT for, so it is the primary (and only) bringup SKU here.
 **Workload:** performance tests prefill each prompt at its natural length (TTTv1
 ``preprocess_inputs_prefill`` semantics; these sample prompts are ~90-125 tokens -> 128
 prefill bucket, matching TTTv1's traced-prefill seq len for Llama-3.3-70B on T3K) + 200
-decode iterations. Accuracy / teacher-forcing uses 511 continuation tokens. See
-``generate_controlled_refpt.py``.
+decode iterations. Accuracy / teacher-forcing uses 511 continuation tokens.
 
 Usage::
 
@@ -33,11 +32,10 @@ Usage::
 LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
-Reference artifact (``.refpt``): use ``generate_controlled_refpt.py`` to produce a
-metadata-rich ``.refpt`` with ``prompt_len=512`` before running the accuracy test.
-The legacy TTTv1 artifact at ``models/tt_transformers/tests/reference_outputs/`` may
-lack ``prompt_len`` metadata and its intrinsic top-1 ceiling may be below PERF.md
-thresholds. See the reference-sanity guide.
+Reference artifact (``.refpt``): the accuracy test gates on the committed book
+reference at ``models/tt_transformers/tests/reference_outputs/<model>.refpt``
+(ground-truth real-text targets, single teacher-forced pass), which is the
+PERF.md-comparable methodology.
 """
 
 import json
@@ -177,12 +175,12 @@ def load_reference_data(hf_model_id: str):
     """Load reference tensors and optional metadata from ``.refpt``.
 
     Supports both the metadata-rich format (``prompt_len`` + ``metadata`` keys)
-    produced by ``generate_controlled_refpt.py`` and the legacy half-split format.
+    and the book half-split format (``reference_tokens`` + ``top5_tokens`` only).
     """
     name = hf_model_id.strip("/").split("/")[-1]
     ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
-        pytest.skip(f"Reference file not found: {ref_path}. Run generate_controlled_refpt.py first.")
+        pytest.skip(f"Reference file not found: {ref_path}")
 
     ref_data = torch.load(ref_path, map_location="cpu", weights_only=False)
     reference_tokens = ref_data["reference_tokens"]
@@ -387,10 +385,7 @@ def _run_token_accuracy(model: Llama33_70BTransformer1D, mesh_device, expected):
         logger.info(f"Using metadata prompt_len={prompt_len}")
     else:
         prompt_len = len(reference_tokens) // 2
-        logger.warning(
-            f"Reference missing prompt_len metadata; legacy half-split={prompt_len}. "
-            "Run generate_controlled_refpt.py for a PERF.md-aligned .refpt."
-        )
+        logger.info(f"Reference has no prompt_len metadata; using book half-split={prompt_len}.")
 
     if metadata:
         logger.info(
