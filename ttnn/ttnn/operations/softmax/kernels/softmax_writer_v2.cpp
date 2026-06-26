@@ -157,12 +157,18 @@ void kernel_main() {
 
                         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
                             uint32_t byte_offset = chunk * chunk_row_bytes;
+                            // Clamp row_bytes to not exceed the page boundary
+                            // (same as reader — non-aligned W last chunk)
+                            uint32_t actual_row_bytes =
+                                (byte_offset + chunk_row_bytes <= full_row_bytes)
+                                    ? chunk_row_bytes
+                                    : (full_row_bytes > byte_offset ? (full_row_bytes - byte_offset) : 0);
                             dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
                                 dst_accessor,
-                                tile_h,           // total_num_rows (one tile-height of sticks)
-                                chunk_row_bytes,  // row_bytes for this chunk
-                                base_stick,       // start_page (stick index)
-                                byte_offset       // byte_offset_within_page
+                                tile_h,            // total_num_rows (one tile-height of sticks)
+                                actual_row_bytes,  // row_bytes for this chunk
+                                base_stick,        // start_page (stick index)
+                                byte_offset        // byte_offset_within_page
                             );
                         }
                     }
@@ -172,13 +178,18 @@ void kernel_main() {
 
                     for (uint32_t wt = 0; wt < Wt; ++wt) {
                         uint32_t byte_offset = wt * chunk_row_bytes;
+                        // Clamp row_bytes for non-aligned W (same as reader)
+                        uint32_t actual_row_bytes =
+                            (byte_offset + chunk_row_bytes <= full_row_bytes)
+                                ? chunk_row_bytes
+                                : (full_row_bytes > byte_offset ? (full_row_bytes - byte_offset) : 0);
 
                         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
                             uint32_t base_stick = slab_start_stick + chunk * tile_h * BLOCK_SIZE;
                             dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
                                 dst_accessor,
                                 tile_h * BLOCK_SIZE,  // total_num_rows
-                                chunk_row_bytes,      // row_bytes (1 tile column)
+                                actual_row_bytes,     // row_bytes (1 tile column)
                                 base_stick,           // start_page
                                 byte_offset           // byte_offset_within_page
                             );

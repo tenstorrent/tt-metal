@@ -184,3 +184,10 @@
 {"source":"tt-probe","pid":1136846,"started_at_ms":1782441549710,"wait_ms":182,"run_ms":19702,"test_path":"softmax","exit_code":0}
 {"source":"tt-probe","pid":1137536,"started_at_ms":1782441671006,"wait_ms":183,"run_ms":19653,"test_path":"softmax","exit_code":0}
 {"source":"tt-probe","pid":1138085,"started_at_ms":1782441744759,"wait_ms":186,"run_ms":30887,"test_path":"softmax","exit_code":0}
+{"source":"run_safe_pytest","pid":1140208,"started_at_ms":1782441806895,"wait_ms":2,"run_ms":67831,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1143122,"started_at_ms":1782441881804,"wait_ms":2,"run_ms":148115,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1149498,"started_at_ms":1782442037520,"wait_ms":3,"run_ms":48621,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1153849,"started_at_ms":1782442136358,"wait_ms":3,"run_ms":8068,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1154279,"started_at_ms":1782442166813,"wait_ms":3,"run_ms":7914,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1154654,"started_at_ms":1782442178738,"wait_ms":3,"run_ms":70492,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1158365,"started_at_ms":1782442255520,"wait_ms":3,"run_ms":31711,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":0}
