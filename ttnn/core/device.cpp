@@ -54,9 +54,14 @@ tt::tt_metal::DispatchCoreConfig create_cluster_aware_dispatch_config(
     std::optional<tt::tt_metal::DispatchCoreAxis> axis,
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config) {
     validate_dispatch_core_config(type, axis, fabric_tensix_config);
-    return tt::tt_metal::DispatchCoreConfig(
-        type.value_or(cluster_aware_dispatch_core_type()),
-        axis.value_or(default_dispatch_core_axis(fabric_tensix_config)));
+
+    const auto resolved_axis = axis.value_or(default_dispatch_core_axis(fabric_tensix_config));
+    // When the type is not specified, the default depends on the axis: COL is only supported on WORKER
+    // dispatch cores, so it must not fall back to the cluster-aware (potentially ETH) default type.
+    const auto resolved_type = type.value_or(
+        resolved_axis == tt::tt_metal::DispatchCoreAxis::COL ? tt::tt_metal::DispatchCoreType::WORKER
+                                                             : cluster_aware_dispatch_core_type());
+    return tt::tt_metal::DispatchCoreConfig(resolved_type, resolved_axis);
 }
 
 std::shared_ptr<MeshDevice> open_mesh_device(
