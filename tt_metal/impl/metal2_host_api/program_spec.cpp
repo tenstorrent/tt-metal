@@ -59,6 +59,7 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const CrossNodeDataflowBufferSpec*> cross_node_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
+    std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
@@ -453,6 +454,55 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 kernel.unique_id,
                 binding.semaphore_spec_name);
         }
+    }
+
+    // Collect ScratchpadSpecs
+    for (const auto& scratchpad : spec.scratchpads) {
+        auto [it, inserted] = collected.scratchpad_by_name.try_emplace(scratchpad.unique_id, &scratchpad);
+        TT_FATAL(inserted, "Duplicate ScratchpadSpec name '{}'", scratchpad.unique_id);
+    }
+
+    // Validate scratchpad bindings.
+    // A scratchpad is private to a single kernel: each ScratchpadSpec must be bound by exactly one
+    // ScratchpadBinding across the whole ProgramSpec (deliberately stricter than a DFB, which permits
+    // multiple same-role endpoint bindings).
+    std::unordered_map<ScratchpadSpecName, const KernelSpec*> scratchpad_binder;
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.scratchpad_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate scratchpad accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
+                "Kernel '{}' references unknown scratchpad '{}'",
+                kernel.unique_id,
+                binding.scratchpad_spec_name);
+            auto [bit, binserted] = scratchpad_binder.try_emplace(binding.scratchpad_spec_name, &kernel);
+            TT_FATAL(
+                binserted,
+                "ScratchpadSpec '{}' is bound by more than one kernel ('{}' and '{}'). A scratchpad is private "
+                "to a single kernel — it may be bound exactly once.",
+                binding.scratchpad_spec_name,
+                bit->second->unique_id,
+                kernel.unique_id);
+        }
+    }
+    // Every declared scratchpad must be bound (exactly once): an unbound scratchpad would reserve L1
+    // that no kernel can reach.
+    for (const auto& scratchpad : spec.scratchpads) {
+        TT_FATAL(
+            scratchpad_binder.contains(scratchpad.unique_id),
+            "ScratchpadSpec '{}' is declared but not bound by any kernel.",
+            scratchpad.unique_id);
     }
 
     // Collect TensorParameters
@@ -2279,6 +2329,41 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     return out;
 }
 
+// Per-kernel resolved scratchpad bindings:
+//  - one CRTA word per binding (the scratchpad's allocated L1 base address), in declaration order
+//  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
+//    each binding's absolute CRTA word index (and thus addr_crta_offset) is fixed at codegen time
+//    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
+// The allocated_address is left 0 here; allocate_dataflow_buffers fills it once L1 is allocated.
+struct ScratchpadBindingsForKernel {
+    std::vector<ScratchpadBindingHandle> handles;
+    uint32_t section_words = 0;  // == number of scratchpad bindings
+};
+
+ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
+    const KernelSpec& kernel,
+    const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
+    size_t scratchpad_base_crta_word) {
+    ScratchpadBindingsForKernel out;
+    out.handles.reserve(kernel.scratchpad_bindings.size());
+
+    size_t crta_word_index = scratchpad_base_crta_word;
+    for (const auto& binding : kernel.scratchpad_bindings) {
+        const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
+
+        ScratchpadBindingHandle handle;
+        handle.accessor_name = binding.accessor_name;
+        handle.size_bytes = scratchpad_spec->size_per_node;
+        handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+        // handle.allocated_address stays 0 until allocate_dataflow_buffers runs.
+        out.handles.push_back(std::move(handle));
+        crta_word_index += 1;  // one address word per scratchpad binding
+    }
+
+    out.section_words = static_cast<uint32_t>(kernel.scratchpad_bindings.size());
+    return out;
+}
+
 // Create map of local accessor name -> logical DFB id
 tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
@@ -2821,6 +2906,17 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
 
+        // Resolve scratchpad bindings for this kernel. The scratchpad section follows the TensorBinding
+        // section and precedes varargs, so it begins at the tensor-binding resolution's (pre-scratchpad)
+        // vararg offset; we then push the vararg section out by the scratchpad section's width so the
+        // crta_layout that flows into the kernel ctor reflects all four sections.
+        ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
+            kernel_spec,
+            collected.scratchpad_by_name,
+            /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
+        ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
+        ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
+
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
         // address section is tracked separately (via tensor_binding_handles), so we pass the user
@@ -2899,6 +2995,11 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     ta_bindings.crta_layout);
             }
         }
+
+        // Attach the resolved scratchpad bindings to the kernel (set post-construction: their sizes are
+        // part of the kernel cache key, so this must run before the kernel is compiled). allocate_dataflow_buffers
+        // will later fill each handle's allocated_address.
+        kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
