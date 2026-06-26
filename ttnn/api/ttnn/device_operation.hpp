@@ -331,7 +331,7 @@ void create_and_cache_mesh_workload(
             // (addr 0); that is fine because compilation is address-independent. See
             // ttnn/up_front_compile.hpp.
             if (auto* collector = ttnn::up_front_compile::ProgramCollector::active()) {
-                collector->collect(static_cast<std::uint64_t>(program_hash), std::move(cached_workload.workload));
+                collector->collect(static_cast<std::uint64_t>(program_key.hash), std::move(cached_workload.workload));
                 return;
             }
 
