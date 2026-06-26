@@ -29,7 +29,7 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.tt.generate import (
     commit_canvas_tokens,
     generate_from_prompt_tokens,
-    make_host_canvas_init_fn,
+    make_seeded_host_canvas_init_fn,
 )
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -496,7 +496,6 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
             dtype=ttnn.uint32,
         )
 
-    init_canvases = [torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long) for _ in range(num_blocks)]
     logits_fn = _PositionDependentDeviceLogits(mesh_device, canvas_len=canvas_len, vocab_size=vocab_size)
     out = generate_from_prompt_tokens(
         model,
@@ -508,7 +507,13 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
             max_denoise_steps=1,
             entropy_budget=0.0,
         ),
-        init_canvas_fn=make_host_canvas_init_fn(mesh_device, init_canvases),
+        init_canvas_fn=make_seeded_host_canvas_init_fn(
+            mesh_device,
+            batch=1,
+            canvas_len=canvas_len,
+            vocab_size=vocab_size,
+            seed=47464,
+        ),
         gumbel_noise_fn=gumbel_noise_for_block,
         noise_tokens_fn=noise_tokens_for_block,
     )
