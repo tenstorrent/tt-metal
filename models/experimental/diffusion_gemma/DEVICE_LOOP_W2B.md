@@ -150,6 +150,7 @@ S1 (maskless non-causal at [256 × Sk], Sk→262144)
 | Date | Spike / step | Result |
 |---|---|---|
 | 2026-06-26 | Plan authored (source-grounded design + adversarial feasibility) | S1 is the gating experiment; D1 is the target pending S1; D3 ruled out as a localized edit. |
+| 2026-06-26 | S1/S2 harness + smoke | Added `tests/test_device_long_sdpa_w2b.py` with a memory-bounded fp32 online-softmax oracle and opt-in full sweep. QB2 smoke passed: S1 maskless `Sk=8192,DH=256`; S1 maskless non-tile `Sk=33000,DH=256`; S2 masked `Sk=8192,DH=256` (3 passed, 13 full-sweep cases skipped pending `DG_W2B_SDPA_SWEEP=full`). |
 | | S1 maskless non-causal `[256 × Sk]` PCC sweep | _pending_ |
 | | S2 masked A/B control | _pending_ |
 | | S4 RoPE cache ≥ 262144 | _pending_ |
