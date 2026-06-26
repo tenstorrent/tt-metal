@@ -1,9 +1,8 @@
 # DiffusionGemma bring-up — Python env (curated)
 #
 # Captured 2026-06-24 from the dedicated venv `/home/zni/venvs/tt-diffusion-gemma`
-# on the TT-QuietBox 2 (Blackhole) box (Python 3.12.12). These are the packages
-# DiffusionGemma's reference oracle + PCC/device harness actually use; the venv
-# itself is a larger shared dev env (full snapshot in requirements.full.lock.txt).
+# on the TT-QuietBox 2 (Blackhole) box (Python 3.12.12). Curated to the packages
+# DiffusionGemma's reference oracle + PCC/device harness actually use.
 #
 # ttnn / tt-metal are EDITABLE from THIS repo (built from source, loaded via the
 # venv's .pth) — do NOT pip-install them. For reference only, the env had:
