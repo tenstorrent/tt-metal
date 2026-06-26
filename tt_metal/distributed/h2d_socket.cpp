@@ -521,14 +521,18 @@ void H2DSocket::set_page_size(uint32_t page_size) {
 }
 
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
-    // Sync bytes_sent_ from SHM so a separate connector process's pushes are visible.
-    if (connector_state_) {
-        tt_driver_atomics::mfence();
-        bytes_sent_ = connector_state_->bytes_sent;
-    }
+    // Re-sync bytes_sent_ from connector SHM each iteration (mirrors D2HSocket::barrier).
+    auto refresh_connector_write_state = [this]() {
+        if (connector_state_) {
+            tt_driver_atomics::mfence();
+            bytes_sent_ = connector_state_->bytes_sent;
+        }
+    };
+    refresh_connector_write_state();
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
     auto start_time = std::chrono::high_resolution_clock::now();
     while (bytes_sent_ - bytes_acked_value != 0) {
+        refresh_connector_write_state();
         tt_driver_atomics::mfence();
         bytes_acked_value = bytes_acked_ptr_[0];
         if (timeout_ms.has_value()) {

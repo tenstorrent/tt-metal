@@ -50,11 +50,11 @@ void kernel_main() {
             // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
             // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
             tt::data_movement::common::noc_async_read_sharded(
-                src_buffer_l1_addr, s0, src_stick_id, /*offset=*/0, /*size=*/read_size);
+                noc, src_buffer_l1_addr, s0, src_stick_id, /*offset=*/0, /*size=*/read_size);
             if (misalignment != 0) {
                 noc.async_read_barrier();
                 tt::data_movement::common::tt_memmove<false, false, false, 0>(
-                    src_buffer_l1_addr, src_buffer_l1_addr + misalignment, unpadded_stick_size);
+                    noc, src_buffer_l1_addr, src_buffer_l1_addr + misalignment, unpadded_stick_size);
             }
             src_buffer_l1_addr += stick_size_offset;
             src_stick_id++;

@@ -482,7 +482,7 @@ def run_model(
             first_token_id, _, tt_intermediates = transformer(
                 tt_tokens,
                 tt_kvpe_cache,
-                number_of_non_padded_tokens=number_of_non_padded_tokens,
+                actual_isl=number_of_non_padded_tokens,
                 return_intermediates=True,
                 read_profiler=False,
                 temperature=temperature,
@@ -540,7 +540,7 @@ def run_model(
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
             tt_kvpe_cache,
-            number_of_non_padded_tokens=number_of_non_padded_tokens,
+            actual_isl=number_of_non_padded_tokens,
             return_intermediates=pcc_validation,
             read_profiler=False,
             temperature=temperature,
@@ -1013,8 +1013,8 @@ def test_ds_prefill_transformer(
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
-    [(384, GateComputeMode.HOST_ALL)],
-    ids=["e384_host"],
+    [(384, GateComputeMode.DEVICE)],
+    ids=["e384_device"],
 )
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])

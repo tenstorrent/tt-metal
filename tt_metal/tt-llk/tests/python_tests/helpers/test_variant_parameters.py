@@ -30,7 +30,6 @@ from .llk_params import (
     StableSort,
     StochasticRounding,
     Tilize,
-    TilizeUnpackerSel,
     TopKSortDirection,
     Transpose,
     UnpackerEngine,
@@ -139,6 +138,22 @@ class SFPU_INT_OP(TemplateParameter):
         if self.op:
             return f"#define SFPU_INT_OP_{self.op.upper()}"
         return ""
+
+
+@dataclass
+class SFPU_BINARY_OP(TemplateParameter):
+    """Select the consolidated Quasar binary-SFPU op at compile time.
+
+    Emits ``constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::<op>;``,
+    consumed by ``sfpu_operations_quasar.h``. ``op`` is one of:
+    ADD, MUL, DIV, GT, LT, LE, GE, MAX, MIN (reusing the LLK BinaryOp enum, like
+    Blackhole — int vs float MUL is disambiguated by the math format in the cpp).
+    """
+
+    op: str = "ADD"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::{self.op};"
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
@@ -306,14 +321,6 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
-
-
-@dataclass
-class TILIZE_UNPACKER_SEL(TemplateParameter):
-    tilize_unp_sel: TilizeUnpackerSel = TilizeUnpackerSel.UnpA
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr TilizeUnpackerSel TILIZE_UNP_SEL = TilizeUnpackerSel::{self.tilize_unp_sel.value};"
 
 
 @dataclass
@@ -951,3 +958,23 @@ class FILL_INT_FORMAT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
+
+
+@dataclass
+class TYPECAST_FORMATS(TemplateParameter):
+    """Compile-time config for the SFPU typecast test kernel.
+
+    Emits the logical input/output ``DataFormat`` enum values consumed by
+    ``typecast_tile<IN, OUT>`` (mirrored by the typecast dispatch in
+    ``sfpu_operations.h``, reached via ``SfpuType::typecast``).
+    """
+
+    input_format: DataFormat = DataFormat.Float32
+    output_format: DataFormat = DataFormat.Float16_b
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr auto TYPECAST_IN_FORMAT = DataFormat::{self.input_format.name};",
+            f"constexpr auto TYPECAST_OUT_FORMAT = DataFormat::{self.output_format.name};",
+        ]
+        return "\n".join(lines)

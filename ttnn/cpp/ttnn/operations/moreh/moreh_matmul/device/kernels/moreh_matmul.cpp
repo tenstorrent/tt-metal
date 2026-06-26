@@ -4,6 +4,7 @@
 
 // Implemented based on bmm.cpp
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
@@ -200,7 +201,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     CircularBuffer cb_in3_obj(cb_in3);
     CircularBuffer cb_intermed0_obj(cb_intermed0);
     // TODO: checking required when the input cb format and intermediate cb format are different.
-    mm_init(cb_in0, cb_in1, cb_out0);
+    matmul_init(cb_in0, cb_in1);
     if (transpose_input || transpose_other) {
         transpose_wh_init(cb_in0, cb_out0);
     }
@@ -292,7 +293,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
-            mm_init_short(mm_src0, mm_src1);
+            matmul_init(mm_src0, mm_src1);
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0);
             tile_regs_commit();
 
@@ -329,7 +330,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
     CircularBuffer cb_in0_obj(cb_in0);
     CircularBuffer cb_in1_obj(cb_in1);
-    mm_init(cb_in0, cb_in1, cb_out0);
+    matmul_init(cb_in0, cb_in1);
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
         for (uint32_t kt = 0; kt < Kt; kt++) {
@@ -377,6 +378,8 @@ void kernel_main() {
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out0);
 
     if (need_transpose || need_mask || need_bias_add) {
         matmul_with_transpose_and_mask<is_scalar_bias>(

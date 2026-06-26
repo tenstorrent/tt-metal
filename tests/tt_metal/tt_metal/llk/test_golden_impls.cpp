@@ -116,15 +116,17 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
     return dst_vec;
 }
 
-// input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t>& src_vec, const std::vector<uint32_t>& shape) {
+// Templated on the element type: uint16_t holds BF16 bit-patterns,
+// uint32_t holds Float32 bit-patterns or Int32.
+template <typename T>
+std::vector<T> gold_transpose_wh(const std::vector<T>& src_vec, const std::vector<uint32_t>& shape) {
     vector<uint32_t> shapeT{shape[0], shape[1], shape[3], shape[2]};
     TensAddr addr(shape);
     TensAddr addrt(shapeT);
 
-    vector<uint16_t> transposed(src_vec.size());
+    vector<T> transposed(src_vec.size());
     for (int n = 0; n < shape[0]; n++) {
         for (int c = 0; c < shape[1]; c++) {
             for (int h = 0; h < shape[2]; h++) {
@@ -139,7 +141,12 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t>& src_vec, co
     }
 
     return transposed;
-};
+}
+
+template std::vector<uint16_t> gold_transpose_wh<uint16_t>(
+    const std::vector<uint16_t>& src_vec, const std::vector<uint32_t>& shape);
+template std::vector<uint32_t> gold_transpose_wh<uint32_t>(
+    const std::vector<uint32_t>& src_vec, const std::vector<uint32_t>& shape);
 
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized

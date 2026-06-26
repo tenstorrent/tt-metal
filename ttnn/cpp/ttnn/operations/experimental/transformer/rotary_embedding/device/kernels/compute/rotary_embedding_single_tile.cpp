@@ -14,6 +14,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -30,7 +31,8 @@ ALWI void UNTILIZE_ONE_TILE() {
 
 template <uint32_t in0_cb, uint32_t out_cb>
 ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
-    cb_wait_front(sync_cb, 1);
+    CircularBuffer cb_sync(sync_cb);
+    cb_sync.wait_front(1);
     compute_kernel_lib::tilize<
         1,
         in0_cb,
@@ -38,7 +40,7 @@ ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-    cb_pop_front(sync_cb, 1);
+    cb_sync.pop_front(1);
 }
 
 void kernel_main() {
@@ -53,6 +55,13 @@ void kernel_main() {
     constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t num_rows = get_compile_time_arg_val(8);
+
+    CircularBuffer cb_in(in_cb);
+    CircularBuffer cb_trans_mat(trans_mat_cb);
+    CircularBuffer cb_rotated_in_interm(rotated_in_interm_cb);
+    CircularBuffer cb_cos_interm(cos_interm_cb);
+    CircularBuffer cb_sin_interm(sin_interm_cb);
+    CircularBuffer cb_out(out_cb);
 
     uint32_t updated_cos_cb = cos_cb;
     uint32_t updated_sin_cb = sin_cb;
@@ -76,35 +85,32 @@ void kernel_main() {
     updated_sin_cb = retilized_sin_cb;
 #endif
 
-    cb_wait_front(trans_mat_cb, onetile);
-    mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
-    // Binary ops (mul, add) below need their own init path; without this the
-    // math-thread register routing stays in matmul mode and mixed-precision
-    // binaries (e.g. bf16 x bfp8) produce incorrect results.
+    cb_trans_mat.wait_front(onetile);
     binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
-        cb_wait_front(in_cb, onetile);
+        cb_in.wait_front(onetile);
         reconfig_data_format(in_cb, trans_mat_cb);
         pack_reconfig_data_format(rotated_in_interm_cb);
-        mm_init_short(in_cb, trans_mat_cb);
+        matmul_init(in_cb, trans_mat_cb);
 
         tile_regs_acquire();
         matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
         tile_regs_commit();
 
-        cb_reserve_back(rotated_in_interm_cb, onetile);
+        cb_rotated_in_interm.reserve_back(onetile);
 
         tile_regs_wait();
         pack_tile(0, rotated_in_interm_cb);
         tile_regs_release();
 
-        cb_push_back(rotated_in_interm_cb, onetile);
+        cb_rotated_in_interm.push_back(onetile);
 
         // sin_interim = rotated * sin
-        cb_wait_front(rotated_in_interm_cb, onetile);
-        cb_wait_front(updated_sin_cb, onetile);
+        CircularBuffer cb_updated_sin(updated_sin_cb);
+        cb_rotated_in_interm.wait_front(onetile);
+        cb_updated_sin.wait_front(onetile);
         reconfig_data_format(rotated_in_interm_cb, updated_sin_cb);
         pack_reconfig_data_format(sin_interm_cb);
 
@@ -118,21 +124,22 @@ void kernel_main() {
 #endif
         tile_regs_commit();
 
-        cb_pop_front(rotated_in_interm_cb, onetile);
+        cb_rotated_in_interm.pop_front(onetile);
 #ifndef DECODE_MODE
-        cb_pop_front(updated_sin_cb, onetile);
+        cb_updated_sin.pop_front(onetile);
 #endif
 
-        cb_reserve_back(sin_interm_cb, onetile);
+        cb_sin_interm.reserve_back(onetile);
 
         tile_regs_wait();
         pack_tile(0, sin_interm_cb);
         tile_regs_release();
 
-        cb_push_back(sin_interm_cb, onetile);
+        cb_sin_interm.push_back(onetile);
 
         // cos_interim = in * cos
-        cb_wait_front(updated_cos_cb, onetile);
+        CircularBuffer cb_updated_cos(updated_cos_cb);
+        cb_updated_cos.wait_front(onetile);
         reconfig_data_format(in_cb, updated_cos_cb);
         pack_reconfig_data_format(cos_interm_cb);
 
@@ -146,22 +153,22 @@ void kernel_main() {
 #endif
         tile_regs_commit();
 
-        cb_pop_front(in_cb, onetile);
+        cb_in.pop_front(onetile);
 #ifndef DECODE_MODE
-        cb_pop_front(updated_cos_cb, onetile);
+        cb_updated_cos.pop_front(onetile);
 #endif
 
-        cb_reserve_back(cos_interm_cb, onetile);
+        cb_cos_interm.reserve_back(onetile);
 
         tile_regs_wait();
         pack_tile(0, cos_interm_cb);
         tile_regs_release();
 
-        cb_push_back(cos_interm_cb, onetile);
+        cb_cos_interm.push_back(onetile);
 
         // out = cos_interim + sin_interim
-        cb_wait_front(cos_interm_cb, onetile);
-        cb_wait_front(sin_interm_cb, onetile);
+        cb_cos_interm.wait_front(onetile);
+        cb_sin_interm.wait_front(onetile);
         reconfig_data_format(cos_interm_cb, sin_interm_cb);
         pack_reconfig_data_format(out_cb);
         add_tiles_init(cos_interm_cb, sin_interm_cb);
@@ -170,15 +177,15 @@ void kernel_main() {
         add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
         tile_regs_commit();
 
-        cb_pop_front(cos_interm_cb, onetile);
-        cb_pop_front(sin_interm_cb, onetile);
+        cb_cos_interm.pop_front(onetile);
+        cb_sin_interm.pop_front(onetile);
 
-        cb_reserve_back(out_cb, onetile);
+        cb_out.reserve_back(onetile);
 
         tile_regs_wait();
         pack_tile(0, out_cb);
         tile_regs_release();
 
-        cb_push_back(out_cb, onetile);
+        cb_out.push_back(onetile);
     }
 }

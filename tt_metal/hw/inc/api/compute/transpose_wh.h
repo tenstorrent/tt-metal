@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
@@ -30,6 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
@@ -37,16 +39,11 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 
 #ifndef ARCH_QUASAR
-    const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
     const bool is_8bit_int = (src_format & 0xf) == (std::uint32_t)DataFormat::Int8;
     const bool enable_unpack_to_dest = (dst_format == (std::uint32_t)DataFormat::Float32) ||
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
-    if (is_int32) {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE, true>(icb)));
-    } else {
-        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
-    }
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
 
     if (enable_unpack_to_dest) {
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -103,6 +100,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __b
  * correctly.
  */
 ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
@@ -170,6 +168,7 @@ ALWI void transpose_wh_init_short(uint32_t icb, uint32_t call_line = __builtin_L
  */
 // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
+    LLK_SAN_FUNCTION();
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 

@@ -841,7 +841,26 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     )
     # Host stashes for PLI models (no-op for 31B/12B, which have no per-layer inputs).
     model._prefill_input_ids_torch = tokens.long()
-    model._prefill_embeds_torch = None
+    if model._embed_weight_cpu is not None:
+        import torch.nn.functional as F
+
+        model._prefill_embeds_torch = F.embedding(tokens.long(), model._embed_weight_cpu).float() * model.embed_scale
+    else:
+        model._prefill_embeds_torch = None
+
+    prefill_pli_device_tensors = None
+    if model.hidden_size_per_layer_input and model.per_layer_input_weights:
+        per_layer_inputs = model._compute_per_layer_inputs(model._prefill_input_ids_torch, model._prefill_embeds_torch)
+        prefill_pli_device_tensors = [
+            ttnn.from_torch(
+                pli.unsqueeze(0).unsqueeze(0),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=replicate,
+            )
+            for pli in per_layer_inputs
+        ]
 
     def _embed():
         emb = model.embed_tokens(tokens_tt)
@@ -854,7 +873,12 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     # ── Warmup prefill (kernel compile — excluded from the profile) ──
     logger.info("Single-prefill warmup (compiling kernels)...")
     warm = model.ttnn_prefill_forward(
-        x=_embed(), page_table=page_table_tt, kv_cache=tt_kv_cache, get_last_token=get_last_token, user_id=0
+        x=_embed(),
+        page_table=page_table_tt,
+        kv_cache=tt_kv_cache,
+        get_last_token=get_last_token,
+        user_id=0,
+        pli_device_tensors=prefill_pli_device_tensors,
     )
     ttnn.synchronize_device(mesh_device)
     warm.deallocate(True)
@@ -864,7 +888,13 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     model._prefill_trace_mode = True
     x = _embed()
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    trace_out = model.ttnn_prefill_forward(x=x, page_table=page_table_tt, kv_cache=tt_kv_cache, user_id=0)
+    trace_out = model.ttnn_prefill_forward(
+        x=x,
+        page_table=page_table_tt,
+        kv_cache=tt_kv_cache,
+        user_id=0,
+        pli_device_tensors=prefill_pli_device_tensors,
+    )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     model._prefill_trace_mode = False
     ttnn.synchronize_device(mesh_device)

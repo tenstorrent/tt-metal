@@ -22,7 +22,7 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
         tt::tt_metal::experimental::sender_core_type(*args.global_cb) !=
             tt::tt_metal::experimental::SenderCoreType::Dram,
         "ttnn.dram_prefetcher does not support DRAM-sender GlobalCircularBuffers. Use "
-        "ttnn.experimental.start_dram_core_prefetcher / ttnn.experimental.stop_dram_core_prefetcher instead.");
+        "ttnn.experimental.start_tensor_prefetcher / ttnn.experimental.stop_tensor_prefetcher instead.");
 
     const ttnn::Tensor& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 

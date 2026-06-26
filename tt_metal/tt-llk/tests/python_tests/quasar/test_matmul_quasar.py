@@ -6,7 +6,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import data_formats
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIM,
     MatmulGolden,
@@ -46,23 +46,27 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
-matmul_dimensions_dest_sync = [
-    (
-        [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
-        [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-        dest_acc,
-        dest_sync,
-    )
-    for dest_sync in (DestSync.Half, DestSync.Full)
-    for dest_acc in (DestAccumulation.Yes, DestAccumulation.No)
-    for max_tiles in (
-        DEST_SYNC_TILE_LIMITS[dest_sync]
-        // (2 if dest_acc == DestAccumulation.Yes else 1),
-    )
-    for mt_dim in range(1, max_tiles + 1)
-    for nt_dim in range(1, max_tiles // mt_dim + 1)
-    for kt_dim in kt_dims
-]
+
+
+def matmul_dimensions_dest_sync(dest_acc_modes):
+    return [
+        (
+            [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
+            [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
+            dest_acc,
+            dest_sync,
+        )
+        for dest_sync in (DestSync.Half, DestSync.Full)
+        for dest_acc in dest_acc_modes
+        for max_tiles in (
+            DEST_SYNC_TILE_LIMITS[dest_sync]
+            // (2 if dest_acc == DestAccumulation.Yes else 1),
+        )
+        for mt_dim in range(1, max_tiles + 1)
+        for nt_dim in range(1, max_tiles // mt_dim + 1)
+        for kt_dim in kt_dims
+    ]
+
 
 # Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
 # unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
@@ -78,21 +82,30 @@ MATMUL_FORMAT = input_output_formats(
         DataFormat.MxInt4,
         DataFormat.MxInt2,
     ],
-)
+) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
 _ARCH = get_chip_architecture()
 
 
 @pytest.mark.quasar
 @parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
-    dimensions_dest_acc_dest_sync=matmul_dimensions_dest_sync,
     format=MATMUL_FORMAT,
+    # Integer matmul is LoFi-only on Quasar.
+    math_fidelity=lambda format: (
+        [MathFidelity.LoFi]
+        if format.input_format == DataFormat.Int8
+        else [
+            MathFidelity.LoFi,
+            MathFidelity.HiFi2,
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
+    ),
+    dimensions_dest_acc_dest_sync=lambda format: (
+        matmul_dimensions_dest_sync((DestAccumulation.Yes,))
+        if format.input_format == DataFormat.Int8
+        else matmul_dimensions_dest_sync((DestAccumulation.Yes, DestAccumulation.No))
+    ),
     implied_math_format=lambda format: (
         [ImpliedMathFormat.Yes]
         if format.input_format.is_mx_format()
@@ -134,14 +147,17 @@ def test_matmul(
 
     torch_format = format_dict[format.output_format]
 
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    if format.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=format.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=format.input_format,
         input_dimensions_B=input_B_dimensions,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+        spec_A=stimuli_spec,
+        spec_B=stimuli_spec,
         output_format=format.output_format,
     )
 

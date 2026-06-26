@@ -32,7 +32,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void sfpu_bcast_col_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::COL))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::COL))));
 }
 
 ALWI void sfpu_sub_bcast_col_init() { sfpu_bcast_col_init(); }
@@ -74,41 +74,41 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
 // per-face loop and invoke the full-tile bcast helper exactly once, with the same
 // `_llk_math_eltwise_sfpu_start_(0)` / `_llk_math_eltwise_sfpu_done_()` brackets
 // the standalone helper used to set up by hand, plus the dst-bound LLK_ASSERTs in
-// `_sfpu_binary_check_and_call_`.
+// `_sfpu_binary_check_`.
 ALWI void sfpu_sub_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::COL),
-        None,
         dst_data_idx,
         dst_col_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_add_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::COL),
-        None,
         dst_data_idx,
         dst_col_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::COL),
-        None,
         dst_data_idx,
         dst_col_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 // ============================================================================
@@ -125,7 +125,7 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx) {
  */
 // clang-format on
 ALWI void sfpu_bcast_row_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::_sfpu_binary_bcast_init_, (ckernel::BroadcastType::ROW))));
 }
 
 ALWI void sfpu_sub_bcast_row_init() { sfpu_bcast_row_init(); }
@@ -164,39 +164,39 @@ ALWI void sfpu_mul_bcast_row_init() { sfpu_bcast_row_init(); }
  */
 // clang-format on
 ALWI void sfpu_sub_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::SUB, ckernel::BroadcastType::ROW),
-        None,
         dst_data_idx,
         dst_row_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_add_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::ADD, ckernel::BroadcastType::ROW),
-        None,
         dst_data_idx,
         dst_row_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 ALWI void sfpu_mul_bcast_row(uint32_t dst_data_idx, uint32_t dst_row_vec_idx) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_sfpu_binary_bcast_full_tile_,
         (ckernel::BinaryOp::MUL, ckernel::BroadcastType::ROW),
-        None,
         dst_data_idx,
         dst_row_vec_idx,
-        dst_data_idx)));
+        dst_data_idx,
+        VectorMode::None)));
 }
 
 // ============================================================================

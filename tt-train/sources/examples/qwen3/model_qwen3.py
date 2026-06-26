@@ -5,9 +5,12 @@
 """Qwen3 HF weight loading and re-exports.
 
 The model implementation lives in ``ttml.models.qwen3``.  This module provides
-``load_weights_from_hf`` for loading HuggingFace checkpoints, and re-exports
-symbols consumed by ``model_qwen3_distributed.py`` and ``model_factory.py``.
+``load_weights_from_hf`` for loading HuggingFace checkpoints into the
+single-device ``Qwen3`` model, and re-exports symbols consumed by
+``model_qwen3_distributed.py``, ``model_factory.py`` and external callers.
 """
+
+import sys
 
 import torch
 from tqdm import tqdm
@@ -25,7 +28,10 @@ from utils.param_utils import (  # noqa: F401 — re-exported for callers
     build_weight_mapping_single,
 )
 
-# Backwards-compat alias: callers that created Qwen3ForCausalLM now get Qwen3
+# Backwards-compat alias: callers that imported ``Qwen3ForCausalLM`` from this
+# module now get the canonical ``Qwen3`` from ``ttml.models.qwen3``.  Tying,
+# checkpointing and runner mode are configured through ``Qwen3Config`` (see
+# ``create_qwen3_config_from_hf`` and ``utils/model_factory.create_ttml_model``).
 Qwen3ForCausalLM = Qwen3
 
 
@@ -116,6 +122,7 @@ def load_weights_from_hf(
             total=len(items),
             desc="  Loading weights",
             unit="w",
+            file=sys.stdout,
         ):
             new_tensor = future.result()
             if new_tensor is None:

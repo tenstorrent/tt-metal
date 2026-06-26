@@ -30,20 +30,36 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH(SFPU_UNARY_THREE_PARAM_KERNEL_WITH_DST_ACCUM(
-        calculate_softplus, RC, APPROX, DST_ACCUM_MODE, idst, beta, beta_reciprocal, threshold));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softplus,
+        (APPROX, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC,
+        beta,
+        beta_reciprocal,
+        threshold));
 }
 
 ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    PACK(SFPU_UNARY_THREE_PARAM_KERNEL_WITH_DST_ACCUM(
-        calculate_softplus, RC, APPROX, DST_ACCUM_MODE, idst, beta, beta_reciprocal, threshold));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softplus,
+        (APPROX, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC,
+        beta,
+        beta_reciprocal,
+        threshold));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(softplus, APPROX)); }
+ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
 
-ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_KERNEL_INIT(softplus, APPROX)); }
+ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_INIT(softplus)); }
 
 }  // namespace ckernel

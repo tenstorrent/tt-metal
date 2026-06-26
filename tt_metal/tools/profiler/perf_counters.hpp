@@ -209,18 +209,22 @@ static_assert(ANY_THREAD_STALL <= 255, "PerfCounterType enum exceeds 8-bit count
 union PerfCounter {
     struct {
         uint32_t counter_value;
-        uint32_t ref_cnt : 24;
+        uint32_t ref_cnt;
         uint32_t counter_type : 8;
+        uint32_t unused : 24;
     } __attribute__((packed));
-    uint64_t raw_data;
+    struct {
+        uint64_t raw_data_1;
+        uint64_t raw_data_2;
+    } __attribute__((packed));
 
     PerfCounter() = delete;
     PerfCounter(uint32_t counter_value, uint32_t ref_cnt, PerfCounterType counter_type) :
         counter_value(counter_value), ref_cnt(ref_cnt), counter_type(static_cast<uint32_t>(counter_type)) {}
 
-    PerfCounter(uint64_t raw_data) : raw_data(raw_data) {}
+    PerfCounter(uint64_t raw_data_1, uint64_t raw_data_2) : raw_data_1(raw_data_1), raw_data_2(raw_data_2) {}
 };
-static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-bit");
+static_assert(sizeof(PerfCounter) == sizeof(uint64_t) * 2, "PerfCounter must be 128-bit");
 
 // Perf counter start/stop runs on TRISC1 (wraps the compute kernel).
 // Counter readout and DRAM push runs on BRISC (has NOC access for DRAM writes).
@@ -423,11 +427,22 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
-        timeStampedData<PERF_COUNTER_PROFILER_ID>(counter.raw_data);
+        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
+        kernel_profiler::timeStampedData<
+            PERF_COUNTER_PROFILER_ID,
+            kernel_profiler::DoingDispatch::DISPATCH,
+            kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
     }
+    // Toggle start bit to clear the counters for this group
+    cntl_reg[2] = 0;
+    cntl_reg[2] = PERF_CNT_START_VALUE;
 }
 
 void read_perf_counters() {
+    if (kernel_profiler::get_profiler_zone_valid()) {
+        return;
+    }
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_FPU
     read_single_group(PerfCounterGroup::FPU);
 #endif

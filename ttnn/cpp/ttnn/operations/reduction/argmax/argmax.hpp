@@ -11,7 +11,6 @@ Tensor argmax(
     const std::optional<int>& dim = std::nullopt,
     bool keepdim = false,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_multicore = false,  // Deprecated: use sub_core_grids instead. Removal tracked in #44838.
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt);
 

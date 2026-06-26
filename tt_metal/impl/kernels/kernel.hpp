@@ -100,16 +100,23 @@ using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t
 // TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
 // (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
 struct TensorBindingHandle {
-    std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
+    std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
-    uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+    uint32_t addr_crta_offset;          // byte offset of this binding's base-address slot within the kernel's CRTA buffer
     // Count of runtime accessor field words that immediately follow the address slot
-    // in this binding's CRTA section. Non-zero only when the TensorParameter has
-    // dynamic_tensor_shape=true and is sharded: the runtime tensor's shape-in-pages
-    // is written here at enqueue time. The first runtime field word lives at byte
-    // offset addr_crta_offset + sizeof(uint32_t).
+    // in this binding's CRTA section.
+    // Non-zero when the TensorParameter opts into a CRTA-resident dynamic field.
+    // The first runtime field word lives at byte offset addr_crta_offset + sizeof(uint32_t).
     uint32_t num_runtime_field_crta_words = 0;
+    // What info the runtime field CRTA words actually contain depends on the relaxation chosen.
+    // Currently, there are only two mutually exclusive possibilities (though more may be added):
+    //  1. The interleaved row-major page-size (one CRTA only)
+    //  2. The sharded dynamic_tensor_shape shape (one CRTA per tensor dim)
+    // For now, since there are only two mutually exclusive possibilities, it's sufficient to
+    // distinguish them with a boolean.
+    // (We'll need to extend this to something more flexible if additional possibilities are added.)
+    bool runtime_field_is_page_size = false;
 };
 
 class Kernel : public JitBuildSettings {
@@ -642,11 +649,13 @@ public:
         TT_FATAL(
             std::is_sorted(compute_processors_.begin(), compute_processors_.end()), "Compute cores must be ordered");
         this->set_compiler_include_paths(config_.compiler_include_paths);
+        init_trisc_binary_groups();
     }
 
     ~QuasarComputeKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 
@@ -668,6 +677,11 @@ public:
 private:
     const QuasarComputeConfig config_;
     const std::vector<QuasarComputeProcessor> compute_processors_;
+    // Processors grouped by TRISC slot (enum % 4). Same slot across NEOs shares one compile,
+    // one on-disk ELF, and one device transfer.
+    std::vector<std::vector<QuasarComputeProcessor>> trisc_binary_groups_;
+
+    void init_trisc_binary_groups();
 
     uint8_t expected_num_binaries() const override;
 

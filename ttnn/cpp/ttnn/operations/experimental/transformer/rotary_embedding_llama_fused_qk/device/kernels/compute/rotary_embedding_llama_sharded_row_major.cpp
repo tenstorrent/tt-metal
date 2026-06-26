@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
 ALWI void ACQ() {
@@ -61,7 +62,8 @@ void kernel_main() {
     CircularBuffer cos_interm_cb_obj(cos_interm_cb);
     CircularBuffer sin_interm_cb_obj(sin_interm_cb);
 
-    mm_init(in_cb, trans_mat_cb, out_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
+    matmul_init(in_cb, trans_mat_cb);
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
@@ -78,7 +80,7 @@ void kernel_main() {
         // Do the computation
 
         // rotated = x @ trans_mat
-        mm_init_short(in_cb, trans_mat_cb);
+        matmul_init(in_cb, trans_mat_cb);
         ACQ();
 
         matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);

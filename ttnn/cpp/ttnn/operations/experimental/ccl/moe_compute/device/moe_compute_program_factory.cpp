@@ -457,6 +457,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t intermediate_size = args.intermediate_size;
     const uint32_t hidden_tiles = hidden_size / 32;
     const uint32_t intermediate_tiles = intermediate_size / 32;
+    const uint32_t num_shared_experts = args.num_shared_experts_per_device.value_or(0);
 
     // Cores
     const auto
@@ -908,7 +909,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // tile_width_bytes = TILE_WIDTH * element_size
     // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
-    uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
+    uint32_t tile_width_bytes = tt::constants::TILE_WIDTH * tilize_input_tensor.element_size();
     uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
 
     const uint32_t primary_mcast_gather_group_num_cores = tilize_num_cores / 2;
@@ -1290,10 +1291,22 @@ MoEComputeMeshWorkloadFactory::create_at(
         "moe_compute: w2 total pages ({}) not divisible by num_cores ({})",
         w2_total_pages_buf,
         matmul_num_cores);
+
+    uint32_t shared_expert_tp_factor;
+    if (args.path == MoEComputePath::ComputeOnly) {
+        // concept of a shared expert doesn't hold in the compute only case.
+        shared_expert_tp_factor = 1;
+    } else {
+        auto* mesh_device = tilize_input_tensor.device();
+        const auto& mesh_shape = mesh_device->get_view().shape();
+        shared_expert_tp_factor = mesh_shape[1 - args.cluster_axis().value()];
+    }
     const uint32_t w0_w1_pages_per_ring_core_total = w0_w1_total_pages_buf / matmul_num_cores;
     const uint32_t w2_pages_per_ring_core_total = w2_total_pages_buf / matmul_num_cores;
     std::unordered_map<std::string, uint32_t> matmul_named_compile_time_args = {
         {"num_experts", experts_per_device},
+        {"num_shared_experts", num_shared_experts},
+        {"shared_expert_tp_factor", shared_expert_tp_factor},
         {"layer_id", args.layer_id},
         {"has_bias", args.has_bias ? 1u : 0u},
         {"num_cores", static_cast<uint32_t>(matmul_num_cores)},

@@ -23,8 +23,8 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-constexpr std::uint32_t MAX_UNITS_PER_ROW            = 16;
 constexpr bool FAST_UNTILIZE_SINGLE_UNIT             = FULL_CT_DIM <= ckernel::FAST_UNTILIZE_MAX_UNIT_DIM;
+constexpr std::uint32_t MAX_UNITS_PER_ROW            = (FULL_CT_DIM + ckernel::FAST_UNTILIZE_MAX_UNIT_DIM - 1) / ckernel::FAST_UNTILIZE_MAX_UNIT_DIM;
 constexpr std::uint32_t FAST_UNTILIZE_FIRST_UNIT_DIM = ckernel::fast_untilize_next_unit_dim(FULL_CT_DIM);
 constexpr bool FAST_UNTILIZE_BFP_B_INPUT =
     UNPACK_A_IN == ckernel::to_underlying(DataFormat::Bfp8_b) || UNPACK_A_IN == ckernel::to_underlying(DataFormat::Bfp4_b);
@@ -296,6 +296,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
             const std::uint32_t units_per_row = ckernel::fast_untilize_decompose_row(FULL_CT_DIM, unit_dims);
             std::uint32_t prev_pack_unit_dim  = 0;
+            const std::uint32_t output_row_stride_16B = SCALE_DATUM_SIZE(formats.pack_dst, FULL_CT_DIM * TILE_C_DIM) / 16;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
@@ -314,7 +315,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             _llk_packer_wait_for_math_done_();
                         }
                         ckernel::_llk_pack_fast_untilize_block_strided_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(
-                            chunk_address, unit_dim, prev_pack_unit_dim);
+                            chunk_address, unit_dim, prev_pack_unit_dim, output_row_stride_16B);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();

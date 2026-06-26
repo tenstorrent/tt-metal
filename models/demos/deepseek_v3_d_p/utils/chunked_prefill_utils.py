@@ -16,17 +16,36 @@ from loguru import logger
 from safetensors.torch import load_file
 from transformers.cache_utils import DynamicCache
 
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 
 
-def discover_traces(root, num_users):
-    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/ + kv_cache/."""
+def discover_traces(root, num_users, variant_name=None):
+    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/ + kv_cache/.
+
+    `root` may hold both kimi and deepseek traces as sibling subdirs (e.g. kimi_*_sdpa_mla next to
+    deepseek_*_sdpa_mla). When `variant_name` is given, select by whether the dir name contains 'kimi':
+    a kimi variant keeps the kimi_* dirs, any other variant keeps the rest.
+    """
     dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
     assert dirs, f"no trace subdirs under {root}"
+    if variant_name is not None:
+        want_kimi = "kimi" in variant_name.lower()
+        dirs = [d for d in dirs if ("kimi" in d.name.lower()) == want_kimi]
+        assert dirs, f"no {'kimi' if want_kimi else 'non-kimi'} trace subdirs under {root} (variant={variant_name})"
     for d in dirs:
         assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
         assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
     return [dirs[u % len(dirs)] for u in range(num_users)]
+
+
+def single_trace(path, num_users):
+    """Use `path` directly as ONE trace dir (the leaf holding mla_io/ + kv_cache/), shared across all
+    users. For MLA_CHUNKED_TRACE_PATH, which points at a specific trace rather than the root of many."""
+    d = Path(path)
+    assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
+    assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
+    return [d for _ in range(num_users)]
 
 
 def load_trace(d):
@@ -74,5 +93,5 @@ def cpu_mla_reference(config, weights, hidden_2d):
             hidden_states=hidden_2d.unsqueeze(0), position_ids=pos, past_key_value=ref_cache, use_cache=True
         )
     logger.warning(f"===== HOST ATTENTION END: torch reference done in {time.perf_counter() - t0:.1f}s =====")
-    kvpe = ref_cache.key_cache[0][0, 0]  # [S, kvpe], latent k_nope + roped k_pe (Meta basis)
+    kvpe = hf_cache_layer_kv(ref_cache, 0)[0][0, 0]  # [S, kvpe], latent k_nope + roped k_pe (Meta basis)
     return out[0].to(torch.bfloat16), kvpe.to(torch.bfloat16)

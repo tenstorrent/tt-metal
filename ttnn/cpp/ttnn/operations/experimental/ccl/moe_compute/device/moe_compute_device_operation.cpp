@@ -186,6 +186,18 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
     TT_FATAL(
         tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+
+    const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
+    TT_FATAL(
+        args.num_shared_experts_per_device <= experts_per_device,
+        "num_shared_experts_per_device ({}) must be <= experts_per_device ({})",
+        args.num_shared_experts_per_device,
+        experts_per_device);
+
+    TT_FATAL(
+        args.bh_ring_size == 8 || args.bh_ring_size == 12 || args.bh_ring_size == 16,
+        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+        args.bh_ring_size);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -395,7 +407,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
-    const std::optional<uint32_t>& bh_ring_size) {
+    const std::optional<uint32_t>& bh_ring_size,
+    const std::optional<uint32_t>& num_shared_experts_per_device) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -411,10 +424,8 @@ std::vector<ttnn::Tensor> moe_compute(
     // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
     // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
     const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
-    TT_FATAL(
-        ring_n == 8 || ring_n == 12 || ring_n == 16,
-        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
-        ring_n);
+    // NOTE: there has been some experimentation with different ring sizes on Blackhole but there are known correctness
+    // issues for some model configurations for values other than 8, which is why this is not exposed in the public API
 
     // Auto-compute num_data_parallel_cores: largest divisor d of hidden_tiles with d <= 4
     // AND ring_n % d == 0. dm1 maps ring cores to combine columns via
@@ -485,6 +496,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .intermediate_size = intermediate_size,
+            .num_shared_experts_per_device = num_shared_experts_per_device,
             .has_bias = has_bias,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,

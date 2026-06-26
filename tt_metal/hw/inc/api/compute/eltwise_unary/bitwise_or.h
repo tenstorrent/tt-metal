@@ -28,12 +28,12 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_FN(calculate_bitwise_or, RC, APPROX, idst, param0));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_or, (APPROX), idst, VectorMode::RC, param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void bitwise_or_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(bitwise_or, APPROX)); }
+ALWI void bitwise_or_tile_init() { MATH(SFPU_UNARY_INIT(bitwise_or)); }
 
 }  // namespace ckernel

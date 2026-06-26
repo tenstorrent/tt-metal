@@ -193,10 +193,9 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 
 # Test a 0D, 1D, 1-element, 1 column, 0-volume, and a 5D tensor
 @pytest.mark.parametrize(
-    "tensor_shape",
-    [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20)],
+    "tensor_shape", [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
 )
-@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4)])
+@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -586,9 +585,6 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
         if reduction_count <= 1:
             pytest.skip("Bessel-corrected std/var with reduction count of 1 produces NaN output")
 
-    if op in ("var", "std") and scalar != 1.0 and dtype == torch.float32:
-        pytest.xfail("FPU SrcA TF32 floor on do_scale path: cb_in loses precision before the mul. Issue #45222.")
-
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=dtype)
 
@@ -607,11 +603,12 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
         torch_result = torch_op(scalar * torch_input, dim=dim)
 
     if dtype == torch.float32 and op in ("var", "std"):
-        # var/std with scalar == 1.0 uses the Welford single-pass path, which
-        # avoids the FPU scale-mul and operates at full FP32 precision
-        # (eps = 2^-23 ~= 1.19e-7). Welford has relative error bounded by
-        # O(sqrt(N) * eps); for N up to 177408 this is ~5e-5. rtol = 1e-4 covers
-        # this with margin, and atol = 1e-4 handles the small-magnitude regime.
+        # var/std always run the Welford single-pass path unscaled and apply the scalar
+        # afterwards (var(s*x) = s^2 var(x), std(s*x) = |s| std(x)), so the reduction stays
+        # at full FP32 precision (eps = 2^-23 ~= 1.19e-7) and avoids the FPU scale-mul.
+        # Welford has relative error bounded by O(sqrt(N) * eps); for N up to 177408 this is
+        # ~5e-5. rtol = 1e-4 covers this with margin, and atol = 1e-4 handles the
+        # small-magnitude regime.
         rtol = 1e-4
         atol = 1e-4
         frobenius_threshold = 1e-4

@@ -61,7 +61,7 @@ void kernel_main() {
 
         constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
         const uint32_t eps = get_arg_val<uint32_t>(2);
-        generate_bcast_col_scalar(eps_cb_id, eps);
+        generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
         if constexpr (is_all_to_all_worker) {
             constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");

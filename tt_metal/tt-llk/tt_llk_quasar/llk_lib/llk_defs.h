@@ -71,13 +71,6 @@ enum class Transpose : std::uint8_t
     Both      = 3,
 };
 
-enum class TilizeUnpackerSel : std::uint8_t
-{
-    UnpA  = 0,
-    UnpB  = 1,
-    UnpAB = 2,
-};
-
 enum class SfpuType : std::uint32_t
 {
     tanh,
@@ -110,14 +103,15 @@ enum class SfpuType : std::uint32_t
     le_int,
     ge_int,
     mul_int,
-};
-
-enum class BinaryOp : std::uint8_t
-{
-    ADD,
-    SUB,
-    MUL,
-    DIV,
+    topk_local_sort,
+    topk_merge,
+    topk_rebuild,
+    equal_zero,
+    not_equal_zero,
+    less_than_zero,
+    greater_than_zero,
+    less_than_equal_zero,
+    greater_than_equal_zero,
 };
 
 enum class DstSync : std::uint8_t
@@ -133,6 +127,9 @@ enum class MathFidelity : std::uint8_t
     HiFi3 = 3,
     HiFi4 = 4
 };
+
+constexpr bool UnpackToDestEn  = true;
+constexpr bool UnpackToDestDis = false;
 
 enum class StochRndType : std::uint8_t
 {

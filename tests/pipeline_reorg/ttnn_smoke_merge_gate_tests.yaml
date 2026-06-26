@@ -1,0 +1,11 @@
+# TTNN merge-gate smoke matrix (subset of former ttnn-tests.yaml merge_gate entries).
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+
+- name: "ttnn example tests"
+  cmd: "./tests/scripts/run_ttnn_examples.sh"
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
