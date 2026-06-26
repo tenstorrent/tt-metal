@@ -8,7 +8,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from glob import glob
 from pathlib import Path
 from typing import Any, Callable
@@ -241,11 +241,175 @@ def dequantize_weight_tensor(
     return out[original_slices].to(dtype).contiguous()
 
 
+# ---------------------------------------------------------------------------
+# compressed-tensors INT4 pack-quantized support (e.g. Kimi K2.6)
+#
+# Kimi K2.6 quantizes only its routed-expert Linear weights with compressed-tensors
+# "pack-quantized" symmetric INT4 (group_size=32). Each quantized weight is a triplet
+# in the checkpoint -- ``X.weight_packed`` + ``X.weight_scale`` + ``X.weight_shape`` --
+# instead of DeepSeek's fp8 weight + ``X.weight_scale_inv``. ``dequantize_packed_int4_weight``
+# below is a self-contained pure-torch dequant (the INT counterpart to ``dequantize_weight_tensor``),
+# so this path needs no external quant library; the bit layout is verified bitwise against the
+# reference checkpoints.
+# ---------------------------------------------------------------------------
+
+PACKED_WEIGHT_SUFFIX = "_packed"
+PACK_QUANT_SCALE_SUFFIX = "_scale"
+PACK_QUANT_SHAPE_SUFFIX = "_shape"
+
+
+def _get_quantization_config_dict(hf_config: Any) -> dict | None:
+    """Return the ``quantization_config`` dict from an hf_config.
+
+    Kimi's multimodal config nests it under ``text_config``; callers pass an already-unwrapped
+    config, but we still fall back to ``text_config`` defensively.
+    """
+    qc = getattr(hf_config, "quantization_config", None)
+    if qc is None:
+        text_cfg = getattr(hf_config, "text_config", None)
+        if text_cfg is not None:
+            qc = getattr(text_cfg, "quantization_config", None)
+    return qc
+
+
+def is_pack_quantized_int4(quantization_config: Any) -> bool:
+    """True for compressed-tensors pack-quantized INT4 (a config group with num_bits == 4)."""
+    if not isinstance(quantization_config, dict):
+        return False
+    if quantization_config.get("quant_method") not in (None, "compressed-tensors"):
+        return False
+    for group in (quantization_config.get("config_groups") or {}).values():
+        if ((group or {}).get("weights") or {}).get("num_bits") == 4:
+            return True
+    return False
+
+
+def _pack_quant_params(quantization_config: dict) -> tuple[int, int, bool]:
+    """Extract and validate ``(num_bits, group_size, symmetric)`` for the pack-quantized weight group.
+
+    Raises if the layout differs from what ``dequantize_packed_int4_weight`` implements
+    (symmetric, group-wise int weights without activation reordering).
+    """
+    weights_cfg = quantization_config["config_groups"]["group_0"]["weights"]
+    num_bits = int(weights_cfg["num_bits"])
+    group_size = int(weights_cfg["group_size"])
+    symmetric = bool(weights_cfg.get("symmetric", True))
+    weight_type = weights_cfg.get("type", "int")
+    strategy = weights_cfg.get("strategy", "group")
+    actorder = weights_cfg.get("actorder")
+    if weight_type != "int" or strategy != "group" or actorder or not symmetric:
+        raise NotImplementedError(
+            "Pure-torch pack-quant dequant supports symmetric group-wise int weights without "
+            f"activation reordering; got type={weight_type!r}, strategy={strategy!r}, "
+            f"actorder={actorder!r}, symmetric={symmetric}."
+        )
+    return num_bits, group_size, symmetric
+
+
+def dequantize_packed_int4_weight(
+    packed: torch.Tensor,
+    scale: torch.Tensor,
+    shape: torch.Tensor | Sequence[int],
+    *,
+    group_size: int,
+    num_bits: int = 4,
+    symmetric: bool = True,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor:
+    """Dequantize one compressed-tensors pack-quantized INT weight to ``dtype`` (pure torch).
+
+    Self-contained counterpart to ``dequantize_weight_tensor`` (which folds fp8 block scales), so
+    the INT4 path used by Kimi K2.6's routed experts needs no external quant library.
+
+    Layout (verified bitwise against the reference checkpoints):
+      * ``packed`` is an int32 tensor holding ``32 // num_bits`` little-endian ``num_bits``-wide
+        lanes per word along the input dim: input column ``c`` lives in word ``c // pack_factor``,
+        lane ``c % pack_factor`` (lane ``j`` occupies bits ``[num_bits*j, num_bits*(j+1))``).
+      * Symmetric int weights are stored offset-binary: ``stored = value + 2**(num_bits-1)``.
+      * ``scale`` carries one fp scale per ``group_size`` contiguous input columns.
+      * ``shape`` is the logical ``[out_features, in_features]``.
+    """
+    if 32 % num_bits != 0:
+        raise ValueError(f"num_bits must divide 32 for int32 packing, got num_bits={num_bits}.")
+    if not symmetric:
+        raise NotImplementedError("Only symmetric INT pack-quantization is supported.")
+
+    out_features, in_features = int(shape[0]), int(shape[1])
+    pack_factor = 32 // num_bits
+    mask = (1 << num_bits) - 1
+
+    # Unpack little-endian num_bits-wide lanes from each int32 word along the input dim.
+    words = packed.to(torch.int64) & 0xFFFFFFFF
+    shifts = torch.arange(pack_factor, dtype=torch.int64, device=words.device) * num_bits
+    lanes = (words.unsqueeze(-1) >> shifts) & mask  # [out_features, n_words, pack_factor]
+    levels = lanes.reshape(out_features, -1)[:, :in_features].to(torch.float32)
+    levels -= float(1 << (num_bits - 1))  # offset-binary storage -> signed level
+
+    # Broadcast the per-group scale across each contiguous block of ``group_size`` columns.
+    scale_full = scale.to(torch.float32).repeat_interleave(group_size, dim=1)[:, :in_features]
+    return (levels * scale_full).to(dtype).contiguous()
+
+
+def _dequantize_pack_quantized_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    quantization_config: dict,
+    *,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Dequantize a (sub-)state_dict whose quantized tensors are pack-quantized INT4 triplets.
+
+    ``X.weight_packed`` anchors emit ``X.weight``; ``_scale``/``_shape`` companions are
+    consumed with their anchor. Non-quantized tensors pass through with their source dtype
+    preserved -- notably the fp32 ``e_score_correction_bias`` that feeds the router top-k,
+    which must not be downcast to bf16.
+    """
+    params = None  # (num_bits, group_size, symmetric); parsed lazily on the first packed anchor
+    out: dict[str, torch.Tensor] = {}
+    n_dequantized = 0  # count of pack-quantized weights actually unpacked (for the summary log)
+    for name in sorted(state_dict.keys()):
+        if name.endswith((PACK_QUANT_SCALE_SUFFIX, PACK_QUANT_SHAPE_SUFFIX)):
+            continue  # consumed alongside the matching _packed anchor
+        if name.endswith(PACKED_WEIGHT_SUFFIX):
+            base = name[: -len(PACKED_WEIGHT_SUFFIX)]  # "...gate_proj.weight"
+            scale_name = base + PACK_QUANT_SCALE_SUFFIX
+            shape_name = base + PACK_QUANT_SHAPE_SUFFIX
+            if scale_name not in state_dict or shape_name not in state_dict:
+                raise ValueError(f"INT4 anchor '{name}' is missing companion(s) '{scale_name}'/'{shape_name}'.")
+            if params is None:
+                params = _pack_quant_params(quantization_config)
+            num_bits, group_size, symmetric = params
+            out[base] = dequantize_packed_int4_weight(
+                state_dict[name],
+                state_dict[scale_name],
+                state_dict[shape_name],
+                group_size=group_size,
+                num_bits=num_bits,
+                symmetric=symmetric,
+                dtype=dtype,
+            )
+            n_dequantized += 1
+            continue
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
+        out[name] = tensor.contiguous().clone()  # passthrough: preserve source dtype
+    if n_dequantized:
+        num_bits, group_size, _ = params
+        logger.info(
+            f"compressed-tensors INT4: dequantized {n_dequantized} packed weight tensor(s) "
+            f"(num_bits={num_bits}, group_size={group_size})"
+        )
+    return out
+
+
 def dequantize_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     hf_config: PretrainedConfig,
     dtype: torch.dtype = torch.bfloat16,
 ) -> dict[str, torch.Tensor]:
+    quant_cfg = _get_quantization_config_dict(hf_config)
+    if is_pack_quantized_int4(quant_cfg):
+        return _dequantize_pack_quantized_state_dict(state_dict, quant_cfg, dtype=dtype)
     dequantized_state_dict: dict[str, torch.Tensor] = {}
     block_shape = get_weight_block_shape(hf_config)
 

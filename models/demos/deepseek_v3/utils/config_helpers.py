@@ -752,6 +752,23 @@ def sub_state_dicts(
     return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
 
 
+def detect_language_model_prefix(state_dict: Mapping[str, torch.Tensor]) -> str:
+    """Detect the multimodal LM-submodule key prefix of a checkpoint.
+
+    Multimodal checkpoints (e.g. Kimi K2.6's ``KimiK25ForConditionalGeneration``) nest the
+    language model under ``language_model.`` alongside ``vision_tower.``; text-only or
+    already-dequantized checkpoints use bare ``model.`` keys. Returns the prefix to prepend so
+    the rest of the pipeline can address weights with bare ``model.``/``lm_head.`` keys.
+
+    Detected from the keys rather than hardcoded, so the same variant works whether pointed at
+    the raw multimodal checkpoint (prefixed) or a dequantized/stripped one (bare).
+    """
+    for probe in ("language_model.model.embed_tokens.weight", "language_model.model.norm.weight"):
+        if probe in state_dict:
+            return "language_model."
+    return ""
+
+
 TENSOR_CACHE_EXTENSION = ".tensorbin"
 
 
