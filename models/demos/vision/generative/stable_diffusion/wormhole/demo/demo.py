@@ -38,13 +38,11 @@ CLIP_SCORE_MODEL = "openai/clip-vit-base-patch16"
 
 
 def _build_clip_for_score():
-    """Factory for torchmetrics CLIPScore (passed as its `model_name_or_path`).
+    """Build the CLIP model and processor for torchmetrics CLIPScore.
 
-    transformers 5.x changed CLIPModel.get_{image,text}_features to return a
-    BaseModelOutputWithPooling (projected embeds in .pooler_output) instead of a Tensor,
-    which breaks torchmetrics 1.9.0 CLIPScore (latest release, no upstream fix). We build
-    the model here and expose the pooled tensor so the metric keeps working. The hasattr
-    guard keeps this a no-op on transformers <5 (Tensor return). See issue #47941.
+    Wraps get_image_features / get_text_features so they return the pooled
+    embedding tensor that CLIPScore expects, unwrapping it when the call
+    yields a BaseModelOutputWithPooling.
     """
     model = CLIPModel.from_pretrained(CLIP_SCORE_MODEL)
     processor = CLIPProcessor.from_pretrained(CLIP_SCORE_MODEL)
