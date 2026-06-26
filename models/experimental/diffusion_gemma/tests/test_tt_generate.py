@@ -163,6 +163,41 @@ def test_generate_blocks_advances_position_and_concatenates_commits():
     ]
 
 
+def test_generate_blocks_stops_after_committed_stop_token():
+    calls = []
+
+    def init_canvas_fn(block_idx, start_pos):
+        calls.append(("init", block_idx, start_pos))
+        return f"canvas-{block_idx}"
+
+    def fake_block(tt_model, logits_fn, init_canvas, config, **kwargs):
+        block_idx = len([call for call in calls if call[0] == "block"])
+        committed = torch.tensor([[block_idx, 9 if block_idx == 1 else block_idx]], dtype=torch.long)
+        trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
+        calls.append(("block", init_canvas, kwargs["start_pos"]))
+        return GeneratedBlock(
+            committed=committed,
+            next_pos=kwargs["start_pos"] + committed.shape[1],
+            trajectory=trajectory,
+        )
+
+    out = generate_blocks(
+        "model",
+        "logits",
+        prompt_len=4,
+        num_blocks=4,
+        config=DiffusionConfig(canvas_length=2),
+        init_canvas_fn=init_canvas_fn,
+        stop_token_ids=9,
+        block_fn=fake_block,
+    )
+
+    assert torch.equal(out.generated, torch.tensor([[0, 0, 1, 9]], dtype=torch.long))
+    assert out.next_pos == 8
+    assert len(out.trajectories) == 2
+    assert [call for call in calls if call[0] == "init"] == [("init", 0, 4), ("init", 1, 6)]
+
+
 def test_generate_from_prompt_tokens_prefills_then_runs_blocks():
     calls = []
     prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
@@ -212,6 +247,7 @@ def test_generate_from_prompt_tokens_prefills_then_runs_blocks():
     assert kwargs["noise_tokens_fn"] is noise_tokens_fn
     assert kwargs["page_table"] == "page-table"
     assert kwargs["page_tables_per_layer"] == ["layer-pages"]
+    assert kwargs["stop_token_ids"] is None
 
 
 def test_generate_text_tokenizes_generates_and_decodes():
@@ -265,6 +301,7 @@ def test_generate_text_tokenizes_generates_and_decodes():
     assert calls[0][3:] == (None, None)
     assert calls[1][0:3] == ("blocks", "model", "logits")
     assert calls[1][3]["init_canvas_fn"] is init_canvas_fn
+    assert calls[1][3]["stop_token_ids"] == 9
 
 
 def test_generation_sequences_appends_prompt_and_generated_tokens():

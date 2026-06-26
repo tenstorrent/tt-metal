@@ -276,6 +276,13 @@ def _set_q_rope_offset(logits_fn, q_rope_offset: int) -> None:
         logits_fn.q_rope_offset = q_rope_offset
 
 
+def _contains_stop_token(tokens: torch.Tensor, stop_token_ids) -> bool:
+    if stop_token_ids is None:
+        return False
+    ids = _normalize_eos_token_ids(stop_token_ids)
+    return any(token_id in ids for token_id in tokens.reshape(-1).tolist())
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -332,6 +339,7 @@ def generate_blocks(
     noise_tokens_fn=None,
     page_table=None,
     page_tables_per_layer=None,
+    stop_token_ids=None,
     block_fn: Callable[..., GeneratedBlock] = denoise_and_commit_block,
 ) -> DeviceGeneration:
     """Run the minimal device outer loop for ``num_blocks`` canvases.
@@ -361,6 +369,8 @@ def generate_blocks(
         committed_blocks.append(block.committed)
         trajectories.append(block.trajectory)
         next_pos = block.next_pos
+        if _contains_stop_token(block.committed, stop_token_ids):
+            break
 
     generated = torch.cat(committed_blocks, dim=1) if committed_blocks else torch.zeros((1, 0), dtype=torch.long)
     return DeviceGeneration(generated=generated, prompt_len=prompt_len, next_pos=next_pos, trajectories=trajectories)
@@ -378,6 +388,7 @@ def generate_from_prompt_tokens(
     noise_tokens_fn=None,
     page_table=None,
     page_tables_per_layer=None,
+    stop_token_ids=None,
     prefill_fn: Callable[..., int] = prefill_prompt_tokens,
     blocks_fn: Callable[..., DeviceGeneration] = generate_blocks,
 ) -> DeviceGeneration:
@@ -405,6 +416,7 @@ def generate_from_prompt_tokens(
         noise_tokens_fn=noise_tokens_fn,
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
+        stop_token_ids=stop_token_ids,
     )
 
 
@@ -513,6 +525,7 @@ def generate_text(
     page_tables_per_layer=None,
     max_new_tokens: int | None = None,
     eos_token_id=None,
+    stop_token_ids=None,
     skip_prompt: bool = True,
     decode_kwargs: dict | None = None,
     prefill_fn: Callable[..., int] = prefill_prompt_tokens,
@@ -536,6 +549,7 @@ def generate_text(
         noise_tokens_fn=noise_tokens_fn,
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
+        stop_token_ids=stop_token_ids if stop_token_ids is not None else eos_token_id,
         prefill_fn=prefill_fn,
         blocks_fn=blocks_fn,
     )
