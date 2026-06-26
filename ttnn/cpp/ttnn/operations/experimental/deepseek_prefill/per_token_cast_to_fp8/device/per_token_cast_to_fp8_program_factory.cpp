@@ -136,7 +136,8 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
                                          .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
-    make_fp32_tile_cb(cb_tile_idx, tiles_per_block);                  // tilized input
+    make_fp32_tile_cb(cb_tile_idx, 2 * tiles_per_block);  // tilized input (double-buffered: next block's tilize
+                                                          // overlaps current block's reduce/divide)
     make_fp32_tile_cb(cb_scaler_idx, 1);                              // reduce scaler (1.0), reader-filled
     make_fp32_tile_cb(cb_abs_idx, 2 * tiles_per_block);               // abs tiles for the whole block (double-buffered)
     make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht);              // col0 = scale
