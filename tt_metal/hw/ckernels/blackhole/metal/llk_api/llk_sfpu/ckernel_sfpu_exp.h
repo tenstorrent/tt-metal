@@ -344,7 +344,7 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 
 template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
-    sfpi::vInt i;
+    sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
 
     // j = round(a / ln2)
@@ -369,14 +369,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + 1.0f;
 
-    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i_2c;
     if constexpr (unsafe) {
         // y = 2**i * r
+        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i;
         y = sfpi::setexp(r, e);
     } else {
         // overflow: y = infinity or NaN
         y *= std::numeric_limits<float>::infinity();
 
+        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i;
         // if e < 255
         v_block {
             sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
