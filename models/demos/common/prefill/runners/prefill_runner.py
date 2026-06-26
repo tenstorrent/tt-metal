@@ -238,6 +238,12 @@ def _load_token_ids() -> list[int]:
 # Layer-completion routing (pipeline / num_ranks > 1)
 # ---------------------------------------------------------------------------
 
+# When the completion ring is full, spin waiting for the router to drain rather than
+# dropping/failing immediately. Bounded so a genuinely stalled router still surfaces.
+LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
+LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
+LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001  # tiny yield so the spin doesn't peg a core
+
 
 def build_layer_completion_sink(producer, *, source_rank, num_layers):
     """Build the per-layer completion sink the runtime fires once per layer.
@@ -543,7 +549,7 @@ def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     )
     out = runtime.prefill_chunk(
-        inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+        inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"], request_id=c
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -1010,7 +1016,8 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
         )
         producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
         # seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this rank's slice; the layer_idx
-        # arriving at the sink is already global; the chunk index is set per chunk in _compute_and_send.
+        # arriving at the sink is already global; the chunk index is bound per prefill() call as
+        # request_id (passed by _compute_and_send), so the sink reads no shared mutable state.
         runtime.set_layer_completion_sink(
             build_layer_completion_sink(
                 producer,
