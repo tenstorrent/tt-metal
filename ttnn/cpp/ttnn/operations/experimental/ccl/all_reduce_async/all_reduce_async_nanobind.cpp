@@ -92,7 +92,8 @@ void bind_all_reduce_async(nb::module_& mod) {
                 const std::optional<ttnn::MemoryConfig>&,
                 std::optional<ttnn::ccl::Topology>,
                 std::optional<size_t>,
-                std::optional<tt::tt_metal::SubDeviceId>>(ttnn::experimental::all_reduce_async),
+                std::optional<tt::tt_metal::SubDeviceId>,
+                const std::optional<ttnn::DeviceComputeKernelConfig>&>(ttnn::experimental::all_reduce_async),
             nb::arg("input_tensor"),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("mesh_device"),
@@ -104,7 +105,8 @@ void bind_all_reduce_async(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear),
             nb::arg("num_links") = nb::none(),
-            nb::arg("subdevice_id") = nb::none()),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,

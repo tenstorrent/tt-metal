@@ -31,6 +31,7 @@ void bind_all_reduce(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
             num_links (int, optional): Number of links to use for the all_reduce operation. Defaults to `None`.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the reduction. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: The reduced tensor with the same shape as the input tensor. The output tensor is identical across all devices along the cluster axis if specified, otherwise it is identical across all devices in the mesh.
@@ -60,7 +61,8 @@ void bind_all_reduce(nb::module_& mod) {
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("num_links") = nb::none(),
-        nb::arg("topology") = nb::none());
+        nb::arg("topology") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

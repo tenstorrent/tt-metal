@@ -19,7 +19,8 @@ ttnn::Tensor all_reduce(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-reduce on cluster_axis=1, then
     // all-reduce on cluster_axis=0
     if (cluster_axis == std::nullopt) {
@@ -29,7 +30,8 @@ ttnn::Tensor all_reduce(
         if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
             for (size_t i = 0; i < mesh_shape.dims(); ++i) {
-                tensor = ttnn::all_reduce(tensor, i, subdevice_id, memory_config, num_links, topology);
+                tensor = ttnn::all_reduce(
+                    tensor, i, subdevice_id, memory_config, num_links, topology, compute_kernel_config);
             }
             return tensor;
         }
@@ -53,7 +55,8 @@ ttnn::Tensor all_reduce(
         memory_config,
         topology_,
         num_links,
-        subdevice_id);
+        subdevice_id,
+        compute_kernel_config);
 }
 
 }  // namespace ttnn

@@ -281,7 +281,8 @@ ttnn::Tensor all_reduce_async(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     uint32_t resolved_num_links =
         num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
@@ -361,7 +362,11 @@ ttnn::Tensor all_reduce_async(
             std::nullopt,
             topology_,
             worker_subdevice_id_opt,
-            cluster_axis);
+            cluster_axis,
+            /*chunks_per_sync*/ std::nullopt,
+            /*num_workers_per_link*/ std::nullopt,
+            /*num_buffers_per_channel*/ std::nullopt,
+            compute_kernel_config);
     } else {
         scattered_tensor = ttnn::reduce_scatter(
             working_input_tensor,
@@ -375,7 +380,8 @@ ttnn::Tensor all_reduce_async(
             topology_,
             std::nullopt,
             std::nullopt,
-            std::nullopt);
+            std::nullopt,
+            compute_kernel_config);
     }
     if (interleaved_input_tensor.has_value()) {
         interleaved_input_tensor->deallocate();

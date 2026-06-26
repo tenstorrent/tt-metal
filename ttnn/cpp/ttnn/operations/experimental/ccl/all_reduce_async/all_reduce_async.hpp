@@ -9,6 +9,7 @@
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/distributed/types.hpp"
 
@@ -37,7 +38,8 @@ ttnn::Tensor all_reduce_async(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 ttnn::Tensor all_reduce_async(
     const ttnn::Tensor& input_tensor,
