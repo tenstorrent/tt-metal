@@ -562,6 +562,14 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
 
+    # Migration is only wired for the single-rank case; on the pipeline it would silently no-op. Fail
+    # loud so an enabled-migration pipeline run can't be mistaken for a working one.
+    if not single_rank and os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
+        raise ValueError(
+            f"PREFILL_ENABLE_MIGRATION=1 is unsupported for num_ranks={num_ranks} (pipelined migration "
+            "is not implemented); run single-rank or unset PREFILL_ENABLE_MIGRATION."
+        )
+
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
     # H2D input service lives on the first rank only (downstream ranks read from D2D). compile() leaves
