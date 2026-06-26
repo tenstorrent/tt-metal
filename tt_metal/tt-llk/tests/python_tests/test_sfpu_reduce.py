@@ -74,10 +74,11 @@ def get_supported_reduce_axioms(
     # divides exactly; integer AVG stays column-only). See ckernel_sfpu_reduce.h::calculate_reduce.
     if reduce_pool in (ReducePool.Sum, ReducePool.Max, ReducePool.Min):
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
+    # Only Float32/Float16_b: the kernel's `is_float_format` AVG row gate treats just these two as
+    # float, so a Float16 row AVG would hit the calculate_reduce static_assert at compile time.
     if reduce_pool == ReducePool.Average and formats.input_format in (
         DataFormat.Float32,
         DataFormat.Float16_b,
-        DataFormat.Float16,
     ):
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
     return [MathOperation.ReduceColumn]

@@ -959,9 +959,11 @@ inline void perform_reduce_row_sum_tile(
             if constexpr (is_avg) {
                 if (divide_now) {
                     load_row_avg_reciprocal_into(p_sfpu::LREG2, recip);
+                    // The two SFPMULs cover each other's 2-cycle latency: the LREG4 multiply sits
+                    // between the LREG0 multiply and the LREG0 store, and the first store sits
+                    // between the LREG4 multiply and the LREG4 store, so no extra NOP is needed.
                     TT_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
                     TT_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
-                    TTI_SFPNOP;  // cover the 2-cycle SFPMUL latency before the stores below
                 }
             }
 
@@ -1083,11 +1085,13 @@ inline void sum_first_columns_across_tiles(
         // free after the accumulation loop and holds the reciprocal for the four multiplies.
         if constexpr (is_avg) {
             load_row_avg_reciprocal_into(p_sfpu::LREG4, recip);
+            // The four SFPMULs cover each other's 2-cycle latency: at least two multiplies (and the
+            // earlier stores) separate every multiply from the store that reads its result, so no
+            // extra NOP is needed before the stores below.
             TT_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
             TT_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
             TT_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
             TT_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
-            TTI_SFPNOP;  // cover the 2-cycle SFPMUL latency before the stores below
         }
 
         // Store LREG0-3 back to tile 0. This is the final, packer-visible result, so it uses mode 9

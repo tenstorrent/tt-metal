@@ -9,11 +9,13 @@
 // (e.g. ttir.max dim=[1,2]) is lowered: one `sfpu_reduce_init` for the fused op followed by two
 // `sfpu_reduce` calls, with no re-init in between.
 //
-// This is exactly the configuration that exposed the Int32 MAX/MIN regression analysed in
-// reduce_int32_multidim_bug.md: the column Int32 path (INT32_2S_COMP, two's-complement, and its
-// own init_reduce_max_min_int32 that flips the SFPSWAP-direction config bit) runs first, then the
-// row path runs trusting state established by the shared init. Single-axis reduces only exercise
-// one path with its matching init and therefore pass, so the bug is only reachable here.
+// This is exactly the configuration that exposed an Int32 MAX/MIN regression: the column Int32 path
+// (INT32_2S_COMP, two's-complement, and its own init_reduce_max_min_int32 that flips the
+// SFPSWAP-direction config bit) runs first, then the row path runs trusting state established by the
+// shared init. With the column stage's inverted comparator direction left in place, the row stage
+// misordered values and produced wrong results once negatives/extremes were present. Single-axis
+// reduces only exercise one path with its matching init and therefore pass, so the bug is only
+// reachable here.
 //
 // Geometry: a column of BLOCK_RT_DIM row-tiles, one column-tile wide (BLOCK_CT_DIM == 1).
 //   Phase 1 (REDUCE_COL, per tile): row 0 of each tile holds that tile's 32 per-column extremes.

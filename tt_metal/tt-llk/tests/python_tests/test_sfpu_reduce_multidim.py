@@ -8,11 +8,12 @@ pass under a SINGLE shared ``init_reduce`` (see ``sources/sfpu_reduce_multidim_t
 mirrors how a multi-axis reduce (e.g. ``ttir.max`` ``dim=[1,2]``) is lowered to two ``sfpu_reduce``
 calls sharing one ``sfpu_reduce_init``.
 
-This configuration is what exposed the Int32 MAX regression analysed in
-``reduce_int32_multidim_bug.md``: the column Int32 path runs first (``INT32_2S_COMP``, and its own
-``init_reduce_max_min_int32`` that flips the SFPSWAP-direction config bit), then the row path runs
-trusting state established by the shared init. The single-axis ``test_sfpu_reduce`` suite only
-exercises one path per init and therefore could not catch it.
+This configuration is what exposed an Int32 MAX/MIN regression: the column Int32 path runs first
+(``INT32_2S_COMP``, and its own ``init_reduce_max_min_int32`` that flips the SFPSWAP-direction config
+bit), then the row path runs trusting state established by the shared init. Because the row stage
+inherited the column stage's inverted comparator direction, it misordered values and returned wrong
+results once negatives/extremes were present. The single-axis ``test_sfpu_reduce`` suite only
+exercises one path per init (with its matching init) and therefore could not catch it.
 
 Pool coverage is MAX, SUM, MIN (all formats) and AVG (float formats only): the kernel's ``REDUCE_ROW``
 path supports SUM/MAX/MIN for all formats and AVG for float formats, so each is expressible as a
@@ -108,24 +109,25 @@ _FLOAT_FORMAT_EPS = {
 }
 
 
-def get_multidim_avg_atol(output_format, reduce_pool, input_bounds) -> float | None:
-    """Absolute tolerance for the float multi-axis AVG chain.
+def get_multidim_sum_avg_atol(output_format, reduce_pool, input_bounds) -> float | None:
+    """Absolute tolerance for the float multi-axis SUM/AVG chain.
 
-    The device averages 32 per-column means (themselves means of 32 rows), so the result is a mean of
-    N = 32*32 terms. Low-precision float accumulation/rounding contributes ~ max_term * eps * sqrt(N)
-    absolute error to the underlying sum, and the divide-by-N shrinks it to ~ max_term * eps / sqrt(N).
-    On near-cancelling tiles the true mean is tiny, so the fixed 0.05 atol can spuriously fail even
-    though PCC stays ~1.0; size atol to that bound (2x margin). Returns None for MAX/MIN/SUM and integer
-    formats, leaving the default tolerances in place.
+    Both chains accumulate N = 32*32 terms (a column pass over 32 rows then a row pass over 32
+    column results). Low-precision float accumulation/rounding contributes ~ max_term * eps * sqrt(N)
+    absolute error to the underlying sum. SUM keeps that error; AVG's divide-by-N shrinks it to
+    ~ max_term * eps / sqrt(N). On near-cancelling tiles the true result is tiny, so the fixed 0.05
+    atol can spuriously fail even though PCC stays ~1.0; size atol to that bound (2x margin). Returns
+    None for MAX/MIN and integer formats, leaving the default tolerances in place.
     """
-    if reduce_pool != ReducePool.Average:
+    if reduce_pool not in (ReducePool.Sum, ReducePool.Average):
         return None
     eps = _FLOAT_FORMAT_EPS.get(output_format)
     if eps is None:
         return None
     num_terms = TILE_DIM * TILE_DIM
     max_term = max(abs(input_bounds[0]), abs(input_bounds[1]))
-    atol = 2.0 * max_term * eps / (num_terms**0.5)
+    sum_error = 2.0 * max_term * eps * (num_terms**0.5)
+    atol = sum_error if reduce_pool == ReducePool.Sum else sum_error / num_terms
     return max(0.05, atol)
 
 
@@ -242,8 +244,9 @@ def test_sfpu_reduce_multidim(
     # Each tile's multi-axis result lives at its element [0][0] -> row r*32, column 0.
     res_vec = res_matrix[0::TILE_DIM, 0]
 
-    # The float AVG chain accumulates rounding error; size atol to it (PCC still guards correctness).
-    reduce_atol = get_multidim_avg_atol(
+    # The float SUM/AVG chains accumulate rounding error; size atol to it (PCC still guards
+    # correctness). MAX/MIN and integer formats keep the default tolerances.
+    reduce_atol = get_multidim_sum_avg_atol(
         formats.output_format, reduce_pool, input_bounds
     )
 
