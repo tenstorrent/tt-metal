@@ -91,7 +91,11 @@ struct FiberSchedulerImpl {
                                                        // released only at quiescence (below)
     std::vector<std::unique_ptr<Fiber>> all_;          // ownership of every spawned fiber
 
-    unsigned K_ = 1;
+    unsigned K_ = 1;           // persistent pool size (read once at pool creation)
+    unsigned W_ = 0;           // workers ACTIVE this program = min(K_, fiber count); only
+                               // ready_[0..W_) is used, fibers home to [0..W_), surplus
+                               // workers stay parked on start_cv_ (no per-fiber wakeups)
+    unsigned workers_done_ = 0;// active workers that finished the current run (under mu_)
     unsigned idle_ = 0;        // workers waiting on cv_ (under mu_)
     unsigned running_ = 0;     // fibers currently executing on a worker (under mu_)
     unsigned active_ = 0;      // fibers not yet Done (under mu_)
@@ -104,7 +108,18 @@ struct FiberSchedulerImpl {
 
     size_t stack_bytes_ = 1u << 20;          // 1 MB default
 
-    void worker_loop(unsigned w);
+    // Persistent worker pool: created once (lazily, on the first run), reused across every
+    // program. Threads block on start_cv_ between programs; run_until_idle bumps generation_
+    // + notify_all to launch a run, then waits on done_cv_ for workers_done_ == W_. This
+    // eliminates the per-program create/join (fiber-engine.md §10.4).
+    std::vector<std::thread> pool_;
+    std::condition_variable start_cv_;       // pool waits here between programs
+    std::condition_variable done_cv_;        // run_until_idle waits here for run completion
+    uint64_t generation_ = 0;                // bumped per program (under mu_); workers detect a new run
+    bool shutdown_ = false;                  // set by ~FiberScheduler to drain the pool
+
+    void worker_main(unsigned w);            // persistent outer loop (one per pool thread)
+    void inner_loop(unsigned w);             // per-program body; runs until active_==0 / abort
     void install_fiber(Fiber* f);
     bool any_ready() const {                 // any runnable fiber in any worker's queue?
         for (const auto& q : ready_) {
@@ -137,21 +152,52 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
     my_y[0] = my_y[1] = f->id.phys_y;
 }
 
-void FiberSchedulerImpl::worker_loop(unsigned w) {
+void FiberSchedulerImpl::worker_main(unsigned w) {
+    // Persistent worker: parks on start_cv_ between programs and participates only when this
+    // program activated it (w < W_). The same OS thread is reused across every program — safe
+    // because all per-RISC state is per-fiber (ThreadCommonCtx, repointed by install_fiber) or
+    // restored per swap-in (my_x/my_y); nothing per-RISC is a bare worker thread_local.
     t_impl = this;
     t_worker = w;
+    uint64_t seen = 0;
     mu_.lock();
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> wl(mu_, std::adopt_lock);
+            start_cv_.wait(wl, [&] { return shutdown_ || generation_ != seen; });
+            wl.release();                        // mu_ stays locked
+        }
+        if (shutdown_) {
+            mu_.unlock();
+            return;
+        }
+        seen = generation_;
+        if (w < W_) {
+            inner_loop(w);                       // enters + returns with mu_ held
+            ++workers_done_;
+            if (workers_done_ == W_) {
+                done_cv_.notify_one();           // last active worker wakes run_until_idle
+            }
+        }
+        // surplus workers (w >= W_) loop back to wait for the next generation
+    }
+}
+
+// Per-program scheduling loop. Pre: mu_ held. Post: mu_ held. Runs this program's fibers to
+// completion (active_ == 0) or to an abort (deadlock / kernel exception).
+void FiberSchedulerImpl::inner_loop(unsigned w) {
     for (;;) {
         if (abort_flag_) break;
         if (ready_[w].empty()) {
             if (active_ == 0) break;
             ++idle_;
             // Quiescence: nothing executing, nothing runnable in any queue. The
-            // `!any_ready()` term is essential — `idle_ == K_` alone is a false positive at
-            // K>1, because a worker counts itself idle before re-acquiring mu_ to observe a
+            // `!any_ready()` term is essential — `idle_ == W_` alone is a false positive at
+            // W>1, because a worker counts itself idle before re-acquiring mu_ to observe a
             // fiber a concurrent wake() just enqueued into its ready queue. Checking the
-            // queues (under mu_) closes that window.
-            if (idle_ == K_ && running_ == 0 && !any_ready()) {
+            // queues (under mu_) closes that window. (W_ = active workers this program, not the
+            // pool size K_ — surplus pool workers aren't counted in idle_.)
+            if (idle_ == W_ && running_ == 0 && !any_ready()) {
                 // Read-latency model: a fiber latency-parked at its first noc_async_read
                 // barrier represents an in-flight read. At quiescence — every other runnable
                 // core has had its turn — the read "completes": release them all (lowest
@@ -204,8 +250,8 @@ void FiberSchedulerImpl::worker_loop(unsigned w) {
         t_current = nullptr;
         __emule_self = nullptr;
     }
-    mu_.unlock();
-    cv_.notify_all();                        // wake peers to terminate / re-check
+    cv_.notify_all();                        // wake active peers to observe active_==0 / abort
+    // returns with mu_ held — worker_main increments workers_done_ under it
 }
 
 // ---- bridge ops (called from a running fiber via the runner's extern-C thunks) ----
@@ -385,46 +431,66 @@ void FiberSchedulerImpl::watchdog() {
 }
 
 void FiberScheduler::run_until_idle() {
-    p_->K_ = static_cast<unsigned>(env_size("TT_EMULE_FIBER_WORKERS", 1));
     p_->stack_bytes_ = env_size("TT_EMULE_FIBER_STACK_BYTES", 1u << 20);
+
+    // Lazily create the persistent worker pool on the first run (K is process-constant). The
+    // threads live until ~FiberScheduler and park on start_cv_ between programs — no per-program
+    // create/join (fiber-engine.md §10.4).
+    if (p_->pool_.empty()) {
+        p_->K_ = static_cast<unsigned>(env_size("TT_EMULE_FIBER_WORKERS", 64));
+        p_->pool_.reserve(p_->K_);
+        for (unsigned i = 0; i < p_->K_; ++i) {
+            p_->pool_.emplace_back([this, i] { p_->worker_main(i); });
+        }
+    }
+
+    unsigned W;
     {
         std::lock_guard<std::mutex> g(p_->mu_);
         p_->active_ = static_cast<unsigned>(p_->all_.size());
+        if (p_->active_ == 0) {
+            return;   // nothing to run; the pool stays parked
+        }
         p_->idle_ = 0;
         p_->running_ = 0;
+        p_->workers_done_ = 0;
         p_->deadlock_ = false;
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
         p_->latency_parked_.clear();
-        // Pin each fiber to a worker round-robin and seed that worker's ready queue.
-        p_->ready_.assign(p_->K_, {});
+        // Activate W = min(K, fiber count) workers; pin each fiber round-robin across [0,W).
+        // Surplus pool workers (>= W) stay parked on start_cv_ — per-fiber wake()/yield()
+        // (which notify cv_) never touch them, so a tiny program at K=64 does not pay a herd.
+        W = std::min<unsigned>(p_->K_, p_->active_);
+        p_->W_ = W;
+        p_->ready_.assign(W, {});
         for (size_t i = 0; i < p_->all_.size(); ++i) {
             Fiber* f = p_->all_[i].get();
-            f->home = static_cast<unsigned>(i % p_->K_);
+            f->home = static_cast<unsigned>(i % W);
             p_->ready_[f->home].push_back(f);
         }
     }
     p_->progress_.store(0);
     p_->resumptions_.store(0);
     if (std::getenv("TT_EMULE_FIBER_LOG_N")) {
-        std::fprintf(stderr, "[EMULE FIBER] program: %u fibers on K=%u workers\n",
-                     p_->active_, p_->K_);
-    }
-    if (p_->active_ == 0) {
-        return;
+        std::fprintf(stderr, "[EMULE FIBER] program: %u fibers on W=%u of K=%u workers\n",
+                     p_->active_, W, p_->K_);
     }
 
     p_->run_active_.store(true, std::memory_order_release);
     std::thread wd([this] { p_->watchdog(); });
 
-    std::vector<std::thread> workers;
-    workers.reserve(p_->K_);
-    for (unsigned i = 0; i < p_->K_; ++i) {
-        workers.emplace_back([this, i] { p_->worker_loop(i); });
+    // Launch: bump the generation under mu_ (after the watchdog is up), then wake the pool.
+    {
+        std::lock_guard<std::mutex> g(p_->mu_);
+        ++p_->generation_;
     }
-    for (auto& t : workers) {
-        t.join();
+    p_->start_cv_.notify_all();
+    {   // Block the dispatch thread until every active worker has finished this run.
+        std::unique_lock<std::mutex> lk(p_->mu_);
+        p_->done_cv_.wait(lk, [&] { return p_->workers_done_ == W; });
     }
+
     {   // Clear under wd_mu_ + notify so the watchdog wakes at once (no lost wakeup).
         std::lock_guard<std::mutex> lk(p_->wd_mu_);
         p_->run_active_.store(false, std::memory_order_release);
@@ -432,18 +498,22 @@ void FiberScheduler::run_until_idle() {
     p_->wd_cv_.notify_all();
     wd.join();
 
-    std::exception_ptr eptr = p_->first_eptr_;
-    bool deadlock = p_->deadlock_;
+    std::exception_ptr eptr;
+    bool deadlock;
     std::string dump;
-    if (deadlock) {
-        dump = p_->dump_parked();
+    {   // Collect results + clear the registry for the next program / mesh (workers are parked
+        // on start_cv_ now, but take mu_ anyway for clean ordering).
+        std::lock_guard<std::mutex> g(p_->mu_);
+        eptr = p_->first_eptr_;
+        deadlock = p_->deadlock_;
+        if (deadlock) {
+            dump = p_->dump_parked();
+        }
+        p_->ready_.clear();
+        p_->parked_.clear();
+        p_->latency_parked_.clear();
+        p_->all_.clear();   // frees Fiber stacks via ~Fiber
     }
-
-    // Clear the registry for the next program / mesh.
-    p_->ready_.clear();
-    p_->parked_.clear();
-    p_->latency_parked_.clear();
-    p_->all_.clear();   // frees Fiber stacks via ~Fiber
 
     // A real kernel exception is the root cause; report it before any deadlock symptom.
     if (eptr) {
@@ -456,7 +526,21 @@ void FiberScheduler::run_until_idle() {
 }
 
 FiberScheduler::FiberScheduler() : p_(std::make_unique<FiberSchedulerImpl>()) {}
-FiberScheduler::~FiberScheduler() = default;
+
+FiberScheduler::~FiberScheduler() {
+    if (p_ && !p_->pool_.empty()) {
+        {
+            std::lock_guard<std::mutex> g(p_->mu_);
+            p_->shutdown_ = true;
+        }
+        p_->start_cv_.notify_all();
+        for (auto& t : p_->pool_) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+    }
+}
 
 FiberScheduler& FiberScheduler::instance() {
     static FiberScheduler s;

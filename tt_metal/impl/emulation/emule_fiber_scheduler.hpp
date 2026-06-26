@@ -6,10 +6,12 @@
 // Cooperative stackful-fiber scheduler for the emule program runner.
 //
 // Replaces OS-thread-per-RISC execution: each (core, RISC) kernel runs on a
-// ucontext stackful fiber, multiplexed onto a runtime-sized worker pool (env
-// TT_EMULE_FIBER_WORKERS, default 1). A fiber that blocks at a sync point parks
-// (yields its worker) and is woken when its predicate is satisfied — so tens of
-// thousands of fibers run on K workers, with no OS-thread ceiling and no spin.
+// ucontext stackful fiber, multiplexed onto a PERSISTENT worker pool of K threads
+// (env TT_EMULE_FIBER_WORKERS, default 64) created once and reused across every
+// program — each program activates only min(K, fiber count) of them. A fiber that
+// blocks at a sync point parks (yields its worker) and is woken when its predicate
+// is satisfied — so tens of thousands of fibers run on K workers, with no OS-thread
+// ceiling and no spin.
 //
 // The scheduler is a process-global singleton sitting above the IDevices (shared
 // ready/parked pool; register/run split for future multi-device). The blocking
