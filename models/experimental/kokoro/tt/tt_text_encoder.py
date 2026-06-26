@@ -161,12 +161,49 @@ def _fused_recurrent_program_config(hidden_size: int, device: ttnn.Device):
     )
 
 
+def _layernorm_prog_from_sharded(x: ttnn.Tensor):
+    """LayerNorm program config matching ``x``'s own block-sharded layout, or ``None``.
+
+    The batched CNN conv emits its output **block-sharded in L1** (e.g. the ``B*T``×512 stage: grid
+    8×3, shard ``[32, 64]`` => block_h=1, block_w=2). Feeding that straight into a sharded LayerNorm
+    (program config derived here from the shard spec) lets the LN read it in place — dropping BOTH the
+    conv's ``ShardedToInterleaved`` and the ``InterleavedToSharded`` a fixed-config sharded LN would
+    need (two reshards/CNN stage). The layout sweep (``perf/test_layernorm_text_encoder_perf_sweep.py``)
+    measured this 8×3 layout at ~7.8µs vs ~12.4µs DRAM (1.6×) — 0.6µs slower than the standalone 4×3
+    optimum (7.2µs) but with zero reshards, a net win. Returns ``None`` (caller keeps the DRAM LN) when
+    ``x`` isn't block-sharded or doesn't tile cleanly.
+    """
+    TILE = 32
+    mc = x.memory_config()
+    if mc.memory_layout != ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        return None
+    ss = mc.shard_spec
+    if ss is None:
+        return None
+    shard_h, shard_w = int(ss.shape[0]), int(ss.shape[1])
+    if shard_h % TILE or shard_w % TILE or shard_h == 0 or shard_w == 0:
+        return None
+    block_h, block_w = shard_h // TILE, shard_w // TILE
+    # The grid (and thus block_h/gy) is set by the conv on the *tile-padded* row count, so read it from
+    # the shard's own bounding box rather than the logical shape (e.g. B*T=120 pads to 128 => grid 8x4).
+    # The LN program config grid must match the shard grid exactly, anchored at the origin.
+    bb = ss.grid.bounding_box()
+    if bb.start.x != 0 or bb.start.y != 0:
+        return None
+    gx, gy = bb.end.x + 1, bb.end.y + 1
+    subblock_w = next((d for d in range(min(block_w, 4), 0, -1) if block_w % d == 0), 1)
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+
+
 def _maybe_interleaved(x: ttnn.Tensor) -> ttnn.Tensor:
-    if ttnn.is_tensor_storage_on_device(x):
-        try:
-            return ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        except Exception:
-            return x
+    if ttnn.is_tensor_storage_on_device(x) and x.is_sharded():
+        return ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     return x
 
 
@@ -194,7 +231,13 @@ class TTTextEncoderConvLNBlock:
         batch: int,
         seq: int,
     ) -> ttnn.Tensor:
-        """One CNN stage on batch-flattened activations ``[1, 1, batch*seq, C]`` (same shape out)."""
+        """One CNN stage on batch-flattened activations ``[1, 1, batch*seq, C]`` (same shape out).
+
+        The conv emits its output **block-sharded in L1**; when that layout is a valid sharded-LN input
+        the channel-LayerNorm + LeakyReLU run on it in place (no reshard either side), then the result
+        is re-interleaved to DRAM for the next conv. Falls back to a DRAM-interleaved LayerNorm when the
+        conv output isn't block-sharded (non-BH / odd shapes).
+        """
         x = tt_conv1d_nlc(
             x_nlc=x_flat,
             params=self.params.conv,
@@ -204,17 +247,36 @@ class TTTextEncoderConvLNBlock:
             # is a Wormhole-only correctness workaround), halving conv/halo/shard dispatch. Flattened
             # in/out so the CNN stack never pays the [1,B*L,C]->[B,L,C] split between stages.
             batched_shape=(batch, seq),
+            # Keep the conv's native block-sharded L1 output so the LayerNorm reads it in place.
+            output_sharded=True,
         )
-        x = _maybe_interleaved(x)
-        x = ttnn.layer_norm(
-            x,
-            weight=self.params.ln_weight,
-            bias=self.params.ln_bias,
-            epsilon=self.ln_eps,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        x = ttnn.leaky_relu(x, negative_slope=0.2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ln_prog = _layernorm_prog_from_sharded(x)
+        if ln_prog is not None:
+            # Conv output is block-sharded L1: normalize + activate on-core (no reshard), then
+            # re-interleave to DRAM for the next conv (which does its own input resharding).
+            ln_mem = x.memory_config()
+            x = ttnn.layer_norm(
+                x,
+                weight=self.params.ln_weight,
+                bias=self.params.ln_bias,
+                epsilon=self.ln_eps,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ln_mem,
+                program_config=ln_prog,
+            )
+            x = ttnn.leaky_relu(x, negative_slope=0.2, memory_config=ln_mem)
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            x = _maybe_interleaved(x)
+            x = ttnn.layer_norm(
+                x,
+                weight=self.params.ln_weight,
+                bias=self.params.ln_bias,
+                epsilon=self.ln_eps,
+                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            x = ttnn.leaky_relu(x, negative_slope=0.2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # No padding (mask_keep is None) -> the reference ``masked_fill_`` is a no-op, so skip the
         # all-ones multiply (the full-length/single-utterance path; saves one BinaryNg per block).
         if mask_keep is None:
