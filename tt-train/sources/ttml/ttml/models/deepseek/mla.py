@@ -89,9 +89,7 @@ class MultiHeadLatentAttention(AbstractModuleBase):
             q = self.wq_b(self.q_norm(self.wq_a(x)))  # [B, 1, S, n_heads * qk_head]
         q = split_heads(q, n_heads)  # [B, n_heads, S, qk_head]
 
-        q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-        q_pe = autograd_slice(q, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
-        q_pe = ttml.ops.rope.rope(q_pe, self.rope_params)
+        q_full = ttml.ops.rope.mla_q_rope(q, self.rope_params, qk_nope, qk_rope)
 
         # ── KV path ──
         kv_full = self.wkv_a(x)  # [B, 1, S, kv_lora_rank + qk_rope]
@@ -114,8 +112,7 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         k_nope = autograd_slice(kv_up, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
         v = autograd_slice(kv_up, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + v_dim])
 
-        # Assemble full Q and K
-        q_full = autograd_concat([q_nope, q_pe], dim=3)  # [B, H, S, qk_head]
+        # Assemble full K
         k_full = autograd_concat([k_nope, k_pe], dim=3)  # [B, H, S, qk_head]
 
         # ── Attention (causal-only) ──
