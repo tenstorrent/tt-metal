@@ -89,8 +89,13 @@ def create_program_descriptor(
     ) = ttnn.split_work_to_cores(ttnn.CoreCoord(num_cores_x, num_cores_y), NC)
 
     # ========== 2.5 V1 vs V2 DISPATCH ==========
+    # reduce_dim_tiles: the number of tiles along the reduce dim (input side)
+    # For V2 dispatch: this is what gets chunked
     reduce_dim_tiles = Wt if dim == -1 else Ht  # Wt for REDUCE_ROW, Ht for REDUCE_COL
     non_reduce_dim = Ht if dim == -1 else Wt
+    # reduce_output_tiles: the number of output tiles from the reduce (output side)
+    # For V1 CB sizing of cb_max / cb_recip_sum
+    reduce_output_tiles = Ht if dim == -1 else Wt  # Ht for REDUCE_ROW, Wt for REDUCE_COL
     tiles_per_slab = Ht * Wt
 
     # Compute V1 per-core CB footprint (sum of all CB sizes)
@@ -101,9 +106,9 @@ def create_program_descriptor(
         + (tiles_per_slab * output_tile_size if not is_rm else 0)  # cb_output_tiles (TILE: full slab)
         + (2 * Wt * input_tile_size if is_rm else 0)  # cb_rm_in (RM only, double-buffered)
         + (2 * Wt * output_tile_size if is_rm else 0)  # cb_rm_out (RM only, double-buffered)
-        + reduce_dim_tiles * intermediate_tile_size  # cb_max
+        + reduce_output_tiles * intermediate_tile_size  # cb_max
         + tiles_per_slab * intermediate_tile_size  # cb_exp
-        + reduce_dim_tiles * intermediate_tile_size  # cb_recip_sum
+        + reduce_output_tiles * intermediate_tile_size  # cb_recip_sum
     )
     # For RM path, cb_output_tiles is full slab (untilize can't pipeline)
     if is_rm:
@@ -212,7 +217,7 @@ def create_program_descriptor(
             )
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=reduce_dim_tiles * intermediate_tile_size,
+                total_size=reduce_output_tiles * intermediate_tile_size,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -234,7 +239,7 @@ def create_program_descriptor(
         )
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=reduce_dim_tiles * intermediate_tile_size,
+                total_size=reduce_output_tiles * intermediate_tile_size,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
