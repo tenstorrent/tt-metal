@@ -871,12 +871,112 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
                 )
                 break
 
+# Threshold identity collapse: piecewise y=x outside a dead zone and y=0 inside.
+# This is the algebraic shape behind shrink/threshold-style functions. The
+# threshold owns equality, so x == +/-threshold returns zero instead of identity.
+threshold_select_macro = ''
+if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and num_segments == 3:
+    cps = degree + 1
+    tol = 1.0e-5
+    segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
+    def _is_identity(coeff):
+        return abs((coeff[0] if len(coeff) > 0 else 0.0)) <= tol and abs((coeff[1] if len(coeff) > 1 else 0.0) - 1.0) <= tol and all(abs(c) <= tol for c in coeff[2:])
+    def _is_zero(coeff):
+        return all(abs(c) <= tol for c in coeff)
+    lo_thr = abs(boundaries[1])
+    hi_thr = abs(boundaries[2])
+    if _is_identity(segs[0]) and _is_zero(segs[1]) and _is_identity(segs[2]) and abs(lo_thr - hi_thr) <= tol:
+        threshold_select_macro = (
+            '\n// eval_method: threshold_identity_select. y=x outside |x|<=threshold, else 0.\n'
+            '#define EVAL_METHOD_THRESHOLD_IDENTITY_SELECT\n'
+            '#define THRESHOLD_IDENTITY_SELECT\n'
+            f'#define THRESHOLD_IDENTITY_LAMBDA {clamp(hi_thr):.10e}f\n'
+        )
+        print(f'THRESHOLD IDENTITY SELECT: y=x when |x|>{hi_thr:.6g}, else 0 -> threshold bypass')
+
+# Gated quadratic collapse: y = x * clamp(c0 + c1*x, low, high). This captures
+# hardmish/hardswish-like exact piecewise polynomials without naming the op.
+gated_quadratic_macro = ''
+if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and num_segments == 3:
+    cps = degree + 1
+    tol = 1.0e-5
+    segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
+    def _coeff(coeff, idx):
+        return float(coeff[idx]) if len(coeff) > idx else 0.0
+    def _is_const(coeff, value):
+        return abs(_coeff(coeff, 0) - value) <= tol and all(abs(c) <= tol for c in coeff[1:])
+    def _is_identity(coeff):
+        return abs(_coeff(coeff, 0)) <= tol and abs(_coeff(coeff, 1) - 1.0) <= tol and all(abs(c) <= tol for c in coeff[2:])
+    middle_high_zero = all(abs(c) <= tol for c in segs[1][3:])
+    # middle y = x*(q0 + q1*x) => c0=0, c1=q0, c2=q1
+    if _is_const(segs[0], 0.0) and _is_identity(segs[2]) and abs(_coeff(segs[1], 0)) <= tol and middle_high_zero:
+        q0 = _coeff(segs[1], 1)
+        q1 = _coeff(segs[1], 2)
+        gated_quadratic_macro = (
+            '\n// eval_method: gated_quadratic_collapse. y = x * clamp(q0 + q1*x, 0, 1).\n'
+            '#define EVAL_METHOD_GATED_QUADRATIC_COLLAPSE\n'
+            '#define GATED_QUADRATIC_COLLAPSE\n'
+            f'#define GATED_QUADRATIC_Q0 {clamp(q0):.10e}f\n'
+            f'#define GATED_QUADRATIC_Q1 {clamp(q1):.10e}f\n'
+        )
+        print(f'GATED QUADRATIC COLLAPSE: y = x * clamp({q0:.6g} + {q1:.6g}*x, 0, 1) -> clamp template')
+
+# Abs-denominator rational collapse: y = x / (1 + abs(x)). Recognized from the
+# exact two-segment rational coefficient pattern, not from activation name.
+abs_den_rational_macro = ''
+if is_rational and rr_method in ('', 'none') and num_segments == 2 and num_degree == 1 and den_degree == 1:
+    tol = 1.0e-5
+    n_cps = num_degree + 1
+    d_cps = den_degree + 1
+    seg0_num = num_coefficients[0:n_cps]
+    seg1_num = num_coefficients[n_cps:2 * n_cps]
+    seg0_den = den_coefficients[0:d_cps]
+    seg1_den = den_coefficients[d_cps:2 * d_cps]
+    numer_ok = (
+        abs(seg0_num[0]) <= tol and abs(seg0_num[1] - 1.0) <= tol and
+        abs(seg1_num[0]) <= tol and abs(seg1_num[1] - 1.0) <= tol
+    )
+    den_ok = (
+        abs(seg0_den[0] - 1.0) <= tol and abs(seg0_den[1] + 1.0) <= tol and
+        abs(seg1_den[0] - 1.0) <= tol and abs(seg1_den[1] - 1.0) <= tol and
+        abs(boundaries[1]) <= tol
+    )
+    if numer_ok and den_ok:
+        abs_den_rational_macro = (
+            '\n// rational template: abs_denominator_rational. y = x / (1 + abs(x)).\n'
+            '#define ABS_DENOMINATOR_RATIONAL\n'
+        )
+        print('ABS DENOMINATOR RATIONAL: y = x / (1 + abs(x)) -> abs+reciprocal bypass')
+
+# Optional postcompose hook. This is explicit CSV metadata for algebraic wrappers
+# such as acos(x) = pi/2 - asin(x). It is generic affine-in-output composition.
+postcompose_macro = ''
+postcompose = _meta_norm('postcompose', 'post_compose', 'post_transform', 'output_transform')
+if postcompose in ('pi_over_2_minus_y', 'half_pi_minus_y'):
+    postcompose_macro = (
+        '\n// postcompose: y = pi/2 - y\n'
+        '#define POSTCOMPOSE_AFFINE_Y\n'
+        '#define POSTCOMPOSE_A 1.5707963267948966e+00f\n'
+        '#define POSTCOMPOSE_B -1.0000000000e+00f\n'
+    )
+    print('Postcompose: y = pi/2 - y')
+elif postcompose in ('', 'none', 'identity'):
+    pass
+else:
+    raise ValueError(f'unsupported postcompose={postcompose!r}')
+
 # Exactly one EVAL_METHOD_* selector. Metadata-driven methods (rr_macro) and
 # whole-function collapses emit their own selector; otherwise default to the
 # poly cascade. Parity / dual / adaptive / blend are orthogonal modifiers.
 eval_method_macro = ''
 has_codegen_eval_method = any(
-    'EVAL_METHOD_' in macro for macro in (rr_macro, affine_macro, clamped_affine_macro)
+    'EVAL_METHOD_' in macro for macro in (
+        rr_macro,
+        affine_macro,
+        clamped_affine_macro,
+        threshold_select_macro,
+        gated_quadratic_macro,
+    )
 )
 if not is_rational:
     if not has_codegen_eval_method:
@@ -904,7 +1004,7 @@ constexpr uint32_t LUT_SIZE = {lut_size};
 constexpr std::array<float, LUT_SIZE> LUT_DATA = {{{{
     {lut_str}
 }}}};
-{eval_method_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}
+{eval_method_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{abs_den_rational_macro}{postcompose_macro}
 #include \"../piecewise_rational.cpp\"
 '''
     # Override degree-related output variables for rational
@@ -939,7 +1039,7 @@ constexpr std::array<float, LUT_SIZE_FP32> LUT_DATA_FP32 = {{{{
     constexpr auto& LUT_DATA = LUT_DATA_FP32;
     constexpr uint32_t LUT_SIZE = LUT_SIZE_FP32;
 #endif
-{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}
+{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}{threshold_select_macro}{gated_quadratic_macro}{postcompose_macro}
 #include \"../piecewise_generic.cpp\"
 '''
 

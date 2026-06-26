@@ -61,6 +61,13 @@ namespace kutil = norm::kernel_util;
 
 namespace sfpi {
 
+inline vFloat apply_output_postcompose(vFloat y) {
+#if defined(POSTCOMPOSE_AFFINE_Y)
+    y = POSTCOMPOSE_B * y + POSTCOMPOSE_A;
+#endif
+    return y;
+}
+
 #ifdef RANGE_REDUCTION_EXP
 // Cody-Waite range reduction: x → (s, k_int) where exp(x) = 2^k * exp(s)
 // s ∈ [-ln(2)/2, ln(2)/2] ≈ [-0.347, 0.347]
@@ -2209,6 +2216,8 @@ inline void piecewise_generic_lut(const std::array<float, LUT_SIZE>& lut) {
         v_endif;
 #endif
 
+        result = apply_output_postcompose(result);
+
         // bf16 dst: RNE-round before the store. SFPSTORE narrows fp32->bf16 by
         // truncation (RTZ) in hardware; rounding here (sfpstochrnd RND_EVEN)
         // makes the already-bf16 value lossless under SFPSTORE and recovers the
@@ -2422,6 +2431,9 @@ inline void piecewise_generic_lut_dual(const std::array<float, LUT_SIZE>& lut) {
         v_endif;
 #endif
 
+        result1 = apply_output_postcompose(result1);
+        result2 = apply_output_postcompose(result2);
+
         // bf16 dst: RNE-round before the store (see single-eval note above).
 #ifdef USE_BF16
         result1 = convert<vFloat16b>(result1, RoundMode::Nearest);
@@ -2448,6 +2460,7 @@ inline void affine_collapse_eval() {
     for (int d = 0; d < 32; d++) {
         vFloat x = dst_reg[d];
         vFloat y = C1 * x + C0;
+        y = apply_output_postcompose(y);
 #ifdef USE_BF16
         y = convert<vFloat16b>(y, RoundMode::Nearest);
 #endif
@@ -2475,6 +2488,50 @@ inline void clamped_affine_collapse_eval() {
         vFloat hi = CLAMPED_AFFINE_MAX;
         vec_min_max(y, hi);  // y = min(y, hi)
 #endif
+        y = apply_output_postcompose(y);
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+}
+#endif
+
+#if defined(THRESHOLD_IDENTITY_SELECT)
+// y=x for |x|>lambda, else zero. Equality belongs to zero.
+inline void threshold_identity_select_eval() {
+    constexpr float LAMBDA = THRESHOLD_IDENTITY_LAMBDA;
+#pragma GCC unroll 8
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat y = x;
+        vFloat ax = setsgn(x, 0);
+        v_if(ax <= LAMBDA) { y = 0.0f; }
+        v_endif;
+        y = apply_output_postcompose(y);
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+}
+#endif
+
+#if defined(GATED_QUADRATIC_COLLAPSE)
+// y = x * clamp(q0 + q1*x, 0, 1).
+inline void gated_quadratic_collapse_eval() {
+    constexpr float Q0 = GATED_QUADRATIC_Q0;
+    constexpr float Q1 = GATED_QUADRATIC_Q1;
+#pragma GCC unroll 8
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat gate = Q1 * x + Q0;
+        vFloat zero = 0.0f;
+        vFloat one = 1.0f;
+        vec_min_max(zero, gate);  // gate = max(0, gate)
+        vec_min_max(gate, one);   // gate = min(gate, 1)
+        vFloat y = x * gate;
+        y = apply_output_postcompose(y);
 #ifdef USE_BF16
         y = convert<vFloat16b>(y, RoundMode::Nearest);
 #endif
@@ -2603,6 +2660,12 @@ void kernel_main() {
         // Clamped affine collapse: one SFPMAD plus optional min/max clamps.
         (void)p_lut;
         sfpi::clamped_affine_collapse_eval();
+#elif defined(THRESHOLD_IDENTITY_SELECT)
+        (void)p_lut;
+        sfpi::threshold_identity_select_eval();
+#elif defined(GATED_QUADRATIC_COLLAPSE)
+        (void)p_lut;
+        sfpi::gated_quadratic_collapse_eval();
 #else
         sfpi::piecewise_generic_lut_dispatch<poly_degree, num_segments, lut_size>(*p_lut);
 #endif

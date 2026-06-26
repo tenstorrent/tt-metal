@@ -151,6 +151,8 @@ inline void piecewise_rational_lut_N(const std::array<float, LUT_SIZE>& lut) {
         v_endif;
 #endif
 
+        result = apply_output_postcompose(result);
+
         // bf16 dst: RNE-round before the store. SFPSTORE narrows fp32->bf16 by
         // truncation (RTZ) in hardware; rounding here (sfpstochrnd RND_EVEN)
         // makes the already-bf16 value lossless under SFPSTORE and recovers the

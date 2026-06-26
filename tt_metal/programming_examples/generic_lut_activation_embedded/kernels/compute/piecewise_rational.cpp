@@ -52,6 +52,13 @@ namespace kutil = norm::kernel_util;
 
 namespace sfpi {
 
+inline vFloat apply_output_postcompose(vFloat y) {
+#if defined(POSTCOMPOSE_AFFINE_Y)
+    y = POSTCOMPOSE_B * y + POSTCOMPOSE_A;
+#endif
+    return y;
+}
+
 #ifdef RANGE_REDUCTION_EXP
 // Cody-Waite range reduction: x → (s, k_int) where exp(x) = 2^k * exp(s)
 // s ∈ [-ln(2)/2, ln(2)/2] ≈ [-0.347, 0.347]
@@ -465,6 +472,22 @@ inline vFloat eval_rational(const float* num_coeffs, const float* den_coeffs, vF
 #endif
 }
 
+#if defined(ABS_DENOMINATOR_RATIONAL)
+inline void abs_denominator_rational_eval() {
+#pragma GCC unroll 8
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat den = setsgn(x, 0) + 1.0f;
+        vFloat y = x * ckernel::sfpu::sfpu_reciprocal<false>(den);
+        y = apply_output_postcompose(y);
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+}
+#endif
+
 // Evaluate P(x) and Q(x) separately for deferred-reciprocal dispatch.
 // The segment unroller calls this inside v_if, then does ONE reciprocal outside.
 template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
@@ -545,7 +568,12 @@ void kernel_main() {
 #ifdef TRISC_MATH
         // All degree parameters are constexpr — use them directly as template args.
         // No dispatch table needed; works for ANY (num_degree, den_degree) combination.
+#if defined(ABS_DENOMINATOR_RATIONAL)
+        (void)p_lut;
+        sfpi::abs_denominator_rational_eval();
+#else
         sfpi::piecewise_rational_lut_dispatch<num_degree, den_degree, num_segments, lut_size>(*p_lut);
+#endif
 #endif
 
         tile_regs_commit();
