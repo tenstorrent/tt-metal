@@ -30,6 +30,30 @@ constexpr uint32_t ct_after_src = src_args.next_compile_time_args_offset();
 // conv3d reader's progress_t_batch_size compile-time arg.
 constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(ct_after_src);
 
+// Global two-pass gate, set per-shape by the program factory (lockstep with np_writer via the same
+// factory value). ON: defer all corners past H's finish (NP-bound win, regresses conv-bound).
+// Follows progress_t_batch_size (ct_after_src) in the W-reader arg layout.
+constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_src + 1);
+
+// Per-batch two-pass reorder: within a FULL batch of nf frames x h_total rows, emit all interior rows
+// first (nf*input_H_dev), then all corner rows (nf*2*padding_h), so the H->W corner gate is reached only
+// after the batch's gate-free interior (H's per-batch corner commit is done by then -> no stall). Returns
+// (frame_in_batch, h_padded). MUST stay identical in np_writer.cpp (reader/writer halo addressing lockstep).
+inline void np_reorder_batch(
+    uint32_t k, uint32_t nf, uint32_t input_H_dev, uint32_t padding_h, uint32_t& frame, uint32_t& h_padded) {
+    const uint32_t interior = nf * input_H_dev;
+    if (k < interior) {
+        frame = k / input_H_dev;
+        h_padded = padding_h + (k % input_H_dev);
+    } else {
+        const uint32_t kc = k - interior;
+        const uint32_t cpf = 2 * padding_h;  // corners per frame (top + bottom)
+        frame = kc / cpf;
+        const uint32_t c = kc % cpf;
+        h_padded = (c < padding_h) ? c : (padding_h + input_H_dev + (c - padding_h));
+    }
+}
+
 template <uint32_t stick_size_bytes>
 inline void zeroPadCb(uint32_t cb_id) {
     constexpr uint32_t num_full_reads = stick_size_bytes / MEM_ZEROS_SIZE;
@@ -109,14 +133,30 @@ void kernel_main() {
 
     // outer_dim runs over T_in * h_total; one progress-sem batch = progress_t_batch_size * h_total sticks.
     const uint32_t sticks_per_batch = progress_t_batch_size * h_total;
+    // Frames in this core's slice (link-local; the partial last batch lives here when T % N != 0).
+    const uint32_t slice_frames = (h_total > 0) ? (outer_dim_size / h_total) : 0;
+    // Global two-pass layout: interior rows [0, interior_rows) then corner rows. A conv batch's W-pad
+    // is complete only after its corners are written (corner pass), so signal w_region_sem there.
+    const uint32_t interior_rows = slice_frames * input_H_dev;
+    const uint32_t corner_rows_per_batch = progress_t_batch_size * 2 * padding_h;
 
     // Main loop: read W-boundary sticks → CB for the paired writer.
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
-        // outer_dim maps to (t, h_padded) where h_padded ∈ [0, h_total).
-        // Interior: padding_h ≤ h_padded < padding_h + H_dev.
-        const uint32_t global_idx = outer_dim_start + outer_dim;
-        const uint32_t t_idx = global_idx / h_total;
-        const uint32_t h_padded = global_idx % h_total;
+        // outer_dim maps to (t, h_padded). Per-batch two-pass reorder (interior rows of a batch before
+        // its corners) for FULL batches; linear for the partial last batch (and when not batching).
+        uint32_t t_idx;
+        uint32_t h_padded;
+        if constexpr (progress_t_batch_size > 0 && W_TWO_PASS) {
+            // Global two-pass: whole slice as one batch -> ALL interior rows first, then ALL corners.
+            // W runs its H-independent interior free while H produces; corners come after H is done.
+            uint32_t frame_in_slice;
+            np_reorder_batch(outer_dim, slice_frames, input_H_dev, padding_h, frame_in_slice, h_padded);
+            t_idx = (outer_dim_start / h_total) + frame_in_slice;
+        } else {
+            const uint32_t global_idx = outer_dim_start + outer_dim;
+            t_idx = global_idx / h_total;
+            h_padded = global_idx % h_total;
+        }
         const bool h_interior = (h_padded >= padding_h && h_padded < padding_h + input_H_dev);
 
         // A non-interior row is a corner stick built from H-halo. Before reading it, wait this
@@ -211,7 +251,17 @@ void kernel_main() {
         // remote fabric write for this batch has landed. Receiver signals only after
         // wait_min(w_neighbor_sem, outer_dim+1) — fabric in-order delivery guarantees
         // batch data is in DRAM at that point.
-        if (!is_first_chip && (outer_dim + 1) % sticks_per_batch == 0) {
+        // Global two-pass: a conv batch's W-pad is complete after its corners (corner pass), so signal
+        // there; the original per-sticks_per_batch point would fire during the interior pass (corners
+        // not yet written). Non-reorder path keeps the original signal.
+        bool do_signal;
+        if constexpr (progress_t_batch_size > 0 && W_TWO_PASS) {
+            do_signal = (outer_dim >= interior_rows) && (corner_rows_per_batch > 0) &&
+                        ((outer_dim + 1 - interior_rows) % corner_rows_per_batch == 0);
+        } else {
+            do_signal = ((outer_dim + 1) % sticks_per_batch == 0);
+        }
+        if (!is_first_chip && do_signal) {
             noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim + 1);
             noc_async_write_barrier();
             for (uint32_t i = 0; i < num_reader_cores; i++) {
@@ -223,8 +273,14 @@ void kernel_main() {
         }
     }
 
-    // Tail for partial last batch (receiver side only).
-    if (!is_first_chip && outer_dim_size % sticks_per_batch != 0) {
+    // Tail for the partial last batch (receiver side only).
+    bool tail_signal;
+    if constexpr (progress_t_batch_size > 0 && W_TWO_PASS) {
+        tail_signal = (corner_rows_per_batch > 0) && ((outer_dim_size - interior_rows) % corner_rows_per_batch != 0);
+    } else {
+        tail_signal = (outer_dim_size % sticks_per_batch != 0);
+    }
+    if (!is_first_chip && tail_signal) {
         noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim_size);
         noc_async_write_barrier();
         for (uint32_t i = 0; i < num_reader_cores; i++) {

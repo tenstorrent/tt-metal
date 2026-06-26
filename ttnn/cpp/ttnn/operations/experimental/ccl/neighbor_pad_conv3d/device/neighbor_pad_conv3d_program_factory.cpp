@@ -131,6 +131,20 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     TT_FATAL(op.np_pad_dim2.has_value(), "NpConv3d: fused op requires 2D padding (H+W).");
     const bool is_2d = true;
 
+    // Per-shape gates for the two NP-fabric reorders, passed as compile-time args (reader/writer stay in
+    // lockstep). Both win when the op is NP-bound — low conv compute-intensity (C_in*C_out = per-position
+    // matmul K*N) leaves the NP fabric exposed. H corner-first (H writer) wins whenever NP is exposed.
+    // The W global two-pass (defer all H-dependent corner reads past H's finish) additionally needs a
+    // small per-device tile, else it delays the conv's W-edge and regresses the larger-tile NP-leaning
+    // shapes. Thresholds from the BH 4x8/2x4 device sweep; replace with a calibrated conv-vs-NP cost
+    // estimate when one exists.
+    const uint32_t gate_c_in = input_tensor_shape[input_tensor_shape.size() - 1];
+    const uint32_t gate_c_out = op.output_channels;
+    const uint32_t gate_spatial = input_halo_dim_size * num_sticks_per_halo_dim;  // H_dev * W_dev
+    const bool np_bound_channels = gate_c_in * gate_c_out <= 131072u;
+    const uint32_t use_corner_first = np_bound_channels ? 1u : 0u;
+    const uint32_t use_w_two_pass = (np_bound_channels && gate_spatial <= 8192u) ? 1u : 0u;
+
     // For the compact halo buffer, H-section rows are exactly W_dev wide.
     // W-padding is handled in a separate W-section, so no extra columns in H rows.
     // (The standalone NP factory widens rows to W+pad for padded-tensor output,
@@ -373,7 +387,9 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
     h_writer_kernel_config.compile_args.push_back(op.np_ring_size);  // ring_size
     // Per-batch progress-sem granularity is always passed; 0 disables the per-batch path.
     h_writer_kernel_config.compile_args.push_back(progress_t_batch_size);
-    h_writer_kernel_config.compile_args.push_back(hsend_cb_index);  // send_cb_id (batched H send)
+    h_writer_kernel_config.compile_args.push_back(hsend_cb_index);    // send_cb_id (batched H send)
+    h_writer_kernel_config.compile_args.push_back(use_w_two_pass);    // unused on H writer; keeps arg layout aligned
+    h_writer_kernel_config.compile_args.push_back(use_corner_first);  // H-writer corner-first gate
     auto h_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
@@ -551,6 +567,7 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
         // Per-batch signal granularity (matches conv3d reader's progress_t_batch_size CT arg).
         w_reader_kernel_config.compile_args.push_back(progress_t_batch_size);
+        w_reader_kernel_config.compile_args.push_back(use_w_two_pass);  // global two-pass gate (lockstep w/ writer)
         w_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
@@ -607,6 +624,9 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
         // match np_writer.cpp's arg layout.
         w_writer_kernel_config.compile_args.push_back(progress_t_batch_size);
         w_writer_kernel_config.compile_args.push_back(sender_cb_index);  // send_cb_id: W keeps the c_in0 per-stick path
+        w_writer_kernel_config.compile_args.push_back(use_w_two_pass);   // global two-pass gate (lockstep w/ reader)
+        w_writer_kernel_config.compile_args.push_back(
+            use_corner_first);  // unused on W writer; keeps arg layout aligned
         w_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/"
@@ -619,7 +639,9 @@ NpConv3dMeshWorkloadFactory::cached_program_t NpConv3dMeshWorkloadFactory::creat
             {halo_buffer->address(),
              halo_buffer->address(),
              op.w_neighbor_semaphore.address(),
-             op.h_neighbor_semaphore.address()});
+             op.h_neighbor_semaphore.address(),
+             input_halo_dim_size,
+             static_cast<uint32_t>(op.np_padding_h)});  // [4],[5]: W-writer per-batch two-pass reorder dims
 
         // Per-core W fabric runtime args.
         // When pipelining (progress_t_batch_size>0), align each link to whole T-batches so the

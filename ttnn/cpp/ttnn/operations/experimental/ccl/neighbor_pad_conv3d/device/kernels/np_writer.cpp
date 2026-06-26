@@ -38,6 +38,24 @@ inline ccl_routing_utils::line_multicast_route_info_t get_line_multicast_route_i
         .s_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
 }
 
+// Per-batch two-pass reorder (W path): within a FULL batch of nf frames, all interior rows first then
+// all corner rows. Returns (frame_in_batch, h_padded). MUST stay identical to
+// np_phase2_w_reader.cpp::np_reorder_batch — reader and writer address the halo buffer in lockstep.
+inline void np_reorder_batch(
+    uint32_t k, uint32_t nf, uint32_t input_H_dev, uint32_t padding_h, uint32_t& frame, uint32_t& h_padded) {
+    const uint32_t interior = nf * input_H_dev;
+    if (k < interior) {
+        frame = k / input_H_dev;
+        h_padded = padding_h + (k % input_H_dev);
+    } else {
+        const uint32_t kc = k - interior;
+        const uint32_t cpf = 2 * padding_h;
+        frame = kc / cpf;
+        const uint32_t c = kc % cpf;
+        h_padded = (c < padding_h) ? c : (padding_h + input_H_dev + (c - padding_h));
+    }
+}
+
 // Compile-time args (uniform across all cores sharing this kernel)
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr bool is_padding_zeros = get_compile_time_arg_val(1);
@@ -54,6 +72,15 @@ constexpr uint32_t ring_size = get_compile_time_arg_val(ct_after_dst + 4);
 constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(ct_after_dst + 5);
 // CB the fabric-send loop drains. H writer: dedicated batched send ring (c_in2). W writer: c_in0.
 constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_dst + 6);
+
+// Global two-pass gate, set per-shape by the program factory (lockstep with np_phase2_w_reader via
+// the same factory value). Follows send_cb_id (ct_after_dst + 6) in the W-writer/H-writer arg layout.
+constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_dst + 7);
+
+// H-writer corner-first send (H-writer path only): raise the recv sem after the corner sticks, before
+// the bulk middle, so the neighbor's recv-wait clears after ~pad2 sticks instead of the whole row. Set
+// per-shape by the program factory; unused on the W writer. Follows W_TWO_PASS in the arg layout.
+constexpr bool H_CORNER_FIRST = get_compile_time_arg_val(ct_after_dst + 8);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -127,6 +154,30 @@ void kernel_main() {
     auto pkt_hdr = PacketHeaderPool::allocate_header();
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
+
+    // Send one payload stick to dst_noc_addr over the fabric; pkt_hdr is reused per stick.
+    auto fabric_send_stick = [&](uint32_t l1_read_addr, uint64_t dst_noc_addr) {
+        pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
+        auto& conn =
+            direction ? fabric_connection.get_backward_connection() : fabric_connection.get_forward_connection();
+        conn.wait_for_empty_write_slot();
+        conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, stick_size);
+        conn.send_payload_flush_non_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        noc_async_writes_flushed();
+    };
+
+    // Atomic-inc the neighbor's output-ready semaphore over the fabric.
+    auto raise_neighbor_sem = [&]() {
+        uint64_t sem_noc_addr = safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, neighbor_sem, 0);
+        pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint32_t>(1)});
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
+        auto& conn =
+            direction ? fabric_connection.get_backward_connection() : fabric_connection.get_forward_connection();
+        conn.wait_for_empty_write_slot();
+        conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
+        noc_async_writes_flushed();
+    };
 
     // H writers: always open fabric at start (for data transfer in main loop).
     // W writers: open at start only when startup barrier is enabled (defer data transfer until CB ready).
@@ -260,11 +311,33 @@ void kernel_main() {
         uint32_t w_overhead = num_sticks_per_halo_dim - num_sticks_to_read;
         pad2_right_sticks = (w_overhead >= pad2_left_sticks) ? (w_overhead - pad2_left_sticks) : pad2_left_sticks;
     }
+    // A W-boundary (corner) stick is one of the pad2 columns at either row end; the rest are interior.
+    auto is_corner_stick = [&](uint32_t iter) {
+        return iter < pad2_right_sticks || iter >= (num_sticks_to_read - pad2_left_sticks);
+    };
+
+    // W-path per-batch two-pass reorder dims (common args [4],[5], W-writer only; gated progress>0).
+    uint32_t w_input_H = 0, w_pad_h = 0, w_h_total = 1, w_row_stride = 0, w_slice_frames = 0;
+    if constexpr (is_w_fabric_writer && progress_t_batch_size > 0) {
+        w_input_H = get_common_arg_val<uint32_t>(4);
+        w_pad_h = get_common_arg_val<uint32_t>(5);
+        w_h_total = w_input_H + 2 * w_pad_h;
+        w_row_stride = num_sticks_per_halo_dim * output_halo_dim_size;
+        w_slice_frames = (w_h_total > 0) ? (outer_dim_size / w_h_total) : 0;
+    }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     uint32_t l1_buf_offset = 0;                       // L1 intermediate: accumulates across all outer_dims (no reuse)
     uint32_t inc_offset = outer_dim_offset_start_id;  // recv-commit cursor, advances per committed od
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
+        // Global two-pass: whole slice as one batch -> ALL interior rows first, then ALL corners.
+        uint32_t eff_offset = outer_dim_offset;
+        if constexpr (is_w_fabric_writer && progress_t_batch_size > 0 && W_TWO_PASS) {
+            uint32_t frame_in_slice, hp;
+            np_reorder_batch(outer_dim, w_slice_frames, w_input_H, w_pad_h, frame_in_slice, hp);
+            const uint32_t reordered = frame_in_slice * w_h_total + hp;
+            eff_offset = outer_dim_offset_start_id + reordered * w_row_stride;
+        }
         if (is_first_chip) {
             if (!is_padding_zeros) {
                 // Replicate a slice of 1 from input to output
@@ -274,7 +347,7 @@ void kernel_main() {
                 } else {
                     dst_stick_id = stick_start_id;
                 }
-                dst_stick_id += outer_dim_offset;
+                dst_stick_id += eff_offset;
                 for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
                     cb_wait_front(cb_output_id, 1);
                     if constexpr (is_w_fabric_writer) {
@@ -302,7 +375,7 @@ void kernel_main() {
                 } else {
                     dst_stick_id = stick_start_id;
                 }
-                dst_stick_id += outer_dim_offset;
+                dst_stick_id += eff_offset;
                 cb_wait_front(cb_output_id, 1);
                 if constexpr (is_w_fabric_writer) {
                     if (!fabric_opened) {
@@ -326,90 +399,103 @@ void kernel_main() {
         }
 
         if (!is_last_chip) {
-            // Read the "end" of each slice into the CB to write to the neighbor
-            for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
-                uint32_t dst_stick_id = 0;
-                if (direction) {
-                    dst_stick_id =
-                        (output_halo_dim_size - (padding - pad_id)) * num_sticks_per_halo_dim + stick_start_id;
-                } else {
-                    dst_stick_id = pad_id * num_sticks_per_halo_dim + stick_start_id;
-                }
-                dst_stick_id += outer_dim_offset;
-                for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
-                    cb_wait_front(send_cb_id, 1);
-                    if constexpr (is_w_fabric_writer) {
-                        if (!fabric_opened) {
-                            fabric_connection.open();
-                            fabric_opened = true;
+            bool did_corner_first = false;
+            // H writer, corners-only, padding==1: the neighbor's H reader recv-commit pulls only the
+            // corner sticks; the bulk middle sticks go straight to its output DRAM for conv (gated far
+            // later by w_region_sem). So send the few corners first and raise the recv sem BEFORE the
+            // middle bulk — the neighbor clears its recv-wait after ~pad2 sticks instead of the whole
+            // row, taking the full-row send off the H-recv critical path. The single send_cb row holds
+            // both passes, so no extra read. padding!=1 needs all pad rows resident before the sem inc
+            // (the 2-row send_cb can't guarantee that), so it keeps the in-order path below.
+            if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
+                if (H_CORNER_FIRST && padding == 1) {
+                    uint32_t dst_stick_id =
+                        (direction ? (output_halo_dim_size - 1) * num_sticks_per_halo_dim + stick_start_id
+                                   : stick_start_id) +
+                        eff_offset;
+                    cb_wait_front(send_cb_id, num_sticks_to_read);
+                    const uint32_t row_base = get_read_ptr(send_cb_id);
+                    // Pass 1: corner sticks -> neighbor L1.
+                    for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                        if (!is_corner_stick(iter)) {
+                            continue;
                         }
+                        uint64_t dst_noc_addr = safe_get_noc_addr(
+                            neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
+                        l1_buf_offset += stick_size;
+                        fabric_send_stick(row_base + iter * stick_size, dst_noc_addr);
                     }
-                    uint32_t l1_read_addr = get_read_ptr(send_cb_id);
+                    noc_async_write_barrier();
 
-                    uint64_t dst_noc_addr;
-                    if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-                        // Corners-only: W-boundary sticks go to L1, rest to DRAM
-                        bool is_corner =
-                            (iter < pad2_right_sticks) || (iter >= (num_sticks_to_read - pad2_left_sticks));
-                        if (is_corner) {
+                    // Corners delivered: raise the recv sem before the middle bulk so the neighbor's
+                    // recv-commit clears now instead of after the whole row.
+                    raise_neighbor_sem();
+
+                    // Pass 2: bulk middle sticks -> neighbor DRAM (off the H-recv critical path).
+                    for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                        if (!is_corner_stick(iter)) {
+                            fabric_send_stick(
+                                row_base + iter * stick_size, get_noc_addr(dst_stick_id, dst_accessor, 0, 0));
+                        }
+                        dst_stick_id++;
+                    }
+                    noc_async_write_barrier();
+                    cb_pop_front(send_cb_id, num_sticks_to_read);
+                    did_corner_first = true;
+                }
+            }
+            if (!did_corner_first) {
+                // Read the "end" of each slice into the CB to write to the neighbor
+                for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
+                    uint32_t dst_stick_id = 0;
+                    if (direction) {
+                        dst_stick_id =
+                            (output_halo_dim_size - (padding - pad_id)) * num_sticks_per_halo_dim + stick_start_id;
+                    } else {
+                        dst_stick_id = pad_id * num_sticks_per_halo_dim + stick_start_id;
+                    }
+                    dst_stick_id += eff_offset;
+                    for (uint32_t iter = 0; iter < num_sticks_to_read; ++iter) {
+                        cb_wait_front(send_cb_id, 1);
+                        if constexpr (is_w_fabric_writer) {
+                            if (!fabric_opened) {
+                                fabric_connection.open();
+                                fabric_opened = true;
+                            }
+                        }
+                        uint32_t l1_read_addr = get_read_ptr(send_cb_id);
+
+                        uint64_t dst_noc_addr;
+                        if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
+                            // Corners-only: W-boundary sticks go to L1, rest to DRAM
+                            if (is_corner_stick(iter)) {
+                                dst_noc_addr = safe_get_noc_addr(
+                                    neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
+                                l1_buf_offset += stick_size;
+                            } else {
+                                // Non-corner: send directly to neighbor's output DRAM
+                                dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+                            }
+                        } else if constexpr (use_l1_intermediate) {
+                            // W writer: all sticks to L1
                             dst_noc_addr = safe_get_noc_addr(
                                 neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
                             l1_buf_offset += stick_size;
                         } else {
-                            // Non-corner: send directly to neighbor's output DRAM
                             dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
                         }
-                    } else if constexpr (use_l1_intermediate) {
-                        // W writer: all sticks to L1
-                        dst_noc_addr = safe_get_noc_addr(
-                            neighbor_sem_noc0_x, neighbor_sem_noc0_y, recv_buf_base + l1_buf_offset, 0);
-                        l1_buf_offset += stick_size;
-                    } else {
-                        dst_noc_addr = get_noc_addr(dst_stick_id, dst_accessor, 0, 0);
+
+                        fabric_send_stick(l1_read_addr, dst_noc_addr);
+
+                        dst_stick_id++;
+
+                        noc_async_write_barrier();
+                        cb_pop_front(send_cb_id, 1);
                     }
-
-                    pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, stick_size);
-                    if (direction) {
-                        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                        fabric_connection.get_backward_connection()
-                            .send_payload_without_header_non_blocking_from_address(l1_read_addr, stick_size);
-                        fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-                    } else {
-                        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                        fabric_connection.get_forward_connection()
-                            .send_payload_without_header_non_blocking_from_address(l1_read_addr, stick_size);
-                        fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-                    }
-                    noc_async_writes_flushed();
-
-                    dst_stick_id++;
-
-                    noc_async_write_barrier();
-                    cb_pop_front(send_cb_id, 1);
                 }
-            }
 
-            // unicast output ready semaphore
-            uint64_t neighbor_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(neighbor_sem_noc0_x, neighbor_sem_noc0_y, neighbor_sem, 0);
-            pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                neighbor_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
-            // Write the unicast packet
-            if (direction) {
-                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
-                fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
-
-            } else {
-                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
-                fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr_sem_inc, sizeof(PACKET_HEADER_TYPE));
+                raise_neighbor_sem();
             }
-            noc_async_writes_flushed();
         }
 
         // No local interior copy in this kernel. Dedicated local-copy kernels handle that work.
