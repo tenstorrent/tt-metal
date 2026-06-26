@@ -209,6 +209,10 @@ def _blocks_for(seqlen, max_generated_tokens):
         # Batched decode (TP only): B users sharing one shared paged KV + batched GDN state.
         pytest.param(128, 50, True, 8, 1, id="batched_128_b8"),
         pytest.param(128, 50, True, 32, 1, id="batched_128_b32"),
+        # Batched LONG prefill (TP only): T>128 routes to prefill_chunked_peruser (per-user
+        # chunk-outer prefill into a B=1 GDN scratch, assembled into the batched decode buffers).
+        pytest.param(4096, 50, True, 8, 1, id="batched_4k_b8"),
+        pytest.param(4096, 50, True, 32, 1, id="batched_4k_b32"),
     ],
 )
 def test_demo_text(

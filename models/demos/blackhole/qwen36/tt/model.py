@@ -183,6 +183,18 @@ class Qwen36Model:
         self._chunk_full_page_table_buf = None
         self._chunk_cos_buf = None
         self._chunk_sin_buf = None
+        # Traced batched short-prompt (bucket) prefill: one B=1 full-bucket trace replayed
+        # once per user (see capture_prefill_trace_bucket / prefill_traced_bucket_batched).
+        self._bucket_trace_id = None
+        self._bucket_trace_output = None
+        self._bucket_size = None
+        self._bucket_token_buf = None
+        self._bucket_start_idx_tensor = None
+        self._bucket_page_table_buf = None
+        self._bucket_full_page_table_buf = None
+        self._bucket_cos_buf = None
+        self._bucket_sin_buf = None
+        self._gdn_batched_prev = None  # batched GDN bindings saved during bucket-trace capture
 
         # Optional vision tower (DropInVisionTransformer), attached lazily by
         # init_vision_model() for the multimodal serving path. None on the text-only path.
