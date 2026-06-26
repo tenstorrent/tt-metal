@@ -320,7 +320,7 @@ eval_basis_macro = ''
 basis_kind = metadata.get('basis_kind', '').strip()
 basis_kind_norm = basis_kind.lower().replace('-', '_')
 basis_clamp_max = metadata.get('basis_clamp_max', '').strip()
-plain_basis_kinds = ('', 'natural', 'monomial', 'power', 'polynomial', 'poly')
+plain_basis_kinds = ('', 'natural', 'monomial', 'power', 'polynomial', 'poly', 'trig_odd_residual')
 
 def _meta_norm(*keys):
     for key in keys:
@@ -723,6 +723,30 @@ elif rr_method == 'exp':
 elif rr_method == 'trig':
     rr_macro = '\n// eval_method: reduced_poly / trig\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TRIG\n'
     print(f'Range reduction: trig')
+elif rr_method in ('trig_residual', 'trig_standalone'):
+    if is_rational:
+        raise ValueError('trig_residual standalone evaluator requires polynomial coefficients')
+    if num_segments != 1:
+        raise ValueError('trig_residual standalone evaluator currently requires one segment')
+    trig_phase = _meta_norm('trig_phase', 'trig_reduction_phase', 'range_reduction_phase')
+    if trig_phase not in ('cosine_pi2_odd', 'cos_pi2_odd', 'cosine_shifted_sine', 'cos_shifted_sine'):
+        raise ValueError(f'trig_residual requires supported trig_phase, got {trig_phase!r}')
+    cps = degree + 1
+    seg0 = coefficients[0:cps]
+    coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+    c1_is_one_macro = '#define TRIG_RESIDUAL_C1_IS_ONE\n' if len(seg0) > 1 and abs(float(seg0[1]) - 1.0) < 1e-12 else ''
+    degree_macros = ''
+    poly_parity_macro = ''
+    rr_macro = (
+        '\n// eval_method: trig_residual standalone, odd residual polynomial. STANDALONE\n'
+        '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_TRIG_RESIDUAL\n'
+        '#define EVAL_METHOD_TRIG_RESIDUAL\n'
+        '#define TRIG_RESIDUAL_PHASE_COSINE_PI2_ODD\n'
+        f'{c1_is_one_macro}'
+        f'constexpr uint32_t TRIG_RESIDUAL_DEGREE = {degree};\n'
+        f'constexpr float TRIG_RESIDUAL_COEFFS[] = {{{coeff_str}}};\n'
+    )
+    print(f'Range reduction: trig_residual standalone (phase {trig_phase}, degree {degree})')
 elif rr_method == 'log':
     expand_const = metadata.get('log_ln2_constant', '0.6931471805599453')
     rr_macro = (f'\n// eval_method: reduced_poly / log\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n'

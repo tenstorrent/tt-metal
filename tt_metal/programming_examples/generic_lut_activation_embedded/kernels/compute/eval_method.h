@@ -94,6 +94,7 @@
 #define TT_ACT_EVAL_REDUCED_POLY 3
 #define TT_ACT_EVAL_EXPONENT_ALU 4
 #define TT_ACT_EVAL_NEWTON_ROOT 5
+#define TT_ACT_EVAL_TRIG_RESIDUAL 6
 #define TT_ACT_EVAL_IDENTITY 10
 #define TT_ACT_EVAL_AFFINE 11
 #define TT_ACT_EVAL_CLAMPED_AFFINE 12
@@ -156,7 +157,7 @@
 // ----------------------------------------------------------------------------
 
 // Standalone evaluators own the whole approximation and bypass the cascade.
-#if defined(EVAL_METHOD_EXPONENT_ALU) || defined(EVAL_METHOD_NEWTON_ROOT)
+#if defined(EVAL_METHOD_EXPONENT_ALU) || defined(EVAL_METHOD_NEWTON_ROOT) || defined(EVAL_METHOD_TRIG_RESIDUAL)
 #define EVAL_METHOD_IS_STANDALONE 1
 #else
 #define EVAL_METHOD_IS_STANDALONE 0
@@ -164,7 +165,8 @@
 
 // Any method that needs the range-reduction / exponent-decompose helpers
 // (reduce_*, exp_hw_eval, log_hw_eval, pow_hw_eval, newton_root_eval) pulled in.
-#if defined(EVAL_METHOD_REDUCED_POLY) || defined(EVAL_METHOD_EXPONENT_ALU) || defined(EVAL_METHOD_NEWTON_ROOT)
+#if defined(EVAL_METHOD_REDUCED_POLY) || defined(EVAL_METHOD_EXPONENT_ALU) || defined(EVAL_METHOD_NEWTON_ROOT) || \
+    defined(EVAL_METHOD_TRIG_RESIDUAL)
 #define EVAL_METHOD_NEEDS_REDUCTION_HELPERS 1
 #else
 #define EVAL_METHOD_NEEDS_REDUCTION_HELPERS 0

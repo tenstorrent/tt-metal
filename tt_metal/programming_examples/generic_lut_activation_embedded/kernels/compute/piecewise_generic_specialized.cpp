@@ -40,7 +40,18 @@
 #if EVAL_METHOD_IS_STANDALONE
 template <uint32_t POLY_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE>
 inline void piecewise_generic_lut_hw_reduce(const std::array<float, LUT_SIZE>& /*lut*/) {
-#if defined(EVAL_METHOD_NEWTON_ROOT)
+#if defined(EVAL_METHOD_TRIG_RESIDUAL)
+#pragma GCC unroll 16
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat y = trig_residual_cosine_pi2_odd_eval<TRIG_RESIDUAL_DEGREE>(x);
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+    return;
+#elif defined(EVAL_METHOD_NEWTON_ROOT)
     // Newton-Raphson magic-seed root: constants preloaded in kernel_main, no
     // per-loop hoist needed. sqrt/rsqrt mirror native (~15-18 SFPU instrs); cbrt
     // is division-free (inverse-cube-root multiply-only Newton). All fit the

@@ -128,6 +128,62 @@ inline vFloat trig_expand(vFloat poly_result, vInt q_int) {
 }
 #endif
 
+#if defined(EVAL_METHOD_TRIG_RESIDUAL)
+template <uint32_t DEGREE>
+inline vFloat trig_residual_cosine_pi2_odd_eval(vFloat x) {
+    vFloat half = sFloat16b(0.5f);
+    vFloat inv_pi = vConstFloatPrgm2;
+    vFloat z = __builtin_rvtt_sfpmad(x.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
+
+    const vFloat c231 = ckernel::sfpu::Converter::as_float(0x4B400000U);
+    vFloat tmp = z + c231;
+    vFloat q = tmp - c231;
+    vInt q_int = reinterpret<vInt>(tmp) - reinterpret<vInt>(c231);
+
+    vFloat two = sFloat16b(2.0f);
+    vFloat neg_one = vConstNeg1;
+    vFloat j = __builtin_rvtt_sfpmad(q.get(), two.get(), neg_one.get(), SFPMAD_MOD1_OFFSET_NONE);
+    constexpr float NEG_PI_2_P0 = -0x1.92p+0f;
+    constexpr float NEG_PI_2_P1 = -0x1.fbp-12f;
+    vFloat a = j * NEG_PI_2_P0 + x;
+    a = j * NEG_PI_2_P1 + a;
+    a = j * vConstFloatPrgm0 + a;
+    a = j * vConstFloatPrgm1 + a;
+
+    q_int <<= 31;
+    a = reinterpret<vFloat>(reinterpret<vInt>(a) ^ q_int);
+
+    vFloat s = a * a;
+    if constexpr (DEGREE == 7) {
+        vFloat r = TRIG_RESIDUAL_COEFFS[7] * s + TRIG_RESIDUAL_COEFFS[5];
+        vFloat c = a * s;
+        r = r * s + TRIG_RESIDUAL_COEFFS[3];
+#ifdef TRIG_RESIDUAL_C1_IS_ONE
+        return r * c + a;
+#else
+        return r * c + TRIG_RESIDUAL_COEFFS[1] * a;
+#endif
+    } else if constexpr (DEGREE == 5) {
+        vFloat r = TRIG_RESIDUAL_COEFFS[5] * s + TRIG_RESIDUAL_COEFFS[3];
+        vFloat c = a * s;
+#ifdef TRIG_RESIDUAL_C1_IS_ONE
+        return r * c + a;
+#else
+        return r * c + TRIG_RESIDUAL_COEFFS[1] * a;
+#endif
+    } else {
+        constexpr int TOP = (DEGREE % 2 == 1) ? DEGREE : DEGREE - 1;
+        constexpr int STEPS = (TOP - 1) / 2;
+        vFloat r = TRIG_RESIDUAL_COEFFS[TOP];
+#pragma GCC unroll 8
+        for (int k = 1; k <= STEPS; k++) {
+            r = r * s + TRIG_RESIDUAL_COEFFS[TOP - 2 * k];
+        }
+        return r * a;
+    }
+}
+#endif
+
 #ifdef RANGE_REDUCTION_TAN
 // Tan range reduction: x → (a, j_int) where a ∈ [-π/4, π/4]
 // Uses Cody-Waite reduction matching TTNN's sfpu_tan implementation
@@ -2689,6 +2745,14 @@ void kernel_main() {
     sfpi::vConstFloatPrgm1 = NEWTON_ROOT_C1;  // sqrt: C1; rsqrt: 1.5 step constant
     sfpi::vConstFloatPrgm2 = NEWTON_ROOT_C2;  // sqrt: C2; rsqrt: unused
 #endif
+#endif
+
+#if defined(EVAL_METHOD_TRIG_RESIDUAL) && defined(TRISC_MATH)
+    // Four-part Cody-Waite -PI/2 tail constants and 1/PI multiplier for the
+    // standalone trig residual evaluator.
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+    sfpi::vConstFloatPrgm2 = 0.31830987334251404f;
 #endif
 
 #if defined(RANGE_REDUCTION_TAN) && defined(TRISC_MATH)
