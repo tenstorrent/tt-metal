@@ -21,7 +21,7 @@ namespace ckernel::sfpu {
 // tanh(x): t = 0.5*expm1(abs(2*x)); sgn(x) * t / (t + 1)
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat a, r, s, f, w, y, scale, bias0, bias1, c0;
-    sfpi::vFloat t, rcp, x0, x1, tmp;
+    sfpi::vFloat t, rcp, x0, x1, y0, tmp, x_exp;
     sfpi::vInt magic_seed;
 
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
@@ -57,12 +57,19 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     magic_seed = 0xfef30000;
     rcp = sfpi::reinterpret<sfpi::vFloat>(magic_seed - sfpi::reinterpret<sfpi::vInt>(x1));
     t = x1 * rcp + 1.0f;
-    t = t * t + t;
-    rcp = rcp * t + rcp;
+
+    //
     v_if(i < 61) {
-        y = x0 * rcp;
-        t = x1 * y + x0;
-        y = t * rcp + y;
+        t = t * t + t;
+        y = x;
+        rcp = rcp * t + rcp;
+        x_exp = sfpi::exexp(x, sfpi::ExponentMode::NoDebias);
+        y0 = x0 * rcp;
+        t = x1 * y0 + x0;
+
+        //
+        v_if(x_exp >= 115) { y = t * rcp + y0; }
+        v_endif;
     }
     v_endif;
 
