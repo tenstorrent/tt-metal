@@ -92,10 +92,45 @@ def _make_corpus(n: int, approx_tokens: int = 460) -> List[str]:
     return [" ".join(rng.choice(words) for _ in range(n_words)) + f" #{i}" for i in range(n)]
 
 
+def _make_exact_512(model_id: str, target_tokens: int = 512) -> str:
+    """Build a text that tokenizes to EXACTLY ``target_tokens`` (incl. specials),
+    so the tokenizer does no wasted over-tokenize-then-truncate work.
+
+    Tokenizes a growing word string and trims word-by-word until the tokenizer
+    output (with special tokens) is exactly ``target_tokens``. Avoids charging
+    the model path for tokenizing throwaway tokens (the default --long text is
+    ~803 tokens truncated to 512, which inflates the tokenize hop).
+    """
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(model_id)
+    base = "the quick brown fox jumps over the lazy dog while the curious cat watches nearby "
+    words = (base * 60).split()
+    # Binary-ish trim: start long, drop words until tokenized length <= target.
+    lo, hi = 1, len(words)
+    best = " ".join(words[:hi])
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        cand = " ".join(words[:mid])
+        ntok = len(tok(cand, truncation=False)["input_ids"])
+        if ntok <= target_tokens:
+            best = cand
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    n = len(tok(best, truncation=False)["input_ids"])
+    print(f"  [exact512] built text tokenizing to {n} tokens (target {target_tokens}).")
+    return best
+
+
 async def _run_load(args, url: str) -> None:
-    # A ~512-token input (forces the full ISL-512 bucket) when --long is set;
-    # otherwise a short input.
-    if args.long:
+    # Input text selection:
+    #   --exact512 : text pre-sized to EXACTLY 512 tokens (no truncation waste).
+    #   --long     : ~803-token text truncated to 512 (tokenizer over-works).
+    #   default    : a short input.
+    if getattr(args, "exact512", False):
+        text = _make_exact_512(args.model, 512)
+    elif args.long:
         text = "the quick brown fox jumps over the lazy dog while the curious cat watches nearby " * 40
     else:
         text = "the quick brown fox jumps over the lazy dog " * 4
@@ -140,7 +175,7 @@ async def _run_load(args, url: str) -> None:
     if server and server.get("count"):
         print(f"\n  server-side per-request breakdown ({server['count']} samples):")
         for key, label in (
-            ("device", "on-device forward (encoder+pool)"),
+            ("device", "on-device replay (encoder+pool)"),
             ("worker_total", "worker total (H2D+device+D2H+host)"),
             ("server_wall", "server wall (dispatch->result)"),
             ("overhead", "scheduling/queue overhead"),
@@ -148,11 +183,21 @@ async def _run_load(args, url: str) -> None:
             ("chip_wait", "  hop: chip_wait (await idle chip)"),
             ("task_q", "  hop: task_q (dispatch->worker)"),
             ("prepare", "  hop: prepare (tokenize+host tensors)"),
-            ("replay", "  hop: replay (== worker_total)"),
+            ("tok", "      sub: tokenize"),
+            ("build", "      sub: build host tensors (H2D)"),
+            ("h2d", "  hop: h2d (host->device input slot)"),
+            ("replay", "  hop: replay (trace execute == device)"),
+            ("d2h", "  hop: d2h (device->host pooled vec)"),
+            ("host", "  hop: host (reshape + L2 norm)"),
             ("result", "  hop: result (worker->future resolved)"),
         ):
             s = server.get(key, {})
-            if s:
+            # Hide effectively-unused hops (e.g. server_tok in worker-tokenize
+            # mode is a sub-microsecond no-op) -- like the pplx client does.
+            # Use a small threshold rather than exact-zero: the no-op path still
+            # records a few microseconds, which is != 0.0 but displays as 0.00.
+            _hide = {"server_tok", "chip_wait"}
+            if s and not (key in _hide and s.get("mean", 1.0) < 0.05):
                 print(
                     f"    {label:<40} p50={s['p50']:.2f}  p90={s['p90']:.2f}  "
                     f"p99={s['p99']:.2f}  max={s['max']:.2f}  mean={s['mean']:.2f}  ms"
@@ -168,6 +213,12 @@ def main() -> None:
     parser.add_argument("--load", type=int, default=0, help="Run a load test with this many requests.")
     parser.add_argument("--concurrency", type=int, default=64, help="Max in-flight requests in load mode.")
     parser.add_argument("--long", action="store_true", help="Use a ~512-token input (full ISL bucket) in load mode.")
+    parser.add_argument(
+        "--exact512",
+        action="store_true",
+        help="Send text pre-sized to EXACTLY 512 tokens (no over-tokenize-then-truncate "
+        "waste; isolates true device cost from tokenizer overhead).",
+    )
     parser.add_argument(
         "--vary",
         action="store_true",
