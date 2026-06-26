@@ -169,3 +169,18 @@
 {"source":"run_safe_pytest","pid":1086962,"started_at_ms":1782440005145,"wait_ms":3,"run_ms":9552,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
 {"source":"run_safe_pytest","pid":1087479,"started_at_ms":1782440020209,"wait_ms":3,"run_ms":9482,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
 {"source":"run_safe_pytest","pid":1088014,"started_at_ms":1782440039814,"wait_ms":3,"run_ms":9526,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":0}
+{"event": "phase", "phase": "refinement_5", "state": "end", "at_ms": 1782440107925}
+{"event": "phase", "phase": "refinement_5_golden", "state": "start", "at_ms": 1782440108186}
+{"source":"eval_test_runner","pid":1089898,"started_at_ms":1782440108189,"wait_ms":3374,"run_ms":371302,"test_path":"eval/golden_tests/softmax/","exit_code":0}
+{"event": "phase", "phase": "refinement_5_golden", "state": "end", "at_ms": 1782440482868}
+{"event": "phase", "phase": "refinement_5a", "state": "start", "at_ms": 1782440486450}
+{"source":"run_safe_pytest","pid":1130898,"started_at_ms":1782440590335,"wait_ms":2,"run_ms":9431,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"tt-probe","pid":1132975,"started_at_ms":1782441075676,"wait_ms":181,"run_ms":16217,"test_path":"softmax","exit_code":1}
+{"source":"tt-probe","pid":1133187,"started_at_ms":1782441098215,"wait_ms":182,"run_ms":33148,"test_path":"softmax","exit_code":2}
+{"source":"tt-probe","pid":1133924,"started_at_ms":1782441186409,"wait_ms":181,"run_ms":17429,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1134588,"started_at_ms":1782441275249,"wait_ms":184,"run_ms":23174,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1135828,"started_at_ms":1782441407219,"wait_ms":182,"run_ms":19724,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1136320,"started_at_ms":1782441477575,"wait_ms":181,"run_ms":18644,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1136846,"started_at_ms":1782441549710,"wait_ms":182,"run_ms":19702,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1137536,"started_at_ms":1782441671006,"wait_ms":183,"run_ms":19653,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1138085,"started_at_ms":1782441744759,"wait_ms":186,"run_ms":30887,"test_path":"softmax","exit_code":0}

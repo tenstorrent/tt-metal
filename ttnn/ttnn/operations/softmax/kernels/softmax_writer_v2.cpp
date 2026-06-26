@@ -3,13 +3,19 @@
 
 // Softmax writer kernel — V2 streaming path.
 //
-// The V2 compute kernel writes output tiles one chunk at a time (BLOCK_SIZE tiles
-// per chunk). The writer drains them as they arrive.
+// The V2 compute kernel writes output tiles one chunk at a time. The writer
+// drains them as they arrive.
 //
 // TILE path: reads tiles from cb_output_tiles, writes to DRAM/L1
 //   For dim=-1: tiles arrive in row-major order (standard)
 //   For dim=-2: tiles arrive in column-major order (per-column chunks)
-// RM path:   reads sticks from cb_rm_out (compute untilizes), writes to DRAM/L1
+//
+// RM path: reads tile-pages from cb_rm_out (compute untilizes), writes to DRAM/L1
+//   Uses write_sticks_after_untilize with byte_offset_within_page to write
+//   W-slices of each stick.
+//
+// write_sticks_after_untilize calls cb_wait_front / cb_pop_front internally
+// (width_in_tiles pages per block of 32 rows). The writer just calls it.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -116,52 +122,102 @@ void kernel_main() {
         }
     } else {
         // ===== ROW_MAJOR path: write sticks from cb_rm_out =====
-        // For dim=-1: compute untilizes per tile-row chunk, writer writes per tile-row
-        // For dim=-2: compute untilizes per tile-column chunk, writer writes per tile-column
-        // The RM writer uses write_sticks_after_untilize which writes contiguous sticks.
-        // For dim=-2, the output tiles are in column-major order, which doesn't map
-        // directly to contiguous sticks. This is a known limitation — for now, the
-        // RM + dim=-2 + V2 path is not supported (should not trigger V2 for typical
-        // RM shapes, since RM is typically used with dim=-1 for attention).
+        //
+        // write_sticks_after_untilize<cb_rm_out> waits/pops `width_in_tiles`
+        // pages per block of 32 rows. The compute kernel's untilize helper
+        // produces the same count. The writer just calls the helper.
+        //
+        // For chunk_along_reduce (dim=-1): each chunk writes 32 sticks
+        //   (1 tile-row), BLOCK_SIZE tiles wide, using byte_offset_within_page
+        //   to select the W-slice. 3 passes per tile-row.
+        //
+        // For chunk_along_reduce (dim=-2): each chunk writes BLOCK_SIZE*32
+        //   sticks, 1 tile column wide, using byte_offset_within_page.
+        //   3 passes per tile-column.
+        //
+        // For chunk_along_non_reduce (dim=-1): each chunk writes BLOCK_SIZE*32
+        //   sticks, full W width. 1 pass per chunk.
+        //
+        // For chunk_along_non_reduce (dim=-2): each chunk writes origin_H sticks,
+        //   BLOCK_SIZE tile columns wide. 1 pass per chunk.
         constexpr uint32_t tile_h = 32;
         const uint32_t tile_size = get_tile_size(cb_rm_out);
-        const uint32_t row_bytes = origin_W * tile_size / (tile_h * tile_h);
+        const uint32_t full_row_bytes = origin_W * tile_size / (tile_h * tile_h);
 
-        if constexpr (dim == -1) {
-            // dim=-1 RM: tiles arrive in row-major order, writer writes contiguous sticks
-            uint32_t stick_id = start_id;
-            for (uint32_t slab = 0; slab < num_slabs; ++slab) {
-                dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
-                    dst_accessor, origin_H, row_bytes, stick_id, 0);
-                stick_id += origin_H;
-            }
-        } else {
-            // dim=-2 RM + V2: not supported. This path should not be reached for
-            // typical RM shapes. If it is, fall back to per-tile writes.
-            // Each tile is 32 rows × 32 columns. We write each tile's 32 sticks.
-            CircularBuffer output_cb(cb_rm_out);
-            Noc noc;
-            const uint32_t tile_bytes = get_tile_size(cb_rm_out);
+        uint32_t slab_start_stick = start_id;
 
-            for (uint32_t slab = 0; slab < num_slabs; ++slab) {
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-                        for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
-                            uint32_t ht = chunk * BLOCK_SIZE + i;
-                            // Write 32 sticks for this tile
-                            uint32_t base_stick = start_id + slab * origin_H + ht * 32;
-                            for (uint32_t r = 0; r < 32; ++r) {
-                                uint32_t stick_id = base_stick + r;
-                                output_cb.wait_front(1);
-                                // Actually this won't work for RM — the cb_rm_out
-                                // has tile-sized pages, not stick-sized.
-                                // This path needs more work. For now, assert.
-                                ASSERT(false);
-                            }
+        for (uint32_t slab = 0; slab < num_slabs; ++slab) {
+            if constexpr (chunk_along_reduce) {
+                if constexpr (dim == -1) {
+                    // Each chunk writes 32 sticks (1 tile-row), BLOCK_SIZE tiles wide
+                    constexpr uint32_t chunk_row_bytes = BLOCK_SIZE * tile_size / tile_h;
+
+                    for (uint32_t ht = 0; ht < Ht; ++ht) {
+                        uint32_t base_stick = slab_start_stick + ht * tile_h;
+
+                        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                            uint32_t byte_offset = chunk * chunk_row_bytes;
+                            dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
+                                dst_accessor,
+                                tile_h,           // total_num_rows (one tile-height of sticks)
+                                chunk_row_bytes,  // row_bytes for this chunk
+                                base_stick,       // start_page (stick index)
+                                byte_offset       // byte_offset_within_page
+                            );
+                        }
+                    }
+                } else {
+                    // dim=-2: each chunk writes BLOCK_SIZE*32 sticks, 1 tile column wide
+                    constexpr uint32_t chunk_row_bytes = tile_size / tile_h;  // 1 tile column
+
+                    for (uint32_t wt = 0; wt < Wt; ++wt) {
+                        uint32_t byte_offset = wt * chunk_row_bytes;
+
+                        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                            uint32_t base_stick = slab_start_stick + chunk * tile_h * BLOCK_SIZE;
+                            dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
+                                dst_accessor,
+                                tile_h * BLOCK_SIZE,  // total_num_rows
+                                chunk_row_bytes,      // row_bytes (1 tile column)
+                                base_stick,           // start_page
+                                byte_offset           // byte_offset_within_page
+                            );
                         }
                     }
                 }
+            } else {
+                // chunk_along_non_reduce: 1 pass, full reduce dim per chunk
+                if constexpr (dim == -1) {
+                    // Each chunk: BLOCK_SIZE tile-rows × full W width
+                    constexpr uint32_t chunk_row_bytes = BLOCK_SIZE * tile_size / tile_h;
+
+                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                        uint32_t base_stick = slab_start_stick + chunk * tile_h * BLOCK_SIZE;
+                        dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
+                            dst_accessor,
+                            tile_h * BLOCK_SIZE,  // total_num_rows (BLOCK_SIZE tile-rows)
+                            full_row_bytes,       // row_bytes (full width)
+                            base_stick,           // start_page
+                            0                     // byte_offset_within_page
+                        );
+                    }
+                } else {
+                    // dim=-2: each chunk writes full H, BLOCK_SIZE tile-columns wide
+                    constexpr uint32_t chunk_row_bytes = BLOCK_SIZE * tile_size / tile_h;
+
+                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                        uint32_t byte_offset = chunk * chunk_row_bytes;
+                        dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
+                            dst_accessor,
+                            origin_H,          // total_num_rows (full H)
+                            chunk_row_bytes,   // row_bytes (BLOCK_SIZE tile columns)
+                            slab_start_stick,  // start_page
+                            byte_offset        // byte_offset_within_page
+                        );
+                    }
+                }
             }
+            slab_start_stick += origin_H;
         }
     }
 }

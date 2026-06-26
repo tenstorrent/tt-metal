@@ -114,10 +114,11 @@ def create_program_descriptor(
     if is_rm:
         v1_cb_footprint += tiles_per_slab * output_tile_size
 
-    # V2 is only dispatched for TILE layout — the RM V2 path (chunked tilize/
-    # untilize with 3-pass or non-reduce chunking) is not yet implemented.
-    # RM shapes that exceed V1 budget will OOM — those are a follow-up.
-    use_v2 = v1_cb_footprint > V1_CB_BUDGET and not is_rm
+    # V2 dispatched when V1 footprint exceeds 256 KiB — works for both TILE
+    # and ROW_MAJOR layouts. The V2 RM path uses chunked tilize/untilize
+    # via read_sticks_for_tilize / write_sticks_after_untilize with
+    # byte_offset_within_page to read/write W-slices of each stick.
+    use_v2 = v1_cb_footprint > V1_CB_BUDGET
 
     # V2 has two sub-modes:
     #  - chunk_along_reduce: 3-pass approach, chunks the reduce dim.

@@ -329,7 +329,7 @@ void kernel_main() {
                             BLOCK_SIZE,
                             cb_rm_in,
                             cb_input_tiles,
-                            ckl::tilize_config::InitUninitMode::InitOnly,
+                            ckl::tilize_config::InitUninitMode::InitAndUninit,
                             ckl::tilize_config::WaitMode::WaitBlock,
                             ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(1);
                     }
@@ -395,7 +395,7 @@ void kernel_main() {
                             BLOCK_SIZE,
                             cb_rm_in,
                             cb_input_tiles,
-                            ckl::tilize_config::InitUninitMode::InitOnly,
+                            ckl::tilize_config::InitUninitMode::InitAndUninit,
                             ckl::tilize_config::WaitMode::WaitBlock,
                             ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(1);
                     }
@@ -430,16 +430,6 @@ void kernel_main() {
                         ckl::PackTileReconfig::Output,
                         ckl::OperandKind::Block,
                         ckl::OperandKind::Col>(eltwise_shape);
-
-                    // Pop exp tiles (mul used Bulk on cb_exp, which pops at end)
-                    // Actually, mul with InputLifecycle::Bulk on cb_exp pops at end.
-                    // So cb_exp is already empty. No explicit pop needed.
-                    // But wait — does mul's Bulk pop cb_exp? Let me check.
-                    // mul<cb_exp, cb_recip_sum, cb_output_tiles, ..., Bulk, HeldBulk, ...>
-                    // cb_exp is operand A with InputLifecycle::Bulk → waited upfront, popped at end. ✓
-                    // cb_recip_sum is operand B with InputLifecycle::HeldBulk → waited upfront, NOT popped.
-                    // So cb_recip_sum needs to be popped after the last chunk.
-                    // Actually, HeldBulk doesn't pop. I need to pop it after all chunks.
 
                     // RM path: untilize cb_output_tiles → cb_rm_out
                     if constexpr (is_rm) {
@@ -512,7 +502,7 @@ void kernel_main() {
                             1,
                             cb_rm_in,
                             cb_input_tiles,
-                            ckl::tilize_config::InitUninitMode::InitOnly,
+                            ckl::tilize_config::InitUninitMode::InitAndUninit,
                             ckl::tilize_config::WaitMode::WaitBlock,
                             ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(BLOCK_SIZE);
                     }
@@ -572,7 +562,7 @@ void kernel_main() {
                             1,
                             cb_rm_in,
                             cb_input_tiles,
-                            ckl::tilize_config::InitUninitMode::InitOnly,
+                            ckl::tilize_config::InitUninitMode::InitAndUninit,
                             ckl::tilize_config::WaitMode::WaitBlock,
                             ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(BLOCK_SIZE);
                     }

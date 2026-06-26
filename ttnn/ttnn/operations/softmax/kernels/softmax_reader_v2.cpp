@@ -13,6 +13,10 @@
 // RM path:   reads sticks into cb_rm_in (compute tilizes)
 //
 // At kernel start: prepares scaler tiles (cb_scaler_max, cb_scaler_sum).
+//
+// read_sticks_for_tilize<cb_rm_in> pushes `width_in_tiles` pages per block
+// (one block = 32 sticks). The compute kernel's tilize helper consumes
+// the same count.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -93,13 +97,11 @@ void kernel_main() {
     constexpr uint32_t num_chunks =
         chunk_along_reduce ? (reduce_dim_tiles / BLOCK_SIZE) : (non_reduce_dim / BLOCK_SIZE);
     constexpr uint32_t num_passes = chunk_along_reduce ? 3 : 1;
-    constexpr uint32_t tiles_per_chunk = chunk_along_reduce ? BLOCK_SIZE : (BLOCK_SIZE * reduce_dim_tiles);
-
-    CircularBuffer input_cb(cb_input_tiles);
-    Noc noc;
 
     if constexpr (!is_rm) {
         // ===== TILE path: read tiles directly into cb_input_tiles =====
+        CircularBuffer input_cb(cb_input_tiles);
+        Noc noc;
         const uint32_t tile_bytes = get_tile_size(cb_input_tiles);
         uint32_t slab_start_tile = start_id;
 
@@ -145,10 +147,7 @@ void kernel_main() {
                 }
             } else {
                 // chunk_along_non_reduce: 1 pass, chunks along non-reduce dim
-                // Each chunk reads BLOCK_SIZE non-reduce-dim elements × full reduce dim
                 if constexpr (dim == -1) {
-                    // non-reduce = Ht, reduce = Wt
-                    // Each chunk: BLOCK_SIZE rows, each with Wt tiles
                     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
                         for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
                             uint32_t ht = chunk * BLOCK_SIZE + i;
@@ -167,10 +166,6 @@ void kernel_main() {
                         }
                     }
                 } else {
-                    // non-reduce = Wt, reduce = Ht
-                    // Each chunk: BLOCK_SIZE columns, each with Ht tiles
-                    // Push tiles in row-major order within the chunk (ht outer, wt inner)
-                    // so reduce<REDUCE_COL> with ReduceInputBlockShape::of(Ht, BLOCK_SIZE) works
                     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
                         for (uint32_t ht = 0; ht < Ht; ++ht) {
                             for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
@@ -190,11 +185,29 @@ void kernel_main() {
         }
     } else {
         // ===== ROW_MAJOR path: read sticks into cb_rm_in =====
-        // The reader reads sticks, compute tilizes them.
-        // For dim=-1: each chunk reads 32 sticks (1 tile-row), BLOCK_SIZE tiles wide.
+        //
+        // read_sticks_for_tilize<cb_rm_in> pushes `width_in_tiles` pages per
+        // block (32 rows). Each push is consumed by the compute kernel's
+        // tilize helper, which reads `width_in_tiles` pages and produces
+        // `width_in_tiles` tile-pages.
+        //
+        // For chunk_along_reduce (dim=-1):
+        //   Each chunk reads 32 sticks (1 tile-row), BLOCK_SIZE tiles wide.
         //   Using byte_offset_within_page to select the W-slice for each chunk.
-        // For dim=-2: each chunk reads 32*BLOCK_SIZE sticks, 1 tile wide.
+        //   3 passes per tile-row (max → sum → apply).
+        //
+        // For chunk_along_reduce (dim=-2):
+        //   Each chunk reads 32*BLOCK_SIZE sticks, 1 tile column wide.
         //   Using byte_offset_within_page to select the 1-tile-wide column.
+        //   3 passes per tile-column (max → sum → apply).
+        //
+        // For chunk_along_non_reduce (dim=-1):
+        //   Each chunk reads BLOCK_SIZE tile-rows (BLOCK_SIZE*32 sticks),
+        //   full W width. 1 pass per chunk (V1-style 4-phase per chunk).
+        //
+        // For chunk_along_non_reduce (dim=-2):
+        //   Each chunk reads full H, BLOCK_SIZE tile-columns wide.
+        //   1 pass per chunk.
         constexpr uint32_t tile_h = 32;
         const uint32_t tile_size = get_tile_size(cb_rm_in);
         // Full row bytes = origin_W * elem_size = origin_W * tile_size / (32*32)
@@ -203,46 +216,77 @@ void kernel_main() {
         uint32_t slab_start_stick = start_id;
 
         for (uint32_t slab = 0; slab < num_slabs; ++slab) {
-            if constexpr (dim == -1) {
-                // Chunk width in bytes: BLOCK_SIZE tiles = BLOCK_SIZE * 32 elements
-                constexpr uint32_t chunk_row_bytes = BLOCK_SIZE * tile_size / tile_h;
+            if constexpr (chunk_along_reduce) {
+                if constexpr (dim == -1) {
+                    // Chunk width in bytes: BLOCK_SIZE tiles = BLOCK_SIZE * 32 elements
+                    constexpr uint32_t chunk_row_bytes = BLOCK_SIZE * tile_size / tile_h;
 
-                for (uint32_t ht = 0; ht < Ht; ++ht) {
-                    // Each tile-row starts at stick: slab_start + ht * 32
-                    // (within a slab, sticks are contiguous: origin_H sticks per slab)
-                    uint32_t base_stick = slab_start_stick + ht * tile_h;
+                    for (uint32_t ht = 0; ht < Ht; ++ht) {
+                        // Each tile-row starts at stick: slab_start + ht * 32
+                        uint32_t base_stick = slab_start_stick + ht * tile_h;
 
-                    for (uint32_t pass = 0; pass < 3; ++pass) {
-                        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-                            uint32_t byte_offset = chunk * chunk_row_bytes;
-                            dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(
-                                src_accessor,
-                                tile_h,           // total_num_rows (one tile-height of sticks)
-                                chunk_row_bytes,  // row_bytes for this chunk
-                                base_stick,       // start_page (stick index)
-                                byte_offset       // byte_offset_within_page
-                            );
+                        for (uint32_t pass = 0; pass < 3; ++pass) {
+                            for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                                uint32_t byte_offset = chunk * chunk_row_bytes;
+                                dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(
+                                    src_accessor,
+                                    tile_h,           // total_num_rows (one tile-height of sticks)
+                                    chunk_row_bytes,  // row_bytes for this chunk
+                                    base_stick,       // start_page (stick index)
+                                    byte_offset       // byte_offset_within_page
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    // dim=-2: each chunk reads BLOCK_SIZE tile-rows, 1 tile column wide
+                    constexpr uint32_t chunk_row_bytes = tile_size / tile_h;  // 1 tile column
+
+                    for (uint32_t wt = 0; wt < Wt; ++wt) {
+                        uint32_t byte_offset = wt * chunk_row_bytes;
+
+                        for (uint32_t pass = 0; pass < 3; ++pass) {
+                            for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                                uint32_t base_stick = slab_start_stick + chunk * tile_h * BLOCK_SIZE;
+                                dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(
+                                    src_accessor,
+                                    tile_h * BLOCK_SIZE,  // total_num_rows
+                                    chunk_row_bytes,      // row_bytes (1 tile column)
+                                    base_stick,           // start_page
+                                    byte_offset           // byte_offset_within_page
+                                );
+                            }
                         }
                     }
                 }
             } else {
-                // dim=-2: each chunk reads BLOCK_SIZE tile-rows, 1 tile column wide
-                constexpr uint32_t chunk_row_bytes = tile_size / tile_h;  // 1 tile column
+                // chunk_along_non_reduce: 1 pass, full reduce dim per chunk
+                if constexpr (dim == -1) {
+                    // Each chunk: BLOCK_SIZE tile-rows × full W width
+                    // Read BLOCK_SIZE*32 sticks, full row width
+                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                        uint32_t base_stick = slab_start_stick + chunk * tile_h * BLOCK_SIZE;
+                        dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(
+                            src_accessor,
+                            tile_h * BLOCK_SIZE,  // total_num_rows (BLOCK_SIZE tile-rows)
+                            full_row_bytes,       // row_bytes (full width)
+                            base_stick,           // start_page
+                            0                     // byte_offset_within_page
+                        );
+                    }
+                } else {
+                    // dim=-2: each chunk reads full H, BLOCK_SIZE tile-columns wide
+                    constexpr uint32_t chunk_row_bytes = BLOCK_SIZE * tile_size / tile_h;
 
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
-                    uint32_t byte_offset = wt * chunk_row_bytes;
-
-                    for (uint32_t pass = 0; pass < 3; ++pass) {
-                        for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-                            uint32_t base_stick = slab_start_stick + chunk * tile_h * BLOCK_SIZE;
-                            dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(
-                                src_accessor,
-                                tile_h * BLOCK_SIZE,  // total_num_rows
-                                chunk_row_bytes,      // row_bytes (1 tile column)
-                                base_stick,           // start_page
-                                byte_offset           // byte_offset_within_page
-                            );
-                        }
+                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                        uint32_t byte_offset = chunk * chunk_row_bytes;
+                        dataflow_kernel_lib::read_sticks_for_tilize<cb_rm_in>(
+                            src_accessor,
+                            origin_H,          // total_num_rows (full H)
+                            chunk_row_bytes,   // row_bytes (BLOCK_SIZE tile columns)
+                            slab_start_stick,  // start_page
+                            byte_offset        // byte_offset_within_page
+                        );
                     }
                 }
             }
