@@ -5,10 +5,10 @@
 /*
  * Shared writer-side setup for the fused Wan2.2 distributed RMSNorm op.
  *
- * The WRITER (both the legacy single-core writer and the MUX writer) always
- * populates the compute kernel's reduce-scalar / epsilon CBs and reads the
- * RoPE transformation matrix. Doing this in the writer (rather than the
- * reader) lets the reader issue its first input-tile read immediately, so
+ * The WRITER (both the is_tp_1 drain-only writer and the forwarder-AG worker
+ * writer) always populates the compute kernel's reduce-scalar / epsilon CBs and
+ * reads the RoPE transformation matrix. Doing this in the writer (rather than
+ * the reader) lets the reader issue its first input-tile read immediately, so
  * compute's PRE sum-of-squares starts as early as possible.
  *
  * Both writers call this with their own CB ids / accessor, so the logic lives

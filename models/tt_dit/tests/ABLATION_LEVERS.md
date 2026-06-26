@@ -226,3 +226,106 @@ Findings:
   dominate** — there it's the biggest remaining structural lever (~6–10%, up to ~40µs). It needs
   a real pipeline restructure (decouple PRE(N+1) from POST(N), double-buffer stats across rows),
   so scope it to the AG path and validate on flux_tp8_N16384 + self_sp4 where the payoff sits.
+
+---
+
+# Blackhole IO ablation (TARGET — 2 links, 12×10 grid, worker cap 48)
+
+Same method on the **BH 4×8 galaxy** (`WAN_GALAXY_LINKS=2`, cap48 = the BH perf optimum;
+forwarder fused, origin `2d56fbdd64e`). Δµs = `base − ablated`, fused-only, min-of-2.
+`no-fabric` = `WAN_ABLATION=4`, `no-output` = `3`, `no-reads` (input+weight+rope together) =
+new combined `WAN_ABLATION=9`.
+
+| config | base µs | no-fabric | no-output | no-reads | **fabric** | **output write** | **reads** |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| self_sp4_N18944      | 410.8 | 381.0 | 297.9 | 343.0 | 30µs (7%)  | **113µs (27%)** | 68µs (17%) |
+| cross_q_sp4_N18944   | 356.7 | 326.6 | 201.5 | 278.5 | 30µs (8%)  | **155µs (44%)** | 78µs (22%) |
+| flux_tp8_N16384_phn0 | 275.9 | 237.9 | 215.5 | 233.0 | 38µs (14%) | **60µs (22%)**  | 43µs (16%) |
+| flux_tp8_N16384_phn1 | 208.9 | 208.2 | 171.5 | 114.2 | 0µs (0%)   | 37µs (18%)      | **95µs (45%)** |
+| flux_tp4_N8192_phn0  | 272.2 | 260.2 | 176.6 | 218.2 | 12µs (4%)  | **96µs (35%)**  | 54µs (20%) |
+
+**Confirms the WH balance on BH:** the op is **DRAM-bound, output-write first** (22–44% on every
+AG config; biggest on the low-compute `cross_q_sp4`), **reads second** (16–22%), **fabric spent**
+(≤14%, 0% on phn1 — the forwarder did its job; split-sender is moot). vs the WH proxy the % are
+close; BH fabric is a slightly bigger fraction on tp8 (14% vs 10%, 2 links).
+
+**BH-specific:** **per-head `phn1` is read-bound, not output-bound** — reads **45%** on BH (vs 15%
+on WH). No AG → input + per-head cos/sin reads dominate. So per-head FLUX.2 wants the **read**
+path; every other config wants the **output-write** path.
+
+**Next levers (DRAM):** (1) **output write** — biggest, on every AG config. (2) **reads** — #2,
+and #1 for per-head. Fabric/gather-scatter are spent. Output-write experiments (barrier/flush
+granularity to cut NoC contention across the ~48 writing cores; dual-NoC for full DRAM BW) follow.
+
+### DRAM-speed tricks — both NON-LEVERS (2026-06-26, BH 4×8, cap48, fused-only, min-of-2)
+
+Two common "go-faster on DRAM" tricks were tried against the output-write bottleneck. Both are
+**no-ops** — confirming the writer is **DRAM-bandwidth-bound, not NoC-bound**.
+
+1. **Flush/barrier granularity** (barrier every N tiles vs once per row to cut NoC contention):
+   no change. Reverted.
+2. **Dual-NoC output drain** (`WAN_RMSNORM_DUAL_NOC`, alternate `noc_async_write_tile` between
+   `noc_index` and `1-noc_index` per tile so the output stream uses both NoCs):
+
+   | config | dual=0 µs | dual=1 µs |
+   |---|---:|---:|
+   | self_sp4_N18944      | 367.84 | 367.81 |
+   | cross_q_sp4_N18944   | 321.40 | 321.56 |
+   | flux_tp8_N16384_phn0 | 252.10 | 252.17 |
+   | flux_tp4_N8192_phn0  | 249.08 | 249.35 |
+
+   Dead flat (≤0.1%). Implementation note: tt-metal requires **all NoC kernels in a program to
+   share one `noc_mode`** (`TT_FATAL noc_modes.size()<=1`), so dual-NoC forces reader + writer +
+   forwarder all to `DM_DYNAMIC_NOC` (fabric forwarder included — correctness held, PCC 99.99%+,
+   so fabric-under-dynamic-NoC is safe). Even so, zero speedup. Reverted.
+
+**Takeaway:** a single NoC already saturates DRAM write BW for this access pattern — extra NoC
+injection bandwidth is not the limiter. (Tile order is also irrelevant for locality — tiles are
+pages, round-robin across DRAM banks — so the head-interleaved scatter costs nothing extra.) The
+output write is genuinely **DRAM-bound**; the only way to win against it is to **overlap** it (or
+the fabric) with compute, i.e. software-pipelining.
+
+### Software-pipelined AG, idea #3 (writer deferred-drain) — NO-OP (2026-06-26, BH cap48)
+
+`WAN_RMSNORM_PIPELINE` (writer half): defer each row's output drain one iteration so its DRAM
+writes overlap the next row's go-sem wait (`W_AGWAIT`, the fabric round-trip).
+
+| config | pipe=0 µs | pipe=1 µs |
+|---|---:|---:|
+| self_sp4_N18944      | 428.54 | 428.66 |
+| cross_q_sp4_N18944   | 323.08 | 322.92 |
+| flux_tp8_N16384_phn0 | 277.71 | 278.08 |
+| flux_tp4_N8192_phn0  | 269.41 | 269.39 |
+
+**Dead flat.** First thought was "the op is compute-bound, so only the compute-side pipeline can
+help" — so idea #2 was implemented next.
+
+### Software-pipelined AG, idea #2 (compute look-ahead PRE) — ALSO NO-OP (2026-06-26, BH cap48)
+
+Full software pipeline: compute PREs row r+1 (parity-split input CBs `input_cb`/`input_cb_b`,
+each read at its front, wrap-safe; stats double-buffered) **during** row r's AG gather wait, plus
+the idea-#3 writer deferred-drain. Correctness verified (the pipelined path executed — parity CBs,
+look-ahead PRE, deferred drain — still bit-exact, PCC 99.99%+). Perf (min of 2 runs):
+
+| config | pipe=0 µs | pipe=1 µs |
+|---|---:|---:|
+| self_sp4_N18944      | 467.48 | 467.70 |
+| cross_q_sp4_N18944   | 303.86 | 303.63 |
+| flux_tp8_N16384_phn0 | 274.33 | 274.78 |
+| flux_tp4_N8192_phn0  | 247.82 | 248.00 |
+
+**Dead flat (≤0.2%), rock-stable across runs — a true no-op, not noise.**
+
+### Conclusion: the forwarder code is at its DRAM floor on BH
+
+Three independent overlap experiments (dual-NoC, writer deferred-drain, full compute pipeline) all
+give **zero**. The consistent explanation: the **fabric AG is already fully hidden** — the
+dedicated forwarder cores run the ring mcast concurrently with the workers' DRAM traffic, so there
+is **no exposed stall** for compute/writer/NoC pipelining to recover. The ablation's "no-fabric
+7–14%" was the **DRAM-staggering confound** (removing the sem-wait reshuffles DRAM timing), not a
+real exposed fabric cost. BH has 2× the FLOPs of WH but the **same** DRAM BW, so this op is
+**DRAM-bound** here (more so than on WH) and already pipelined (reader prefetch + async writes).
+That is why the old MUX branch's −13.6% (WH, fabric exposed at 47%) does **not** reproduce: the
+forwarder rewrite already captured that win. **The remaining lever would have to reduce DRAM bytes**
+(output is already bf16; tile order is irrelevant) — there is no traffic-shaping win left. All three
+experiments reverted; the op ships at its DRAM/compute floor.

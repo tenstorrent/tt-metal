@@ -125,7 +125,7 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
             args.num_heads_per_device);
     }
 
-    // The MUX path (TP>1 with multiple workers) requires a caller-supplied
+    // The all-gather path (TP>1, whole-row norm) requires a caller-supplied
     // persistent buffer for the gathered-stats DRAM scratch. The buffer must
     // be allocated as a mesh-coherent MeshBuffer (same DRAM address on every
     // chip in the cluster) — required for the fabric mcast. Allocating it
@@ -186,9 +186,9 @@ WanFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     const auto out_dtype = args.dtype.value_or(input.dtype());
     specs.emplace_back(output_shape, TensorLayout(out_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 
-    // Persistent stats DRAM scratch for the MUX writer path (Phase 9
-    // packed-page layout). Each page holds one chunk's worth of post-reduce
-    // stats in row-major form: TILE_HEIGHT * window_size fp32 values =
+    // Persistent stats DRAM scratch for the all-gather path. Each page holds one
+    // chunk's worth of post-reduce stats in row-major form: TILE_HEIGHT *
+    // window_size fp32 values =
     // TILE_HEIGHT * window_size * 4 bytes per page. There are total_pages =
     // ring_size * num_chunks_per_device pages — independent of num_workers
     // by design, so the caller need not know the worker count.
