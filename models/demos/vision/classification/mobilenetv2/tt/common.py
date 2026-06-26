@@ -77,12 +77,15 @@ class TtMobileNetV2Conv2D:
         return conv_config
 
     def _initialize_compute_config(self):
+        # packer_l1_acc=True adds an L1 region for K-block accumulation; on WH the conv
+        # kernel measured neutral while the larger L1 footprint risks N300 CB clashes
+        # (mobilenetv2 OOM'd in N300 CI before this was arch-gated). Keep the BH win.
         return ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=(self.device.arch() == ttnn.device.Arch.BLACKHOLE),
         )
 
     def __call__(self, x):

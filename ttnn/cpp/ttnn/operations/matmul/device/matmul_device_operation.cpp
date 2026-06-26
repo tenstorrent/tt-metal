@@ -153,6 +153,16 @@ void validate_matmul_block_and_subblock_configuration(
                     std::is_same_v<
                         ProgramConfigType,
                         operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                    // tile_pack_row_major adds L1 footprint, a deadlock predicate, and pack-side
+                    // LLK overhead with no measured win on interleaved output. The auto-deducer
+                    // only sets it for sharded outputs (commit 73d03f855c7); reject explicit
+                    // callers that try to force it on the interleaved path. Addresses Sofija's
+                    // PR review concern that the interleaved escape hatch is unjustified.
+                    TT_FATAL(
+                        !(program_config.tile_pack_row_major && !attributes.output_mem_config.is_sharded()),
+                        "tile_pack_row_major=true is only supported with a sharded output "
+                        "memory config; interleaved output has no measured perf benefit and "
+                        "should use the default (tile_pack_row_major=false).");
                     TT_FATAL(program_config.out_block_h != 0, "out_block_h is 0, which is not valid");
                     TT_FATAL(program_config.out_block_w != 0, "out_block_w is 0, which is not valid");
                     TT_FATAL(
@@ -1282,12 +1292,19 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         // No padding
                         TT_FATAL(M == per_core_M, "Error: M {} must be equal to per_core_M {}.", M, per_core_M);
 
-                        TT_FATAL(
-                            program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                            "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
-                        TT_FATAL(
-                            program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
-                            "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                        // The subblock-major writer requires the CB layout to match row-major
+                        // order, which holds only when out_subblock_w == per_core_N (single
+                        // N-subblock) or out_subblock_h == 1. tile_pack_row_major enables the
+                        // absolute-offset pack path that decouples these.
+                        if (!program_config.tile_pack_row_major) {
+                            TT_FATAL(
+                                program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
+                                "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to "
+                                "1.");
+                            TT_FATAL(
+                                program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
+                                "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                        }
                     }
                     if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 &&
                         input_tensor_b.memory_config().is_sharded()) {
@@ -1358,12 +1375,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         uint32_t per_core_N = program_config.per_core_N;
 
                         TT_FATAL(N == per_core_N, "Error: N must be equal to per_core_N.");
-                        TT_FATAL(
-                            program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                            "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
-                        TT_FATAL(
-                            program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
-                            "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                        // See equivalent site in the sharded-output 2D path above — tile_pack_row_major
+                        // gate removes the subblock-major layout constraint.
+                        if (!program_config.tile_pack_row_major) {
+                            TT_FATAL(
+                                program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
+                                "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to "
+                                "1.");
+                            TT_FATAL(
+                                program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
+                                "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                        }
                     }
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -1649,12 +1671,16 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         attributes.output_mem_config.memory_layout());
                     uint32_t per_core_N = program_config.per_core_N;
 
-                    TT_FATAL(
-                        program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                        "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
-                    TT_FATAL(
-                        program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
-                        "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                    // See equivalent sites in the 1D config block — tile_pack_row_major gate
+                    // removes the subblock-major layout constraint for the 2D BLOCK_SHARDED path.
+                    if (!program_config.tile_pack_row_major) {
+                        TT_FATAL(
+                            program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
+                            "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
+                        TT_FATAL(
+                            program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
+                            "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
+                    }
                 }
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
@@ -1784,12 +1810,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         attributes.output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                         "Output memory layout must not be WIDTH_SHARDED, got: {}",
                         attributes.output_mem_config.memory_layout());
-                    TT_FATAL(
-                        program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
-                        "Either out_subblock_w ({}) must equal per_core_N ({}) or out_subblock_h ({}) must be 1",
-                        program_config.out_subblock_w,
-                        per_core_N,
-                        program_config.out_subblock_h);
                 }
             } else {
                 TT_FATAL(
