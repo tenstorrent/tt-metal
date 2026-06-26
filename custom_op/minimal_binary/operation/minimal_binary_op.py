@@ -196,10 +196,10 @@ def minimal_binary_op(
             op_call = "mul_binary_tile"
     else:
         if op_type == "add":
-            op_init = "binary_tiles_init<true, ELWADD>(tt::CBIndex::c_0, tt::CBIndex::c_1)"
+            op_init = "binary_tiles_init<true, ckernel::EltwiseBinaryType::ELWADD>(tt::CBIndex::c_0, tt::CBIndex::c_1)"
             op_call = "add_tiles"
         else:
-            op_init = "binary_tiles_init<true, ELWMUL>(tt::CBIndex::c_0, tt::CBIndex::c_1)"
+            op_init = "binary_tiles_init<true, ckernel::EltwiseBinaryType::ELWMUL>(tt::CBIndex::c_0, tt::CBIndex::c_1)"
             op_call = "mul_tiles"
 
     compute_defines = [

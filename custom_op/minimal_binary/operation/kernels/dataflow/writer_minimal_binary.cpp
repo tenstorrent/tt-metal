@@ -23,19 +23,18 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
-void print_tile_cb(const experimental::CircularBuffer& cb, uint32_t offset, uint32_t len) {
-    uint32_t addr = cb.get_read_ptr();
-    volatile uint16_t* ptr = reinterpret_cast<volatile uint16_t*>(addr);
-
-    for (uint32_t i = 0; i < len; i++) {
-        DPRINT << " " << BF16(ptr[offset + i]);
-    }
-    DPRINT << ENDL();
-}
+//void print_tile_cb(const experimental::CircularBuffer& cb, uint32_t offset, uint32_t len) {
+//    uint32_t addr = cb.get_read_ptr();
+//    volatile uint16_t* ptr = reinterpret_cast<volatile uint16_t*>(addr);
+//
+//    for (uint32_t i = 0; i < len; i++) {
+//        DPRINT << " " << BF16(ptr[offset + i]);
+//    }
+//    DPRINT << ENDL();
+//}
 
 void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
@@ -55,7 +54,7 @@ void kernel_main() {
 #endif
 
     constexpr auto cb_out_id = tt::CBIndex::c_2;
-    experimental::CircularBuffer cb_out(cb_out_id);
+    CircularBuffer cb_out(cb_out_id);
     const uint32_t tile_size_c = get_tile_size(cb_out_id);
     const auto dst = TensorAccessor(dst_args, dst_addr_c, tile_size_c);
 
@@ -66,7 +65,7 @@ void kernel_main() {
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, tile_size_b);
 #endif
 
-    experimental::Noc noc;
+    Noc noc;
 
     for (uint32_t tiles_done = 0; tiles_done < Wt; tiles_done += block_size) {
         const uint32_t cur_block = (Wt - tiles_done < block_size) ? (Wt - tiles_done) : block_size;
@@ -87,11 +86,11 @@ void kernel_main() {
         // Write output C block
         cb_out.wait_front(block_size);
 
-        print_tile_cb(cb_out, 1024, 4);
+        //print_tile_cb(cb_out, 1024, 4);
 
         uint32_t src_offset = 0;
         for (uint32_t j = 0; j < cur_block; ++j) {
-            DPRINT << "[writer] writing tile " << start_tile + tiles_done + j << ENDL();
+            //DPRINT << "[writer] writing tile " << start_tile + tiles_done + j << ENDL();
             noc.async_write(
                 cb_out, dst, tile_size_c, {.offset_bytes = src_offset}, {.page_id = start_tile + tiles_done + j});
             src_offset += tile_size_c;
