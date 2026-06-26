@@ -139,6 +139,10 @@ thread_local uint32_t __emule_my_thread_id = 0;
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
 
+// Which chip this kernel thread is executing as. Set per (core,RISC) thread in the launch prologue.
+// Read by the fabric teleport hook to know the source chip for cross-chip routing.
+thread_local uint32_t __emule_chip_id = 0;
+
 // ---------------------------------------------------------------------------
 // Bank mapping arrays — populated from SoC descriptor before kernel launch.
 // Exported via -rdynamic so JIT .so files can resolve them at dlopen time.
@@ -600,6 +604,11 @@ static void apply_x86_rewrites(std::string& src) {
     static const std::regex zero_len_noc_coords_re(
         R"((using\s+RemoteNocCoords\s*=\s*RemoteNocCoord\s*\[)\s*N\s*(\]))");
     src = std::regex_replace(src, zero_len_noc_coords_re, "$1(N) == 0 ? 1 : (N)$2");
+
+    // Note: C-style `(uint32_t)ptr` truncation casts (common in fabric/CCL kernels, e.g.
+    // `(uint32_t)sem_header_ptr`) are handled globally by the -fms-extensions JIT flag, which
+    // downgrades pointer→smaller-int casts from a hard error to a warning. The MAP_32BIT window keeps
+    // those addresses in the low 2 GB so the truncation is value-preserving.
 }
 
 // Patch `src_path` into `out_path`, then recurse into the quoted project headers
@@ -633,7 +642,9 @@ static void preprocess_tu_recursive(
         std::error_code ec;
         const std::filesystem::path candidate = src_dir / inc_name;
         if (!std::filesystem::exists(candidate, ec)) {
-            // Resolved via a -I path (emule api/, system headers) — not ours to patch.
+            // Resolved via a -I path (emule api/, system headers, repo-rooted kernel-common). Not ours
+            // to patch — pointer-truncation idioms there are handled by -fms-extensions (see the JIT
+            // compile flags), which downgrades pointer→uint32 casts to warnings.
             continue;
         }
         const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
@@ -809,7 +820,26 @@ static std::function<void()> jit_compile_kernel(
     // (mhartid, fence) and raw L1 arg-val pointer casts. -I kernel_dir (below)
     // keeps relative includes in the patched file resolvable.
     std::string patched_kernel_path = dir + "/patched_kernel.cpp";
-    preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
+    // WORKAROUND: see tt-emule/.claude/skills/workarounds (WA-2).
+    // The fabric mux (tt_fabric_mux.cpp) is a transport-layer aggregation kernel: workers write packets
+    // into its L1 channels and it forwards them over ethernet. emule has no ethernet — WorkerToFabricMux
+    // Sender teleports each packet straight to its final destination (same as the no-mux direct path),
+    // so the mux has nothing to do. The real kernel is also persistent (loops until an external
+    // termination signal) and pulls in erisc firmware emule doesn't model, which would both fail to
+    // compile and hang emule's run-to-completion join. Substitute a no-op kernel: it compiles, exits
+    // immediately, and the teleporting mux sender carries the data. (Mirrors how emule collapses the eth
+    // router/switch into the teleport — the mux is the worker-side half of that same transport.)
+    if (std::filesystem::path(abs_kernel).filename() == "tt_fabric_mux.cpp") {
+        std::ofstream f(patched_kernel_path);
+        if (!f) {
+            throw std::runtime_error("jit_compile_kernel: cannot write mux stub " + patched_kernel_path);
+        }
+        f << "// emule no-op stub for tt_fabric_mux.cpp (the teleporting mux sender carries the data).\n"
+          << "#include \"api/dataflow/dataflow_api.h\"\n"
+          << "void kernel_main() {}\n";
+    } else {
+        preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
+    }
 
     // 3. Write wrapper.cpp
     // Kernel defines are written as #define directives in the wrapper to avoid
@@ -875,7 +905,12 @@ static std::function<void()> jit_compile_kernel(
     // 7. Compile — output to disk cache path if provided, else temp dir
     std::string so_path = disk_cache_so_path_arg.empty() ? (dir + "/kernel.so") : disk_cache_so_path_arg;
     std::ostringstream cmd;
-    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared -O2 -Wno-c++11-narrowing"
+    // -fms-extensions: fabric/CCL kernels collapse 32-bit-device L1 pointers to uint32_t (e.g.
+    // `(uint32_t)pkt_hdr`); on the 64-bit host clang treats pointer→smaller-int as a hard error, but
+    // -fms-extensions downgrades it to a warning. emule's MAP_32BIT window keeps those addresses in the
+    // low 2 GB, so the truncation is value-preserving.
+    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD
+        << " -fPIC -shared -O2 -Wno-c++11-narrowing -fms-extensions"
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
@@ -1591,6 +1626,17 @@ static void collect_kernels(
 // ---------------------------------------------------------------------------
 // jit_compile_pending: Compile cache misses in parallel, resolve all fns.
 // ---------------------------------------------------------------------------
+// Global compile-once registry: dedups kernel compilation ACROSS the concurrent per-device dispatch
+// threads. Under emule's multi-device dispatch both devices run the same program, so both reach
+// jit_compile_pending with the same cache-miss kernels. Without dedup they would compile the same kernel
+// concurrently — and (pre-fix) to the same `.so.tmp.<pid>` file, so two clang processes wrote one output
+// → a corrupt .so → dlopen'd garbage → hangs/crashes. Here the FIRST thread to need a key launches its
+// compile and publishes a shared_future; later threads (any device) reuse that future instead of
+// recompiling. Each kernel is therefore compiled exactly once, to a unique tmp, with an atomic rename.
+static std::mutex g_compile_inflight_mutex;
+static std::unordered_map<std::string, std::shared_future<std::function<void()>>> g_compile_inflight;
+static std::atomic<uint64_t> g_compile_tmp_seq{0};
+
 static void jit_compile_pending(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
@@ -1598,27 +1644,53 @@ static void jit_compile_pending(
     if (!deferred_compiles.empty()) {
         log_info(tt::LogMetal, "JIT parallel compile: {} unique kernels to compile", deferred_compiles.size());
 
-        std::vector<std::pair<std::string, std::future<std::function<void()>>>> futures;
+        std::vector<std::pair<std::string, std::shared_future<std::function<void()>>>> futures;
         futures.reserve(deferred_compiles.size());
 
         for (auto& [key, dc] : deferred_compiles) {
-            std::string cache_path = disk_cache_so_path(key);
-            std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid());
-            futures.emplace_back(
-                key, std::async(std::launch::async, [&dc, cache_path, tmp_path]() {
-                    auto fn = jit_compile_kernel(
-                        dc.src_path, dc.compile_args, dc.named_compile_args, dc.defines, dc.extra_inc,
-                        dc.bindings, tmp_path);
-                    std::filesystem::rename(tmp_path, cache_path);
-                    return fn;
-                }));
+            std::shared_future<std::function<void()>> fut;
+            {
+                std::lock_guard<std::mutex> lock(g_compile_inflight_mutex);
+                // Another thread may have already finished this key (published to g_jit_cache) or be
+                // mid-compile (published an inflight future) since we built deferred_compiles.
+                {
+                    std::lock_guard<std::mutex> clock(g_jit_cache_mutex);
+                    auto cit = g_jit_cache.find(key);
+                    if (cit != g_jit_cache.end()) {
+                        resolved_fns[key] = cit->second;
+                        continue;
+                    }
+                }
+                auto iit = g_compile_inflight.find(key);
+                if (iit != g_compile_inflight.end()) {
+                    fut = iit->second;  // reuse the in-progress compile launched by another thread
+                } else {
+                    std::string cache_path = disk_cache_so_path(key);
+                    DeferredCompile dc_copy = dc;  // own a copy: the future may outlive this call's map
+                    fut = std::async(std::launch::async, [dc_copy, cache_path]() {
+                              std::string tmp_path = cache_path + ".tmp." + std::to_string(::getpid()) + "." +
+                                                     std::to_string(g_compile_tmp_seq.fetch_add(1));
+                              auto fn = jit_compile_kernel(
+                                  dc_copy.src_path, dc_copy.compile_args, dc_copy.named_compile_args,
+                                  dc_copy.defines, dc_copy.extra_inc, dc_copy.bindings, tmp_path);
+                              std::filesystem::rename(tmp_path, cache_path);
+                              return fn;
+                          }).share();
+                    g_compile_inflight[key] = fut;
+                }
+            }
+            futures.emplace_back(key, fut);
         }
 
         for (auto& [key, fut] : futures) {
             auto fn = fut.get();
             resolved_fns[key] = fn;
-            std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
-            g_jit_cache[key] = fn;
+            {
+                std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+                g_jit_cache[key] = fn;
+            }
+            std::lock_guard<std::mutex> lock(g_compile_inflight_mutex);
+            g_compile_inflight.erase(key);
         }
     }
 
@@ -1638,12 +1710,15 @@ static void jit_compile_pending(
 // build_core_map: Build physical {x,y} → tt_emule::Core* for NOC resolution.
 // Cached per device_id since chip topology doesn't change between calls.
 // ---------------------------------------------------------------------------
+// Per-device physical {x,y}->Core* maps. Lifted to file scope (was a build_core_map static) so the
+// fabric teleport hooks below can resolve a *remote* chip's core: its map is already built by that
+// device's own execute_program_emulated, which runs concurrently (see the SDMeshCommandQueue emule path).
+static std::mutex g_core_map_mutex;
+static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
+    g_core_map_cache;
+
 static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
     tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
-    static std::mutex g_core_map_mutex;
-    static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
-        g_core_map_cache;
-
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
     auto& core_map = g_core_map_cache[device_id];
     if (!core_map && sw_emu) {
@@ -1693,6 +1768,216 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
         core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
     }
     return core_map.get();
+}
+
+// ===========================================================================
+// Fabric teleport hooks (multi-chip CCL). emule intercepts the fabric client API
+// (WorkerToFabricEdmSender) in the jit_hw shadow and routes each send here. We do
+// NOT run the ethernet/ERISC router or model multi-hop: we decode the (real-layout)
+// packet header, resolve the destination chip, and apply the terminal NOC command
+// directly into that chip's L1 (teleport). Delivery is synchronous; the consumer on
+// the peer chip (running concurrently) observes it via its semaphore wait.
+// See docs/multichip/ for the design.
+// ---------------------------------------------------------------------------
+
+// Resolve (noc_addr) -> host pointer on an arbitrary chip, mirroring __emule_resolve_noc_addr but
+// against the destination chip's cached core map (already built by that chip's launch).
+extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t noc_addr) {
+    std::lock_guard<std::mutex> lock(g_core_map_mutex);
+    auto it = g_core_map_cache.find(dst_chip);
+    if (it == g_core_map_cache.end() || !it->second) {
+        return nullptr;
+    }
+    auto& m = *it->second;
+    uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
+    uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
+    uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;
+    static constexpr uint32_t L1_SLOT_MASK = (2u * 1024 * 1024) - 1;
+
+    auto find_core = [&](uint32_t x, uint32_t y) {
+        return m.find((uint64_t(x) << 32) | y);
+    };
+
+    // (noc_x,noc_y) are the SOURCE chip's physical/virtual coords (get_noc_addr packs the caller core's
+    // coords). Resolve against the destination chip's core map.
+    //
+    // Cross-chip physical-coordinate translation is needed ONLY for WORKER (tensix) cores: per-chip
+    // harvesting can map the same logical worker to a different physical coord on the dest chip (e.g.
+    // n300 with different harvest masks). DRAM/ETH coordinates are identical across chips, so translating
+    // them is WRONG — it can collapse distinct DRAM banks onto one backing. So: verbatim first; only if
+    // the verbatim core is a WORKER (or there is no verbatim hit) do we translate src->logical->dst.
+    auto cit = find_core(noc_x, noc_y);
+    const uint32_t src_chip = __emule_chip_id;
+    const bool verbatim_is_worker =
+        (cit != m.end() && cit->second->role() == tt_emule::CoreRole::WORKER);
+    if (src_chip != dst_chip && (verbatim_is_worker || cit == m.end())) {
+        auto* src_obj = get_sw_emulated_chip(src_chip);
+        auto* dst_obj = get_sw_emulated_chip(dst_chip);
+        if (src_obj != nullptr && dst_obj != nullptr) {
+            try {
+                auto logical = src_obj->get_soc_descriptor().translate_coord_to(
+                    tt_xy_pair(noc_x, noc_y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+                auto dst_xy = dst_obj->get_soc_descriptor().translate_coord_to(
+                    tt_xy_pair(logical.x, logical.y), CoordSystem::LOGICAL, CoordSystem::TRANSLATED);
+                auto t = find_core(static_cast<uint32_t>(dst_xy.x), static_cast<uint32_t>(dst_xy.y));
+                if (t != m.end() && t->second->role() == tt_emule::CoreRole::WORKER) {
+                    cit = t;  // harvesting-correct worker on the dest chip
+                }
+            } catch (...) {
+                // translation unavailable — keep the verbatim result
+            }
+        }
+    }
+    if (cit == m.end()) {
+        return nullptr;
+    }
+    uint32_t offset = (cit->second->role() == tt_emule::CoreRole::WORKER)
+                          ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
+                          : static_cast<uint32_t>(local_addr);
+    return cit->second->l1_ptr(offset);
+}
+
+// The destination chip for a fabric send from src_chip. For a directly-connected 2-chip system
+// (n300/p300) there is a single ethernet-connected neighbor; resolve it from the cluster descriptor.
+// (Multi-hop / direction-aware resolution for >2 chips is a later milestone — see docs/multichip/.)
+extern "C" uint32_t __emule_fabric_neighbor(uint32_t src_chip) {
+    auto ids = MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(src_chip);
+    if (!ids.empty()) {
+        return *ids.begin();
+    }
+    return src_chip;
+}
+
+// Top-level teleport: decode the real-layout packet header (NocCommandFields @0, payload_size @40,
+// noc_send_type @42), resolve the destination chip + core, and apply the terminal NOC command.
+// payload/payload_size are the bytes staged by a prior send_payload_without_header* call (may be null
+// for header-only commands such as a bare atomic-inc).
+extern "C" void __emule_fabric_teleport(const void* packet_header, const void* payload, uint32_t payload_size) {
+    const uint8_t* h = static_cast<const uint8_t*>(packet_header);
+    if (h == nullptr) {
+        return;
+    }
+    const uint32_t dst_chip = __emule_fabric_neighbor(__emule_chip_id);
+    const uint16_t hdr_payload_size = *reinterpret_cast<const uint16_t*>(h + 40);
+    const uint8_t noc_send_type = *(h + 42);
+    const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+    const uint32_t size = payload_size ? payload_size : hdr_payload_size;
+    static const bool dbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
+    if (dbg) {
+        uint8_t* dd = __emule_fabric_resolve_remote(dst_chip, noc_address);
+        fprintf(
+            stderr,
+            "[EMULE_FABRIC] teleport src=%u dst=%u send_type=%u noc_addr=0x%llx payload_size=%u resolved=%p\n",
+            __emule_chip_id, dst_chip, noc_send_type, (unsigned long long)noc_address, size, (void*)dd);
+    }
+
+    switch (noc_send_type) {
+        case 0: {  // NOC_UNICAST_WRITE
+            uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
+            if (d != nullptr && payload != nullptr && size > 0) {
+                std::memcpy(d, payload, size);
+                std::atomic_thread_fence(std::memory_order_release);
+            }
+            break;
+        }
+        case 1: {  // NOC_UNICAST_INLINE_WRITE: {noc_address; value@8}
+            uint32_t value = *reinterpret_cast<const uint32_t*>(h + 8);
+            uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
+            if (d != nullptr) {
+                reinterpret_cast<std::atomic<uint32_t>*>(d)->store(value, std::memory_order_release);
+            }
+            break;
+        }
+        case 2: {  // NOC_UNICAST_ATOMIC_INC: {noc_address; val@8}
+            uint32_t val = *reinterpret_cast<const uint32_t*>(h + 8);
+            uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
+            if (d != nullptr) {
+                uint32_t old = reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
+                if (dbg) {
+                    fprintf(stderr, "[EMULE_FABRIC]   atomic_inc dst=%p %u->%u (val=%u)\n", (void*)d, old, old + val, val);
+                }
+            }
+            break;
+        }
+        case 3: {  // NOC_FUSED_UNICAST_ATOMIC_INC: {noc_address; semaphore_noc_address@8; val@16}
+            uint64_t sem_addr = *reinterpret_cast<const uint64_t*>(h + 8);
+            uint32_t val = *reinterpret_cast<const uint32_t*>(h + 16);
+            uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
+            if (d != nullptr && payload != nullptr && size > 0) {
+                std::memcpy(d, payload, size);
+                std::atomic_thread_fence(std::memory_order_release);
+            }
+            uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
+            if (s != nullptr) {
+                reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
+            }
+            break;
+        }
+        case 4: {  // NOC_UNICAST_SCATTER_WRITE: noc_address[4]@0, chunk_size[3]@32, chunk_count@38
+            const uint64_t* na = reinterpret_cast<const uint64_t*>(h + 0);
+            const uint16_t* cs = reinterpret_cast<const uint16_t*>(h + 32);
+            uint8_t chunk_count = *(h + 38);
+            uint32_t off = 0;
+            for (uint8_t i = 0; i < chunk_count && payload != nullptr; ++i) {
+                uint32_t csz = (i + 1 < chunk_count) ? cs[i] : (size - off);
+                uint8_t* d = __emule_fabric_resolve_remote(dst_chip, na[i]);
+                if (d != nullptr && csz > 0) {
+                    std::memcpy(d, static_cast<const uint8_t*>(payload) + off, csz);
+                }
+                off += csz;
+            }
+            std::atomic_thread_fence(std::memory_order_release);
+            break;
+        }
+        default:
+            // MCAST (5,6) — implemented in a later milestone.
+            break;
+    }
+}
+
+// DESIGN DIVERGENCE: see tt-emule/.claude/skills/workarounds (DM-1). Faithful mechanism, not a hack.
+// Remap a local-L1 host pointer to the CURRENT chip's copy. Cross-chip-shared objects (notably
+// global semaphores) are passed to kernels as a single absolute host pointer that is valid for only
+// ONE chip's MAP_32BIT mmap. When a kernel on a DIFFERENT chip dereferences it locally (e.g. a worker
+// spinning on a global semaphore that a peer increments over fabric), it must hit ITS OWN chip's copy.
+// This finds the (core, offset) the pointer denotes on whichever chip owns it, and returns the same
+// (core, offset) on the current chip. Single-chip runs short-circuit (no peer chip → no remap), so
+// the hot path is one map-size check. Used by the semaphore chokepoint __emule_sem_atomic.
+extern "C" uint8_t* __emule_chip_relative_l1(uint8_t* p) {
+    std::lock_guard<std::mutex> lock(g_core_map_mutex);
+    if (g_core_map_cache.size() <= 1) {
+        return p;  // single chip: the pointer is already this chip's
+    }
+    const uint32_t cur = __emule_chip_id;
+    auto cur_it = g_core_map_cache.find(cur);
+    for (auto& [chip, mapp] : g_core_map_cache) {
+        if (!mapp) {
+            continue;
+        }
+        for (auto& [key, core] : *mapp) {
+            uint8_t* base = core->l1_data();
+            if (base != nullptr && p >= base && p < base + core->l1_size()) {
+                if (chip == cur) {
+                    return p;  // already on the current chip
+                }
+                uint64_t off = static_cast<uint64_t>(p - base);
+                if (cur_it != g_core_map_cache.end() && cur_it->second) {
+                    auto cc = cur_it->second->find(key);
+                    if (cc != cur_it->second->end()) {
+                        uint8_t* rp = cc->second->l1_ptr(off);
+                        if (std::getenv("EMULE_FABRIC_DEBUG") != nullptr) {
+                            fprintf(stderr,
+                                "[EMULE_FABRIC]   chip_relative cur=%u: %p (chip%u core[0x%llx]+0x%llx) -> %p\n",
+                                cur, (void*)p, chip, (unsigned long long)key, (unsigned long long)off, (void*)rp);
+                        }
+                        return rp;  // same core+offset on the current chip
+                    }
+                }
+                return p;
+            }
+        }
+    }
+    return p;  // not a known L1 pointer (firmware offset etc.) — leave unchanged
 }
 
 // ---------------------------------------------------------------------------
@@ -2161,7 +2446,8 @@ struct EmuleSigfpeGuard {
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
-    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr) {
+    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
+    ChipId device_id) {
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;
 #endif
@@ -2183,7 +2469,7 @@ static void launch_cores(
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         core_threads.emplace_back(
             [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx],
-             &kernel_start_barrier, total_kernel_threads]() {
+             &kernel_start_barrier, total_kernel_threads, device_id]() {
                 try {
                     auto* core = cs.core;
                     uint8_t* l1_data = core->l1_data();
@@ -2220,6 +2506,7 @@ static void launch_cores(
                                               kidx,
                                               &kernel_start_barrier,
                                               total_kernel_threads,
+                                              device_id,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
@@ -2238,6 +2525,7 @@ static void launch_cores(
                             __emule_tc_array = tc_array;
                             __processor_id = ki.processor_id;
                             __core = core;
+                            __emule_chip_id = static_cast<uint32_t>(device_id);
                             __emule_core_map = core_map_ptr;
                             my_x[0] = px;
                             my_x[1] = px;
@@ -2327,10 +2615,13 @@ static void launch_cores(
 // ---------------------------------------------------------------------------
 // execute_program_emulated: Main entry point.
 // ---------------------------------------------------------------------------
-void execute_program_emulated(IDevice* device, Program& program) {
+void execute_program_emulated(IDevice* device, Program& program, const std::function<void()>& post_setup_barrier) {
     auto& impl = program.impl();
     auto device_id = device->id();
     log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
+    if (std::getenv("EMULE_FABRIC_DEBUG") != nullptr) {
+        fprintf(stderr, "[EMULE_FABRIC] execute_program_emulated device=%u START\n", (unsigned)device_id);
+    }
 
     auto* sw_emu = get_sw_emulated_chip(device_id);
 
@@ -2405,9 +2696,17 @@ void execute_program_emulated(IDevice* device, Program& program) {
     std::vector<CoreSetup> core_setups;
     setup_core_state(impl, device, sw_emu, core_kernels, emule_sem_base, core_setups);
 
+    // Cross-device ordering barrier: under concurrent multi-device dispatch every device must finish
+    // writing its CB/semaphore initial values (setup_core_state, above) before ANY device launches
+    // kernels — otherwise a peer chip's fabric teleport (a barrier / out-ready atomic-inc) can land in
+    // this chip's L1 before this chip initializes that semaphore and be clobbered, deadlocking the CCL.
+    if (post_setup_barrier) {
+        post_setup_barrier();
+    }
+
     // Phase 3: Launch all cores concurrently
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
-    launch_cores(core_setups, dram_data, core_map_ptr);
+    launch_cores(core_setups, dram_data, core_map_ptr, device_id);
 
     log_debug(tt::LogMetal, "execute_program_emulated: device {} done", device_id);
 }

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <functional>
+
 namespace tt::tt_metal {
 class IDevice;
 class Program;
@@ -23,6 +25,12 @@ namespace tt::tt_metal::emule {
 ///
 /// Memory I/O from kernels goes through the SWEmuleChip's backing store
 /// via UMD Cluster::write_core / Cluster::read_core.
-void execute_program_emulated(IDevice* device, Program& program);
+///
+/// `post_setup_barrier`, if set, is invoked after this device finishes writing its per-core CB/semaphore
+/// initial values to L1 but BEFORE it launches kernels. Under concurrent multi-device dispatch it must
+/// block until every participating device has reached the same point, so a peer's fabric teleport (e.g.
+/// a barrier / out-ready atomic-inc) can never land before this device has initialized that semaphore.
+void execute_program_emulated(
+    IDevice* device, Program& program, const std::function<void()>& post_setup_barrier = {});
 
 }  // namespace tt::tt_metal::emule

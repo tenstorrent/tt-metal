@@ -19,6 +19,10 @@
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#ifdef TT_METAL_USE_EMULE
+#include <thread>
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"
+#endif
 
 namespace {
 
@@ -201,6 +205,74 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     if (local_devices.empty()) {
         return;
     }
+
+#ifdef TT_METAL_USE_EMULE
+    if (this->get_target_device_type() == tt::TargetDevice::Emule && local_devices.size() > 1) {
+        // Emule: a coord range that spans multiple devices runs one replicated program on each. A CCL /
+        // point_to_point program contains a cross-chip handshake (a worker blocks on a semaphore that a
+        // worker on the *other* chip increments over fabric). With emule's synchronous teleport, that
+        // increment lands in the peer's L1 immediately — but only if the peer's program is *also running*.
+        // Sequential launch (LaunchProgram(dev0) then dispatch dev1) would therefore deadlock. So run all
+        // local devices' programs CONCURRENTLY. Finalize + write-runtime-args serially first (they read the
+        // shared program / write per-device L1) to avoid racing on program mutation, then execute each
+        // device's kernels on its own host thread and join.
+        program.impl().finalize_dataflow_buffer_configs();
+        if (!program.impl().is_finalized()) {
+            program.impl().finalize_offsets(local_devices[0]);
+        }
+        for (auto* device : local_devices) {
+            tt_metal::detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+            tt_metal::detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+        }
+        std::vector<std::thread> emule_threads;
+        std::vector<std::exception_ptr> emule_excs(local_devices.size());
+        emule_threads.reserve(local_devices.size());
+        // Cross-device setup barrier: each device's execute_program_emulated calls this after it has
+        // written its CB/semaphore initial values to L1 but before launching kernels. It releases only
+        // once every device has set up, so a peer's fabric teleport can't clobber an as-yet-uninitialized
+        // semaphore. Exception-safe: a device that throws (setup or launch) sets `failed`, releasing any
+        // peers blocked at the barrier (they then throw) so the join + fail-fast below report the error
+        // instead of deadlocking.
+        struct EmuleSetupBarrier {
+            std::atomic<int> arrived{0};
+            std::atomic<bool> failed{false};
+            int total{0};
+        };
+        auto barrier = std::make_shared<EmuleSetupBarrier>();
+        barrier->total = static_cast<int>(local_devices.size());
+        auto barrier_fn = [barrier]() {
+            barrier->arrived.fetch_add(1, std::memory_order_acq_rel);
+            while (barrier->arrived.load(std::memory_order_acquire) < barrier->total) {
+                if (barrier->failed.load(std::memory_order_acquire)) {
+                    throw std::runtime_error("emule: a peer device failed during program setup");
+                }
+                std::this_thread::yield();
+            }
+        };
+        for (size_t i = 0; i < local_devices.size(); ++i) {
+            IDevice* device = local_devices[i];
+            emule_threads.emplace_back([device, &program, &emule_excs, i, barrier, barrier_fn]() {
+                try {
+                    tt::tt_metal::emule::execute_program_emulated(device, program, barrier_fn);
+                } catch (...) {
+                    barrier->failed.store(true, std::memory_order_release);
+                    emule_excs[i] = std::current_exception();
+                }
+            });
+        }
+        for (auto& t : emule_threads) {
+            t.join();
+        }
+        // Fail-fast: surface the first per-device failure (e.g. a JIT compile error) instead of letting
+        // a peer chip spin forever on a cross-chip semaphore the failed device never increments.
+        for (auto& e : emule_excs) {
+            if (e) {
+                std::rethrow_exception(e);
+            }
+        }
+        return;
+    }
+#endif
 
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);

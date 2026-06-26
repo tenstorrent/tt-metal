@@ -411,6 +411,19 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
     auto device_id = device->id();
 
+#ifdef TT_METAL_USE_EMULE
+    if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        // Emule JIT-compiles kernels lazily inside execute_program_emulated, so the program is never
+        // marked is_compiled() in the tt-metal sense — the is_compiled() assert below would fire on the
+        // 2nd..Nth device of a multi-device coord range. Mirror LaunchProgram's emule path: write this
+        // device's runtime args + configure, then execute synchronously on this device's SWEmuleChip.
+        detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+        detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+        emule::execute_program_emulated(device, program);
+        return;
+    }
+#endif
+
     // Verify program was prepared by prior LaunchProgram call
     TT_FATAL(
         program.impl().is_finalized(),
