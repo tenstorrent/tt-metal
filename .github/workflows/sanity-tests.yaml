@@ -289,28 +289,11 @@ jobs:
     with:
       # sim_* SKUs run ttnn under the ttsim simulator on ubuntu-latest, which can't reach Harbor.
       # Use the canonical GHCR image from resolve-artifacts (not the Harbor-resolved resolve-docker-pull-refs ref).
-      enabled-skus: "wh_n300_civ2,sim_blackhole"
+      enabled-skus: "wh_n300_civ2,sim_wormhole_b0,sim_blackhole"
       docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
-      enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      ref: ${{ inputs.ref || github.sha }}
-
-  profiler-tests:
-    needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
-    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-tests == 'true'}}
-    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      # Sanity historically ran (wormhole_b0, N300) → wh_n300_civ2, post-commit only.
-      enabled-skus: wh_n300_civ2
-      test-selection: post-commit
-      enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
@@ -352,7 +335,6 @@ jobs:
     with:
       basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
-      enabled-skus: "sim_blackhole"
 
   runtime-sim-sanity-tests:
     needs: [resolve-artifacts, tests-to-run]

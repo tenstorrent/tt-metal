@@ -84,7 +84,7 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "ALL_SKUS_IN_TESTS" \
             ./.github/sku_config.yaml
 
       - name: Detect sim SKUs in matrix
