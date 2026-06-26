@@ -794,8 +794,7 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
 
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_migrations_pairwise
 
-        if is_first_rank:
-            validate_migrations_pairwise(runtime, [(src_slot, dst_slot)])
+        validate_migrations_pairwise(runtime, [(src_slot, dst_slot)])
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
