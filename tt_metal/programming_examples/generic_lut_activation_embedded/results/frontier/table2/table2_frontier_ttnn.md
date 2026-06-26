@@ -5,7 +5,7 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 36. Accuracy match but slower: 14. Faster but less accurate: 1. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -29,10 +29,10 @@ Comparable rows: 52. Win on ULP and runtime: 36. Accuracy match but slower: 14. 
 | exp2 | exponent_alu_exp2:s16/d2 | 0.50 | 1.94 | 0.50 | 2.52 | 1.299 | win_both |
 | expm1 | poly:s1/d7 | 0.00 | 1.99 | 0.00 | 2.92 | 1.467 | win_both |
 | gelu | poly:s16/d2 | 0.12 | 11.80 | 0.12 | 5.78 | 0.490 | accuracy_match_slow |
-| hardmish | poly:s3/d3 | 0.00 | 2.01 | 0.03 | 1.77 | 0.881 | accuracy_match_slow |
-| hardshrink | poly:s1/d4 | 8.00 | 1.68 | 0.00 | 1.82 | 1.083 | faster_less_accurate |
+| hardmish | gated_affine_product:s3/d3 | 0.00 | 1.72 | 0.03 | 1.77 | 1.029 | win_both |
+| hardshrink | threshold_identity:s3/d2 | 0.00 | 1.74 | 0.00 | 1.82 | 1.046 | win_both |
 | hardsigmoid | poly:s3/d2 | 0.50 | 1.74 | 0.50 | 1.79 | 1.029 | win_both |
-| hardswish | poly:s3/d6 | 0.02 | 2.08 | 0.25 | 2.01 | 0.966 | accuracy_match_slow |
+| hardswish | gated_affine_product:s3/d6 | 0.02 | 1.78 | 0.25 | 2.01 | 1.129 | win_both |
 | hardtanh | poly:s3/d10 | 0.00 | 1.68 | 0.00 | 1.86 | 1.107 | win_both |
 | i0 | poly:s1/d10 | 0.25 | 2.35 | 1.00 | 3.10 | 1.319 | win_both |
 | i1 | rational:s1/d8d5 | 0.50 | 2.70 | 0.50 | 7.40 | 2.741 | win_both |
@@ -62,7 +62,7 @@ Comparable rows: 52. Win on ULP and runtime: 36. Accuracy match but slower: 14. 
 | sinh | rational:s1/d14d2 | 0.00 | 3.03 | 0.00 | 3.25 | 1.073 | win_both |
 | softplus | poly:s2/d9 | 0.12 | 3.29 | 0.12 | 5.31 | 1.614 | win_both |
 | softshrink | poly:s3/d2 | 0.00 | 2.00 | 0.00 | 1.91 | 0.955 | accuracy_match_slow |
-| softsign | rational:s2/d1d1 | 0.00 | 2.17 | 1.00 | 1.96 | 0.903 | accuracy_match_slow |
+| softsign | abs_denominator_rational:s2/d1d1 | 0.00 | 1.80 | 1.00 | 1.96 | 1.089 | win_both |
 | sqrt | newton_root:s1/d14 | 0.00 | 2.16 | 0.00 | 2.28 | 1.056 | win_both |
 | swish | poly:s2/d12 | 0.25 | 3.85 | 0.25 | 3.10 | 0.805 | accuracy_match_slow |
 | tan | tan:s1/d7 | 0.12 | 3.31 | 0.12 | 2.94 | 0.888 | accuracy_match_slow |
