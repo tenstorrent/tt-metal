@@ -186,6 +186,11 @@ def _resolve_generation_logits_fn(
     )
 
 
+def _validate_logits_fn_args(logits_fn, logits_fn_builder) -> None:
+    if logits_fn is not None and logits_fn_builder is not None:
+        raise ValueError("pass either logits_fn or logits_fn_builder, not both")
+
+
 def make_host_canvas_init_fn(mesh_device, host_canvases):
     """Create a ``generate_blocks`` init hook from fixed host canvas tensors."""
     canvases = list(host_canvases)
@@ -486,6 +491,7 @@ def generate_from_prompt_tokens(
     """
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
+    _validate_logits_fn_args(logits_fn, logits_fn_builder)
     init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     prompt_len = prefill_fn(
         tt_model,

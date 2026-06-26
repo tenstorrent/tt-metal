@@ -405,6 +405,23 @@ def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
         )
 
 
+def test_generate_from_prompt_tokens_rejects_logits_and_builder_together_for_zero_blocks():
+    def fail_prefill(*args, **kwargs):
+        raise AssertionError("prefill should not run for conflicting logits inputs")
+
+    with pytest.raises(ValueError, match="either logits_fn or logits_fn_builder"):
+        generate_from_prompt_tokens(
+            "model",
+            "logits",
+            torch.tensor([[1, 2]], dtype=torch.long),
+            num_blocks=0,
+            config=DiffusionConfig(canvas_length=2),
+            logits_fn_builder=lambda *args, **kwargs: "built",
+            prefill_fn=fail_prefill,
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_from_prompt_tokens_rejects_negative_num_blocks_before_prefill():
     def fail_prefill(*args, **kwargs):
         raise AssertionError("prefill should not run for invalid num_blocks")
