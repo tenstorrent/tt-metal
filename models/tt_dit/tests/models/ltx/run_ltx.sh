@@ -296,7 +296,15 @@ export RUN_CLIP="$QUALITY_GATES"
 [[ -n "$WIDTH"  ]] && export WIDTH
 [[ -n "$SEED"   ]] && export SEED
 [[ -n "$STEPS"  ]] && export NUM_STEPS="$STEPS"
-[[ -n "$OUTPUT" ]] && export OUTPUT_PATH="$OUTPUT"
+
+# One output path for every mode, so a run always saves a video and can report it. -o wins; else
+# a stable per-mode name under $HOME (absolute, so the test's default never lands in the repo
+# CWD). t2v/i2v honor OUTPUT_PATH; the i2v assertion test (gate) only honors LTX_I2V_OUT. Chained
+# drives its own per-pass LTX_*_OUT, so it just reuses OUT as the final splice target.
+if [[ "$CHAINED" -eq 1 ]];   then OUT="${OUTPUT:-$HOME/t2v_i2v_chained_12s.mp4}"
+elif [[ "$GATE" -eq 1 ]];    then OUT="${OUTPUT:-$HOME/ltx_i2v_gate.mp4}"; export LTX_I2V_OUT="$OUT"
+elif [[ -n "$I2V_IMAGE" ]];  then OUT="${OUTPUT:-$HOME/ltx_i2v.mp4}";      export OUTPUT_PATH="$OUT"
+else                              OUT="${OUTPUT:-$HOME/ltx_t2v.mp4}";      export OUTPUT_PATH="$OUT"; fi
 
 # Names of env vars to forward to the run. The first group makes the broker use our
 # venv + repo instead of its (wrong) auto-located path.
@@ -310,7 +318,9 @@ ENV_NAMES=(PYTHON_ENV_DIR VIRTUAL_ENV TT_METAL_HOME PYTHONPATH \
 [[ -n "$WIDTH"  ]] && ENV_NAMES+=(WIDTH)
 [[ -n "$SEED"   ]] && ENV_NAMES+=(SEED)
 [[ -n "$STEPS"  ]] && ENV_NAMES+=(NUM_STEPS)
-[[ -n "$OUTPUT" ]] && ENV_NAMES+=(OUTPUT_PATH)
+if [[ "$CHAINED" -ne 1 ]]; then
+  if [[ "$GATE" -eq 1 ]]; then ENV_NAMES+=(LTX_I2V_OUT); else ENV_NAMES+=(OUTPUT_PATH); fi
+fi
 [[ -n "${HF_TOKEN:-}" ]] && ENV_NAMES+=(HF_TOKEN)
 
 PYTEST_CMD="pytest $TEST_FILE -k \"$KID\" -s --timeout $TIMEOUT"
@@ -321,7 +331,8 @@ echo " variant : $VARIANT      mesh: $MESH  topology: $TOPOLOGY"
 echo " test    : $TEST_FILE"
 echo " -k      : $KID"
 echo " ckpt    : $LTX_CHECKPOINT"
- echo " i2v     : $([[ "$CHAINED" -eq 1 ]] && echo "chained t2v->i2v 12s (seeds ${SEED:-10}/${I2V_SEED:-12}) -> ${OUTPUT:-$HOME/t2v_i2v_chained_12s.mp4}" || echo "${I2V_IMAGE:-<none> (text-to-video)}")"
+echo " i2v     : $([[ "$CHAINED" -eq 1 ]] && echo "chained t2v->i2v 12s (seeds ${SEED:-10}/${I2V_SEED:-12})" || { [[ "$GATE" -eq 1 ]] && echo "gate assert (PCC+seam): $I2V_IMAGE" || echo "${I2V_IMAGE:-<none> (text-to-video)}"; })"
+echo " output  : $OUT"
 echo " mode    : $RUN_MODE"
 echo " traced  : $([[ "$TRACED" -eq 1 ]] && echo "yes (gen #1 = steady-state replay)" || echo "no")"
 echo " warmup  : $([[ "$WARMUP" -eq 1 ]] && echo "yes" || echo "no")    RUN_I2V: $RUN_I2V    quality-gates: $([[ "$QUALITY_GATES" -eq 1 ]] && echo "on" || echo "off")"
@@ -348,7 +359,7 @@ PY
 if [[ "$CHAINED" -eq 1 ]]; then
   [[ "$RUN_MODE" == "direct" ]] && { echo "--i2v-chained needs the broker (two passes); drop --direct" >&2; exit 1; }
   T2V_OUT="$HOME/chain_t2v.mp4"; COND="$HOME/chain_cond.png"; I2V_OUT="$HOME/chain_i2v.mp4"
-  FINAL="${OUTPUT:-$HOME/t2v_i2v_chained_12s.mp4}"
+  FINAL="$OUT"
   T2V_SEED="${SEED:-10}"; I2V_SEED="${I2V_SEED:-12}"
 
   ENVA="$(mktemp /tmp/ltx_chain_a.XXXXXX.yaml)"; ENVB="$(mktemp /tmp/ltx_chain_b.XXXXXX.yaml)"
@@ -385,14 +396,16 @@ if [[ "$CHAINED" -eq 1 ]]; then
   "$FF" -v error -i "$T2V_OUT" -i "$I2V_OUT" \
     -filter_complex "[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[v][a]" \
     -map "[v]" -map "[a]" -y "$FINAL"
-  echo "CHAINED 12s VIDEO: $FINAL"
   "$FF" -hide_banner -i "$FINAL" 2>&1 | grep -E "Duration|Stream" || true
+  echo "OUTPUT: $FINAL"
 elif [[ "$RUN_MODE" == "direct" ]]; then
   eval "$PYTEST_CMD"
+  [[ -f "$OUT" ]] && echo "OUTPUT: $OUT" || echo "WARN: expected output not found: $OUT"
 else
   ENV_FILE="$(mktemp /tmp/ltx_env.XXXXXX.yaml)"
   trap 'rm -f "$ENV_FILE"' EXIT
   emit_env "$ENV_FILE" "${ENV_NAMES[@]}"
   echo ">> Submitting to tt-device-mcp broker (timeout ${TIMEOUT}s)..."
   tt-device-mcp run "$PYTEST_CMD" -w "$TT_METAL_DIR" -e "$ENV_FILE" -t "$TIMEOUT" -o 40
+  [[ -f "$OUT" ]] && echo "OUTPUT: $OUT" || echo "WARN: expected output not found: $OUT"
 fi
