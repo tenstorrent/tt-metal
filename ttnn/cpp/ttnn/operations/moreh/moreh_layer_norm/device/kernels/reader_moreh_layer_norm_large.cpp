@@ -48,15 +48,23 @@ void kernel_main() {
     const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 #endif
 
-    fill_cb_with_value(cb_id_scaler, scaler);
-    fill_cb_with_value(cb_id_eps, eps);
+    CircularBuffer cb_scaler(cb_id_scaler);
+    CircularBuffer cb_eps(cb_id_eps);
+    fill_cb_with_value(cb_scaler, scaler);
+    fill_cb_with_value(cb_eps, eps);
 
 #ifdef DO_MASK_H
-    generate_mask_h(cb_id_mask_h, mask_h);
+    {
+        CircularBuffer cb_mask_h(cb_id_mask_h);
+        generate_mask_h(cb_mask_h, mask_h);
+    }
 #endif
 
 #ifdef DO_MASK_W
-    generate_mask_w(cb_id_mask_w, mask_w);
+    {
+        CircularBuffer cb_mask_w(cb_id_mask_w);
+        generate_mask_w(cb_mask_w, mask_w);
+    }
 #endif
 
     uint32_t offs = 0;

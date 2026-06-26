@@ -63,11 +63,11 @@ namespace {
 constexpr uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
 
 template <uint32_t K>
-FORCE_INLINE void materialize_index_rank_order(uint32_t idst) {
+FORCE_INLINE void materialize_index_rank_order(uint32_t idst, uint32_t indices_cb) {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
 
-    transpose_wh_dest_init_short<true, false>();
+    transpose_wh_dest_init_short<true, false>(indices_cb);
     for (uint32_t t = 0; t < tiles_per_sequence; ++t) {
         transpose_wh_dest<true, false>(idst + tiles_per_sequence + t);
     }
@@ -147,7 +147,7 @@ void kernel_main() {
         }
 
         mark_neginf_indices<K>(slot0);
-        materialize_index_rank_order<K>(slot0);
+        materialize_index_rank_order<K>(slot0, indices_cb);
 
         tile_regs_commit();
         tile_regs_wait();
