@@ -62,6 +62,27 @@ class ModelArgs(TTModelArgs):
         ]
         return max(snaps, key=os.path.getmtime) if snaps else None
 
+    def _set_hf_params(self, checkpoint_dir):
+        # The base dummy path reads the HF config from LOCAL_HF_PARAMS[model_name],
+        # which Janus doesn't register (and model_name is a snapshot hash here).
+        # Force the config to load from CKPT_DIR (the real config.json) while keeping
+        # dummy_weights semantics for the weight-loading paths.
+        saved_dummy_weights = self.dummy_weights
+        self.dummy_weights = False
+        try:
+            super()._set_hf_params(checkpoint_dir)
+        finally:
+            self.dummy_weights = saved_dummy_weights
+
+    def weight_cache_path(self, dtype):
+        # Never reuse the on-disk weight cache for dummy weights. Otherwise modules
+        # such as TtLayerNorm (which key their cache only by weight_cache_path +
+        # state_dict_prefix) would load stale real-weight tensors instead of the
+        # random dummy state_dict, breaking PCC against the dummy reference model.
+        if self.dummy_weights:
+            return None
+        return super().weight_cache_path(dtype)
+
     def _set_model_specific_params(self):
         # LLaMA-style text decoder: RMSNorm without a unit offset.
         self.rms_norm_add_unit_offset = False
@@ -128,6 +149,45 @@ class ModelArgs(TTModelArgs):
 
         return JanusForConditionalGeneration
 
+    def _janus_dummy_hf_model(self):
+        """Build JanusForConditionalGeneration from HF config only (random init).
+
+        Avoids loading the multi-GB checkpoint. The text decoder is shrunk to
+        self.n_layers since the vision tests don't exercise the language model.
+        The model is cached so load_state_dict() and the reference_* helpers
+        share identical random weights (otherwise PCC checks would compare two
+        different random initializations).
+        """
+        if getattr(self, "_dummy_hf_model", None) is not None:
+            return self._dummy_hf_model
+
+        import gc
+
+        import torch
+        from transformers import AutoConfig, JanusForConditionalGeneration
+
+        logger.info("[JanusPro] Building HF dummy model from config (dummy_weights=True)")
+
+        config = AutoConfig.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
+        # Keep the language model tiny; vision tower keeps its real depth (vision_n_layers).
+        if getattr(config, "text_config", None) is not None:
+            config.text_config.num_hidden_layers = self.n_layers
+            config.text_config.num_layers = self.n_layers
+
+        build_from_config = getattr(
+            JanusForConditionalGeneration, "from_config", JanusForConditionalGeneration._from_config
+        )
+        try:
+            model = build_from_config(config, torch_dtype=torch.bfloat16)
+        except TypeError:
+            model = build_from_config(config)
+
+        # Reference runs on fp32 inputs; force fp32 to avoid the mixed-dtype CPU error.
+        model = model.float()
+        gc.collect()
+        self._dummy_hf_model = model
+        return model
+
     def load_state_dict(self):
         model = self.reference_vision_transformer(wrap=False)
         return convert_vision_hf_to_meta(model.state_dict(), self.head_dim)
@@ -157,6 +217,14 @@ class ModelArgs(TTModelArgs):
         return prefix + layer_prefix + module_map[module_name]
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
+        if self.dummy_weights and not load_checkpoint:
+            model = self._janus_dummy_hf_model()
+            if wrap:
+                from models.tt_transformers.tt.model_config import HfModelWrapper
+
+                return HfModelWrapper(model, self.head_dim, use_hf_rope=self.use_hf_rope)
+            return model
+        # Real-weights path: keep the working base behaviour (layer slicing, auto dtype).
         model = super().reference_vision_transformer(wrap=wrap, load_checkpoint=load_checkpoint)
         return model.float()
 

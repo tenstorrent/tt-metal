@@ -32,14 +32,16 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
+@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_janus_vision(
     mesh_device,
     reset_seeds,
     bsz,
+    dummy_weights,
 ):
     pcc_required = 0.95
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     first_layer_prefix = "model.vision_model."
@@ -88,10 +90,12 @@ def test_janus_vision(
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
+@pytest.mark.parametrize("dummy_weights", [False, True], ids=["real", "dummy"])
 def test_janus_vision_piecewise(
     mesh_device,
     reset_seeds,
     bsz,
+    dummy_weights,
 ):
     from models.experimental.janus_pro.tt.janus_pro_image_transformer import TtJanusProImageTransformer
     from models.experimental.janus_pro.tt.janus_pro_vision_embedding import TtJanusProVisionEmbeddings
@@ -99,7 +103,7 @@ def test_janus_vision_piecewise(
 
     pcc_required = 0.99
     dtype = ttnn.bfloat16
-    model_args = ModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device, dummy_weights=dummy_weights)
     state_dict = model_args.load_state_dict()
 
     first_layer_prefix = "model.vision_model."
