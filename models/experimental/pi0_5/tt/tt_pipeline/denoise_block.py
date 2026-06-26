@@ -22,7 +22,7 @@ from ._module import DeviceArch, run_on_devices
 from ._trace import trace_enabled
 from .modeling.bs import matmul_pcfg, sdpa_program_config
 from .modeling.common import get_sdpa_compute_kernel_config
-from .modeling.gemma import TTNNPi05AdaRMSGemmaBlock, TTNNPi05GemmaAttention
+from .modeling.gemma import TTNNPi05AdaRMSGemmaBlock, TTNNPi05GemmaAttention, TTNNPi05GemmaMLP
 
 TT_METAL_COMMIT = "58672b47cfd304195798bcf34d44f5dbcbcf5189"
 _L1 = ttnn.L1_MEMORY_CONFIG
@@ -88,6 +88,52 @@ def _denoise_sdpa_pcfg(q_seq, kv_seq, grid_x, grid_y):
     return sdpa_program_config(q_seq, kv_seq, grid_x, grid_y, q_chunk=q_chunk, k_chunk=k_chunk)
 
 
+# --------------------------------------------------------------------------- decode_all mode
+# When DECODE_ALL is set (by the walltime test), the denoise block routes all five projection
+# matmuls (QKV, o, MLP gate/up/down) through ttnn.matmul_decode (partial-width-sharded resident-L1
+# weights + width-sharded input-A reshard) + concat_heads_matmul_decode for the o-proj. Numerics
+# are PCC ~1.0 vs the linear path (validated by the single-layer test). Ported from the
+# matmul_decode branch (Sankar Manoj matmul_decode op + alnah005 decode_all wiring).
+DECODE_ALL = False
+
+_K_BLOCKS = 2
+_RESHARD_CORES = 2
+_QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = 40, 32, 32
+_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+)
+
+
+def _crs(device, n):
+    return ttnn.num_cores_to_corerangeset(n, device.compute_with_storage_grid_size(), True)
+
+
+def _pws_B(device, w_kn, n_blocks):
+    """Partial-width-sharded resident-L1 bf8_b weight for matmul_decode (w_kn is torch [K, N])."""
+    k, n = w_kn.shape
+    kc, nc = k // _K_BLOCKS, n // n_blocks
+    br = w_kn.reshape(_K_BLOCKS, kc, n).permute(1, 0, 2).reshape(kc, n * _K_BLOCKS).contiguous()
+    mc = ttnn.create_sharded_memory_config(
+        (kc, nc),
+        core_grid=_crs(device, _K_BLOCKS * n_blocks),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return ttnn.from_torch(br, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc, dtype=ttnn.bfloat8_b)
+
+
+def _ws_in_mc(device, m, k):
+    """Width-sharded input-A memory config (matmul_decode hard-requires WIDTH_SHARDED in0)."""
+    return ttnn.create_sharded_memory_config(
+        (m, k // _RESHARD_CORES),
+        core_grid=_crs(device, _RESHARD_CORES),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
     def _proj(self, x, w, dtype, m_t, grid, ck):
         k_t, n_t = w.shape[-2] // 32, w.shape[-1] // 32
@@ -119,7 +165,19 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         _expert_ck = _expert_lofi_ck()
 
         m_t = s // 32
-        qkv = self._proj(hidden_states, self.tt_wqkv, ttnn.bfloat8_b, m_t, _g, _expert_ck)
+        if DECODE_ALL:
+            hwq = ttnn.to_memory_config(hidden_states, _ws_in_mc(self.device, s, hidden_states.shape[-1]))
+            qkv = ttnn.matmul_decode(
+                hwq,
+                self.wqkv_b,
+                partial_width_sharded=True,
+                compute_kernel_config=_LOFI,
+                interleaved_output=True,
+                dtype=ttnn.bfloat8_b,
+            )
+            ttnn.deallocate(hwq)
+        else:
+            qkv = self._proj(hidden_states, self.tt_wqkv, ttnn.bfloat8_b, m_t, _g, _expert_ck)
         # Fused create-qkv-heads + q/k RoPE in ONE dispatch (custom op; byte-identical to
         # nlp_create_qkv_heads + 2x rotary_embedding, PCC 1.0). Replaces 3 launches with 1.
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_rope(
@@ -155,15 +213,55 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         # is consumed directly as in0 (concat = contiguous tiles for seq<=1 tile, PCC ~1.0); the
         # [.,32,K] view is build-time-only so it is trace-replay-safe. 2 launches -> 1. Pass the
         # SAME tuned program config _proj uses for the O-matmul so the matmul stays as fast.
-        _o_k, _o_n = self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32
-        _o_pc = _denoise_tuned_pcfg(m_t, _o_k, _o_n, _g.x, _g.y) or matmul_pcfg(
-            m_t, _o_k, _o_n, _g.x, _g.y, in0_block_w=8
-        )
-        out = ttnn.experimental.concat_heads_matmul(attn_out, self.tt_o, memory_config=_L1, program_config=_o_pc)
+        if DECODE_ALL:
+            # FREE-view concat-heads + matmul_decode o-proj (partial-width-sharded), bf16 out.
+            out = ttnn.experimental.concat_heads_matmul_decode(
+                attn_out,
+                self.wo_b,
+                output_dtype=ttnn.bfloat16,
+                compute_kernel_config=_LOFI,
+                reshard_cores=_RESHARD_CORES,
+            )
+        else:
+            _o_k, _o_n = self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32
+            _o_pc = _denoise_tuned_pcfg(m_t, _o_k, _o_n, _g.x, _g.y) or matmul_pcfg(
+                m_t, _o_k, _o_n, _g.x, _g.y, in0_block_w=8
+            )
+            out = ttnn.experimental.concat_heads_matmul(attn_out, self.tt_o, memory_config=_L1, program_config=_o_pc)
         ttnn.deallocate(attn_out)
         if len(out.shape) == 4:
             out = ttnn.reshape(out, (b, s, out.shape[-1]))
         return out, new_cache
+
+
+class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
+    """GeGLU MLP with an optional decode_all path: gate/up/down via matmul_decode (partial-width-
+    sharded resident-L1 weights), gate fuses a tanh-approx gelu. Falls back to the linear path."""
+
+    @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if not DECODE_ALL:
+            return super().forward(x)
+        s = x.shape[-2]
+        hw = ttnn.to_memory_config(x, _ws_in_mc(self.device, s, x.shape[-1]))
+        ttnn.deallocate(x)
+        gate = ttnn.matmul_decode(
+            hw,
+            self.gate_b,
+            partial_width_sharded=True,
+            compute_kernel_config=_LOFI,
+            fused_gelu=True,
+            fused_gelu_approx=True,
+        )
+        up = ttnn.matmul_decode(hw, self.up_b, partial_width_sharded=True, compute_kernel_config=_LOFI)
+        hid = ttnn.multiply(gate, up, memory_config=gate.memory_config())
+        hid2 = ttnn.to_memory_config(hid, _ws_in_mc(self.device, s, hid.shape[-1]))
+        out = ttnn.matmul_decode(
+            hid2, self.down_b, partial_width_sharded=True, compute_kernel_config=_LOFI, interleaved_output=True
+        )
+        for t in (hw, gate, up, hid, hid2):
+            ttnn.deallocate(t)
+        return out
 
 
 @trace_enabled
@@ -172,6 +270,7 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
     def from_torch(cls, block, config):
         new = super().from_torch(block, config)
         new.attention = TTNNPi05DenoiseExpertAttention.from_torch(block.attention, config)
+        new.mlp = TTNNPi05DenoiseExpertMLP.from_torch(block.mlp, config)
         return new
 
     def move_weights_to_device_impl(self):
@@ -179,6 +278,20 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         # per-matmul DRAM weight read.
         super().move_weights_to_device_impl()
         a, m = self.attention, self.mlp
+        if DECODE_ALL:
+            # decode_all: build partial-width-sharded resident-L1 weights for matmul_decode and
+            # free the now-unused interleaved weights (keeps L1 within stage budget).
+            import torch
+
+            dev = self.device
+            a.wqkv_b = _pws_B(dev, torch.cat([a._q_w.t(), a._k_w.t(), a._v_w.t()], dim=-1).contiguous(), _QKV_N_BLOCKS)
+            a.wo_b = _pws_B(dev, a._o_w.t().contiguous(), _O_N_BLOCKS)
+            m.gate_b = _pws_B(dev, m._gate_w.t().contiguous(), _MLP_N_BLOCKS)
+            m.up_b = _pws_B(dev, m._up_w.t().contiguous(), _MLP_N_BLOCKS)
+            m.down_b = _pws_B(dev, m._down_w.t().contiguous(), _MLP_N_BLOCKS)
+            for t in (a.tt_wqkv, a.tt_o, m.tt_gate, m.tt_up, m.tt_down):
+                ttnn.deallocate(t)
+            return
         a.tt_wqkv = ttnn.to_memory_config(a.tt_wqkv, _L1)
         a.tt_o = ttnn.to_memory_config(a.tt_o, _L1)
         m.tt_gate = ttnn.to_memory_config(m.tt_gate, _L1)

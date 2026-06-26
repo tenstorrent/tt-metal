@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include <variant>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+
+namespace ttnn::operations::matmul_decode {
+
+// -----------------------------------------------------------------------------
+// MatmulDecodeDeviceOperation
+//
+// TEMPLATE / SKELETON ONLY -- this is intentionally NOT a functional matmul.
+// It mirrors the structure of the example device operation
+// (ttnn/cpp/ttnn/operations/examples/example) so it can be fleshed out into a
+// real decode-optimized matmul. Fill in the program factories with the actual
+// reader / compute / writer kernels and runtime args to make it functional.
+// -----------------------------------------------------------------------------
+struct MatmulDecodeDeviceOperation {
+    // Non-tensor configuration for the operation.
+    struct operation_attributes_t {
+        int M;
+        int N;
+        int K;
+        MemoryConfig output_mem_config;
+        std::optional<DataType> output_dtype;
+        // When true, force the partial width-sharded program factory (B sharded along
+        // both K and N with a cross-core K-reduction). When false, the factory is chosen
+        // automatically from the input layouts.
+        bool partial_width_sharded = false;
+        // Optional compute-kernel config (math fidelity, fp32 dest acc, approx mode).
+        // When unset the factories default to HiFi4 (the op's original hardcoded value).
+        std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+        // When true, fuse an (erf) GELU activation into the output pack of the partial
+        // width-sharded compute kernel -- the gate projection of a GeGLU MLP gets its
+        // activation for free in the matmul's phase-2 pack, eliminating a separate
+        // elementwise gelu op (which would otherwise run on only N_blocks output cores).
+        bool fused_gelu = false;
+        // When true, the partial width-sharded factory writes its result to an
+        // INTERLEAVED L1 output (each base core NoC-scatters its N-slice to the
+        // interleaved buffer) instead of a width-sharded output -- folding the
+        // sharded->interleaved reshard the caller would otherwise do into the op.
+        bool interleaved_output = false;
+        // When true (and fused_gelu is set), the fused GELU uses the tanh-approx
+        // variant (gelu_tile<true>) instead of the exact-erf variant (gelu_tile<false>).
+        bool fused_gelu_approx = false;
+    };
+
+    // Tensors passed in/out of the operation.
+    struct tensor_args_t {
+        const Tensor& input_tensor_a;
+        const Tensor& input_tensor_b;
+    };
+
+    // Output spec / tensor types. A single matmul output here.
+    using spec_return_value_t = ttnn::TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    // -------------------------------------------------------------------------
+    // Descriptor-based program factories.
+    //
+    // Each factory returns a ProgramDescriptor. The framework handles program
+    // construction, caching, and runtime argument patching automatically.
+    // -------------------------------------------------------------------------
+
+    // Full width-sharded: keeps the full output width resident across the core
+    // grid, with each core owning a contiguous slice of the N (width) dimension.
+    struct FullWidthSharded {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    // Partial width-sharded: B is sharded along BOTH K and N. The N dimension is
+    // split across N_blocks cores and the K dimension across K_blocks cores, so a
+    // single core holds only a [K/K_blocks, N/N_blocks] block of B (expressed as a
+    // width-sharded tensor after the caller reshapes/permutes B). Each core computes
+    // a partial product over its K-slice; the K_blocks partials for each N-slice are
+    // then reduced (summed) onto the base core that owns that N-slice of the output.
+    struct PartialWidthSharded {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    // Multi-core: distributes output tiles across the available core grid.
+    struct MultiCore {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<FullWidthSharded, PartialWidthSharded, MultiCore>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+};
+
+}  // namespace ttnn::operations::matmul_decode
+
+namespace ttnn::prim {
+ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_value_t matmul_decode(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool partial_width_sharded = false,
+    std::optional<const DataType> dtype = std::nullopt,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool fused_gelu = false,
+    bool interleaved_output = false,
+    bool fused_gelu_approx = false);
+}  // namespace ttnn::prim
