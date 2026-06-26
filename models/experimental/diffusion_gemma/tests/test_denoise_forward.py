@@ -7,6 +7,7 @@ import pytest
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
     denoise_attention_forward,
+    make_denoise_logits_adapter_from_kv_cache,
     read_prompt_kv_cache_by_layer,
 )
 
@@ -127,3 +128,55 @@ def test_read_prompt_kv_cache_by_layer_rejects_cache_layer_mismatch():
 
     with pytest.raises(ValueError, match="tt_kv_cache has 1 layers"):
         read_prompt_kv_cache_by_layer(model, prompt_len=64, read_fn=lambda *args, **kwargs: None)
+
+
+def test_make_denoise_logits_adapter_from_kv_cache_wires_prompt_kv_and_self_conditioning():
+    calls = {}
+    model = _FakeModel(num_layers=2)
+
+    def fake_read(tt_model, *, prompt_len, seq_len_start=0):
+        calls["read"] = (tt_model, prompt_len, seq_len_start)
+        return ["kv0", "kv1"]
+
+    class _FakeAdapter:
+        def __init__(self, tt_model, **kwargs):
+            calls["adapter"] = (tt_model, kwargs)
+
+    out = make_denoise_logits_adapter_from_kv_cache(
+        model,
+        prompt_len=64,
+        seq_len_start=32,
+        self_conditioning="self-conditioning",
+        self_conditioning_embedding_weight="embedding",
+        self_conditioning_compute_kernel_config="kernel",
+        read_prompt_kv_fn=fake_read,
+        adapter_cls=_FakeAdapter,
+    )
+
+    assert isinstance(out, _FakeAdapter)
+    assert calls["read"] == (model, 64, 32)
+    tt_model, kwargs = calls["adapter"]
+    assert tt_model is model
+    assert kwargs["prompt_hidden_by_layer"] == ["kv0", "kv1"]
+    assert kwargs["self_conditioning"] == "self-conditioning"
+    assert kwargs["self_conditioning_embedding_weight"] == "embedding"
+    assert kwargs["self_conditioning_compute_kernel_config"] == "kernel"
+    assert kwargs["q_rope_offset"] == 64
+
+
+def test_make_denoise_logits_adapter_from_kv_cache_accepts_explicit_rope_offset():
+    calls = {}
+
+    class _FakeAdapter:
+        def __init__(self, tt_model, **kwargs):
+            calls["q_rope_offset"] = kwargs["q_rope_offset"]
+
+    make_denoise_logits_adapter_from_kv_cache(
+        _FakeModel(),
+        prompt_len=64,
+        q_rope_offset=64 + 2 * 256,
+        read_prompt_kv_fn=lambda *args, **kwargs: ["kv"],
+        adapter_cls=_FakeAdapter,
+    )
+
+    assert calls["q_rope_offset"] == 576

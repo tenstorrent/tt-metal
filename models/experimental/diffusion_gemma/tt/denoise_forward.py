@@ -405,3 +405,31 @@ class DenoiseLogitsAdapter:
         if self.prev_logits is not None:
             self.prev_logits.deallocate(True)
             self.prev_logits = None
+
+
+def make_denoise_logits_adapter_from_kv_cache(
+    tt_model,
+    *,
+    prompt_len: int,
+    seq_len_start: int = 0,
+    self_conditioning=None,
+    self_conditioning_embedding_weight=None,
+    self_conditioning_compute_kernel_config=None,
+    q_rope_offset: int | None = None,
+    read_prompt_kv_fn=read_prompt_kv_cache_by_layer,
+    adapter_cls=DenoiseLogitsAdapter,
+):
+    """Build a denoise logits adapter from the model's per-layer prompt KV cache."""
+    prompt_kv_by_layer = read_prompt_kv_fn(
+        tt_model,
+        prompt_len=prompt_len,
+        seq_len_start=seq_len_start,
+    )
+    return adapter_cls(
+        tt_model,
+        prompt_hidden_by_layer=prompt_kv_by_layer,
+        self_conditioning=self_conditioning,
+        self_conditioning_embedding_weight=self_conditioning_embedding_weight,
+        self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
+        q_rope_offset=prompt_len if q_rope_offset is None else q_rope_offset,
+    )
