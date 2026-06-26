@@ -8,6 +8,8 @@
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <mutex>
+#include <unordered_map>
 #include <utility>
 
 namespace tt::tt_metal {
@@ -94,8 +96,47 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
     ShardDistributionStrategy shard_distribution_strategy) {
     auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(tensor_shape), page_shape);
     auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(shard_shape), page_shape);
-    return BufferDistributionSpec(
+
+    // Memo: the ctor's core-list / CoreRangeSet / core-groups work is a pure function of these inputs and
+    // is recomputed identically every dispatch for a fixed sharded spec. Cache it (operator== guards
+    // correctness; the hash is only for bucketing, so collisions can't return a wrong spec).
+    struct Key {
+        Shape tensor_shape_in_pages;
+        Shape shard_shape_in_pages;
+        CoreRangeSet core_range_set;
+        ShardOrientation orientation;
+        ShardDistributionStrategy strategy;
+        bool operator==(const Key& o) const {
+            return tensor_shape_in_pages == o.tensor_shape_in_pages && shard_shape_in_pages == o.shard_shape_in_pages &&
+                   core_range_set == o.core_range_set && orientation == o.orientation && strategy == o.strategy;
+        }
+    };
+    struct KeyHash {
+        size_t operator()(const Key& k) const {
+            size_t h = std::hash<CoreRangeSet>{}(k.core_range_set);
+            auto comb = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
+            for (auto d : k.tensor_shape_in_pages.view()) {
+                comb(d);
+            }
+            for (auto d : k.shard_shape_in_pages.view()) {
+                comb(d);
+            }
+            comb(static_cast<size_t>(k.orientation));
+            comb(static_cast<size_t>(k.strategy));
+            return h;
+        }
+    };
+    static std::mutex mtx;
+    static std::unordered_map<Key, BufferDistributionSpec, KeyHash> cache;
+    Key key{
+        tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy};
+    std::lock_guard<std::mutex> lock(mtx);
+    if (auto it = cache.find(key); it != cache.end()) {
+        return it->second;
+    }
+    BufferDistributionSpec result(
         tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
+    return cache.emplace(std::move(key), std::move(result)).first->second;
 }
 
 BufferDistributionSpec::BufferDistributionSpec(
