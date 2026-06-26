@@ -459,16 +459,11 @@ void MeshGraph::initialize_from_mgd(
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, effective_fabric_type);
         }
 
-        // Layer on declared skip links (sub-torus links) on top of the base grid, which is now
-        // fully allocated/populated above. Each pattern expands to intra-mesh endpoint pairs added
-        // as bidirectional edges. Wrap follows the axis's torus-ness in effective_fabric_type
-        // (TORUS_Y wraps the ROW/dim-0 axis, TORUS_X the COLUMN/dim-1 axis), matching how
-        // get_valid_connections wraps the base grid.
-        // NOTE: skip links are assigned the Z routing direction so their physical eth channels
-        // occupy their own bucket (router_port_directions_to_physical_eth_chan_map_[node][Z]),
-        // kept separate from the in-plane N/S/E/W grid links and not subject to the N/S/E/W
-        // routing-plane trimming. Both ends of a (bidirectional) skip link use Z. Stage-4 routing
-        // over Z for intra-mesh skip links is still TBD.
+        // Layer declared skip links on top of the fully-populated base grid. Each pattern expands to
+        // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
+        // physical channels occupy a bucket separate from the N/S/E/W grid and escape its plane
+        // trimming). Wrap follows the axis's torus-ness in effective_fabric_type (TORUS_Y wraps
+        // ROW/dim-0, TORUS_X COLUMN/dim-1), matching get_valid_connections.
         for (const auto& skip : mesh_desc->skip_links()) {
             const bool along_rows = (skip.axis() == proto::SkipLink::ROW);
             const uint32_t axis_len = along_rows ? mesh_shape[0] : mesh_shape[1];
