@@ -585,6 +585,21 @@ static void apply_x86_rewrites(std::string& src) {
         R"(reinterpret_cast<\s*(?:std::)?uint32_t\s*>\s*\(\s*((?:[^()]|\([^()]*\))*?)\s*\))");
     src = std::regex_replace(
         src, ptr_to_l1_addr_re, "static_cast<uint32_t>(reinterpret_cast<uintptr_t>($1))");
+
+    // tt-metal's sharded-layernorm dataflow util declares
+    // `using RemoteNocCoords = RemoteNocCoord[N];`. The two-stage reduce path
+    // instantiates it with N==0 for a core that has no second-stage workers,
+    // forming a zero-length array RemoteNocCoord[0]. Silicon's kernel compiler
+    // accepts that as a GNU extension; stock x86 clang rejects it as a
+    // substitution failure ("zero-length arrays are not permitted in C++"),
+    // even though the array is dead (the N==0 loop never runs and it is never
+    // indexed). The instantiation is unavoidable because kernel_main() is not a
+    // template, so the `if constexpr (use_two_stage_reduce)` dead branch is
+    // still type-checked. Rewrite the array bound so N==0 yields a 1-element
+    // dummy; behavior is identical on both arches (the element is never touched).
+    static const std::regex zero_len_noc_coords_re(
+        R"((using\s+RemoteNocCoords\s*=\s*RemoteNocCoord\s*\[)\s*N\s*(\]))");
+    src = std::regex_replace(src, zero_len_noc_coords_re, "$1(N) == 0 ? 1 : (N)$2");
 }
 
 // Patch `src_path` into `out_path`, then recurse into the quoted project headers
@@ -1087,6 +1102,9 @@ static std::string get_extra_include_flags() {
     const std::string project_src = TT_EMULE_PROJECT_SOURCE_DIR;
     std::string extra_inc;
     extra_inc += "-I\"" + project_src + "/ttnn/cpp\"";
+    // Resolves headers included with the repo-rooted `cpp/ttnn/...` prefix
+    // (e.g. the SDPA dataflow helper chain pulled in by the sampling writer).
+    extra_inc += " -I\"" + project_src + "/ttnn\"";
     extra_inc += " -I\"" + project_src + "\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hw/inc\"";
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";

@@ -221,6 +221,13 @@ skus:
         exabox.tenstorrent.com/purpose: ci-metal
         exabox.tenstorrent.com/superpod: A29
 
+  cpu_medium:
+    runs_on:
+      - tt-ubuntu-2204-medium-stable
+  cpu_medium_prio:
+    runs_on:
+      - tt-ubuntu-2204-medium-prio-stable
+
   # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
   # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim
   # gated on `startsWith(sku, 'sim_')` to download the matching libttsim_<arch>.so
