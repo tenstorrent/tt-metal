@@ -17,6 +17,10 @@ import ttnn
 
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
+from models.experimental.diffusion_gemma.tt.self_conditioning import (
+    build_self_conditioning,
+    build_self_conditioning_embedding_weight,
+)
 
 NEG = -1.0e9
 
@@ -432,4 +436,51 @@ def make_denoise_logits_adapter_from_kv_cache(
         self_conditioning_embedding_weight=self_conditioning_embedding_weight,
         self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
         q_rope_offset=prompt_len if q_rope_offset is None else q_rope_offset,
+    )
+
+
+def make_denoise_logits_adapter_from_checkpoint_state(
+    tt_model,
+    *,
+    prompt_len: int,
+    self_conditioning_state,
+    embedding_weight,
+    config=None,
+    hidden_size: int | None = None,
+    intermediate_size: int | None = None,
+    eps: float | None = None,
+    seq_len_start: int = 0,
+    q_rope_offset: int | None = None,
+    self_conditioning_dtype=ttnn.bfloat16,
+    self_conditioning_compute_kernel_config=None,
+    self_conditioning_builder=build_self_conditioning,
+    embedding_weight_builder=build_self_conditioning_embedding_weight,
+    adapter_builder=make_denoise_logits_adapter_from_kv_cache,
+):
+    """Build the full denoise logits adapter from remapped real-checkpoint pieces."""
+    self_conditioning = self_conditioning_builder(
+        tt_model.mesh_device,
+        self_conditioning_state,
+        config=config,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        eps=eps,
+        dtype=self_conditioning_dtype,
+    )
+    if config is not None and hidden_size is None:
+        hidden_size = config["hidden_size"] if isinstance(config, dict) else config.hidden_size
+    embedding_weight_tt = embedding_weight_builder(
+        tt_model.mesh_device,
+        embedding_weight,
+        hidden_size=hidden_size,
+        dtype=self_conditioning_dtype,
+    )
+    return adapter_builder(
+        tt_model,
+        prompt_len=prompt_len,
+        seq_len_start=seq_len_start,
+        self_conditioning=self_conditioning,
+        self_conditioning_embedding_weight=embedding_weight_tt,
+        self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
+        q_rope_offset=q_rope_offset,
     )

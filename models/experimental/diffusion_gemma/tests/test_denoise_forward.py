@@ -8,6 +8,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
     denoise_attention_forward,
     make_denoise_logits_adapter_from_kv_cache,
+    make_denoise_logits_adapter_from_checkpoint_state,
     read_prompt_kv_cache_by_layer,
 )
 
@@ -180,3 +181,63 @@ def test_make_denoise_logits_adapter_from_kv_cache_accepts_explicit_rope_offset(
     )
 
     assert calls["q_rope_offset"] == 576
+
+
+def test_make_denoise_logits_adapter_from_checkpoint_state_builds_full_adapter_inputs():
+    calls = {}
+    model = _FakeModel(num_layers=2)
+    config = {"hidden_size": 8, "intermediate_size": 6, "rms_norm_eps": 1e-5}
+
+    def fake_self_conditioning_builder(device, state_dict, **kwargs):
+        calls["self_conditioning"] = (device, state_dict, kwargs)
+        return "self-conditioning"
+
+    def fake_embedding_builder(device, embedding_weight, **kwargs):
+        calls["embedding"] = (device, embedding_weight, kwargs)
+        return "embedding-tt"
+
+    def fake_adapter_builder(tt_model, **kwargs):
+        calls["adapter"] = (tt_model, kwargs)
+        return "adapter"
+
+    out = make_denoise_logits_adapter_from_checkpoint_state(
+        model,
+        prompt_len=64,
+        seq_len_start=32,
+        self_conditioning_state={"weights": "state"},
+        embedding_weight="embedding-weight",
+        config=config,
+        q_rope_offset=576,
+        self_conditioning_dtype="dtype",
+        self_conditioning_compute_kernel_config="kernel",
+        self_conditioning_builder=fake_self_conditioning_builder,
+        embedding_weight_builder=fake_embedding_builder,
+        adapter_builder=fake_adapter_builder,
+    )
+
+    assert out == "adapter"
+    assert calls["self_conditioning"] == (
+        model.mesh_device,
+        {"weights": "state"},
+        {
+            "config": config,
+            "hidden_size": None,
+            "intermediate_size": None,
+            "eps": None,
+            "dtype": "dtype",
+        },
+    )
+    assert calls["embedding"] == (
+        model.mesh_device,
+        "embedding-weight",
+        {"hidden_size": 8, "dtype": "dtype"},
+    )
+    assert calls["adapter"][0] is model
+    assert calls["adapter"][1] == {
+        "prompt_len": 64,
+        "seq_len_start": 32,
+        "self_conditioning": "self-conditioning",
+        "self_conditioning_embedding_weight": "embedding-tt",
+        "self_conditioning_compute_kernel_config": "kernel",
+        "q_rope_offset": 576,
+    }
