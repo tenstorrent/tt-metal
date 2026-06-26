@@ -207,6 +207,10 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
     )
 
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)
+    # PROTOTYPE: fp8_e4m3 + ROW_MAJOR kvpe cache. update_padded_kv_cache supports ROW_MAJOR, and
+    # sparse_sdpa consumes fp8_e4m3 ROW_MAJOR directly, so the chunked read-back (_gather_kvpe_prefix)
+    # drops the bf8->bf16 typecast and the TILE->RM untilize over the full 50k+ prefix. Same 1-byte
+    # footprint as bf8. Flip back to (bfloat8_b, TILE_LAYOUT) for the baseline.
     kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
         mesh_device=mesh_device,
@@ -214,6 +218,8 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Represent `cache` already-processed tokens by POPULATING the caches directly (no warm-up

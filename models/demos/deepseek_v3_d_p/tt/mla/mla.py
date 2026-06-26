@@ -837,6 +837,7 @@ class ttMLA:
         seq_len_local: int,
         return_kv_intermediates: bool,
         keep_kvpe_bf16: bool,
+        kvpe_cache: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor | None, ttnn.Tensor, ttnn.Tensor, dict | None]:
         """Shared KV stem.
 
@@ -895,7 +896,19 @@ class ttMLA:
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
-        tt_kvpe_b8 = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
+        # Cache-format write tensor: update_padded_kv_cache requires input.dtype == cache.dtype and
+        # input.layout == cache.layout. The common cache is bf8/TILE (this stays the plain bf16->bf8
+        # typecast). An fp8_e4m3/ROW_MAJOR cache instead lets the sparse read-back (_gather_kvpe_prefix)
+        # skip the bf8->bf16 typecast and TILE->RM untilize over the full prefix -- sparse_sdpa consumes
+        # fp8_e4m3 ROW_MAJOR directly. fp8 is RM-only, so relayout (on bf16) BEFORE the typecast: the
+        # write tensor is just this chunk (seq/SP rows), so the relayout here is cheap vs the full-cache
+        # untilize it removes on the read side.
+        tt_kvpe_src = tt_kvpe
+        if tt_kvpe_src.layout != kvpe_cache.layout:
+            tt_kvpe_src = ttnn.to_layout(tt_kvpe_src, kvpe_cache.layout)
+        tt_kvpe_b8 = ttnn.typecast(tt_kvpe_src, dtype=kvpe_cache.dtype)
+        if tt_kvpe_src is not tt_kvpe:
+            ttnn.deallocate(tt_kvpe_src)
 
         if return_kv_intermediates:
             # post-transform concat ([.., 576], bf8) -- what actually gets written to the cache.
@@ -1006,6 +1019,7 @@ class ttMLA:
             seq_len_local,
             return_kv_intermediates,
             keep_kvpe_bf16,
+            kvpe_cache,
         )
 
         attn_out = self._attention(
@@ -1313,13 +1327,25 @@ class ttMLA:
         return ret
 
     def _gather_kvpe_prefix(self, kvpe_cache, seq_len_local, end_pos, cache_user_id, cache_layer_idx):
-        """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
-        bf8 / TILE / ND-sharded / block-cyclic across SP; the sparse op wants the full prefix
-        bf16 / ROW_MAJOR / replicated / natural order. Pipeline (all on device — replaces the
-        former host ConcatMesh2dToTensor + blockcyclic_positions read): ND→interleaved, SP
-        all-gather to full-T (no-op at sp==1), select this user/layer slot, bf8→bf16, TILE→RM,
-        un-rotate block-cyclic→natural, trim to end_pos. Returns [1, 1, end_pos, 576] bf16 RM."""
-        cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        """On-device read-back of the chunked KVPE prefix for sparse attention. sparse_sdpa wants the
+        full prefix ROW_MAJOR / replicated / natural order, dtype bf16 OR fp8_e4m3. Pipeline (all on
+        device): ND→interleaved, SP all-gather to full-T (no-op at sp==1), select this user/layer slot,
+        bring to an sdpa-compatible (dtype, layout), un-rotate block-cyclic→natural, trim to end_pos.
+
+        The (dtype, layout) bridge is cache-driven and the hot path of this prototype: a bf8/TILE cache
+        still pays the bf8→bf16 typecast + TILE→RM untilize over the FULL prefix (the two largest
+        non-attention ops in the layer), but an fp8_e4m3/ROW_MAJOR cache is already exactly what
+        sparse_sdpa consumes, so both are skipped entirely. Returns [1, 1, end_pos, 576] RM."""
+        # to_memory_config's reshard lowers to ttnn.copy, which rejects FP8_E4M3 (ttnn today). An fp8
+        # cache therefore can't pass the ND→interleaved reshard as fp8 — convert fp8→bf16 first (cheap:
+        # per-chip shard, and typecast preserves the ND shard + ROW_MAJOR layout). bf8 stays bf8 through
+        # the reshard/all-gather (1 byte on the wire, as before) and is widened post-gather.
+        src = kvpe_cache
+        if src.dtype == ttnn.fp8_e4m3:
+            src = ttnn.typecast(src, ttnn.bfloat16)
+        cache_i = ttnn.to_memory_config(src, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        if src is not kvpe_cache and src is not cache_i:
+            ttnn.deallocate(src)
         full = self._sp_all_gather(cache_i, dim=2)  # → [B, 1, seq_len_cache, 576] replicated, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
@@ -1328,10 +1354,17 @@ class ttMLA:
             sel = ttnn.slice(full, [slot, 0, 0, 0], [slot + 1, 1, full.shape[2], full.shape[3]])
             ttnn.deallocate(full)
             full = sel
-        full16 = ttnn.typecast(full, ttnn.bfloat16)
+        # Bring to sparse_sdpa's format, converting only what the cache isn't already: block-float
+        # (bf8/bf4) → bf16, and TILE → ROW_MAJOR. A ROW_MAJOR cache (fp8/bf16) SKIPS the full-prefix
+        # untilize entirely — the point of this prototype.
+        if full.dtype not in (ttnn.bfloat16, ttnn.fp8_e4m3):
+            conv = ttnn.typecast(full, ttnn.bfloat16)
+            ttnn.deallocate(full)
+            full = conv
+        if full.layout != ttnn.ROW_MAJOR_LAYOUT:
+            conv = ttnn.to_layout(full, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(full)
+            full = conv
+        out = blockcyclic_to_natural(full, self.sp_factor, seq_len_local, end_pos)
         ttnn.deallocate(full)
-        full_rm = ttnn.to_layout(full16, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(full16)
-        out = blockcyclic_to_natural(full_rm, self.sp_factor, seq_len_local, end_pos)
-        ttnn.deallocate(full_rm)
         return out
