@@ -23,4 +23,6 @@ global_env:
   PREFILL_MIGRATION_CLIENT_DIR: "/data/nolenzhao/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"
   PREFILL_MODEL_VARIANT: "kimi_k2_6"
   PREFILL_PP_D2D_FIFO_BYTES: "4096"
-  PREFILL_CHECK_COMPLETIONS: "1"
+  # NOTE: PREFILL_CHECK_COMPLETIONS is test-only — the master attaches a stand-in consumer that
+  # drains the scheduler's counter channel, so it must NOT be set in a config a real scheduler runs
+  # against (it would zero the deltas the scheduler polls). Enable it only for bring-up.
