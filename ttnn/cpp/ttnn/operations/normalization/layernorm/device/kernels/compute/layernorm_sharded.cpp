@@ -203,7 +203,6 @@ void kernel_main() {
         }
         reduce_uninit();
         cb_ex.push_back(num_tiles_per_allgather_worker);
-        reconfig_data_format(cb_ex_external_id, cb_scaler_global_id);
         cb_ex.wait_front(num_tiles_per_allgather_worker);
     }
 
@@ -317,7 +316,6 @@ void kernel_main() {
         }
         reduce_uninit();
         cb_ex2.push_back(num_tiles_per_allgather_worker);
-        reconfig_data_format(cb_xmm2_id, cb_scaler_id);
 
         if (enable_sqrt) {
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {

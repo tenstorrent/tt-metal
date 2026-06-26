@@ -152,7 +152,6 @@ void kernel_main() {
 #endif
             tile_regs_release();
             reduce_uninit();
-            reconfig_data_format(cb_stats, cb_scaler_global);
 #ifdef RMSNORM
             cb_var_obj.push_back(stats_tiles);
 #else
