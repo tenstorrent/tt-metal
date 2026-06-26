@@ -101,7 +101,7 @@ def boolq_reward(completions, answer, **kwargs):
         f"mean_reward={sum(rewards) / n:.2f}",
         flush=True,
     )
-    # Print every generation for the FIRST prompt.
+    # Print first generation for the FIRST prompt.
     if completions:
         print(f"[reward] first-prompt gt={answer[0]!r}", flush=True)
         preview = completions[0].strip().replace("\n", " ")[:300]
