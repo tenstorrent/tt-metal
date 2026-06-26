@@ -21,6 +21,9 @@ Usage::
 
     pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device_perf.py \\
         -v -m models_device_performance_bare_metal
+
+    MESH_DEVICE=P150 pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device_perf.py \\
+        -v -m models_device_performance_bare_metal
 """
 
 import json
@@ -45,7 +48,7 @@ _TASKS = (
     ("asr", False, 10),
 )
 
-_MAX_MESH_DEVICES = 4
+_DEFAULT_MESH_SHAPE = (1, 4)
 _TASK_OP_SUPPORT_COUNT = {
     "t2tt": 20000,
     "s2tt": 30000,
@@ -57,6 +60,34 @@ _TASK_OP_SUPPORT_COUNT = {
 
 def _task_params():
     return [pytest.param(t, gs, mnt, id=t) for (t, gs, mnt) in _TASKS]
+
+
+def _mesh_device_param() -> tuple[int, int]:
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
+        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
+    if "TT_MESH_WIDTH" in os.environ:
+        return (1, int(os.environ["TT_MESH_WIDTH"]))
+    return _DEFAULT_MESH_SHAPE
+
+
+def _mesh_num_devices(mesh_shape: tuple[int, int]) -> int:
+    return max(1, int(mesh_shape[0]) * int(mesh_shape[1]))
+
+
+def _mesh_id(mesh_shape: tuple[int, int]) -> str:
+    return f"{int(mesh_shape[0])}x{int(mesh_shape[1])}"
+
+
+def _inner_command(task: str) -> str:
+    env_parts = []
+    for key in ("MESH_DEVICE", "TT_MESH_WIDTH"):
+        value = os.environ.get(key)
+        if value is not None:
+            env_parts.append(f"{key}={value}")
+    prefix = " ".join(env_parts)
+    command = f"pytest --timeout=0 {_FWD_TEST}::test_{task} -sv"
+    return f"{prefix} {command}" if prefix else command
 
 
 def _read_timings_side_channel(task: str) -> dict:
@@ -77,8 +108,11 @@ def _read_timings_side_channel(task: str) -> dict:
 def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_new_tokens: int):
     """Per-task device-bound perf via tracy on the eager (no-trace) forward."""
     batch_size = 1
-    subdir = f"ttnn_seamless_m4t_v2_large_{task}"
-    command = f"pytest --timeout=0 {_FWD_TEST}::test_{task} -sv"
+    mesh_shape = _mesh_device_param()
+    num_devices = _mesh_num_devices(mesh_shape)
+    mesh_id = _mesh_id(mesh_shape)
+    subdir = f"ttnn_seamless_m4t_v2_large_{task}_{mesh_id}"
+    command = _inner_command(task)
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     duration_cols = [c + " DURATION [ns]" for c in cols]
     samples_cols = [c + " SAMPLES/S" for c in cols]
@@ -95,11 +129,10 @@ def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_n
         subdir,
         check_test_return_code=False,
         device_analysis_types=["device_kernel_duration"],
-        op_support_count=_TASK_OP_SUPPORT_COUNT[task] * _MAX_MESH_DEVICES,
+        op_support_count=_TASK_OP_SUPPORT_COUNT[task] * num_devices,
     )
 
     raw = post_process_ops_log(subdir, duration_cols)
-    num_devices = _MAX_MESH_DEVICES
     post_processed_results = {}
     for s_col, d_col in zip(samples_cols, duration_cols):
         per_device_ns = raw[d_col] / num_devices
@@ -157,9 +190,13 @@ def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_n
         headline = f"decode {decode_tok_s_u:.2f} t/s/u ({steady_ms_per_tok:.1f} ms/tok steady)"
         workload_str = f"{output_tokens} output tokens (budget {max_new_tokens})"
 
+    # ``prep_device_perf_report`` formats values via ``value.is_integer()``, so keep all numeric
+    # metrics as floats even when the underlying side-channel values are integer counts.
+    post_processed_results = {name: float(value) for name, value in post_processed_results.items()}
+
     logger.info(f"\nTest: {command}\n{json.dumps(post_processed_results, indent=4)}")
     print(f"\n{'='*60}")
-    print(f"Seamless M4T v2 Large Device Performance ({task.upper()})")
+    print(f"Seamless M4T v2 Large Device Performance ({task.upper()}, {mesh_id})")
     print(f"{'='*60}")
     print(
         f"  TT-aligned (wall): {headline}  "
@@ -178,5 +215,7 @@ def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_n
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results={},
-        comments=(f"seamless_m4t_v2_large_{task}_TP{num_devices}_eager_" f"decode_tok_s_u_{decode_tok_s_u:.1f}"),
+        comments=(
+            f"seamless_m4t_v2_large_{task}_{mesh_id}_TP{num_devices}_eager_" f"decode_tok_s_u_{decode_tok_s_u:.1f}"
+        ),
     )

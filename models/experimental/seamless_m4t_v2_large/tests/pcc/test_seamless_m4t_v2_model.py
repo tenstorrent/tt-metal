@@ -316,7 +316,7 @@ def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_param
 
     common_kwargs = hf_aligned_generation_kwargs(model.generation_config)
     asr_kwargs = common_kwargs
-    tt_extra = dict(use_kv_cache=True, use_decode_trace=True, use_2cq=True)
+    tt_extra = dict[str, bool](use_kv_cache=True, use_decode_trace=True, use_2cq=True)
 
     with mesh_default_device(mesh_device):
         tt_model = _make_tt_model(mesh_device, model, cfg, t2u_cfg)
