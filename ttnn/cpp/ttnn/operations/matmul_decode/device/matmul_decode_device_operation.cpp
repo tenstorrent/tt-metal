@@ -75,6 +75,36 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
+    if (operation_attributes.reshard_input) {
+        // Interleaved in0 path: the reader reshards A internally, so A must be INTERLEAVED (not
+        // pre-width-sharded). The K dimension must split evenly across reshard_cores and each
+        // per-core K-slice must be tile-aligned.
+        TT_FATAL(
+            operation_attributes.partial_width_sharded,
+            "reshard_input is only supported with partial_width_sharded matmul_decode");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "reshard_input requires Input tensor A to be in interleaved memory layout, but got {}",
+            input_tensor_a.memory_config().memory_layout());
+        const uint32_t reshard_cores = operation_attributes.reshard_cores;
+        TT_FATAL(reshard_cores > 0, "reshard_cores must be > 0");
+        TT_FATAL(
+            operation_attributes.K % reshard_cores == 0,
+            "reshard_input requires K ({}) to be divisible by reshard_cores ({})",
+            operation_attributes.K,
+            reshard_cores);
+        TT_FATAL(
+            (operation_attributes.K / reshard_cores) % tt::constants::TILE_WIDTH == 0,
+            "reshard_input requires the per-core K-slice (K/reshard_cores = {}) to be tile-aligned",
+            operation_attributes.K / reshard_cores);
+        TT_FATAL(
+            input_tensor_a.logical_shape()[-1] == operation_attributes.K,
+            "Input tensor A must have the same K dimension as the operation attributes");
+        TT_FATAL(
+            input_tensor_a.logical_shape()[-2] == operation_attributes.M,
+            "Input tensor A must have the same M dimension as the operation attributes");
+        return;
+    }
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
         "Input tensor A must be in width sharded memory layout, but got {}",
@@ -205,7 +235,9 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     bool fused_gelu,
     bool interleaved_output,
-    bool fused_gelu_approx) {
+    bool fused_gelu_approx,
+    bool reshard_input,
+    uint32_t reshard_cores) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -239,6 +271,8 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         fused_gelu,
         interleaved_output,
         fused_gelu_approx,
+        reshard_input,
+        reshard_cores,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

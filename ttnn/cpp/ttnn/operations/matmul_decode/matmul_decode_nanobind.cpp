@@ -46,7 +46,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("fused_gelu") = false,
         nb::arg("interleaved_output") = false,
-        nb::arg("fused_gelu_approx") = false);
+        nb::arg("fused_gelu_approx") = false,
+        nb::arg("reshard_input") = false,
+        nb::arg("reshard_cores") = 2);
 }
 
 }  // namespace ttnn::operations::matmul_decode

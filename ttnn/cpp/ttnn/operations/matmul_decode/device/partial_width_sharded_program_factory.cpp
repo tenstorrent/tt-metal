@@ -121,7 +121,31 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         operation_attributes.M,
         inputA_tile_height);
 
-    const std::array<uint32_t, 2> inputA_shard_shape = input_tensor_a.memory_config().shard_spec().value().shape;
+    // ---- in0 (A) geometry ----
+    // Default (buffer-backed in0): A is ALREADY width-sharded, so its geometry comes from its
+    // shard spec. reshard_input: A is INTERLEAVED and the reader reshards it internally, so we
+    // SYNTHESIZE the same geometry _ws_in_mc would have produced (A sharded [M, K/reshard_cores]
+    // across the first reshard_cores cores, row-major).
+    const bool reshard_input = operation_attributes.reshard_input;
+    std::array<uint32_t, 2> inputA_shard_shape;
+    CoreRangeSet inputA_core_range_set;
+    if (reshard_input) {
+        const uint32_t reshard_cores = operation_attributes.reshard_cores;
+        inputA_shard_shape = {M_tiles * inputA_tile_height, operation_attributes.K / reshard_cores};
+        const std::vector<CoreCoord> a_sender_cores = corerange_to_cores(
+            tt::tt_metal::num_cores_to_corerangeset(reshard_cores, device->compute_with_storage_grid_size(), true),
+            std::nullopt,
+            true);
+        std::vector<CoreRange> a_sender_ranges;
+        a_sender_ranges.reserve(a_sender_cores.size());
+        for (const auto& core : a_sender_cores) {
+            a_sender_ranges.emplace_back(core, core);
+        }
+        inputA_core_range_set = CoreRangeSet(a_sender_ranges);
+    } else {
+        inputA_shard_shape = input_tensor_a.memory_config().shard_spec().value().shape;
+        inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
+    }
     TT_FATAL(
         inputA_shard_shape[0] == (M_tiles * inputA_tile_height),
         "Input tensor A shard height {} must equal M_tiles {} * tile height {}",
@@ -140,7 +164,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const uint32_t Kc_tiles = Kc / tt::constants::TILE_WIDTH;
     const uint32_t Nc_tiles = Nc / tt::constants::TILE_WIDTH;
 
-    const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const auto inputB_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
 
     const uint32_t num_B_cores = inputB_core_range_set.num_cores();
@@ -221,8 +244,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     const uint32_t block_num_tiles = M_tiles * Nc_tiles;  // tiles in one (partial / output) shard
 
-    // in0: this core's resident A slice (buffer-backed).
-    desc.cbs.push_back(CBDescriptor{
+    // in0: this core's resident A slice (gather source). Default: buffer-backed by the
+    // already-width-sharded A. reshard_input: a plain CB the reader NoC-reads A's K-slice into
+    // (from the interleaved A buffer) before the multicast gather.
+    CBDescriptor in0_cb_desc{
         .total_size = M_tiles * inA_K_tiles_per_core * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
         .format_descriptors = {{CBFormatDescriptor{
@@ -231,8 +256,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .page_size = in0_tile_size,
             .tile = in0_tile_desc,
         }}},
-        .buffer = input_tensor_a.buffer(),
-    });
+    };
+    if (!reshard_input) {
+        in0_cb_desc.buffer = input_tensor_a.buffer();
+    }
+    desc.cbs.push_back(in0_cb_desc);
     // in1: this core's resident B block (buffer-backed).
     desc.cbs.push_back(CBDescriptor{
         .total_size = Kc_tiles * Nc_tiles * in1_tile_size,
@@ -318,7 +346,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const uint32_t num_receivers = all_compute_cores_with_bbox.num_cores();
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
 
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         in0_cb_index,
         full_in0_cb_index,
         shard_num_tiles,
@@ -335,7 +363,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         static_cast<uint32_t>(mcast_start_phys.y),
         in1_cb_index,
         Kc_tiles * Nc_tiles,
+        static_cast<uint32_t>(reshard_input),  // 16: read interleaved A K-slice before multicast
+        M_tiles,                               // 17: A height in tiles
+        inA_K_tiles_per_core,                  // 18: this sender's K-slice width in tiles
+        K_tiles,                               // 19: global A width in tiles (row-major page stride)
     };
+    // 20+: TensorAccessor args for the interleaved in0 buffer (senders NoC-read their K-slice from
+    // it when reshard_input). Harmless when unused (read_interleaved == 0).
+    tt::tt_metal::TensorAccessorArgs(*input_tensor_a.buffer()).append_to(reader_compile_time_args);
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
     std::map<CoreCoord, uint32_t> sender_id_by_core;
@@ -366,10 +401,12 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             const bool is_sender = it != sender_id_by_core.end();
             const uint32_t sender_id = is_sender ? it->second : 0;
             const bool is_coordinator = (core == coordinator_logical);
-            reader_kernel_desc.runtime_args.emplace_back(
+            reader_kernel_desc.emplace_runtime_args(
                 core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(is_sender), sender_id, static_cast<uint32_t>(is_coordinator)});
+                {static_cast<uint32_t>(is_sender),
+                 sender_id,
+                 static_cast<uint32_t>(is_coordinator),
+                 input_tensor_a.buffer()});  // 3: interleaved A base addr (patched; used iff read_interleaved)
         }
         return reader_kernel_desc;
     };

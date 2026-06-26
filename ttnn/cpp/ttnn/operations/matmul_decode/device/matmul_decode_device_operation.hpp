@@ -53,6 +53,14 @@ struct MatmulDecodeDeviceOperation {
         // When true (and fused_gelu is set), the fused GELU uses the tanh-approx
         // variant (gelu_tile<true>) instead of the exact-erf variant (gelu_tile<false>).
         bool fused_gelu_approx = false;
+        // When true, in0 (the activation A) is passed INTERLEAVED rather than pre-width-sharded;
+        // the partial width-sharded reader reshards it internally (each of `reshard_cores` sender
+        // cores NoC-reads its K-slice into in0_cb before the multicast gather), folding the
+        // separate to_memory_config reshard the caller would otherwise do into the op.
+        bool reshard_input = false;
+        // Number of sender cores the interleaved in0 is resharded across (== _RESHARD_CORES on the
+        // caller side). Only used when reshard_input is true.
+        uint32_t reshard_cores = 2;
     };
 
     // Tensors passed in/out of the operation.
@@ -124,5 +132,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool fused_gelu = false,
     bool interleaved_output = false,
-    bool fused_gelu_approx = false);
+    bool fused_gelu_approx = false,
+    bool reshard_input = false,
+    uint32_t reshard_cores = 2);
 }  // namespace ttnn::prim
