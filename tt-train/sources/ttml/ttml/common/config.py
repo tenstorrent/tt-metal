@@ -121,11 +121,8 @@ class TransformerConfig:
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
             self.original_context_length = self.rope.get("original_context_length", None)
 
-        # Qwen3-specific. Optional: for the Qwen3 path the architecture (incl.
-        # head_dim) is read from the HF config inside the completer, so it may be
-        # absent here. Keep it None when unset.
-        head_dim = tc.get("head_dim", None)
-        self.head_dim = int(head_dim) if head_dim is not None else None
+        # Qwen3-specific.
+        self.head_dim = tc.get("head_dim", None)
 
 
 @dataclass
