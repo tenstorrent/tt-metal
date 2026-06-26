@@ -60,9 +60,7 @@ struct SliceReshardAsyncParams {
         topology(topology),
         ring_size(ring_size) {}
 
-    // Program-cache hash / canonical-key fields. Lists exactly the structural fields the former
-    // custom compute_program_hash included; `devices` (raw IDevice* pointers) and the two
-    // GlobalSemaphore members are runtime-only and intentionally excluded.
+    // Program-cache hash / canonical-key fields.
     static constexpr auto attribute_names = std::make_tuple(
         "dim",
         "output_dim_offset",
