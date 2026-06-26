@@ -245,6 +245,20 @@ Verify the topology in the final `tt-perf-report`, not only in code. A successfu
 
 Compare packed and split candidates under the same traced warmed decode harness, context shape, precision policy, and correctness checks. Keep the faster correct path. If packing loses because it forces worse dtype, fidelity, memory layout, program config, or extra output movement, record that full-path comparison; do not infer the answer from op count alone.
 
+### OPT-002: Preserve the SDPA and KV-cache contract when changing attention
+
+When optimizing decoder attention, treat SDPA or FlashDecode time as part of the attention contract, not a downstream detail. Before accepting a change to QKV packing, head creation, rotary, cache update, page-table handling, cache dtype, cache layout, or attention input memory config, compare the candidate against the strongest prior correct attention path at the same traced decode context.
+
+The comparison must include the `tt-perf-report` row for SDPA or FlashDecode, the KV-cache dtype, cache layout, page-table shape/distribution, Q/K/V head layout, attention op `program_config`, chunk sizes, block size, `num_kv_heads`, output memory config, and the final attention-block topology. Do not accept an attention candidate only because the projection matmul got faster if SDPA, cache update, or layout-conversion time moved the cost elsewhere. A lower total layer time can justify a local SDPA regression only when the report names the regression, quantifies it, and shows the whole traced decoder is still faster under the same context and correctness checks.
+
+When the final candidate still uses a BF16 KV cache and SDPA or FlashDecode is a material cost, a reduced-cache candidate is mandatory before accepting the stage. Try the architecture-appropriate reduced cache dtype, usually BFP8/BFLOAT8_B, with the same context length, page table, head layout, trace path, and correctness checks. This requirement applies even when the functional baseline used BF16 cache; a functional baseline is not proof that BF16 is the optimized cache policy.
+
+Preserve a lower-precision KV cache when the prior correct path used one and PCC still passes. If BFP8 or another reduced cache dtype fails, debug the fill/update contract before falling back to BF16: prefill fill-cache tensors may need an explicit cast to the cache dtype, while decode `paged_update_cache` inputs may need to remain BF16 or FLOAT32. Also compare cache shape, local/global head mapping, page-table distribution, and whether packing QKV forced a different Q/K/V head creation path. A BF16 cache fallback is acceptable only with a correctness failure, op-contract blocker, or measured same-context win that includes the SDPA/cache cost.
+
+When SDPA or FlashDecode is material, do not rely on the op default configuration. Create an explicit architecture-appropriate decode attention program config and measure it against the default under the same cache dtype and head/page contract. For Wormhole paged decode, the usual first candidate is `ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0)` when legal. If a default attention op is kept, record the explicit config tried, its SDPA row, and why it lost or failed.
+
+The final report for an optimized decoder must list the SDPA or FlashDecode row, KV-cache dtype/layout, attention program config, reduced-cache candidate result, and kept/rejected decision. If SDPA or FlashDecode is one of the largest regressions versus the prior same-context correct candidate, if BF16 cache remains without a reduced-cache trial or precise blocker, or if a material SDPA path uses default program config without an explicit-config candidate, the stage is not optimized.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
