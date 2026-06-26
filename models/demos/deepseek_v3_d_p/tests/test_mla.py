@@ -16,6 +16,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -262,7 +263,7 @@ def run_model(
                     use_cache=True,
                 )
 
-            ref_kvpe = ref_cache.key_cache[0]  # layer 0
+            ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
 
             if not (is_ci_env or is_ci_v2_env):
                 # Save to cache for future runs

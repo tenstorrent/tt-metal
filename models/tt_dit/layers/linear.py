@@ -463,3 +463,38 @@ def prepare_chunked_linear_output(
     if bias is not None:
         bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
         state[bias_key] = bias
+
+
+# =====================================================================
+# LoRA-aware Linear variants
+# =====================================================================
+# Each variant subclasses its base Linear + the shared LoRAMixin. The
+# mixin offers two execution paths chosen at construction with
+# ``lora_mode`` ('fuse' or 'runtime'); see models/tt_dit/layers/lora.py
+# for the trade-offs.
+from .lora import LoRAMixin  # noqa: E402
+
+
+class LoRALinear(LoRAMixin, Linear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._init_lora_state(mode=lora_mode)
+
+
+class LoRAColParallelLinear(LoRAMixin, ColParallelLinear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._init_lora_state(mode=lora_mode)
+
+
+class LoRARowParallelLinear(LoRAMixin, RowParallelLinear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Runtime mode lacks the all-reduce the base path performs via
+        # reduce_scatter, so the delta and base sit at different mesh layouts.
+        if lora_mode == "runtime" and self._mesh_axis_size > 1:
+            raise ValueError(
+                "LoRARowParallelLinear with lora_mode='runtime' is unsupported "
+                f"at TP>1 (mesh_axis_size={self._mesh_axis_size}); use lora_mode='fuse'"
+            )
+        self._init_lora_state(mode=lora_mode)

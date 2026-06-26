@@ -17,24 +17,49 @@ using namespace ckernel::math;
 /**
  * @brief Set debug feature disable bit 11 to work around an FPU HW bug.
  *
+ * DO NOT call this unless absolutely necessary.
+ * We need to wait for both math and pack to be fully idle before writing
+ * this bit because it affects both dest banks.
+ * Changing it while either pipeline is active can cause a race condition.
+ *
  * @note Workaround for bug tt-metal#46219. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
  */
 inline void _llk_math_dbg_feature_disable_()
 {
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
-                                                             // workaround for bug tt-metal#46219
+    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    if (val & (1 << 11))
+    {
+        return;
+    }
+    tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val | (1 << 11));
 }
 
 /**
  * @brief Clear debug feature disable bit 11, restoring default FPU behavior.
  *
- * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219). Issues a tensix_sync() first.
+ * Clears bit 11 to disable 32 bit mode for dest.
+ * Same synchronization as @ref _llk_math_dbg_feature_disable_ is needed here to avoid racing.
+ *
+ * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219).
  */
 inline void _llk_math_dbg_feature_enable_()
 {
+    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    if (!(val & (1 << 11)))
+    {
+        return;
+    }
     tensix_sync();
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
-                                                       // workaround for bug tt-metal#46219
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val & ~(1 << 11));
 }
 
 /**
@@ -81,17 +106,6 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-
-    // Workaround for HW bugs:
-    // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
-    // budabackend#1948: fp32 dest and movd2a/b with UInt16 srcA/B
-    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && ((srca_data_format == ckernel::to_underlying(DataFormat::UInt16)) ||
-                                                         (srcb_data_format == ckernel::to_underlying(DataFormat::UInt16)));
-
-    if (int8_math_enabled || uint16_with_fp32_dest)
-    {
-        _llk_math_dbg_feature_disable_();
-    }
 
     // Establish the operand-driven baseline for the Src zero-substitution flag.
     _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);

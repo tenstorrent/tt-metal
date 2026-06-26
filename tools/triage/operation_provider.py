@@ -221,12 +221,13 @@ def run(args, context: Context) -> RunningOpsAggregation:
                 continue
 
             dispatcher_core_data: DispatcherCoreData = check_result.result
-            if dispatcher_core_data.host_assigned_id in (None, 0):
+            host_assigned_id = dispatcher_core_data.host_assigned_id
+            if host_assigned_id is None or host_assigned_id == 0:
                 continue
 
             dispatch_mode = dispatcher_core_data.dispatch_mode
 
-            op_info = runtime_id_to_operation.lookup(dispatcher_core_data.host_assigned_id) or OperationInfo.empty()
+            op_info = runtime_id_to_operation.lookup(host_assigned_id) or OperationInfo.empty()
 
             # Slow dispatch (HOST) overwrites a single launch slot in the mailbox, so the
             # "previous" entry is stale/invalid there.
@@ -235,15 +236,15 @@ def run(args, context: Context) -> RunningOpsAggregation:
                 prev_op_info = OperationInfo.empty()
             else:
                 prev_runtime_id = dispatcher_core_data.previous_host_assigned_id
-                if prev_runtime_id not in (None, 0):
+                if prev_runtime_id is not None and prev_runtime_id != 0:
                     prev_op_info = runtime_id_to_operation.lookup(prev_runtime_id) or OperationInfo.empty()
                 else:
                     prev_op_info = OperationInfo.empty()
 
             aggregation = aggregations.setdefault(
-                dispatcher_core_data.host_assigned_id,
+                host_assigned_id,
                 RunningOperationAggregation(
-                    dispatcher_core_data.host_assigned_id,
+                    host_assigned_id,
                     op_info.name,
                     op_info.parameters,
                     op_info.trace_id,

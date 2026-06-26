@@ -6,25 +6,21 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_gelu.h"
-#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-#ifndef ARCH_QUASAR
 /**
  * Please refer to documentation for any_init.
  */
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
+#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
-}
-
-template <bool fast_and_approx = true>
-ALWI void gelu_tile_init_pack() {
-    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
+#else
+    MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx)));
+#endif
 }
 
 // clang-format off
@@ -44,8 +40,24 @@ ALWI void gelu_tile_init_pack() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (fast_and_approx, DST_ACCUM_MODE), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_gelu,
+        (fast_and_approx, SFPU_ITERATIONS),
+        idst,
+        ::ckernel::VectorMode::RC));
+#endif
+}
+
+#ifndef ARCH_QUASAR
+template <bool fast_and_approx = true>
+ALWI void gelu_tile_init_pack() {
+    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
 }
 
 template <bool fast_and_approx = true>

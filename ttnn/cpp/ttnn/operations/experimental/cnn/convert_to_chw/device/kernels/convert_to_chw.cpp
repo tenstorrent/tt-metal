@@ -6,24 +6,27 @@
 
 #include "api/compute/pack_untilize.h"
 #include "api/compute/transpose_wh.h"
+#include "api/dataflow/circular_buffer.h"
 
 template <int BATCH_SIZE>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
-    cb_wait_front(cb_in, BATCH_SIZE);
+    CircularBuffer cb_in_cb(cb_in);
+    CircularBuffer cb_out_cb(cb_out);
+    cb_in_cb.wait_front(BATCH_SIZE);
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < BATCH_SIZE; i++) {
         transpose_wh_tile(cb_in, i, i);
     }
     tile_regs_commit();
-    cb_pop_front(cb_in, BATCH_SIZE);
+    cb_in_cb.pop_front(BATCH_SIZE);
 
-    cb_reserve_back(cb_out, BATCH_SIZE);
+    cb_out_cb.reserve_back(BATCH_SIZE);
     tile_regs_wait();
     pack_untilize_dest<1>(cb_out, BATCH_SIZE);
     tile_regs_release();
 
-    cb_push_back(cb_out, BATCH_SIZE);
+    cb_out_cb.push_back(BATCH_SIZE);
 }
 void kernel_main() {
     constexpr int BATCH_SIZE = 8;

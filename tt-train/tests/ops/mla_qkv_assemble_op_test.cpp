@@ -13,11 +13,13 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
+#include "ops/binary_ops.hpp"
+#include "ops/unary_ops.hpp"
 #include "test_utils/random_data.hpp"
 
-class MLAQKVAssembleForwardTest : public ::testing::Test {
+class MLAQKVAssembleTest : public ::testing::Test {
 protected:
     static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
@@ -34,9 +36,8 @@ protected:
 
 namespace {
 
-// MLA QKV assemble dimensions for a single test case. All channel dims are
-// multiples of TILE_WIDTH (32) and S is a multiple of TILE_HEIGHT (32) — the
-// op validates this.
+// MLA QKV assemble dimensions for a single test case. All channel dims are multiples of TILE_WIDTH (32)
+// and S is a multiple of TILE_HEIGHT (32).
 struct AssembleShape {
     std::string name;
     uint32_t batch = 0;
@@ -47,101 +48,170 @@ struct AssembleShape {
     uint32_t v_dim = 0;
 };
 
-// Build a [B, 1, S, W] BF16 device tensor filled with deterministic uniform data.
-ttml::autograd::TensorPtr make_input(uint32_t batch, uint32_t seq_len, uint32_t width, uint32_t seed) {
+// Deterministic uniform BF16 device tensor of the given 4D shape.
+ttnn::Tensor make_input(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t seed) {
     auto* device = &ttml::autograd::ctx().get_device();
-    const size_t count = static_cast<size_t>(batch) * seq_len * width;
+    const size_t count = static_cast<size_t>(d0) * d1 * d2 * d3;
     const auto host = ttml::test_utils::make_uniform_vector<float>(count, -1.0F, 1.0F, seed);
-    const ttnn::Shape shape({batch, 1U, seq_len, width});
-    return ttml::autograd::create_tensor(
-        ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(host, shape, device, ttnn::Layout::TILE));
+    const ttnn::Shape shape({d0, d1, d2, d3});
+    return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(host, shape, device, ttnn::Layout::TILE);
 }
 
-// Reference assemble computed from the BF16-rounded inputs (read back via to_xtensor), so the only
-// numeric path is a layout/copy/broadcast — the comparison against the kernel output must be exact.
-//
-// q[b,h,s,d]        = q_pre[b,0,s, h*qk_head + d]                       (head split)
-// k[b,h,s,d<Tn*32]  = kv_up[b,0,s, h*(qk_nope+v_dim) + d]              (k_nope slice)
-// k[b,h,s,d>=Tn*32] = k_pe[b,0,s, d - qk_nope]                          (k_pe broadcast across heads)
-// v[b,h,s,d]        = kv_up[b,0,s, h*(qk_nope+v_dim) + qk_nope + d]    (v slice)
-struct ReferenceOutputs {
+// ── Forward reference (q, k, v) computed from BF16-rounded packed inputs ───────────────────────────
+struct FwOutputs {
     xt::xarray<float> q;
     xt::xarray<float> k;
     xt::xarray<float> v;
 };
 
-ReferenceOutputs reference_assemble(
-    const ttml::autograd::TensorPtr& q_pre,
-    const ttml::autograd::TensorPtr& kv_up,
-    const ttml::autograd::TensorPtr& k_pe,
-    const AssembleShape& shape) {
+FwOutputs reference_fw(
+    const ttnn::Tensor& q_pre, const ttnn::Tensor& kv_up, const ttnn::Tensor& k_pe, const AssembleShape& shape) {
     const std::size_t B = shape.batch;
     const std::size_t S = shape.seq_len;
     const std::size_t H = shape.n_heads;
     const std::size_t nope = shape.qk_nope_dim;
+    const std::size_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
     const std::size_t kv_w = shape.qk_nope_dim + shape.v_dim;
 
-    // split_heads: [B, 1, S, H*W] -> [B, S, H, W] -> [B, H, S, W].
-    xt::xarray<float> q_pre_bf = ttml::core::to_xtensor(q_pre->get_value());
-    q_pre_bf.reshape({B, S, H, static_cast<std::size_t>(shape.qk_nope_dim + shape.qk_rope_dim)});
-    xt::xarray<float> kv_up_bf = ttml::core::to_xtensor(kv_up->get_value());
+    xt::xarray<float> q_pre_bf = ttml::core::to_xtensor(q_pre);
+    q_pre_bf.reshape({B, S, H, qk_head});
+    xt::xarray<float> kv_up_bf = ttml::core::to_xtensor(kv_up);
     kv_up_bf.reshape({B, S, H, kv_w});
 
-    const xt::xarray<float> q = xt::transpose(q_pre_bf, {0, 2, 1, 3});
     const xt::xarray<float> kv = xt::transpose(kv_up_bf, {0, 2, 1, 3});
-
     const xt::xarray<float> k_nope = xt::view(kv, xt::all(), xt::all(), xt::all(), xt::range(std::size_t{0}, nope));
-    const xt::xarray<float> v = xt::view(kv, xt::all(), xt::all(), xt::all(), xt::range(nope, kv_w));
+    const xt::xarray<float> k_pe_b =
+        xt::broadcast(ttml::core::to_xtensor(k_pe), {B, H, S, static_cast<std::size_t>(shape.qk_rope_dim)});
 
-    // Broadcast the shared k_pe [B, 1, S, qk_rope] across heads -> [B, H, S, qk_rope].
-    const xt::xarray<float> k_pe_b = xt::broadcast(
-        ttml::core::to_xtensor(k_pe->get_value()), {B, H, S, static_cast<std::size_t>(shape.qk_rope_dim)});
-
-    ReferenceOutputs ref;
-    ref.q = q;
+    FwOutputs ref;
+    ref.q = xt::transpose(q_pre_bf, {0, 2, 1, 3});
     ref.k = xt::concatenate(xt::xtuple(k_nope, k_pe_b), 3);
-    ref.v = v;
+    ref.v = xt::view(kv, xt::all(), xt::all(), xt::all(), xt::range(nope, kv_w));
     return ref;
 }
 
-void expect_exact(const xt::xarray<float>& actual, const xt::xarray<float>& expected, const std::string& tag) {
-    ASSERT_EQ(actual.shape(), expected.shape()) << tag << ": shape mismatch";
-    // Pure copy/broadcast through identical BF16 values → bit-exact on FP32 readback.
-    EXPECT_TRUE(xt::allclose(actual, expected, /*rtol=*/0.0, /*atol=*/0.0)) << tag << ": value mismatch";
+// ── Backward reference (dq_pre, dkv_up, dk_pe) from head-major grads ────────────────────────────────
+// dq_pre = reverse head-split of dQ; dkv_up = reverse head-split of [dK_nope | dV]; dk_pe = Σ_h dK_rope.
+struct BwOutputs {
+    xt::xarray<float> dq_pre;
+    xt::xarray<float> dkv_up;
+    xt::xarray<float> dk_pe;
+};
+
+BwOutputs reference_bw(
+    const ttnn::Tensor& dQ, const ttnn::Tensor& dK, const ttnn::Tensor& dV, const AssembleShape& shape) {
+    const std::size_t B = shape.batch;
+    const std::size_t S = shape.seq_len;
+    const std::size_t H = shape.n_heads;
+    const std::size_t nope = shape.qk_nope_dim;
+    const std::size_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    const std::size_t kv_w = shape.qk_nope_dim + shape.v_dim;
+
+    const xt::xarray<float> dQ_bf = ttml::core::to_xtensor(dQ);  // [B, H, S, qk_head]
+    const xt::xarray<float> dK_bf = ttml::core::to_xtensor(dK);  // [B, H, S, qk_head]
+    const xt::xarray<float> dV_bf = ttml::core::to_xtensor(dV);  // [B, H, S, v_dim]
+
+    BwOutputs ref;
+
+    // dq_pre: [B, H, S, qk_head] -> [B, S, H, qk_head] -> [B, 1, S, H*qk_head]
+    ref.dq_pre = xt::transpose(dQ_bf, {0, 2, 1, 3});
+    ref.dq_pre.reshape({B, 1U, S, H * qk_head});
+
+    // dkv_up: concat([dK_nope | dV]) per head -> reverse head-split.
+    const xt::xarray<float> dK_nope = xt::view(dK_bf, xt::all(), xt::all(), xt::all(), xt::range(std::size_t{0}, nope));
+    xt::xarray<float> kv_head = xt::concatenate(xt::xtuple(dK_nope, dV_bf), 3);  // [B, H, S, kv_w]
+    ref.dkv_up = xt::transpose(kv_head, {0, 2, 1, 3});
+    ref.dkv_up.reshape({B, 1U, S, H * kv_w});
+
+    // dk_pe: sum dK's rope suffix over the head axis -> [B, 1, S, qk_rope].
+    const xt::xarray<float> dK_rope = xt::view(dK_bf, xt::all(), xt::all(), xt::all(), xt::range(nope, qk_head));
+    ref.dk_pe = xt::sum(dK_rope, {1});
+    ref.dk_pe.reshape({B, 1U, S, static_cast<std::size_t>(shape.qk_rope_dim)});
+    return ref;
 }
 
-void run_case(const AssembleShape& shape) {
-    auto q_pre = make_input(shape.batch, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.qk_rope_dim), 1001U);
-    auto kv_up = make_input(shape.batch, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 2002U);
-    auto k_pe = make_input(shape.batch, shape.seq_len, shape.qk_rope_dim, 3003U);
+void run_fw(const AssembleShape& shape) {
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    const auto q_pre = make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head, 1001U);
+    const auto kv_up =
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 2002U);
+    const auto k_pe = make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 3003U);
 
-    auto [q, k, v] = ttml::ops::mla_qkv_assemble_fw(
+    auto [q, k, v] = ttml::metal::mla_qkv_assemble_fw(
         q_pre, kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
 
-    const auto ref = reference_assemble(q_pre, kv_up, k_pe, shape);
-    expect_exact(ttml::core::to_xtensor(q->get_value()), ref.q, shape.name + "/q");
-    expect_exact(ttml::core::to_xtensor(k->get_value()), ref.k, shape.name + "/k");
-    expect_exact(ttml::core::to_xtensor(v->get_value()), ref.v, shape.name + "/v");
+    const auto ref = reference_fw(q_pre, kv_up, k_pe, shape);
+    // Pure copy/broadcast → bit-exact.
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(q), ref.q, 0.0, 0.0)) << shape.name << " fw/q";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(k), ref.k, 0.0, 0.0)) << shape.name << " fw/k";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(v), ref.v, 0.0, 0.0)) << shape.name << " fw/v";
+}
+
+void run_bw(const AssembleShape& shape) {
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    const auto dQ = make_input(shape.batch, shape.n_heads, shape.seq_len, qk_head, 4004U);
+    const auto dK = make_input(shape.batch, shape.n_heads, shape.seq_len, qk_head, 5005U);
+    const auto dV = make_input(shape.batch, shape.n_heads, shape.seq_len, shape.v_dim, 6006U);
+
+    auto [dq_pre, dkv_up, dk_pe] =
+        ttml::metal::mla_qkv_assemble_bw(dQ, dK, dV, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+
+    const auto ref = reference_bw(dQ, dK, dV, shape);
+    // dq_pre / dkv_up are pure copies → bit-exact; dk_pe is a BF16 head-axis reduction → tolerant.
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(dq_pre), ref.dq_pre, 0.0, 0.0)) << shape.name << " bw/dq_pre";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(dkv_up), ref.dkv_up, 0.0, 0.0)) << shape.name << " bw/dkv_up";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(dk_pe), ref.dk_pe, /*rtol=*/5e-3, /*atol=*/5e-3))
+        << shape.name << " bw/dk_pe";
+}
+
+void run_autograd_wrapper_bw(const AssembleShape& shape) {
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    auto q_pre = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head, 7007U), /*requires_grad=*/true);
+    auto kv_up = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 8008U),
+        /*requires_grad=*/true);
+    auto k_pe = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 9009U), /*requires_grad=*/true);
+
+    auto [q, k, v] = ttml::ops::mla_qkv_assemble(
+        q_pre, kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+    auto loss = ttml::ops::add(ttml::ops::add(ttml::ops::mean(q), ttml::ops::mean(k)), ttml::ops::mean(v));
+    loss->backward();
+
+    const auto ref = reference_bw(q->get_grad(), k->get_grad(), v->get_grad(), shape);
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(q_pre->get_grad()), ref.dq_pre, 0.0, 0.0))
+        << shape.name << " autograd/dq_pre";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(kv_up->get_grad()), ref.dkv_up, 0.0, 0.0))
+        << shape.name << " autograd/dkv_up";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(k_pe->get_grad()), ref.dk_pe, /*rtol=*/5e-3, /*atol=*/5e-3))
+        << shape.name << " autograd/dk_pe";
+}
+
+const std::vector<AssembleShape>& shapes() {
+    static const std::vector<AssembleShape> cases = {
+        {"square_st1", 2, 32, 2, 32, 32, 32},
+        {"square_st2", 2, 64, 2, 32, 32, 32},
+        {"asym_rope2", 2, 64, 4, 128, 64, 128},
+        {"heads8_s96", 1, 96, 8, 64, 32, 64},
+    };
+    return cases;
 }
 
 }  // namespace
 
-// Square head dims, S_t == 1 (single sequence tile row).
-TEST_F(MLAQKVAssembleForwardTest, SquareDimsSingleSeqTile) {
-    run_case({"square_st1", /*B=*/2, /*S=*/32, /*H=*/2, /*nope=*/32, /*rope=*/32, /*v=*/32});
+TEST_F(MLAQKVAssembleTest, ForwardMatchesReference) {
+    for (const auto& shape : shapes()) {
+        run_fw(shape);
+    }
 }
 
-// Square head dims, S_t > 1 (exercises the end-of-batch jump path in the writer).
-TEST_F(MLAQKVAssembleForwardTest, SquareDimsMultiSeqTile) {
-    run_case({"square_st2", /*B=*/2, /*S=*/64, /*H=*/2, /*nope=*/32, /*rope=*/32, /*v=*/32});
+TEST_F(MLAQKVAssembleTest, BackwardMatchesReference) {
+    for (const auto& shape : shapes()) {
+        run_bw(shape);
+    }
 }
 
-// Asymmetric Tn != Tr != Tv with Tr > 1 (broadcast spans multiple rope tiles).
-TEST_F(MLAQKVAssembleForwardTest, AsymmetricDimsRopeMultiTile) {
-    run_case({"asym_rope2", /*B=*/2, /*S=*/64, /*H=*/4, /*nope=*/128, /*rope=*/64, /*v=*/128});
-}
-
-// More heads, single batch, larger S_t.
-TEST_F(MLAQKVAssembleForwardTest, ManyHeadsLargerSeq) {
-    run_case({"heads8_s96", /*B=*/1, /*S=*/96, /*H=*/8, /*nope=*/64, /*rope=*/32, /*v=*/64});
+TEST_F(MLAQKVAssembleTest, AutogradWrapperBackwardMatchesReference) {
+    run_autograd_wrapper_bw({"wrapper_heads4", 2, 64, 4, 64, 32, 64});
 }

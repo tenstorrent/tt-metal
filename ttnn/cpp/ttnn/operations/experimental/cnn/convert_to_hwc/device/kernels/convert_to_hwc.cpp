@@ -8,10 +8,13 @@
 #include "api/compute/transpose_wh.h"
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "api/dataflow/circular_buffer.h"
 
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
-    cb_wait_front(cb_in, BatchSize);
+    CircularBuffer cb_in_cb(cb_in);
+    CircularBuffer cb_out_cb(cb_out);
+    cb_in_cb.wait_front(BatchSize);
 
     tile_regs_acquire();
     tile_regs_wait();
@@ -21,14 +24,14 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
         transpose_wh_tile(cb_in, i, i);
     }
 
-    cb_reserve_back(cb_out, BatchSize);
+    cb_out_cb.reserve_back(BatchSize);
     pack_untilize_dest<1>(cb_out, BatchSize);
 
     tile_regs_commit();
     tile_regs_release();
 
-    cb_push_back(cb_out, BatchSize);
-    cb_pop_front(cb_in, BatchSize);
+    cb_out_cb.push_back(BatchSize);
+    cb_in_cb.pop_front(BatchSize);
 }
 
 void kernel_main() {
