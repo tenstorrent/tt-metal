@@ -8,6 +8,14 @@
 // buffers a message and drains every now-contiguous message starting at
 // next_expected. Pure logic — no SHM, no threads, no MPI — so it is unit
 // tested in isolation.
+//
+// LIMITATION (future work): next_expected_ only advances over a contiguous
+// run, so a single permanently-lost `seq` (e.g. a teardown drop or a rank
+// SIGKILL) head-of-line-blocks every later completion forever — they pile up
+// in pending_ and the scheduler stalls. Proposed fix: a per-sequence watchdog
+// — arm a ~5s timer when the first completion of a sequence arrives and clear
+// it when its last layer arrives; on expiry, skip the gap (advance
+// next_expected_ past the missing seq, logging the skip). Not implemented yet.
 
 #pragma once
 
