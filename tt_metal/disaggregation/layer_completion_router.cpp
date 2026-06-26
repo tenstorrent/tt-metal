@@ -154,35 +154,70 @@ void LayerCompletionRouter::run_master() {
 
 void LayerCompletionRouter::run_subordinate() {
     const mh::ContextPtr ctx = mh::DistributedContext::get_current_world();
-    auto send_msg = [&](const LayerCompletionMessage& msg) {
+    auto send_blocking = [&](const LayerCompletionMessage& msg) {
         std::array<std::byte, sizeof(msg)> buf{};
         std::memcpy(buf.data(), &msg, sizeof(msg));
         ctx->send(ttsl::Span<std::byte>(buf.data(), buf.size()), mh::Rank(cfg_.master_rank), kLayerCompletionTag);
+    };
+    // Teardown sends are bounded (isend + deadline) so this thread can't wedge — and so hang stop() /
+    // the dtor join — if the master already hit its own teardown_timeout_ms, stopped receiving, and
+    // cancelled. Returns false when the send didn't complete in time (master gone). Symmetric with the
+    // master's bound; the clean path never trips it.
+    auto send_bounded = [&](const LayerCompletionMessage& msg) -> bool {
+        std::array<std::byte, sizeof(msg)> buf{};
+        std::memcpy(buf.data(), &msg, sizeof(msg));
+        auto req =
+            ctx->isend(ttsl::Span<std::byte>(buf.data(), buf.size()), mh::Rank(cfg_.master_rank), kLayerCompletionTag);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.teardown_timeout_ms);
+        while (!req->test().has_value()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                req->cancel();
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
+        }
+        return true;
     };
 
     LayerCompletionMessage m{};
     while (!stop_.load(std::memory_order_acquire)) {
         if (queue_->try_pop(m)) {
-            send_msg(m);
+            send_blocking(m);  // steady state: the master is actively receiving
             processed_.fetch_add(1, std::memory_order_relaxed);
         } else {
             std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
         }
     }
-    // Drain any messages that arrived in the ring between the last pop and stop_ being set —
-    // otherwise they would be silently dropped and the master would never receive them.
-    while (queue_->try_pop(m)) {
-        send_msg(m);
-        processed_.fetch_add(1, std::memory_order_relaxed);
+    // Teardown: drain anything that arrived between the last pop and stop_, then send the end-of-stream
+    // sentinel — all via bounded sends. The master keeps a receive posted until it sees the sentinel
+    // (run_master), so in the clean path every send completes promptly; if a send times out the master
+    // has already given up, so abandon the rest (those completions are unrecoverable either way).
+    bool master_alive = true;
+    while (master_alive && queue_->try_pop(m)) {
+        master_alive = send_bounded(m);
+        if (master_alive) {
+            processed_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
-    // Coordinated teardown: send one end-of-stream sentinel as the final message. The master keeps a
-    // receive posted until it sees this (run_master), so this blocking send always has a receiver and
-    // the master can then stop without cancelling a live recv. The sentinel is not a real completion
-    // (not counted in processed_, never fed through the reorder buffer).
-    LayerCompletionMessage sentinel{};
-    sentinel.source_rank = static_cast<uint32_t>(cfg_.rank);
-    sentinel.reserved = kLayerCompletionSentinel;
-    send_msg(sentinel);
+    if (master_alive) {
+        LayerCompletionMessage sentinel{};
+        sentinel.source_rank = static_cast<uint32_t>(cfg_.rank);
+        sentinel.reserved = kLayerCompletionSentinel;
+        master_alive = send_bounded(sentinel);
+    }
+    if (!master_alive) {
+        std::size_t lost = 1;  // the send that timed out (a completion or the sentinel)
+        while (queue_->try_pop(m)) {
+            ++lost;
+        }
+        log_warning(
+            LogMetal,
+            "LayerCompletionRouter rank {}: master not receiving within {} ms at teardown; abandoning ~{} "
+            "undelivered message(s) (master likely timed out or crashed)",
+            cfg_.rank,
+            cfg_.teardown_timeout_ms,
+            lost);
+    }
 }
 
 }  // namespace tt::tt_metal::distributed
