@@ -2028,6 +2028,22 @@ class ModelArgs:
             # See tests/perf/test_wo_prefill_matmul_sweep_p150.py.
             if is_blackhole() and self.dim == 3072 and dram_sharded_wo and min(seq_len, 1024) <= 128:
                 return None
+            # WO prefill at the 512-token bucket (512x1024x3072, BFP8 x BF16 => BFP8, HiFi4 on
+            # BH P150x4) is FLOP-bound (~79% util). The production grid find_prefill_grid(8,32)=
+            # (8,8) uses 64 cores; N=3072 (96 tiles) lets an (11,8) grid use 88 cores (11 = device
+            # max usable columns). A trace-based device-time sweep found grid (11,8) + in0_block_w=8
+            # runs ~41us vs ~51us for the production config -> ~1.25x, PCC 0.9999, no L1 OOM. (More
+            # rows, e.g. (11,10)/110 cores, do not help: M=512 is 16 tiles, covered by 8 rows at
+            # per_core_M=2.) See tests/perf/test_wo_prefill_512_trace_sweep_p150.py.
+            if (
+                is_blackhole()
+                and dram_sharded_wo
+                and self.dim == 3072
+                and k_dim == 1024
+                and n_dim == 3072
+                and min(seq_len, 1024) == 512
+            ):
+                return self.matmul_config(m=512, k=k_dim, n=n_dim, grid_size=(11, 8), in0_block_w=8)
             return self.matmul_config(
                 m=min(seq_len, 1024),
                 k=k_dim,
