@@ -7,6 +7,7 @@ import pytest
 import torch
 
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
+    build_self_conditioning_embedding_weight,
     build_self_conditioning,
     validate_self_conditioning_state,
 )
@@ -75,3 +76,48 @@ def test_build_self_conditioning_uses_config_and_forwards_constructor_args():
 def test_build_self_conditioning_requires_dimensions_without_config():
     with pytest.raises(ValueError, match="hidden_size and intermediate_size"):
         build_self_conditioning("device", _state(), module_cls=object)
+
+
+def test_build_self_conditioning_embedding_weight_uses_matmul_layout(monkeypatch):
+    calls = {}
+
+    class _FakeTtnn:
+        bfloat16 = "bf16"
+        TILE_LAYOUT = "tile"
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def as_tensor(value, **kwargs):
+            calls["as_tensor"] = (value.clone(), kwargs)
+            return "device-embedding"
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+    embedding = torch.arange(24, dtype=torch.float32).reshape(3, 8)
+
+    out = build_self_conditioning_embedding_weight(
+        "device",
+        embedding,
+        hidden_size=8,
+        dtype="bf16",
+        tensor_fn=_FakeTtnn.as_tensor,
+    )
+
+    value, kwargs = calls["as_tensor"]
+    assert out == "device-embedding"
+    assert value.shape == (1, 1, 3, 8)
+    assert torch.equal(value[0, 0], embedding)
+    assert kwargs == {
+        "device": "device",
+        "dtype": "bf16",
+        "layout": "tile",
+        "memory_config": "dram",
+    }
+
+
+def test_build_self_conditioning_embedding_weight_rejects_hidden_mismatch():
+    with pytest.raises(ValueError, match="embedding hidden size"):
+        build_self_conditioning_embedding_weight(
+            "device", torch.ones(3, 8), hidden_size=16, tensor_fn=lambda *a, **k: None
+        )

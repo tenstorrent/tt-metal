@@ -79,6 +79,28 @@ def build_self_conditioning(
     )
 
 
+def build_self_conditioning_embedding_weight(
+    device,
+    embedding_weight,
+    *,
+    hidden_size: int | None = None,
+    dtype=ttnn.bfloat16,
+    tensor_fn=ttnn.as_tensor,
+):
+    """Move tied token embedding weights to the self-conditioning matmul layout."""
+    if len(embedding_weight.shape) != 2:
+        raise ValueError("embedding_weight must have shape [vocab, hidden]")
+    if hidden_size is not None and embedding_weight.shape[-1] != hidden_size:
+        raise ValueError(f"embedding hidden size {embedding_weight.shape[-1]} does not match expected {hidden_size}")
+    return tensor_fn(
+        embedding_weight.unsqueeze(0).unsqueeze(0),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 class TtSelfConditioning:
     def __init__(
         self,
