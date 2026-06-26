@@ -309,9 +309,20 @@ class _CompletionCheckConsumer:
         from models.demos.test.prefill_test import LayerCompletionConsumer
 
         self._num_layers = num_layers
-        self._expected_chunks = int(
-            os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS", os.environ.get("PREFILL_STANDALONE_NCHUNKS", "11"))
+        explicit_chunks = os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS") or os.environ.get(
+            "PREFILL_STANDALONE_NCHUNKS"
         )
+        if explicit_chunks is None:
+            # Unbounded request mode sends an arbitrary number of chunks, so this fallback is a guess:
+            # the consumer self-terminates at expected_total, making the PASS/FAIL signal meaningless
+            # unless the real chunk count is pinned. Only trustworthy in STANDALONE mode or with an
+            # explicit PREFILL_CHECK_EXPECTED_CHUNKS.
+            logger.warning(
+                "[completion-check] neither PREFILL_CHECK_EXPECTED_CHUNKS nor PREFILL_STANDALONE_NCHUNKS "
+                "is set; falling back to 11 chunks — the PASS/FAIL tally is unreliable in unbounded "
+                "request mode. Set PREFILL_CHECK_EXPECTED_CHUNKS to the real chunk count."
+            )
+        self._expected_chunks = int(explicit_chunks or "11")
         self._expected_total = self._expected_chunks * num_layers
         # Internal C++ native-thread consumer (re-exported from prefill_test; see that module).
         self._impl = LayerCompletionConsumer(
@@ -908,26 +919,30 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
             completion_check = _CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
+    try:
+        run_request_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
+    finally:
+        # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
+        # spin timing out on a stalled router); without this, producer/router/ack segments + the
+        # router listener thread leak, and a downstream peer blocked in D2D recv deadlocks the pipeline.
+        # Release services while the mesh + command queues are still alive (their dtors free a command
+        # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
+        import gc
 
-    # Release services while the mesh + command queues are still alive (their dtors free a command
-    # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
-    import gc
-
-    h2d_service = d2d_in = d2d_out = None
-    gc.collect()
-    # Teardown. NOTE: for num_ranks>1 the request loop only returns on a clean _shutdown; the known
-    # rough-shutdown path (downstream ranks block in D2D recv, exit on SIGKILL) can bypass this. Clean
-    # cross-rank router teardown (barrier + end-of-request sentinel) is future work.
-    if producer is not None:
-        producer.shutdown()
-    if completion_check is not None:
-        completion_check.stop_and_report()  # drain + tally BEFORE router.stop() unlinks the channel
-    if router is not None:
-        router.stop()  # joins the listener; on the master, unlinks the scheduler counter channel
-    if ack_channel is not None:
-        ack_channel.shutdown()  # munmap + shm_unlink
-        ack_channel = None
+        h2d_service = d2d_in = d2d_out = None
+        gc.collect()
+        # NOTE: for num_ranks>1 the request loop only returns on a clean _shutdown; the known
+        # rough-shutdown path (downstream ranks block in D2D recv, exit on SIGKILL) can bypass this.
+        # Clean cross-rank router teardown (barrier + end-of-request sentinel) is future work.
+        if producer is not None:
+            producer.shutdown()
+        if completion_check is not None:
+            completion_check.stop_and_report()  # drain + tally BEFORE router.stop() unlinks the channel
+        if router is not None:
+            router.stop()  # joins the listener; on the master, unlinks the scheduler counter channel
+        if ack_channel is not None:
+            ack_channel.shutdown()  # munmap + shm_unlink
+            ack_channel = None
 
 
 if __name__ == "__main__":
