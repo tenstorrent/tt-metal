@@ -61,6 +61,7 @@ blackhole:
   # (THCON_SEC1_REG1, the fp8/LF8 SEC1 config) is still unimplemented even in latest ttsim, hit on a data-format
   # reconfig after an fp8 program. The skip stays for (2); remove once a ttsim release with both lands in CI.
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
