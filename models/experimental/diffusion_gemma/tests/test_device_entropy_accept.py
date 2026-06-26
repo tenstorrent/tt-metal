@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.experimental.diffusion_gemma.reference import sampling as S
+from models.experimental.diffusion_gemma.tt.denoise_loop import entropy_budget_accept
 
 pytestmark = [
     pytest.mark.skipif(
@@ -110,3 +111,22 @@ def test_entropy_budget_accept_matches_reference(device, frac):
 
     assert dev.shape == ref.shape
     assert torch.equal(dev, ref), f"accept mask mismatch (frac={frac}): {int((dev != ref).sum())} of {length} differ"
+
+
+def test_production_entropy_budget_accept_guards_device_sort_at_canvas_256(device):
+    torch.manual_seed(47463)
+    batch, length = 1, 256
+    entropy = torch.rand(batch, length) + torch.arange(length).float() * 1e-4
+    budget = _budget_for_fraction(entropy, 0.375)
+    ref = S.entropy_budget_accept(entropy, budget, min_accept=0)
+
+    ent = ttnn.from_torch(entropy.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_t = entropy_budget_accept(ent, budget)
+    dev = ttnn.to_torch(dev_t) > 0.5
+
+    try:
+        assert int(dev.sum()) == int(ref.sum())
+        assert torch.equal(dev, ref), f"production accept mask mismatch: {int((dev != ref).sum())} of {length} differ"
+    finally:
+        dev_t.deallocate(True)
+        ent.deallocate(True)

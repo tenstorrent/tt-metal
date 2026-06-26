@@ -41,7 +41,12 @@ def temperature_at_step(step: int, num_steps: int, t_start: float, t_end: float)
 
 
 def entropy_budget_accept(entropy, budget: float):
-    """Device entropy-budget accept mask using the HF exclusive-prefix rule."""
+    """Device entropy-budget accept mask using the HF exclusive-prefix rule.
+
+    This path is load-bearing for the Part I decision-fidelity bar: device sort
+    regressions must show up as accept-mask/count mismatches against the host
+    oracle, not as silent trajectory drift.
+    """
     sorted_vals, sorted_idx = ttnn.sort(entropy, dim=-1)
     cum = ttnn.cumsum(sorted_vals, dim=-1)
     excl = ttnn.subtract(cum, sorted_vals)
