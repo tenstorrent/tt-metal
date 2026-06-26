@@ -197,7 +197,7 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 
 template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
-    sfpi::vInt i, e, e_i;
+    sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
