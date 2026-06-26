@@ -171,7 +171,9 @@ def test_eltwise_unary_typecast(
         formats.output_format
     )
     if formats.input_format.is_integer():
-        spec_A = StimuliSpec.uniform(0, 15) if bfp_involved else None
+        spec_A = (
+            StimuliSpec.uniform(0, 15) if bfp_involved else StimuliSpec.uniform(0, 255)
+        )
     else:
         spec_A = _whole_number_float_spec(16 if bfp_involved else 201)
 
