@@ -718,7 +718,7 @@ static void emit_metal2_namespaces(
         f << "#include <cstdint>\n";
     }
     if (!s.ta_accessors.empty()) {
-        f << "#include \"api/tensor/tensor_accessor.h\"\n";
+        f << "#include \"api/tensor/tensor_binding_token.h\"\n";
     }
 
     if (has_args) {
