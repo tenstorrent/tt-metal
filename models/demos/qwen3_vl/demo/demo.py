@@ -16,6 +16,7 @@ import ttnn
 from models.common.sampling import SamplingParams
 from models.demos.qwen3_vl.tt.common import (
     PagedAttentionConfig,
+    get_hf_visual,
     get_pad_embedding,
     merge_vision_tokens_single_user_ttnn,
     multimodal_rope_single_user_from_hf,
@@ -384,11 +385,9 @@ def test_demo(
             optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        # transformers 5.x nests the vision tower under model.model.visual; 4.x exposed model.visual.
-        _ref_visual = reference_model.visual if hasattr(reference_model, "visual") else reference_model.model.visual
-        visual_model = DropInVisionTransformer(_ref_visual, vision_model_args, debug=False)  # show PCC
+        visual_model = DropInVisionTransformer(get_hf_visual(reference_model), vision_model_args, debug=False)  # show PCC
     else:
-        visual_model = reference_model.visual if hasattr(reference_model, "visual") else reference_model.model.visual
+        visual_model = get_hf_visual(reference_model)
     processor = AutoProcessor.from_pretrained(ref_model_name)
     num_tokens_generated_decode = []
     num_image_tokens = []
@@ -732,8 +731,8 @@ def test_demo(
 
     if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
-        from bert_score import score as bert_score
         import bert_score.utils as _bert_score_utils
+        from bert_score import score as bert_score
 
         # transformers 5.x leaves some tokenizers' model_max_length at the VERY_LARGE_INTEGER sentinel
         # (~1e30); bert_score forwards it straight into the fast tokenizer's truncation, which overflows

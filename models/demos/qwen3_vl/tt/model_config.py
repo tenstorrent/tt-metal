@@ -7,7 +7,7 @@ import math
 from loguru import logger
 
 import ttnn
-from models.demos.qwen3_vl.tt.common import nearest_multiple
+from models.demos.qwen3_vl.tt.common import get_hf_visual, nearest_multiple
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
@@ -116,9 +116,7 @@ class VisionModelArgs(ModelArgs):
         # transformers 5.x loads in the config dtype (bf16) by default; force float32 so the reference
         # and its sub-modules match the float32 test inputs (4.x defaulted to float32).
         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config, torch_dtype=torch.float32)
-        # transformers 5.x nests the vision tower under model.model.visual (Qwen3VLModel); 4.x exposed
-        # it at the top level as model.visual.
-        return model.visual if hasattr(model, "visual") else model.model.visual
+        return get_hf_visual(model)
 
     def reference_vision_block(self, layer_num=0):
         return self.reference_vision_model().blocks[layer_num]
