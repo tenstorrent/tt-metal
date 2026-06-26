@@ -84,29 +84,21 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         comb_w = self.fn_comb(flat)  # [1,1,T,H*H]
         _profile(self.device)
 
-        # pre = sigmoid(w*scale + b) + eps ; post = 2*sigmoid(w*scale + b).
-        pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(pre_w, self.pre_scale), self.pre_b)), self.eps)
-        post = ttnn.multiply(ttnn.sigmoid(ttnn.add(ttnn.multiply(post_w, self.post_scale), self.post_b)), 2.0)
-
-        # comb logits -> [1,T,H,H]; softmax over last dim, then Sinkhorn (alternate
-        # row/col normalisation) onto the doubly-stochastic manifold.
-        comb_logits = ttnn.add(ttnn.multiply(comb_w, self.comb_scale), self.comb_b)  # [1,1,T,H*H]
-        comb_logits = ttnn.reshape(comb_logits, [1, t, hc, hc])
-        comb = ttnn.add(ttnn.softmax(comb_logits, dim=-1), self.eps)
-        comb = ttnn.div(comb, ttnn.add(ttnn.sum(comb, dim=-2, keepdim=True), self.eps))  # column
-        for _ in range(self.iters - 1):
-            comb = ttnn.div(comb, ttnn.add(ttnn.sum(comb, dim=-1, keepdim=True), self.eps))  # row
-            comb = ttnn.div(comb, ttnn.add(ttnn.sum(comb, dim=-2, keepdim=True), self.eps))  # column
-
-        # collapsed = sum_h pre[..,h] * hidden_streams[..,h,:]  (weighted stream sum).
-        hs = ttnn.reshape(hidden_streams, [1, t, hc, d])
-        pre_col = ttnn.reshape(pre, [1, t, hc, 1])
-        collapsed = ttnn.sum(ttnn.multiply(hs, pre_col), dim=-2, keepdim=True)  # [1,T,1,D]
-
-        post = ttnn.reshape(post, [b, s, hc, 1])
-        comb = ttnn.reshape(comb, [b, s, hc, hc])
-        collapsed = ttnn.reshape(collapsed, [b, s, 1, d])
-        return post, comb, collapsed
+        return ttnn.experimental.deepseek.fused_hyperconnection(
+            hidden_streams,
+            pre_w=pre_w,
+            post_w=post_w,
+            comb_w=comb_w,
+            pre_bias=self.pre_b,
+            post_bias=self.post_b,
+            comb_bias=self.comb_b,
+            num_streams=hc,
+            sinkhorn_iters=self.iters,
+            pre_scale=self.pre_scale,
+            post_scale=self.post_scale,
+            comb_scale=self.comb_scale,
+            eps=self.eps,
+        )
 
 
 class DeepSeekV4HyperHead(DeepSeekV4Module):
