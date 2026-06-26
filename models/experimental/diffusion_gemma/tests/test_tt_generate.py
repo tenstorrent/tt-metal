@@ -661,6 +661,67 @@ def test_generate_text_from_checkpoint_state_can_use_tokenizer_len_for_vocab_siz
     assert calls["canvas_init"][1]["vocab_size"] == 101
 
 
+def test_generate_text_from_checkpoint_state_can_use_model_vocab_size(monkeypatch):
+    calls = {}
+
+    class _Model:
+        mesh_device = "mesh"
+        vocab_size = 103
+
+    def fake_canvas_init_fn(mesh_device, **kwargs):
+        calls["canvas_init"] = (mesh_device, kwargs)
+        return "init"
+
+    monkeypatch.setattr(G, "make_seeded_host_canvas_init_fn", fake_canvas_init_fn)
+
+    generate_text_from_checkpoint_state(
+        _Model(),
+        object(),
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        seed=123,
+        noise_tokens_fn="noise",
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=lambda *args, **kwargs: "result",
+    )
+
+    assert calls["canvas_init"][1]["vocab_size"] == 103
+
+
+def test_generate_text_from_checkpoint_state_can_use_model_config_vocab_size(monkeypatch):
+    calls = {}
+
+    class _Config:
+        vocab_size = 105
+
+    class _Model:
+        mesh_device = "mesh"
+        hf_config = _Config()
+
+    def fake_canvas_init_fn(mesh_device, **kwargs):
+        calls["canvas_init"] = (mesh_device, kwargs)
+        return "init"
+
+    monkeypatch.setattr(G, "make_seeded_host_canvas_init_fn", fake_canvas_init_fn)
+
+    generate_text_from_checkpoint_state(
+        _Model(),
+        object(),
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        seed=123,
+        noise_tokens_fn="noise",
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=lambda *args, **kwargs: "result",
+    )
+
+    assert calls["canvas_init"][1]["vocab_size"] == 105
+
+
 def test_generate_text_from_checkpoint_state_preserves_explicit_noise_tokens(monkeypatch):
     calls = {}
 
