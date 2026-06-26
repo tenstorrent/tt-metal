@@ -27,7 +27,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model_config import determine_device_name
 
 # Multi-device (TP) is selected via MESH_DEVICE. The 27B (default) runs on a P150x4
 # (1,4) Blackhole mesh; the 9B can run on a single P150 (1,1) via MESH_DEVICE=P150.
@@ -53,17 +56,6 @@ DEVICE_PARAMS = [
 SAMPLE_PROMPTS_DIR = "models/demos/blackhole/qwen36/demo/sample_prompts"
 SHARED_PROMPTS_DIR = "models/demos/llama3_70b_galaxy/demo/sample_prompts"
 
-PERF_TARGETS = {
-    128: {"min_decode_tok_s": 5.0, "max_ttft_s": 2.0},
-    2048: {"min_decode_tok_s": 4.0, "max_ttft_s": 5.0},
-    4096: {"min_decode_tok_s": 2.0, "max_ttft_s": 10.0},
-    8192: {"min_decode_tok_s": 1.0, "max_ttft_s": 20.0},
-    16384: {"min_decode_tok_s": 0.5, "max_ttft_s": 35.0},
-    32768: {"min_decode_tok_s": 0.5, "max_ttft_s": 70.0},
-    # 256k (262016-token prompt): measured TTFT ~400s, decode ~11.3 tok/s on single P150.
-    # Gates set as regression guards with margin (TTFT +50%, decode floor ~half measured).
-    262144: {"min_decode_tok_s": 6.0, "max_ttft_s": 600.0},
-}
 
 # Frankenstein prompt config: seqlen → json_index in eval_frankenstein_long.json.
 # Each entry clips Frankenstein text to enough characters to exceed the target token count
@@ -249,40 +241,24 @@ def _blocks_for(seqlen, max_generated_tokens):
 
 
 @run_for_blackhole()
-@pytest.mark.timeout(3600)  # 60 min/case: 256k prefill processes ~2.5x the tokens of the 128k case
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "seqlen, max_generated_tokens, use_trace, repeat_batches",
     [
-        (128, 50, True, 1),
-        (128, 50, False, 1),
-        (4096, 100, True, 1),
-        (4096, 100, False, 1),
-        (8192, 500, True, 1),
-        (8192, 100, False, 1),
-        (16384, 100, True, 1),
-        (32768, 100, True, 1),
-        (65536, 500, True, 1),
-        (65536, 100, False, 1),
-        (131072, 100, True, 1),
-        (262144, 100, True, 1),
-        (128, 50, True, 2),
-    ],
-    ids=[
-        "traced_128",
-        "paged_128",
-        "traced_4k",
-        "paged_4k",
-        "traced_8k",
-        "paged_8k",
-        "traced_16k",
-        "traced_32k",
-        "traced_64k",
-        "paged_64k",
-        "traced_128k",
-        "traced_256k",
-        "determinism_128",
+        pytest.param(128, 50, True, 1, id="traced_128"),
+        pytest.param(128, 50, False, 1, id="paged_128"),
+        pytest.param(4096, 100, True, 1, id="traced_4k"),
+        pytest.param(4096, 100, False, 1, id="paged_4k"),
+        pytest.param(8192, 500, True, 1, id="traced_8k"),
+        pytest.param(8192, 100, False, 1, id="paged_8k"),
+        pytest.param(16384, 100, True, 1, id="traced_16k"),
+        pytest.param(32768, 100, True, 1, id="traced_32k"),
+        pytest.param(65536, 500, True, 1, id="traced_64k"),
+        pytest.param(65536, 100, False, 1, id="paged_64k"),
+        pytest.param(131072, 100, True, 1, id="traced_128k"),
+        pytest.param(262144, 100, True, 1, id="traced_256k"),
+        pytest.param(128, 50, True, 2, id="determinism_128"),
     ],
 )
 def test_demo_text(
@@ -359,15 +335,9 @@ def test_demo_text(
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
         assert len(set(generated)) > 1, f"degenerate generation: {generated}"
-        targets = PERF_TARGETS.get(actual_len)
-        if targets:
-            assert (
-                perf["ttft_s"] < targets["max_ttft_s"]
-            ), f"[TP] TTFT {perf['ttft_s']:.1f}s exceeds target {targets['max_ttft_s']}s at seqlen={actual_len}"
-            assert perf["decode_tok_s"] >= targets["min_decode_tok_s"], (
-                f"[TP] Decode {perf['decode_tok_s']:.1f} tok/s below target"
-                f" {targets['min_decode_tok_s']} tok/s at seqlen={actual_len}"
-            )
+        # Emit perf metrics for the centralized target check (no-op outside CI). Perf is
+        # NOT asserted here — validate_perf_targets.py compares this against model_targets.yaml.
+        _save_tp_benchmark(perf, model, seqlen=seqlen, prompt_len=actual_len, num_generated=len(generated))
         return
 
     # Warmup: compile programs (not counted in TTFT). A short traced prompt takes the masked
@@ -457,6 +427,12 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     vocab = model.args.vocab_size
     T = token_ids.shape[1]
 
+    # Benchmark profiler (no-op outside CI). Brackets the phases the centralized perf check
+    # consumes: compile_prefill (trace capture), inference_prefill (TTFT), compile_decode
+    # (decode trace capture) and inference_decode (steady-state throughput).
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
     # The flexible (position-general) chunked SDPA requires the page-table width to be a
     # multiple of 32; round the block budget up so both the captured chunk trace's page
     # table and the per-request page table satisfy it. Mirrors test_model_tp_long_prefill_traced.
@@ -475,13 +451,17 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # trace is parked, so a request never compiles a program that could clobber the trace.
     CHUNK = 2048
     t_cap = time.time()
+    profiler.start("compile_prefill")
     model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
+    profiler.end("compile_prefill")
     logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
 
     # ---- Chunk-outer prefill (real prompt only; the tail is masked internally). ----
     t0 = time.time()
+    profiler.start("inference_prefill")
     logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
     ttnn.synchronize_device(model.device)
+    profiler.end("inference_prefill")
     ttft = time.time() - t0
 
     # Decode token selection: greedy by default; QWEN35_TEMP>0 enables temperature sampling.
@@ -589,6 +569,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     trace_id = None
     tt_logits = None
+    profiler.start("compile_decode")
     if not eager:
         gdn_snap = _snapshot_gdn()  # exact post-prefill GDN state
         # Compile the decode programs (eager) then capture a throwaway trace; both advance GDN
@@ -598,9 +579,11 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(gdn_snap)
+    profiler.end("compile_decode")
 
     pos = T
     decode_times = []
+    profiler.start("inference_decode")
     while len(generated) < max_generated_tokens:
         _update(nxt, pos)
         t_step = time.time()
@@ -615,11 +598,13 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         pos += 1
     if trace_id is not None:
         ttnn.release_trace(mesh, trace_id)
+    profiler.end("inference_decode")
 
     # Steady-state throughput (drop the first step, which can carry one-time costs).
     steady = decode_times[1:] if len(decode_times) > 1 else decode_times
     avg = (sum(steady) / len(steady)) if steady else float("inf")
-    return generated, {"ttft_s": ttft, "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0}
+    profiler.end("run")
+    return generated, {"ttft_s": ttft, "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0, "profiler": profiler}
 
 
 def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks):
@@ -774,6 +759,43 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
 
 
+def _save_tp_benchmark(perf, model, seqlen, prompt_len, num_generated):
+    """Emit a benchmark partial-run JSON for the centralized perf-target check.
+
+    No-op outside CI (BenchmarkData/save self-gate on CI=true). The standalone
+    .github/scripts/utils/validate_perf_targets.py pass compares these metrics against
+    models/model_targets.yaml. batch_size is 1, so decode tokens/s == tokens/s/user, and
+    prefill_time_to_token is reported in seconds (the validator converts the ms target).
+
+    input_sequence_length is the NOMINAL ``seqlen`` (128, 4096, ...), not the tile-clipped
+    actual prompt length, because target lookup requires an exact seq_len match against the
+    per-ISL entries in model_targets.yaml. prefill_t/s still uses the actual tokens processed.
+    """
+    profiler = perf["profiler"]
+    ttft_s = perf["ttft_s"]
+    decode_tok_s = perf["decode_tok_s"]
+    measurements = {
+        "compile_prefill": profiler.get_duration("compile_prefill"),
+        "compile_decode": profiler.get_duration("compile_decode"),
+        "prefill_t/s": (prompt_len / ttft_s) if ttft_s > 0 else 0.0,
+        "prefill_time_to_token": ttft_s,
+        "decode_t/s": decode_tok_s,
+        "decode_t/s/u": decode_tok_s,
+    }
+    benchmark_data = create_benchmark_data(profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, {})
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="demo",
+        ml_model_name=model.args.base_model_name,
+        ml_model_type="llm",
+        device_name=determine_device_name(model.mesh_device),
+        num_layers=model.args.n_layers,
+        batch_size=1,
+        input_sequence_length=seqlen,
+        output_sequence_length=num_generated,
+    )
+
+
 def _log_results(perf, prompt_len, num_generated, text):
     ttft = perf["ttft"]
     avg_ms = perf["avg_decode_s"] * 1000
@@ -790,20 +812,6 @@ def _log_results(perf, prompt_len, num_generated, text):
 
 
 def _assert_results(perf, prompt_len, num_generated):
+    # Correctness only. Perf/accuracy targets are checked by the centralized
+    # validate_perf_targets.py pass against models/model_targets.yaml, not asserted here.
     assert num_generated >= 1, "Should generate at least 1 token"
-
-    targets = PERF_TARGETS.get(prompt_len)
-    if targets is None:
-        return
-
-    # Decode throughput is only meaningful with enough steps — the first decode
-    # includes compilation overhead and a single sample is not representative.
-    if perf["decode_steps"] >= 3:
-        tok_s = 1.0 / perf["avg_decode_s"] if perf["avg_decode_s"] > 0 else 0
-        min_tok_s = targets["min_decode_tok_s"]
-        assert (
-            tok_s >= min_tok_s
-        ), f"Decode throughput {tok_s:.1f} tok/s below target {min_tok_s} tok/s at seqlen={prompt_len}"
-
-    max_ttft = targets["max_ttft_s"]
-    assert perf["ttft"] < max_ttft, f"TTFT {perf['ttft']:.1f}s exceeds target {max_ttft}s at seqlen={prompt_len}"
