@@ -71,6 +71,21 @@ def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
     )
 
 
+def host_gumbel_noise_to_device(mesh_device, gumbel_noise: torch.Tensor):
+    """Move host Gumbel noise to denoise logits layout ``[batch, 1, canvas_len, vocab]``."""
+    if gumbel_noise.dim() == 3:
+        gumbel_noise = gumbel_noise.unsqueeze(1)
+    if gumbel_noise.dim() != 4 or gumbel_noise.shape[1] != 1:
+        raise ValueError("gumbel_noise must have shape [batch, canvas_len, vocab] or [batch, 1, canvas_len, vocab]")
+    return ttnn.from_torch(
+        gumbel_noise.to(torch.float32),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.float32,
+        mesh_mapper=_replicate_mapper(mesh_device),
+    )
+
+
 def host_tokens_to_device(mesh_device, tokens: torch.Tensor):
     """Move host token ids ``[batch, seq_len]`` to Gemma4 token layout."""
     if tokens.dim() != 2:
@@ -212,6 +227,30 @@ def make_host_canvas_init_fn(mesh_device, host_canvases):
         return host_canvas_to_device(mesh_device, canvases[block_idx].clone())
 
     return init_canvas_fn
+
+
+def _validate_gumbel_noise(noise: torch.Tensor) -> None:
+    if noise.dim() == 3:
+        return
+    if noise.dim() == 4 and noise.shape[1] == 1:
+        return
+    raise ValueError("gumbel_noise must have shape [batch, canvas_len, vocab] or [batch, 1, canvas_len, vocab]")
+
+
+def make_host_gumbel_noise_fn(mesh_device, host_gumbel_noise):
+    """Create ``generate_blocks`` Gumbel noise hooks from fixed host noise tensors."""
+    blocks = [[noise.clone() for noise in block] for block in host_gumbel_noise]
+    for block in blocks:
+        for noise in block:
+            _validate_gumbel_noise(noise)
+
+    def gumbel_noise_for_block(block_idx: int):
+        def gumbel_noise_for_step(step: int):
+            return host_gumbel_noise_to_device(mesh_device, blocks[block_idx][step].clone())
+
+        return gumbel_noise_for_step
+
+    return gumbel_noise_for_block
 
 
 def _check_random_token_args(batch: int, canvas_len: int, vocab_size: int) -> None:

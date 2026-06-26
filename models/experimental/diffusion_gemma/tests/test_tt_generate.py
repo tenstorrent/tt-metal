@@ -18,7 +18,9 @@ from models.experimental.diffusion_gemma.tt.generate import (
     generation_sequences,
     generation_token_ids,
     host_canvas_to_device,
+    host_gumbel_noise_to_device,
     host_tokens_to_device,
+    make_host_gumbel_noise_fn,
     make_seeded_gumbel_noise_fn,
     make_host_canvas_init_fn,
     make_seeded_host_canvas_init_fn,
@@ -1408,6 +1410,43 @@ def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
     assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
 
 
+def test_host_gumbel_noise_to_device_uses_logits_layout(monkeypatch):
+    calls = {}
+
+    class _FakeTtnn:
+        TILE_LAYOUT = "tile"
+        float32 = "float32"
+
+        @staticmethod
+        def ReplicateTensorToMesh(mesh_device):
+            return ("replicate", mesh_device)
+
+        @staticmethod
+        def from_torch(value, **kwargs):
+            calls["from_torch"] = (value.clone(), kwargs)
+            return "device-gumbel"
+
+    monkeypatch.setattr(G, "ttnn", _FakeTtnn)
+    noise = torch.arange(24, dtype=torch.float64).reshape(1, 4, 6)
+
+    out = host_gumbel_noise_to_device(_FakeMesh(), noise)
+
+    value, kwargs = calls["from_torch"]
+    assert out == "device-gumbel"
+    assert value.shape == (1, 1, 4, 6)
+    assert value.dtype == torch.float32
+    assert kwargs["layout"] == "tile"
+    assert kwargs["dtype"] == "float32"
+    assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
+
+
+def test_host_gumbel_noise_to_device_rejects_bad_shape():
+    with pytest.raises(ValueError, match="gumbel_noise"):
+        host_gumbel_noise_to_device("mesh", torch.zeros(1, 2, 3, 4, 5))
+    with pytest.raises(ValueError, match="gumbel_noise"):
+        host_gumbel_noise_to_device("mesh", torch.zeros(1, 2, 4, 6))
+
+
 def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
     calls = {}
 
@@ -1602,6 +1641,37 @@ def test_make_seeded_host_noise_tokens_fn_generates_step_noise(monkeypatch):
     assert torch.equal(calls[0][1], calls[2][1])
     assert not torch.equal(calls[0][1], calls[1][1])
     assert int(calls[0][1].min()) >= 0 and int(calls[0][1].max()) < 16
+
+
+def test_make_host_gumbel_noise_fn_replays_fixed_noise(monkeypatch):
+    calls = []
+
+    def fake_host_gumbel_noise_to_device(mesh_device, noise):
+        calls.append((mesh_device, noise.clone()))
+        noise.reshape(-1)[0] = 99.0
+        return f"device-gumbel-{len(calls)}"
+
+    monkeypatch.setattr(G, "host_gumbel_noise_to_device", fake_host_gumbel_noise_to_device)
+    host_noise = [
+        [torch.full((1, 4, 8), 1.0), torch.full((1, 4, 8), 2.0)],
+        [torch.full((1, 4, 8), 3.0)],
+    ]
+    noise_fn = make_host_gumbel_noise_fn("mesh", host_noise)
+    host_noise[0][0].fill_(88.0)
+
+    assert noise_fn(0)(0) == "device-gumbel-1"
+    assert noise_fn(0)(1) == "device-gumbel-2"
+    assert noise_fn(0)(0) == "device-gumbel-3"
+    assert noise_fn(1)(0) == "device-gumbel-4"
+    assert torch.equal(calls[0][1], torch.full((1, 4, 8), 1.0))
+    assert torch.equal(calls[1][1], torch.full((1, 4, 8), 2.0))
+    assert torch.equal(calls[2][1], torch.full((1, 4, 8), 1.0))
+    assert torch.equal(calls[3][1], torch.full((1, 4, 8), 3.0))
+
+
+def test_make_host_gumbel_noise_fn_rejects_bad_shape():
+    with pytest.raises(ValueError, match="gumbel_noise"):
+        make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3, 4, 5)]])
 
 
 def test_make_seeded_gumbel_noise_fn_generates_block_step_seeds(monkeypatch):
