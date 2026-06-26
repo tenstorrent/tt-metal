@@ -1478,6 +1478,9 @@ void ProgramImpl::finalize_single_dfb_config(
 }
 
 void ProgramImpl::invalidate_dataflow_buffer_allocation() {
+    // Scratchpads stack on the DFB allocators, so a DFB re-layout invalidates their addresses too.
+    // Clear the guard unconditionally (even on the early-return path) so allocate_scratchpads re-runs.
+    this->scratchpads_allocated_ = false;
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }
