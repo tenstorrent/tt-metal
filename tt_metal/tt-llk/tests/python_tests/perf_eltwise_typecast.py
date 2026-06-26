@@ -49,21 +49,23 @@ from helpers.test_variant_parameters import (
 )
 
 # The five (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path
-# re-introduced by issue #46751. Each tuple is (input_format, output_format,
-# dest_acc). The dest_acc choice mirrors the production/functional typecast wiring
-# (32-bit dtypes require 32-bit Dest -> dest_acc=Yes).
+# re-introduced by issue #46751.
+#
+# dest_acc is the production setting EXCEPT for the two rows marked below: their
+# macro fast path is gated !DST_ACCUM_MODE, but ttnn.typecast forces dest_acc=Yes
+# for 32-bit outputs (typecast.cpp:38-41), so production takes the plain loop. Those
+# rows measure the macro in isolation and their speedup is not production-realized.
 _TYPECAST_PERF_CASES = [
-    # Float16_b -> UInt16 routes through calculate_typecast_fp32_to_uint16: the
-    # Compute API maps the Float16_b-in-Dest -> UInt16 cast to that kernel (it does
-    # not load FP32 from L1). Macro on !DST_ACCUM_MODE (16-bit Dest).
+    # Float16_b -> UInt16: routes through calculate_typecast_fp32_to_uint16 (the
+    # Compute API maps Float16_b-in-Dest -> UInt16 to it, no FP32 load from L1).
     (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
-    # calculate_typecast_uint16_to_fp32, macro on !DST_ACCUM_MODE (16-bit Dest).
+    # uint16_to_fp32 -- NOT production-reachable (Float32 out -> dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.No),
-    # calculate_typecast_uint32_to_fp16b, macro mode-agnostic; UInt32 needs 32-bit Dest.
+    # uint32_to_fp16b, macro mode-agnostic; UInt32 needs 32-bit Dest.
     (DataFormat.UInt32, DataFormat.Float16_b, DestAccumulation.Yes),
-    # calculate_typecast_uint16_to_uint32, macro on !DST_ACCUM_MODE (16-bit Dest).
+    # uint16_to_uint32 -- NOT production-reachable (UInt32 out -> dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
-    # calculate_typecast_int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.
+    # int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
 ]
 
