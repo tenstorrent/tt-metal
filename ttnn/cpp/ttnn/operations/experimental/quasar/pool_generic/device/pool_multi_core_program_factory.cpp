@@ -350,8 +350,8 @@ DataflowBufferSpec local_dfb(
         .entry_size = page_size,
         .num_entries = num_pages,
         .data_format_metadata = df,
-        .tile_format_metadata = std::move(tile),
-        .unpack_face_geometry_metadata = std::move(face),
+        .tile_format_metadata = tile,
+        .unpack_face_geometry_metadata = face,
     };
 }
 
