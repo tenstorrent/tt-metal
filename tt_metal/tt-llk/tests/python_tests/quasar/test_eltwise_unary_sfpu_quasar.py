@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import List
 
@@ -19,9 +20,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -525,12 +528,49 @@ def generate_sfpu_unary_combinations():
     return combinations
 
 
+def _split_sfpu_unary_combinations(combinations):
+    """Split the bundled sweep into a compile-time key and its runtime payload.
+
+    input_dimensions only feeds stimuli / TILE_COUNT / golden (runtime) and never the
+    compiled kernel, so it is collapsed in --compile-producer. (mathop, formats,
+    dest_acc, dest_sync, implied_math_format) drive MATH_OP / formats / dest_acc /
+    DEST_SYNC / IMPLIED_MATH_FORMAT and stay compile-time. Grouping reuses the exact
+    generator output (keyed by repr, since FormatConfig is an unhashable dataclass).
+    """
+    payloads_by_key = OrderedDict()
+    combo_by_key = OrderedDict()
+    for (
+        mathop,
+        fmt,
+        dest_acc,
+        dest_sync,
+        implied_math_format,
+        input_dimensions,
+    ) in combinations:
+        compile_combo = (mathop, fmt, dest_acc, dest_sync, implied_math_format)
+        key = repr(compile_combo)
+        combo_by_key.setdefault(key, compile_combo)
+        payloads_by_key.setdefault(key, []).append(input_dimensions)
+    return list(combo_by_key.values()), payloads_by_key
+
+
+SFPU_UNARY_COMPILE_COMBOS, SFPU_UNARY_RUNTIME_PAYLOADS = _split_sfpu_unary_combinations(
+    generate_sfpu_unary_combinations()
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    mathop_formats_dest_acc_sync_implied_math=compile_time(SFPU_UNARY_COMPILE_COMBOS),
+    input_dimensions=runtime(
+        lambda mathop_formats_dest_acc_sync_implied_math: SFPU_UNARY_RUNTIME_PAYLOADS[
+            repr(mathop_formats_dest_acc_sync_implied_math)
+        ]
+    ),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop_formats_dest_acc_sync_implied_math,
+    input_dimensions,
 ):
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
@@ -538,8 +578,8 @@ def test_eltwise_unary_sfpu_quasar(
     square, and the six compare-to-zero modes), validated against the
     UnarySFPUGolden reference.
     """
-    mathop, formats, dest_acc, dest_sync, implied_math_format, input_dimensions = (
-        mathop_formats_dest_acc_sync_implied_math_input_dims[0]
+    mathop, formats, dest_acc, dest_sync, implied_math_format = (
+        mathop_formats_dest_acc_sync_implied_math
     )
 
     cfg = OP_CONFIG_BY_MATHOP[mathop]

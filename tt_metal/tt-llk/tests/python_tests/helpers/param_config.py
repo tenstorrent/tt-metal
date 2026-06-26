@@ -3,6 +3,7 @@
 
 import inspect
 import math
+import warnings
 from itertools import product
 from typing import Iterator, List, Tuple
 
@@ -290,7 +291,96 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
     return list(_solve_recursive(resolved, 0))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Compile-time vs runtime axis classification
+#
+# Every axis of a parametrized sweep either affects the compiled kernel (the
+# generated ELF / variant_id) or only feeds runtime args / stimuli. Wrapping the
+# axis values at the parametrize call records that distinction so --compile-producer
+# can collapse runtime-only-differing variants down to one compile each (see the
+# collapse hook in conftest.py). The wrappers are intentionally tiny: they only
+# tag the underlying values, which are otherwise passed through unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Name of the marker that carries the runtime-axis names to the collapse hook.
+RUNTIME_AXES_MARK = "runtime_axes"
+
+# Transition switch. When True, every axis passed to parametrize() must be wrapped
+# in compile_time()/runtime() or parametrize raises. When False (during migration),
+# a bare axis is treated as compile_time -- the *safe* default: it stays in the
+# compile key, so nothing collapses on it and no coverage can be lost. Flip to True
+# only once every parametrize() call site has been classified.
+STRICT_AXIS_CLASSIFICATION = False
+
+
+class _Axis:
+    """An axis of values tagged compile-time or runtime. See compile_time()/runtime()."""
+
+    __slots__ = ("values", "is_compile_time")
+
+    def __init__(self, values, is_compile_time: bool):
+        self.values = values
+        self.is_compile_time = is_compile_time
+
+
+def compile_time(values):
+    """Mark a parametrize axis as affecting the compiled kernel (the ELF / variant_id).
+
+    Use for anything that flows into TestConfig's formats / dest_acc / templates /
+    unpack_to_dest / disable_format_inference / cpp source, i.e. anything baked into
+    the build. `values` may be a list or a constraint callable, exactly as before.
+    """
+    return _Axis(values, True)
+
+
+def runtime(values):
+    """Mark a parametrize axis as runtime-only (does NOT affect the compiled kernel).
+
+    Use only when every value derived from the axis flows solely into
+    runtimes=[...] / variant_stimuli / golden generation / stimuli shapes. These
+    axes are collapsed in --compile-producer so each ELF is built once instead of
+    once per runtime combination. `values` may be a list or a constraint callable.
+    """
+    return _Axis(values, False)
+
+
+def _unwrap_axes(kwargs: dict) -> Tuple[dict, List[str]]:
+    """Split classified kwargs into (raw name->values for the solver, runtime names).
+
+    Bare (unwrapped) axes default to compile-time; under STRICT_AXIS_CLASSIFICATION
+    an unwrapped axis is an error instead.
+    """
+    raw: dict = {}
+    runtime_names: List[str] = []
+    bare: List[str] = []
+    for name, value in kwargs.items():
+        if isinstance(value, _Axis):
+            raw[name] = value.values
+            if not value.is_compile_time:
+                runtime_names.append(name)
+        else:
+            bare.append(name)
+            raw[name] = value  # default: compile-time (stays in the compile key)
+
+    if bare:
+        if STRICT_AXIS_CLASSIFICATION:
+            raise pytest.UsageError(
+                "parametrize() requires every axis to be wrapped in "
+                "compile_time(...) or runtime(...). Unclassified axes: "
+                f"{', '.join(bare)}"
+            )
+        warnings.warn(
+            "parametrize() axes not classified as compile_time()/runtime() "
+            f"(defaulting to compile_time): {', '.join(bare)}",
+            stacklevel=3,
+        )
+
+    return raw, runtime_names
+
+
 def parametrize(**kwargs: any):
+    raw_kwargs, runtime_names = _unwrap_axes(kwargs)
+    kwargs = raw_kwargs
     parameters = tuple(kwargs.keys())
     parameters_string = ",".join(parameters)
     parameter_values = _params_solve_dependencies(**kwargs)
@@ -313,9 +403,17 @@ def parametrize(**kwargs: any):
     ids = [generate_id(values) for values in parameter_values]
 
     def decorator(test_function):
-        return pytest.mark.parametrize(parameters_string, parameter_values, ids=ids)(
-            test_function
-        )
+        test_function = pytest.mark.parametrize(
+            parameters_string, parameter_values, ids=ids
+        )(test_function)
+        # Record which axes are runtime-only so the --compile-producer collapse hook
+        # can drop variants that differ only on these. Everything not listed here
+        # (including raw pytest.mark.parametrize axes) is treated as compile-time.
+        if runtime_names:
+            test_function = getattr(pytest.mark, RUNTIME_AXES_MARK)(*runtime_names)(
+                test_function
+            )
+        return test_function
 
     return decorator
 

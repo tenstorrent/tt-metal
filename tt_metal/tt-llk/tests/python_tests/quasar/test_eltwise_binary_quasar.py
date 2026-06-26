@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import OrderedDict
+
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -17,9 +19,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -88,53 +92,93 @@ ELTWISE_FORMATS = input_output_formats(
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
 
+# input_dimensions only feeds stimuli / INPUT_TILE_CNT / OUTPUT_TILE_CNT (all runtime),
+# so it is collapsed in --compile-producer. (dest_sync, dest_acc, acc_to_dest) drive
+# DEST_SYNC / dest_acc / the ACC_TO_DEST template and stay compile-time. acc_to_dest's
+# valid domain depends on input_dimensions (tile count must be a multiple of the
+# accumulation depth), so the split is computed per-`formats` and grouped by the
+# compile key's repr (FormatConfig is an unhashable dataclass).
+_ELTWISE_BINARY_GROUPS = {}
+
+
+def _eltwise_binary_groups(formats):
+    cache_key = repr(formats)
+    if cache_key not in _ELTWISE_BINARY_GROUPS:
+        dest_acc_modes = (
+            (DestAccumulation.Yes,)
+            if formats.input_format == DataFormat.Int8
+            else (DestAccumulation.No,)
+        )
+        combo_by_key = OrderedDict()
+        payloads_by_key = OrderedDict()
+        for dest_sync, dims, dest_acc in eltwise_dimensions_dest_sync(dest_acc_modes):
+            for acc_to_dest in valid_acc_to_dest((dest_sync, dims, dest_acc)):
+                compile_combo = (dest_sync, dest_acc, acc_to_dest)
+                key = repr(compile_combo)
+                combo_by_key.setdefault(key, compile_combo)
+                payloads_by_key.setdefault(key, []).append(dims)
+        _ELTWISE_BINARY_GROUPS[cache_key] = (
+            list(combo_by_key.values()),
+            payloads_by_key,
+        )
+    return _ELTWISE_BINARY_GROUPS[cache_key]
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats=ELTWISE_FORMATS,
-    mathop=[
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-        MathOperation.Elwmul,
-    ],
-    # Math fidelity only affects multiplication; for add/sub and Int8 only LoFi is meaningful.
-    math_fidelity=lambda mathop, formats: (
-        [MathFidelity.LoFi]
-        if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
-        or formats.input_format == DataFormat.Int8
-        else [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
-        ]
-    ),
-    implied_math_format=lambda formats: (
+    formats=compile_time(ELTWISE_FORMATS),
+    mathop=compile_time(
         [
-            ImpliedMathFormat.No,
-            ImpliedMathFormat.Yes,
+            MathOperation.Elwadd,
+            MathOperation.Elwsub,
+            MathOperation.Elwmul,
         ]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
     ),
-    dest_sync_dims_dest_acc=lambda formats: (
-        eltwise_dimensions_dest_sync((DestAccumulation.Yes,))
-        if formats.input_format == DataFormat.Int8
-        else eltwise_dimensions_dest_sync((DestAccumulation.No,))
+    # Math fidelity only affects multiplication; for add/sub and Int8 only LoFi is meaningful.
+    math_fidelity=compile_time(
+        lambda mathop, formats: (
+            [MathFidelity.LoFi]
+            if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
+            or formats.input_format == DataFormat.Int8
+            else [
+                MathFidelity.LoFi,
+                MathFidelity.HiFi2,
+                MathFidelity.HiFi3,
+                MathFidelity.HiFi4,
+            ]
+        )
     ),
-    acc_to_dest=valid_acc_to_dest,
-    num_faces=[4],
+    implied_math_format=compile_time(
+        lambda formats: (
+            [
+                ImpliedMathFormat.No,
+                ImpliedMathFormat.Yes,
+            ]
+            if not formats.input_format.is_mx_format()
+            else [ImpliedMathFormat.Yes]
+        )
+    ),
+    dest_sync_dest_acc_acc2dest=compile_time(
+        lambda formats: _eltwise_binary_groups(formats)[0]
+    ),
+    input_dimensions=runtime(
+        lambda formats, dest_sync_dest_acc_acc2dest: _eltwise_binary_groups(formats)[1][
+            repr(dest_sync_dest_acc_acc2dest)
+        ]
+    ),
+    num_faces=runtime([4]),
 )
 def test_eltwise_binary(
     formats,
     mathop,
     math_fidelity,
     implied_math_format,
-    dest_sync_dims_dest_acc,
-    acc_to_dest,
+    dest_sync_dest_acc_acc2dest,
+    input_dimensions,
     num_faces,
     boot_mode=BootMode.DEFAULT,
 ):
-    dest_sync_mode, input_dimensions, dest_acc = dest_sync_dims_dest_acc
+    dest_sync_mode, dest_acc, acc_to_dest = dest_sync_dest_acc_acc2dest
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 

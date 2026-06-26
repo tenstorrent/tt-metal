@@ -18,6 +18,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
+    compile_time,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -56,32 +57,40 @@ def get_valid_dest_acc_unary_broadcast(formats):
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
+    formats=compile_time(
+        input_output_formats(
+            [
+                DataFormat.Float16_b,
+                # DataFormat.Float32, Buggy functionality for Float32 (unpack_to_dest=True) tbd
+                DataFormat.MxFp8R,
+                DataFormat.MxFp8P,
+                DataFormat.MxFp4,
+                DataFormat.MxInt8,
+                DataFormat.MxInt4,
+                DataFormat.MxInt2,
+            ],
+            same=True,
+        )
+    ),
+    dest_acc=compile_time(lambda formats: get_valid_dest_acc_unary_broadcast(formats)),
+    broadcast_type=compile_time(
         [
-            DataFormat.Float16_b,
-            # DataFormat.Float32, Buggy functionality for Float32 (unpack_to_dest=True) tbd
-            DataFormat.MxFp8R,
-            DataFormat.MxFp8P,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ],
-        same=True,
+            BroadcastType.Scalar,
+            BroadcastType.Column,
+            BroadcastType.Row,
+        ]
     ),
-    dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
-    broadcast_type=[
-        BroadcastType.Scalar,
-        BroadcastType.Column,
-        BroadcastType.Row,
-    ],
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
+    implied_math_format=compile_time(
+        lambda formats: (
+            [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+            if not formats.input_format.is_mx_format()
+            else [ImpliedMathFormat.Yes]
+        )
     ),
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
+    dest_sync_mode=compile_time([DestSync.Half, DestSync.Full]),
+    # input_dimensions is baked into the kernel via generate_input_dim (templates),
+    # so it is compile-time.
+    input_dimensions=compile_time(INPUT_DIMENSIONS),
 )
 def test_unary_broadcast_quasar(
     formats,

@@ -19,7 +19,12 @@ from helpers.llk_params import (
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    compile_time,
+    input_output_formats,
+    parametrize,
+    runtime,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -52,7 +57,8 @@ def generate_sfpu_fill_combinations(
 
     Args: Input-output format pairs for float and int paths
 
-    Returns: List of (format, dest_acc, implied_math_format, input_dimensions) tuples
+    Returns: List of (format, dest_acc, implied_math_format) tuples. input_dimensions
+    is a separate runtime axis (it does not affect the compiled kernel).
     """
     combinations = []
 
@@ -72,10 +78,7 @@ def generate_sfpu_fill_combinations(
             continue
 
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-            for input_dimensions in [[32, 32], [64, 64]]:
-                combinations.append(
-                    (fmt, dest_acc, implied_math_format, input_dimensions)
-                )
+            combinations.append((fmt, dest_acc, implied_math_format))
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
     # Int32 is 32-bit → dest_acc Yes; Int16 (16-bit) and Int8/UInt8 (8-bit) → dest_acc No.
@@ -83,10 +86,14 @@ def generate_sfpu_fill_combinations(
     for fmt in int_formats:
         in_fmt = fmt.input_format
         dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
-        for input_dimensions in [[32, 32], [64, 64]]:
-            combinations.append((fmt, dest_acc, ImpliedMathFormat.No, input_dimensions))
+        combinations.append((fmt, dest_acc, ImpliedMathFormat.No))
 
     return combinations
+
+
+# input_dimensions only feeds stimuli / TILE_COUNT / golden (runtime), so it is a
+# separate runtime axis collapsed in --compile-producer.
+SFPU_FILL_INPUT_DIMENSIONS = [[32, 32], [64, 64]]
 
 
 _FILL_FLOAT_INPUTS = [
@@ -120,11 +127,12 @@ SFPU_FILL_INT_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_input_dims=generate_sfpu_fill_combinations(
-        SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS
+    formats_dest_acc_implied_math=compile_time(
+        generate_sfpu_fill_combinations(SFPU_FILL_FLOAT_FORMATS, SFPU_FILL_INT_FORMATS)
     ),
+    input_dimensions=runtime(SFPU_FILL_INPUT_DIMENSIONS),
 )
-def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
+def test_sfpu_fill_quasar(formats_dest_acc_implied_math, input_dimensions):
     """
     Test fill operation on Quasar architecture.
 
@@ -143,9 +151,7 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
     Since fill ignores input values, the input stimuli are arbitrary —
     typed stimuli are still generated so the unpack path sees a valid buffer.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
-    )
+    (formats, dest_acc, implied_math_format) = formats_dest_acc_implied_math
 
     is_int_fill = formats.input_format.is_integer()
 

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import OrderedDict
 from typing import List
 
 import pytest
@@ -22,9 +23,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -141,19 +144,49 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
 )
 
 
+def _split_transpose_dest_combinations(combinations):
+    """Split the bundled sweep into a compile-time key and its runtime payload.
+
+    `dimensions` only feeds stimuli / TILE_COUNT / golden (runtime) and never the
+    compiled kernel, so it is collapsed in --compile-producer. The remaining fields
+    drive formats / dest_acc / DEST_SYNC / MATH_TRANSPOSE_FACES and stay compile-time.
+    Grouping reuses the exact generator output (keyed by repr, since FormatConfig is
+    an unhashable dataclass).
+    """
+    payloads_by_key = OrderedDict()
+    combo_by_key = OrderedDict()
+    for fmt, dest_acc, dest_sync, math_transpose_faces, dimensions in combinations:
+        compile_combo = (fmt, dest_acc, dest_sync, math_transpose_faces)
+        key = repr(compile_combo)
+        combo_by_key.setdefault(key, compile_combo)
+        payloads_by_key.setdefault(key, []).append(dimensions)
+    return list(combo_by_key.values()), payloads_by_key
+
+
+TRANSPOSE_DEST_COMPILE_COMBOS, TRANSPOSE_DEST_RUNTIME_PAYLOADS = (
+    _split_transpose_dest_combinations(
+        generate_qsr_transpose_dest_combinations(TRANSPOSE_DEST_FORMATS)
+    )
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_dims=generate_qsr_transpose_dest_combinations(
-        TRANSPOSE_DEST_FORMATS
+    formats_dest_acc_sync_transpose=compile_time(TRANSPOSE_DEST_COMPILE_COMBOS),
+    implied_math_format=compile_time([ImpliedMathFormat.No, ImpliedMathFormat.Yes]),
+    input_dimensions=runtime(
+        lambda formats_dest_acc_sync_transpose: TRANSPOSE_DEST_RUNTIME_PAYLOADS[
+            repr(formats_dest_acc_sync_transpose)
+        ]
     ),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
 def test_transpose_dest_quasar(
-    formats_dest_acc_sync_transpose_dims,
+    formats_dest_acc_sync_transpose,
     implied_math_format,
+    input_dimensions,
 ):
-    (formats, dest_acc, dest_sync, math_transpose_faces, input_dimensions) = (
-        formats_dest_acc_sync_transpose_dims
+    (formats, dest_acc, dest_sync, math_transpose_faces) = (
+        formats_dest_acc_sync_transpose
     )
 
     data_copy_type = DataCopyType.A2D

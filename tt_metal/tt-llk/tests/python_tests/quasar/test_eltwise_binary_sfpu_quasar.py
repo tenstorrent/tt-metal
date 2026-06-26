@@ -21,10 +21,12 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     InputOutputFormat,
+    compile_time,
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -307,11 +309,11 @@ _FLOAT_OPS = [
     "binary_op, mathop", _FLOAT_OPS, ids=[op for op, _ in _FLOAT_OPS]
 )
 @parametrize(
-    formats_dest_acc=_get_valid_float_formats_dest_acc(),
-    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
-        formats_dest_acc[0]
+    formats_dest_acc=compile_time(_get_valid_float_formats_dest_acc()),
+    implied_math_format=compile_time(
+        lambda formats_dest_acc: _get_valid_implied_math_formats(formats_dest_acc[0])
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
     formats_dest_acc, implied_math_format, tile_indices, binary_op, mathop
@@ -554,15 +556,17 @@ def _run_max_min(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-        dest_acc_for_format=lambda fmt: (
-            (DestAccumulation.Yes,)
-            if fmt.input_format.is_32_bit()
-            else (DestAccumulation.No,)
-        ),
+    formats_dest_acc_implied_math_is_max_input_dims=compile_time(
+        _generate_max_min_combinations(
+            SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+            dest_acc_for_format=lambda fmt: (
+                (DestAccumulation.Yes,)
+                if fmt.input_format.is_32_bit()
+                else (DestAccumulation.No,)
+            ),
+        )
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
@@ -587,12 +591,14 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        dest_acc_for_format=lambda fmt: (DestAccumulation.Yes,),
-        implied_math_formats=(ImpliedMathFormat.No,),
+    formats_dest_acc_implied_math_is_max_input_dims=compile_time(
+        _generate_max_min_combinations(
+            SFPU_BINARY_MAX_MIN_INT32_FORMATS,
+            dest_acc_for_format=lambda fmt: (DestAccumulation.Yes,),
+            implied_math_formats=(ImpliedMathFormat.No,),
+        )
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,

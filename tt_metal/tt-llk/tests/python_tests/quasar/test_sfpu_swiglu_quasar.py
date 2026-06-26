@@ -39,9 +39,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -284,10 +286,12 @@ SFPU_SWIGLU_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math=_generate_sfpu_swiglu_combinations(
-        SFPU_SWIGLU_FORMATS
+    formats_dest_acc_implied_math=compile_time(
+        _generate_sfpu_swiglu_combinations(SFPU_SWIGLU_FORMATS)
     ),
-    distribution=list(_StimulusDistribution),
+    # distribution only shapes the stimuli (via _prepare_swiglu_inputs); it does not
+    # affect the compiled kernel, so it is collapsed in --compile-producer.
+    distribution=runtime(list(_StimulusDistribution)),
 )
 def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     """

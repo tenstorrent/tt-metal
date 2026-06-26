@@ -45,6 +45,7 @@ from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
+from helpers.param_config import RUNTIME_AXES_MARK
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
@@ -168,6 +169,15 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--count-compiles",
+        action="store_true",
+        default=False,
+        help="Collect only: report how many unique kernel compiles the selected "
+        "tests require (grouping variants that differ only on runtime() axes) and "
+        "exit without compiling or running anything.",
+    )
+
+    parser.addoption(
         "--detailed-artefacts",
         action="store_true",
         help="Insert few more compilation flags to produce binary artefacts suitable for debugging",
@@ -277,6 +287,15 @@ _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 
 def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        f"{RUNTIME_AXES_MARK}(*names): names of parametrize axes that do not affect "
+        "the compiled kernel (they only feed runtime args / stimuli). Added "
+        "automatically by helpers.param_config.parametrize for runtime()-wrapped "
+        "axes; in --compile-producer these axes are collapsed so each unique ELF is "
+        "built once instead of once per runtime combination.",
+    )
+
     # Configure loguru log level from CLI option or environment variable.
     log_level = config.getoption("--logging-level", default=None)
     configure_logger(level=log_level)
@@ -414,7 +433,102 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
+def _runtime_axis_names(item) -> set:
+    """Names of axes declared runtime-only via runtime() (carried by the marker)."""
+    names: set = set()
+    for mark in item.iter_markers(name=RUNTIME_AXES_MARK):
+        names.update(mark.args)
+    return names
+
+
+def _compile_key(item) -> str:
+    """Stable key identifying a test's compile variant.
+
+    Two parametrizations sharing this key compile to the same ELF, so in
+    --compile-producer only one needs to be built. The key is the test function
+    plus every parametrized value EXCEPT the declared runtime() axes -- so any
+    axis we don't explicitly know to be runtime (raw pytest.mark.parametrize
+    axes, unclassified axes) stays in the key and is never wrongly collapsed.
+    repr() is used per value; values with an unstable repr simply fail to
+    collapse (the safe direction).
+    """
+    base = item.nodeid.split("[", 1)[0]
+    callspec = getattr(item, "callspec", None)
+    params = getattr(callspec, "params", {}) if callspec else {}
+    runtime_only = _runtime_axis_names(item)
+    kept = ";".join(
+        f"{name}={value!r}"
+        for name, value in sorted(params.items())
+        if name not in runtime_only
+    )
+    return f"{base}|{kept}"
+
+
+def _collapse_runtime_only_variants(config, items) -> None:
+    """In --compile-producer, keep one item per unique compile key."""
+    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        return
+
+    total = len(items)
+    seen: set = set()
+    kept = []
+    deselected = []
+    for item in items:
+        # Only collapse tests that declared at least one runtime() axis; everything
+        # else is left untouched (its key would be unique anyway).
+        if not _runtime_axis_names(item):
+            kept.append(item)
+            continue
+        key = _compile_key(item)
+        if key in seen:
+            deselected.append(item)
+        else:
+            seen.add(key)
+            kept.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = kept
+        logger.info(
+            "compile-dedup: collapsed {} -> {} items "
+            "({} runtime-only duplicates deselected)",
+            total,
+            len(kept),
+            len(deselected),
+        )
+
+
+def _report_compile_count(config, items) -> None:
+    """Print how many unique compiles the selected tests need, then exit."""
+    by_test: dict = {}
+    total_keys: set = set()
+    for item in items:
+        base = item.nodeid.split("[", 1)[0]
+        key = _compile_key(item)
+        total_keys.add(key)
+        by_test.setdefault(base, [set(), 0])
+        by_test[base][0].add(key)
+        by_test[base][1] += 1
+
+    lines = ["", "=== compile count (unique ELFs per test) ==="]
+    for base in sorted(by_test):
+        keys, count = by_test[base]
+        lines.append(f"  {len(keys):>6} / {count:<6} compiles/items  {base}")
+    lines.append(
+        f"TOTAL: {len(total_keys)} compiles for {len(items)} collected items "
+        f"({len(items) - len(total_keys)} collapsible runtime-only duplicates)"
+    )
+    print("\n".join(lines))
+    pytest.exit("--count-compiles: collection-only report complete", returncode=0)
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    # Run before pytest-split / xdist so they distribute the reduced set.
+    if config.getoption("--count-compiles", default=False):
+        _report_compile_count(config, items)
+    _collapse_runtime_only_variants(config, items)
+
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
