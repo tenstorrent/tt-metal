@@ -1150,6 +1150,57 @@ constexpr uint32_t largest_factor_le(uint32_t n, uint32_t max_val) {
     return 1;
 }
 
+// --- lightweight-mask predicates (single source of truth for "does this op / iter stamp a mask") ---
+
+// Compile-time: does this op configuration ever use the structured lightweight (causal / padding /
+// sliding-window) mask? Also selects the lightweight branch via `if constexpr`.
+template <bool ring_mode, bool is_causal, bool use_padded_mask, uint32_t sliding_window_size>
+constexpr bool sdpa_uses_lightweight_mask() {
+    return ring_mode || is_causal || use_padded_mask || sliding_window_size > 0;
+}
+
+// Runtime: does *this* K-chunk iteration actually stamp the lightweight mask?
+inline bool sdpa_lightweight_mask_stamped(
+    bool kv_pad_rotation_enabled, bool causal_applies, bool apply_sliding_window, bool partial_tile_mask) {
+    return kv_pad_rotation_enabled || causal_applies || apply_sliding_window || partial_tile_mask;
+}
+
+// Can the reduce's first half (run()#1, cols [0, active_Sk/2)) overlap the second-half pack? Only if
+// no masked column lands there: either nothing is stamped (no_mask_this_iter), or — on the plain
+// contiguous causal path — this q_subblock's lowest diagonal column (first_q_tile = q_subblock *
+// qkt_subblock_h) is already in the second half. A causal mask writes only cols >= the diagonal, and
+// a fully-visible column's value is its raw score, so reading it pre-mask is correct. Every other
+// variant (sliding window, kv-pad rotation, K straddle, padding/partial, provided mask) -> false.
+template <
+    bool is_causal_sdpa,
+    bool kv_pad_rotation_enabled,
+    uint32_t sliding_window_size,
+    bool use_provided_mask,
+    uint32_t Sk_chunk_t>
+inline bool sdpa_first_half_unmasked(
+    bool no_mask_this_iter,
+    bool apply_causal,
+    bool apply_sliding_window,
+    bool apply_mask,
+    uint32_t lw_partial_tile_idx,
+    uint32_t mask_straddle_col,
+    uint32_t mask_q_start_tile,
+    uint32_t mask_k_start_tile,
+    uint32_t first_q_tile,
+    uint32_t active_Sk) {
+    if (no_mask_this_iter) {
+        return true;
+    }
+    if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled && sliding_window_size == 0 && !use_provided_mask) {
+        const bool plain_causal_stamp = apply_causal && !apply_sliding_window && mask_straddle_col == 0 &&
+                                        active_Sk == Sk_chunk_t && !(apply_mask && lw_partial_tile_idx > 0);
+        const int32_t first_diag_col =
+            static_cast<int32_t>(mask_q_start_tile + first_q_tile) - static_cast<int32_t>(mask_k_start_tile);
+        return plain_causal_stamp && first_diag_col >= static_cast<int32_t>(active_Sk / 2);
+    }
+    return false;
+}
+
 /**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
@@ -1260,31 +1311,36 @@ static void sdpa_inner_loop_step(
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
 
-        // Mask predicates hoisted here (single source of truth, reused by the mask branch below).
+        // Mask plan for this q_subblock (single source of truth; reused by the mask stamp below).
         constexpr bool uses_lightweight_mask =
-            ring_mode || is_causal_sdpa || use_padded_mask || sliding_window_size > 0;
-        const bool should_apply_lightweight_mask = kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) ||
-                                                   apply_sliding_window || (apply_mask && lw_partial_tile_idx > 0);
+            sdpa_uses_lightweight_mask<ring_mode, is_causal_sdpa, use_padded_mask, sliding_window_size>();
+        const bool should_apply_lightweight_mask = sdpa_lightweight_mask_stamped(
+            kv_pad_rotation_enabled,
+            is_causal_sdpa && apply_causal,
+            apply_sliding_window,
+            apply_mask && lw_partial_tile_idx > 0);
         const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
 
-        // run()#1 reads only the first half [0, active_Sk/2), so it can overlap the second-half pack
-        // whenever no masked column lands there: either nothing is stamped, or this is a plain causal
-        // stamp whose lowest diagonal column (this q_subblock's earliest query row) is already in the
-        // second half. A causal mask writes only columns >= the diagonal, and a fully-visible column's
-        // value is just its raw score, so reading it pre-mask is correct. Restricted to the contiguous
-        // causal fast path; every other variant (sliding window, kv-pad rotation, K straddle,
-        // padding/partial, provided mask) keeps the conservative no-overlap fallback.
-        bool causal_first_half_unmasked = false;
-        if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled && sliding_window_size == 0 && !use_provided_mask) {
-            const bool plain_causal_stamp = apply_causal && !apply_sliding_window && mask_straddle_col == 0 &&
-                                            active_Sk == Sk_chunk_t && !(apply_mask && lw_partial_tile_idx > 0);
-            const int32_t diag0 = static_cast<int32_t>(mask_q_start_tile + q_subblock * qkt_subblock_h) -
-                                  static_cast<int32_t>(mask_k_start_tile);
-            causal_first_half_unmasked = plain_causal_stamp && diag0 >= static_cast<int32_t>(active_Sk / 2);
-        }
-        const bool overlap_first_half = reduce_trigger && (no_mask_this_iter || causal_first_half_unmasked);
-        // Subblock covering the last first-half column [active_Sk/2 - 1]; PACK posts the first-half token after it.
-        // Committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
+        // run()#1 (the reduce's first half) may overlap the second-half pack only if no masked
+        // column lands in [0, active_Sk/2) — see sdpa_first_half_unmasked.
+        const bool overlap_first_half = reduce_trigger && sdpa_first_half_unmasked<
+                                                              is_causal_sdpa,
+                                                              kv_pad_rotation_enabled,
+                                                              sliding_window_size,
+                                                              use_provided_mask,
+                                                              Sk_chunk_t>(
+                                                              no_mask_this_iter,
+                                                              apply_causal,
+                                                              apply_sliding_window,
+                                                              apply_mask,
+                                                              lw_partial_tile_idx,
+                                                              mask_straddle_col,
+                                                              mask_q_start_tile,
+                                                              mask_k_start_tile,
+                                                              q_subblock * qkt_subblock_h,
+                                                              active_Sk);
+        // PACK posts the first-half token after the subblock covering the last first-half column
+        // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
 
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
