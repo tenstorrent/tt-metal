@@ -34,7 +34,7 @@ def torch_masked_bincount(
         [n_routed_experts] int tensor of masked histogram counts.
     """
     counts = torch.bincount(indices.flatten().to(torch.int64), minlength=n_routed_experts).to(torch.int32)
-    mask = (expert_dispatch_table >= 0).to(torch.int32)
+    mask = (expert_dispatch_table[:n_routed_experts] >= 0).to(torch.int32)
     return counts[:n_routed_experts] * mask
 
 

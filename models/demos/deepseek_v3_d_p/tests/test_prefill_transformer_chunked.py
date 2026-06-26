@@ -308,7 +308,7 @@ def run_chunked_transformer_padded(
         _, _, layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
-            number_of_non_padded_tokens=isl,
+            actual_isl=isl,
             actual_start=kv_actual,
             actual_end=valid_end,
             cache_user_id=0,
@@ -489,7 +489,7 @@ def run_chunked_transformer(
         _, _, layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
-            number_of_non_padded_tokens=CHUNK,
+            actual_isl=CHUNK,
             actual_start=kv_actual,
             actual_end=kv_actual + CHUNK,
             cache_user_id=0,

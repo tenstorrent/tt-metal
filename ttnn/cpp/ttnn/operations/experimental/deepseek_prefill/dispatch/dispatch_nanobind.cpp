@@ -61,6 +61,12 @@ void bind_dispatch(nb::module_& mod) {
             max_dispatch_buffer_token_size (int): Total token capacity of the flat dispatch
                 buffer per chip (shared across all local experts via dynamic offsets).
                 Used as the in-kernel bounds check ceiling.
+            padding_config (ttnn.Tensor, optional): Per-device [local_real_tokens, pad_side]
+                config (uint32, ROW_MAJOR, shape (1, 2) per device). When provided, the
+                dispatch kernels read it on device and bound their token loop to the real
+                (unpadded) tokens instead of the full seq_len_per_chip. Must be the same
+                tensor the gate used to sentinel-mark padded tokens. Defaults to None
+                (process the full token range).
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation.
             cluster_axis (int, optional): Mesh axis along which dispatch communicates
@@ -99,6 +105,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("num_experts_per_tok"),
         nb::arg("metadata_len"),
         nb::arg("max_dispatch_buffer_token_size"),
+        nb::arg("padding_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
