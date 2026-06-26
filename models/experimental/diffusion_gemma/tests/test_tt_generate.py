@@ -14,6 +14,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     generate_blocks,
     generate_from_prompt_tokens,
     generate_text,
+    generate_text_from_checkpoint_state,
     generation_sequences,
     generation_token_ids,
     host_canvas_to_device,
@@ -412,6 +413,43 @@ def test_generate_text_can_build_logits_after_prompt_prefill():
     assert builder_kwargs["page_table"] == "page-table"
     assert builder_kwargs["page_tables_per_layer"] == ["layer-pages"]
     assert calls[2][0:3] == ("blocks", "model", "built-logits")
+
+
+def test_generate_text_from_checkpoint_state_builds_logits_and_delegates():
+    calls = {}
+    result = object()
+
+    def fake_builder_factory(dg_state_dict, **kwargs):
+        calls["builder"] = (dg_state_dict, kwargs)
+        return "builder"
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = (tt_model, logits_fn, tokenizer, prompt, kwargs)
+        return result
+
+    out = generate_text_from_checkpoint_state(
+        "model",
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=2,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        adapter_kwargs={"adapter": "kwarg"},
+        max_new_tokens=8,
+        logits_fn_builder_factory=fake_builder_factory,
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out is result
+    assert calls["builder"] == ({"raw": "state"}, {"adapter": "kwarg"})
+    assert calls["generate"][0:4] == ("model", None, "tokenizer", "hello")
+    kwargs = calls["generate"][4]
+    assert kwargs["num_blocks"] == 2
+    assert kwargs["config"].canvas_length == 4
+    assert kwargs["init_canvas_fn"] == "init"
+    assert kwargs["logits_fn_builder"] == "builder"
+    assert kwargs["max_new_tokens"] == 8
 
 
 def test_generation_sequences_appends_prompt_and_generated_tokens():

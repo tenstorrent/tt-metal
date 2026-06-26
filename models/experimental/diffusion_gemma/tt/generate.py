@@ -19,6 +19,9 @@ import ttnn
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
+from models.experimental.diffusion_gemma.tt.denoise_forward import (
+    make_generation_logits_fn_builder_from_checkpoint_state,
+)
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
 
 
@@ -604,4 +607,36 @@ def generate_text(
         generation=generation,
         sequences=generation_sequences(prompt_tokens, generation),
         text=text,
+    )
+
+
+def generate_text_from_checkpoint_state(
+    tt_model,
+    tokenizer,
+    prompt,
+    *,
+    dg_state_dict,
+    num_blocks: int,
+    config: DiffusionConfig,
+    init_canvas_fn: Callable[[int, int], object],
+    adapter_kwargs: dict | None = None,
+    logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
+    generate_text_fn=generate_text,
+    **generate_kwargs,
+) -> DeviceTextGeneration:
+    """Run prompt-to-text generation using raw DiffusionGemma checkpoint state."""
+    logits_fn_builder = logits_fn_builder_factory(
+        dg_state_dict,
+        **(adapter_kwargs or {}),
+    )
+    return generate_text_fn(
+        tt_model,
+        None,
+        tokenizer,
+        prompt,
+        num_blocks=num_blocks,
+        config=config,
+        init_canvas_fn=init_canvas_fn,
+        logits_fn_builder=logits_fn_builder,
+        **generate_kwargs,
     )
