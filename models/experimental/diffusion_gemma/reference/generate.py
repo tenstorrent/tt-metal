@@ -40,6 +40,23 @@ class Generation(NamedTuple):
     trajectories: List[DenoiseTrajectory]  # one per block
 
 
+def _validate_generate_args(
+    prompt_tokens: torch.Tensor,
+    *,
+    num_blocks: int,
+    canvas_len: int,
+    vocab_size: int,
+) -> None:
+    if prompt_tokens.dim() != 2:
+        raise ValueError("prompt_tokens must have shape [batch, seq_len]")
+    if num_blocks < 0:
+        raise ValueError("num_blocks must be non-negative")
+    if canvas_len <= 0:
+        raise ValueError("diffusion_config.canvas_length must be positive")
+    if vocab_size <= 0:
+        raise ValueError("vocab_size must be positive")
+
+
 def _validate_canvas_shape(canvas: torch.Tensor, *, batch: int, canvas_len: int) -> None:
     if canvas.shape != (batch, canvas_len):
         raise ValueError(f"init_canvas_fn must return shape [{batch}, {canvas_len}]")
@@ -68,8 +85,9 @@ def generate_blocks(
     ``init_canvas_fn`` to replay exact per-block canvases in device-vs-reference
     acceptance tests.
     """
-    batch = prompt_tokens.shape[0]
     canvas_len = diffusion_config.canvas_length
+    _validate_generate_args(prompt_tokens, num_blocks=num_blocks, canvas_len=canvas_len, vocab_size=vocab_size)
+    batch = prompt_tokens.shape[0]
     prompt_len = prompt_tokens.shape[1]
 
     prefix = prompt_tokens

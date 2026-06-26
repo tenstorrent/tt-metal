@@ -181,6 +181,22 @@ def test_generation_is_deterministic_under_fixed_generator():
     assert torch.equal(a.generated, b.generated)
 
 
+@pytest.mark.parametrize(
+    "prompt,num_blocks,config,vocab,match",
+    [
+        (torch.zeros(4, dtype=torch.long), 1, _cfg(4), 16, "prompt_tokens must have shape"),
+        (torch.zeros(1, 4, dtype=torch.long), -1, _cfg(4), 16, "num_blocks must be non-negative"),
+        (torch.zeros(1, 4, dtype=torch.long), 1, _cfg(0), 16, "canvas_length must be positive"),
+        (torch.zeros(1, 4, dtype=torch.long), 1, _cfg(4), 0, "vocab_size must be positive"),
+    ],
+)
+def test_generate_blocks_rejects_bad_arguments(prompt, num_blocks, config, vocab, match):
+    model = _PrefixDependentModel(1, max(config.canvas_length, 1), max(vocab, 1))
+
+    with pytest.raises(ValueError, match=match):
+        generate_blocks(model, prompt, num_blocks, config, vocab, generator=_gen(3))
+
+
 def test_can_replay_fixed_initial_canvases(monkeypatch):
     batch, canvas_len, vocab, blocks = 1, 4, 16, 2
     prompt = torch.zeros(batch, canvas_len, dtype=torch.long)
