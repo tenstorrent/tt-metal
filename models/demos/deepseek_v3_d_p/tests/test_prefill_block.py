@@ -118,6 +118,12 @@ def run_model(
     if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
+    # moe-gate_host_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
+    # where the device grouped-gate's hard 256-expert requirement forces the host gate). It is not CI
+    # coverage; the real device gate already covers the 256-expert meshes that run in CI.
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode == GateComputeMode.HOST_ALL:
+        pytest.skip("moe-gate_host_all is a local-only testing aid (sub-256-expert); not run in CI")
+
     # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
     # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
     # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and

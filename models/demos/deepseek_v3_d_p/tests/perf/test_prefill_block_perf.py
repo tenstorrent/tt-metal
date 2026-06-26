@@ -20,20 +20,12 @@ selected mesh topology and `DEEPSEEK_V3_HF_MODEL` pointing to the pretrained che
 """
 
 import os
-import re
 
 import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import run_model_device_perf_test_with_merge
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
-
-# Optional ISL sweep override: set DS_PERF_ISL=isl_5k (or isl_1k/isl_6k4/isl_12k8/isl_25k) to
-# retarget EVERY perf entry below to that ISL instead of its native one, to measure device perf at
-# that length. 5120 (5*1024) fits L1 on all meshes (8x4=640/chip, 4x4=1280, 2x4=2560). The per-entry
-# expected_ns stays calibrated for the native ISL, so the threshold check will FAIL under the
-# override — that's expected; the run still surfaces the measured perf. Unset = native ISL + check.
-_ISL_OVERRIDE = os.environ.get("DS_PERF_ISL")
 
 # 4x4 sub-torus carving: 16 of the galaxy's 32 chips + the Ring-4-on-Y graph descriptor.
 # Applied via run_model_device_perf_test_with_merge(extra_env=...) (which sets os.environ
@@ -244,12 +236,6 @@ def test_deepseek_v3_prefill_block_perf(
         # shell — the loop test then halves to 128 experts and forces HOST_ALL. (Forcing 256 experts
         # on the device gate currently stalls on the ring; see the parametrize note above.)
         extra_env["DS_4X4_FULL_EXPERTS"] = ""
-
-    # DS_PERF_ISL sweep: retarget this entry's ISL to measure perf at a different length. The
-    # per-entry expected_ns is calibrated for the native ISL, so the threshold check will FAIL —
-    # that's fine, the run still surfaces the measured device perf at the new length.
-    if _ISL_OVERRIDE:
-        command = re.sub(r"isl_\w+", _ISL_OVERRIDE, command)
 
     run_model_device_perf_test_with_merge(
         command=command,

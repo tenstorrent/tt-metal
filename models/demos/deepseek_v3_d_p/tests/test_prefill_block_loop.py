@@ -12,6 +12,7 @@ TT hardware at each step. Generates a PCC-vs-iteration plot per layer.
 This is observational/diagnostic — no PCC threshold assertions.
 """
 
+import copy
 import os
 
 import matplotlib
@@ -154,7 +155,14 @@ def test_prefill_block_loop(
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
 
-    config = hf_config
+    # isl_2k56 / isl_12k8 exist only for the 4x4 sub-torus sweep and are not part of CI coverage on
+    # any mesh; skip them under CI.
+    if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and isl_total in (2560, 12800):
+        pytest.skip("isl_2k56 / isl_12k8 are subtorus-4x4-only; not run in CI")
+
+    # Deep-copy the HF config: hf_config returns a process-wide lru_cache'd object, so mutating it in
+    # place (max_seq_len here, n_routed_experts below) would leak into later tests in the same session.
+    config = copy.deepcopy(hf_config)
     config.max_seq_len = isl_total
 
     sp_axis = 0
