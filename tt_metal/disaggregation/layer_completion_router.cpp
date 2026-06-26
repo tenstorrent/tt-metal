@@ -118,7 +118,19 @@ void LayerCompletionRouter::run_master() {
         ingest(m);
     }
 
-    // Cancel still-outstanding receives so MPI can release them at teardown.
+    // Final sweep: harvest any subordinate completion that already landed in its receive buffer
+    // before stop_ was observed — otherwise the cancel() below would discard a physically-arrived
+    // message (and a lost seq head-of-line-blocks the reorder buffer). Then cancel whatever is still
+    // genuinely outstanding so MPI can release it. (Subordinate sends still in flight at teardown are
+    // the separately-tracked uncoordinated-teardown gap.)
+    for (std::size_t i = 0; i < subs.size(); ++i) {
+        if (reqs[i] && reqs[i]->test().has_value()) {
+            LayerCompletionMessage recv{};
+            std::memcpy(&recv, bufs[i].data(), sizeof(recv));
+            ingest(recv);
+            reqs[i].reset();
+        }
+    }
     for (auto& r : reqs) {
         if (r && r->active()) {
             r->cancel();

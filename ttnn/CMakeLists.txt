@@ -532,8 +532,10 @@ if(WITH_PYTHON_BINDINGS)
                 "${PROJECT_BINARY_DIR}/models/demos/test"
             BUILD_RPATH
                 "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            INSTALL_RPATH
-                "${PROJECT_BINARY_DIR}/lib"
+            # No INSTALL_RPATH: this test-only module is not installed (no install(TARGETS) rule); it
+            # is loaded straight from the build tree via the source-dir symlink. A hardcoded build-path
+            # INSTALL_RPATH would only mislead if someone later adds an install rule — set $ORIGIN-based
+            # RPATH (like _ttnn/ttnncpp) at that point.
             ADDITIONAL_CLEAN_FILES
                 "${PROJECT_SOURCE_DIR}/models/demos/test/_prefill_test.so"
     )
