@@ -42,11 +42,7 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     const CoreCoord reduce_scatter_core_grid_offset;
 
     // Compile-time attributes select exactly the program-structure-affecting fields for the default
-    // program-cache reflection hash + canonical key. This mirrors the field set of the (now-removed)
-    // custom compute_program_hash. Excluded as runtime-only / non-hashable: `fused_ternary_scalar`
-    // (scalar passed to runtime args), `semaphore` (std::vector<GlobalSemaphore>, runtime object).
-    // `barrier_semaphore` and `sub_device_id` are reduced to a presence bool (only their existence
-    // affects program structure; the GlobalSemaphore object itself is runtime-only).
+    // program-cache reflection hash + canonical key.
     static constexpr auto attribute_names = std::forward_as_tuple(
         "matmul_struct",
         "dim",
