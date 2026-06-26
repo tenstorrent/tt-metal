@@ -1,0 +1,2 @@
+{"event":"read_kernel_files","details":"Read all three softmax kernel files: softmax_reader.cpp, softmax_writer.cpp, softmax_compute.cpp","ts":"2026-06-26T00:24:50+00:00"}
+{"event":"rank-handling-analysis-complete","details":"Investigated unsqueeze_to_4D, squeeze_from_4D, Shape.to_rank, from_torch, and softmax program descriptor rank handling across the codebase","ts":"2026-06-26T00:27:28+00:00"}
