@@ -25,6 +25,11 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_thread_pool.cpp
     test_dispatch_context.cpp
     utils.cpp
+    # The layer-completion impls live with the pipelined-prefill feature (models/demos/...); compile
+    # them in so the queue/reorder/router gtests link without pulling in the feature's standalone .so.
+    ${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill/layer_completion_queue.cpp
+    ${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill/layer_completion_reorder_buffer.cpp
+    ${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill/layer_completion_router.cpp
 )
 # MPI sub-context tests require the MPI distributed build (matches tt_metal/distributed USE_MPI).
 if(ENABLE_DISTRIBUTED)
@@ -49,8 +54,9 @@ target_include_directories(
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tt_metal/distributed
-        ${PROJECT_SOURCE_DIR}/tt_metal/disaggregation # layer_completion_ring_layout.hpp (layout test)
+        ${PROJECT_SOURCE_DIR}/tt_metal/distributed # named_shm.hpp (used by the layer_completion queue impl)
+        # layer-completion feature headers (queue/reorder/router/ring_layout/message)
+        ${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill
 )
 
 set_target_properties(
