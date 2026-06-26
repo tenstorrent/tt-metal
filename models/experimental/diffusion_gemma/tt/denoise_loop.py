@@ -53,7 +53,7 @@ def entropy_budget_accept(entropy, budget: float):
     budget_t = ttnn.full(
         list(entropy.shape),
         float(budget),
-        dtype=ttnn.float32,
+        dtype=entropy.get_dtype(),
         layout=ttnn.TILE_LAYOUT,
         device=entropy.device(),
     )

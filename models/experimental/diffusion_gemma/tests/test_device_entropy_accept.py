@@ -130,3 +130,25 @@ def test_production_entropy_budget_accept_guards_device_sort_at_canvas_256(devic
     finally:
         dev_t.deallocate(True)
         ent.deallocate(True)
+
+
+def test_production_entropy_budget_accept_uses_entropy_dtype_for_budget(device):
+    torch.manual_seed(47464)
+    batch, length = 1, 256
+    entropy = torch.rand(batch, length) + torch.arange(length).float() * 1e-4
+    entropy_bf16 = entropy.to(torch.bfloat16).float()
+    budget = _budget_for_fraction(entropy_bf16, 0.5)
+    ref = S.entropy_budget_accept(entropy_bf16, budget, min_accept=0)
+
+    ent = ttnn.from_torch(entropy_bf16, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    dev_t = entropy_budget_accept(ent, budget)
+    dev = ttnn.to_torch(dev_t) > 0.5
+
+    try:
+        assert int(dev.sum()) == int(ref.sum())
+        assert torch.equal(
+            dev, ref
+        ), f"bf16 production accept mask mismatch: {int((dev != ref).sum())} of {length} differ"
+    finally:
+        dev_t.deallocate(True)
+        ent.deallocate(True)
