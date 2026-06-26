@@ -659,13 +659,21 @@ class LTXPipeline:
 
     @staticmethod
     def _build_transformer_cache_name(checkpoint_path: str, lora_specs: list[LoraSpec]) -> str:
-        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and
-        base weights don't alias in ``TT_DIT_CACHE_DIR``."""
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base
+        weights don't alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached
+        tensorbins carry their dtype — a bf8 quant run and the bf16 baseline must use
+        separate dirs or the loader dtype-clashes on a stale-precision cache hit."""
         base = os.path.basename(checkpoint_path).removesuffix(".safetensors")
-        if not lora_specs:
-            return base
-        tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
-        return f"{base}.lora-{tag}"
+        if lora_specs:
+            tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
+            base = f"{base}.lora-{tag}"
+        preset = os.environ.get("LTX_QUANT", "").strip()
+        if preset:
+            from .quant_config import QuantConfig
+
+            if callable(getattr(QuantConfig, preset, None)):
+                base = f"{base}.q-{preset}"
+        return base
 
     def _new_transformer(self) -> LTXTransformerModel:
         return LTXTransformerModel(
