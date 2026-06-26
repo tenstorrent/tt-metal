@@ -7,8 +7,8 @@
 #include <cstdio>
 #include <string>
 
-#include <internal/disaggregation/layer_completion_message.hpp>
-#include <internal/disaggregation/layer_completion_queue.hpp>
+#include <layer_completion_message.hpp>
+#include <layer_completion_queue.hpp>
 
 namespace tt::tt_metal::distributed::test {
 

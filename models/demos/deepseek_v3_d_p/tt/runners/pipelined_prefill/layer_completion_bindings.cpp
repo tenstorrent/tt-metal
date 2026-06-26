@@ -1,11 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include "layer_completion.hpp"
+//
+// Standalone nanobind module (`_layer_completion`) for the pipelined-prefill layer-completion
+// aggregation feature. Deliberately NOT part of the ttnn module/API: this machinery is used only by
+// the deepseek_v3_d_p pipelined-prefill runner, so it ships as its own .so next to the runner (see
+// __init__.py) and links only TT::Metalium. Binds the host-local ring (LayerCompletionQueue), the
+// per-host router (LayerCompletionRouter), and the test-only scheduler stand-in consumer
+// (LayerCompletionConsumer).
 
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -16,17 +20,21 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include <internal/disaggregation/layer_completion_message.hpp>
-#include <internal/disaggregation/layer_completion_queue.hpp>
-#include <internal/disaggregation/layer_completion_router.hpp>
+#include "layer_completion_consumer.hpp"
+#include "layer_completion_message.hpp"
+#include "layer_completion_queue.hpp"
+#include "layer_completion_router.hpp"
 
-namespace ttnn::layer_completion {
+namespace nb = nanobind;
 
-void py_module_types(nb::module_& mod) {
+NB_MODULE(_layer_completion, mod) {
+    using tt::tests::prefill_test::LayerCompletionConsumer;
     using tt::tt_metal::distributed::LayerCompletionMessage;
     using tt::tt_metal::distributed::LayerCompletionQueue;
     using tt::tt_metal::distributed::LayerCompletionRouter;
     using tt::tt_metal::distributed::LayerCompletionRouterConfig;
+
+    mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer. Not a ttnn API.";
 
     nb::class_<LayerCompletionQueue>(mod, "LayerCompletionQueue")
         .def_static(
@@ -98,8 +106,24 @@ void py_module_types(nb::module_& mod) {
         .def("stop", &LayerCompletionRouter::stop, "Idempotent: stop + join the listener thread.")
         .def_prop_ro("processed", &LayerCompletionRouter::processed)
         .def_prop_ro("is_master", &LayerCompletionRouter::is_master);
+
+    nb::class_<LayerCompletionConsumer>(mod, "LayerCompletionConsumer")
+        .def(
+            "__init__",
+            [](LayerCompletionConsumer* self,
+               const std::string& channel_shm_name,
+               uint64_t expected,
+               uint32_t connect_timeout_ms,
+               uint64_t log_step) {
+                new (self) LayerCompletionConsumer(channel_shm_name, expected, connect_timeout_ms, log_step);
+            },
+            nb::arg("channel_shm_name"),
+            nb::arg("expected"),
+            nb::arg("connect_timeout_ms") = 30'000u,
+            nb::arg("log_step") = 61u,
+            "Test/scheduler stand-in: connect to the scheduler counter channel and drain it on a NATIVE "
+            "C++ thread (GIL-immune), self-terminating once `expected` completions are drained.")
+        .def("stop", &LayerCompletionConsumer::stop, "Idempotent: stop + join + final drain + shutdown channel.")
+        .def_prop_ro("total", &LayerCompletionConsumer::total)
+        .def_prop_ro("reached_expected", &LayerCompletionConsumer::reached_expected);
 }
-
-void py_module(nb::module_& /* mod */) {}
-
-}  // namespace ttnn::layer_completion

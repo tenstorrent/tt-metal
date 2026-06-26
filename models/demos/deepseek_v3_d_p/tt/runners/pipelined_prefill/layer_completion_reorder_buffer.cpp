@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/disaggregation/layer_completion_reorder_buffer.hpp>
+#include "layer_completion_reorder_buffer.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 

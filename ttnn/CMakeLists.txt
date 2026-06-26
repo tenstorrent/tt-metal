@@ -492,61 +492,61 @@ if(WITH_PYTHON_BINDINGS)
             tt_pybinds
     )
 
-    # ── Test-only `_prefill_test` extension ───────────────────────────────────
-    # A standalone nanobind module for the layer-completion scheduler stand-in
-    # (LayerCompletionConsumer). Deliberately NOT linked into _ttnn and NOT on the
-    # ttnn API — it links only TT::Metalium and is imported via
-    # `models.demos.test.prefill_test`. Built here (where the nanobind tooling and
-    # TT::Metalium are in scope); sources live under models/demos/test/ alongside the
-    # Python wrapper. Like _ttnn, the .so is emitted into the BUILD tree and a symlink
-    # is dropped into the source package dir so `import models.demos.test._prefill_test`
-    # resolves (the symlink is covered by the repo-root `*.so` gitignore).
-    # Built the same way as the `ttnn` module above: link TT::Nanobind (which already carries the
-    # nanobind + Python3 include dirs) rather than nanobind_add_module (which would spin up its own
-    # support lib lacking Python.h). Target name `prefill_test_ext` + PREFIX "_" → `_prefill_test.so`.
-    add_library(prefill_test_ext SHARED)
+    # ── Pipelined-prefill `_layer_completion` extension ───────────────────────
+    # A standalone nanobind module for the deepseek_v3_d_p pipelined-prefill layer-completion feature
+    # (host-local ring + reorder buffer + MPI router + the test-only consumer). Deliberately NOT linked
+    # into _ttnn and NOT on the ttnn API — it is exclusive to that runner, links only TT::Metalium, and
+    # is imported via models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill. Built here (the only
+    # scope with nanobind tooling + TT::Metalium); sources live next to the runner. Like _ttnn, the .so
+    # is emitted into the BUILD tree and symlinked into the source package dir (covered by the repo-root
+    # `*.so` gitignore). Links TT::Nanobind (carries the nanobind + Python3 include dirs) and needs
+    # tt_metal/distributed on the include path for named_shm.hpp (a distributed-internal header).
+    set(LAYER_COMPLETION_DIR ${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill)
+    add_library(layer_completion_ext SHARED)
     target_sources(
-        prefill_test_ext
+        layer_completion_ext
         PRIVATE
-            ${PROJECT_SOURCE_DIR}/models/demos/test/prefill_test_module.cpp
-            ${PROJECT_SOURCE_DIR}/models/demos/test/layer_completion_consumer.cpp
+            ${LAYER_COMPLETION_DIR}/layer_completion_bindings.cpp
+            ${LAYER_COMPLETION_DIR}/layer_completion_queue.cpp
+            ${LAYER_COMPLETION_DIR}/layer_completion_reorder_buffer.cpp
+            ${LAYER_COMPLETION_DIR}/layer_completion_router.cpp
+            ${LAYER_COMPLETION_DIR}/layer_completion_consumer.cpp
     )
     target_link_libraries(
-        prefill_test_ext
+        layer_completion_ext
         PRIVATE
             TT::Nanobind
             TT::Metalium
     )
-    nanobind_compile_options(prefill_test_ext)
-    nanobind_link_options(prefill_test_ext)
+    target_include_directories(layer_completion_ext PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/distributed)
+    nanobind_compile_options(layer_completion_ext)
+    nanobind_link_options(layer_completion_ext)
     set_target_properties(
-        prefill_test_ext
+        layer_completion_ext
         PROPERTIES
             OUTPUT_NAME
-                prefill_test
+                layer_completion
             PREFIX
                 "_"
             CXX_VISIBILITY_PRESET
                 "default"
             LIBRARY_OUTPUT_DIRECTORY
-                "${PROJECT_BINARY_DIR}/models/demos/test"
+                "${PROJECT_BINARY_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill"
             BUILD_RPATH
                 "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            # No INSTALL_RPATH: this test-only module is not installed (no install(TARGETS) rule); it
-            # is loaded straight from the build tree via the source-dir symlink. A hardcoded build-path
-            # INSTALL_RPATH would only mislead if someone later adds an install rule — set $ORIGIN-based
-            # RPATH (like _ttnn/ttnncpp) at that point.
+            # No INSTALL_RPATH: not installed (no install(TARGETS) rule); loaded from the build tree via
+            # the source-dir symlink. Add an $ORIGIN-based RPATH (like _ttnn) only if an install rule lands.
             ADDITIONAL_CLEAN_FILES
-                "${PROJECT_SOURCE_DIR}/models/demos/test/_prefill_test.so"
+                "${LAYER_COMPLETION_DIR}/_layer_completion.so"
     )
-    # Symlink the build-tree .so into the source package dir so it is importable as
-    # models.demos.test._prefill_test (mirrors how ttnn/ttnn/_ttnn.so links to the build).
+    # Symlink the build-tree .so into the source package dir so it imports as
+    # ...pipelined_prefill._layer_completion (mirrors ttnn/ttnn/_ttnn.so -> build).
     add_custom_command(
-        TARGET prefill_test_ext
+        TARGET layer_completion_ext
         POST_BUILD
         COMMAND
-            ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE:prefill_test_ext>"
-            "${PROJECT_SOURCE_DIR}/models/demos/test/_prefill_test.so"
+            ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE:layer_completion_ext>"
+            "${LAYER_COMPLETION_DIR}/_layer_completion.so"
         VERBATIM
     )
 endif()
