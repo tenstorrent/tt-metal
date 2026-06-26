@@ -19,8 +19,12 @@ def coerce_kv_cache_phase(value, *, is_decode: bool) -> KVCachePhase:
         phase = value
     else:
         phase = KVCachePhase(value)
+    if is_decode and phase is KVCachePhase.PREFILL_WRITE:
+        raise ValueError("PREFILL_WRITE is a prefill-only KV phase; decode must use COMMIT_APPEND")
     if is_decode and phase is KVCachePhase.DENOISE_READONLY:
         raise ValueError(
             "DENOISE_READONLY is a prefill-only KV phase; decode must write or append the current token KV"
         )
+    if not is_decode and phase is KVCachePhase.COMMIT_APPEND:
+        raise ValueError("COMMIT_APPEND is a decode-only KV phase; prefill must use PREFILL_WRITE or DENOISE_READONLY")
     return phase

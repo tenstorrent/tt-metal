@@ -26,6 +26,17 @@ def test_kv_phase_rejects_decode_readonly_value():
         coerce_kv_cache_phase("denoise_readonly", is_decode=True)
 
 
+def test_kv_phase_rejects_mode_mismatches():
+    with pytest.raises(ValueError, match="PREFILL_WRITE is a prefill-only KV phase"):
+        coerce_kv_cache_phase(KVCachePhase.PREFILL_WRITE, is_decode=True)
+    with pytest.raises(ValueError, match="PREFILL_WRITE is a prefill-only KV phase"):
+        coerce_kv_cache_phase("prefill_write", is_decode=True)
+    with pytest.raises(ValueError, match="COMMIT_APPEND is a decode-only KV phase"):
+        coerce_kv_cache_phase(KVCachePhase.COMMIT_APPEND, is_decode=False)
+    with pytest.raises(ValueError, match="COMMIT_APPEND is a decode-only KV phase"):
+        coerce_kv_cache_phase("commit_append", is_decode=False)
+
+
 def test_kv_phase_is_threaded_through_attention_call_chain():
     assert "kv_phase" in inspect.signature(Gemma4Model.__call__).parameters
     assert "attn_mask" in inspect.signature(Gemma4Model.__call__).parameters
