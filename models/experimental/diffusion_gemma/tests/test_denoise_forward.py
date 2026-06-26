@@ -9,6 +9,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     denoise_attention_forward,
     make_denoise_logits_adapter_from_kv_cache,
     make_denoise_logits_adapter_from_checkpoint_state,
+    make_denoise_logits_adapter_from_remapped_state,
     read_prompt_kv_cache_by_layer,
 )
 
@@ -241,3 +242,41 @@ def test_make_denoise_logits_adapter_from_checkpoint_state_builds_full_adapter_i
         "self_conditioning_compute_kernel_config": "kernel",
         "q_rope_offset": 576,
     }
+
+
+def test_make_denoise_logits_adapter_from_remapped_state_uses_backbone_embedding_key():
+    calls = {}
+
+    def fake_checkpoint_builder(tt_model, **kwargs):
+        calls["builder"] = (tt_model, kwargs)
+        return "adapter"
+
+    out = make_denoise_logits_adapter_from_remapped_state(
+        "model",
+        prompt_len=64,
+        backbone_state={"model.language_model.embed_tokens.weight": "embedding-weight"},
+        self_conditioning_state={"self": "conditioning"},
+        config="config",
+        checkpoint_adapter_builder=fake_checkpoint_builder,
+    )
+
+    assert out == "adapter"
+    assert calls["builder"] == (
+        "model",
+        {
+            "prompt_len": 64,
+            "self_conditioning_state": {"self": "conditioning"},
+            "embedding_weight": "embedding-weight",
+            "config": "config",
+        },
+    )
+
+
+def test_make_denoise_logits_adapter_from_remapped_state_rejects_missing_embedding():
+    with pytest.raises(ValueError, match="missing tied embedding weight"):
+        make_denoise_logits_adapter_from_remapped_state(
+            "model",
+            prompt_len=64,
+            backbone_state={},
+            self_conditioning_state={},
+        )

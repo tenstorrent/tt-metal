@@ -21,6 +21,7 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
     build_self_conditioning,
     build_self_conditioning_embedding_weight,
 )
+from models.experimental.diffusion_gemma.weight_mapping import GEMMA4_LM_PREFIX
 
 NEG = -1.0e9
 
@@ -483,4 +484,26 @@ def make_denoise_logits_adapter_from_checkpoint_state(
         self_conditioning_embedding_weight=embedding_weight_tt,
         self_conditioning_compute_kernel_config=self_conditioning_compute_kernel_config,
         q_rope_offset=q_rope_offset,
+    )
+
+
+def make_denoise_logits_adapter_from_remapped_state(
+    tt_model,
+    *,
+    prompt_len: int,
+    backbone_state,
+    self_conditioning_state,
+    embedding_key: str = GEMMA4_LM_PREFIX + "embed_tokens.weight",
+    checkpoint_adapter_builder=make_denoise_logits_adapter_from_checkpoint_state,
+    **kwargs,
+):
+    """Build a denoise adapter from ``weight_mapping.remap_state_dict`` outputs."""
+    if embedding_key not in backbone_state:
+        raise ValueError(f"missing tied embedding weight in backbone_state: {embedding_key}")
+    return checkpoint_adapter_builder(
+        tt_model,
+        prompt_len=prompt_len,
+        self_conditioning_state=self_conditioning_state,
+        embedding_weight=backbone_state[embedding_key],
+        **kwargs,
     )
