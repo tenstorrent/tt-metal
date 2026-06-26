@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/service/layer_completion_queue.hpp>
+#include <internal/disaggregation/layer_completion_queue.hpp>
 
 #include <chrono>
 #include <cstring>
