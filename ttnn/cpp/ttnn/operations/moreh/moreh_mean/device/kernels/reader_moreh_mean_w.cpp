@@ -21,7 +21,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_mask_w = tt::CBIndex::c_3;
 #ifdef DO_MASK_W
-    generate_mask_w(cb_id_mask_w, mask_w);
+    CircularBuffer cb_mask_w(cb_id_mask_w);
+    generate_mask_w(cb_mask_w, mask_w);
 #endif
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
