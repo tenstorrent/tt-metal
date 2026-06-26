@@ -82,6 +82,9 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+# Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
+# compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
+SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
 # L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
 # requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
@@ -287,6 +290,11 @@ def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: d
     out = runtime.prefill(
         inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
+    if SYNC_PER_CHUNK:
+        # Block on device completion before the send so the delta is this rank's forward alone, not the
+        # downstream-start proxy. Serializes dispatch (no overlap) — measurement runs only.
+        ttnn.synchronize_device(runtime.mesh_device)
+        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
         _d2d_send(d2d_out, out, rank, meta)  # push + free; the grant below forwards it over fabric
     if d2d_out is not None:
