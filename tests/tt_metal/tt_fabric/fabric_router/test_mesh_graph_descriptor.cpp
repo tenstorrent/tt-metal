@@ -1947,8 +1947,7 @@ TEST(MeshGraphDescriptorTests, PinningsEmpty) {
     EXPECT_TRUE(pinnings.empty()) << "Should have no pinnings when none are specified";
 }
 
-// Verify the skip_links pattern (axis=ROW start=2 step=4) expands into the expected intra-mesh Z edges
-// on the shared 8x4 [LINE, RING] descriptor (also used by the routing/lowering tests).
+// skip_links expands into the expected intra-mesh Z edges on the 8x4 [LINE, RING] descriptor.
 TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -1963,11 +1962,8 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
     const auto& m0 = intra[0];
     ASSERT_EQ(m0.size(), 32u);  // 8x4 = 32 chips
 
-    // The row axis (len 8) is LINE, so only block [2,5] fully fits; the next step=4 block would need
-    // rows 6,7,0,1 and a LINE axis can't wrap, so it is dropped. chip = row*4 + col, x4 columns.
-    const std::vector<std::pair<int, int>> expected_skip_edges = {
-        {8, 20}, {9, 21}, {10, 22}, {11, 23},  // block [2,5]: rows 2<->5
-    };
+    // LINE row axis (len 8): only block [2,5] fits, the wrapping block is dropped. chip = row*4 + col.
+    const std::vector<std::pair<int, int>> expected_skip_edges = {{8, 20}, {9, 21}, {10, 22}, {11, 23}};
 
     for (const auto& [a, b] : expected_skip_edges) {
         EXPECT_EQ(m0[a].count(b), 1u) << "missing skip edge " << a << " -> " << b;
@@ -1978,17 +1974,16 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
         }
     }
 
-    // Rows 0,1,6,7 get no skip edges (only block [2,5] formed). Spot-check chip 4 (row1,col0).
-    EXPECT_EQ(m0[4].count(24), 0u);  // no r1<->r6 skip (second block dropped under LINE row)
+    EXPECT_EQ(m0[4].count(24), 0u);  // rows outside block [2,5] get no skip
 
-    // Base grid is preserved: chip 8 (row2,col0) keeps N/S (LINE-interior), E, W (col RING wrap), + 1 skip.
-    EXPECT_EQ(m0[8].count(4), 1u);   // N (row1,col0)
-    EXPECT_EQ(m0[8].count(12), 1u);  // S (row3,col0)
-    EXPECT_EQ(m0[8].count(9), 1u);   // E (row2,col1)
-    EXPECT_EQ(m0[8].count(11), 1u);  // W (row2,col3 via col RING wrap)
-    EXPECT_EQ(m0[8].size(), 5u);     // 4 grid neighbors + 1 skip edge
+    // chip 8 keeps its 4 base-grid neighbors plus the one skip edge
+    EXPECT_EQ(m0[8].count(4), 1u);
+    EXPECT_EQ(m0[8].count(12), 1u);
+    EXPECT_EQ(m0[8].count(9), 1u);
+    EXPECT_EQ(m0[8].count(11), 1u);
+    EXPECT_EQ(m0[8].size(), 5u);
 
-    // And no OTHER Z edges exist: 4 bidirectional edges -> exactly 8 directed Z entries.
+    // 4 bidirectional skip edges = 8 directed Z entries, no others
     int z_directed = 0;
     for (int c = 0; c < 32; ++c) {
         for (const auto& [nb, edge] : m0[c]) {
@@ -2000,7 +1995,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
     EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional skip edges (8 directed Z entries)";
 }
 
-// SkipLinks for the full 32x4 [RING, RING] mesh: the pattern expands into 32 Z edges.
+// skip_links expands into 32 Z edges on the 32x4 [RING, RING] descriptor.
 TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -2015,8 +2010,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
     const auto& m0 = intra[0];
     ASSERT_EQ(m0.size(), 128u);  // 32x4 = 128 chips
 
-    // axis=ROW (32 rows, RING), start=2 step=4 -> endpoint row pairs (last wraps): chip = row*4 + col.
-    // Each of the 8 blocks x 4 columns is a Z edge present in BOTH directions (functionally bidirectional).
+    // axis=ROW (32 rows, RING), start=2 step=4 -> 8 endpoint row pairs (last wraps). chip = row*4 + col.
     const std::vector<std::pair<int, int>> row_blocks = {
         {2, 5}, {6, 9}, {10, 13}, {14, 17}, {18, 21}, {22, 25}, {26, 29}, {30, 1}};
     for (const auto& [ra, rb] : row_blocks) {
@@ -2032,7 +2026,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
         }
     }
 
-    // And no OTHER Z edges exist: 32 bidirectional edges -> exactly 64 directed Z entries.
+    // 32 bidirectional skip edges = 64 directed Z entries, no others
     int z_directed = 0;
     for (int c = 0; c < 128; ++c) {
         for (const auto& [nb, edge] : m0[c]) {

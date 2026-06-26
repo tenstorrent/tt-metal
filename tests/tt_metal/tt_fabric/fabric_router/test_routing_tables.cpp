@@ -141,11 +141,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::fi
     return control_plane;
 }
 
-// These tests run against a Blackhole Galaxy. A stored descriptor was provided -> use the mock cluster;
-// otherwise only run if live hardware is actually a Blackhole Galaxy (any other system can't embed these
-// BH-galaxy descriptors, and the topology solver would fatal). Otherwise the caller GTEST_SKIPs.
-// Ask rtoptions (the authoritative source get_cluster() itself keys off) rather than raw getenv, which
-// can diverge from what was parsed at startup / set programmatically.
+// True if a mock descriptor was provided or live hardware is a Blackhole Galaxy; else the caller skips.
 bool skip_link_cluster_available() {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
         return true;
@@ -155,8 +151,10 @@ bool skip_link_cluster_available() {
 }
 
 constexpr auto kNoClusterSkipMsg =
-    "not a Blackhole Galaxy: set TT_METAL_MOCK_CLUSTER_DESC_PATH to a stored descriptor under "
-    "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/ (e.g. skip_links_8x4_bh_galaxy_cluster_desc.yaml), "
+    "not a Blackhole Galaxy: set TT_METAL_MOCK_CLUSTER_DESC_PATH to a Blackhole Galaxy descriptor from the "
+    "tt-cluster-descriptors submodule (e.g. "
+    "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/"
+    "SC20_32x4_revC_subtorus_aisleC_cluster_desc/SC20_32x4_revC_subtorus_aisleC_cluster_desc_bh-glx-110-c07u08.yaml), "
     "or run on Blackhole Galaxy hardware.";
 
 }  // namespace
@@ -193,330 +191,6 @@ TEST(MeshGraphValidation, TestMGDConnections) {
     EXPECT_EQ(rev_src_dev, 1);
     EXPECT_EQ(rev_dst_dev, 0);
     EXPECT_EQ(rev_count, 1);
-}
-
-// Harness validation: run the SAME mock/no-discovery flow used by IntraMesh8x4Replay, but on the
-// known single-galaxy 8x4 MESH descriptor, and assert the exact XY routing that the discovery-based
-// RoutingTableValidation.TestSingleGalaxyMesh already asserts. If these match, the mock-cluster +
-// derived-PSD + identity-mapping + no-discovery harness is proven correct before we trust it for skip
-// links. Run CPU-only with:
-//   TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_8x4_bh_galaxy_cluster_desc.yaml
-//   ./fabric_unit_tests \
-//       --gtest_filter='SkipLinkRouting.MockHarness8x4KnownRouting'
-TEST(SkipLinkRouting, MockHarness8x4KnownRouting) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    // 8x4 single-galaxy mesh corners (mirrors single_galaxy_constants, which is defined later in this file).
-    constexpr std::uint32_t mesh_size = 32;
-    constexpr std::uint32_t nw_fabric_id = 0;
-    constexpr std::uint32_t ne_fabric_id = 3;
-    constexpr std::uint32_t sw_fabric_id = 28;
-    constexpr std::uint32_t se_fabric_id = 31;
-    auto& metal = tt::tt_metal::MetalContext::instance();
-    const auto desc_path = std::filesystem::path(metal.rtoptions().get_root_dir()) /
-                           "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
-
-    const auto& cluster = metal.get_cluster();  // mock cluster when TT_METAL_MOCK_CLUSTER_DESC_PATH is set
-    tt::tt_fabric::MeshGraph mesh_graph(cluster, desc_path.string());
-
-    const auto& dctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    auto psd = tt::tt_metal::run_physical_system_discovery(
-        *cluster.get_cluster_desc(), dctx, metal.rtoptions().get_target_device());
-
-    std::map<tt::tt_fabric::FabricNodeId, tt::ChipId> logical_to_physical;
-    for (const auto& [chip_id, unique_id] : cluster.get_unique_chip_ids()) {
-        logical_to_physical[tt::tt_fabric::FabricNodeId{
-            tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(chip_id)}] = chip_id;
-    }
-
-    tt::tt_fabric::LocalMeshBinding binding;
-    binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
-    binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
-    tt::tt_fabric::TopologyMapper topology_mapper(cluster, *dctx, mesh_graph, psd, binding, logical_to_physical);
-
-    tt::tt_fabric::RoutingTableGenerator rtg(topology_mapper);
-    const auto t = rtg.get_intra_mesh_table();
-    ASSERT_EQ(t.size(), 1u);
-    ASSERT_EQ(t[0].size(), mesh_size);
-
-    // Same expectations as RoutingTableValidation.TestSingleGalaxyMesh (XY dimension-order routing).
-    EXPECT_EQ(t[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
-    EXPECT_EQ(t[0][nw_fabric_id][ne_fabric_id], RoutingDirection::E);
-    EXPECT_EQ(t[0][nw_fabric_id][sw_fabric_id], RoutingDirection::S);
-    EXPECT_EQ(t[0][nw_fabric_id][se_fabric_id], RoutingDirection::S);
-
-    EXPECT_EQ(t[0][ne_fabric_id][nw_fabric_id], RoutingDirection::W);
-    EXPECT_EQ(t[0][ne_fabric_id][ne_fabric_id], RoutingDirection::C);
-    EXPECT_EQ(t[0][ne_fabric_id][sw_fabric_id], RoutingDirection::S);
-    EXPECT_EQ(t[0][ne_fabric_id][se_fabric_id], RoutingDirection::S);
-
-    EXPECT_EQ(t[0][sw_fabric_id][nw_fabric_id], RoutingDirection::N);
-    EXPECT_EQ(t[0][sw_fabric_id][ne_fabric_id], RoutingDirection::N);
-    EXPECT_EQ(t[0][sw_fabric_id][sw_fabric_id], RoutingDirection::C);
-    EXPECT_EQ(t[0][sw_fabric_id][se_fabric_id], RoutingDirection::E);
-
-    EXPECT_EQ(t[0][se_fabric_id][nw_fabric_id], RoutingDirection::N);
-    EXPECT_EQ(t[0][se_fabric_id][ne_fabric_id], RoutingDirection::N);
-    EXPECT_EQ(t[0][se_fabric_id][sw_fabric_id], RoutingDirection::W);
-    EXPECT_EQ(t[0][se_fabric_id][se_fabric_id], RoutingDirection::C);
-}
-
-// Stage 4 (replay): feed a mock cluster + the skip-link MeshGraph into RoutingTableGenerator and assert
-// intra-mesh first-hop directions, including Z (skip) hops. CPU-only under a mock cluster:
-//   TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_8x4_bh_galaxy_cluster_desc.yaml
-//   ./fabric_unit_tests \
-//       --gtest_filter='SkipLinkRouting.IntraMesh8x4Replay'
-// The PSD is derived from the descriptor (run_live=false). We use the no-discovery TopologyMapper with an
-// identity FabricNodeId->ChipId map -- inert to routing output (which reads only MeshGraph geometry) -- to
-// avoid the discovery ctor, which would reject the skip (Z) edges that have no physical cabling.
-TEST(SkipLinkRouting, IntraMesh8x4Replay) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    auto& metal = tt::tt_metal::MetalContext::instance();
-    const auto root = std::filesystem::path(metal.rtoptions().get_root_dir());
-
-    // 1. MeshGraph from the skip descriptor (same one stage 0-3 uses).
-    const auto desc_path =
-        root / "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
-    const auto& cluster = metal.get_cluster();  // mock cluster when TT_METAL_MOCK_CLUSTER_DESC_PATH is set
-    tt::tt_fabric::MeshGraph mesh_graph(cluster, desc_path.string());
-
-    // 2. Derive the PSD from the cluster descriptor (CPU-only under a mock cluster; live on HW).
-    const auto& dctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    auto psd = tt::tt_metal::run_physical_system_discovery(
-        *cluster.get_cluster_desc(), dctx, metal.rtoptions().get_target_device());
-
-    // 3. Identity FabricNodeId -> physical ChipId mapping (mesh chips 0..31 -> physical chips 0..31).
-    std::map<tt::tt_fabric::FabricNodeId, tt::ChipId> logical_to_physical;
-    for (const auto& [chip_id, unique_id] : cluster.get_unique_chip_ids()) {
-        logical_to_physical[tt::tt_fabric::FabricNodeId{
-            tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(chip_id)}] = chip_id;
-    }
-
-    // 4. TopologyMapper from the supplied mapping -> skips discovery (topology_mapper.hpp:115).
-    tt::tt_fabric::LocalMeshBinding binding;
-    binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
-    binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
-    tt::tt_fabric::TopologyMapper topology_mapper(cluster, *dctx, mesh_graph, psd, binding, logical_to_physical);
-
-    // 5. Generate routing tables.
-    tt::tt_fabric::RoutingTableGenerator rtg(topology_mapper);
-    const auto intra = rtg.get_intra_mesh_table();  // [mesh][src][dst] -> RoutingDirection
-    ASSERT_EQ(intra.size(), 1u);
-    const auto& t = intra[0];
-    ASSERT_EQ(t.size(), 32u);
-
-    // 6. EXPECTED first-hop directions: t[src][dst] = egress direction AT src toward dst (one hop).
-    //    Descriptor is [LINE, RING]: rows (dim0) do NOT wrap; cols (dim1) do. chip = row*4 + col.
-    //    Skip axis = ROW, start=2 step=4 -> only block [2,5] forms; the only skip edges are r2<->r5
-    //    (8<->20, 9<->21, 10<->22, 11<->23). Col-0 chips by row: r0=0 r1=4 r2=8 r3=12 r4=16 r5=20 r6=24 r7=28.
-    //
-    //    Policy: take Z only when it makes the path STRICTLY shorter than base-ring-only routing;
-    //    on equal-length, stay on the ring. (Row base distance is |dr| -- no wrap.)
-    using D = RoutingDirection;  // N,E,S,W,Z,C,NONE
-
-    // Skip endpoints -> Z (1 skip hop vs 3 ring hops).
-    EXPECT_EQ(t[8][20], D::Z);  // r2->r5
-    EXPECT_EQ(t[20][8], D::Z);  // r5->r2 (reverse)
-
-    // r1->r6: chip 4 has NO skip; shortest is 4 --S--> 8 --Z--> 20 --S--> 24 (3) vs base 5. Z is a LATER
-    // hop, so the first hop out of 4 is the base S toward the skip at chip 8.
-    EXPECT_EQ(t[4][24], D::S);
-
-    // r2->r6: chip 8 takes the skip itself -- 8 --Z--> 20 --S--> 24 (2) vs base 4. First hop Z.
-    EXPECT_EQ(t[8][24], D::Z);
-
-    // Adjacent: skip would overshoot to r5, so stay on the base ring.
-    EXPECT_EQ(t[8][12], D::S);  // r2->r3
-
-    // Block interior r2->r4: skip dist (Z,N = 2) == base dist (S,S = 2), not strictly shorter -> base S.
-    EXPECT_EQ(t[8][16], D::S);  // r2->r4
-
-    // Non-skip baselines: must be unperturbed by skip links.
-    EXPECT_EQ(t[0][1], D::E);  // r0 col0->col1
-    EXPECT_EQ(t[0][4], D::S);  // r0->r1 col0
-    EXPECT_EQ(t[8][9], D::E);  // r2 col0->col1
-
-    // Self.
-    EXPECT_EQ(t[8][8], D::C);
-}
-
-// Stage 5 (physical lowering): build the FULL control plane on the 8x4 skip descriptor via the
-// discovery path, so the SAT topology solver embeds the logical 8x4+skip onto the real galaxy trays.
-// CORRECTNESS (not just non-empty): the control-plane forwarding directions must match the SAME
-// expected paths asserted in stage 4 (IntraMesh8x4Replay), AND for direct hops the forwarding eth
-// channels must physically connect src's chip to dst's chip -- proving skip Z edges lowered onto the
-// correct physical inter-tray links, not just that some channels got assigned.
-//
-// Runs under ControlPlaneFixture so SetUp() calls configure_ethernet_cores_for_fabric_routers first
-// (required before configure_routing_tables can bind eth channels; needs slow dispatch).
-//   TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_8x4_bh_galaxy_cluster_desc.yaml
-//   TT_METAL_SLOW_DISPATCH_MODE=1 \
-//       ./fabric_unit_tests --gtest_filter='ControlPlaneFixture.PhysicalLowering8x4'
-TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
-
-    // Builds the control plane (discovery + solver embedding) and configures the per-eth-channel tables.
-    // RELAXED: this galaxy isn't a clean 8x4, so bind whatever physical channels exist rather than fatal.
-    // FABRIC_2D_TORUS_X: the descriptor is [LINE, RING] (column axis = RING = TORUS_X). Plain FABRIC_2D
-    // would flatten the torus to a mesh and drop the column wrap, so we request the matching torus config.
-    auto control_plane = make_control_plane(
-        desc_path,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
-
-    using D = tt::tt_fabric::RoutingDirection;
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
-    // Physical eth channels (on chip `a`) that directly connect a->b in the cluster descriptor.
-    const auto chans_between = [&](tt::ChipId a, tt::ChipId b) {
-        std::unordered_set<chan_id_t> chans;
-        for (const auto& pair :
-             cluster.get_cluster_desc()->get_directly_connected_ethernet_channels_between_chips(a, b)) {
-            chans.insert(static_cast<chan_id_t>(std::get<0>(pair)));
-        }
-        return chans;
-    };
-
-    // Same expected first-hop directions as IntraMesh8x4Replay -- the physical lowering must route along
-    // the SAME paths. `direct` = dst is the immediate first-hop neighbor (so forwarding channels must
-    // physically connect src->dst). chip = row*4 + col; skip endpoints r2<->r5 per column.
-    struct Hop {
-        int src;
-        int dst;
-        D dir;
-        bool direct;
-    };
-    const std::vector<Hop> expected = {
-        {8, 20, D::Z, true},   // skip endpoint: Z, dst is the skip neighbor
-        {20, 8, D::Z, true},   // reverse skip endpoint
-        {4, 24, D::S, false},  // base-then-Z: first hop S toward chip 8 (skip taken later), dst not direct
-        {8, 24, D::Z, false},  // Z to r5 then S; dst not the immediate neighbor
-        {8, 12, D::S, true},   // adjacent (r2->r3)
-        {8, 16, D::S, false},  // r2->r4: first hop S to r3, dst 2 hops away
-        {0, 1, D::E, true},    // adjacent col
-        {0, 4, D::S, true},    // adjacent row
-        {8, 9, D::E, true},    // adjacent col
-    };
-    for (const auto& h : expected) {
-        tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(h.src)};
-        tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(h.dst)};
-
-        // (1) Path matches stage 4: control-plane forwarding direction == the IntraMesh8x4Replay expectation.
-        auto dir = control_plane->get_forwarding_direction(src, dst);
-        EXPECT_TRUE(dir.has_value() && *dir == h.dir)
-            << h.src << "->" << h.dst << ": dir=" << (dir.has_value() ? static_cast<int>(*dir) : -1) << " expected "
-            << static_cast<int>(h.dir);
-
-        // (2) The hop is physically realizable (egress channels exist).
-        auto fwd = control_plane->get_forwarding_eth_chans_to_chip(src, dst);
-        EXPECT_FALSE(fwd.empty()) << "no forwarding eth chans for " << h.src << "->" << h.dst;
-
-        // (3) Stage-5 physical correctness: for a direct hop, the forwarding channels must be physical
-        //     eth channels that actually connect src's physical chip to dst's physical chip. For skip
-        //     endpoints this proves the Z edge lowered onto the CORRECT physical link.
-        if (h.direct) {
-            auto phys_src = control_plane->get_physical_chip_id_from_fabric_node_id(src);
-            auto phys_dst = control_plane->get_physical_chip_id_from_fabric_node_id(dst);
-            auto expected_chans = chans_between(phys_src, phys_dst);
-            EXPECT_FALSE(expected_chans.empty()) << h.src << "->" << h.dst << " mapped to physically non-adjacent "
-                                                 << "chips " << phys_src << "," << phys_dst;
-            for (auto c : fwd) {
-                EXPECT_TRUE(expected_chans.count(c) > 0)
-                    << "fwd chan " << static_cast<int>(c) << " for " << h.src << "->" << h.dst
-                    << " does not physically connect chip " << phys_src << "->" << phys_dst;
-            }
-        }
-    }
-
-    // (4) Broad connectivity check: in [LINE, RING] every chip has >=3 BASE (N/E/S/W) directions --
-    //     columns are RING so E+W are always present; LINE rows drop only one of N/S at r0/r7. Count
-    //     base dirs only (exclude Z so a skip endpoint can't mask a dropped base edge). Ideal is 3 for
-    //     rows 0/7 and 4 for interior rows; we hard-assert the >=3 floor and log any shortfall from ideal.
-    for (int c = 0; c < 32; ++c) {
-        tt::tt_fabric::FabricNodeId fn{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(c)};
-        int base = 0;
-        for (D d : {D::N, D::E, D::S, D::W}) {
-            if (!control_plane->get_active_fabric_eth_channels_in_direction(fn, d).empty()) {
-                ++base;
-            }
-        }
-        const int row = c / 4;
-        const int ideal = (row == 0 || row == 7) ? 3 : 4;
-        EXPECT_GE(base, 3) << "chip " << c << " has only " << base << " base directions (expected >=3)";
-        if (base != ideal) {
-            log_info(tt::LogTest, "chip {} base directions={} (ideal {} for row {})", c, base, ideal, row);
-        }
-    }
-
-    // The eth channels each skip endpoint assigned to the Z direction (what the skip links lowered onto).
-    for (int c : {8, 9, 10, 11, 20, 21, 22, 23}) {
-        tt::tt_fabric::FabricNodeId fn{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(c)};
-        auto z = control_plane->get_active_fabric_eth_channels_in_direction(fn, D::Z);
-        std::string s;
-        for (auto ch : z) {
-            s += std::to_string(static_cast<int>(ch)) + " ";
-        }
-        log_info(tt::LogTest, "SKIP-Z chip {} -> Z channels: {}", c, s);
-    }
-}
-
-// Full-system 32x4 multi-rank skip lowering. Builds the control plane on the 32x4 [RING,RING]+skip
-// descriptor across 4 ranks (each rank owns an 8x4 block, rows 8r..8r+7) and verifies every skip-endpoint
-// pair routes via Z, backed by physical Z channels on the rank that owns the source chip. Some skip blocks
-// straddle host boundaries (cross-rank skip). Run multi-rank via tt-run with the 4-rank mock cluster mapping
-// + a rank binding whose mesh_graph_desc_path is the skip descriptor:
-//   TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
-//     --mock-cluster-rank-binding
-//     tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_32x4_bh_galaxy_cluster_desc_mapping.yaml \
-//     --rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_32x4_rank_bindings.yaml \
-//     --mpi-args "--allow-run-as-root" \
-//     ./build_Release/test/tt_metal/tt_fabric/fabric_unit_tests \
-//     --gtest_filter='ControlPlaneFixture.PhysicalLowering32x4'
-TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
-    if (!skip_link_cluster_available()) {
-        GTEST_SKIP() << kNoClusterSkipMsg;
-    }
-    const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto";
-
-    // FABRIC_2D_TORUS_XY: descriptor is [RING, RING] (both axes torus).
-    auto control_plane = make_control_plane(
-        desc_path,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
-        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
-
-    using D = tt::tt_fabric::RoutingDirection;
-    // 32-row RING, axis=ROW start=2 step=4 -> endpoint row pairs (last wraps): chip = row*4 + col.
-    const std::vector<std::pair<int, int>> row_blocks = {
-        {2, 5}, {6, 9}, {10, 13}, {14, 17}, {18, 21}, {22, 25}, {26, 29}, {30, 1}};
-    for (const auto& [ra, rb] : row_blocks) {
-        for (int col = 0; col < 4; ++col) {
-            tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(ra * 4 + col)};
-            tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(rb * 4 + col)};
-
-            // Routing picks the skip (Z). The intra-mesh routing table is full-mesh, valid on every rank.
-            auto dir = control_plane->get_forwarding_direction(src, dst);
-            EXPECT_TRUE(dir.has_value() && *dir == D::Z)
-                << "skip r" << ra << "->r" << rb << " col " << col << " not routed via Z";
-
-            // For chips local to this rank, the skip must be backed by physical Z channels.
-            // get_active_fabric_eth_channels_in_direction throws for chips not owned by this rank -> skip those.
-            try {
-                EXPECT_FALSE(control_plane->get_active_fabric_eth_channels_in_direction(src, D::Z).empty())
-                    << "no physical Z channels at local chip " << (ra * 4 + col);
-            } catch (const std::exception&) {
-            }
-        }
-    }
 }
 
 TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
@@ -2666,4 +2340,183 @@ TEST(BlitzDecodePipelineAssignment, InfeasibleOddRingTwoCables) {
 }
 
 }  // namespace blitz_assign_tests
+
+// Generate intra-mesh routing tables from the skip MeshGraph + mock cluster; assert first-hop directions
+// including Z (skip) hops. No-discovery identity mapping so the cabling-less Z edges aren't rejected.
+TEST(SkipLinkRouting, IntraMesh8x4Replay) {
+    if (!skip_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    auto& metal = tt::tt_metal::MetalContext::instance();
+    const auto root = std::filesystem::path(metal.rtoptions().get_root_dir());
+
+    const auto desc_path =
+        root / "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
+    const auto& cluster = metal.get_cluster();
+    tt::tt_fabric::MeshGraph mesh_graph(cluster, desc_path.string());
+
+    const auto& dctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto psd = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), dctx, metal.rtoptions().get_target_device());
+
+    std::map<tt::tt_fabric::FabricNodeId, tt::ChipId> logical_to_physical;  // identity (chips 0..31)
+    for (const auto& [chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+        logical_to_physical[tt::tt_fabric::FabricNodeId{
+            tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(chip_id)}] = chip_id;
+    }
+
+    tt::tt_fabric::LocalMeshBinding binding;
+    binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
+    binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+    tt::tt_fabric::TopologyMapper topology_mapper(cluster, *dctx, mesh_graph, psd, binding, logical_to_physical);
+
+    tt::tt_fabric::RoutingTableGenerator rtg(topology_mapper);
+    const auto intra = rtg.get_intra_mesh_table();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& t = intra[0];
+    ASSERT_EQ(t.size(), 32u);
+
+    // First hops under the strict-shorter policy (take Z only when it shortens the path). chip = row*4+col;
+    // [LINE, RING] with skip edges r2<->r5 per column.
+    using D = RoutingDirection;
+    EXPECT_EQ(t[8][20], D::Z);  // skip endpoint
+    EXPECT_EQ(t[20][8], D::Z);  // reverse
+    EXPECT_EQ(t[4][24], D::S);  // base-then-Z: S toward the skip, Z taken later
+    EXPECT_EQ(t[8][24], D::Z);  // skip then S
+    EXPECT_EQ(t[8][12], D::S);  // adjacent, no skip
+    EXPECT_EQ(t[8][16], D::S);  // equal-length: stays on ring
+    EXPECT_EQ(t[0][1], D::E);   // base routing unperturbed
+    EXPECT_EQ(t[0][4], D::S);
+    EXPECT_EQ(t[8][9], D::E);
+    EXPECT_EQ(t[8][8], D::C);  // self
+}
+
+// Build the control plane on the 8x4 skip descriptor and verify the forwarding directions match
+// IntraMesh8x4Replay, and that direct-hop forwarding channels physically connect src->dst.
+TEST_F(ControlPlaneFixture, PhysicalLowering8x4) {
+    if (!skip_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
+
+    // RELAXED: bind whatever physical channels exist. FABRIC_2D_TORUS_X: [LINE, RING] keeps the column wrap.
+    auto control_plane = make_control_plane(
+        desc_path,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
+
+    using D = tt::tt_fabric::RoutingDirection;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    // physical eth channels on `a` that directly connect a->b
+    const auto chans_between = [&](tt::ChipId a, tt::ChipId b) {
+        std::unordered_set<chan_id_t> chans;
+        for (const auto& pair :
+             cluster.get_cluster_desc()->get_directly_connected_ethernet_channels_between_chips(a, b)) {
+            chans.insert(static_cast<chan_id_t>(std::get<0>(pair)));
+        }
+        return chans;
+    };
+
+    // Same first hops as IntraMesh8x4Replay; `direct` = dst is the immediate first-hop neighbor.
+    struct Hop {
+        int src;
+        int dst;
+        D dir;
+        bool direct;
+    };
+    const std::vector<Hop> expected = {
+        {8, 20, D::Z, true},
+        {20, 8, D::Z, true},
+        {4, 24, D::S, false},
+        {8, 24, D::Z, false},
+        {8, 12, D::S, true},
+        {8, 16, D::S, false},
+        {0, 1, D::E, true},
+        {0, 4, D::S, true},
+        {8, 9, D::E, true},
+    };
+    for (const auto& h : expected) {
+        tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(h.src)};
+        tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(h.dst)};
+
+        // forwarding direction matches the expected first hop
+        auto dir = control_plane->get_forwarding_direction(src, dst);
+        EXPECT_TRUE(dir.has_value() && *dir == h.dir)
+            << h.src << "->" << h.dst << ": dir=" << (dir.has_value() ? static_cast<int>(*dir) : -1) << " expected "
+            << static_cast<int>(h.dir);
+
+        // egress channels exist
+        auto fwd = control_plane->get_forwarding_eth_chans_to_chip(src, dst);
+        EXPECT_FALSE(fwd.empty()) << "no forwarding eth chans for " << h.src << "->" << h.dst;
+
+        // for a direct hop, the forwarding channels must physically connect src->dst
+        if (h.direct) {
+            auto phys_src = control_plane->get_physical_chip_id_from_fabric_node_id(src);
+            auto phys_dst = control_plane->get_physical_chip_id_from_fabric_node_id(dst);
+            auto expected_chans = chans_between(phys_src, phys_dst);
+            EXPECT_FALSE(expected_chans.empty()) << h.src << "->" << h.dst << " mapped to physically non-adjacent "
+                                                 << "chips " << phys_src << "," << phys_dst;
+            for (auto c : fwd) {
+                EXPECT_TRUE(expected_chans.count(c) > 0)
+                    << "fwd chan " << static_cast<int>(c) << " for " << h.src << "->" << h.dst
+                    << " does not physically connect chip " << phys_src << "->" << phys_dst;
+            }
+        }
+    }
+
+    // every chip keeps at least 3 base (N/E/S/W) directions (columns RING, LINE rows drop one of N/S at r0/r7)
+    for (int c = 0; c < 32; ++c) {
+        tt::tt_fabric::FabricNodeId fn{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(c)};
+        int base = 0;
+        for (D d : {D::N, D::E, D::S, D::W}) {
+            if (!control_plane->get_active_fabric_eth_channels_in_direction(fn, d).empty()) {
+                ++base;
+            }
+        }
+        EXPECT_GE(base, 3) << "chip " << c << " has only " << base << " base directions (expected >=3)";
+    }
+}
+
+// 32x4 multi-rank skip lowering: every skip-endpoint pair routes via Z, backed by physical Z channels on
+// the rank that owns the source chip. Run multi-rank under tt-run with a 4-rank subtorus mock mapping.
+TEST_F(ControlPlaneFixture, PhysicalLowering32x4) {
+    if (!skip_link_cluster_available()) {
+        GTEST_SKIP() << kNoClusterSkipMsg;
+    }
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_32x4_mesh_graph_descriptor.textproto";
+
+    // FABRIC_2D_TORUS_XY: [RING, RING] keeps both wraps.
+    auto control_plane = make_control_plane(
+        desc_path,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    using D = tt::tt_fabric::RoutingDirection;
+    // skip endpoint row pairs (last wraps); chip = row*4 + col
+    const std::vector<std::pair<int, int>> row_blocks = {
+        {2, 5}, {6, 9}, {10, 13}, {14, 17}, {18, 21}, {22, 25}, {26, 29}, {30, 1}};
+    for (const auto& [ra, rb] : row_blocks) {
+        for (int col = 0; col < 4; ++col) {
+            tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(ra * 4 + col)};
+            tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(rb * 4 + col)};
+
+            auto dir = control_plane->get_forwarding_direction(src, dst);
+            EXPECT_TRUE(dir.has_value() && *dir == D::Z)
+                << "skip r" << ra << "->r" << rb << " col " << col << " not routed via Z";
+
+            // local chips must have physical Z channels (throws for chips not owned by this rank)
+            try {
+                EXPECT_FALSE(control_plane->get_active_fabric_eth_channels_in_direction(src, D::Z).empty())
+                    << "no physical Z channels at local chip " << (ra * 4 + col);
+            } catch (const std::exception&) {
+            }
+        }
+    }
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
