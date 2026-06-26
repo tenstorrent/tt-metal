@@ -133,6 +133,51 @@ def encode_one(generator, model, kv_cache, page_table, tokenizer, norm_weight, e
     return emb
 
 
+def maybe_patch_fastokens():
+    """Best-effort global patch of HF ``AutoTokenizer`` with crusoe/atero ``fastokens``.
+
+    Enabled when ``PPLX_FASTOKENS=1`` is set in the environment (the server's
+    ``main`` propagates it to spawned workers). A no-op (with a warning) if the
+    package is not installed, so the import is never a hard dependency. Must run
+    *before* any ``from_pretrained`` so the fast Rust engine is adopted.
+    Returns ``True`` if the patch was applied.
+    """
+    if os.environ.get("PPLX_FASTOKENS", "0") != "1":
+        return False
+    try:
+        import fastokens
+
+        fastokens.patch_transformers()
+        return True
+    except Exception as exc:  # pragma: no cover - optional dependency
+        logger.warning(f"PPLX_FASTOKENS=1 but fastokens unavailable ({exc}); using HF tokenizer.")
+        return False
+
+
+def _fast_encode(tokenizer, text, max_len):
+    """Tokenize ``text`` to a ``list[int]`` (special tokens included), truncated
+    to ``max_len``, using the raw Rust ``backend_tokenizer`` when available.
+
+    The HF Python wrappers (``__call__``/``encode``) add several milliseconds of
+    BatchEncoding/truncation bookkeeping per call; the backend tokenizer's
+    ``encode(text).ids`` is the same result with far less host overhead. Falls
+    back to ``tokenizer.encode`` if no fast backend is present.
+    """
+    raw = getattr(tokenizer, "_tt_raw_backend", "unset")
+    if raw == "unset":
+        raw = getattr(tokenizer, "backend_tokenizer", None)
+        try:
+            tokenizer._tt_raw_backend = raw  # cache on the tokenizer instance
+        except Exception:
+            pass
+    if raw is not None:
+        ids = raw.encode(text).ids
+        if len(ids) > max_len:
+            ids = ids[:max_len]
+        return ids
+    return tokenizer.encode(text, truncation=True, max_length=max_len)
+
+
 class TracedEncoder:
     """Fixed-ISL encoder that replays a captured prefill trace per request.
 
@@ -274,17 +319,61 @@ class TracedEncoder:
         v[:, :, :, :n] = 1.0 / n
         return ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    def _prepare(self, text):
-        """Tokenize + build host input tensors (host-side, not timed as replay)."""
-        enc = self.tokenizer(text, truncation=True, max_length=self.seq_len, return_tensors="pt")
-        ids = enc["input_ids"]
-        n = min(int(ids.shape[1]), self.seq_len)
+    def _tokenize(self, text):
+        """Tokenize ``text`` to a list of ids, capped at this encoder's ISL.
+
+        Prefers the raw Rust ``backend_tokenizer`` (much faster than the HF Python
+        ``__call__``/``encode`` wrappers, which carry BatchEncoding + truncation
+        bookkeeping overhead), falling back to ``.encode`` if unavailable.
+        """
+        ids = _fast_encode(self.tokenizer, text, self.seq_len)
+        return ids, min(len(ids), self.seq_len)
+
+    def _build_inputs(self, ids, n):
+        """Build host input tensors from pre-tokenized ids (host-side, not replay).
+
+        ``ids`` is a ``list[int]``. Only the token tensor is request-dependent.
+        The page table is static, so it is built once and cached. The rotary
+        matrices that ``prepare_prefill_inputs_trace`` also computes are baked into
+        the captured trace and unused here, so we skip recomputing them every
+        request (this was the bulk of the old per-request host overhead).
+        """
         if n == 0:
             return None
-        ids_padded = torch.zeros(1, self.seq_len, dtype=torch.long)
-        ids_padded[0, :n] = ids[0, :n]
-        host_inputs = self.model.prepare_prefill_inputs_trace(ids_padded, page_table=self.page_table_user)
-        return (host_inputs[0], host_inputs[3], host_inputs[4]), n
+        ids_padded = torch.zeros(1, 1, 1, self.seq_len, dtype=torch.long)
+        ids_padded[0, 0, 0, :n] = torch.as_tensor(ids[:n], dtype=torch.long)
+        tokens_host = ttnn.from_torch(
+            ids_padded,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.model.mesh_device),
+        )
+        if getattr(self, "_static_host_inputs", None) is None:
+            full = self.model.prepare_prefill_inputs_trace(
+                torch.zeros(1, self.seq_len, dtype=torch.long), page_table=self.page_table_user
+            )
+            self._static_host_inputs = (full[3], full[4])
+        return (tokens_host, self._static_host_inputs[0], self._static_host_inputs[1]), n
+
+    def _prepare(self, text):
+        """Tokenize + build host input tensors (host-side, not timed as replay)."""
+        ids, n = self._tokenize(text)
+        if n == 0:
+            return None
+        return self._build_inputs(ids, n)
+
+    def _prepare_from_ids(self, ids):
+        """Build host input tensors from ids tokenized elsewhere (e.g. the server).
+
+        Skips the tokenizer entirely — used by the server-side tokenization path
+        where the HTTP layer tokenizes on its dedicated cores and ships token ids
+        to the worker, so the worker never contends for CPU on the tokenizer.
+        """
+        n = min(len(ids), self.seq_len)
+        if n == 0:
+            return None
+        return self._build_inputs(ids, n)
 
     def _write_inputs(self, ext_host, n):
         """1-CQ input update: H2D tokens (+ mask/pool on length change) on CQ0."""
@@ -477,13 +566,41 @@ class BucketedEncoder:
         return self.encoders[self._pick(n)], n
 
     def _prepare(self, text):
-        te, _ = self._bucket_for_text(text)
-        prepared = te._prepare(text)
-        if prepared is None:
+        # Tokenize once (at the largest bucket's limit), pick the smallest bucket
+        # that fits, then build inputs from the already-tokenized ids — avoids the
+        # double tokenization of the old _bucket_for_text + te._prepare path.
+        t0 = time.perf_counter()
+        ids = _fast_encode(self.tokenizer, text, self.max_seq)
+        n = len(ids)
+        if n == 0:
             self._active = None
             return None
+        te = self.encoders[self._pick(n)]
         self._active = te
-        return prepared
+        t1 = time.perf_counter()
+        out = te._build_inputs(ids, min(n, te.seq_len))
+        self._prep_tok_ms = (t1 - t0) * 1000.0
+        self._prep_build_ms = (time.perf_counter() - t1) * 1000.0
+        return out
+
+    def _prepare_from_ids(self, ids):
+        """Pick a bucket + build host tensors from ids tokenized elsewhere.
+
+        The server-side tokenization counterpart of ``_prepare``: token ids are
+        produced on the HTTP layer's cores, so here we only select the smallest
+        bucket that fits and build the (cheap) per-request token tensor.
+        """
+        n = len(ids)
+        if n == 0:
+            self._active = None
+            return None
+        te = self.encoders[self._pick(n)]
+        self._active = te
+        t1 = time.perf_counter()
+        out = te._build_inputs(ids, min(n, te.seq_len))
+        self._prep_tok_ms = 0.0  # tokenized off-worker (server threadpool)
+        self._prep_build_ms = (time.perf_counter() - t1) * 1000.0
+        return out
 
     @torch.no_grad()
     def _replay(self, ext_host, n, normalize=True):
@@ -614,8 +731,48 @@ def _run_repl(encode_fn, traced=None, normalize=True, metrics=False):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _dp_worker(chip_id, args, normalize, task_q, result_q, ready_q, cores_per_worker):
+def _smt_cores(phys_ids, n_phys):
+    """Expand physical core ids to all their SMT-sibling logical cpu ids.
+
+    On a 2-threads/core host, physical core ``p`` owns logical cpus ``p`` and
+    ``p + n_phys`` (verified via /sys thread_siblings).
+    """
+    cores = set()
+    for p in phys_ids:
+        cores.add(int(p))
+        cores.add(int(p) + n_phys)
+    return cores
+
+
+def compute_worker_cores(chip_id, n_workers, cpw, server_phys=0, total_logical=None):
+    """Logical-cpu affinity set for worker ``chip_id`` (or ``None`` => OS-float).
+
+    SMT-aware: physical core ``p`` -> logical ``{p, p+n_phys}``.
+      * ``cpw > 0``  : dedicate ``cpw`` physical cores per worker (round-robin over
+                       the worker pool) -> clean per-worker isolation (each worker
+                       owns whole physical cores incl. both hyperthreads).
+      * ``cpw == 0`` : workers share the pool. Returns ``None`` (unset affinity)
+                       when the pool is every core; otherwise the shared set.
+    ``server_phys`` physical cores at the top are reserved for the server.
+    """
+    total_logical = total_logical or os.cpu_count() or 64
+    n_phys = max(1, total_logical // 2)
+    pool_phys = max(1, n_phys - max(0, int(server_phys)))  # worker pool = phys [0, pool_phys)
+    if cpw and cpw > 0:
+        phys = [(chip_id * cpw + i) % pool_phys for i in range(cpw)]
+        return _smt_cores(phys, n_phys)
+    if server_phys and server_phys > 0:
+        return _smt_cores(range(pool_phys), n_phys)
+    return None  # everything floats (OS-scheduled)
+
+
+def _dp_worker(chip_id, args, normalize, task_q, result_q, ready_q, worker_cores):
     """Single chip: build a resident TracedEncoder, then serve from ``task_q``.
+
+    ``worker_cores`` is a precomputed set of logical cpu ids to pin to, or ``None``
+    to leave affinity unset (OS-scheduled). Pinning a worker to a *single
+    hyperthread* starves the device dispatch/completion thread and adds large tail
+    latency; whole physical cores (both siblings) or OS-float are preferred.
 
     Protocol:
       * On ready (after warmup) puts ``(chip_id, build_sec)`` on ``ready_q``.
@@ -624,12 +781,16 @@ def _dp_worker(chip_id, args, normalize, task_q, result_q, ready_q, cores_per_wo
       * A ``None`` task terminates the worker.
     """
     os.environ["TT_VISIBLE_DEVICES"] = str(chip_id)
-    total_cores = os.cpu_count() or 64
-    start_core = (chip_id * cores_per_worker) % total_cores
-    try:
-        os.sched_setaffinity(0, set(range(start_core, min(start_core + cores_per_worker, total_cores))))
-    except (OSError, AttributeError):
-        pass
+    # Keep each worker's tokenizer single-threaded: with 32 workers, the HF Rust
+    # tokenizer's intra-op thread pool would otherwise fan out to 32xN threads and
+    # oversubscribe the host. (Also silences the post-fork parallelism warning.)
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    maybe_patch_fastokens()
+    if worker_cores:
+        try:
+            os.sched_setaffinity(0, set(worker_cores))
+        except (OSError, AttributeError):
+            pass
 
     try:
         import numpy as np
@@ -689,16 +850,30 @@ def _dp_worker(chip_id, args, normalize, task_q, result_q, ready_q, cores_per_wo
 
         while True:
             task = task_q.get()
+            t_recv = time.perf_counter()
             if task is None:
                 break
-            idx, text = task
-            prepared = enc._prepare(text)
+            idx, payload = task
+            # ``payload`` is either the raw text (worker tokenizes) or a list of
+            # pre-tokenized ids (server-side tokenization path).
+            if isinstance(payload, str):
+                prepared = enc._prepare(payload)
+            else:
+                prepared = enc._prepare_from_ids(payload)
+            t_prep = time.perf_counter()
             if prepared is None:
-                result_q.put((idx, chip_id, None, None))
+                result_q.put((idx, chip_id, None, None, 0))
                 continue
             ext_host, n = prepared
             emb, steps = enc._replay_timed(ext_host, n, normalize=normalize)
-            result_q.put((idx, chip_id, emb.float().numpy().astype(np.float32), steps))
+            # Cross-process timestamps (CLOCK_MONOTONIC, comparable to the server)
+            # so the server can localize host-side overhead per hop.
+            steps["t_recv"] = t_recv
+            steps["t_prep"] = t_prep
+            steps["t_done"] = time.perf_counter()
+            steps["tok"] = getattr(enc, "_prep_tok_ms", 0.0)
+            steps["build"] = getattr(enc, "_prep_build_ms", 0.0)
+            result_q.put((idx, chip_id, emb.float().numpy().astype(np.float32), steps, n))
     except Exception as exc:  # surface build/serve failures to the parent
         try:
             ready_q.put((chip_id, None, f"{type(exc).__name__}: {exc}"))
@@ -714,20 +889,19 @@ def _dp_worker(chip_id, args, normalize, task_q, result_q, ready_q, cores_per_wo
 class _DPServer:
     """Spawns N chip workers and dispatches embedding requests across them."""
 
-    def __init__(self, args, normalize):
+    def __init__(self, args, normalize, cores_per_worker=0):
         self.n = args.dp
         self.normalize = normalize
         ctx = mp.get_context("spawn")
-        total_cores = os.cpu_count() or 64
-        cores_per_worker = max(1, total_cores // self.n)
         self.task_qs = [ctx.Queue() for _ in range(self.n)]
         self.result_q = ctx.Queue()
         ready_q = ctx.Queue()
         self.procs = []
         for i in range(self.n):
+            worker_cores = compute_worker_cores(i, self.n, cores_per_worker, server_phys=0)
             p = ctx.Process(
                 target=_dp_worker,
-                args=(i, args, normalize, self.task_qs[i], self.result_q, ready_q, cores_per_worker),
+                args=(i, args, normalize, self.task_qs[i], self.result_q, ready_q, worker_cores),
                 name=f"chip-{i}",
                 daemon=True,
             )
@@ -767,7 +941,7 @@ class _DPServer:
             self.task_qs[c].put((0, text))
         got = [self.result_q.get() for _ in chips]
         wall_ms = (time.perf_counter() - t0) * 1000
-        return [(c, e, s) for (_, c, e, s) in got], wall_ms
+        return [(c, e, s) for (_, c, e, s, _n) in got], wall_ms
 
     def map(self, texts):
         """Distribute a list of texts round-robin across chips; return embeddings
@@ -779,7 +953,7 @@ class _DPServer:
         out = [None] * len(texts)
         steps_list = []
         for _ in range(len(texts)):
-            idx, _chip, emb, steps = self.result_q.get()
+            idx, _chip, emb, steps, _n = self.result_q.get()
             out[idx] = emb
             if steps is not None:
                 steps_list.append(steps)
