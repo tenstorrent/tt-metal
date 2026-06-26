@@ -39,14 +39,22 @@ void kernel_main() {
 
                     cb_input.wait_front(tile_granularity);
                     cb_intermediate.wait_front(tile_granularity);
-                    cb_output.reserve_back(tile_granularity);
-                    acquire_dst();
+
+                    tile_regs_acquire();
                     for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
                         add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
                     }
-                    release_dst();
+                    tile_regs_commit();
+
                     cb_input.pop_front(tile_granularity);
                     cb_intermediate.pop_front(tile_granularity);
+
+                    cb_output.reserve_back(tile_granularity);
+                    tile_regs_wait();
+                    for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
+                        pack_tile(tile_id, output_cb);
+                    }
+                    tile_regs_release();
                     cb_output.push_back(tile_granularity);
 
                     tiles_read += num_pages_to_read;

@@ -289,7 +289,7 @@ void kernel_main() {
             while (tiles_read < tiles_to_read) {
                 // Wait for FWD writer to signal that it has done its final reduction
                 if (detail::do_accumulate_output(is_forward)) {
-                    fwd_bwd_sem.wait(++fwd_sync_cnt);
+                    fwd_bwd_sem.wait_min(++fwd_sync_cnt);
                 }
 
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
