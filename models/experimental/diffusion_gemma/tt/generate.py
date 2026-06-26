@@ -23,6 +23,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_generation_logits_fn_builder_from_checkpoint_state,
 )
 from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
+from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
 class GeneratedBlock(NamedTuple):
@@ -256,6 +257,30 @@ def make_seeded_host_noise_tokens_fn(
         return noise_tokens_for_step
 
     return noise_tokens_for_block
+
+
+def make_seeded_gumbel_noise_fn(
+    mesh_device,
+    *,
+    batch: int,
+    canvas_len: int,
+    vocab_size: int,
+    seed: int,
+):
+    """Create deterministic device Gumbel noise hooks for ``generate_blocks``."""
+    _check_random_token_args(batch, canvas_len, vocab_size)
+
+    def gumbel_noise_for_block(block_idx: int):
+        def gumbel_noise_for_step(step: int):
+            return TS.sample_gumbel_noise(
+                (batch, 1, canvas_len, vocab_size),
+                device=mesh_device,
+                seed=seed + block_idx * 1_000_003 + step,
+            )
+
+        return gumbel_noise_for_step
+
+    return gumbel_noise_for_block
 
 
 def commit_canvas_tokens(
@@ -636,6 +661,7 @@ def generate_text_from_checkpoint_state(
     init_canvas_fn: Callable[[int, int], object] | None = None,
     vocab_size: int | None = None,
     seed: int | None = None,
+    gumbel_seed: int | None = None,
     noise_seed: int | None = None,
     batch: int = 1,
     adapter_kwargs: dict | None = None,
@@ -675,6 +701,18 @@ def generate_text_from_checkpoint_state(
             canvas_len=config.canvas_length,
             vocab_size=vocab_size,
             seed=noise_seed if noise_seed is not None else seed + 1,
+        )
+    if (
+        "gumbel_noise_fn" not in generate_kwargs
+        and vocab_size is not None
+        and (seed is not None or gumbel_seed is not None)
+    ):
+        generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
+            tt_model.mesh_device,
+            batch=batch,
+            canvas_len=config.canvas_length,
+            vocab_size=vocab_size,
+            seed=gumbel_seed if gumbel_seed is not None else seed + 2,
         )
     if "eos_token_id" not in generate_kwargs:
         eos_token_id = getattr(tokenizer, "eos_token_id", None)

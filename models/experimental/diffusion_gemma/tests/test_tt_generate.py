@@ -19,6 +19,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     generation_token_ids,
     host_canvas_to_device,
     host_tokens_to_device,
+    make_seeded_gumbel_noise_fn,
     make_host_canvas_init_fn,
     make_seeded_host_canvas_init_fn,
     make_seeded_host_noise_tokens_fn,
@@ -566,6 +567,10 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
         calls["noise_tokens"] = (mesh_device, kwargs)
         return "noise"
 
+    def fake_gumbel_noise_fn(mesh_device, **kwargs):
+        calls["gumbel_noise"] = (mesh_device, kwargs)
+        return "gumbel"
+
     def fake_builder_factory(dg_state_dict, **kwargs):
         calls["builder"] = (dg_state_dict, kwargs)
         return "builder"
@@ -576,6 +581,7 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
 
     monkeypatch.setattr(G, "make_seeded_host_canvas_init_fn", fake_canvas_init_fn)
     monkeypatch.setattr(G, "make_seeded_host_noise_tokens_fn", fake_noise_tokens_fn)
+    monkeypatch.setattr(G, "make_seeded_gumbel_noise_fn", fake_gumbel_noise_fn)
 
     out = generate_text_from_checkpoint_state(
         _Model(),
@@ -586,6 +592,7 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
         config=DiffusionConfig(canvas_length=4),
         vocab_size=99,
         seed=123,
+        gumbel_seed=321,
         noise_seed=456,
         batch=2,
         logits_fn_builder_factory=fake_builder_factory,
@@ -611,7 +618,17 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
             "seed": 456,
         },
     )
+    assert calls["gumbel_noise"] == (
+        "mesh",
+        {
+            "batch": 2,
+            "canvas_len": 4,
+            "vocab_size": 99,
+            "seed": 321,
+        },
+    )
     assert calls["generate"][4]["init_canvas_fn"] == "init"
+    assert calls["generate"][4]["gumbel_noise_fn"] == "gumbel"
     assert calls["generate"][4]["noise_tokens_fn"] == "noise"
     assert calls["generate"][4]["logits_fn_builder"] == "builder"
 
@@ -777,6 +794,40 @@ def test_generate_text_from_checkpoint_state_preserves_explicit_noise_tokens(mon
 
     assert out == "result"
     assert calls["generate"]["noise_tokens_fn"] == "explicit-noise"
+
+
+def test_generate_text_from_checkpoint_state_preserves_explicit_gumbel_noise(monkeypatch):
+    calls = {}
+
+    class _Model:
+        mesh_device = "mesh"
+
+    def fail_gumbel_noise_fn(*args, **kwargs):
+        raise AssertionError("explicit gumbel_noise_fn should not be replaced")
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    monkeypatch.setattr(G, "make_seeded_gumbel_noise_fn", fail_gumbel_noise_fn)
+
+    out = generate_text_from_checkpoint_state(
+        _Model(),
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        vocab_size=99,
+        seed=123,
+        gumbel_noise_fn="explicit-gumbel",
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["generate"]["gumbel_noise_fn"] == "explicit-gumbel"
 
 
 def test_generate_text_from_checkpoint_state_uses_tokenizer_eos_by_default():
@@ -1206,3 +1257,24 @@ def test_make_seeded_host_noise_tokens_fn_generates_step_noise(monkeypatch):
     assert torch.equal(calls[0][1], calls[2][1])
     assert not torch.equal(calls[0][1], calls[1][1])
     assert int(calls[0][1].min()) >= 0 and int(calls[0][1].max()) < 16
+
+
+def test_make_seeded_gumbel_noise_fn_generates_block_step_seeds(monkeypatch):
+    calls = []
+
+    def fake_sample_gumbel_noise(shape, *, device, seed):
+        calls.append((shape, device, seed))
+        return f"gumbel-{len(calls)}"
+
+    monkeypatch.setattr(G.TS, "sample_gumbel_noise", fake_sample_gumbel_noise)
+
+    noise = make_seeded_gumbel_noise_fn("mesh", batch=2, canvas_len=4, vocab_size=16, seed=31)
+
+    assert noise(0)(0) == "gumbel-1"
+    assert noise(0)(1) == "gumbel-2"
+    assert noise(1)(0) == "gumbel-3"
+    assert calls == [
+        ((2, 1, 4, 16), "mesh", 31),
+        ((2, 1, 4, 16), "mesh", 32),
+        ((2, 1, 4, 16), "mesh", 1_000_034),
+    ]
