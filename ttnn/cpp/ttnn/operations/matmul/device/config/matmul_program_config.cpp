@@ -6,6 +6,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
+#include <tt-metalium/mesh_command_queue.hpp>
 
 namespace ttnn::operations::matmul {
 
@@ -992,6 +993,10 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
+    TT_FATAL(
+        !input_tensor_a.device()->mesh_command_queue().trace_id().has_value(),
+        "ttnn.matmul without a program_config is not trace-safe. Pass a program config to use matmul inside trace "
+        "capture.");
     auto config = generate_matmul_program_config(
         input_tensor_a,
         input_tensor_b,

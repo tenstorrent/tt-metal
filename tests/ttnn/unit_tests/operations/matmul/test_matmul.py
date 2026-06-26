@@ -3937,3 +3937,55 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
 
     with expect_error(RuntimeError, r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
         ttnn.matmul(in0, in1, program_config=program_config)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 10_000_000}], indirect=True)
+def test_matmul_without_program_config_fatals_during_trace(device, expect_error):
+    """ttnn.matmul without a program_config must raise inside trace capture.
+
+    Auto-config queries live device L1 space, making the program cache key
+    non-deterministic. This can cause spurious cache misses (and a cryptic crash)
+    if the same matmul is captured twice with different L1 occupancy.
+
+    Related issue: https://github.com/tenstorrent/tt-metal/issues/48275
+    """
+    a = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Sanity: works fine outside trace capture.
+    out = ttnn.matmul(a, b)
+    assert out.shape == (1, 1, 32, 32)
+
+    # Inside trace capture it must fatal with a clear message.
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        with expect_error(RuntimeError, "not trace-safe"):
+            ttnn.matmul(a, b)
+    finally:
+        ttnn.end_trace_capture(device, tid, cq_id=0)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 10_000_000}], indirect=True)
+def test_matmul_with_program_config_succeeds_during_trace(device):
+    """ttnn.matmul with an explicit program_config must work inside trace capture."""
+    a = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+    )
+
+    ttnn.matmul(a, b, program_config=program_config)
+    ttnn.synchronize_device(device)
+
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.matmul(a, b, program_config=program_config)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.release_trace(device, tid)
