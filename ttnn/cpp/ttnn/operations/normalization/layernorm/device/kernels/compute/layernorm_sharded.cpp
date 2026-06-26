@@ -180,8 +180,7 @@ void kernel_main() {
     // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
     if constexpr (is_allgather_worker) {
         reconfig_data_format(cb_scaler_global_id, cb_ex_external_id);
-        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
-            cb_ex_external_id, cb_scaler_global_id, cb_ex_id);
+        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_ex_external_id, cb_scaler_global_id, cb_ex_id);
         cb_ex.reserve_back(num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -189,7 +188,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_ex_external.wait_front(1);
-                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                     cb_ex_external_id, cb_scaler_global_id, 0, scaler0, dst0);
                 cb_ex_external.pop_front(1);
             }
@@ -202,7 +201,7 @@ void kernel_main() {
             pack_tile(dst0, cb_ex_id);
             tile_regs_release();
         }
-        reduce_uninit<FP32_DEST_ACC>();
+        reduce_uninit();
         cb_ex.push_back(num_tiles_per_allgather_worker);
         reconfig_data_format(cb_ex_external_id, cb_scaler_global_id);
         cb_ex.wait_front(num_tiles_per_allgather_worker);
@@ -294,8 +293,7 @@ void kernel_main() {
     // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
     if constexpr (is_allgather_worker) {
         reconfig_data_format(cb_scaler_global_id, cb_ex_external2_id);
-        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
-            cb_ex_external2_id, cb_scaler_global_id, cb_ex2_id);
+        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_ex_external2_id, cb_scaler_global_id, cb_ex2_id);
         cb_ex2.reserve_back(num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -304,7 +302,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
                 cb_ex_external2.wait_front(1);
-                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
+                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
                     cb_ex_external2_id, cb_scaler_global_id, 0, scaler0, dst0);
                 cb_ex_external2.pop_front(1);
             }
@@ -317,7 +315,7 @@ void kernel_main() {
             pack_tile(dst0, cb_ex2_id);
             tile_regs_release();
         }
-        reduce_uninit<FP32_DEST_ACC>();
+        reduce_uninit();
         cb_ex2.push_back(num_tiles_per_allgather_worker);
         reconfig_data_format(cb_xmm2_id, cb_scaler_id);
 

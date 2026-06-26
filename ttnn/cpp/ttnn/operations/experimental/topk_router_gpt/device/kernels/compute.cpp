@@ -308,9 +308,9 @@ void kernel_main() {
 
     tile_regs_acquire();
     reconfig_data_format(cb_bcast_scaler_id, cb_softmax_tmp_id);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, true>(cb_softmax_tmp_id, cb_bcast_scaler_id, cb_reduce_scalar_id);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_softmax_tmp_id, cb_bcast_scaler_id, cb_reduce_scalar_id);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_softmax_tmp_id, cb_bcast_scaler_id, 0, 0, 0);
-    reduce_uninit<true>(cb_reduce_scalar_id);
+    reduce_uninit(cb_reduce_scalar_id);
     recip_tile_init();
     recip_tile(0);
     tile_regs_commit();
