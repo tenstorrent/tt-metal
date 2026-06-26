@@ -6,6 +6,7 @@
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_to_dest.h"
 #include "tensor_shape.h"
 
 /*************************************************************************
@@ -72,20 +73,15 @@ inline void llk_unpack_A_init(
             // operand requested with unpack_to_dest falls through to the normal (UNP_A) path below.
             if constexpr (unpack_to_dest) {
                 if (llk_unpack_is_to_dest_32b(operand_id)) {
-                    _llk_unpack_unary_operand_init_<
-                        p_unpacr::UNP_DEST,
-                        false /*transpose*/,
-                        DST_ACCUM_MODE,
-                        binary_reuse_dest,
-                        true>(operand_id, tensor_shape, 1);
+                    _llk_unpack_to_dest_init_(operand_id, 1);
                     return;
                 }
             }
             if (transpose_of_faces && within_face_16x16_transpose) {
-                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest, false>(
+                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest>(
                     operand_id, tensor_shape, 1);
             } else {
-                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest, false>(
+                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest>(
                     operand_id, tensor_shape, 1);
             }
         } else {
@@ -128,12 +124,12 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         // Route a 32-bit operand to UNP_DEST, 16-bit operands fall through to the normal UNP_A path.
         if constexpr (unpack_to_dest) {
             if (llk_unpack_is_to_dest_32b(operand_id)) {
-                _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(l1_tile_idx, tensor_shape);
+                _llk_unpack_to_dest_<DST_SYNC_MODE>(l1_tile_idx);
             } else {
-                _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(l1_tile_idx, tensor_shape);
+                _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
             }
         } else {
-            _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(l1_tile_idx, tensor_shape);
+            _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
         }
     } else {
         constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
@@ -171,15 +167,13 @@ inline void llk_unpack_A_block(
             // Route a 32-bit operand to UNP_DEST. A 16-bit operand falls through to the normal UNP_A path.
             if constexpr (unpack_to_dest) {
                 if (llk_unpack_is_to_dest_32b(operand_id)) {
-                    _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
-                        rd_entry_idx + tile_index, tensor_shape);
+                    _llk_unpack_to_dest_<DST_SYNC_MODE>(rd_entry_idx + tile_index);
                 } else {
-                    _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(
+                    _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(
                         rd_entry_idx + tile_index, tensor_shape);
                 }
             } else {
-                _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(
-                    rd_entry_idx + tile_index, tensor_shape);
+                _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(rd_entry_idx + tile_index, tensor_shape);
             }
         } else {
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
