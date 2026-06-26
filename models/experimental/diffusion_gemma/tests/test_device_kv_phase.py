@@ -28,9 +28,8 @@ from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.tt.generate import (
     commit_canvas_tokens,
-    generate_blocks,
+    generate_from_prompt_tokens,
     make_host_canvas_init_fn,
-    prefill_prompt_tokens,
 )
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -468,10 +467,6 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
     v_prompt_before = _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh)
 
     prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.long)
-    assert prefill_prompt_tokens(model, prompt_tokens) == prompt_len
-    _assert_regions_changed(k_prompt_before, _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh))
-    _assert_regions_changed(v_prompt_before, _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh))
-
     k_block0_before = _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
     v_block0_before = _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
     k_block1_before = _cache_region(k_cache, prompt_len + canvas_len, prompt_len + 2 * canvas_len, is_mesh=is_mesh)
@@ -503,10 +498,10 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
 
     init_canvases = [torch.randint(0, vocab_size, (1, canvas_len), dtype=torch.long) for _ in range(num_blocks)]
     logits_fn = _PositionDependentDeviceLogits(mesh_device, canvas_len=canvas_len, vocab_size=vocab_size)
-    out = generate_blocks(
+    out = generate_from_prompt_tokens(
         model,
         logits_fn,
-        prompt_len=prompt_len,
+        prompt_tokens,
         num_blocks=num_blocks,
         config=DiffusionConfig(
             canvas_length=canvas_len,
@@ -519,6 +514,8 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
     )
 
     assert out.prompt_len == prompt_len
+    _assert_regions_changed(k_prompt_before, _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh))
+    _assert_regions_changed(v_prompt_before, _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh))
     assert out.next_pos == prompt_len + num_blocks * canvas_len
     assert logits_fn.offsets == [prompt_len, prompt_len + canvas_len]
     expected = torch.cat(

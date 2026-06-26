@@ -11,6 +11,7 @@ from models.experimental.diffusion_gemma.tt.generate import (
     GeneratedBlock,
     denoise_and_commit_block,
     generate_blocks,
+    generate_from_prompt_tokens,
     host_canvas_to_device,
     host_tokens_to_device,
     make_host_canvas_init_fn,
@@ -132,6 +133,57 @@ def test_generate_blocks_advances_position_and_concatenates_commits():
         ("block", "canvas-1", 35, "gumbel-1", "noise-1"),
         ("block", "canvas-2", 38, "gumbel-2", "noise-2"),
     ]
+
+
+def test_generate_from_prompt_tokens_prefills_then_runs_blocks():
+    calls = []
+    prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    config = DiffusionConfig(canvas_length=3)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[7, 8, 9]], dtype=torch.long),
+        prompt_len=prompt_tokens.shape[1],
+        next_pos=prompt_tokens.shape[1] + config.canvas_length,
+        trajectories=[],
+    )
+
+    def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
+        calls.append(("prefill", tt_model, tokens, page_table, page_tables_per_layer))
+        return tokens.shape[1]
+
+    def fake_blocks(tt_model, logits_fn, **kwargs):
+        calls.append(("blocks", tt_model, logits_fn, kwargs))
+        return generation
+
+    init_canvas_fn = object()
+    gumbel_noise_fn = object()
+    noise_tokens_fn = object()
+    out = generate_from_prompt_tokens(
+        "model",
+        "logits",
+        prompt_tokens,
+        num_blocks=2,
+        config=config,
+        init_canvas_fn=init_canvas_fn,
+        gumbel_noise_fn=gumbel_noise_fn,
+        noise_tokens_fn=noise_tokens_fn,
+        page_table="page-table",
+        page_tables_per_layer=["layer-pages"],
+        prefill_fn=fake_prefill,
+        blocks_fn=fake_blocks,
+    )
+
+    assert out is generation
+    assert calls[0] == ("prefill", "model", prompt_tokens, "page-table", ["layer-pages"])
+    assert calls[1][0:3] == ("blocks", "model", "logits")
+    kwargs = calls[1][3]
+    assert kwargs["prompt_len"] == prompt_tokens.shape[1]
+    assert kwargs["num_blocks"] == 2
+    assert kwargs["config"] is config
+    assert kwargs["init_canvas_fn"] is init_canvas_fn
+    assert kwargs["gumbel_noise_fn"] is gumbel_noise_fn
+    assert kwargs["noise_tokens_fn"] is noise_tokens_fn
+    assert kwargs["page_table"] == "page-table"
+    assert kwargs["page_tables_per_layer"] == ["layer-pages"]
 
 
 def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):

@@ -246,3 +246,45 @@ def generate_blocks(
 
     generated = torch.cat(committed_blocks, dim=1) if committed_blocks else torch.zeros((1, 0), dtype=torch.long)
     return DeviceGeneration(generated=generated, prompt_len=prompt_len, next_pos=next_pos, trajectories=trajectories)
+
+
+def generate_from_prompt_tokens(
+    tt_model,
+    logits_fn,
+    prompt_tokens: torch.Tensor,
+    *,
+    num_blocks: int,
+    config: DiffusionConfig,
+    init_canvas_fn: Callable[[int, int], object],
+    gumbel_noise_fn=None,
+    noise_tokens_fn=None,
+    page_table=None,
+    page_tables_per_layer=None,
+    prefill_fn: Callable[..., int] = prefill_prompt_tokens,
+    blocks_fn: Callable[..., DeviceGeneration] = generate_blocks,
+) -> DeviceGeneration:
+    """Prefill prompt K/V, then generate and commit ``num_blocks`` canvases.
+
+    This host-token entrypoint is intentionally below tokenizer/detokenizer level:
+    callers still own chat templating, production canvas RNG, and EOS policy. It
+    is the reusable bridge needed by device-vs-HF replay tests, where prompt ids
+    and per-step noise are injected exactly.
+    """
+    prompt_len = prefill_fn(
+        tt_model,
+        prompt_tokens,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+    )
+    return blocks_fn(
+        tt_model,
+        logits_fn,
+        prompt_len=prompt_len,
+        num_blocks=num_blocks,
+        config=config,
+        init_canvas_fn=init_canvas_fn,
+        gumbel_noise_fn=gumbel_noise_fn,
+        noise_tokens_fn=noise_tokens_fn,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+    )
