@@ -324,6 +324,14 @@ Keep the CCL algorithm, payload dtype, collective dimension, topology, link coun
 
 The final report must list every material decode CCL row with payload dtype, input/output memory configs, CCL axis/dim, topology, `chunks_per_sync`, `num_workers_per_link`, `num_buffers_per_channel`, persistent output buffer status, persistent intermediate buffer status, row time, and kept/rejected decision. A stage with repeated decode CCL rows using default non-persistent buffers is incomplete unless a persistent/preallocated candidate was measured or a precise blocker is recorded.
 
+### OPT-010: Compare packed and split MLP gate/up in decode
+
+For MLP-style gate/up projections, "pack the weights and run one larger matmul" is a strong first candidate, not a proof. If the gate/up group is material and both families are legal, compare packed gate-up against separate gate plus up while holding dtype/fidelity, input memory config, residual layout, downstream elementwise contract, and row-parallel output contract fixed. This is a special case of the "fewer larger matmuls are generally better than more small ones" rule: the usual bias is toward packing, but the measured whole-layer winner is the optimization target.
+
+A packed gate/up candidate must include the cost of splitting or reshaping the packed output before the activation and multiply. A split candidate must include both matmul launches and any extra layout movement. Do not keep packed gate/up merely because it has fewer ops if the doubled output width forces a worse `per_core_N`, `in0_block_w`, output subblock, L1 allocation, slice/layout row, or precision policy. Do not keep split gate/up merely because the individual matmul rows look faster if launch count or downstream layout makes the traced layer slower.
+
+The final report for a material gate/up group must list packed and split candidate rows, program configs, input/output memory configs, weight memory configs, dtype/fidelity, split/slice/layout rows, elementwise row, downstream reduce-scatter or all-gather rows, whole-layer traced latency, correctness, and kept/rejected decision. If one family is impossible, report the exact API, shape, memory, program-config, L1, trace, or correctness blocker.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
