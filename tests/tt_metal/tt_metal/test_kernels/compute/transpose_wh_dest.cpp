@@ -11,7 +11,7 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr std::uint32_t NHtWt = get_arg(args::NHtWt);
+    constexpr uint32_t NHtWt = get_arg(args::NHtWt);
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
@@ -22,7 +22,7 @@ void kernel_main() {
     // - assumes the tiles come in in column major order from reader
     // - uses reader_unary_transpose_wh
     // - transpose_dest each tile
-    for (std::uint32_t n = 0; n < NHtWt; n++) {
+    for (uint32_t n = 0; n < NHtWt; n++) {
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
 

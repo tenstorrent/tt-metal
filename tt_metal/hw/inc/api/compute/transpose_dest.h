@@ -26,7 +26,7 @@ namespace ckernel {
  * materialization paths.
  */
 template <bool is_32bit = false, bool transpose_of_faces = true>
-ALWI void transpose_dest_init([[maybe_unused]] std::uint32_t operand = 0) {
+ALWI void transpose_dest_init([[maybe_unused]] uint32_t operand = 0) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest_init<transpose_of_faces, is_32bit>()));
 #else
@@ -49,7 +49,7 @@ ALWI void transpose_dest_init([[maybe_unused]] std::uint32_t operand = 0) {
  */
 // clang-format on
 template <bool is_32bit = false, bool transpose_of_faces = true>
-ALWI void transpose_dest(std::uint32_t idst) {
+ALWI void transpose_dest(uint32_t idst) {
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
 #ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest<transpose_of_faces, is_32bit>(idst)));

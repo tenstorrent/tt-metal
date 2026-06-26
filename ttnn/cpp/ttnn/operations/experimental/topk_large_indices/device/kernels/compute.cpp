@@ -35,19 +35,19 @@ inline void _topk_large_indices_mark_neginf_indices_init_() {
         .set(ADDR_MOD_0);
 }
 
-template <std::uint32_t K>
+template <uint32_t K>
 inline void _topk_large_indices_mark_neginf_indices_() {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
-    constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
-    constexpr std::uint32_t indices_offset = tiles_per_sequence * 64;
-    constexpr std::uint32_t iterations = (K == 512 ? 1 : K == 1024 ? 2 : 4) * 16;
+    constexpr uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
+    constexpr uint32_t indices_offset = tiles_per_sequence * 64;
+    constexpr uint32_t iterations = (K == 512 ? 1 : K == 1024 ? 2 : 4) * 16;
 
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0xFF80);
     TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
     TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0xFFFF);
 
-    for (std::uint32_t i = 0; i < iterations; ++i) {
+    for (uint32_t i = 0; i < iterations; ++i) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
@@ -61,32 +61,32 @@ inline void _topk_large_indices_mark_neginf_indices_() {
 
 namespace {
 
-constexpr std::uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
+constexpr uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
 
-template <std::uint32_t K>
-FORCE_INLINE void materialize_index_rank_order(std::uint32_t idst, std::uint32_t indices_cb) {
+template <uint32_t K>
+FORCE_INLINE void materialize_index_rank_order(uint32_t idst, uint32_t indices_cb) {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
-    constexpr std::uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
+    constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
 
     transpose_dest_init<true, false>(indices_cb);
-    for (std::uint32_t t = 0; t < tiles_per_sequence; ++t) {
+    for (uint32_t t = 0; t < tiles_per_sequence; ++t) {
         transpose_dest<true, false>(idst + tiles_per_sequence + t);
     }
 }
 
-template <std::uint32_t K>
-FORCE_INLINE void mark_neginf_indices(std::uint32_t idst) {
+template <uint32_t K>
+FORCE_INLINE void mark_neginf_indices(uint32_t idst) {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     MATH((ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_()));
     MATH((_llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>, idst, VectorMode::RC_custom)));
 }
 
-template <std::uint32_t K>
+template <uint32_t K>
 FORCE_INLINE void process_chunk(
-    CircularBuffer& input_cb, std::uint32_t dst_base, std::uint32_t active_elements, bool ascending) {
-    constexpr std::uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
-    const std::uint32_t input_cb_id = input_cb.get_cb_id();
+    CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
+    constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
+    const uint32_t input_cb_id = input_cb.get_cb_id();
     input_cb.wait_front(tiles_per_sequence);
     topk_xl_copy_tile_init(input_cb_id);
     topk_xl_copy_tile<K>(input_cb_id, dst_base, 0, active_elements);
@@ -106,19 +106,19 @@ FORCE_INLINE void process_chunk(
 }  // namespace
 
 void kernel_main() {
-    const std::uint32_t num_rows = get_arg_val<std::uint32_t>(0);
-    const std::uint32_t num_chunks = get_arg_val<std::uint32_t>(1);
-    const std::uint32_t tail_elements = get_arg_val<std::uint32_t>(2);
+    const uint32_t num_rows = get_arg_val<uint32_t>(0);
+    const uint32_t num_chunks = get_arg_val<uint32_t>(1);
+    const uint32_t tail_elements = get_arg_val<uint32_t>(2);
 
-    constexpr std::uint32_t input_cb = get_compile_time_arg_val(0);
-    constexpr std::uint32_t indices_cb = get_compile_time_arg_val(1);
-    constexpr std::uint32_t K = get_compile_time_arg_val(2);
+    constexpr uint32_t input_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t indices_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t K = get_compile_time_arg_val(2);
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
-    constexpr std::uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
-    constexpr std::uint32_t sequence_tiles = tiles_per_sequence * 2u;
-    constexpr std::uint32_t slot0 = 0;
-    constexpr std::uint32_t slot1 = sequence_tiles;
+    constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
+    constexpr uint32_t sequence_tiles = tiles_per_sequence * 2u;
+    constexpr uint32_t slot0 = 0;
+    constexpr uint32_t slot1 = sequence_tiles;
 
     compute_kernel_hw_startup(input_cb, indices_cb);
     pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
@@ -126,12 +126,12 @@ void kernel_main() {
     CircularBuffer input_cb_obj(input_cb);
     CircularBuffer indices_cb_obj(indices_cb);
 
-    for (std::uint32_t row = 0; row < num_rows; ++row) {
+    for (uint32_t row = 0; row < num_rows; ++row) {
         tile_regs_acquire();
 
         topk_xl_separate_indices_row_major_init_static<0, 0>();
 
-        const std::uint32_t first_chunk_elements = (num_chunks == 1) ? tail_elements : K;
+        const uint32_t first_chunk_elements = (num_chunks == 1) ? tail_elements : K;
         process_chunk<K>(input_cb_obj, slot0, first_chunk_elements, false);
 
         if (num_chunks == 1) {
@@ -139,8 +139,8 @@ void kernel_main() {
             topk_xl_rebuild<K, false>(slot0, false);
         }
 
-        for (std::uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
-            const std::uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
+        for (uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
+            const uint32_t active_elements = (chunk + 1 == num_chunks) ? tail_elements : K;
             process_chunk<K>(input_cb_obj, slot1, active_elements, true);
 
             topk_xl_init<K, false>();

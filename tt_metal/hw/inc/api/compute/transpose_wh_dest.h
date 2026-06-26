@@ -28,7 +28,7 @@ namespace ckernel {
  */
 template <bool is_32bit = false, bool transpose_of_faces = true>
 [[deprecated("Use transpose_dest_init<is_32bit, transpose_of_faces>(). See api/compute/transpose_dest.h.")]] ALWI void
-transpose_wh_dest_init_short([[maybe_unused]] std::uint32_t operand = 0) {
+transpose_wh_dest_init_short([[maybe_unused]] uint32_t operand = 0) {
     transpose_dest_init<is_32bit, transpose_of_faces>(operand);
 }
 
@@ -37,7 +37,7 @@ transpose_wh_dest_init_short([[maybe_unused]] std::uint32_t operand = 0) {
  */
 template <bool is_32bit = false, bool transpose_of_faces = true>
 [[deprecated("Use transpose_dest<is_32bit, transpose_of_faces>(idst). See api/compute/transpose_dest.h.")]] ALWI void
-transpose_wh_dest(std::uint32_t idst) {
+transpose_wh_dest(uint32_t idst) {
     transpose_dest<is_32bit, transpose_of_faces>(idst);
 }
 

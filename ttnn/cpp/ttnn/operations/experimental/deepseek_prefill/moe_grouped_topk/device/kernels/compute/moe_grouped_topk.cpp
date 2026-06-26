@@ -21,12 +21,12 @@
 #include "api/dataflow/circular_buffer.h"
 
 namespace blocks {
-void sigmoid(std::uint32_t cb_in_scores_id, std::uint32_t cb_sigmoid_scores_id, std::uint32_t width_tiles) {
+void sigmoid(uint32_t cb_in_scores_id, uint32_t cb_sigmoid_scores_id, uint32_t width_tiles) {
     CircularBuffer cb_in_scores(cb_in_scores_id);
     CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
     // Perform sigmoid on scores
     // Reconfigure pack/unpack for float32 after topk operations used UInt16
-    for (std::uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_scores.wait_front(1);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_in_scores_id);
@@ -49,17 +49,17 @@ void sigmoid(std::uint32_t cb_in_scores_id, std::uint32_t cb_sigmoid_scores_id, 
 }
 
 void add_bias(
-    std::uint32_t cb_sigmoid_scores_id,
-    std::uint32_t cb_in_bias_id,
-    std::uint32_t cb_biased_scores_id,
-    std::uint32_t width_tiles) {
+    uint32_t cb_sigmoid_scores_id,
+    uint32_t cb_in_bias_id,
+    uint32_t cb_biased_scores_id,
+    uint32_t width_tiles) {
     CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
     // Perform add bias on sigmoid scores
     add_tiles_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
     cb_sigmoid_scores.wait_front(width_tiles);
-    for (std::uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_bias.wait_front(1);
         tile_regs_acquire();
         add_tiles(cb_sigmoid_scores_id, cb_in_bias_id, width_tile, 0, 0);
@@ -77,11 +77,11 @@ void add_bias(
 
 template <bool stable_sort = false>
 void process_and_sort_tiles(
-    std::uint32_t cb_biased_scores_id,
-    std::uint32_t cb_expert_index_template_id,
-    std::uint32_t cb_sorted_group_scores_id,
-    std::uint32_t cb_sorted_expert_indices_temp_id,
-    std::uint32_t Wt,
+    uint32_t cb_biased_scores_id,
+    uint32_t cb_expert_index_template_id,
+    uint32_t cb_sorted_group_scores_id,
+    uint32_t cb_sorted_expert_indices_temp_id,
+    uint32_t Wt,
     bool switch_dir,
     bool ascending,
     int end_phase) {
@@ -93,7 +93,7 @@ void process_and_sort_tiles(
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     cb_expert_index_template.wait_front(Wt);
     cb_biased_scores.wait_front(Wt);
-    for (std::uint32_t wt = 0; wt < Wt; wt += 2) {
+    for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
         // transpose and unpack into dest regs
         reconfig_data_format_srca(cb_biased_scores_id);
@@ -141,9 +141,9 @@ void process_and_sort_tiles(
 }
 
 void sum_top_experts_per_group(
-    const std::uint32_t cb_top_experts_per_group_id,
-    const std::uint32_t cb_group_summed_scores_id,
-    std::uint32_t summed_experts_per_group) {
+    const uint32_t cb_top_experts_per_group_id,
+    const uint32_t cb_group_summed_scores_id,
+    uint32_t summed_experts_per_group) {
     CircularBuffer cb_top_experts_per_group(cb_top_experts_per_group_id);
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
     // sum the top experts_per_group rows for each group
@@ -153,7 +153,7 @@ void sum_top_experts_per_group(
 
     cb_group_summed_scores.reserve_back(1);
     tile_regs_acquire();
-    for (std::uint32_t i = 0; i < summed_experts_per_group; i += 2) {
+    for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
         add_tiles(cb_top_experts_per_group_id, cb_top_experts_per_group_id, i, i + 1, 0);
     }
     tile_regs_commit();
@@ -168,9 +168,9 @@ void sum_top_experts_per_group(
 
 template <bool stable_sort = false>
 void topk_group_scores(
-    const std::uint32_t cb_group_summed_scores_id,
-    const std::uint32_t cb_group_index_template_id,
-    const std::uint32_t cb_sorted_group_order_id,
+    const uint32_t cb_group_summed_scores_id,
+    const uint32_t cb_group_index_template_id,
+    const uint32_t cb_sorted_group_order_id,
     bool switch_dir,
     bool ascending,
     int log_topk_groups) {
@@ -208,13 +208,13 @@ void topk_group_scores(
 }
 
 void transpose_and_pack(
-    const std::uint32_t input_cb_index, const std::uint32_t output_cb_index, const std::uint32_t tiles) {
+    const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     CircularBuffer input_cb(input_cb_index);
     CircularBuffer output_cb(output_cb_index);
     reconfig_data_format_srca(input_cb_index);
     transpose_init(input_cb_index);
     pack_reconfig_data_format(output_cb_index);
-    for (std::uint32_t i = 0; i < tiles; i++) {
+    for (uint32_t i = 0; i < tiles; i++) {
         tile_regs_acquire();
         input_cb.wait_front(1);
         transpose_tile(input_cb_index, 0, 0);
@@ -232,14 +232,14 @@ void transpose_and_pack(
 
 template <bool stable_sort = false>
 void topk(
-    const std::uint32_t cb_winning_group_scores_id,
-    const std::uint32_t cb_winning_group_indices_id,
-    const std::uint32_t cb_final_indices_transposed_id,
-    const std::uint32_t cb_out_indices_id,
-    const std::uint32_t tiles,
-    const std::uint32_t log_tiles,
-    const std::uint32_t k,
-    const std::uint32_t logk) {
+    const uint32_t cb_winning_group_scores_id,
+    const uint32_t cb_winning_group_indices_id,
+    const uint32_t cb_final_indices_transposed_id,
+    const uint32_t cb_out_indices_id,
+    const uint32_t tiles,
+    const uint32_t log_tiles,
+    const uint32_t k,
+    const uint32_t logk) {
     CircularBuffer cb_winning_group_scores(cb_winning_group_scores_id);
     CircularBuffer cb_winning_group_indices(cb_winning_group_indices_id);
     CircularBuffer cb_final_indices_transposed(cb_final_indices_transposed_id);
@@ -270,7 +270,7 @@ void topk(
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
-    for (std::uint32_t j = 2; j < tiles; j++) {
+    for (uint32_t j = 2; j < tiles; j++) {
         reconfig_data_format_srca(cb_winning_group_scores_id);
         transpose_init(cb_winning_group_scores_id);
         transpose_tile(cb_winning_group_scores_id, j, 1);
@@ -298,12 +298,12 @@ void topk(
 }
 
 void normalize_scores(
-    const std::uint32_t cb_gathered_sigmoid_id,
-    const std::uint32_t cb_reduce_ones_scalar_id,
-    const std::uint32_t cb_reduce_intermediate_id,
-    const std::uint32_t cb_reciprocal_sums_id,
-    const std::uint32_t cb_epsilon_scalar_id,
-    const std::uint32_t cb_normalized_scores_id) {
+    const uint32_t cb_gathered_sigmoid_id,
+    const uint32_t cb_reduce_ones_scalar_id,
+    const uint32_t cb_reduce_intermediate_id,
+    const uint32_t cb_reciprocal_sums_id,
+    const uint32_t cb_epsilon_scalar_id,
+    const uint32_t cb_normalized_scores_id) {
     CircularBuffer cb_gathered_sigmoid(cb_gathered_sigmoid_id);
     CircularBuffer cb_reduce_ones_scalar(cb_reduce_ones_scalar_id);
     CircularBuffer cb_reduce_intermediate(cb_reduce_intermediate_id);
@@ -375,9 +375,9 @@ void normalize_scores(
 }
 
 void scale(
-    const std::uint32_t cb_normalized_scores_id,
-    const std::uint32_t cb_route_scale_scalar_id,
-    const std::uint32_t cb_out_weights_id) {
+    const uint32_t cb_normalized_scores_id,
+    const uint32_t cb_route_scale_scalar_id,
+    const uint32_t cb_out_weights_id) {
     CircularBuffer cb_normalized_scores(cb_normalized_scores_id);
     CircularBuffer cb_route_scale_scalar(cb_route_scale_scalar_id);
     CircularBuffer cb_out_weights(cb_out_weights_id);
@@ -404,56 +404,56 @@ void scale(
 
 void kernel_main() {
     // Circular buffer indices
-    constexpr std::uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
-    constexpr std::uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
-    constexpr std::uint32_t cb_sigmoid_scores = get_named_compile_time_arg_val("cb_sigmoid_scores");
-    constexpr std::uint32_t cb_biased_scores = get_named_compile_time_arg_val("cb_biased_scores");
-    constexpr std::uint32_t cb_out_weights = get_named_compile_time_arg_val("cb_out_weights");
-    constexpr std::uint32_t cb_out_indices = get_named_compile_time_arg_val("cb_out_indices");
-    constexpr std::uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
-    constexpr std::uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
-    constexpr std::uint32_t bias_page_size = get_named_compile_time_arg_val("bias_page_size");
-    constexpr std::uint32_t cb_sorted_group_scores = get_named_compile_time_arg_val("cb_sorted_group_scores");
-    constexpr std::uint32_t cb_sorted_expert_indices_temp =
+    constexpr uint32_t cb_in_scores = get_named_compile_time_arg_val("cb_in_scores");
+    constexpr uint32_t cb_in_bias = get_named_compile_time_arg_val("cb_in_bias");
+    constexpr uint32_t cb_sigmoid_scores = get_named_compile_time_arg_val("cb_sigmoid_scores");
+    constexpr uint32_t cb_biased_scores = get_named_compile_time_arg_val("cb_biased_scores");
+    constexpr uint32_t cb_out_weights = get_named_compile_time_arg_val("cb_out_weights");
+    constexpr uint32_t cb_out_indices = get_named_compile_time_arg_val("cb_out_indices");
+    constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
+    constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
+    constexpr uint32_t bias_page_size = get_named_compile_time_arg_val("bias_page_size");
+    constexpr uint32_t cb_sorted_group_scores = get_named_compile_time_arg_val("cb_sorted_group_scores");
+    constexpr uint32_t cb_sorted_expert_indices_temp =
         get_named_compile_time_arg_val("cb_sorted_expert_indices_temp");
-    constexpr std::uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
-    constexpr std::uint32_t cb_winning_group_scores = get_named_compile_time_arg_val("cb_winning_group_scores");
-    constexpr std::uint32_t cb_winning_group_indices = get_named_compile_time_arg_val("cb_winning_group_indices");
+    constexpr uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
+    constexpr uint32_t cb_winning_group_scores = get_named_compile_time_arg_val("cb_winning_group_scores");
+    constexpr uint32_t cb_winning_group_indices = get_named_compile_time_arg_val("cb_winning_group_indices");
 
-    constexpr std::uint32_t log_group_size = get_named_compile_time_arg_val("log_group_size");
-    constexpr std::uint32_t group_size = get_named_compile_time_arg_val("group_size");
-    constexpr std::uint32_t log_topk_groups = get_named_compile_time_arg_val("log_topk_groups");
-    constexpr std::uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
-    constexpr std::uint32_t n_activated_experts = get_named_compile_time_arg_val("n_activated_experts");
-    constexpr std::uint32_t log_n_activated_experts = get_named_compile_time_arg_val("log_n_activated_experts");
-    constexpr std::uint32_t n_activated_expert_tiles = get_named_compile_time_arg_val("n_activated_expert_tiles");
+    constexpr uint32_t log_group_size = get_named_compile_time_arg_val("log_group_size");
+    constexpr uint32_t group_size = get_named_compile_time_arg_val("group_size");
+    constexpr uint32_t log_topk_groups = get_named_compile_time_arg_val("log_topk_groups");
+    constexpr uint32_t topk_groups = get_named_compile_time_arg_val("topk_groups");
+    constexpr uint32_t n_activated_experts = get_named_compile_time_arg_val("n_activated_experts");
+    constexpr uint32_t log_n_activated_experts = get_named_compile_time_arg_val("log_n_activated_experts");
+    constexpr uint32_t n_activated_expert_tiles = get_named_compile_time_arg_val("n_activated_expert_tiles");
 
-    constexpr std::uint32_t cb_group_index_template = get_named_compile_time_arg_val("cb_group_index_template");
-    constexpr std::uint32_t cb_top_experts_per_group = get_named_compile_time_arg_val("cb_top_experts_per_group");
-    constexpr std::uint32_t cb_group_summed_scores = get_named_compile_time_arg_val("cb_group_summed_scores");
-    constexpr std::uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
-    constexpr std::uint32_t cb_sorted_group_order = get_named_compile_time_arg_val("cb_sorted_group_order");
-    constexpr std::uint32_t cb_reduce_intermediate = get_named_compile_time_arg_val("cb_reduce_intermediate");
-    constexpr std::uint32_t cb_final_indices_transposed = get_named_compile_time_arg_val("cb_final_indices_transposed");
-    constexpr std::uint32_t cb_reduce_ones_scalar = get_named_compile_time_arg_val("cb_reduce_ones_scalar");
-    constexpr std::uint32_t cb_epsilon_scalar = get_named_compile_time_arg_val("cb_epsilon_scalar");
-    constexpr std::uint32_t cb_route_scale_scalar = get_named_compile_time_arg_val("cb_route_scale_scalar");
-    constexpr std::uint32_t cb_normalized_scores = get_named_compile_time_arg_val("cb_normalized_scores");
-    constexpr std::uint32_t cb_reciprocal_sums = get_named_compile_time_arg_val("cb_reciprocal_sums");
-    constexpr std::uint32_t cb_gathered_sigmoid = get_named_compile_time_arg_val("cb_gathered_sigmoid");
+    constexpr uint32_t cb_group_index_template = get_named_compile_time_arg_val("cb_group_index_template");
+    constexpr uint32_t cb_top_experts_per_group = get_named_compile_time_arg_val("cb_top_experts_per_group");
+    constexpr uint32_t cb_group_summed_scores = get_named_compile_time_arg_val("cb_group_summed_scores");
+    constexpr uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
+    constexpr uint32_t cb_sorted_group_order = get_named_compile_time_arg_val("cb_sorted_group_order");
+    constexpr uint32_t cb_reduce_intermediate = get_named_compile_time_arg_val("cb_reduce_intermediate");
+    constexpr uint32_t cb_final_indices_transposed = get_named_compile_time_arg_val("cb_final_indices_transposed");
+    constexpr uint32_t cb_reduce_ones_scalar = get_named_compile_time_arg_val("cb_reduce_ones_scalar");
+    constexpr uint32_t cb_epsilon_scalar = get_named_compile_time_arg_val("cb_epsilon_scalar");
+    constexpr uint32_t cb_route_scale_scalar = get_named_compile_time_arg_val("cb_route_scale_scalar");
+    constexpr uint32_t cb_normalized_scores = get_named_compile_time_arg_val("cb_normalized_scores");
+    constexpr uint32_t cb_reciprocal_sums = get_named_compile_time_arg_val("cb_reciprocal_sums");
+    constexpr uint32_t cb_gathered_sigmoid = get_named_compile_time_arg_val("cb_gathered_sigmoid");
 
-    constexpr std::uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
-    constexpr std::uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
-    constexpr std::uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
+    constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+    constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
+    constexpr uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
     constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
 
-    constexpr std::uint32_t end_phase = log_group_size - 1;
+    constexpr uint32_t end_phase = log_group_size - 1;
 
-    const std::uint32_t start_height_tile = get_arg_val<std::uint32_t>(0);
-    const std::uint32_t end_height_tile = get_arg_val<std::uint32_t>(1);
+    const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
+    const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
     binary_op_init_common(cb_in_scores, cb_in_bias, cb_biased_scores);
 
-    for (std::uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
+    for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         blocks::sigmoid(cb_in_scores, cb_sigmoid_scores, width_tiles);
 
         // Perform add bias on sigmoid scores
