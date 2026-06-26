@@ -497,8 +497,10 @@ if(WITH_PYTHON_BINDINGS)
     # (LayerCompletionConsumer). Deliberately NOT linked into _ttnn and NOT on the
     # ttnn API — it links only TT::Metalium and is imported via
     # `models.demos.test.prefill_test`. Built here (where the nanobind tooling and
-    # TT::Metalium are in scope) but its sources live under models/demos/test/,
-    # alongside the Python wrapper. The .so is emitted into that same importable dir.
+    # TT::Metalium are in scope); sources live under models/demos/test/ alongside the
+    # Python wrapper. Like _ttnn, the .so is emitted into the BUILD tree and a symlink
+    # is dropped into the source package dir so `import models.demos.test._prefill_test`
+    # resolves (the symlink is covered by the repo-root `*.so` gitignore).
     # Built the same way as the `ttnn` module above: link TT::Nanobind (which already carries the
     # nanobind + Python3 include dirs) rather than nanobind_add_module (which would spin up its own
     # support lib lacking Python.h). Target name `prefill_test_ext` + PREFIX "_" → `_prefill_test.so`.
@@ -527,13 +529,23 @@ if(WITH_PYTHON_BINDINGS)
             CXX_VISIBILITY_PRESET
                 "default"
             LIBRARY_OUTPUT_DIRECTORY
-                "${PROJECT_SOURCE_DIR}/models/demos/test"
+                "${PROJECT_BINARY_DIR}/models/demos/test"
             BUILD_RPATH
                 "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
             INSTALL_RPATH
                 "${PROJECT_BINARY_DIR}/lib"
             ADDITIONAL_CLEAN_FILES
                 "${PROJECT_SOURCE_DIR}/models/demos/test/_prefill_test.so"
+    )
+    # Symlink the build-tree .so into the source package dir so it is importable as
+    # models.demos.test._prefill_test (mirrors how ttnn/ttnn/_ttnn.so links to the build).
+    add_custom_command(
+        TARGET prefill_test_ext
+        POST_BUILD
+        COMMAND
+            ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE:prefill_test_ext>"
+            "${PROJECT_SOURCE_DIR}/models/demos/test/_prefill_test.so"
+        VERBATIM
     )
 endif()
 if(TT_INSTALL)
