@@ -365,7 +365,7 @@ def run_all_to_all_dispatch_metadata_test(
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
         )
 
