@@ -240,21 +240,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
         // This is our underflow result, which handles -NaN correctly too.
         y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(y) + -1);
         y *= 0.0f;
-        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
-        // if e+i >= 0
-        v_block {
-            e_i = __builtin_rvtt_sfpiadd_v(e.get(), i.get(), sfpi::SFPIADD_MOD1_CC_GTE0);
+        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i;
+        v_if(e >= 1) {
             // Overflow: y = infinity or NaN
             // We add infinity to our underflow result to get the overflow result.
             // If underflow was NaN, then NaN+inf = NaN.  Otherwise 0+inf = inf.
             y += std::numeric_limits<float>::infinity();
-            v_if(e_i < 255) {
+            v_if(e < 255) {
                 // y = 2**i * r
-                y = sfpi::setexp(r, e_i);
+                y = sfpi::setexp(r, e);
             }
             v_endif;
         }
-        v_endblock;
+        v_endif;
     }
 
     return y;
