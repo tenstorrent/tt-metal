@@ -162,6 +162,19 @@ def create_tt_model(
             True,  # stop_at_eos
             True,  # ci_only
         ),
+        (  # DEBUG(#48222): batch-1 version of the bert-score test, to check batch-32-specificity
+            "models/demos/qwen25_vl/demo/sample_prompts/test_bert_score.json",
+            True,  # instruct mode
+            1,  # repeat_batches
+            4096,  # max_seq_len
+            1,  # batch_size = 1 (vs 32) -- the key control
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+        ),
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
@@ -232,6 +245,7 @@ def create_tt_model(
         "batch-1",  # latency
         "batch-32",  # 32 users (special because it fills tile size)
         "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
+        "ci-only-bert-score-b1",  # DEBUG(#48222): batch-1 control for the bert-score test
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
         "long-context-16k",  # real-world test for 300DPI scanned document with 16k long context
         "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context

@@ -756,6 +756,32 @@ class TTSampling(LightweightModule):
             output_tensor=tt_out_tok,
         )
 
+        # DEBUG(#48222): on real decode logits, does ttnn.sampling pick the max-VALUE gathered
+        # candidate? mismatches>0 => the op mis-picks among candidates on real data; mismatches==0
+        # but wrong decode => the candidate set (topk/gather/offsets) doesn't contain the true max.
+        # Robust + env-gated; never affects the decode.
+        import os as _os
+
+        if _os.environ.get("TT_QWEN_SAMPLING_DEBUG") == "1":
+            try:
+                self._dbg_step = getattr(self, "_dbg_step", 0)
+                _v = ttnn.to_torch(ttnn.get_device_tensors(topk_values_gathered_bf16_interleaved)[0]).float()
+                _i = ttnn.to_torch(ttnn.get_device_tensors(topk_global_indices_interleaved)[0])
+                _t = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok)[0])
+                _v = _v.reshape(-1, _v.shape[-1])
+                _i = _i.reshape(-1, _i.shape[-1]).long()
+                _tok = _t.reshape(-1).long()
+                _B = _tok.shape[0]
+                _cand_slot = _v[:_B].argmax(dim=-1)
+                _cand_tok = _i[:_B][torch.arange(_B), _cand_slot]
+                _mis = int((_tok[:_B] != _cand_tok).sum().item())
+                logger.info(
+                    f"[SAMPLING_DEBUG] step={self._dbg_step} B={_B} sampled-vs-candidate-argmax mismatches={_mis}/{_B}"
+                )
+                self._dbg_step += 1
+            except Exception as _e:
+                logger.warning(f"[SAMPLING_DEBUG] instrumentation failed: {_e}")
+
         # Compute logprobs if enabled
         if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator._use_topk_logprobs:
             # New path: top-K logprobs for gpt-oss-120b

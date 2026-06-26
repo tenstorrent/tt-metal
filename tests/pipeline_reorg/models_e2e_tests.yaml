@@ -291,11 +291,12 @@
   cmd: |
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+    export TT_QWEN_DISABLE_FORCE_ARGMAX=1 TT_QWEN_SAMPLING_DEBUG=1  # DEBUG(#48222): heavy path + per-step sampling instrumentation
+    pytest --timeout 900 models/demos/qwen25_vl/demo/demo.py -k "bert-score"
   model: qwen2.5-vl-32b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 22
       tier: 3
     bh_quietbox_2:
       timeout: 15

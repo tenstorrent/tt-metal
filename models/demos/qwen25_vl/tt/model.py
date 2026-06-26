@@ -365,8 +365,12 @@ class Transformer(TTTransformer):
         # non-Galaxy default (default_sampling_force_argmax) sets allow_force_argmax=False,
         # which forces greedy decode onto the heavy top-k/top-p pipeline that corrupts at
         # batch-32 (#48037). Must be set before super().__init__ builds the sampling module.
+        # DEBUG(#48222): TT_QWEN_DISABLE_FORCE_ARGMAX=1 reverts to the heavy path to reproduce
+        # the batch-32 gibberish for instrumentation.
+        import os as _os
+
         ag_cfg = dict(args.model_config.get("SAMPLING_AG_CONFIG", {}) or {})
-        ag_cfg["allow_force_argmax"] = True
+        ag_cfg["allow_force_argmax"] = _os.environ.get("TT_QWEN_DISABLE_FORCE_ARGMAX", "0") != "1"
         args.model_config["SAMPLING_AG_CONFIG"] = ag_cfg
 
         # Call parent constructor with vision-specific classes
