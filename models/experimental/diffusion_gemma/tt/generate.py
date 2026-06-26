@@ -191,9 +191,21 @@ def _validate_logits_fn_args(logits_fn, logits_fn_builder) -> None:
         raise ValueError("pass either logits_fn or logits_fn_builder, not both")
 
 
+def _validate_replay_canvases(canvases) -> None:
+    if not canvases:
+        return
+    if canvases[0].dim() != 2:
+        raise ValueError("host_canvases must contain tensors with shape [batch, canvas_len]")
+    expected_shape = tuple(canvases[0].shape)
+    for canvas in canvases[1:]:
+        if canvas.dim() != 2 or tuple(canvas.shape) != expected_shape:
+            raise ValueError("host_canvases must all have shape [batch, canvas_len]")
+
+
 def make_host_canvas_init_fn(mesh_device, host_canvases):
     """Create a ``generate_blocks`` init hook from fixed host canvas tensors."""
     canvases = [canvas.clone() for canvas in host_canvases]
+    _validate_replay_canvases(canvases)
 
     def init_canvas_fn(block_idx: int, start_pos: int):
         del start_pos

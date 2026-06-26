@@ -1556,6 +1556,13 @@ def test_make_host_canvas_init_fn_replays_fixed_canvases(monkeypatch):
     assert torch.equal(calls[2][1], torch.tensor([[4, 5]]))
 
 
+def test_make_host_canvas_init_fn_rejects_bad_replay_shapes():
+    with pytest.raises(ValueError, match="host_canvases"):
+        make_host_canvas_init_fn("mesh", [torch.tensor([4, 5])])
+    with pytest.raises(ValueError, match="host_canvases"):
+        make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]]), torch.tensor([[6, 7, 8]])])
+
+
 def test_make_seeded_host_canvas_init_fn_generates_reproducible_tokens(monkeypatch):
     calls = []
 
