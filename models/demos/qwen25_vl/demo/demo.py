@@ -510,11 +510,11 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        # Diagnostic A/B toggle (#48037). The actual gibberish fix is the model-level
-        # `_tt_vllm_always_refresh_decode_trace_inputs = True` (Transformer in tt/model.py), which
-        # keeps on-device sampling. Setting TT_QWEN_FORCE_HOST_SAMPLING=1 forces host argmax
-        # instead: a known-good reference (correct output) but slower (per-step logits read-back),
-        # useful to compare against the on-device path locally.
+        # Diagnostic A/B toggle (#48037). The gibberish fix is enabling the on-device force-argmax
+        # sampling path for the qwen25_vl Transformer (allow_force_argmax via SAMPLING_AG_CONFIG;
+        # see tt/model.py), which keeps greedy decode on-device. Setting TT_QWEN_FORCE_HOST_SAMPLING=1
+        # forces host argmax instead: a known-good reference (correct output) but slower (per-step
+        # logits read-back, fails the wh_llmbox_perf decode target), useful only for local A/B.
         force_host_sampling = os.environ.get("TT_QWEN_FORCE_HOST_SAMPLING", "0") == "1"
         argmax_on_device = model._supports_on_device_sampling and not force_host_sampling
         if argmax_on_device:

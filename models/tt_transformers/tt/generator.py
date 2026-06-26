@@ -1648,9 +1648,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # and frozen into the trace, so replaying the sampling trace reuses a stale
             # semaphore and the gather corrupts from the 2nd decode step (#48037). Running
             # sampling eagerly re-acquires a fresh semaphore each step.
-            sampling_enable_trace = enable_trace and not getattr(
-                self.model[i], "_tt_disable_sampling_trace", False
-            )
+            sampling_enable_trace = enable_trace and not getattr(self.model[i], "_tt_disable_sampling_trace", False)
             # Must match the capture-time decision in _capture_decode_trace_text:
             # only feed the sampled token back into device_inputs[0] for models
             # that use on-device token feedback (see _decode_token_feedback_buffer).
