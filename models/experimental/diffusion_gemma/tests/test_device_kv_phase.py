@@ -28,7 +28,7 @@ from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.tt.generate import (
     commit_canvas_tokens,
-    generate_from_prompt_tokens,
+    generate_text,
     make_seeded_host_canvas_init_fn,
 )
 from models.experimental.diffusion_gemma.config import DiffusionConfig
@@ -158,6 +158,21 @@ class _PositionDependentDeviceLogits:
         if self._last_logits is not None:
             self._last_logits.deallocate(True)
             self._last_logits = None
+
+
+class _FakeDeviceSmokeTokenizer:
+    def __init__(self, prompt_tokens):
+        self.prompt_tokens = prompt_tokens
+        self.template_calls = []
+        self.decode_calls = []
+
+    def apply_chat_template(self, messages, *, add_generation_prompt, tokenize):
+        self.template_calls.append((messages, add_generation_prompt, tokenize))
+        return self.prompt_tokens.squeeze(0).tolist()
+
+    def batch_decode(self, token_ids, **kwargs):
+        self.decode_calls.append((token_ids, kwargs))
+        return [" ".join(str(token) for token in row) for row in token_ids]
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
@@ -497,10 +512,12 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
         )
 
     logits_fn = _PositionDependentDeviceLogits(mesh_device, canvas_len=canvas_len, vocab_size=vocab_size)
-    out = generate_from_prompt_tokens(
+    tokenizer = _FakeDeviceSmokeTokenizer(prompt_tokens)
+    text_out = generate_text(
         model,
         logits_fn,
-        prompt_tokens,
+        tokenizer,
+        "hello device",
         num_blocks=num_blocks,
         config=DiffusionConfig(
             canvas_length=canvas_len,
@@ -516,7 +533,10 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
         ),
         gumbel_noise_fn=gumbel_noise_for_block,
         noise_tokens_fn=noise_tokens_for_block,
+        max_new_tokens=num_blocks * canvas_len,
+        decode_kwargs={"skip_special_tokens": True},
     )
+    out = text_out.generation
 
     assert out.prompt_len == prompt_len
     _assert_regions_changed(k_prompt_before, _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh))
@@ -531,6 +551,11 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
         dim=1,
     )
     assert torch.equal(out.generated, expected)
+    assert torch.equal(text_out.prompt_tokens, prompt_tokens)
+    assert torch.equal(text_out.sequences, torch.cat([prompt_tokens, expected], dim=1))
+    assert text_out.text == [" ".join(str(token) for token in expected.squeeze(0).tolist())]
+    assert tokenizer.template_calls == [([{"role": "user", "content": "hello device"}], True, True)]
+    assert tokenizer.decode_calls == [(expected.tolist(), {"skip_special_tokens": True})]
     _assert_regions_changed(
         k_block0_before, _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
     )
