@@ -153,7 +153,7 @@ Tensor group_norm(
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DataType> dtype,
+    const std::optional<DataType> /*dtype*/,
     std::optional<CoreGrid> core_grid,
     std::optional<bool> inplace,
     std::optional<Layout> output_layout,
@@ -369,7 +369,7 @@ Tensor group_norm(
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
             .im_data_format = DataType::BFLOAT16,
-            .out_data_format = dtype.value_or(input_tensor.dtype()),
+            .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
         return ttnn::prim::group_norm(
@@ -392,7 +392,7 @@ Tensor group_norm(
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
         .im_data_format = DataType::BFLOAT16,
-        .out_data_format = dtype.value_or(input_tensor.dtype()),
+        .out_data_format = DataType::BFLOAT16,
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};

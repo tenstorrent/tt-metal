@@ -285,11 +285,6 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        // SrcA must be reconfigured to cb_ex_global's format (bf16). On the FP32 welford path,
-        // the prior transpose_wh_init configured SrcA for the FP32 input CB; without resetting it
-        // here, add_tiles would read the bf16 variance tile (cb_ex_global) as FP32 -> garbage var
-        // -> garbage rsqrt. reconfig_data_format_srcb already handles SrcB (eps).
-        reconfig_data_format_srca(cb_ex_global_id);
         reconfig_data_format_srcb(cb_eps_id);
         add_tiles_init(cb_ex_global_id, cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
@@ -490,18 +485,7 @@ void kernel_main() {
                 CircularBuffer write_cb(write_cb_id);
                 write_cb.reserve_back(1);
                 tile_regs_wait();
-#ifndef UNTILIZE_OUT
-                // TILE output path: the packer was last configured for the bf16 intermediates
-                // (cb_xmm / cb_x). The final output CB (cb_out0_id) can be a different (e.g. FP32)
-                // format, so reconfigure the packer to it before packing; otherwise an FP32 output
-                // tile is packed with bf16 packer config -> corrupt output. Restore to the bf16
-                // intermediate format afterwards for the next iteration's packs.
-                pack_reconfig_data_format(write_cb_id);
-#endif
                 pack_tile(dst0, write_cb_id);
-#ifndef UNTILIZE_OUT
-                pack_reconfig_data_format(cb_xmm_id);
-#endif
                 tile_regs_release();
                 write_cb.push_back(1);
             }

@@ -55,11 +55,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    TT_FATAL(
-        a.dtype() == DataType::BFLOAT16 || (a.dtype() == DataType::FLOAT32 && args.use_welford),
-        "Input tensor must be BFLOAT16, or FLOAT32 with use_welford=true, got: {} (use_welford={})",
-        a.dtype(),
-        args.use_welford);
+    TT_FATAL(a.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
@@ -119,8 +115,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
-                gamma.value().dtype() == DataType::BFLOAT16 || gamma.value().dtype() == DataType::FLOAT32,
-                "Gamma tensor must be BFLOAT16 or FLOAT32, got: {}",
+                gamma.value().dtype() == DataType::BFLOAT16,
+                "Gamma tensor must be BFLOAT16, got: {}",
                 gamma.value().dtype());
         }
         if (beta.has_value()) {
@@ -161,8 +157,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
-                beta.value().dtype() == DataType::BFLOAT16 || beta.value().dtype() == DataType::FLOAT32,
-                "Beta tensor must be BFLOAT16 or FLOAT32, got: {}",
+                beta.value().dtype() == DataType::BFLOAT16,
+                "Beta tensor must be BFLOAT16, got: {}",
                 beta.value().dtype());
         }
     }

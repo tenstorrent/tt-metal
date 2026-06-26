@@ -385,12 +385,7 @@ void kernel_main() {
         cb_ex_global.wait_front(2 * num_groups);
         cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        // SrcA must be reconfigured to cb_ex_global's format (bf16). On the FP32 welford path the
-        // prior transpose_wh_tile configured SrcA for the FP32 input CB; without resetting it here,
-        // add_tiles would read the bf16 variance tile (cb_ex_global) as FP32 -> garbage var ->
-        // garbage rsqrt. reconfig_data_format_srcb already handles SrcB (eps).
         add_tiles_init(cb_ex_global_id, cb_eps_id);
-        reconfig_data_format_srca(cb_ex_global_id);
         reconfig_data_format_srcb(cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
@@ -449,16 +444,8 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        // Both SrcA and SrcB must be reset to the correct format here. SrcA must follow
-                        // cb_in0 (FP32 on the fp32-input path); without it sub_tiles_bcast_scalar reads
-                        // the FP32 input as bf16 -> garbage (x - mean). SrcB must be reset to
-                        // cb_ex_global unconditionally: with FP32 gamma/beta the previous tile's
-                        // gamma/beta step leaves SrcB as FP32, and a 2-arg reconfig against the bf16
-                        // stats (cb_eps -> cb_ex_global) would be a no-op and fail to reset it, so the
-                        // bf16 mean would be read as FP32.
                         sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                        reconfig_data_format_srca(cb_in0_id);
-                        reconfig_data_format_srcb(cb_ex_global_id);
+                        reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
 
                         tile_regs_acquire();
                         sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
@@ -471,10 +458,7 @@ void kernel_main() {
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
 
-                        // SrcA was set to the FP32 cb_in0 by the (x - mean) step above; restore it
-                        // to the mask format before reading cb_input_mask on SrcA. (bf16 path: no-op.)
                         mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
-                        reconfig_data_format_srca(cb_in0_id, cb_input_mask_id);
                         reconfig_data_format_srcb(cb_ex_global_id, cb_ex2pe_id);
                         tile_regs_acquire();
                         mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
@@ -487,11 +471,6 @@ void kernel_main() {
                         // // c. a * b
                         cb_xmm.wait_front(2);
                         mul_tiles_init(cb_xmm_id, cb_xmm_id);
-                        // SrcA must be reset to cb_xmm here. The mask-multiply above left SrcA pointing
-                        // at cb_input_mask's format; with an FP32 mask that is FP32, so reading the bf16
-                        // cb_xmm intermediate on SrcA without this reset interprets it as FP32 -> garbage.
-                        // (bf16 mask path: no-op.)
-                        reconfig_data_format_srca(cb_xmm_id);
                         reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
                         tile_regs_acquire();
                         mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
@@ -569,12 +548,8 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        // SrcA must be reset to cb_x. With an FP32 mask the (mask * rstd) step left SrcA
-                        // as FP32; the bcast-rows multiply reads the bf16 cb_x on SrcA and would
-                        // misinterpret it otherwise. (bf16 path: no-op.)
-                        reconfig_data_format_srca(cb_x_id);
-                        reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
                         mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
+                        reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
 
                         cb_x.wait_front(1);
                         tile_regs_acquire();
@@ -589,10 +564,8 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        // SrcA must follow cb_x for the same reason as the gamma step above.
-                        reconfig_data_format_srca(cb_x_id);
-                        reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
                         add_bcast_rows_init_short(cb_x_id, cb_beta_id);
+                        reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
 
                         cb_x.wait_front(1);
                         tile_regs_acquire();
@@ -608,7 +581,6 @@ void kernel_main() {
 
                     // Write out the final output
                     copy_tile_init(cb_x_id);
-                    reconfig_data_format_srca(cb_x_id);
                     reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
 
                     cb_x.wait_front(1);
@@ -618,17 +590,7 @@ void kernel_main() {
                     cb_x.pop_front(1);
                     cb_out.reserve_back(1);
                     tile_regs_wait();
-#ifndef UNTILIZE_OUT
-                    // TILE output path: the packer was last configured for the bf16 intermediate
-                    // (cb_x). cb_out_id can be a different (e.g. FP32) format, so reconfigure the
-                    // packer to it before packing; otherwise an FP32 output tile is packed with
-                    // bf16 packer config -> corrupt output. Restore to cb_x afterwards.
-                    pack_reconfig_data_format(cb_out_id);
-#endif
                     pack_tile(dst0, cb_out_id);
-#ifndef UNTILIZE_OUT
-                    pack_reconfig_data_format(cb_x_id);
-#endif
                     tile_regs_release();
                     cb_out.push_back(1);
                 }
