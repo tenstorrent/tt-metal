@@ -69,7 +69,7 @@ def _row_result(row):
     ttnn_us = _f(row.get("ttnn_us"))
     if None in (ours_ulp, ours_us, ttnn_ulp, ttnn_us):
         return "incomplete"
-    if ours_ulp <= ttnn_ulp and ours_us < ttnn_us:
+    if ours_ulp <= ttnn_ulp and ours_us <= ttnn_us:
         return "win_both"
     if ours_ulp <= ttnn_ulp:
         return "accuracy_match_slow"

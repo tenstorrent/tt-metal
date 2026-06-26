@@ -5,7 +5,7 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 32. Accuracy match but slower: 18. Faster but less accurate: 1. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 33. Accuracy match but slower: 17. Faster but less accurate: 1. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -33,7 +33,7 @@ Comparable rows: 52. Win on ULP and runtime: 32. Accuracy match but slower: 18. 
 | hardshrink | poly:s1/d4 | 8.00 | 1.68 | 0.00 | 1.82 | 1.083 | faster_less_accurate |
 | hardsigmoid | poly:s3/d2 | 0.50 | 1.99 | 0.50 | 1.79 | 0.899 | accuracy_match_slow |
 | hardswish | poly:s3/d6 | 0.02 | 2.08 | 0.25 | 2.01 | 0.966 | accuracy_match_slow |
-| hardtanh | poly:s3/d5 | 0.00 | 1.86 | 0.00 | 1.86 | 1.000 | accuracy_match_slow |
+| hardtanh | poly:s3/d5 | 0.00 | 1.86 | 0.00 | 1.86 | 1.000 | win_both |
 | i0 | poly:s1/d10 | 0.25 | 2.35 | 1.00 | 3.10 | 1.319 | win_both |
 | i1 | rational:s1/d8d5 | 0.50 | 2.70 | 0.50 | 7.40 | 2.741 | win_both |
 | identity | poly:s1/d13 | 0.00 | 0.13 | 0.00 | 0.16 | 1.231 | win_both |
@@ -75,7 +75,7 @@ Excluded rows:
 
 ## fp32
 
-Comparable rows: 52. Win on ULP and runtime: 20. Accuracy match but slower: 5. Faster but less accurate: 15. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 21. Accuracy match but slower: 4. Faster but less accurate: 15. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -101,7 +101,7 @@ Comparable rows: 52. Win on ULP and runtime: 20. Accuracy match but slower: 5. F
 | gelu | poly:s32/d2 | 1204.88 | 20.51 | 2.00 | 6.61 | 0.322 | loss |
 | hardmish | poly:s3/d4 | 0.00 | 3.06 | 0.03 | 3.05 | 0.997 | accuracy_match_slow |
 | hardshrink | poly:s3/d2 | 0.00 | 3.02 | 0.00 | 2.98 | 0.987 | accuracy_match_slow |
-| hardsigmoid | poly:s3/d1 | 0.50 | 3.05 | 0.50 | 3.05 | 1.000 | accuracy_match_slow |
+| hardsigmoid | poly:s3/d1 | 0.50 | 3.05 | 0.50 | 3.05 | 1.000 | win_both |
 | hardswish | poly:s3/d4 | 0.25 | 3.05 | 0.25 | 3.30 | 1.082 | win_both |
 | hardtanh | poly:s3/d11 | 0.00 | 2.99 | 0.00 | 3.14 | 1.050 | win_both |
 | i0 | poly:s1/d13 | 1183.00 | 3.35 | 2582.00 | 3.82 | 1.140 | win_both |

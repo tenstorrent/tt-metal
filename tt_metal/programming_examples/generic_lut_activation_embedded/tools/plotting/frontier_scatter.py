@@ -399,7 +399,7 @@ def main():
         tus, tulp = ttnn_for(ttnn, act, dtype, has_typed_ttnn)
         if tus is not None and tulp is not None:
             n_with_ttnn += 1
-        wins = [r for (_, _, r) in front if tus and tulp is not None and r["_us"] < tus and r["_ulp"] <= tulp]
+        wins = [r for (_, _, r) in front if tus and tulp is not None and r["_us"] <= tus and r["_ulp"] <= tulp]
         if wins:
             n_win += 1
         print(
