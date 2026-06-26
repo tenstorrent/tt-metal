@@ -7,14 +7,14 @@
 # (TT::Nanobind, nanobind_* helpers) and TT::Metalium are in scope. Like _ttnn, the .so is emitted to
 # the BUILD tree and symlinked into this source dir (covered by the repo-root `*.so` gitignore).
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/sources.cmake) # LAYER_COMPLETION_IMPL_SRCS
 add_library(layer_completion_ext SHARED)
 target_sources(
     layer_completion_ext
     PRIVATE
+        # shared impls (queue/reorder/router) + this module's own binding entry point + test consumer
+        ${LAYER_COMPLETION_IMPL_SRCS}
         ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_bindings.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_queue.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_reorder_buffer.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_router.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_consumer.cpp
 )
 target_link_libraries(

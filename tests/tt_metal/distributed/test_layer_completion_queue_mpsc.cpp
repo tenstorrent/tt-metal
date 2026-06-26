@@ -28,6 +28,7 @@ TEST(LayerCompletionQueueMpsc, FourProducersOneConsumerNoLossNoDup) {
 
     std::atomic<bool> start{false};
     std::vector<std::thread> producers;
+    producers.reserve(kProducers);
     for (int p = 0; p < kProducers; ++p) {
         producers.emplace_back([&, p] {
             while (!start.load(std::memory_order_acquire)) {
