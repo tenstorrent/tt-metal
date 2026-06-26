@@ -340,6 +340,7 @@ def _batched_tt_conv1d_nlc(
     compute_config=None,
     out_dtype=ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    output_sharded: bool = False,
 ) -> ttnn.Tensor:
     """Single ``ttnn.conv1d`` over all ``batch`` rows (Blackhole-only; see ``batched_shape``).
 
@@ -351,11 +352,19 @@ def _batched_tt_conv1d_nlc(
     conv_config = ttnn.Conv1dConfig(weights_dtype=params.weight.dtype)
     conv_config.config_tensors_in_dram = True
     conv_config.deallocate_activation = True
+    # Config sweep (perf/test_conv_text_encoder_perf_sweep.py, production 512x512x5 @ B*T=96 shape):
+    # the conv op was 31.6µs on the default auto-shard/no-double-buffer config. Block-sharded with both
+    # double buffers on is the fastest PCC-passing config (1.0 unchanged) at 21.7µs (1.46x). Levers, in
+    # order of impact: weights-double-buffer (~10µs — the conv re-reads the [2560,512] weight per output
+    # block), act-double-buffer (~4µs), explicit BLOCK shard (beats auto/width). act_block_h_override=32
+    # ties the default but 64 regresses hard (40-50µs); split_reader is noise. Double buffering costs
+    # extra L1 — guarded to the larger convs that benefit and verified to fit the full kmodel's L1.
+    conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    conv_config.enable_act_double_buffer = True
+    conv_config.enable_weights_double_buffer = True
+    conv_config.act_block_h_override = 32
     if params.out_channels >= 256 or params.kernel_size >= 7:
-        try:
-            conv_config.force_split_reader = True
-        except Exception:
-            pass
+        conv_config.force_split_reader = True
     if compute_config is None:
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
@@ -382,7 +391,13 @@ def _batched_tt_conv1d_nlc(
         groups=params.groups,
         dtype=out_dtype,
     )
-    # Move the (block-sharded) conv output to interleaved DRAM and return as-is; no reshape here.
+    # With ``output_sharded`` the conv's native block-sharded L1 output is returned as-is, so the
+    # consumer (the TextEncoder channel-LayerNorm) reads it in place — no ShardedToInterleaved here AND
+    # no InterleavedToSharded before the LayerNorm (the conv output is already a valid block-sharded LN
+    # input; the LN derives its program config from this shard spec). Saves two reshards/CNN stage.
+    if output_sharded and y.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        return y
+    # Otherwise move the (block-sharded) conv output to interleaved DRAM and return as-is; no reshape.
     if y.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         y = ttnn.to_memory_config(y, memory_config)
     return y
@@ -399,6 +414,7 @@ def tt_conv1d_nlc(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     preserve_input_dtype: bool = False,
     batched_shape: Optional[tuple[int, int]] = None,
+    output_sharded: bool = False,
 ) -> ttnn.Tensor:
     """
     Conv1d on activations ``[B, L, C]`` (NLC). Returns ``[B, out_L, out_C]`` (NLC).
@@ -429,6 +445,7 @@ def tt_conv1d_nlc(
             compute_config=compute_config,
             out_dtype=out_dtype,
             memory_config=memory_config,
+            output_sharded=output_sharded,
         )
     if batched_shape is not None:
         # Non-Blackhole (or custom conv_config): un-flatten, run the standard (per-item) path, then
@@ -510,10 +527,7 @@ def tt_conv1d_nlc(
         conv_config.config_tensors_in_dram = True
         conv_config.deallocate_activation = True
         if params.out_channels >= 256 or params.kernel_size >= 7:
-            try:
-                conv_config.force_split_reader = True
-            except Exception:
-                pass
+            conv_config.force_split_reader = True
         # For large L with dilation=1: capping act_block_h to 32 (one TILE row) reduces
         # the per-core CB footprint to avoid L1 overflow.  For dilation=1 this is correct
         # because the halo is only (kernel_size-1)//2 rows, well within a 32-row block.
@@ -859,15 +873,9 @@ def tt_conv_transpose1d_nlc(
         conv_config.deallocate_activation = True
         if not _use_dram_slice:
             conv_config.output_layout = ttnn.TILE_LAYOUT
-        try:
-            conv_config.enable_act_double_buffer = False
-        except Exception:
-            pass
+        conv_config.enable_act_double_buffer = False
         if params.out_channels >= 256 or params.kernel_size >= 7:
-            try:
-                conv_config.force_split_reader = True
-            except Exception:
-                pass
+            conv_config.force_split_reader = True
     if compute_config is None:
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
