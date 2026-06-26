@@ -793,13 +793,13 @@ static void emit_metal2_namespaces(
     }
 
     // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors
-    // genfiles.cpp). The CRTA buffer layout is [user-named CRTAs,
-    // TensorBinding addresses, varargs], so get_common_vararg's base skips
-    // past both the named CRTAs and the binding section.
+    // genfiles.cpp). The CRTA buffer layout is [named CRTAs, TensorBinding
+    // addresses, scratchpads, varargs], so get_common_vararg's base skips
+    // past the named CRTAs, the binding section, and the scratchpad section.
     if (s.is_metal2) {
         const uint32_t named_rta_words = static_cast<uint32_t>(s.runtime_arg_names.size());
-        const uint32_t named_crta_words =
-            static_cast<uint32_t>(s.common_runtime_arg_names.size() + s.ta_accessors.size());
+        const uint32_t named_crta_words = static_cast<uint32_t>(
+            s.common_runtime_arg_names.size() + s.ta_accessors.size() + s.scratch_accessors.size());
         f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "
           << "return get_arg_val<uint32_t>(" << named_rta_words << " + idx); }\n";
         f << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { "

@@ -1186,13 +1186,18 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 }
             }
             if (!cvarargs.empty()) {
-                // Common varargs live after the named CRTAs and the tensor-binding address section.
+                // Common varargs live after the named CRTAs, the tensor-binding section, and the
+                // scratchpad section: [named | tensor bindings | scratchpads | varargs]. This must
+                // match SetProgramRunArgs' assembly order and crta_layout.vararg_section_offset
+                // (program_spec.cpp), both of which include the scratchpad words.
                 const auto& binding_handles = kernel->tensor_binding_handles();
                 size_t tensor_binding_section_words = 0;
                 for (const auto& h : binding_handles) {
                     tensor_binding_section_words += 1u + h.num_runtime_field_crta_words;
                 }
-                const size_t crta_vararg_base = schema->common_runtime_arg_names.size() + tensor_binding_section_words;
+                const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
+                const size_t crta_vararg_base =
+                    schema->common_runtime_arg_names.size() + tensor_binding_section_words + scratchpad_section_words;
                 for (size_t j = 0; j < cvarargs.size(); ++j) {
                     crta.data()[crta_vararg_base + j] = cvarargs[j];
                 }

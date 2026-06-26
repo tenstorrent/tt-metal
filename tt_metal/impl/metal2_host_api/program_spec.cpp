@@ -2280,14 +2280,14 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 // Per-kernel resolved tensor binding data:
 //  - All the kernel's TensorBindingHandle (type is defined in kernel.hpp)
 //  - The positional CTAs to append to the kernel's (unnamed) CTAs
-//  - The full CRTA buffer layout (named CRTAs + binding section + vararg-section start),
-//    precomputed here so consumers (headergen, runtime) don't have to re-derive section
-//    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
+//  - The size (in words) of the TensorBinding section of the CRTA buffer (section 2). This is the
+//    only KernelCrtaLayout section this resolver owns; MakeProgramFromSpec assembles the full
+//    KernelCrtaLayout from each section's owner. See KernelCrtaLayout in jit_build_settings.hpp.
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
     std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
                                       // (currently, this is the only Metal 2.0 use of positional CTAs)
-    KernelCrtaLayout crta_layout;
+    uint32_t tensor_binding_section_words = 0;
 };
 
 // Resolve the tensor bindings for a single kernel:
@@ -2298,8 +2298,13 @@ struct TensorBindingsForKernel {
 //     Each binding occupies (1 + extra_crta_words) words: the always-present base address
 //     word, plus any runtime accessor field words (e.g. shape, when dynamic_tensor_shape
 //     is set on a sharded TensorParameter).
-//  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
-//     the headergen and runtime can consult it directly instead of re-summing the bindings.
+//  4. Record this kernel's TensorBinding section size (section 2 of the CRTA buffer) on the
+//     output. This resolver only owns that one section; the caller (MakeProgramFromSpec) stitches
+//     together the full KernelCrtaLayout from each section's owner.
+//
+// base_named_crta_count is the size of the user-named CRTA section (section 1) that precedes this
+// section; it is needed only to compute each handle's absolute addr_crta_offset, not to populate
+// the layout (the caller owns the num_named_words field).
 //
 // (SetProgramRunArgs will fill the address slots and runtime field slots at enqueue
 // time, extracting info from the TensorArgs.)
@@ -2334,11 +2339,8 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         out.handles.push_back(std::move(handle));
     }
 
-    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
-    out.crta_layout.tensor_binding_section_words = tensor_binding_section_words;
-    // Provisional: assumes no scratchpad section. ResolveScratchpadBindingsForKernel folds the
-    // scratchpad section in and rewrites vararg_section_offset accordingly.
-    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + tensor_binding_section_words;
+    // Only the TensorBinding section (section 2) is owned here.
+    out.tensor_binding_section_words = tensor_binding_section_words;
 
     return out;
 }
@@ -2928,23 +2930,38 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
         //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
         const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
+
+        // Assemble the kernel's CRTA buffer layout one section at a time, advancing a running word
+        // "waterline" (the first free CRTA word index) as each section is appended. Each section's
+        // size is filled by its owner. The CRTA buffer is laid out as:
+        // [ named CRTAs | TensorBinding section | Scratchpad section | varargs ].
+        KernelCrtaLayout crta_layout;
+        uint32_t crta_waterline = 0;
+
+        // Section 1 (named CRTAs): owned here — it is just the user-named common-RTA count.
+        crta_layout.num_named_words = static_cast<uint32_t>(user_named_crtas.size());
+        crta_waterline += crta_layout.num_named_words;
+
+        // Section 2 (TensorBinding): owned by ResolveTensorBindingsForKernel. Its address slots
+        // start at the current waterline.
+        //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
+        //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
-            kernel_spec, resolved_tensor_parameters, /*base_named_crta_count=*/user_named_crtas.size());
-
-        // Create TensorBindingHandles for this kernel
+            kernel_spec, resolved_tensor_parameters, /*base_named_crta_count=*/crta_waterline);
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
+        crta_layout.tensor_binding_section_words = ta_bindings.tensor_binding_section_words;
+        crta_waterline += crta_layout.tensor_binding_section_words;
 
-        // Resolve ScratchpadBindings: their CRTA address slots follow the TensorBinding section.
-        // Fold the scratchpad section into the CRTA layout (it sits before the vararg section).
+        // Section 3 (Scratchpad): owned by ResolveScratchpadBindingsForKernel. Its address slots
+        // start at the current waterline.
         ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
-            kernel_spec,
-            collected.scratchpad_by_name,
-            /*crta_start_word=*/ta_bindings.crta_layout.num_named_words +
-                ta_bindings.crta_layout.tensor_binding_section_words);
+            kernel_spec, collected.scratchpad_by_name, /*crta_start_word=*/crta_waterline);
         const std::vector<tt::tt_metal::ScratchpadBindingHandle>& scratchpad_binding_handles = sp_bindings.handles;
-        KernelCrtaLayout crta_layout = ta_bindings.crta_layout;
         crta_layout.scratchpad_section_words = sp_bindings.scratchpad_section_words;
-        crta_layout.vararg_section_offset += sp_bindings.scratchpad_section_words;
+        crta_waterline += crta_layout.scratchpad_section_words;
+
+        // Section 4 (varargs) begins at the waterline, after all three fixed sections.
+        crta_layout.vararg_section_offset = crta_waterline;
 
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
