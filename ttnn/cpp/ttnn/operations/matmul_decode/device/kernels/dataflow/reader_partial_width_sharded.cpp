@@ -2,10 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// matmul_decode targets a newer tt-metal where the OO dataflow API (Noc / CircularBuffer /
+// Semaphore / UnicastEndpoint) lives in split api/dataflow/*.h headers. In this version those
+// classes live under experimental/*.h in namespace experimental; api/dataflow/dataflow_api.h still
+// provides the C-style primitives (noc_async_*, cb_*, get_arg_val, TensorAccessor).
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+using experimental::CircularBuffer;
+using experimental::Noc;
+using experimental::Semaphore;
+using experimental::use;
 
 // Full-width-sharded matmul activation (in0 / A) reader.
 //
@@ -79,7 +87,7 @@ void kernel_main() {
         // at the offset for this K-slice.  full_in0_cb is allocated identically
         // on all cores, so the destination L1 address is the same everywhere.
         const uint32_t dst_offset_bytes = sender_id * shard_size_bytes;
-        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+        noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
             use<CircularBuffer::AddrSelector::READ_PTR>(in0_cb),  // source: this core's A slice
             full_in0_cb,                                          // destination: gathered full A (mcast)
             shard_size_bytes,
@@ -99,7 +107,7 @@ void kernel_main() {
             noc.async_atomic_barrier();
         } else {
             done_sem.set(1);
-            done_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+            done_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
                 noc, mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, num_receivers);
             noc.async_write_barrier();
         }
@@ -111,7 +119,7 @@ void kernel_main() {
 
         // All of A is now resident on every core: tell everyone it is ready.
         done_sem.set(1);
-        done_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+        done_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
             noc, mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, num_receivers);
         noc.async_write_barrier();
     }
