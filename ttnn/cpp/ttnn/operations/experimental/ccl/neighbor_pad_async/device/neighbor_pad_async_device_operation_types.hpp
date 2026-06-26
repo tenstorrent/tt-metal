@@ -82,32 +82,6 @@ struct NeighborPadAsyncParams {
         logical_h(logical_h),
         t_front_pad(t_front_pad) {}
 
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("padding_left", padding_left);
-        attrs.emplace_back("padding_right", padding_right);
-        attrs.emplace_back("padding_mode", padding_mode);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("h_neighbor_semaphore", h_neighbor_semaphore);
-        attrs.emplace_back("w_neighbor_semaphore", w_neighbor_semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("pad_dim2", pad_dim2);
-        attrs.emplace_back("pad2_left", pad2_left);
-        attrs.emplace_back("pad2_right", pad2_right);
-        attrs.emplace_back("pad2_cluster_axis", pad2_cluster_axis);
-        attrs.emplace_back("pad2_num_links", pad2_num_links);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
-        attrs.emplace_back("logical_h", logical_h);
-        attrs.emplace_back("t_front_pad", t_front_pad);
-        return attrs;
-    }
-
     // Program-cache hash / canonical-key fields. Lists exactly the structural fields the former
     // custom compute_program_hash included; the three GlobalSemaphore members and
     // using_persistent_buffers are runtime-only and intentionally excluded.
