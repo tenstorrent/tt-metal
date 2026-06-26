@@ -548,11 +548,10 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     assert_output_accuracy(golden_output, output_ttnn)
 
 
-def test_layer_norm_inputs_requires_input_tensor():
+def test_layer_norm_inputs_requires_input_tensor(expect_error):
     """``LayerNormInputs()`` without an input tensor must raise."""
-    import pytest
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "."):
         ttnn.LayerNormInputs()
 
 
