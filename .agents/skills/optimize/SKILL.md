@@ -269,6 +269,16 @@ Do not let an attention or MLP helper force the whole layer back to DRAM. Pay re
 
 The final report for an optimized decoder must list both norm rows, norm program configs, residual-add output memory configs, residual memory config before attention and MLP, and any `InterleavedToSharded`, `ShardedToInterleaved`, or reshape/slice rows used to cross helper boundaries. If norm rows are one of the largest regressions versus the prior same-context correct path, or if norms/residual adds use DRAM interleaved without a measured sharded candidate or precise blocker, the stage is not optimized.
 
+### OPT-004: Sweep DRAM-sharded decode matmul geometry, not only dtype
+
+For dominant DRAM-sharded decode matmuls, do not assume the largest available compute-core count is fastest. The logical program core count, activation shard grid, `in0_block_w`, `per_core_N`, and output subblock fields are part of the performance contract. More cores can shrink the legal K block or per-core output block enough to lose to a smaller coherent grid. This is a block-geometry version of the rule that fewer larger work chunks can beat more smaller chunks.
+
+When a DRAM-sharded matmul or repeated matmul role is material, measure at least one candidate tied to the residual or intermediate sharded layout grid, one larger-core candidate when legal, and any helper/default candidate already in the code. Keep dtype, math fidelity, weight memory config, input/output memory config, and surrounding residual layout fixed while sweeping geometry, unless the candidate requires a coherent layout change; if it does, measure the whole compatible layer path. A geometry sweep is invalid if it silently changes precision, fidelity, or weight layout from the best prior correct path or from the mandatory precision policy for that tensor group.
+
+For dense MLP or expert gate/up/down geometry work, include the best legal reduced-weight policy in the geometry sweep, usually BFP4/LoFi for MLP weights. A BFP8/HiFi2 geometry sweep is useful as a baseline, but it cannot justify accepting the MLP geometry when BFP4/LoFi was never tried, failed without diagnosis, or was not measured under the same geometry candidates. If the final MLP path uses higher precision than the best prior correct path or the mandatory BFP4/LoFi trial, record the lower-precision candidate result and the exact correctness or op-contract blocker.
+
+For each dominant matmul role, the final report must list shape, dtype/fidelity, program class, logical program core count or grid source, `in0_block_w`, `per_core_M`, `per_core_N`, output subblock fields when exposed, input and output memory configs, bandwidth classification, traced latency, correctness result, and kept/rejected decision. If `tt-perf-report` marks a dominant DRAM-sharded matmul `SLOW`, or reports missing output subblock information, do not accept the stage until a precision-locked block-geometry sweep has been tried or a precise op-contract blocker is recorded.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
