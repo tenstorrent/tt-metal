@@ -420,6 +420,10 @@ class TTSampling(LightweightModule):
             [valid_logits, masked_tail_logits],
             dim=3,
             memory_config=logits.memory_config(),
+            # Match the slices above: run concat on the sampling sub-device cores,
+            # otherwise the concat program is placed on the full Tensix grid and
+            # fails with "Kernel group cores do not match sub device cores"
+            # (TT_FATAL num_intersections == num_cores).
             sub_core_grids=self.sub_core_grids,
         )
         ttnn.deallocate(valid_logits)
