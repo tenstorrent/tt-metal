@@ -158,6 +158,7 @@ def test_canvas_sample_from_params_permuted_vocab_regenerated_noise_distribution
         _to_device(device, logits),
         sampling_params,
         default_temperature=0.8,
+        use_vocab_permuted_noise=True,
     )
     sample_ids = ttnn.to_torch(samples).squeeze(-1).to(torch.long)
 

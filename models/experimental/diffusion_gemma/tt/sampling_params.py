@@ -86,7 +86,7 @@ def canvas_sample_from_params(
     default_seed: int | None = None,
     gumbel_noise=None,
     use_vocab_chunked_noise: bool = False,
-    use_vocab_permuted_noise: bool = True,
+    use_vocab_permuted_noise: bool = False,
     vocab_chunk_size: int = 1,
 ):
     """Apply duck-typed TT sampling params to the device canvas sampler.
@@ -95,9 +95,8 @@ def canvas_sample_from_params(
     ``TTSamplingParams`` object (or a dict with the same fields), and the helper
     maps temperature/seed onto the per-position DiffusionGemma canvas sampler.
     ``top_k``/``top_p`` remain parsed-only until the reference sampler ships
-    those filters. Seed-regenerated sampling defaults to the permuted-vocab RNG
-    path because the raw ``ttnn.rand[..., vocab]`` layout is distributionally
-    biased on QB2.
+    those filters. The permuted-vocab RNG workaround is opt-in until it is
+    validated at production vocabulary scale.
     """
     from models.experimental.diffusion_gemma.tt import sampling as TS
 
