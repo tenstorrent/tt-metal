@@ -4,8 +4,10 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -261,6 +263,131 @@ TEST(KvChunkAddressTableProtobuf, TextFormatRoundTripViaFile) {
     }
 
     std::filesystem::remove(tmp_path);
+}
+
+// --- KvChunkAddressTableSet (multiple configs per cache, issue #184) ---
+
+// Deterministically fill one group's table from a seed, using its own config.
+void populate_group(KvChunkAddressTable& table, uint32_t seed) {
+    const auto& cfg = table.config();
+    auto g0 = table.add_device_group({make_fnid(seed, 0)});
+    auto g1 = table.add_device_group({make_fnid(seed, 0), make_fnid(seed, 1)});
+    table.set_fabric_node_host(make_fnid(seed, 0), "host-" + std::to_string(seed));
+    table.set_fabric_node_host(make_fnid(seed, 1), "host-" + std::to_string(seed));
+    std::array<DeviceGroupIndex, 2> groups = {g0, g1};
+
+    for (uint32_t slot = 0; slot < cfg.num_slots; slot++) {
+        for (uint32_t layer = 0; layer < cfg.num_layers; layer++) {
+            for (uint32_t pos = 0; pos < cfg.max_sequence_length; pos += cfg.chunk_n_tokens) {
+                uint64_t h = pseudo_rand(seed * 31 + slot, layer, pos);
+                if ((h & 0x7) == 0) {
+                    continue;  // leave some entries empty (sparse)
+                }
+                uint64_t addr = 0x1'0000'0000ULL + (h & 0xFFFF'FFFF'FFFF'FF00ULL);
+                uint32_t size = 256 + (static_cast<uint32_t>((h >> 8) % 8) * 64);
+                table.set(
+                    layer,
+                    pos,
+                    slot,
+                    KvCacheLocation{.noc_addr = addr, .size_bytes = size, .device_group_index = groups[h % 2]});
+            }
+        }
+    }
+}
+
+// A set of 3 groups with deliberately different dimensions and chunking.
+KvChunkAddressTableSet make_test_set() {
+    std::vector<KvChunkAddressTableConfig> configs = {
+        {.num_layers = 4, .max_sequence_length = 128, .num_slots = 2, .chunk_n_tokens = 32, .chunk_size_bytes = 1024},
+        {.num_layers = 2, .max_sequence_length = 256, .num_slots = 3, .chunk_n_tokens = 64, .chunk_size_bytes = 4096},
+        {.num_layers = 6, .max_sequence_length = 64, .num_slots = 1, .chunk_n_tokens = 16, .chunk_size_bytes = 512},
+    };
+    KvChunkAddressTableSet table_set(configs);
+    for (size_t g = 0; g < table_set.num_groups(); g++) {
+        populate_group(table_set.group(g), static_cast<uint32_t>(g));
+    }
+    return table_set;
+}
+
+void expect_sets_equal(const KvChunkAddressTableSet& original, const KvChunkAddressTableSet& restored) {
+    ASSERT_EQ(restored.num_groups(), original.num_groups());
+    for (size_t g = 0; g < original.num_groups(); g++) {
+        const auto& orig = original.group(g);
+        const auto& rest = restored.group(g);
+
+        EXPECT_EQ(rest.config().num_layers, orig.config().num_layers);
+        EXPECT_EQ(rest.config().max_sequence_length, orig.config().max_sequence_length);
+        EXPECT_EQ(rest.config().num_slots, orig.config().num_slots);
+        EXPECT_EQ(rest.config().chunk_n_tokens, orig.config().chunk_n_tokens);
+        EXPECT_EQ(rest.config().chunk_size_bytes, orig.config().chunk_size_bytes);
+
+        ASSERT_EQ(rest.num_device_groups(), orig.num_device_groups());
+        for (size_t i = 0; i < orig.num_device_groups(); i++) {
+            EXPECT_EQ(
+                orig.get_device_group(DeviceGroupIndex{static_cast<uint32_t>(i)}),
+                rest.get_device_group(DeviceGroupIndex{static_cast<uint32_t>(i)}));
+        }
+
+        const auto& cfg = orig.config();
+        for (uint32_t slot = 0; slot < cfg.num_slots; slot++) {
+            for (uint32_t layer = 0; layer < cfg.num_layers; layer++) {
+                for (uint32_t pos = 0; pos < cfg.max_sequence_length; pos += cfg.chunk_n_tokens) {
+                    const auto& o = orig.lookup(layer, pos, slot);
+                    const auto& r = rest.lookup(layer, pos, slot);
+                    EXPECT_EQ(r.noc_addr, o.noc_addr)
+                        << "group=" << g << " slot=" << slot << " layer=" << layer << " pos=" << pos;
+                    EXPECT_EQ(r.size_bytes, o.size_bytes);
+                    EXPECT_EQ(r.device_group_index, o.device_group_index);
+                }
+            }
+        }
+    }
+}
+
+TEST(KvChunkAddressTableSetProtobuf, MixedConfigRoundTripViaString) {
+    auto original = make_test_set();
+    std::string data = export_to_protobuf(original);
+    auto restored = import_set_from_protobuf(data);
+    expect_sets_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableSetProtobuf, MixedConfigRoundTripViaFile) {
+    auto original = make_test_set();
+    std::string tmp_path = std::filesystem::temp_directory_path() / "kv_chunk_address_table_set_test.pb";
+    export_to_protobuf_file(original, tmp_path);
+    auto restored = import_set_from_protobuf_file(tmp_path);
+    expect_sets_equal(original, restored);
+    std::filesystem::remove(tmp_path);
+}
+
+TEST(KvChunkAddressTableSetProtobuf, MixedConfigTextFormatRoundTrip) {
+    auto original = make_test_set();
+    std::string text = export_to_protobuf_text(original);
+    auto restored = import_set_from_protobuf_text(text);
+    expect_sets_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableSetProtobuf, SingleGroupRoundTrip) {
+    std::vector<KvChunkAddressTableConfig> configs = {
+        {.num_layers = 2, .max_sequence_length = 64, .num_slots = 1, .chunk_n_tokens = 32}};
+    KvChunkAddressTableSet original(configs);
+    populate_group(original.group(0), 7);
+
+    auto restored = import_set_from_protobuf(export_to_protobuf(original));
+    expect_sets_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableSet, EmptyConfigsThrows) {
+    std::vector<KvChunkAddressTableConfig> empty;
+    EXPECT_ANY_THROW(KvChunkAddressTableSet{std::span<const KvChunkAddressTableConfig>(empty)});
+}
+
+TEST(KvChunkAddressTableSet, GroupIndexOutOfRangeThrows) {
+    std::vector<KvChunkAddressTableConfig> configs = {
+        {.num_layers = 1, .max_sequence_length = 32, .num_slots = 1, .chunk_n_tokens = 32}};
+    KvChunkAddressTableSet set(configs);
+    EXPECT_EQ(set.num_groups(), 1u);
+    EXPECT_ANY_THROW((void)set.group(1));
 }
 
 }  // namespace

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::internal::disaggregation {
@@ -131,6 +133,66 @@ private:
     std::vector<KvCacheLocation> entries_;
     std::vector<DeviceGroup> device_groups_;
     std::unordered_map<tt::tt_fabric::FabricNodeId, std::string> fabric_node_to_host_;
+};
+
+// A set of KvChunkAddressTables, one per "group". Each group is a distinct
+// KvChunkAddressTableConfig, letting a model author mix multiple attention
+// implementations / KV representations within a single cache (issue #184).
+//
+// Groups are addressed positionally by the index of their config; the per-group
+// KvChunkAddressTable API is unchanged, e.g. set.group(g).lookup(layer, pos, slot).
+// Device groups and host mappings are owned per sub-table, not shared.
+//
+// Header-only (inline) by design: this is a thin owner of a vector of
+// KvChunkAddressTable, so the real implementation and the migration-build synthetic
+// stub do not each have to carry — and keep in sync — its method bodies. The only
+// logic that legitimately differs between those builds (read_device_chunk) stays in
+// KvChunkAddressTable.
+class KvChunkAddressTableSet {
+public:
+    explicit KvChunkAddressTableSet(std::span<const KvChunkAddressTableConfig> configs) {
+        TT_FATAL(!configs.empty(), "KvChunkAddressTableSet requires at least one config");
+        groups_.reserve(configs.size());
+        for (const auto& cfg : configs) {
+            // Per-group config is validated by the KvChunkAddressTable constructor.
+            groups_.emplace_back(cfg);
+        }
+    }
+
+    // Number of groups (== number of configs).
+    size_t num_groups() const { return groups_.size(); }
+
+    // Access a group's table by index.
+    KvChunkAddressTable& group(size_t index) {
+        TT_FATAL(index < groups_.size(), "group index {} >= num_groups {}", index, groups_.size());
+        return groups_[index];
+    }
+    const KvChunkAddressTable& group(size_t index) const {
+        TT_FATAL(index < groups_.size(), "group index {} >= num_groups {}", index, groups_.size());
+        return groups_[index];
+    }
+
+    // Range access over the per-group tables (for migration's iterate-over-configs path).
+    std::vector<KvChunkAddressTable>& groups() { return groups_; }
+    const std::vector<KvChunkAddressTable>& groups() const { return groups_; }
+
+    auto begin() { return groups_.begin(); }
+    auto end() { return groups_.end(); }
+    auto begin() const { return groups_.begin(); }
+    auto end() const { return groups_.end(); }
+
+    // Convenience: the config of each group, in order.
+    std::vector<KvChunkAddressTableConfig> configs() const {
+        std::vector<KvChunkAddressTableConfig> out;
+        out.reserve(groups_.size());
+        for (const auto& g : groups_) {
+            out.push_back(g.config());
+        }
+        return out;
+    }
+
+private:
+    std::vector<KvChunkAddressTable> groups_;
 };
 
 }  // namespace tt::tt_metal::internal::disaggregation

@@ -36,3 +36,10 @@ message KvChunkAddressTable {
     repeated FabricNodeHost fabric_node_hosts = 7;
     repeated KvCacheEntry entries = 8;
 }
+
+// A set of KvChunkAddressTables, one per "group" (one per config). Supports
+// mixing multiple attention implementations / KV representations within a single
+// KV cache. See issue #184.
+message KvChunkAddressTableSet {
+    repeated KvChunkAddressTable groups = 1;
+}
