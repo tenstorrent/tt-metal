@@ -88,7 +88,7 @@ class TtMotionDeformableAttention:
 
         value = ttnn.permute(value, (1, 0, 2))
         bs, num_value, _ = value.shape
-        assert ttnn.sum(spatial_shapes[:, 0] * spatial_shapes[:, 1]) == num_value
+        # `assert (ttnn.sum(...) == num_value)` removed — host read, trace blocker.
 
         value = self.value_proj(
             value,
@@ -148,16 +148,17 @@ class TtMotionDeformableAttention:
                     reference_trajs_ego.shape[4],
                 ),
             )
-            device = reference_trajs_ego.device()
-            reference_trajs_ego = ttnn.to_torch(reference_trajs_ego)
-            # TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25517>
-            reference_trajs_ego[..., 0] -= self.bev_range[0]
-            reference_trajs_ego[..., 1] -= self.bev_range[1]
-            reference_trajs_ego[..., 0] /= self.bev_range[3] - self.bev_range[0]
-            reference_trajs_ego[..., 1] /= self.bev_range[4] - self.bev_range[1]
-            reference_trajs_ego = ttnn.from_torch(
-                reference_trajs_ego, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
+            # Replaced the to_torch/from_torch round-trip with pure ttnn slice+
+            # scalar-op+concat. The original used torch in-place assignment to
+            # rescale (x, y) into [0, 1] using the bev range — that's a 4-way
+            # host read + write that blocks trace capture.
+            inv_x = 1.0 / (self.bev_range[3] - self.bev_range[0])
+            inv_y = 1.0 / (self.bev_range[4] - self.bev_range[1])
+            ref_x = reference_trajs_ego[..., 0:1]
+            ref_y = reference_trajs_ego[..., 1:2]
+            ref_x = ttnn.multiply(ttnn.subtract(ref_x, self.bev_range[0]), inv_x)
+            ref_y = ttnn.multiply(ttnn.subtract(ref_y, self.bev_range[1]), inv_y)
+            reference_trajs_ego = ttnn.concat([ref_x, ref_y], dim=-1)
             offset_normalizer = ttnn.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], dim=-1)
 
             # we are making 7D to 5D to support ttnn add and ttnn div
@@ -408,6 +409,11 @@ class TtMotionTransformerDecoder:
         self.pc_range = pc_range
         self.embed_dims = embed_dims
         self.num_layers = num_layers
+        # initial query_embed (zeros, used as concat input for the first
+        # layer's in_query_fuser) — shape comes from static_intention_embed
+        # on first call, then reused.
+        self._initial_query_embed_cache = None
+        self._initial_query_embed_cache_key = None
         self.intention_interaction_layers = TtIntentionInteraction(
             parameters=parameters.intention_interaction_layers, device=device
         )
@@ -498,12 +504,21 @@ class TtMotionTransformerDecoder:
         static_intention_embed = agent_level_embedding + scene_level_offset_embedding + learnable_embed
         reference_trajs_input = ttnn.unsqueeze(reference_trajs, 4)
 
-        query_embed = ttnn.zeros(
-            static_intention_embed.shape,
-            dtype=static_intention_embed.dtype,
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        # Initial query_embed is a fresh zeros tensor on every layer-0
+        # in_query_fuser concat input. Shape comes from
+        # static_intention_embed and is constant per UniAD warm path
+        # (fixed agents / modes); lazy-cache to avoid the per-forward
+        # device allocation that blocks trace capture.
+        cache_key = (tuple(static_intention_embed.shape), static_intention_embed.dtype)
+        if self._initial_query_embed_cache_key != cache_key:
+            self._initial_query_embed_cache = ttnn.zeros(
+                static_intention_embed.shape,
+                dtype=static_intention_embed.dtype,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self._initial_query_embed_cache_key = cache_key
+        query_embed = self._initial_query_embed_cache
         for lid in range(self.num_layers):
             # fuse static and dynamic intention embedding
             # the dynamic intention embedding is the output of the previous layer, which is initialized with anchor embedding
@@ -621,11 +636,10 @@ class TtMotionTransformerDecoder:
                 ttnn.deallocate(tmp_a)
                 ttnn.deallocate(tmp_b)
 
-                new_reference_trajs = ttnn.zeros(
-                    reference_trajs.shape, dtype=reference_trajs.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
-                )
-                new_reference_trajs = tmp[..., :2]
-                reference_trajs = new_reference_trajs
+                # Previous code did `new_reference_trajs = ttnn.zeros(...)` then
+                # immediately overwrote it with `tmp[..., :2]` — dead allocation
+                # in the motion transformer's per-layer loop.
+                reference_trajs = tmp[..., :2]
                 reference_trajs_input = ttnn.unsqueeze(reference_trajs, 4)  # BS NUM_AGENT NUM_MODE 12 NUM_LEVEL  2
 
                 ep_offset_embed = ttnn.clone(reference_trajs)

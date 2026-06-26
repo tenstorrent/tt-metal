@@ -512,7 +512,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
 
-    // No lock_api_function_() here: the caller (DramCorePrefetcherManager) already holds
+    // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
     // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
 
@@ -1031,7 +1031,8 @@ void FDMeshCommandQueue::reset_worker_state(
     bool reset_launch_msg_state,
     uint32_t num_sub_devices,
     const vector_aligned<uint32_t>& go_signal_noc_data,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+    tt::stl::Span<const uint32_t> workers_per_sub_device) {
     for (auto* device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
@@ -1046,7 +1047,8 @@ void FDMeshCommandQueue::reset_worker_state(
             this->virtual_program_dispatch_core(),
             expected_num_workers_completed_,
             reset_launch_msg_state);
-        program_dispatch::set_num_worker_sems_on_dispatch(mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
+        program_dispatch::set_num_worker_sems_on_dispatch(
+            mesh_device_, device->sysmem_manager(), id_, num_sub_devices, workers_per_sub_device);
         program_dispatch::set_go_signal_noc_data_on_dispatch(
             mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
         if (reset_launch_msg_state) {

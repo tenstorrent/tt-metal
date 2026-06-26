@@ -711,6 +711,40 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_num_worker_sems(
 }
 
 template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_dispatch_set_sub_device_worker_counts(
+    tt::stl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type) {
+    TT_ASSERT(workers_per_sub_device.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+    auto data_sizeB = workers_per_sub_device.size() * sizeof(uint32_t);
+    uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
+    if (dispatcher_type == DispatcherSelect::DISPATCH_SUBORDINATE) {
+        constexpr uint32_t dispatch_page_size = 1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
+        TT_FATAL(
+            lengthB <= dispatch_page_size,
+            "Data to set dispatch_s worker counts {} must fit within one dispatch page {}",
+            lengthB,
+            dispatch_page_size);
+    }
+    this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
+    auto initialize_set_sub_device_worker_counts_cmd = [&](CQDispatchCmd* cmd) {
+        cmd->base.cmd_id = CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS;
+        cmd->set_sub_device_worker_counts.num_sub_devices = static_cast<uint32_t>(workers_per_sub_device.size());
+    };
+    CQDispatchCmd* set_sub_device_worker_counts_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd set_sub_device_worker_counts_cmd{};
+        initialize_set_sub_device_worker_counts_cmd(&set_sub_device_worker_counts_cmd);
+        this->memcpy(set_sub_device_worker_counts_cmd_dst, &set_sub_device_worker_counts_cmd, sizeof(CQDispatchCmd));
+    } else {
+        initialize_set_sub_device_worker_counts_cmd(set_sub_device_worker_counts_cmd_dst);
+    }
+    uint32_t* workers_per_sub_device_dst = this->reserve_space<uint32_t*>(data_sizeB);
+    if (data_sizeB > 0) {
+        this->memcpy(workers_per_sub_device_dst, workers_per_sub_device.data(), data_sizeB);
+    }
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+}
+
+template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
     const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
     TT_ASSERT(

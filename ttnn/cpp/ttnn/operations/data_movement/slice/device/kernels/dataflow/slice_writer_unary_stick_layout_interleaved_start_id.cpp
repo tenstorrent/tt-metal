@@ -41,7 +41,7 @@ void kernel_main() {
             // noc_async_write_sharded splits the write across shards for B/W-sharded outputs;
             // falls through to a single noc_async_write for interleaved / HEIGHT-sharded.
             tt::data_movement::common::noc_async_write_sharded(
-                l1_read_addr, s0, i_stick, /*offset=*/0, /*size=*/stick_size);
+                noc, l1_read_addr, s0, i_stick, /*offset=*/0, /*size=*/stick_size);
             l1_read_addr += stick_size_offset;
             i_stick += 1;
         }

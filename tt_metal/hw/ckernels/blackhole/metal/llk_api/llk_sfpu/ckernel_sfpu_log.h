@@ -42,15 +42,15 @@ namespace sfpu {
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     sfpi::vFloat three_quarters = 0.75f;
-    sfpi::vInt e = sfpi::reinterpret<sfpi::vInt>(a) - sfpi::reinterpret<sfpi::vInt>(three_quarters);
+    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
 
     if constexpr (!FAST_APPROX) {
         // normalise a (-0.0 and subnormals become +0.0)
         a = a * sfpi::vConst1 + sfpi::vConst0;
     }
 
-    e = sfpi::reinterpret<sfpi::vInt>(sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(e), 0));
-    sfpi::vFloat m = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - e);
+    e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
+    sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
     sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
 
     // m in [0.75, 1.5). Compute log1p(m - 1) for m - 1 in [-0.25, 0.5).
@@ -93,11 +93,11 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
         a = sfpi::addexp(a, -1);
 
         r = r * s + m;
-        e_float = sfpi::copysgn(e_float, sfpi::reinterpret<sfpi::vFloat>(e));
+        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
         result = e_float * sfpi::vConstFloatPrgm0 + r;
 
         if constexpr (HAS_BASE_SCALING) {
-            result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+            result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
         }
 
         // For zero, result is negative before this multiply, so result * +inf

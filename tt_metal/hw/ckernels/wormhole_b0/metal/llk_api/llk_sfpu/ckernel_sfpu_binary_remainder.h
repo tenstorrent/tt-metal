@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_div_int32_floor.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
@@ -38,7 +38,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // First Newton-Raphson iteration: inv_b_f = inv_b_f * (2 - inv_b_f * b_f)
     sfpi::vFloat t = inv_b_f * neg_b_f + sfpi::vConst1;
-    scale = sfpi::reinterpret<sfpi::vFloat>((254 << 23) - sfpi::reinterpret<sfpi::vInt>(scale));
+    scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
     // Second Newton-Raphson iteration (interleaved with abs(a) computation)
@@ -154,7 +154,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat b = in1;
 
     // Compute a/b = a * (1/b)
-    sfpi::vFloat div_result = a * _sfpu_reciprocal_<2>(b);
+    sfpi::vFloat div_result = a * sfpu_reciprocal_iter<2>(b);
 
     // Compute floor(a/b)
     sfpi::vFloat floor_div = _floor_body_(div_result);
@@ -229,7 +229,7 @@ inline void remainder_int32_init() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void remainder_binary_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    recip_init<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
 }
 
 }  // namespace ckernel::sfpu

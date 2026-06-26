@@ -135,12 +135,16 @@ void MetalEnvImpl::initialize_base_objects() {
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
 
-    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch() &&
-        this->cluster_->get_target_device_type() == tt::TargetDevice::Simulator) {
-        log_info(
-            tt::LogMetal,
-            "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
-        this->rtoptions_->set_dram_backed_cq(true);
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch()) {
+        if (this->cluster_->get_target_device_type() == tt::TargetDevice::Simulator) {
+            log_info(
+                tt::LogMetal,
+                "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
+            this->rtoptions_->set_dram_backed_cq(true);
+        }
+        // Watcher NOC sanitization currently only works on Quasar in slow dispatch.
+        // TODO: Remove this once NOC sanitization is supported on Quasar in fast dispatch (#45878)
+        this->rtoptions_->disable_watcher_noc_sanitize();
     }
 
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
@@ -281,6 +285,11 @@ bool MetalEnvImpl::set_fabric_config(
             this->fabric_config_);
         system_mesh_.reset();
         this->initialize_control_plane_impl();
+    }
+
+    // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        this->initialize_fabric_config();
     }
 
     return true;

@@ -110,6 +110,12 @@ enum class SfpuType : std::uint32_t
     le_int,
     ge_int,
     mul_int,
+    equal_zero,
+    not_equal_zero,
+    less_than_zero,
+    greater_than_zero,
+    less_than_equal_zero,
+    greater_than_equal_zero,
 };
 
 enum class DstSync : std::uint8_t
@@ -125,6 +131,9 @@ enum class MathFidelity : std::uint8_t
     HiFi3 = 3,
     HiFi4 = 4
 };
+
+constexpr bool UnpackToDestEn  = true;
+constexpr bool UnpackToDestDis = false;
 
 enum class StochRndType : std::uint8_t
 {

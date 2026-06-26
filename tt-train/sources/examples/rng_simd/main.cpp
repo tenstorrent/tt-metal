@@ -351,7 +351,7 @@ void benchmark_type(const std::string& type_name, size_t size) {
             .expected_median = 0.0,
             .expected_q25 = 0.0,
             .expected_q75 = 0.0,
-            .has_simd_support = true  // SIMD optimized
+            .has_simd_support = std::same_as<T, float> || std::same_as<T, bfloat16>  // SIMD for float/bfloat16 only
         };
         benchmark_distribution<T>(type_name, uniform_factory, size, params);
     }

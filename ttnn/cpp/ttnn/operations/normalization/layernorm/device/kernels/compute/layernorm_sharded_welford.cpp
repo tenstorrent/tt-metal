@@ -372,7 +372,12 @@ void kernel_main() {
                 cb_ex_external,
                 cb_ex,
                 num_blocks_combine,
-                [&](uint32_t b) {
+                [num_blocks_combine,
+                 is_second_stage_reader,
+                 num_blocks_first_stage,
+                 second_stage_w,
+                 block_w,
+                 last_block_w](uint32_t b) {
                     return get_next_set_size(
                         b,
                         num_blocks_combine,

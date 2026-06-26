@@ -59,7 +59,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
-    CQ_DISPATCH_CMD_MAX_COUNT,                        // for checking legal IDs
+    CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 19,
+    CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -420,6 +421,12 @@ struct CQDispatchSetGoSignalNocDataCmd {
     uint32_t num_words;
 } __attribute__((packed));
 
+struct CQDispatchSetSubDeviceWorkerCountsCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t num_sub_devices;
+} __attribute__((packed));
+
 struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
@@ -438,6 +445,7 @@ struct CQDispatchCmd {
         CQDispatchNotifySubordinateGoSignalCmd notify_dispatch_s_go_signal;
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
+        CQDispatchSetSubDeviceWorkerCountsCmd set_sub_device_worker_counts;
     } __attribute__((packed));
 };
 

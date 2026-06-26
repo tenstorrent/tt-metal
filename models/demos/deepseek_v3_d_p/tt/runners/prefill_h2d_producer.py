@@ -8,7 +8,7 @@ Pairs with `prefill_runner.py` running in `PREFILL_H2D_EXTERNAL_PRODUCER=1`
 mode. The runner constructs an `H2DStreamService`, calls
 `export_descriptor(service_id)` to drop a flatbuffer at
 `/dev/shm/tt_h2d_stream_service_<service_id>.bin`, then loops on
-`h2d_socket_sync` (blocks on `data_ready_sem`).
+`inbound_socket_service_sync` (blocks on `data_ready_sem`).
 
 This producer:
   * Attaches to the same service via `ttnn.H2DStreamService.connect(service_id)`
@@ -18,7 +18,7 @@ This producer:
   * Replays the same host-side block-cyclic reshape the runner uses. Kept inline so this
     script does NOT import the runner module (which would pull in `_migration`).
   * Pushes the byte buffer once per chunk via `forward_to_tensor_bytes`. The runner's per-iter
-    `h2d_socket_sync` unblocks on each push.
+    `inbound_socket_service_sync` unblocks on each push.
 
 Env vars:
   PREFILL_H2D_SERVICE_ID       — must match runner's value (default: "ds_prefill")

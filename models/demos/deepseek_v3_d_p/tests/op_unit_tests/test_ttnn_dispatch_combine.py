@@ -16,6 +16,14 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -44,28 +52,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
-# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
-# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
-# Real traffic never approaches the worst case, so half-capacity is sufficient.
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
-    [
-        (3200, 7168, 64, 2, 2),
-    ],
-    ids=["3200-avg"],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-@pytest.mark.parametrize(
-    "dispatched_buffer_layout",
-    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
-)
-def test_ttnn_dispatch_combine(
+def run_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
     emb_dim,
@@ -76,8 +63,18 @@ def test_ttnn_dispatch_combine(
     topology,
     use_predictable_data,
     dispatched_buffer_layout,
+    is_ci_env=False,
+    is_ci_v2_env=False,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
+    if (is_ci_env or is_ci_v2_env) and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("ROW_MAJOR coverage does not run in CI")
+
+    # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
+    # linear/ring meshes; 2D mesh / fabric2d (both dims > 1) and 2-link variants still run.
+    if (is_ci_env or is_ci_v2_env) and is_blackhole() and num_links == 1 and 1 in tuple(mesh_device.shape):
+        pytest.skip("1-link linear/ring coverage does not run on BH in CI")
+
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
@@ -372,6 +369,88 @@ def test_ttnn_dispatch_combine(
     logger.debug("✅ TTNN dispatch→combine round-trip matches input!")
 
 
+# Per-model round-trip entrypoints as (id_prefix, config, extended_model). Only emb_dim is
+# model-dependent here; the round-trip is a single always-on correctness case (no pcc/perf split),
+# and its expert/topk/capacity tuning (num_routed_experts = NUM_ROUTED_EXPERTS // 4, topk 2,
+# capacity 2) is sized so the flat dispatch buffer does not overflow — independent of the model.
+# DeepSeek V3 is the baseline and runs by default; every other model is gated behind
+# @pytest.mark.extended_model.
+DISPATCH_COMBINE_MODELS = [
+    ("dsv3", DeepSeekV3Config, False),
+    ("glm_51", GLM51Config, True),
+    ("kimi_k26", KimiK26Config, True),
+    ("minimax_m27", MiniMaxM27Config, True),
+    ("dsv4_pro", DeepSeekV4ProConfig, True),
+    ("dsv4_flash", DeepSeekV4FlashConfig, True),
+    ("gptoss_120b", GptOss120BConfig, True),
+]
+
+
+def dispatch_combine_shape_params():
+    """Build the per-model shape parametrization. Non-baseline models carry the extended_model
+    marker on their params so they stay gated exactly as the separate tests were."""
+    params = []
+    for name, config, extended in DISPATCH_COMBINE_MODELS:
+        marks = (pytest.mark.extended_model,) if extended else ()
+        params.append(
+            pytest.param(
+                640,
+                config.EMB_SIZE,
+                config.NUM_ROUTED_EXPERTS // 4,
+                2,
+                2,
+                marks=marks,
+                id=f"{name}-640-avg",
+            )
+        )
+    return params
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
+    dispatch_combine_shape_params(),
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+def test_ttnn_dispatch_combine(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    use_predictable_data,
+    dispatched_buffer_layout,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    run_dispatch_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data,
+        dispatched_buffer_layout,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
+    )
+
+
 # ------------------------------------------------------------------------------
 # How the `indices` tensor is constructed
 # ------------------------------------------------------------------------------
@@ -603,12 +682,14 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
-def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched_buffer_layout):
+def test_ttnn_dispatch_combine_top4(
+    mesh_device, num_links, topology, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
+):
     """Regression test for num_experts_per_tok > 2 (previously caused hangs due to undersized CB buffering)."""
     # dispatch_buffer_capacity_factor: ceil(N/2) of the most conservative integer
     # N such that dgs*seq*N >= theoretical worst-case dispatch buffer. Real traffic
     # never approaches the worst case, so half-capacity is sufficient.
-    test_ttnn_dispatch_combine(
+    run_dispatch_combine(
         mesh_device=mesh_device,
         seq_len_per_chip=1600,
         emb_dim=7168,
@@ -619,4 +700,6 @@ def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched
         topology=topology,
         use_predictable_data=True,
         dispatched_buffer_layout=dispatched_buffer_layout,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
     )

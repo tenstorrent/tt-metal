@@ -78,7 +78,12 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds):
     tt_out = tt_model(attention_input, mask=tt_mask)
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
-    reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)[0]
+    reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)
+    # transformers 5.x: the Gemma3/SigLIP vision block returns a bare Tensor (4.x returned a tuple),
+    # so only unwrap [0] when it's actually a tuple — otherwise [0] slices off the batch dim and
+    # non_zero_indices (built from the full-rank tt output) over-indexes the reference.
+    if isinstance(reference_output, tuple):
+        reference_output = reference_output[0]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 

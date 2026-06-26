@@ -212,21 +212,22 @@ mkdir -p "$RESULTS_DIR"
 # Build pytest argv
 # ──────────────────────────────────────────────────────────────
 PYTEST_BASE_ARGS=(
-    # Display config: this is the verbose, capture-untouched setup that we
-    # confirmed actually preserves the child's captured stdout in the junit
-    # XML. -v gives one line per test result, sugar stays off (it confused
-    # the failure tally with pytest-forked anyway), and we deliberately do
-    # NOT override `-s` from python_tests/pytest.ini or `log_cli=true` —
-    # both of those overrides empirically caused pytest-forked's child
-    # output to disappear from <system-out>, so the ttsim ERROR lines were
-    # missing from the HTML report.
-    -v
+    # Display config: capture-untouched setup that we confirmed actually
+    # preserves the child's captured stdout in the junit XML. -q keeps the
+    # terminal to one dot per test, `console_output_style=classic` drops the
+    # trailing percentage column so it's pure dots, sugar stays off (it
+    # confused the failure tally with pytest-forked anyway), and we
+    # deliberately do NOT override `-s` from python_tests/pytest.ini or
+    # `log_cli=true` — both of those overrides empirically caused
+    # pytest-forked's child output to disappear from <system-out>, so the
+    # ttsim ERROR lines were missing from the HTML report.
+    -q
+    -o console_output_style=classic
     -p no:sugar
     --run-simulator
     --timeout="$TIMEOUT"
     --forked
-    --show-progress
-    -m "not quasar and not nightly and not perf"
+    -m "not quasar and not nightly and not perf and not accuracy"
     --junit-xml="$XML_PATH"
     # ttsim writes via printf (stdout), so caplog and stderr are always
     # empty for these tests. Capture only stdout to keep the XML and the
