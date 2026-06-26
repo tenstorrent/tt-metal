@@ -748,28 +748,46 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
 }
 
 /**
- * @brief Row-wise maximum reduction across a block of tiles.
+ * @brief Row-wise maximum/minimum reduction across a block of tiles.
  *
  * For each row of tiles, reduces every tile individually, then (if block_ct_dim > 1)
- * accumulates the per-tile column-0 maxima across tiles using compare-and-swap into
+ * accumulates the per-tile column-0 extrema across tiles using compare-and-swap into
  * tile 0's column 0.
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
+ * MAX and MIN share the entire compare-and-swap machinery (per-tile reduce, horizontal_reduce_max,
+ * max_first_columns_across_tiles, and the Int32 two's-complement<->sign-magnitude casts); the only
+ * difference is the SFPSWAP comparator direction, set once here via SFPCONFIG bit 8 (0 = MAX,
+ * 1 = MIN). The representation seen by SFPSWAP (float, or sign-magnitude for Int32 after the explicit
+ * cast) is identical for MAX and MIN, so flipping bit 8 cleanly inverts the result for every format.
+ *
+ * @tparam pool_type MAX or MIN.
+ * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int extrema)
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
-inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+template <PoolType pool_type, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
+inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+    static_assert(
+        pool_type == PoolType::MAX || pool_type == PoolType::MIN,
+        "perform_reduce_row_max_min only supports MAX and MIN pool types");
+
     constexpr bool is_int32 = (INSTRUCTION_MODE == InstrModLoadStore::INT32);
 
-    // Re-establish the default MAX SFPSWAP direction (SFPCONFIG bit 8 = 0) unconditionally at the start
-    // of the row-MAX path instead of trusting the paired init. In a multi-axis reduce (e.g. ttir.max
-    // dim=[1,2]) a single shared init is followed by a column reduce and then this row reduce; the Int32
-    // column path runs init_reduce_max_min_int32(), which flips bit 8 to 1 for MAX, and leaves that
-    // config in place. Without this reset the row stage would run with the comparator inverted (MIN
-    // direction) and drop the true max. Resetting here makes the row path self-consistent regardless of
-    // what a preceding column calculate left in the config register.
+    // Re-establish the SFPSWAP direction unconditionally at the start of the row MAX/MIN path instead of
+    // trusting the paired init. In a multi-axis reduce (e.g. ttir.max dim=[1,2]) a single shared init is
+    // followed by a column reduce and then this row reduce; the Int32 column path runs
+    // init_reduce_max_min_int32(), which flips bit 8, and leaves that config in place. Resetting to the
+    // MAX default (bit 8 = 0) here, then explicitly setting the MIN direction below, makes the row path
+    // self-consistent regardless of what a preceding column calculate left in the config register.
     _init_sfpu_config_reg();
+
+    // Invert the SFPSWAP comparator for MIN (set SFPCONFIG bit 8). The default (bit 8 = 0) keeps the
+    // maximum on each compare-and-swap; setting bit 8 keeps the minimum.
+    if constexpr (pool_type == PoolType::MIN) {
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0100);  // bit 8
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+        TTI_SFPCONFIG(0, 0xF, 0);
+    }
 
     record_horizontal_reduce_max();
 
@@ -1659,8 +1677,8 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
  * @brief Unified reduction kernel wrapper for a 32x32 tile.
  *        Determines the instruction mode from format, then dispatches to the appropriate reduction kernel.
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX only,
- * FP32/Int32).
+ * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (SUM/MAX/MIN,
+ * FP32/FP16B/Int32).
  * @tparam format The INPUT data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b). Drives the
  *         instruction mode and load-time high-bit masking.
  * @tparam output_format The packer-visible OUTPUT data format (defaults to @p format). Drives the final store mode:
@@ -1681,8 +1699,9 @@ template <
 inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_ROW) ||
-            (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
-        "Row reduction (REDUCE_ROW) is supported for SUM and MAX pool types");
+            (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW) ||
+            (pool_type == PoolType::MIN && reduce_dim == ReduceDim::REDUCE_ROW),
+        "Row reduction (REDUCE_ROW) is supported for SUM, MAX and MIN pool types");
     static_assert(
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
@@ -1720,12 +1739,11 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
             static_assert(
-                pool_type == PoolType::MAX, "Row reduction (REDUCE_ROW) currently only supports MAX pool type");
-            static_assert(
                 INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::INT32 ||
                     INSTRUCTION_MODE == InstrModLoadStore::FP16B,
-                "Row MAX reduction supports FP32, FP16B, and INT32 (sign-magnitude) instruction modes");
-            perform_reduce_row_max<INSTRUCTION_MODE, clear_high_bits, pack_low16>(block_ct_dim, block_rt_dim);
+                "Row MAX/MIN reduction supports FP32, FP16B, and INT32 (sign-magnitude) instruction modes");
+            perform_reduce_row_max_min<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>(
+                block_ct_dim, block_rt_dim);
         } else if constexpr (clear_high_bits) {
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
