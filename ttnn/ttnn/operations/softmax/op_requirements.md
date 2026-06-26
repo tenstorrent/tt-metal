@@ -72,7 +72,7 @@
 
 **Done when**: every Phase 0 cell currently in the `OOM` category passes.
 
-### [ ] Refinement 5a — V2 RM layout streaming path
+### [x] Refinement 5a — V2 RM layout streaming path
 
 **Goal**: extend the V2 streaming path to support ROW_MAJOR layout. The V2 TILE path (3-pass chunk_along_reduce + V1-style chunk_along_non_reduce) is working and passes all TILE-layout wide/tall shapes. The V2 RM path (chunked tilize/untilize with `byte_offset_within_page` per chunk) is not yet implemented — RM shapes that exceed the V1 CB budget (256 KiB) still OOM. The specific cells that need this are `layout=ROW_MAJOR` × wide/tall shapes (W∈{4096,8192}, H∈{2048,4096}, 1024×1024).
 

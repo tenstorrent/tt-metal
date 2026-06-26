@@ -191,3 +191,8 @@
 {"source":"run_safe_pytest","pid":1154279,"started_at_ms":1782442166813,"wait_ms":3,"run_ms":7914,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1154654,"started_at_ms":1782442178738,"wait_ms":3,"run_ms":70492,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1158365,"started_at_ms":1782442255520,"wait_ms":3,"run_ms":31711,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1162221,"started_at_ms":1782442309086,"wait_ms":3,"run_ms":93722,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":0}
+{"source":"run_safe_pytest","pid":1167791,"started_at_ms":1782442410800,"wait_ms":2,"run_ms":7530,"test_path":"eval/golden_tests/softmax/test_regression.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1168192,"started_at_ms":1782442423086,"wait_ms":2,"run_ms":7017,"test_path":"eval/golden_tests/softmax/test_regression.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1168611,"started_at_ms":1782442442429,"wait_ms":2,"run_ms":6714,"test_path":"eval/golden_tests/softmax/test_regression.py::test_small_magnitude_input","exit_code":1}
+{"source":"run_safe_pytest","pid":1168971,"started_at_ms":1782442469569,"wait_ms":2,"run_ms":29916,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5a_rm_v2.py","exit_code":0}

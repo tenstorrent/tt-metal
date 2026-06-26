@@ -138,3 +138,30 @@
   - V2 3-pass approach has slightly different rounding than V1 for `large` (×10.0) and `small` (×0.01) distributions — PCC drops to 0.98-0.99. This is because `BinaryMax` SFPU across chunks introduces different rounding than a single `reduce<MAX>`. Not a correctness issue (no inf/nan), just a precision characteristic of the streaming approach.
 - **Tests added**:
   - `test_softmax_refinement5_l1_budget.py` (39 cases: 15 shapes × 2 dtypes + 8 shapes × 6 distributions + V1/V2 equivalence)
+
+## Refinement 5a — V2 RM layout streaming path
+- **Date**: 2026-06-26
+- **What was done**:
+  - Enabled V2 streaming path for ROW_MAJOR layout (removed `and not is_rm` guard in program descriptor)
+  - Reader V2: added `chunk_along_non_reduce` RM path; kept and fixed `chunk_along_reduce` RM path for both dim=-1 and dim=-2
+  - Writer V2: rewrote all 4 RM sub-modes (`chunk_along_reduce`/`chunk_along_non_reduce` × `dim=-1`/`dim=-2`) using `write_sticks_after_untilize` with `byte_offset_within_page` for W-slice writes
+  - Writer V2: removed incorrect 3-pass loop from writer (compute only produces output in pass 3, not all 3 passes)
+  - Compute V2: fixed `InitOnly` → `InitAndUninit` for all tilize calls in `chunk_along_reduce` RM paths (passes 2 and 3, both dim=-1 and dim=-2). `InitOnly` left the unpacker in tilize mode, corrupting subsequent `eltwise_chain` reads — the sub(x-max)+exp chain produced garbage values
+  - Reader/writer V2: clamped `row_bytes` to not exceed actual page boundary for non-aligned W shapes. `read_sticks_for_tilize`/`write_sticks_after_untilize` pad the remainder in L1, so clamping is safe
+- **Accuracy achieved**:
+  - fp32 RM dim=-1 (1,1,32,4096): PCC=0.999999, max_diff=0.000043
+  - fp32 RM dim=-1 (1,1,32,8192): PCC=0.999998, max_diff=0.000021
+  - fp32 RM dim=-2 (1,1,2048,256): PCC=0.999998, max_diff=0.000096
+  - fp32 RM dim=-2 (1,1,4096,128): PCC=0.999998, max_diff=0.000033
+  - bf16 RM dim=-1 (1,1,32,4096): PCC=0.999996, max_diff=0.000031
+  - fp32 RM (1024,1024) dim=-1: PCC=1.000000, max_diff=0.000218
+  - fp32 RM (1024,1024) dim=-2: PCC=0.999999, max_diff=0.000146
+  - fp32 RM non-aligned W (2,1,128,100) dim=-1/-2: PCC ≥ 0.999
+  - All shapes pass with PCC ≥ 0.999
+- **Golden test progress**: 511 → 575 passing (+64 new). All RM wide/tall shapes that previously OOM'd now pass. 2 pre-existing precision near-misses remain (test_regression small_magnitude — V1 TILE path, unrelated to this refinement). 0 failures from RM V2 cells.
+- **Issues encountered**:
+  - Fixed: writer had a 3-pass loop for RM chunk_along_reduce, but compute only produces `cb_rm_out` tiles in pass 3. Passes 0-1 had no producer → writer deadlocked at `cb_wait_front`
+  - Fixed: `InitOnly` tilize mode left unpacker in tilize state, corrupting eltwise_chain reads. DEVICE_PRINT showed exp values of `0.00195` instead of `1.0` for all-ones input. Fix: use `InitAndUninit` for all tilize calls in the 3-pass RM path
+  - Fixed: non-aligned W in V2 RM read past page boundary. `chunk_row_bytes` (tile-padded) exceeded `full_row_bytes` (actual page size). Fix: clamp `row_bytes` to `min(chunk_row_bytes, full_row_bytes - byte_offset)`
+- **Tests added**:
+  - `test_softmax_refinement5a_rm_v2.py` (34 cases: wide/tall shapes × fp32/bf16 × dim=-1/-2 + non-aligned W + rank-2/3 + layout/dtype preservation + RM-vs-TILE equivalence + all-ones deterministic + multi-core)
