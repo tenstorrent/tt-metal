@@ -607,6 +607,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         bare_macro = '#define EXP_HW_BARE_SETEXP\n' if bare_safe else ''
         rr_macro = (
             '\n// eval_method: exponent_alu / exp2 (exman/exexp/setexp), natural [0,1) coeffs. STANDALONE\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_EXPONENT_ALU\n'
             '#define EVAL_METHOD_EXPONENT_ALU\n'
             '#define EXPONENT_ALU_EXP2\n'
             f'#define EXP_HW_MULT {clamp(float(mult)):.10e}f\n'
@@ -628,6 +629,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         offset_macro = f'#define LOG_HW_INPUT_OFFSET {clamp(offset):.10e}f\n' if offset != 0.0 else ''
         rr_macro = (
             '\n// eval_method: exponent_alu / log2 (exexp -> e, exman -> m), natural coeffs. STANDALONE\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_EXPONENT_ALU\n'
             '#define EVAL_METHOD_EXPONENT_ALU\n'
             '#define EXPONENT_ALU_LOG2\n'
             f'{log_basis_macro}'
@@ -651,6 +653,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
                 scale_macros += f'#define POW_HW_SCALE_C{r} {clamp(float(metadata[key])):.10e}f\n'
         rr_macro = (
             '\n// eval_method: exponent_alu / pow/root_N (exexp -> e, exman -> m), natural [1,2) coeffs. STANDALONE\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_EXPONENT_ALU\n'
             '#define EVAL_METHOD_EXPONENT_ALU\n'
             '#define EXPONENT_ALU_POW\n'
             f'{scale_macros}'
@@ -681,6 +684,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         recip_macro = '#define NEWTON_ROOT_RECIPROCAL\n' if recip else ''
         rr_macro = (
             '\n// eval_method: newton_root (magic-seed + Newton, NO poly fit). FIRST-CLASS standalone.\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_NEWTON_ROOT\n'
             '#define EVAL_METHOD_NEWTON_ROOT\n'
             f'#define NEWTON_ROOT_MAGIC {magic}\n'
             f'#define NEWTON_ROOT_C1 {c1:.10e}f\n'
@@ -696,21 +700,21 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
     else:
         print(f'WARNING: unknown exponent_alu kind {kind}')
 elif rr_method == 'exp':
-    rr_macro = '\n// eval_method: reduced_poly / exp\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_EXP\n'
+    rr_macro = '\n// eval_method: reduced_poly / exp\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_EXP\n'
     print(f'Range reduction: exp')
 elif rr_method == 'trig':
-    rr_macro = '\n// eval_method: reduced_poly / trig\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TRIG\n'
+    rr_macro = '\n// eval_method: reduced_poly / trig\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TRIG\n'
     print(f'Range reduction: trig')
 elif rr_method == 'log':
     expand_const = metadata.get('log_ln2_constant', '0.6931471805599453')
-    rr_macro = (f'\n// eval_method: reduced_poly / log\n#define EVAL_METHOD_REDUCED_POLY\n'
+    rr_macro = (f'\n// eval_method: reduced_poly / log\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n'
                 f'#define REDUCE_LOG\n#define LOG_EXPAND_CONSTANT {expand_const}f\n')
     print(f'Range reduction: log (expand_const={expand_const})')
 elif rr_method == 'tan':
-    rr_macro = '\n// eval_method: reduced_poly / tan\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TAN\n'
+    rr_macro = '\n// eval_method: reduced_poly / tan\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TAN\n'
     print(f'Range reduction: tan')
 elif rr_method == 'cbrt':
-    rr_macro = '\n// eval_method: reduced_poly / cbrt\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_CBRT\n'
+    rr_macro = '\n// eval_method: reduced_poly / cbrt\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_CBRT\n'
     print(f'Range reduction: cbrt')
 
 # Detect asymptotic factoring from CSV columns
@@ -771,15 +775,18 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
         c0 = float(seg0_coeffs[0]) if len(seg0_coeffs) >= 1 else 0.0
         c1 = float(seg0_coeffs[1]) if len(seg0_coeffs) >= 2 else 0.0
         if c0 == 0.0 and c1 == 1.0:
-            affine_macro = '\n// eval_method: affine_collapse / identity. fit is y = x. Pure tile copy, no SFPU eval.\n#define EVAL_METHOD_AFFINE_COLLAPSE\n#define AFFINE_COLLAPSE\n#define AFFINE_IDENTITY\n'
+            affine_macro = '\n// eval_method: identity. fit is y = x. Pure tile copy, no SFPU eval.\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_IDENTITY\n#define EVAL_METHOD_AFFINE_COLLAPSE\n#define AFFINE_COLLAPSE\n#define AFFINE_IDENTITY\n'
             print('AFFINE COLLAPSE: identity (c0=0, c1=1) -> pure-copy bypass (no SFPU eval)')
         else:
             affine_macro = (
-                '\n// eval_method: affine_collapse. fit is y = c0 + c1*x. One SFPMAD per element.\n'
+                '\n// eval_method: affine. fit is y = c0 + c1*x. One SFPMAD per element.\n'
+                '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_AFFINE\n'
                 '#define EVAL_METHOD_AFFINE_COLLAPSE\n'
                 '#define AFFINE_COLLAPSE\n'
-                f'#define AFFINE_C0 {clamp(c0):.10e}f\n'
-                f'#define AFFINE_C1 {clamp(c1):.10e}f\n'
+                f'#define TT_ACT_AFFINE_B {clamp(c0):.10e}f\n'
+                f'#define TT_ACT_AFFINE_A {clamp(c1):.10e}f\n'
+                '#define AFFINE_C0 TT_ACT_AFFINE_B\n'
+                '#define AFFINE_C1 TT_ACT_AFFINE_A\n'
             )
             print(f'AFFINE COLLAPSE: y = {c0:.6g} + {c1:.6g}*x -> single SFPMAD bypass')
 
@@ -853,16 +860,19 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
                     break
             if ok:
                 clamped_affine_macro = (
-                    '\n// eval_method: clamped_affine_collapse. fit is y = min(max(c0 + c1*x, min), max).\n'
+                    '\n// eval_method: clamped_affine. fit is y = min(max(c0 + c1*x, min), max).\n'
+                    '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_CLAMPED_AFFINE\n'
                     '#define EVAL_METHOD_CLAMPED_AFFINE_COLLAPSE\n'
                     '#define CLAMPED_AFFINE_COLLAPSE\n'
-                    f'#define CLAMPED_AFFINE_C0 {clamp(c0):.10e}f\n'
-                    f'#define CLAMPED_AFFINE_C1 {clamp(c1):.10e}f\n'
+                    f'#define TT_ACT_CLAMPED_AFFINE_B {clamp(c0):.10e}f\n'
+                    f'#define TT_ACT_CLAMPED_AFFINE_A {clamp(c1):.10e}f\n'
+                    '#define CLAMPED_AFFINE_C0 TT_ACT_CLAMPED_AFFINE_B\n'
+                    '#define CLAMPED_AFFINE_C1 TT_ACT_CLAMPED_AFFINE_A\n'
                 )
                 if lo is not None:
-                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MIN\n#define CLAMPED_AFFINE_MIN {clamp(lo):.10e}f\n'
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MIN\n#define TT_ACT_CLAMPED_AFFINE_MIN {clamp(lo):.10e}f\n#define CLAMPED_AFFINE_MIN TT_ACT_CLAMPED_AFFINE_MIN\n'
                 if hi is not None:
-                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MAX\n#define CLAMPED_AFFINE_MAX {clamp(hi):.10e}f\n'
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_MAX\n#define TT_ACT_CLAMPED_AFFINE_MAX {clamp(hi):.10e}f\n#define CLAMPED_AFFINE_MAX TT_ACT_CLAMPED_AFFINE_MAX\n'
                 low_label = '-inf' if lo is None else f'{lo:.6g}'
                 high_label = '+inf' if hi is None else f'{hi:.6g}'
                 print(
@@ -887,16 +897,19 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
     hi_thr = abs(boundaries[2])
     if _is_identity(segs[0]) and _is_zero(segs[1]) and _is_identity(segs[2]) and abs(lo_thr - hi_thr) <= tol:
         threshold_select_macro = (
-            '\n// eval_method: threshold_identity_select. y=x outside |x|<=threshold, else 0.\n'
+            '\n// eval_method: threshold_identity. y=x outside |x|<=threshold, else 0.\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_THRESHOLD_IDENTITY\n'
             '#define EVAL_METHOD_THRESHOLD_IDENTITY_SELECT\n'
             '#define THRESHOLD_IDENTITY_SELECT\n'
-            f'#define THRESHOLD_IDENTITY_LAMBDA {clamp(hi_thr):.10e}f\n'
+            f'#define TT_ACT_THRESHOLD_LAMBDA {clamp(hi_thr):.10e}f\n'
+            '#define THRESHOLD_IDENTITY_LAMBDA TT_ACT_THRESHOLD_LAMBDA\n'
         )
         print(f'THRESHOLD IDENTITY SELECT: y=x when |x|>{hi_thr:.6g}, else 0 -> threshold bypass')
 
-# Gated quadratic collapse: y = x * clamp(c0 + c1*x, low, high). This captures
-# hardmish/hardswish-like exact piecewise polynomials without naming the op.
-gated_quadratic_macro = ''
+# Gated affine-product collapse: y = x * clamp(q0 + q1*x, low, high).
+# This captures hardmish/hardswish-like exact piecewise polynomials without
+# naming the op.
+gated_affine_product_macro = ''
 if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and num_segments == 3:
     cps = degree + 1
     tol = 1.0e-5
@@ -912,12 +925,16 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
     if _is_const(segs[0], 0.0) and _is_identity(segs[2]) and abs(_coeff(segs[1], 0)) <= tol and middle_high_zero:
         q0 = _coeff(segs[1], 1)
         q1 = _coeff(segs[1], 2)
-        gated_quadratic_macro = (
-            '\n// eval_method: gated_quadratic_collapse. y = x * clamp(q0 + q1*x, 0, 1).\n'
+        gated_affine_product_macro = (
+            '\n// eval_method: gated_affine_product. y = x * clamp(q0 + q1*x, 0, 1).\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_GATED_AFFINE_PRODUCT\n'
             '#define EVAL_METHOD_GATED_QUADRATIC_COLLAPSE\n'
+            '#define GATED_AFFINE_PRODUCT\n'
             '#define GATED_QUADRATIC_COLLAPSE\n'
-            f'#define GATED_QUADRATIC_Q0 {clamp(q0):.10e}f\n'
-            f'#define GATED_QUADRATIC_Q1 {clamp(q1):.10e}f\n'
+            f'#define TT_ACT_GATE_B {clamp(q0):.10e}f\n'
+            f'#define TT_ACT_GATE_A {clamp(q1):.10e}f\n'
+            '#define GATED_QUADRATIC_Q0 TT_ACT_GATE_B\n'
+            '#define GATED_QUADRATIC_Q1 TT_ACT_GATE_A\n'
         )
         print(f'GATED QUADRATIC COLLAPSE: y = x * clamp({q0:.6g} + {q1:.6g}*x, 0, 1) -> clamp template')
 
@@ -944,6 +961,8 @@ if is_rational and rr_method in ('', 'none') and num_segments == 2 and num_degre
     if numer_ok and den_ok:
         abs_den_rational_macro = (
             '\n// rational template: abs_denominator_rational. y = x / (1 + abs(x)).\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_ABS_DENOMINATOR_RATIONAL\n'
+            '#define EVAL_METHOD_ABS_DENOMINATOR_RATIONAL\n'
             '#define ABS_DENOMINATOR_RATIONAL\n'
         )
         print('ABS DENOMINATOR RATIONAL: y = x / (1 + abs(x)) -> abs+reciprocal bypass')
@@ -965,25 +984,49 @@ elif postcompose in ('', 'none', 'identity'):
 else:
     raise ValueError(f'unsupported postcompose={postcompose!r}')
 
-# Exactly one EVAL_METHOD_* selector. Metadata-driven methods (rr_macro) and
-# whole-function collapses emit their own selector; otherwise default to the
-# poly cascade. Parity / dual / adaptive / blend are orthogonal modifiers.
+# Explicit algebraic eval methods are metadata requests. Coefficient-pattern
+# recognizers above are the proof gate: an explicit request that does not prove
+# out is a hard error, not a silent cascade fallback.
+declared_eval_method = _meta_norm('eval_method')
+declared_to_macro = {
+    'identity': affine_macro if '#define AFFINE_IDENTITY' in affine_macro else '',
+    'affine': affine_macro,
+    'affine_collapse': affine_macro,
+    'clamped_affine': clamped_affine_macro,
+    'clamped_affine_collapse': clamped_affine_macro,
+    'threshold_identity': threshold_select_macro,
+    'threshold_identity_select': threshold_select_macro,
+    'gated_affine_product': gated_affine_product_macro,
+    'gated_quadratic_collapse': gated_affine_product_macro,
+    'abs_denominator_rational': abs_den_rational_macro,
+}
+if declared_eval_method in declared_to_macro and not declared_to_macro[declared_eval_method]:
+    raise ValueError(
+        f'eval_method={declared_eval_method!r} requested an algebraic lowering, '
+        'but CSV coefficients/boundaries did not prove that lowering'
+    )
+
+# Exactly one evaluator selector. Metadata-driven methods (rr_macro) and
+# whole-function collapses emit TT_ACT_EVAL_KIND; otherwise default to cascade.
+# Parity / dual / adaptive / blend are orthogonal modifiers.
 eval_method_macro = ''
 has_codegen_eval_method = any(
-    'EVAL_METHOD_' in macro for macro in (
+    'TT_ACT_EVAL_KIND' in macro for macro in (
         rr_macro,
         affine_macro,
         clamped_affine_macro,
         threshold_select_macro,
-        gated_quadratic_macro,
+        gated_affine_product_macro,
+        abs_den_rational_macro,
     )
 )
 if not is_rational:
     if not has_codegen_eval_method:
-        eval_method_macro = '\n// eval_method: poly_cascade (default piecewise polynomial cascade)\n#define EVAL_METHOD_POLY_CASCADE\n'
+        eval_method_macro = '\n// eval_method: poly_cascade (default piecewise polynomial cascade)\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_POLY_CASCADE\n#define EVAL_METHOD_POLY_CASCADE\n'
 else:
     # rational_cascade is the base method; reduced_poly may layer on via rr_macro.
-    eval_method_macro = '\n// eval_method: rational_cascade (piecewise P(x)/Q(x))\n#define EVAL_METHOD_RATIONAL_CASCADE\n'
+    if not has_codegen_eval_method:
+        eval_method_macro = '\n// eval_method: rational_cascade (piecewise P(x)/Q(x))\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_RATIONAL_CASCADE\n#define EVAL_METHOD_RATIONAL_CASCADE\n'
 
 # Write kernel .cpp
 if is_rational:
@@ -1039,7 +1082,7 @@ constexpr std::array<float, LUT_SIZE_FP32> LUT_DATA_FP32 = {{{{
     constexpr auto& LUT_DATA = LUT_DATA_FP32;
     constexpr uint32_t LUT_SIZE = LUT_SIZE_FP32;
 #endif
-{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}{threshold_select_macro}{gated_quadratic_macro}{postcompose_macro}
+{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}{threshold_select_macro}{gated_affine_product_macro}{postcompose_macro}
 #include \"../piecewise_generic.cpp\"
 '''
 

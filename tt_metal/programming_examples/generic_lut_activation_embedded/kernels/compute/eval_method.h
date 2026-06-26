@@ -7,8 +7,8 @@
  * ============================================================================
  *
  * This header is the SINGLE source of truth for "which evaluator owns the
- * approximation". Codegen emits exactly ONE EVAL_METHOD_* selector; the kernel dispatcher
- * reads that one tag and routes. This replaces the historically overloaded
+ * approximation". New codegen emits exactly ONE TT_ACT_EVAL_KIND selector; the
+ * kernel dispatcher reads that one tag and routes. This replaces the historically overloaded
  * RANGE_REDUCTION_* namespace, where reduce-then-poly, standalone
  * hardware-exponent-ALU evaluators, and the Newton-root evaluator (which fits
  * no polynomial at all) all shared one prefix and had to be disambiguated by
@@ -39,12 +39,19 @@
  *                                  fit. FIRST-CLASS method (formerly nested as an
  *                                  "exponent_alu kind"), STANDALONE: bypasses the
  *                                  cascade and ignores the LUT entirely.
- *   EVAL_METHOD_AFFINE_COLLAPSE  - y = c0 + c1*x (one SFPMAD), or identity y = x.
- *   EVAL_METHOD_CLAMPED_AFFINE_COLLAPSE
- *                                - y = min(max(c0 + c1*x, low), high). Exact
- *                                  whole-function algebraic collapse detected
- *                                  from CSV coefficients; bypasses segment
- *                                  selection and Horner.
+ *   Whole-function algebraic lowerings:
+ *     identity                    - y = x, no SFPU body.
+ *     affine                      - y = a*x + b.
+ *     clamped_affine              - y = clamp(a*x + b, lo?, hi?).
+ *     threshold_identity          - y = abs(x)>lambda ? x : 0.
+ *     gated_affine_product        - y = x * clamp(a*x + b, lo, hi).
+ *     abs_denominator_rational    - y = x / (c0 + c1*abs(x)).
+ *
+ *   Algebraic lowerings are whole-function templates. They bypass segment
+ *   selection and Horner only when CSV metadata requests the template and the
+ *   coefficient/boundary algebra proves the request. Legacy EVAL_METHOD_* and
+ *   feature macros remain during migration, but TT_ACT_EVAL_KIND below is the
+ *   canonical single discriminator for new generated kernels.
  *
  * Selection policy:
  *   1. Validate CSV rows and metadata before emitting routing tags.
@@ -68,11 +75,33 @@
  * written against the legacy RANGE_REDUCTION_* feature macros. To guarantee
  * byte-identical numerics, this header DERIVES those legacy macros from the
  * clean selectors. New code (the dispatcher, the standalone-evaluator gate)
- * reads EVAL_METHOD_*; the legacy bodies keep compiling unchanged. There is no
+ * reads TT_ACT_EVAL_KIND where possible; the legacy bodies keep compiling unchanged. There is no
  * numeric difference between the old and new tag — it is a pure rename + shim.
  */
 
 #pragma once
+
+// ----------------------------------------------------------------------------
+// Canonical activation evaluator kind. New generated kernels emit exactly one
+// TT_ACT_EVAL_KIND plus method-specific scalar payload macros. Legacy feature
+// macros below are kept as compatibility aliases while older generated kernels
+// and deep helper bodies are migrated.
+// ----------------------------------------------------------------------------
+#define TT_ACT_EVAL_POLY_CASCADE 1
+#define TT_ACT_EVAL_RATIONAL_CASCADE 2
+#define TT_ACT_EVAL_REDUCED_POLY 3
+#define TT_ACT_EVAL_EXPONENT_ALU 4
+#define TT_ACT_EVAL_NEWTON_ROOT 5
+#define TT_ACT_EVAL_IDENTITY 10
+#define TT_ACT_EVAL_AFFINE 11
+#define TT_ACT_EVAL_CLAMPED_AFFINE 12
+#define TT_ACT_EVAL_THRESHOLD_IDENTITY 13
+#define TT_ACT_EVAL_GATED_AFFINE_PRODUCT 14
+#define TT_ACT_EVAL_ABS_DENOMINATOR_RATIONAL 15
+
+#ifndef TT_ACT_EVAL_KIND
+#define TT_ACT_EVAL_KIND 0
+#endif
 
 // ----------------------------------------------------------------------------
 // EXPONENT_ALU: clean kind sub-tags -> legacy standalone-evaluator feature macros

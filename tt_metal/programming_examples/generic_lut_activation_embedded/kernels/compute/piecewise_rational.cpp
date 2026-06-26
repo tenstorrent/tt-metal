@@ -457,7 +457,8 @@ inline vFloat eval_rational(const float* num_coeffs, const float* den_coeffs, vF
     return eval_rational_interleaved<NUM_DEGREE, DEN_DEGREE>(num_coeffs, den_coeffs, x);
 #else
 #if defined(RANGE_REDUCTION_EXP) || defined(RANGE_REDUCTION_TRIG) || \
-    defined(RANGE_REDUCTION_LOG) return eval_rational_interleaved<NUM_DEGREE, DEN_DEGREE>(num_coeffs, den_coeffs, x);
+    defined(RANGE_REDUCTION_LOG)
+    return eval_rational_interleaved<NUM_DEGREE, DEN_DEGREE>(num_coeffs, den_coeffs, x);
 #else
     if constexpr (NUM_DEGREE >= 7 || DEN_DEGREE >= 7) {
         return eval_rational_interleaved<NUM_DEGREE, DEN_DEGREE>(num_coeffs, den_coeffs, x);
@@ -472,7 +473,7 @@ inline vFloat eval_rational(const float* num_coeffs, const float* den_coeffs, vF
 #endif
 }
 
-#if defined(ABS_DENOMINATOR_RATIONAL)
+#if TT_ACT_EVAL_KIND == TT_ACT_EVAL_ABS_DENOMINATOR_RATIONAL || defined(ABS_DENOMINATOR_RATIONAL)
 inline void abs_denominator_rational_eval() {
 #pragma GCC unroll 8
     for (int d = 0; d < 32; d++) {
@@ -568,7 +569,7 @@ void kernel_main() {
 #ifdef TRISC_MATH
         // All degree parameters are constexpr — use them directly as template args.
         // No dispatch table needed; works for ANY (num_degree, den_degree) combination.
-#if defined(ABS_DENOMINATOR_RATIONAL)
+#if TT_ACT_EVAL_KIND == TT_ACT_EVAL_ABS_DENOMINATOR_RATIONAL || defined(ABS_DENOMINATOR_RATIONAL)
         (void)p_lut;
         sfpi::abs_denominator_rational_eval();
 #else

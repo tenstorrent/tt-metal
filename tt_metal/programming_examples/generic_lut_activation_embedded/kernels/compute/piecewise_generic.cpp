@@ -2517,9 +2517,9 @@ inline void threshold_identity_select_eval() {
 }
 #endif
 
-#if defined(GATED_QUADRATIC_COLLAPSE)
+#if defined(GATED_AFFINE_PRODUCT) || defined(GATED_QUADRATIC_COLLAPSE)
 // y = x * clamp(q0 + q1*x, 0, 1).
-inline void gated_quadratic_collapse_eval() {
+inline void gated_affine_product_eval() {
     constexpr float Q0 = GATED_QUADRATIC_Q0;
     constexpr float Q1 = GATED_QUADRATIC_Q1;
 #pragma GCC unroll 8
@@ -2648,24 +2648,24 @@ void kernel_main() {
 // All degree parameters are constexpr — use them directly as template args.
 // No dispatch table needed; works for ANY poly_degree automatically.
 #ifdef TRISC_MATH
-#if defined(AFFINE_IDENTITY)
+#if TT_ACT_EVAL_KIND == TT_ACT_EVAL_IDENTITY || defined(AFFINE_IDENTITY)
         // Identity collapse (y = x): copy_tile already placed x in dst; the SFPU
         // eval is a pure no-op, so skip it entirely (no Horner, no LUT, no cascade).
         (void)p_lut;
-#elif defined(AFFINE_COLLAPSE)
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_AFFINE || defined(AFFINE_COLLAPSE)
         // Affine collapse (y = c0 + c1*x): one SFPMAD per element, no cascade.
         (void)p_lut;
         sfpi::affine_collapse_eval();
-#elif defined(CLAMPED_AFFINE_COLLAPSE)
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_CLAMPED_AFFINE || defined(CLAMPED_AFFINE_COLLAPSE)
         // Clamped affine collapse: one SFPMAD plus optional min/max clamps.
         (void)p_lut;
         sfpi::clamped_affine_collapse_eval();
-#elif defined(THRESHOLD_IDENTITY_SELECT)
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_THRESHOLD_IDENTITY || defined(THRESHOLD_IDENTITY_SELECT)
         (void)p_lut;
         sfpi::threshold_identity_select_eval();
-#elif defined(GATED_QUADRATIC_COLLAPSE)
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_GATED_AFFINE_PRODUCT || defined(GATED_AFFINE_PRODUCT) || defined(GATED_QUADRATIC_COLLAPSE)
         (void)p_lut;
-        sfpi::gated_quadratic_collapse_eval();
+        sfpi::gated_affine_product_eval();
 #else
         sfpi::piecewise_generic_lut_dispatch<poly_degree, num_segments, lut_size>(*p_lut);
 #endif
