@@ -113,7 +113,8 @@ def test_uint32_renoise_preserves_full_vocab_token_ids(device):
     assert torch.equal(ttnn.to_torch(out).squeeze(1).squeeze(-1).to(torch.long), ref)
 
 
-def test_multi_step_denoise_trajectory_matches_reference(device):
+def test_multi_step_denoise_control_flow_smoke_matches_reference(device):
+    """Synthetic controller smoke; real canvas->W2 logits cycling is covered in the integration suite."""
     torch.manual_seed(17)
     batch = 1
     length = 256
