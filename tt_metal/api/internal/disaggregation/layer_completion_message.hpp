@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Wire payload for a single prefill layer-completion event. POD,
-// trivially copyable — byte-copied verbatim through the host-local SHM
+// Wire payload for a single prefill layer-completion event. Trivially
+// copyable, standard-layout — byte-copied verbatim through the host-local SHM
 // ring and across MPI to the master rank. The transport is agnostic to
 // the fields' meaning; `seq` is a producer-supplied, globally-dense
 // ordering key the master sequences on before re-emitting completions
@@ -26,16 +26,16 @@ struct LayerCompletionMessage {
     // re-emits completions strictly in ascending `seq` (0,1,2,…). For
     // pipelined prefill the runner computes e.g. request_index*num_layers
     // + global_layer_idx; the C++ layer never interprets it.
-    uint64_t seq;
+    uint64_t seq = 0;
     // World rank of the host whose runner produced this completion.
-    uint32_t source_rank;
+    uint32_t source_rank = 0;
     // Layer that completed (global layer index).
-    uint32_t layer_idx;
+    uint32_t layer_idx = 0;
     // Request/chunk this completion belongs to (diagnostic in step 1).
-    uint32_t request_id;
+    uint32_t request_id = 0;
     // Explicit pad → 24 bytes, 8-byte alignment, no implementation-
     // defined tail padding across the wire.
-    uint32_t reserved;
+    uint32_t reserved = 0;
 };
 
 static_assert(sizeof(LayerCompletionMessage) == 24, "LayerCompletionMessage wire size changed");

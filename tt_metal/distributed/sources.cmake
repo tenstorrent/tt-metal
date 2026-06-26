@@ -27,7 +27,9 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/d2h_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/inter_process_counter_channel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/named_shm.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_queue.cpp
+    # layer-completion (disaggregation) impls live in the peer tt_metal/disaggregation/ dir but
+    # compile into this distributed library (they use named_shm/ring_layout — see include dir below).
+    ${PROJECT_SOURCE_DIR}/tt_metal/disaggregation/layer_completion_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shm_resource_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hd_socket_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/h2d_stream_service_descriptor.cpp
@@ -35,6 +37,6 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/pcie_core_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_reorder_buffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_router.cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/disaggregation/layer_completion_reorder_buffer.cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/disaggregation/layer_completion_router.cpp
 )

@@ -50,6 +50,7 @@ target_include_directories(
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal/distributed
+        ${PROJECT_SOURCE_DIR}/tt_metal/disaggregation # layer_completion_ring_layout.hpp (layout test)
 )
 
 set_target_properties(

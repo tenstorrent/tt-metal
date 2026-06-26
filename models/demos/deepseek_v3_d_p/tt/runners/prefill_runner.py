@@ -217,9 +217,15 @@ def _load_token_ids() -> list[int]:
 # Layer-completion routing (pipeline / num_ranks > 1)
 # ---------------------------------------------------------------------------
 
+# When the completion ring is full, spin waiting for the router to drain rather than
+# dropping/failing immediately. Bounded so a genuinely stalled router still surfaces.
+LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
+LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
+LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001  # tiny yield so the spin doesn't peg a core
 
-def build_layer_completion_sink(producer, *, source_rank, num_layers, get_request_id):
-    """Build the per-layer callback the runtime fires once per layer.
+
+def build_layer_completion_sink(producer, *, source_rank, num_layers):
+    """Build the per-layer completion sink the runtime fires once per layer.
 
     Computes a globally-dense ordering key and pushes a full completion
     into `producer` (a ttnn.layer_completion.LayerCompletionQueue). The
@@ -230,20 +236,50 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, get_reques
     global layer indices per request, so the union of every rank's seqs
     tiles [0, num_requests*num_layers) with no gaps or collisions.
 
+    The runtime calls the returned sink as `sink(layer_idx, request_id)`,
+    binding the current chunk's request_id per prefill() call — so this
+    builder needs no request-id accessor and reads no shared mutable state.
+
     Args:
         producer: connected LayerCompletionQueue (the host-local ring).
         source_rank: this rank's world rank (diagnostic in the payload).
         num_layers: total GLOBAL layers (the seq stride per request), NOT this rank's slice.
-        get_request_id: zero-arg callable returning the current request/chunk id.
     """
 
-    def on_layer_complete(layer_idx: int) -> None:
-        request_id = get_request_id()
+    def on_layer_complete(layer_idx: int, request_id: int) -> None:
         seq = request_id * num_layers + layer_idx
-        # Ring is sized well above in-flight depth; a full ring means the
-        # router thread has stalled — surface it rather than drop silently.
-        if not producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-            raise RuntimeError(f"layer-completion ring full (seq={seq}); router not draining")
+
+        def push() -> bool:
+            return producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id)
+
+        if push():
+            return
+
+        # Ring is sized well above in-flight depth; a full ring means the router
+        # thread is momentarily behind. Spin (don't drop) for up to PUSH_SPIN_TIMEOUT_S
+        # waiting for it to drain; log on entry, every PUSH_SPIN_LOG_EVERY_S while waiting,
+        # and on exit. Only surface an error if it never catches up.
+        start = time.monotonic()
+        next_log = start + LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
+        logger.warning(
+            f"[layer-completion] ring full (seq={seq}); spinning up to "
+            f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
+        )
+        while True:
+            if push():
+                logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
+                return
+            now = time.monotonic()
+            if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
+                logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
+                raise RuntimeError(
+                    f"layer-completion ring full (seq={seq}); router not draining after "
+                    f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s"
+                )
+            if now >= next_log:
+                logger.warning(f"[layer-completion] still spinning on full ring (seq={seq}) after {now - start:.0f}s")
+                next_log += LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
+            time.sleep(LAYER_COMPLETION_PUSH_SPIN_SLEEP_S)
 
     return on_layer_complete
 
@@ -252,7 +288,7 @@ class _CompletionCheckConsumer:
     """Test-only scheduler stand-in (enabled by PREFILL_CHECK_COMPLETIONS=1).
 
     Thin Python wrapper over the C++ LayerCompletionConsumer from the standalone, test-only
-    `_prefill_test` extension (tests/ttnn/prefill_test; imported via models.demos.test.prefill_test —
+    `_prefill_test` extension (models/demos/test; imported via models.demos.test.prefill_test —
     NOT part of the ttnn module). The C++ consumer drains the master router's scheduler counter
     channel on a NATIVE thread — immune to the GIL. An earlier Python daemon-thread version stalled at
     a partial count because the master rank's main thread blocks in a GIL-holding request-loop call
@@ -430,11 +466,14 @@ def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: d
     """Run one chunk: prefill, forward the output downstream (non-last rank) and grant the outbound
     sender so it ships over fabric, log CHUNK_START. Returns the compute-start epoch (NTP-comparable)."""
     t_start = time.time()
-    # Record the chunk index so the pipelined layer-completion sink (if registered) can build its
-    # globally-dense seq = current_chunk_idx * NUM_LAYERS + global_layer_idx. No-op single-rank.
-    runtime.current_chunk_idx = c
+    # Pass the chunk index as request_id so the pipelined layer-completion sink (if registered) can
+    # build its globally-dense seq = request_id * NUM_LAYERS + global_layer_idx. Ignored single-rank.
     out = runtime.prefill(
-        inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+        inp,
+        slot_id=meta["slot_id"],
+        actual_start=meta["actual_start"],
+        actual_end=meta["actual_end"],
+        request_id=c,
     )
     if SYNC_PER_CHUNK:
         # Block on device completion before the send so the delta is this rank's forward alone, not the
@@ -833,13 +872,13 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         )
         producer = ttnn.layer_completion.LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
         # seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this rank's slice; the layer_idx
-        # arriving at the sink is already global; the chunk index is set per chunk in _compute_and_send.
+        # arriving at the sink is already global; the chunk index is bound per prefill() call as
+        # request_id (passed by _compute_and_send), so the sink reads no shared mutable state.
         runtime.set_layer_completion_sink(
             build_layer_completion_sink(
                 producer,
                 source_rank=rank,
                 num_layers=NUM_LAYERS,
-                get_request_id=lambda: runtime.current_chunk_idx,
             )
         )
         logger.info(
