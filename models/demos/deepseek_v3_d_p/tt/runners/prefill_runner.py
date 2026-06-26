@@ -34,7 +34,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.prefill_test import LayerCompletionConsumer
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -46,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     resolve_weight_cache_path,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+from models.demos.test.prefill_test import LayerCompletionConsumer
 
 
 def _apply_manifest_env():
@@ -251,8 +251,9 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, get_reques
 class _CompletionCheckConsumer:
     """Test-only scheduler stand-in (enabled by PREFILL_CHECK_COMPLETIONS=1).
 
-    Thin Python wrapper over the C++ ttnn.experimental.deepseek_prefill.LayerCompletionConsumer
-    (the `prefill_test` component). The C++ consumer drains the master router's scheduler counter
+    Thin Python wrapper over the C++ LayerCompletionConsumer from the standalone, test-only
+    `_prefill_test` extension (tests/ttnn/prefill_test; imported via models.demos.test.prefill_test —
+    NOT part of the ttnn module). The C++ consumer drains the master router's scheduler counter
     channel on a NATIVE thread — immune to the GIL. An earlier Python daemon-thread version stalled at
     a partial count because the master rank's main thread blocks in a GIL-holding request-loop call
     and starves any Python drain thread, even though the router had already injected every completion.

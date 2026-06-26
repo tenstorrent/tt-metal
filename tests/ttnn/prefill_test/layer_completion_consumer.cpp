@@ -9,7 +9,7 @@
 
 #include <internal/service/inter_process_counter_channel.hpp>
 
-namespace ttnn::operations::experimental::deepseek_prefill {
+namespace tt::tests::prefill_test {
 
 using tt::tt_metal::distributed::InterProcessCounterChannel;
 
@@ -71,4 +71,4 @@ void LayerCompletionConsumer::run() {
     }
 }
 
-}  // namespace ttnn::operations::experimental::deepseek_prefill
+}  // namespace tt::tests::prefill_test
