@@ -14,8 +14,6 @@ N-only parallelisation on a handful of cores.
 folded into a single M axis, letting the heuristic dispatch across
 many more cores. It restores the original layout downstream of the
 linear.
-
-Mirrors the UniAD helper at `models/experimental/uniad/tt/matmul_helpers.py`.
 """
 
 import ttnn
