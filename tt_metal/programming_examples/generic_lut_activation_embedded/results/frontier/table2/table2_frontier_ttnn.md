@@ -5,20 +5,20 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 42. Accuracy match but slower: 9. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 39. Accuracy match but slower: 12. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
 | abs | abs_value:s2/d2 | 0.00 | 1.71 | 0.00 | 1.71 | 1.000 | win_both |
-| acos | rational:s2/d10d3 | 0.06 | 6.47 | 0.00 | 5.74 | 0.887 | loss |
+| acos | rational:s2/d10d3 | 0.06 | 6.46 | 0.00 | 5.74 | 0.889 | loss |
 | acosh | rational:s1/d4d3 | 1.00 | 2.93 | 1.00 | 4.73 | 1.614 | win_both |
-| asin | rational:s1/d8d8 | 0.00 | 3.03 | 0.00 | 5.70 | 1.881 | win_both |
-| asinh | rational:s1/d6d5 | 1.00 | 2.53 | 1.00 | 4.12 | 1.628 | win_both |
-| atan | poly:s1/d7 | 0.50 | 1.98 | 0.50 | 3.91 | 1.975 | win_both |
+| asin | rational:s1/d8d8 | 0.00 | 3.04 | 0.00 | 5.70 | 1.875 | win_both |
+| asinh | rational:s1/d5d5 | 1.00 | 2.54 | 1.00 | 4.12 | 1.622 | win_both |
+| atan | poly:s1/d7 | 0.50 | 1.99 | 0.50 | 3.91 | 1.965 | win_both |
 | atanh | rational:s1/d5d5 | 1.00 | 2.54 | 1.00 | 4.26 | 1.677 | win_both |
 | cbrt | exponent_alu_pow:s16/d1 | 1.00 | 4.41 | 1.00 | 2.14 | 0.485 | accuracy_match_slow |
-| celu | poly:s2/d13 | 0.00 | 2.74 | 0.00 | 3.61 | 1.318 | win_both |
-| cos | trig:s1/d6d4 | 0.00 | 4.05 | 0.00 | 2.56 | 0.632 | accuracy_match_slow |
+| celu | poly:s2/d13 | 0.00 | 2.75 | 0.00 | 3.61 | 1.313 | win_both |
+| cos | trig_residual:s1/d7 | 0.00 | 2.54 | 0.00 | 2.56 | 1.008 | win_both |
 | cosh | poly:s1/d16 | 0.00 | 3.01 | 0.00 | 2.97 | 0.987 | accuracy_match_slow |
 | digamma | rational:s1/d4d3 | 1.00 | 2.93 | 1.00 | 6.64 | 2.266 | win_both |
 | elu | poly:s2/d11 | 0.00 | 2.74 | 0.00 | 3.60 | 1.314 | win_both |
@@ -26,49 +26,49 @@ Comparable rows: 52. Win on ULP and runtime: 42. Accuracy match but slower: 9. F
 | erfc | poly:s4/d6 | 0.50 | 4.19 | 0.50 | 5.45 | 1.301 | win_both |
 | erfinv | rational:s1/d4d4 | 1.00 | 2.38 | 1.00 | 5.96 | 2.504 | win_both |
 | exp | exponent_alu_exp2:s1/d2 | 1.00 | 1.94 | 1.00 | 1.90 | 0.979 | accuracy_match_slow |
-| exp2 | exponent_alu_exp2:s16/d2 | 0.50 | 1.94 | 0.50 | 2.52 | 1.299 | win_both |
-| expm1 | poly:s1/d7 | 0.00 | 1.99 | 0.00 | 2.92 | 1.467 | win_both |
+| exp2 | exponent_alu_exp2:s3/d2 | 0.50 | 1.94 | 0.50 | 2.52 | 1.299 | win_both |
+| expm1 | poly:s1/d7 | 0.00 | 2.01 | 0.00 | 2.92 | 1.453 | win_both |
 | gelu | poly:s16/d2 | 0.12 | 11.80 | 0.12 | 5.78 | 0.490 | accuracy_match_slow |
 | hardmish | gated_affine_product:s3/d3 | 0.00 | 1.72 | 0.03 | 1.77 | 1.029 | win_both |
 | hardshrink | threshold_identity:s3/d2 | 0.00 | 1.74 | 0.00 | 1.82 | 1.046 | win_both |
-| hardsigmoid | poly:s3/d2 | 0.50 | 1.74 | 0.50 | 1.79 | 1.029 | win_both |
+| hardsigmoid | poly:s3/d3 | 0.50 | 1.99 | 0.50 | 1.79 | 0.899 | accuracy_match_slow |
 | hardswish | gated_affine_product:s3/d6 | 0.02 | 1.78 | 0.25 | 2.01 | 1.129 | win_both |
-| hardtanh | poly:s3/d10 | 0.00 | 1.68 | 0.00 | 1.86 | 1.107 | win_both |
+| hardtanh | poly:s3/d5 | 0.00 | 1.86 | 0.00 | 1.86 | 1.000 | win_both |
 | i0 | poly:s1/d10 | 0.25 | 2.35 | 1.00 | 3.10 | 1.319 | win_both |
-| i1 | rational:s1/d8d5 | 0.50 | 2.70 | 0.50 | 7.40 | 2.741 | win_both |
+| i1 | rational:s1/d7d4 | 0.50 | 2.70 | 0.50 | 7.40 | 2.741 | win_both |
 | identity | poly:s1/d13 | 0.00 | 0.13 | 0.00 | 0.16 | 1.231 | win_both |
-| leaky_relu | poly:s2/d1 | 0.00 | 1.82 | -- | -- | -- | incomplete |
-| lgamma | rational:s1/d6d4 | 1.00 | 3.42 | 1.00 | 13.48 | 3.942 | win_both |
-| log | exponent_alu_log2:s16/d2 | 1.00 | 2.17 | 1.00 | 2.32 | 1.069 | win_both |
+| leaky_relu | poly:s2/d1 | 0.00 | 1.80 | -- | -- | -- | incomplete |
+| lgamma | rational:s1/d5d5 | 1.00 | 3.42 | 1.00 | 13.48 | 3.942 | win_both |
+| log | exponent_alu_log2:s3/d2 | 1.00 | 2.16 | 1.00 | 2.32 | 1.074 | win_both |
 | log10 | exponent_alu_log2:s16/d3 | 0.50 | 2.26 | 0.50 | 2.48 | 1.097 | win_both |
 | log1p | exponent_alu_log2:s16/d2 | 1.00 | 2.26 | 1.00 | 2.43 | 1.075 | win_both |
-| log2 | exponent_alu_log2:s2/d3 | 1.00 | 2.26 | 1.00 | 2.47 | 1.093 | win_both |
+| log2 | exponent_alu_log2:s8/d3 | 1.00 | 2.26 | 1.00 | 2.47 | 1.093 | win_both |
 | logit | rational:s1/d4d4 | 1.00 | 3.04 | 1.00 | 5.40 | 1.776 | win_both |
-| logsigmoid | rational:s2/d5d5 | 0.00 | 5.46 | -- | -- | -- | incomplete |
+| logsigmoid | rational:s2/d5d5 | 0.00 | 5.47 | -- | -- | -- | incomplete |
 | mish | poly:s2/d9 | 0.25 | 3.27 | 0.25 | 4.31 | 1.318 | win_both |
-| multigammaln | poly:s1/d2 | 118.12 | 1.71 | 127.00 | 0.13 | 0.076 | excluded |
+| multigammaln | poly:s1/d3 | 118.12 | 1.72 | 127.00 | 0.13 | 0.076 | excluded |
 | polygamma | poly:s32/d10 | 16.00 | 25.98 | -- | -- | -- | incomplete |
-| prelu | poly:s2/d13 | 0.00 | 1.78 | -- | -- | -- | incomplete |
-| relu | poly:s2/d1 | 0.00 | 1.68 | 0.00 | 1.72 | 1.024 | win_both |
-| relu6 | poly:s3/d6 | 0.00 | 1.71 | 0.00 | 1.84 | 1.076 | win_both |
-| relu_max | poly:s3/d1 | 0.00 | 1.89 | -- | -- | -- | incomplete |
+| prelu | poly:s2/d2 | 0.00 | 1.79 | -- | -- | -- | incomplete |
+| relu | poly:s2/d2 | 0.00 | 1.78 | 0.00 | 1.72 | 0.966 | accuracy_match_slow |
+| relu6 | poly:s3/d2 | 0.00 | 1.88 | 0.00 | 1.84 | 0.979 | accuracy_match_slow |
+| relu_max | poly:s3/d1 | 0.00 | 1.90 | -- | -- | -- | incomplete |
 | relu_min | poly:s2/d1 | 0.00 | 1.78 | -- | -- | -- | incomplete |
-| rsqrt | newton_root:s16/d2 | 0.00 | 2.01 | 0.00 | 2.47 | 1.229 | win_both |
-| selu | poly:s2/d13 | 0.00 | 2.79 | 0.00 | 3.63 | 1.301 | win_both |
-| sigmoid | exponent_alu_exp2:s8/d2 | 0.50 | 2.46 | 0.50 | 2.89 | 1.175 | win_both |
+| rsqrt | newton_root:s1/d13 | 0.00 | 2.02 | 0.00 | 2.47 | 1.223 | win_both |
+| selu | poly:s2/d14 | 0.00 | 2.80 | 0.00 | 3.63 | 1.296 | win_both |
+| sigmoid | exponent_alu_exp2:s1/d2 | 0.50 | 2.46 | 0.50 | 2.89 | 1.175 | win_both |
 | sigmoid_accurate | exponent_alu_exp2:s1/d2 | 0.50 | 2.47 | 0.50 | 2.93 | 1.186 | win_both |
 | silu | exponent_alu_exp2:s1/d3 | 0.03 | 3.35 | 0.25 | 3.11 | 0.928 | accuracy_match_slow |
-| sin | trig:s1/d11 | 0.00 | 2.87 | 0.00 | 2.35 | 0.819 | accuracy_match_slow |
-| sinh | rational:s1/d14d2 | 0.00 | 3.03 | 0.00 | 3.25 | 1.073 | win_both |
-| softplus | poly:s2/d9 | 0.12 | 3.29 | 0.12 | 5.31 | 1.614 | win_both |
+| sin | trig:s1/d7 | 0.00 | 2.86 | 0.00 | 2.35 | 0.822 | accuracy_match_slow |
+| sinh | rational:s1/d13d2 | 0.00 | 3.04 | 0.00 | 3.25 | 1.069 | win_both |
+| softplus | poly:s2/d10 | 0.12 | 3.30 | 0.12 | 5.31 | 1.609 | win_both |
 | softshrink | threshold_softshift:s3/d2 | 0.00 | 1.78 | 0.00 | 1.91 | 1.073 | win_both |
 | softsign | abs_denominator_rational:s2/d1d1 | 0.00 | 1.80 | 1.00 | 1.96 | 1.089 | win_both |
-| sqrt | newton_root:s1/d14 | 0.00 | 2.16 | 0.00 | 2.28 | 1.056 | win_both |
+| sqrt | newton_root:s1/d11 | 0.00 | 2.16 | 0.00 | 2.28 | 1.056 | win_both |
 | swish | exponent_alu_exp2:s1/d3 | 0.03 | 3.36 | 0.25 | 3.10 | 0.923 | accuracy_match_slow |
-| tan | tan:s1/d7 | 0.12 | 3.31 | 0.12 | 2.94 | 0.888 | accuracy_match_slow |
-| tanh | poly:s1/d6 | 0.50 | 2.10 | 0.50 | 2.29 | 1.090 | win_both |
-| tanhshrink | rational:s1/d12d3 | 0.12 | 2.87 | 0.12 | 3.17 | 1.105 | win_both |
-| threshold | poly:s2/d2 | 0.00 | 1.80 | -- | -- | -- | incomplete |
+| tan | tan:s1/d8 | 0.12 | 3.30 | 0.12 | 2.94 | 0.891 | accuracy_match_slow |
+| tanh | rational:s1/d5d3 | 0.50 | 2.38 | 0.50 | 2.29 | 0.962 | accuracy_match_slow |
+| tanhshrink | rational:s1/d12d3 | 0.12 | 2.86 | 0.12 | 3.17 | 1.108 | win_both |
+| threshold | poly:s2/d2 | 0.00 | 1.79 | -- | -- | -- | incomplete |
 
 Excluded rows:
 - multigammaln: frontier/native rows were generated before multigammaln.json was fixed to the true p=4 target; rerun p=4 sweep before claiming
