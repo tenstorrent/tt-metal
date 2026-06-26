@@ -465,9 +465,27 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
-    # ---- L_mat = I + kk * L_mask ----
-    L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
+    # ---- L_mat = I + strictly_lower(kk * L_mask) ----
+    # The intra-chunk system the reference inverts has UNIT diagonal: the delta-rule
+    # correction for token i uses only PRIOR tokens j<i within the chunk (token i reads the
+    # recurrent state BEFORE its own write), so the diagonal of (k_beta @ k.T)*L_mask must be
+    # excluded (HF/FLA reference: `.masked_fill(triu(diagonal=0), 0)`). L_mask here is tril
+    # INCLUSIVE of the diagonal (==1 on it), so kk's diagonal (beta_i*|k_i|^2, ~beta_i since k
+    # is L2-normed) would otherwise leak into L_mat's diagonal as (1+beta_i). The C++ kernel
+    # then solves L_unit x = D^{-1} v_beta with D=diag(L_mat), i.e. x = L_mat^{-1} v_beta, so a
+    # non-unit diagonal makes it invert (I + A) with a (1+beta) diagonal instead of the
+    # reference's unit-diagonal (I + A_strict) -> a systematic per-token error that compounds
+    # over the 48 GDN layers and is worst exactly where keys are correlated / beta saturates
+    # (structured/format tokens). Mask the diagonal out here; the ==1 diagonal of L_mask is
+    # still needed (and kept) for intra_attn below, only NOT for the inverted matrix.
+    kk_lmask = ttnn.multiply(kk, L_mask, memory_config=_cmc)
     ttnn.deallocate(kk)
+    kk_diag = ttnn.multiply(kk_lmask, _eye_1cc, memory_config=_cmc)
+    kk_strict = ttnn.subtract(kk_lmask, kk_diag, memory_config=_cmc)
+    ttnn.deallocate(kk_lmask)
+    ttnn.deallocate(kk_diag)
+    L_mat = ttnn.add(_eye_1cc, kk_strict, memory_config=_cmc)
+    ttnn.deallocate(kk_strict)
     _ck("L_mat", L_mat)
 
     # ---- Normalize to unit-diagonal: L_unit = D^{-1} L_mat ----
