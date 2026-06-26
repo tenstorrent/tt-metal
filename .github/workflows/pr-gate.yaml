@@ -437,7 +437,7 @@ jobs:
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     runs-on: tt-ubuntu-2204-large-stable
-    timeout-minutes: 80
+    timeout-minutes: 20
     container:
       image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
     steps:
