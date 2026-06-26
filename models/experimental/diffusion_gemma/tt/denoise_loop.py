@@ -153,6 +153,13 @@ def _accept_to_torch(tensor: ttnn.Tensor) -> torch.Tensor:
     return _to_host_torch(tensor).squeeze(1).squeeze(1) > 0.5
 
 
+def _deallocate_decision_tensors(res: TtDenoiseStepResult) -> None:
+    res.accept_mask.deallocate(True)
+    res.entropy.deallocate(True)
+    res.sampled.deallocate(True)
+    res.argmax.deallocate(True)
+
+
 def denoise_block(
     logits_fn: TtLogitsFn,
     init_canvas: ttnn.Tensor,
@@ -166,6 +173,7 @@ def denoise_block(
     The full ``[B, L, vocab]`` logits stay on device. For the data-dependent halt
     check and the trajectory harness, this reads back only per-step ``[B, L]``
     decision tensors: argmax, entropy, sampled ids, accept mask, and canvas.
+    ``init_canvas`` is consumed; each superseded device canvas is deallocated.
     """
     canvas = init_canvas
     records: List[StepRecord] = []
@@ -211,9 +219,17 @@ def denoise_block(
         )
         confident = entropy_mean < config.entropy_stop_threshold
         argmax_history.append(argmax)
-        canvas = res.canvas
+        next_canvas = res.canvas
+        if canvas is not next_canvas:
+            canvas.deallocate(True)
+        _deallocate_decision_tensors(res)
 
         if stable and confident:
+            next_canvas.deallocate(True)
             return DenoiseTrajectory(committed, step + 1, True, records)
 
+        canvas = next_canvas
+
+    if config.max_denoise_steps > 0:
+        canvas.deallocate(True)
     return DenoiseTrajectory(committed, config.max_denoise_steps, False, records)
