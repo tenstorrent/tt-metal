@@ -97,6 +97,81 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             mesh_id_val);
         return RoutingDirection::NONE;  // This line should never be reached
     };
+    // Shortest hop-distance from `start` to `goal` traversing only edges whose port_direction is in
+    // `allowed`. Returns -1 if unreachable. Used to compare base-ring-only vs skip-inclusive distance.
+    const auto bfs_dist = [&](std::uint32_t mesh_id_val,
+                              ChipId start,
+                              ChipId goal,
+                              std::initializer_list<RoutingDirection> allowed) -> int {
+        if (start == goal) {
+            return 0;
+        }
+        const auto is_allowed = [&](RoutingDirection d) {
+            for (auto a : allowed) {
+                if (a == d) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        std::vector<int> dist(intra_mesh_connectivity[mesh_id_val].size(), -1);
+        std::queue<ChipId> q;
+        dist[start] = 0;
+        q.push(start);
+        while (!q.empty()) {
+            ChipId cur = q.front();
+            q.pop();
+            for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][cur]) {
+                if (!is_allowed(edge.port_direction) || dist[next_chip_id] != -1) {
+                    continue;
+                }
+                dist[next_chip_id] = dist[cur] + 1;
+                if (next_chip_id == goal) {
+                    return dist[next_chip_id];
+                }
+                q.push(next_chip_id);
+            }
+        }
+        return -1;
+    };
+    // First-hop direction from `src` to `goal` along one axis (base dirs `a`/`b`), accounting for skip
+    // (Z) links. BFS is scoped to {a, b, Z} so it stays on this axis. A skip is taken only when it makes
+    // the path STRICTLY shorter than base-ring-only (equal-length defers to the ring). When a skip helps,
+    // the first hop is the edge out of `src` on a shortest skip-inclusive path: prefer Z if `src` can
+    // skip, else the base hop advancing TOWARD the skip (which can be a later hop, so this may differ
+    // from the shortest ring direction). Skip-free meshes are unaffected (skip_dist == base_dist).
+    const auto first_hop_along_axis = [&](std::uint32_t mesh_id_val,
+                                          ChipId src,
+                                          ChipId goal,
+                                          RoutingDirection a,
+                                          RoutingDirection b) -> RoutingDirection {
+        const int base_dist = bfs_dist(mesh_id_val, src, goal, {a, b});
+        const int skip_dist = bfs_dist(mesh_id_val, src, goal, {a, b, RoutingDirection::Z});
+        if (skip_dist != -1 && (base_dist == -1 || skip_dist < base_dist)) {
+            bool has_a = false, has_b = false;
+            for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][src]) {
+                const RoutingDirection d = edge.port_direction;
+                if (d != a && d != b && d != RoutingDirection::Z) {
+                    continue;
+                }
+                if (bfs_dist(mesh_id_val, next_chip_id, goal, {a, b, RoutingDirection::Z}) != skip_dist - 1) {
+                    continue;
+                }
+                if (d == RoutingDirection::Z) {
+                    return RoutingDirection::Z;  // prefer the skip from src
+                }
+                has_a = has_a || (d == a);
+                has_b = has_b || (d == b);
+            }
+            if (has_a) {
+                return a;
+            }
+            if (has_b) {
+                return b;
+            }
+        }
+        return get_shorter_direction_on_row_or_col(mesh_id_val, src, goal, a, b);
+    };
     const auto& mesh_graph = topology_mapper_.get_mesh_graph();
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
@@ -110,7 +185,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                     // Move North or South
                     MeshCoordinate target_coord_on_column(dst_mesh_coord[0], src_mesh_coord[1]);
                     auto target_chip_id = mesh_graph.coordinate_to_chip(mesh_id, target_coord_on_column);
-                    auto direction = get_shorter_direction_on_row_or_col(
+                    auto direction = first_hop_along_axis(
                         mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // TODO: today we are not updating the weight of the edge, should we use weight to balance
@@ -118,7 +193,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                     //  intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else if (src_mesh_coord[1] != dst_mesh_coord[1]) {
                     // Move East or West
-                    auto direction = get_shorter_direction_on_row_or_col(
+                    auto direction = first_hop_along_axis(
                         mesh_id_val, src_chip_id, dst_chip_id, RoutingDirection::E, RoutingDirection::W);
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
