@@ -1,65 +1,65 @@
-# 7666 configs, 60 activations, explicit dtype groups
+# 7443 configs, 60 activations, explicit dtype groups
 
-abs               208 compile /  208 total | frontier  2 pts | TTNN 2.94us ulp0.0 | WINS: poly 13/s2 (fastest 2.89us)
-acos              183 compile /  183 total | frontier 21 pts | TTNN 8.12us ulp14.0
-acosh             194 compile /  194 total | frontier 20 pts | TTNN 5.29us ulp6791.0 | WINS: rational 5d5/s1,rational 6d5/s1,rational 7d5/s1,rational 8d7/s1,rational 8d8/s1,rational 9d9/s1 (fastest 3.96us)
-asin              126 compile /  126 total | frontier 12 pts | TTNN 7.99us ulp27.5
-asinh             136 compile /  136 total | frontier 15 pts | TTNN 4.69us ulp10107.0 | WINS: rational 10d5/s1,rational 10d6/s1,rational 13d12/s1,rational 6d6/s1,rational 7d6/s1,rational 8d8/s1 (fastest 3.43us)
-atan               62 compile /   62 total | frontier  9 pts | TTNN 5.11us ulp2.0
-atanh             127 compile /  127 total | frontier 13 pts | TTNN 4.79us ulp10029.0
-cbrt              200 compile /  228 total | frontier 13 pts | TTNN 3.41us ulp2.0
-celu               73 compile /   73 total | frontier 11 pts | TTNN 4.40us ulp0.0625
-cos               193 compile /  193 total | frontier  8 pts | TTNN 3.48us ulp1.0
-cosh              202 compile /  202 total | frontier 15 pts | TTNN 4.10us ulp1.0
-digamma           229 compile /  229 total | frontier 24 pts | TTNN 12.17us ulp79.0 | WINS: rational 4d4/s2,rational 5d4/s2,rational 5d5/s2,rational 6d3/s2,rational 6d5/s2 (fastest 5.40us)
-elu                72 compile /   72 total | frontier 10 pts | TTNN 4.38us ulp0.0625
-erf               124 compile /  124 total | frontier 18 pts | TTNN 5.49us ulp3.5 | WINS: rational 15d15/s1 (fastest 4.68us)
-erfc              176 compile /  176 total | frontier 17 pts | TTNN 5.99us ulp15979.5 | WINS: poly 7/s4 (fastest 5.06us)
+abs               202 compile /  202 total | frontier  2 pts | TTNN 2.94us ulp0.0 | WINS: poly 13/s2 (fastest 2.89us)
+acos              176 compile /  176 total | frontier 21 pts | TTNN 8.12us ulp14.0
+acosh             190 compile /  190 total | frontier 20 pts | TTNN 5.29us ulp6791.0 | WINS: rational 5d5/s1,rational 6d4/s1,rational 6d5/s1,rational 7d5/s1,rational 8d7/s1,rational 8d8/s1 (fastest 3.96us)
+asin              123 compile /  123 total | frontier 12 pts | TTNN 7.99us ulp27.5
+asinh             130 compile /  130 total | frontier 15 pts | TTNN 4.69us ulp10107.0 | WINS: rational 10d5/s1,rational 10d6/s1,rational 13d12/s1,rational 6d6/s1,rational 7d6/s1,rational 8d8/s1 (fastest 3.43us)
+atan               60 compile /   60 total | frontier  9 pts | TTNN 5.11us ulp2.0
+atanh             123 compile /  123 total | frontier 13 pts | TTNN 4.79us ulp10029.0
+cbrt              197 compile /  225 total | frontier 13 pts | TTNN 3.41us ulp2.0
+celu               69 compile /   69 total | frontier 11 pts | TTNN 4.40us ulp0.0625
+cos               185 compile /  185 total | frontier  8 pts | TTNN 3.48us ulp1.0
+cosh              195 compile /  195 total | frontier 15 pts | TTNN 4.10us ulp1.0
+digamma           226 compile /  226 total | frontier 24 pts | TTNN 12.17us ulp79.0 | WINS: rational 4d4/s2,rational 5d4/s2,rational 5d5/s2,rational 6d3/s2,rational 6d5/s2 (fastest 5.40us)
+elu                69 compile /   69 total | frontier 10 pts | TTNN 4.38us ulp0.0625
+erf               122 compile /  122 total | frontier 18 pts | TTNN 5.49us ulp3.5 | WINS: rational 15d15/s1 (fastest 4.68us)
+erfc              170 compile /  170 total | frontier 19 pts | TTNN 5.99us ulp15979.5 | WINS: poly 7/s4 (fastest 5.06us)
 erfinv             69 compile /   69 total | frontier 10 pts | TTNN 6.52us ulp20560.0 | WINS: rational 11d4/s1,rational 6d5/s1,rational 6d6/s1,rational 8d7/s1 (fastest 3.29us)
-exp               170 compile /  256 total | frontier  3 pts | TTNN 4.02us ulp1.0
-exp2              168 compile /  251 total | frontier  6 pts | TTNN 3.59us ulp0.5
-expm1              44 compile /  126 total | frontier  3 pts | TTNN 4.50us ulp1.0
-gelu               58 compile /   58 total | frontier 18 pts | TTNN 6.61us ulp2.0
-hardmish           49 compile /   49 total | frontier  4 pts | TTNN 3.05us ulp0.03125
-hardshrink         58 compile /   58 total | frontier  2 pts | TTNN 2.98us ulp0.0
-hardsigmoid        50 compile /   50 total | frontier  3 pts | TTNN 3.05us ulp0.5
+exp               162 compile /  248 total | frontier  3 pts | TTNN 4.02us ulp1.0
+exp2              164 compile /  247 total | frontier  6 pts | TTNN 3.59us ulp0.5
+expm1              39 compile /  121 total | frontier  3 pts | TTNN 4.50us ulp1.0
+gelu               55 compile /   55 total | frontier  6 pts | TTNN 6.61us ulp2.0
+hardmish           47 compile /   47 total | frontier  4 pts | TTNN 3.05us ulp0.03125
+hardshrink         56 compile /   56 total | frontier  2 pts | TTNN 2.98us ulp0.0
+hardsigmoid        47 compile /   47 total | frontier  3 pts | TTNN 3.05us ulp0.5 | WINS: poly 1/s3 (fastest 3.05us)
 hardswish          45 compile /   45 total | frontier  3 pts | TTNN 3.30us ulp0.25 | WINS: poly 4/s3 (fastest 3.05us)
-hardtanh           75 compile /   75 total | frontier  3 pts | TTNN 3.14us ulp0.0 | WINS: poly 11/s3 (fastest 2.99us)
-i0                208 compile /  208 total | frontier 12 pts | TTNN 3.82us ulp2582.0 | WINS: poly 13/s1 (fastest 3.35us)
-i1                140 compile /  140 total | frontier 16 pts | TTNN 9.89us ulp5.0 | WINS: rational 14d14/s1 (fastest 4.48us)
-identity          201 compile /  201 total | frontier  1 pts | TTNN 1.90us ulp0.0 | WINS: poly 16/s1 (fastest 1.83us)
+hardtanh           73 compile /   73 total | frontier  3 pts | TTNN 3.14us ulp0.0 | WINS: poly 11/s3 (fastest 2.99us)
+i0                203 compile /  203 total | frontier 12 pts | TTNN 3.82us ulp2582.0 | WINS: poly 13/s1 (fastest 3.35us)
+i1                134 compile /  134 total | frontier 16 pts | TTNN 9.89us ulp5.0 | WINS: rational 14d14/s1 (fastest 4.48us)
+identity          199 compile /  199 total | frontier  1 pts | TTNN 1.90us ulp0.0 | WINS: poly 16/s1 (fastest 1.83us)
 leaky_relu          1 compile /    1 total | frontier  1 pts
 lgamma            170 compile /  170 total | frontier 12 pts | TTNN 21.33us ulp1685.673828125 | WINS: rational 10d9/s2,rational 11d10/s1,rational 11d2/s2,rational 5d3/s2,rational 9d2/s2 (fastest 5.45us)
-log                60 compile /  131 total | frontier  8 pts | TTNN 3.76us ulp1.0
-log10              60 compile /  130 total | frontier  6 pts | TTNN 3.89us ulp1.0
-log1p             185 compile /  253 total | frontier  6 pts | TTNN 3.88us ulp1.0
-log2               58 compile /  129 total | frontier  6 pts | TTNN 3.87us ulp1.0
+log                52 compile /  123 total | frontier  8 pts | TTNN 3.76us ulp1.0
+log10              52 compile /  122 total | frontier  6 pts | TTNN 3.89us ulp1.0
+log1p             180 compile /  248 total | frontier  6 pts | TTNN 3.88us ulp1.0
+log2               50 compile /  121 total | frontier  6 pts | TTNN 3.87us ulp1.0
 logit              87 compile /   87 total | frontier 13 pts | TTNN 6.47us ulp1.0
-logsigmoid        147 compile /  195 total | frontier 28 pts
-mish              125 compile /  125 total | frontier 16 pts | TTNN 5.94us ulp2.0
-multigammaln      202 compile /  202 total | frontier 20 pts | TTNN 3.21us ulp8301360.0 | WINS: poly 14/s1,poly 2/s1,poly 4/s1,poly 5/s1,poly 6/s1,poly 8/s1 (fastest 2.83us)
+logsigmoid        143 compile /  187 total | frontier 28 pts
+mish              121 compile /  121 total | frontier 16 pts | TTNN 5.94us ulp2.0
+multigammaln      196 compile /  196 total | frontier 20 pts | TTNN 3.21us ulp8301360.0 | WINS: poly 14/s1,poly 2/s1,poly 4/s1,poly 5/s1,poly 6/s1,poly 8/s1 (fastest 2.83us)
 polygamma         112 compile /  112 total | frontier  9 pts
 prelu              71 compile /   71 total | frontier  2 pts
-relu               50 compile /   50 total | frontier  2 pts | TTNN 3.02us ulp0.0 | WINS: poly 2/s2 (fastest 2.88us)
-relu6              52 compile /   52 total | frontier  3 pts | TTNN 3.06us ulp0.0 | WINS: poly 1/s3 (fastest 2.99us)
+relu               48 compile /   48 total | frontier  2 pts | TTNN 3.02us ulp0.0 | WINS: poly 2/s2 (fastest 2.88us)
+relu6              50 compile /   50 total | frontier  3 pts | TTNN 3.06us ulp0.0 | WINS: poly 6/s3 (fastest 3.00us)
 relu_max            1 compile /    1 total | frontier  1 pts
 relu_min            2 compile /    2 total | frontier  2 pts
 rsqrt             197 compile /  197 total | frontier  2 pts | TTNN 3.33us ulp1.0
-selu               71 compile /   71 total | frontier 13 pts | TTNN 4.40us ulp11.0
-sigmoid           156 compile /  256 total | frontier  7 pts | TTNN 4.58us ulp2.0
-sigmoid_accurate   10 compile /   15 total | frontier  6 pts | TTNN 4.58us ulp2.0
-silu              117 compile /  133 total | frontier 14 pts | TTNN 4.62us ulp2.0
-sin               127 compile /  127 total | frontier  7 pts | TTNN 3.41us ulp1.0
-sinh              132 compile /  132 total | frontier 11 pts | TTNN 4.48us ulp1.0
-softplus          194 compile /  194 total | frontier 23 pts | TTNN 7.35us ulp43.625 | WINS: rational 11d2/s2,rational 12d11/s1,rational 6d3/s2,rational 7d3/s2,rational 9d9/s1 (fastest 5.23us)
-softshrink         49 compile /   49 total | frontier  3 pts | TTNN 3.25us ulp0.0 | WINS: poly 6/s3 (fastest 3.05us)
-softsign          207 compile /  207 total | frontier  4 pts | TTNN 3.19us ulp3.0 | WINS: rational 1d1/s2 (fastest 3.14us)
+selu               69 compile /   69 total | frontier 13 pts | TTNN 4.40us ulp11.0
+sigmoid           148 compile /  248 total | frontier  6 pts | TTNN 4.58us ulp2.0
+sigmoid_accurate    8 compile /   13 total | frontier  5 pts | TTNN 4.58us ulp2.0
+silu              112 compile /  128 total | frontier 14 pts | TTNN 4.62us ulp2.0
+sin               120 compile /  120 total | frontier  7 pts | TTNN 3.41us ulp1.0
+sinh              126 compile /  126 total | frontier 11 pts | TTNN 4.48us ulp1.0
+softplus          186 compile /  186 total | frontier 23 pts | TTNN 7.35us ulp43.625 | WINS: rational 11d2/s2,rational 6d3/s2,rational 7d3/s2,rational 8d3/s2,rational 9d9/s1 (fastest 5.23us)
+softshrink         47 compile /   47 total | frontier  3 pts | TTNN 3.25us ulp0.0 | WINS: poly 6/s3 (fastest 3.05us)
+softsign          205 compile /  205 total | frontier  4 pts | TTNN 3.19us ulp3.0 | WINS: rational 1d1/s2 (fastest 3.14us)
 sqrt              198 compile /  198 total | frontier  2 pts | TTNN 3.29us ulp1.0 | WINS: newton_root 8/s3 (fastest 3.05us)
-swish             134 compile /  134 total | frontier 18 pts | TTNN 4.61us ulp2.0
-tan                58 compile /   58 total | frontier  5 pts | TTNN 4.64us ulp1.0
-tanh              135 compile /  135 total | frontier 16 pts | TTNN 7.34us ulp5.0 | WINS: rational 10d5/s1,rational 8d8/s1 (fastest 3.56us)
-tanhshrink         83 compile /   83 total | frontier  6 pts | TTNN 6.71us ulp0.5
+swish             128 compile /  128 total | frontier 17 pts | TTNN 4.61us ulp2.0
+tan                56 compile /   56 total | frontier  5 pts | TTNN 4.64us ulp1.0
+tanh              128 compile /  128 total | frontier 16 pts | TTNN 7.34us ulp5.0 | WINS: rational 10d5/s1,rational 8d8/s1 (fastest 3.56us)
+tanhshrink         78 compile /   78 total | frontier  6 pts | TTNN 6.71us ulp0.5
 threshold          47 compile /   47 total | frontier  2 pts
 
-# 21/53 activation groups with TTNN refs have a config that beats TTNN on both axes
-# per-activation scatters -> /Users/nachiket/workspace/tt-metal/tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/fp32/plots/scatter/
+# 22/53 activation groups with TTNN refs have a config that beats TTNN on both axes
+# per-activation scatters -> tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/fp32/plots/scatter/
