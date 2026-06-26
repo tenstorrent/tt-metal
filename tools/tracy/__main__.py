@@ -190,6 +190,15 @@ def main():
     (options, args) = parser.parse_args()
     sys.argv[:] = args
 
+    # Accumulate mode interleaves zones from many program invocations and does not store
+    # per-program op IDs, so an ops perf report cannot be attributed and would be
+    # meaningless. Disallow -r together with --enable-accumulate-profiling.
+    if options.report and options.do_accumulate:
+        parser.error(
+            "-r (ops report) cannot be used with --enable-accumulate-profiling: "
+            "accumulate mode does not store per-op IDs, so no ops report can be generated"
+        )
+
     outputFolderEnvStr = "TT_METAL_PROFILER_DIR"
     outputFolder = PROFILER_ARTIFACTS_DIR
     if options.output_folder:
