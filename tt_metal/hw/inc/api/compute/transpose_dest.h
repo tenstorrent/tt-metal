@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -24,8 +26,12 @@ namespace ckernel {
  * materialization paths.
  */
 template <bool is_32bit = false, bool transpose_of_faces = true>
-ALWI void transpose_dest_init() {
+ALWI void transpose_dest_init([[maybe_unused]] std::uint32_t operand = 0) {
+#ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest_init<transpose_of_faces, is_32bit>()));
+#else
+    MATH((llk_math_transpose_dest_init<transpose_of_faces, is_32bit>(operand)));
+#endif
 }
 
 // clang-format off
@@ -43,9 +49,13 @@ ALWI void transpose_dest_init() {
  */
 // clang-format on
 template <bool is_32bit = false, bool transpose_of_faces = true>
-ALWI void transpose_dest(uint32_t idst) {
+ALWI void transpose_dest(std::uint32_t idst) {
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
+#ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest<transpose_of_faces, is_32bit>(idst)));
+#else
+    MATH((llk_math_transpose_dest(idst)));
+#endif
 }
 
 }  // namespace ckernel

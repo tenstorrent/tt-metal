@@ -37,7 +37,7 @@ void kernel_main() {
     Noc noc;
 
     cb_out0.reserve_back(num_sticks_padded);
-    uint32_t l1_read_addr = cb_in0.get_write_ptr();
+    uint32_t l1_read_addr = cb_in0.get_read_ptr();
     uint32_t l1_write_addr = cb_out0.get_write_ptr();
 
     uint32_t chunk_ptr_offset = 0;

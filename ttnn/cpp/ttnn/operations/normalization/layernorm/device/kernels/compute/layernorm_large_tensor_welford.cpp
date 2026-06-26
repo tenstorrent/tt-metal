@@ -23,22 +23,22 @@
 namespace generic = norm::kernel_util::generic;
 
 template <
-    uint32_t cb_in,
-    uint32_t cb_inb,
-    uint32_t cb_interm_pre_add,
-    uint32_t cb_ex,
-    uint32_t cb_ex2,
-    uint32_t cb_ex_welford,
-    uint32_t cb_ex2_welford,
+    std::uint32_t cb_in,
+    std::uint32_t cb_inb,
+    std::uint32_t cb_interm_pre_add,
+    std::uint32_t cb_ex,
+    std::uint32_t cb_ex2,
+    std::uint32_t cb_ex_welford,
+    std::uint32_t cb_ex2_welford,
     bool welford_state_fp32_alias,
-    uint32_t input_dst,
-    uint32_t mean_dst,
-    uint32_t var_dst,
-    uint32_t Wt,
-    uint32_t tile_width,
-    uint32_t W,
-    uint32_t blk>
-void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
+    std::uint32_t input_dst,
+    std::uint32_t mean_dst,
+    std::uint32_t var_dst,
+    std::uint32_t Wt,
+    std::uint32_t tile_width,
+    std::uint32_t W,
+    std::uint32_t blk>
+void welford_fuse_pre_add(const std::array<std::uint32_t, W>& reciprocal_lut) {
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_inb_obj(cb_inb);
     CircularBuffer cb_interm_pre_add_obj(cb_interm_pre_add);
@@ -54,10 +54,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     // Because the Welford's llk is given transposed data, skip some rows when
     // we want to skip some columns from getting processed by layer_norm.
     // When last tile is full the value is 0 and is not used because full update is done.
-    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr std::uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
-    uint32_t sample_idx = 0;
+    std::uint32_t sample_idx = 0;
 
     tile_regs_acquire();
     welford_init();
@@ -219,17 +219,17 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
  * @param: p_reciprocals: pointer to the reciprocal LUT
  */
 template <
-    uint32_t cb_in,
-    uint32_t cb_x_welford,
+    std::uint32_t cb_in,
+    std::uint32_t cb_x_welford,
     bool welford_fp32_alias,
-    uint32_t cb_ex,
-    uint32_t input_dst,
-    uint32_t mean_dst,
-    uint32_t Wt,
-    uint32_t tile_width,
-    uint32_t W,
-    uint32_t blk>
-void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
+    std::uint32_t cb_ex,
+    std::uint32_t input_dst,
+    std::uint32_t mean_dst,
+    std::uint32_t Wt,
+    std::uint32_t tile_width,
+    std::uint32_t W,
+    std::uint32_t blk>
+void welford_no_fuse_pre_add(const std::array<std::uint32_t, W>& reciprocal_lut) {
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_x_welford_obj(cb_x_welford);
 
@@ -237,10 +237,10 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     // Because the Welford's llk is given transposed data, skip some rows when
     // we want to skip some columns from getting processed by layer_norm.
     // When last tile is full the value is 0 and is not used because full update is done.
-    constexpr uint32_t last_tile_rows = W % tile_width;
+    constexpr std::uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
-    uint32_t sample_idx = 0;
+    std::uint32_t sample_idx = 0;
     reconfig_data_format_srca(cb_x_welford);
     // Reconfigure the transpose op for the welford intake CB. When the alias is active,
     // cb_x_welford has UnpackToDestFp32 mode so transpose_tile preserves fp32 precision.
@@ -249,7 +249,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     welford_init();
 
     // Process all but the last tile
-    for (uint32_t wt = 0; wt < (Wt - 1); ++wt) {
+    for (std::uint32_t wt = 0; wt < (Wt - 1); ++wt) {
         if constexpr (welford_fp32_alias) {
             cb_x_welford_obj.wait_front(1);
             // SFPU replay slots [0, 32) currently hold the welford recurrence (welford uses the
@@ -317,14 +317,14 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 void kernel_main() {
     namespace kutil = norm::kernel_util;
 
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(3);
+    std::uint32_t NCHt = get_arg_val<std::uint32_t>(0);
+    constexpr std::uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr std::uint32_t blk = get_compile_time_arg_val(1);
+    constexpr std::uint32_t do_gamma = get_compile_time_arg_val(2);
+    constexpr std::uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(6);
+    constexpr std::uint32_t W = get_compile_time_arg_val(5);
+    constexpr std::uint32_t tile_width = get_compile_time_arg_val(6);
     constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(8));
     // welford_fp32_alias: when true, cb_x_welford is a multi-buffer-index alias of cb_x
     // configured with UnpackToDestFp32 so the welford section reads full fp32 into DEST
@@ -350,7 +350,7 @@ void kernel_main() {
     constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
-    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                        // x - E[x]
+    std::uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                   // x - E[x]
     constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
@@ -368,7 +368,7 @@ void kernel_main() {
     CircularBuffer cb_ex2_obj(cb_ex2);
     CircularBuffer cb_ex2pe_obj(cb_ex2pe);
 
-    constexpr uint32_t onetile = 1;
+    constexpr std::uint32_t onetile = 1;
 
     // Initialize the hardware based on the first op
     // that will be done
@@ -383,16 +383,16 @@ void kernel_main() {
 
     cb_eps_obj.wait_front(onetile);  // comes from the reader
 
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
-    constexpr uint32_t mean_dst = 1;   // Mean tile for Welford's
-    constexpr uint32_t var_dst = 2;    // Variance tile for Welford's
+    constexpr std::uint32_t dst0 = 0;
+    constexpr std::uint32_t input_dst = 0;  // Input tile for Welford's algorithm
+    constexpr std::uint32_t mean_dst = 1;   // Mean tile for Welford's
+    constexpr std::uint32_t var_dst = 2;    // Variance tile for Welford's
 
     // Get pointer to the reciprocal LUT
-    using recip_lut_t = std::array<uint32_t, W>;
+    using recip_lut_t = std::array<std::uint32_t, W>;
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
 
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+    for (std::uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Depending on whether we need to fuse pre-add, the approach for welford is different.
         // So we move it to a separate function.
         if constexpr (fuse_pre_add) {
@@ -583,7 +583,7 @@ void kernel_main() {
             if constexpr (wh_dest_reuse_workaround_needed) {
                 tile_regs_commit();
 
-                const uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
+                const std::uint32_t cb_xmm_intermediate = get_named_compile_time_arg_val("cb_xmm");
                 CircularBuffer cb_xmm_intermediate_obj(cb_xmm_intermediate);
                 pack_reconfig_data_format(cb_xmm_intermediate);
                 cb_xmm_intermediate_obj.reserve_back(block.full_block_size());
@@ -691,4 +691,7 @@ void kernel_main() {
         cb_ex2pe_obj.pop_front(onetile);
         cb_ex_obj.pop_front(onetile);
     }  // NCHt loop
+    // The single eps tile is waited once and reused across all NCHt iterations; pop it at the end
+    // so the CB is left balanced.
+    cb_eps_obj.pop_front(onetile);
 }

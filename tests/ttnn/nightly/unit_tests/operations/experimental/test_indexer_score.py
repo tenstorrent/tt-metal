@@ -2,24 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests for the DeepSeek-V3.2 DSA ``indexer_score`` op (GLM5 and DSv32 deployments).
+Tests for the two lightning-indexer scorers that share one device op:
 
-    score[b, s, t] = sum_h relu(q[b, h, s, :] . k[b, t, :]) * w[b, h, s]
+  indexer_score_dsa - DeepSeek-V3.2 DSA / GLM-5:
+      score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * w[b,h,s]
+      ReLU + learned per-head gates, ALL heads summed into one row [B,1,Sq,T].
 
-Causality from scalar ``chunk_start``: key ``t`` visible to query ``s`` iff
-``t <= chunk_start + s``; future columns are -inf.
+  indexer_score_msa - MiniMax M3 MSA:
+      score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
+      Raw dot, no learned gates (just a 1/sqrt(d) ``scale``), Hi heads partitioned into
+      ``num_groups`` GQA groups summed within each group (one plane per group), optionally
+      block-max-pooled (``block_size>0``) to [B,G,Sq,T/block_size] for the block top-k.
 
-Two deployments, both Galaxy chunked prefill (50K history + 5K chunk =
-55K all-gathered keys; the 5K-query chunk is sharded SP=8 -> 640 queries/device):
+Both share the factory + kernels (the flavour is compile-time args). Causality: key ``t``
+visible to query ``s`` iff ``t <= chunk_start + s``; future columns/blocks are -inf.
 
-    GLM5   -  8 heads (per-device indexer)
-    DSv32  - 16 heads (64-head indexer split across TP=4; the op sums only its
-             heads and the -inf mask is head-independent, so -inf survives the
-             cross-TP sum)
+Deployments are Galaxy chunked prefill (50K history + 5K chunk = 55K keys; the chunk is SP=8
+-> 640 q/device): GLM5 (8h), DSv32 (16h, 64-head DSA split across TP=4), M3 (MSA per-GQA-group,
+block-max-pooled). Most cases run on one chip with explicit ``chunk_start`` (``sp_rank`` =
+ring position); the QuietBox tests derive ``chunk_start`` per device from the mesh coordinate.
 
-SP enters only via ``chunk_start``, so this is single-chip with ``sp_rank``
-selecting the ring position. This file is deliberately narrow (GLM5/DSv32 shapes
-only); broader knob/corner/validation coverage will be migrated in separately.
+Run all (perf/tracy self-skip unless INDEXER_SCORE_PERF_CHECKS=1):
+    scripts/run_safe_pytest.sh --run-all <this file>
 """
 
 import os
@@ -44,8 +48,10 @@ GLX_CASES = [("glm5", 8), ("dsv32", 16)]
 GLX_IDS = [c[0] for c in GLX_CASES]
 
 
-def indexer_score_ref(q, k, w, chunk_start):
-    """Per-head fp32 accumulation (a full [Hi,Sq,T] tensor is many GB at GLX sizes)."""
+def indexer_score_dsa_ref(q, k, w, chunk_start):
+    """DeepSeek-V3.2 / GLM-5 DSA reference: sum_h relu(q.kT) * w over ALL Hi heads into one plane
+    -> [b, 1, sq, t]. Per-head fp32 accumulation (a full [Hi,Sq,T] tensor is many GB at GLX sizes).
+    """
     b, hi, sq, _ = q.shape
     t = k.shape[2]
     q, k, w = q.float(), k.float(), w.float()
@@ -54,6 +60,42 @@ def indexer_score_ref(q, k, w, chunk_start):
         score += torch.relu(q[:, h] @ k[:, 0].transpose(-2, -1)) * w[:, h]
     future = torch.arange(t).unsqueeze(0) > chunk_start + torch.arange(sq).unsqueeze(1)
     return score.masked_fill(future, float("-inf")).unsqueeze(1)
+
+
+def msa_block_max_pool(scores, block_size, chunk_start):
+    """MSA block-max-pool + forced-local (the M3 selection step, MSA-only): max over each block_size-key
+    block of the causal-masked scores [b,g,sq,t] -> [b,g,sq,t//block_size]. A fully-future block is -inf.
+    Then forced-local (sparse_local_block=1): each query's own block (= (chunk_start + s) // block_size) is
+    set to +inf. Used both inside indexer_score_msa_ref (block_size>0) and to pool the op's own unpooled
+    output in the exact-vs-unpooled cross-checks."""
+    b, g, sq, t = scores.shape
+    nb = t // block_size
+    pooled = scores.reshape(b, g, sq, nb, block_size).amax(dim=-1)
+    local = (chunk_start + torch.arange(sq)) // block_size  # each query's own block column [sq]
+    pooled[:, :, torch.arange(sq), local] = float("inf")
+    return pooled
+
+
+def indexer_score_msa_ref(q, k, w, chunk_start, num_groups=1, block_size=0):
+    """MiniMax-M3 MSA reference (mirrors the indexer_score_msa op): raw dot (NO relu), gated by w (the
+    constant 1/sqrt(d) scale), partitioned into num_groups contiguous GQA groups of Hi/num_groups and summed
+    WITHIN each group only -> [b, num_groups, sq, t]. num_groups==1 sums all heads into one plane.
+
+    block_size>0 block-max-pools the planes into the M3 block selection -> [b, num_groups, sq, t//block_size].
+    """
+    b, hi, sq, _ = q.shape
+    t = k.shape[2]
+    hog = hi // num_groups
+    q, k, w = q.float(), k.float(), w.float()
+    future = torch.arange(t).unsqueeze(0) > chunk_start + torch.arange(sq).unsqueeze(1)
+    planes = []
+    for g in range(num_groups):
+        score = torch.zeros(b, sq, t)
+        for h in range(g * hog, (g + 1) * hog):
+            score += (q[:, h] @ k[:, 0].transpose(-2, -1)) * w[:, h]
+        planes.append(score.masked_fill(future, float("-inf")))
+    scores = torch.stack(planes, dim=1)  # [b, num_groups, sq, t]
+    return msa_block_max_pool(scores, block_size, chunk_start) if block_size else scores
 
 
 def make_inputs(heads, dim, sq, t, seed=42):
@@ -73,7 +115,14 @@ def to_device(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(t, device=device, layout=layout, dtype=dtype)
 
 
-def run_indexer(
+def _extra_kwargs(program_config, compute_kernel_config):
+    kwargs = {} if program_config is None else {"program_config": program_config}
+    if compute_kernel_config is not None:
+        kwargs["compute_kernel_config"] = compute_kernel_config
+    return kwargs
+
+
+def run_dsa(
     q,
     k,
     w,
@@ -84,19 +133,45 @@ def run_indexer(
     k_dtype=ttnn.bfloat16,
     compute_kernel_config=None,
 ):
-    """Run the device op and return the row-major bf16 score as a torch tensor.
+    """Run indexer_score_dsa (relu + learned gates + head-sum) and return the bf16 score as torch.
 
     q (srcB) and k (srcA) may be bfp8_b; weights stay bf16.
     """
-    kwargs = {} if program_config is None else {"program_config": program_config}
-    if compute_kernel_config is not None:
-        kwargs["compute_kernel_config"] = compute_kernel_config
-    out = ttnn.experimental.indexer_score(
+    out = ttnn.experimental.indexer_score_dsa(
         to_device(q, device, dtype=q_dtype),
         to_device(k, device, dtype=k_dtype),
         to_device(w, device),
         chunk_start_idx=chunk_start,
-        **kwargs,
+        **_extra_kwargs(program_config, compute_kernel_config),
+    )
+    return ttnn.to_torch(out)
+
+
+def run_msa(
+    q,
+    k,
+    chunk_start,
+    device,
+    scale=1.0,
+    num_groups=1,
+    block_size=0,
+    program_config=None,
+    q_dtype=ttnn.bfloat16,
+    k_dtype=ttnn.bfloat16,
+    compute_kernel_config=None,
+):
+    """Run indexer_score_msa (raw dot, constant `scale` gate, per-group planes) and return torch.
+
+    No weights tensor: M3 has no learned gates, only `scale` (run as a constant gate in-op).
+    """
+    out = ttnn.experimental.indexer_score_msa(
+        to_device(q, device, dtype=q_dtype),
+        to_device(k, device, dtype=k_dtype),
+        chunk_start_idx=chunk_start,
+        scale=scale,
+        num_groups=num_groups,
+        block_size=block_size,
+        **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
 
@@ -116,15 +191,35 @@ def assert_indexer_match(out, ref, sq, t, check_neg=False):
         assert (ref[~masked] < 0).any()
 
 
+def assert_grouped_match(out, ref, num_groups, sq, t):
+    """Per-group [1,G,Sq,T] check: exact -inf map + PCC>=0.999 (cross-group leakage fails the PCC)."""
+    assert out.shape == (1, num_groups, sq, t)
+    masked = ref == float("-inf")
+    assert torch.equal(out <= torch.finfo(torch.bfloat16).min, masked)
+    a, b = out[~masked].flatten().float(), ref[~masked].flatten().float()
+    pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+    assert pcc >= 0.999, f"PCC {pcc} < 0.999"
+
+
+def assert_pooled_match(out, ref, num_groups, sq, nblocks, pcc_floor=0.999):
+    """Pooled [1,G,Sq,nblocks] check: exact -inf map + exact +inf (forced-local) map + PCC on the rest.
+    block-max amplifies the bf16 per-token error, so the PCC floor is relaxed for the large-T shape."""
+    assert out.shape == (1, num_groups, sq, nblocks), f"{out.shape} != {(1, num_groups, sq, nblocks)}"
+    masked = ref == float("-inf")
+    assert torch.equal(out <= torch.finfo(torch.bfloat16).min, masked)
+    forced = ref == float("inf")  # forced-local block (sparse_local_block=1)
+    assert torch.equal(out == float("inf"), forced), "forced-local +inf block mismatch"
+    keep = ~masked & ~forced
+    a, b = out[keep].flatten().float(), ref[keep].flatten().float()
+    pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+    assert pcc >= pcc_floor, f"PCC {pcc} < {pcc_floor}"
+
+
 def glx_config(heads):
     """GLX chunked-prefill knobs for the two deployments (GLM5 8h, DSv32 16h).
 
-    - head_group_size=0 keeps all heads resident; head streaming re-reads q per output tile and is
-      ~24x slower, so never used here.
-    - QC=2 (q_chunk_size=64) reuses each resident K chunk across 2 q-rows, ~2x fewer redundant K
-      reads (heads8 sp7 bfp8 0.73 -> 0.48 ms). Fits L1 for both 8 and 16 heads.
-    - k_chunk: GLM5 (8h) uses KC=16 (k_chunk=512), the compute-ceiling optimum at 8 heads; DSv32
-      (16h) is matmul-bound and stays KC=8 (k_chunk=256).
+    head_group_size=0 keeps all heads resident (streaming is ~24x slower). QC=2 reuses each K chunk
+    across 2 q-rows (~2x fewer K reads). k_chunk: GLM5 KC=16 (compute optimum), DSv32 KC=8 (matmul-bound).
     """
     return ttnn.IndexerScoreProgramConfig(
         q_chunk_size=64,
@@ -144,10 +239,10 @@ def test_indexer_score_accuracy(device, sp_rank, q_dtype, case_id, heads):
     """
     chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
     q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
-    out = run_indexer(
+    out = run_dsa(
         q, k, w, chunk_start, device, program_config=glx_config(heads), q_dtype=q_dtype, k_dtype=ttnn.bfloat8_b
     )
-    ref = indexer_score_ref(q, k, w, chunk_start)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, GLX_SQ, GLX_T, check_neg=True)
 
 
@@ -162,8 +257,8 @@ MINI = dict(heads=64, dim=128, sq=64, t=256)  # 64 heads, D=128, Sq=2 tiles, T=8
 def _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
     q, k, w = make_inputs(heads, dim, sq, t)
-    out = run_indexer(q, k, w, chunk_start, device, program_config=cfg)
-    ref = indexer_score_ref(q, k, w, chunk_start)
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
@@ -223,8 +318,7 @@ def test_indexer_score_knobs(device, q_chunk, k_chunk, head_group, chunk_start):
 )
 def test_indexer_score_shapes(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
     """Shape/geometry coverage: prefill corners, single/partial k-tiles, narrow/wide head dims, KC not
-    dividing Tt (partial last unit clipped by the writer), and a multicore QC=2 split where a single
-    q-row-group is dealt across cores."""
+    dividing Tt (partial last unit), and a multicore QC=2 split."""
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
 
 
@@ -249,7 +343,7 @@ def _indexed_inputs(num_slots, seed=11):
 def _check_slot(out, q, k_cache, w, b):
     """Compare a slot's device output against the reference computed on that [1,1,T,D] slice."""
     c = IDX_CACHE
-    ref = indexer_score_ref(q, k_cache[b : b + 1], w, c["chunk_start"])
+    ref = indexer_score_dsa_ref(q, k_cache[b : b + 1], w, c["chunk_start"])
     assert_indexer_match(out, ref, c["sq"], c["t"], check_neg=True)
 
 
@@ -280,7 +374,7 @@ def test_indexer_score_indexed_cache(device):
 
     def run(b):
         return ttnn.to_torch(
-            ttnn.experimental.indexer_score(
+            ttnn.experimental.indexer_score_dsa(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=b
             )
         )
@@ -307,7 +401,7 @@ def test_indexer_score_indexed_cache_nd_sharded_k(device):
 
     for b in range(B):
         out = ttnn.to_torch(
-            ttnn.experimental.indexer_score(
+            ttnn.experimental.indexer_score_dsa(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=b
             )
         )
@@ -326,11 +420,11 @@ def test_indexer_score_indexed_cache_rejects_oob(device, expect_error):
 
     # Warm the program cache with a valid slot; an OOB slot then hits the SAME program (same hash) and must
     # still be rejected by the cache-hit validation.
-    ttnn.experimental.indexer_score(
+    ttnn.experimental.indexer_score_dsa(
         q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=0
     )
     with expect_error(RuntimeError, "cache_batch_idx"):
-        ttnn.experimental.indexer_score(
+        ttnn.experimental.indexer_score_dsa(
             q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=B
         )
 
@@ -344,7 +438,7 @@ def test_indexer_score_indexed_cache_requires_idx_for_multislot(device, expect_e
     q, w, k_cache = _indexed_inputs(2)  # B=2 slots, but no cache_batch_idx supplied below
     q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k_cache, device)
     with expect_error(RuntimeError, "batch must be 1"):
-        ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
 
 
 def test_indexer_score_rejects_sharded_q(device, expect_error):
@@ -357,7 +451,7 @@ def test_indexer_score_rejects_sharded_q(device, expect_error):
     q_dev = ttnn.from_torch(q, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=q_mem)
     w_dev, k_dev = to_device(w, device), to_device(k_cache, device)
     with expect_error(RuntimeError, "interleaved"):
-        ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
 
 
 def test_indexer_score_nd_sharded_k_multi_T(device):
@@ -374,9 +468,9 @@ def test_indexer_score_nd_sharded_k_multi_T(device):
         q_dev, w_dev = to_device(q, device), to_device(w, device)
         k_dev = ttnn.from_torch(k, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=k_mem)
         out = ttnn.to_torch(
-            ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
+            ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
         )
-        assert_indexer_match(out, indexer_score_ref(q, k, w, chunk_start), sq, t, check_neg=True)
+        assert_indexer_match(out, indexer_score_dsa_ref(q, k, w, chunk_start), sq, t, check_neg=True)
     assert device.num_program_cache_entries() == 2, "two distinct T must build two programs (T is hashed)"
 
 
@@ -402,7 +496,7 @@ def _check_kv_len(out, q, k, w, kv_len):
     of the [1,1,Sq,T] output is the stale tail and is sliced off)."""
     c = KV_LEN
     assert out.shape == (1, 1, c["sq"], c["t"])
-    ref = indexer_score_ref(q, k[:, :, :kv_len, :], w, c["chunk_start"])  # [1,1,Sq,kv_len]
+    ref = indexer_score_dsa_ref(q, k[:, :, :kv_len, :], w, c["chunk_start"])  # [1,1,Sq,kv_len]
     assert_indexer_match(out[:, :, :, :kv_len], ref, c["sq"], kv_len, check_neg=True)
 
 
@@ -417,10 +511,9 @@ def _check_kv_len(out, q, k, w, kv_len):
     ids=["resident", "stream", "chunked_k", "qc2"],
 )
 def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
-    """One oversized k buffer (T=512) scored at several kv_len <= T: each writes only [0, kv_len) and
-    matches the reference on the first kv_len keys, and growing kv_len on the SAME buffer does NOT recompile
-    (kv_len is a runtime arg excluded from the hash). This is the persistent-cache serving loop, swept over
-    the kernel paths (resident / head-streaming / chunked-k / multi-row group)."""
+    """One oversized k buffer (T=512) scored at several kv_len <= T: each writes only [0, kv_len), matches
+    the reference there, and growing kv_len does NOT recompile (kv_len is hash-excluded). Swept over the
+    kernel paths (resident / streaming / chunked-k / multi-row)."""
     c = KV_LEN
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
     q, w, k = _kv_len_inputs()
@@ -428,7 +521,7 @@ def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
 
     def run(kv_len):
         return ttnn.to_torch(
-            ttnn.experimental.indexer_score(
+            ttnn.experimental.indexer_score_dsa(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=kv_len
             )
         )
@@ -450,26 +543,21 @@ def test_indexer_score_rejects_bad_kv_len(device, expect_error):
     q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k, device)
 
     # Warm the program cache with a valid kv_len; each bad one then hits the SAME program and must still fail.
-    ttnn.experimental.indexer_score(
+    ttnn.experimental.indexer_score_dsa(
         q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=128
     )
     for bad, why in [(c["t"] + 32, "above T"), (100, "not tile-aligned"), (32, "causal window > kv_len")]:
         with expect_error(RuntimeError, "kv_len"):
-            ttnn.experimental.indexer_score(
+            ttnn.experimental.indexer_score_dsa(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=bad
             )
 
 
 @pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
 def test_indexer_score_determinism(device, case_id, heads):
-    """Determinism on the production deployments (GLM5.1 8h, DSv32 16h, GLX chunked-prefill knobs at
-    sp_rank 7, deployed bf16 q + bfp8 k). The op feeds a downstream top-k key selection, so any
-    nondeterminism (reduction order, an unstable -inf boundary) would silently change which keys are kept.
-
-    Follows the ring-joint-SDPA determinism rule: upload the device inputs once and reuse them for every
-    iteration (this tests device-side determinism, not host re-generation), then require each output to be
-    bit-identical to the first run.
-    """
+    """Determinism on the deployments (sp_rank 7, bf16 q + bfp8 k). The op feeds a downstream top-k, so any
+    nondeterminism would silently change which keys are kept. Inputs uploaded once and reused (device-side
+    determinism); every output must be bit-identical to the first run."""
     num_iterations = 10
     chunk_start = GLX_HISTORY + 7 * GLX_SQ  # sp_rank 7: fullest causal case
     cfg = glx_config(heads)
@@ -482,7 +570,7 @@ def test_indexer_score_determinism(device, case_id, heads):
     reference = None
     for i in range(num_iterations):
         out = ttnn.to_torch(
-            ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
+            ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
         )
         if reference is None:
             reference = out
@@ -500,10 +588,142 @@ def test_indexer_score_determinism(device, case_id, heads):
     logger.info(f"indexer_score {case_id} determinism verified: all {num_iterations} outputs identical")
 
 
-# Blackhole post-commit / sanity coverage reuses test_indexer_score_accuracy above: the CI entry in
-# tests/pipeline_reorg/ttnn-tests.yaml selects its sp_rank-7 GLM5.1/DSv32 cases via `-k "accuracy and
-# rank7"`. No separate post-commit test (that would re-run the same cases under nightly); post-commit just
-# runs a subset of the nightly accuracy parametrization.
+# Post-commit reuses test_indexer_score_accuracy: the CI entry in tests/pipeline_reorg/ttnn-tests.yaml
+# selects its sp_rank-7 cases via `-k "accuracy and rank7"`.
+
+
+# ---------------------------------------------------------------------------
+# MiniMax M3 MSA path (indexer_score_msa): raw dot (no ReLU), no per-head gates, just a 1/sqrt(d) scale.
+# At the group-aligned deployment each device owns one index head (Hi=1), so num_groups=1 and [1,1,Sq,T]
+# is that group's score row for the downstream block-max top-k.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "q_chunk, k_chunk, head_group",
+    [(32, 32, 0), (32, 128, 0), (32, 32, 8)],
+    ids=["fallback_kc1", "fullstrip_kc4", "stream_hb8"],
+)
+def test_indexer_score_msa_compute_paths(device, q_chunk, k_chunk, head_group):
+    """MSA raw dot (no relu) over every compute path: per-column fallback (KC=1), head-major full-strip
+    (KC=4 all-resident), and head streaming (HB=8). MINI shape, num_groups=1, scale gate."""
+    heads, dim, sq, t, chunk_start = MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"], 128
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    out = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg)
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # MSA's constant gate = scale
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start)
+    assert_indexer_match(out, ref, sq, t)
+
+
+def test_indexer_score_dsa_msa_differ(device):
+    """DSA and MSA must differ: with the SAME constant gate the only difference is DSA's relu, so on
+    negative dot products the visible scores must differ (guards against the frontends sharing a path)."""
+    heads, dim, sq, t, chunk_start = MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"], 128
+    scale = 1.0
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    w_const = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # match MSA's gate so only relu differs
+    out_dsa = run_dsa(q, k, w_const, chunk_start, device, program_config=cfg)
+    out_msa = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg)
+    visible = out_dsa > torch.finfo(torch.bfloat16).min  # exclude the -inf causal mask
+    assert not torch.equal(out_dsa[visible], out_msa[visible]), "DSA == MSA (relu had no effect / shared path)"
+
+
+@pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
+@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["q_bf16", "q_bfp8"])
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["k_bf16", "k_bfp8"])
+def test_indexer_score_m3_per_group(device, k_dtype, q_dtype, sp_rank):
+    """MiniMax M3 MSA indexer, per GQA group as deployed at TP=4 (one index head per device, Hi=1): raw
+    dot scaled by 1/sqrt(d), no ReLU, no gates. GLX chunked-prefill geometry; output [1,1,Sq,T] is the
+    group's score row. bfp8 k is the deployed dtype."""
+    heads, dim = 1, GLX_DIM  # one GQA group's single index head, head_dim 128
+    sq, t = GLX_SQ, GLX_T
+    chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=512, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    out = run_msa(q, k, chunk_start, device, scale=scale, program_config=cfg, q_dtype=q_dtype, k_dtype=k_dtype)
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start)
+    assert_indexer_match(out, ref, sq, t)
+
+
+# ---------------------------------------------------------------------------
+# indexer_score_msa num_groups > 1: per-GQA-group output [B, G, Sq, T], multiple groups resident on ONE
+# chip (the TP < 4 fallback; the head-reduction is partitioned into G accumulators in-kernel, one plane
+# per group, NO cross-group sum). Requires all heads resident + full-strip (KC>=2).
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "heads, num_groups",
+    [(4, 4), (8, 4), (8, 2), (64, 4)],
+    ids=["g4_hog1", "g4_hog2", "g2_hog4", "g4_hog16"],
+)
+def test_indexer_score_multigroup(device, heads, num_groups):
+    """num_groups>1 emits one plane per group, each summing only its Hi/G heads (no cross-group sum). Spans
+    hog=1/2/4 and the 64-head MINI geometry; each plane checked against the per-group reference (a plane
+    summing the wrong heads fails the PCC)."""
+    dim, sq, t, chunk_start = 128, 64, 256, 128
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)  # all resident, KC=2
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    out = run_msa(q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg)
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)  # MSA's constant gate = scale
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups)
+    assert_grouped_match(out, ref, num_groups, sq, t)
+
+
+def test_indexer_score_multigroup_m3(device):
+    """MiniMax M3 with multiple GQA groups on one chip (TP<4 fallback): 4 groups, one index head each,
+    raw dot, scale gate = 1/sqrt(d). Output [1,4,Sq,T] is the 4 per-group score rows for the downstream
+    block-max top-k.
+    """
+    heads, num_groups, dim = 4, 4, 128
+    sq, t, chunk_start = 128, 256, 128
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=64, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    out = run_msa(q, k, chunk_start, device, scale=scale, num_groups=num_groups, program_config=cfg)
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups)
+    assert_grouped_match(out, ref, num_groups, sq, t)
+
+
+def test_indexer_score_multigroup_equals_single(device):
+    """num_groups=Hi (one head per group) must equal running each head as its own single-group MSA op:
+    plane g of the grouped output == indexer_score_msa(q[:, g:g+1]). Direct cross-check that the in-kernel
+    per-group split matches the validated single-plane path head-for-head (same scale gate for both).
+    """
+    heads, dim, sq, t, chunk_start = 4, 128, 64, 256, 128
+    scale = 1.0  # same constant gate for grouped and single so the comparison is exact
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    grouped = run_msa(q, k, chunk_start, device, scale=scale, num_groups=heads, program_config=cfg)
+    for g in range(heads):
+        single = run_msa(q[:, g : g + 1], k, chunk_start, device, scale=scale, program_config=cfg)
+        assert torch.equal(grouped[:, g : g + 1], single), f"group {g} plane != single-head op"
+
+
+@pytest.mark.parametrize(
+    "k_chunk, head_group, match",
+    [(32, 0, "k_chunk_size"), (64, 4, "all heads resident")],
+    ids=["kc1_rejected", "streaming_rejected"],
+)
+def test_indexer_score_multigroup_rejects(device, expect_error, k_chunk, head_group, match):
+    """num_groups>1 requires all heads resident + the full-strip path; reject KC<2 and head streaming."""
+    heads, dim, sq, t = 8, 128, 64, 256
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=k_chunk, head_group_size=head_group)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    with expect_error(RuntimeError, match):
+        run_msa(q, k, 128, device, num_groups=2, program_config=cfg)
+
+
+def test_indexer_score_multigroup_rejects_indivisible(device, expect_error):
+    """num_groups must divide Hi -- e.g. 8 heads / 3 groups is rejected (uneven group sizes)."""
+    heads, dim, sq, t = 8, 128, 64, 256
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    with expect_error(RuntimeError, "and divide Hi 8"):
+        run_msa(q, k, 128, device, num_groups=3, program_config=cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -517,8 +737,8 @@ def test_indexer_score_compute_kernel_config(device, math_fidelity):
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
     ckc = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=math_fidelity)
     q, k, w = make_inputs(heads, dim, sq, t)
-    out = run_indexer(q, k, w, chunk_start, device, program_config=cfg, compute_kernel_config=ckc)
-    ref = indexer_score_ref(q, k, w, chunk_start)
+    out = run_dsa(q, k, w, chunk_start, device, program_config=cfg, compute_kernel_config=ckc)
+    ref = indexer_score_dsa_ref(q, k, w, chunk_start)
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
@@ -529,19 +749,15 @@ def test_indexer_score_rejects_fp32_dest_acc(device, expect_error):
     ckc = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=True)
     q, k, w = make_inputs(heads, dim, sq, t)
     with expect_error(RuntimeError, "fp32_dest_acc_en=false"):
-        run_indexer(q, k, w, 128, device, program_config=cfg, compute_kernel_config=ckc)
+        run_dsa(q, k, w, 128, device, program_config=cfg, compute_kernel_config=ckc)
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally")
 @pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
 def test_indexer_score_perf(device, case_id, heads):
-    """Wall-clock latency per op for the GLX shape at the fullest causal rank (sp7), bfp8 k.
-
-    Inputs placed on device once (host transfer excluded), run program-cache-warm with a device sync
-    around a fixed iteration count. Host-dispatched single-op latency (includes enqueue overhead, not
-    pure device-kernel time -- use tracy for that). Logged ms is the signal; the assert is only a
-    coarse hang / gross-regression guard (thresholds are board-dependent).
-    """
+    """Wall-clock latency per op for the GLX shape at the fullest causal rank (sp7), bfp8 k. Host-dispatched
+    single-op latency (includes enqueue overhead; use tracy for pure device time). Logged ms is the signal;
+    the assert is a coarse hang/regression guard (board-dependent)."""
     warmup_iters, measured_iters = 3, 20
     chunk_start = GLX_HISTORY + 7 * GLX_SQ
     cfg = glx_config(heads)
@@ -551,7 +767,7 @@ def test_indexer_score_perf(device, case_id, heads):
     w_dev = to_device(w, device)
 
     def run_once():
-        return ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
+        return ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
 
     for _ in range(warmup_iters):  # compile + program-cache warm
         run_once().deallocate()
@@ -571,16 +787,14 @@ def test_indexer_score_perf(device, case_id, heads):
 
 
 # ---------------------------------------------------------------------------
-# sp_rank 7 math-utilization perf check (tracy device profiler; no accuracy check)
-# math_util = matmul FLOPs / (cores x device cycles x matmul peak); duration from tracy, FLOPs from
-# shape. Run locally with the profiler build (default):
-#   pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::test_indexer_score_sp7_math_util
+# sp_rank 7 perf helpers (tracy device profiler; no accuracy check). math_util = matmul FLOPs /
+# (cores x device cycles x matmul peak); duration from tracy, FLOPs from shape. Consumed by the three
+# band checks in test_indexer_score_math_util (run with INDEXER_SCORE_PERF_CHECKS=1).
 # ---------------------------------------------------------------------------
 SP7_CHUNK_START = GLX_HISTORY + 7 * GLX_SQ  # fullest causal case (99.5% valid)
 
-# Blackhole matmul peak (tests/nightly/sdpa_perf_utils.py): 4096 mm FLOP/cycle/core at LoFi,
-# halved per extra math-fidelity phase. The `fidelity` param below must match the factory's
-# choice for the measured q/k dtypes (LoFi when both bfp8, else HiFi2).
+# Blackhole matmul peak (tests/nightly/sdpa_perf_utils.py): 4096 mm FLOP/cycle/core at LoFi, halved per
+# extra math-fidelity phase. The band checks measure the deployed HiFi2 path (bf16 q, bfp8 k).
 _BH_CLOCK_GHZ = 1.35
 _MM_FLOPS_PER_CYCLE_PER_CORE = {"LoFi": 4096, "HiFi2": 2048, "HiFi3": 1365, "HiFi4": 1024}
 
@@ -599,156 +813,32 @@ def indexer_mm_flops(valid_tiles, heads):
     return valid_tiles * heads * (32 * 32) * (2 * GLX_DIM)
 
 
-# (heads, q_id, k_id, fidelity) cases for the sp7 profiler tests. fidelity must match the factory:
-# q and k both bfp8 -> LoFi (1 phase), any bf16 input -> HiFi2. id is shared by perf_impl and math_util
-# (which spawns it by id), so they must stay in lockstep. Both deployments run bfp8 k; the q_bfp8 rows
-# add the LoFi path (bfp8 q halves the dominant q read and doubles matmul peak).
-_SP7_PERF_CASES = [
-    (8, "q_bf16", "k_bfp8", "HiFi2"),  # GLM5
-    (16, "q_bf16", "k_bfp8", "HiFi2"),  # DSv32
-    (8, "q_bfp8", "k_bfp8", "LoFi"),  # GLM5, bfp8 q -> LoFi
-    (16, "q_bfp8", "k_bfp8", "LoFi"),  # DSv32, bfp8 q -> LoFi
-]
-_SP7_PERF_IDS = [f"heads{h}_{q}_{k}" for h, q, k, _ in _SP7_PERF_CASES]
-
-
+# perf_impl inner targets profiled by tracy, at the deployed HiFi2 dtypes (bf16 q + bfp8 k). One node per
+# model deployment; test_indexer_score_math_util spawns them by id, so the ids must stay in lockstep.
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally with tracy")
-@pytest.mark.parametrize("heads, q_id, k_id", [(h, q, k) for h, q, k, _ in _SP7_PERF_CASES], ids=_SP7_PERF_IDS)
-def test_indexer_score_sp7_perf_impl(device, heads, q_id, k_id):
-    """Inner test profiled by tracy: a few indexer_score ops at GLX sp_rank 7. No accuracy check."""
-    q_dtype = ttnn.bfloat16 if q_id == "q_bf16" else ttnn.bfloat8_b
-    k_dtype = ttnn.bfloat16 if k_id == "k_bf16" else ttnn.bfloat8_b
+@pytest.mark.parametrize("case_id, heads", [("glm5", 8), ("dsv32", 16)], ids=["glm5", "dsv32"])
+def test_indexer_score_sp7_perf_impl(device, case_id, heads):
+    """Inner test profiled by tracy: a few indexer_score_dsa ops at GLX sp_rank 7 (bf16 q, bfp8 k). No
+    accuracy check."""
     q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
-    q_dev = to_device(q, device, dtype=q_dtype)
-    k_dev = to_device(k, device, dtype=k_dtype)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
     w_dev = to_device(w, device)
     cfg = glx_config(heads)
     for _ in range(5):  # tracy logs each op's device duration; the outer test takes the min
-        ttnn.experimental.indexer_score(
+        ttnn.experimental.indexer_score_dsa(
             q_dev, k_dev, w_dev, chunk_start_idx=SP7_CHUNK_START, program_config=cfg
         ).deallocate()
     ttnn.synchronize_device(device)
 
 
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally with tracy")
-@pytest.mark.parametrize("heads, q_id, k_id, fidelity", _SP7_PERF_CASES, ids=_SP7_PERF_IDS)
-def test_indexer_score_sp7_math_util(heads, q_id, k_id, fidelity):
-    """sp_rank 7 matmul math utilization from a tracy device-kernel-duration measurement.
-
-    Spawns the inner perf_impl test under the device profiler, reads the minimum
-    DEVICE KERNEL DURATION, and reports math_util = mm_flops / (cores * cycles * peak).
-    No accuracy check.
-    """
-    from tracy.process_model_log import run_device_profiler
-    from tests.nightly.sdpa_perf_utils import post_process_ops_log
-
-    subdir = "ttnn_indexer_score_sp7"
-    perf_id = f"heads{heads}_{q_id}_{k_id}"
-    command = (
-        "pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::"
-        f"test_indexer_score_sp7_perf_impl[{perf_id}]"
-    )
-    with mock.patch.dict(os.environ, {"CI": "false"}):
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        subdir,
-        float_columns=["CORE COUNT", "DEVICE KERNEL DURATION [ns]"],
-        columns=["ATTRIBUTES"],
-        sum_vals=False,
-        has_signposts=False,
-    )
-    assert len(r["DEVICE KERNEL DURATION [ns]"]) > 0, "profiler returned no indexer_score ops"
-
-    core_count = int(r["CORE COUNT"][0])
-    duration_ns = float(r["DEVICE KERNEL DURATION [ns]"].min())
-
-    valid_tiles = sp7_valid_tiles()
-    mm_flops = indexer_mm_flops(valid_tiles, heads)
-    peak = _MM_FLOPS_PER_CYCLE_PER_CORE[fidelity]
-    cycles = duration_ns * _BH_CLOCK_GHZ
-    theoretical_flops = core_count * cycles * peak
-    math_util = (mm_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0.0
-
-    logger.info(
-        f"indexer_score sp7 heads={heads} {q_id} {k_id} ({fidelity}): device={duration_ns / 1e6:.3f} ms, "
-        f"cores={core_count}, V={valid_tiles} tiles, mm={mm_flops / 1e9:.1f} GFLOP, "
-        f"peak={peak} FLOP/cyc/core @ {_BH_CLOCK_GHZ} GHz -> math_util={math_util:.1f}%"
-    )
+INDEXER_PERF_MARGIN = 0.02  # symmetric +/- 2% band on the expected math util (catches regressions AND speedups)
 
 
 # ---------------------------------------------------------------------------
-# Device-perf op-test band check (CI-gated by INDEXER_SCORE_PERF_CHECKS=1; runs in the "ops perf tests"
-# job of perf-device-models). Mirrors SDPA's test_sdpa_perf_check: measure sp_rank-7 HiFi2 math
-# utilization (the deployed bf16 q + bfp8 k path) via tracy and assert it stays within a symmetric +/-
-# band, catching both regressions and unexpected speedups. Expected values were measured on a Blackhole
-# dev board; the band is wider than SDPA's 1% while the op's cross-board perf is still being characterized.
-# ---------------------------------------------------------------------------
-INDEXER_PERF_MARGIN = 0.02  # symmetric +/- 2%
-
-_INDEXER_PERF_CHECK_CONFIGS = [
-    # (case_id, heads, expected_util) at HiFi2 (bf16 q, bfp8 k), sp_rank 7
-    ("glm5", 8, 70.1),
-    ("dsv32", 16, 76.1),
-]
-
-
-@pytest.mark.skipif(
-    os.environ.get("INDEXER_SCORE_PERF_CHECKS") != "1",
-    reason="Set INDEXER_SCORE_PERF_CHECKS=1 to run (CI: ops perf tests job)",
-)
-@pytest.mark.parametrize(
-    "case_id, heads, expected_util",
-    _INDEXER_PERF_CHECK_CONFIGS,
-    ids=[f"{case_id}_heads{heads}" for case_id, heads, _ in _INDEXER_PERF_CHECK_CONFIGS],
-)
-def test_indexer_score_perf_check(case_id, heads, expected_util):
-    """GLM5.1 / DSv32 sp_rank-7 HiFi2 math utilization via tracy, asserted within +/- INDEXER_PERF_MARGIN."""
-    from tracy.process_model_log import run_device_profiler
-    from tests.nightly.sdpa_perf_utils import post_process_ops_log
-
-    subdir = "ttnn_indexer_score_perf_check"
-    perf_id = f"heads{heads}_q_bf16_k_bfp8"  # HiFi2 (bf16 q, bfp8 k)
-    command = (
-        "pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::"
-        f"test_indexer_score_sp7_perf_impl[{perf_id}]"
-    )
-    with mock.patch.dict(os.environ, {"CI": "false"}):
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        subdir,
-        float_columns=["CORE COUNT", "DEVICE KERNEL DURATION [ns]"],
-        columns=["ATTRIBUTES"],
-        sum_vals=False,
-        has_signposts=False,
-    )
-    assert len(r["DEVICE KERNEL DURATION [ns]"]) > 0, "profiler returned no indexer_score ops"
-
-    core_count = int(r["CORE COUNT"][0])
-    duration_ns = float(r["DEVICE KERNEL DURATION [ns]"].min())
-    mm_flops = indexer_mm_flops(sp7_valid_tiles(), heads)
-    peak = _MM_FLOPS_PER_CYCLE_PER_CORE["HiFi2"]
-    cycles = duration_ns * _BH_CLOCK_GHZ
-    utilization = (mm_flops / (core_count * cycles * peak)) * 100 if core_count > 0 else 0.0
-
-    lower = expected_util * (1 - INDEXER_PERF_MARGIN)
-    upper = expected_util * (1 + INDEXER_PERF_MARGIN)
-    logger.info(
-        f"indexer_score perf check {case_id} heads={heads} (HiFi2): duration={duration_ns / 1e6:.3f} ms, "
-        f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
-    )
-    assert lower <= utilization <= upper, (
-        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {INDEXER_PERF_MARGIN * 100:.1f}%)"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Generalized-multicast regime coverage (accuracy): exercises the banded-product scheduler paths the
-# small knobs/shapes tests miss -- chiefly G > grid.y (groups phase-stacked onto rows, the case that
-# would deadlock the k-mcast column if rows took uneven group counts), G prime > grid.y (rows_used==1,
-# k-mcast off but still correct), uneven k-band split across columns (U not a multiple of grid.x),
-# partial last band, and phase-stacking under head streaming. Same exact -inf + PCC + negative-gate
-# check as the deployments. q_chunk/k_chunk are in ELEMENTS (tiles*32); head_group 0 = all resident.
+# Generalized-multicast regime coverage (accuracy): scheduler paths the knobs/shapes tests miss -- G >
+# grid.y (groups phase-stacked onto rows), prime G (rows_used==1, k-mcast off), uneven k-band split,
+# partial last band, and phase-stacking under streaming. Same exact -inf + PCC check as the deployments.
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group",
@@ -783,17 +873,10 @@ def test_indexer_score_genmcast_regimes(device, heads, dim, sq, t, chunk_start, 
 
 
 def test_indexer_score_streaming_qmcast_uneven_bands(device):
-    """Streaming (HB<Hi) q-mcast with an UNEVEN k-band split across a grid row -- the situation a naive
-    per-output-tile q-mcast would deadlock on: cores in the same row own different band counts, so they
-    would issue different numbers of q reads / mcast rendezvous and the row's sender would wait forever
-    on receivers that already finished.
-
-    The dummy-pad scheduler fixes this by padding every core's streaming band loop to max_bands (the
-    row's widest column) with phantom q-only bands, so the q-mcast handshake count is uniform per row.
-    This test pins that the op stays correct (no hang, exact -inf + PCC) on that shape. U=23 is prime,
-    so min(U, grid.x) never divides it -> the band split is uneven (max_bands > min band count) on any
-    Blackhole grid width.
-    """
+    """Streaming (HB<Hi) q-mcast with an UNEVEN k-band split across a grid row -- a naive per-output-tile
+    q-mcast would deadlock (cores in a row issue different q-read counts). The phantom-band pad to
+    max_bands keeps the q-mcast count uniform; this pins no-hang + exact -inf + PCC. U=23 is prime, so the
+    band split is uneven on any Blackhole grid width."""
     heads, dim, sq, t = 16, 128, 128, 736  # Hi=16, Sqt=4, Tt=23
     chunk_start, q_chunk, k_chunk, head_group = 128, 32, 32, 8  # QC=1, KC=1, HB=8 (< Hi -> streaming)
 
@@ -809,3 +892,488 @@ def test_indexer_score_streaming_qmcast_uneven_bands(device):
     assert max_bands > min_bands, f"need an uneven band split: U={U}, cols_used={cols_used}"
 
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
+# ==============================================================================================
+# Multi-device (QuietBox, 4 BH) tests: PER-DEVICE chunk_start derived from the mesh coordinate.
+# ==============================================================================================
+# Use the `mesh_device` fixture (auto-skips on a single chip). A SINGLE mesh dispatch where each device is
+# a different SP rank: chunk_start = chunk_start_idx + r*Sq (r = linearized index along cluster_axis), one
+# hash-excluded program for all. Two layouts:
+#   - 1D SP=4 (flat mesh): history 25600 + chunk 4*640 -> T 28160; cluster_axis unset (linear order).
+#   - 2D SP=2 x TP=2:      history 25600 + chunk 2*640 -> T 26880; cluster_axis = SP axis, heads split.
+# Functional only (exact -inf map + PCC >= 0.999 per SP rank).
+
+QB_DIM = 128  # indexer head dim
+QB_SQ = 640  # queries per SP rank (preserved from the SP=8 deployment)
+QB_HISTORY = 25600  # 25k history, tile-aligned (800 tiles)
+
+# GLM5 (8 heads) and DSv32 (16 heads), as in the single-device deployment cases above.
+QB_CASES = [("glm5", 8), ("dsv32", 16)]
+QB_IDS = [c[0] for c in QB_CASES]
+
+
+def _global_inputs(heads, chunk, t, seed):
+    """Global GLX tensors (bf16; deployed dtypes applied at shard time): q/w over `chunk` queries, k over
+    `t` all-gathered keys. Weights are random so some gates are negative (-inf must stay distinguishable
+    from low-but-valid scores)."""
+    g = torch.Generator().manual_seed(seed)
+    q = torch.randn(1, heads, chunk, QB_DIM, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, t, QB_DIM, generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, heads, chunk, 1, generator=g, dtype=torch.bfloat16)
+    return q, k, w
+
+
+def _to_mesh(mesh_device, t, dtype, mapper):
+    """from_torch with the shared tiled-layout boilerplate."""
+    return ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=mapper)
+
+
+def _per_sp_ref(q_g, k_g, w_g, sp_count, history):
+    """Reference: each SP rank's full-head score (chunk_start = history + sp*Sq), concatenated along seq."""
+    refs = []
+    for sp in range(sp_count):
+        sl = slice(sp * QB_SQ, (sp + 1) * QB_SQ)
+        refs.append(indexer_score_dsa_ref(q_g[:, :, sl, :], k_g, w_g[:, :, sl, :], history + sp * QB_SQ))
+    return torch.cat(refs, dim=2)
+
+
+# ---- 1D mesh: SP=4 (flat QuietBox), cluster_axis unset (linear device order) ------------------
+QB_SP = 4  # devices (QuietBox); SP ring positions 0..3
+QB_CHUNK = QB_SP * QB_SQ  # 2560 chunk queries (2.5k), sharded SP=4 -> 640/device
+QB_T = QB_HISTORY + QB_CHUNK  # 28160 all-gathered keys (880 tiles)
+
+
+def _shard_1d(mesh_device, heads, seed):
+    """SP=4 inputs: q/w sharded along seq (each device its own 640 rows), k replicated. Deployed dtypes."""
+    q_g, k_g, w_g = _global_inputs(heads, QB_CHUNK, QB_T, seed)
+    shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    return q_g, k_g, w_g, q_dev, k_dev, w_dev
+
+
+@pytest.mark.parametrize("mesh_device", [QB_SP], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_per_device_chunk_start(mesh_device, case_id, heads):
+    """One mesh dispatch over 4 BH devices, each deriving its own chunk_start from its coordinate.
+    Validate each device's output against its own chunk_start reference."""
+    q_g, k_g, w_g, q_dev, k_dev, w_dev = _shard_1d(mesh_device, heads, seed=42)
+
+    # chunk_start_idx OMITTED -> the op deduces base = T - sp_ring*Sq = QB_HISTORY (sp_ring = 4 devices,
+    # cluster_axis unset), then device r gets base + r*Sq. No chunk_start passed at all.
+    out = ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, program_config=glx_config(heads))
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+
+    ref = _per_sp_ref(q_g, k_g, w_g, QB_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB_CHUNK, QB_T, check_neg=True)
+
+
+@pytest.mark.parametrize("mesh_device", [QB_SP], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_one_compile_all_chunk_starts(mesh_device, case_id, heads):
+    """chunk_start is excluded from the program hash: running several different bases must add exactly
+    ONE program-cache entry (the first compile), proving no per-value recompile."""
+    _, _, _, q_dev, k_dev, w_dev = _shard_1d(mesh_device, heads, seed=7)
+
+    # Three distinct chunk-start bases (all within the causal window). Only the first should compile.
+    bases = [QB_HISTORY, QB_HISTORY - QB_SQ, QB_HISTORY - 2 * QB_SQ]
+
+    entries_before = mesh_device.num_program_cache_entries()
+    for base in bases:
+        ttnn.experimental.indexer_score_dsa(
+            q_dev, k_dev, w_dev, chunk_start_idx=base, program_config=glx_config(heads)
+        ).deallocate()
+
+    added = mesh_device.num_program_cache_entries() - entries_before
+    assert added == 1, f"expected 1 program-cache entry across 3 distinct chunk_start bases, got {added}"
+
+
+# ---- 2D mesh: SP=2 (one axis) x TP=2 (the other, head-split) ----------------------------------
+# Exercises cluster_axis on a real 2D mesh, which a 1xN mesh can't: chunk_start must vary along the
+# SP axis only, while the two TP devices sharing an SP position get the SAME chunk_start.
+QB2_SP = 2  # sequence-parallel ranks (chunk_start varies along this axis)
+QB2_TP = 2  # tensor-parallel ranks (heads split across this axis)
+QB2_CHUNK = QB2_SP * QB_SQ  # 1280 chunk queries, sharded SP=2 -> 640/device
+QB2_T = QB_HISTORY + QB2_CHUNK  # 26880 keys (840 tiles)
+QB2_SP_AXIS = 0  # mesh rows = SP ring (passed as cluster_axis)
+QB2_TP_AXIS = 1  # mesh cols = TP head split
+
+
+def _axis_dims(sp_dim, tp_dim):
+    """A 2-tuple indexed by mesh axis: SP axis -> sp_dim, TP axis -> tp_dim. Used for both the q/w shard
+    mapper and the output composer (sharding and concat use the same dims here)."""
+    dims = [None, None]
+    dims[QB2_SP_AXIS], dims[QB2_TP_AXIS] = sp_dim, tp_dim
+    return tuple(dims)
+
+
+@pytest.mark.parametrize("mesh_device", [(QB2_SP, QB2_TP)], ids=["2x2"], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_sp2_tp2(mesh_device, case_id, heads):
+    """One mesh dispatch over a 2x2 mesh: chunk_start derived per-device from the coordinate along
+    cluster_axis (SP), constant across the TP axis; heads split across TP. Each TP device computes a
+    partial head-sum, which the test sums back (the TP all-reduce) and validates per SP rank against
+    its own full-head, own-chunk_start reference."""
+    q_g, k_g, w_g = _global_inputs(heads, QB2_CHUNK, QB2_T, seed=42)
+
+    # q/w: seq (dim 2) sharded along the SP axis, heads (dim 1) along the TP axis. k replicated.
+    mesh_shape = tuple(mesh_device.shape)
+    qw_dims = _axis_dims(sp_dim=2, tp_dim=1)
+    shard_qw = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=qw_dims)
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_qw)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_qw)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    # chunk_start_idx OMITTED: the op deduces base = T - sp_ring*Sq, where sp_ring is the mesh extent
+    # along cluster_axis (2, the SP axis) -- NOT the total device count (4). Device (sp, tp) then gets
+    # chunk_start = base + sp*Sq -- identical for both TP devices at SP position sp.
+    out = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        cluster_axis=QB2_SP_AXIS,
+        program_config=glx_config(heads // QB2_TP),  # per-device head count
+    )
+    # Concat SP shards along seq (dim 2) and the TP head-partials along the size-1 head dim (dim 1), then
+    # SUM the partials (the TP all-reduce) -> full [1,1,1280,T] score.
+    out_t = ttnn.to_torch(
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=qw_dims)
+    )
+    out_t = out_t.float().sum(dim=1, keepdim=True)
+
+    ref = _per_sp_ref(q_g, k_g, w_g, QB2_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB2_CHUNK, QB2_T, check_neg=True)
+
+
+# ==============================================================================================
+# Multichip MSA (MiniMax M3): the same per-device chunk_start mechanism as the DSA QB tests, through the
+# indexer_score_msa frontend (raw dot, constant 1/sqrt(d) scale, no weights). num_groups=1 head-sums into
+# one [1,1,Sq,T] plane; the 2x2 case splits heads across TP and sums the partials back. Functional only.
+M3_QB_HEADS = 4  # MiniMax M3 sparse_num_index_heads
+M3_QB_SCALE = QB_DIM**-0.5  # 1/sqrt(d), the M3 indexer scale (folded into the constant gate)
+
+
+def _msa_per_sp_ref(q_g, k_g, sp_count, history):
+    """MSA reference: each SP rank's raw-dot, scale-gated, head-summed score (chunk_start = history + sp*Sq),
+    concatenated along seq. No learned gates -> a constant M3_QB_SCALE gate, raw dot (no relu)."""
+    w = torch.full((1, q_g.shape[1], QB_SQ, 1), M3_QB_SCALE, dtype=torch.bfloat16)
+    refs = []
+    for sp in range(sp_count):
+        sl = slice(sp * QB_SQ, (sp + 1) * QB_SQ)
+        refs.append(indexer_score_msa_ref(q_g[:, :, sl, :], k_g, w, history + sp * QB_SQ))
+    return torch.cat(refs, dim=2)
+
+
+@pytest.mark.parametrize("mesh_device", [QB_SP], indirect=True)
+def test_indexer_score_msa_qb_per_device_chunk_start(mesh_device):
+    """MSA over 4 BH devices (SP=4), each deriving its own chunk_start from its coordinate (cluster_axis
+    unset -> linear order). Raw dot + constant scale, num_groups=1 -> one head-summed [1,1,Sq,T] plane."""
+    q_g, k_g, _ = _global_inputs(M3_QB_HEADS, QB_CHUNK, QB_T, seed=42)
+    shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    # chunk_start_idx OMITTED -> the op deduces base = T - sp_ring*Sq = QB_HISTORY, then device r gets
+    # base + r*Sq (r = linearized index, cluster_axis unset). The constant gate is synthesized per-device.
+    out = ttnn.experimental.indexer_score_msa(
+        q_dev, k_dev, scale=M3_QB_SCALE, num_groups=1, program_config=glx_config(M3_QB_HEADS)
+    )
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+
+    ref = _msa_per_sp_ref(q_g, k_g, QB_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB_CHUNK, QB_T, check_neg=True)
+
+
+@pytest.mark.parametrize("mesh_device", [(QB2_SP, QB2_TP)], ids=["2x2"], indirect=True)
+def test_indexer_score_msa_qb_sp2_tp2(mesh_device):
+    """MSA over a 2x2 mesh: chunk_start derived per-device along cluster_axis (SP), constant across TP; the
+    M3 index heads split across TP. Each device head-sums its half (num_groups=1); the test sums the TP
+    partials (the all-reduce) and validates per SP rank against its own raw-dot, own-chunk_start reference."""
+    q_g, k_g, _ = _global_inputs(M3_QB_HEADS, QB2_CHUNK, QB2_T, seed=42)
+
+    # q: seq (dim 2) sharded along the SP axis, heads (dim 1) along the TP axis. k replicated.
+    mesh_shape = tuple(mesh_device.shape)
+    q_dims = _axis_dims(sp_dim=2, tp_dim=1)
+    shard_q = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=q_dims)
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_q)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    # chunk_start_idx OMITTED: base deduced as T - sp_ring*Sq, sp_ring = mesh extent along cluster_axis (2,
+    # the SP axis). Device (sp, tp) gets chunk_start = base + sp*Sq -- identical for both TP devices at sp.
+    out = ttnn.experimental.indexer_score_msa(
+        q_dev,
+        k_dev,
+        cluster_axis=QB2_SP_AXIS,
+        scale=M3_QB_SCALE,
+        num_groups=1,
+        program_config=glx_config(M3_QB_HEADS // QB2_TP),  # per-device head count
+    )
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=q_dims))
+    out_t = out_t.float().sum(dim=1, keepdim=True)  # TP all-reduce: sum the head-partials
+
+    ref = _msa_per_sp_ref(q_g, k_g, QB2_SP, QB_HISTORY)
+    assert_indexer_match(out_t, ref, QB2_CHUNK, QB2_T, check_neg=True)
+
+
+# MiniMax M3 MSA math-utilization perf check (tracy; no accuracy check). ONE device of an SP=8 x TP=4 mesh:
+# TP=4 = one GQA group/device (num_groups=1, Hi=1, no cross-TP all-reduce); SP=8 shards the chunk (640
+# q/device); KV all-gathered (50176 prefix + 5120 chunk = 55296 keys). Same FLOP model as the DSA util
+# test (the scoring matmul is identical). Measured at the deployed fused config: block_size=128 with QC=2
+# and the grid-aligned q/K multicast (see M3_T). With one index head the matmul is a small slice (DMA +
+# block-pool dominate), so util is far below the 8/16-head numbers; the TP<4 fallback (num_groups>1) is higher.
+# ---------------------------------------------------------------------------
+M3_DIM = 128  # sparse_index_dim (== GLX_DIM)
+M3_SQ = 640  # queries/device: 5120 prefill chunk / SP=8
+M3_HISTORY = 50176  # ~50K cached prefix, tile- and k_chunk-aligned
+M3_T = 56320  # 55296 real keys PADDED to 1760*32 = 11*160*32, so Tt=1760 divides the 11-wide BH grid -> the
+# dense deal grid-aligns, enabling the q/K multicast. The 1024 padded keys are causally masked (future), so
+# m3_valid_tiles is unchanged.
+M3_CHUNK_START = M3_HISTORY + 7 * M3_SQ  # sp_rank 7 = fullest-causal device
+
+
+def m3_valid_tiles():
+    """Causal-valid output tiles V at the fullest (sp_rank 7) M3 device: sum_s min(Tt, chunk_t + s + 1)
+    over this device's q-tile-rows (one index head, so no head factor)."""
+    chunk_t = M3_CHUNK_START // 32
+    tt_tiles = M3_T // 32
+    sqt = M3_SQ // 32
+    return sum(min(tt_tiles, chunk_t + s + 1) for s in range(sqt))
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally with tracy")
+def test_indexer_score_msa_m3_perf_impl(device):
+    """Inner test profiled by tracy: a few indexer_score_msa ops for one SP=8 x TP=4 M3 device (1 group,
+    640 q, 55296 kv, raw dot, scale=1/sqrt(d), bf16 q + bfp8 k). No accuracy check."""
+    q, k, _ = make_inputs(1, M3_DIM, M3_SQ, M3_T)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
+    # Deployed config: block_size=128 fuses the per-128-key block max (the writer emits the tiny block-score
+    # tensor, not the full ~70 MB score that made the unfused path memory-bound). QC=2 + grid-aligned q/K
+    # multicast removes K-read redundancy; KC=32 (blocks_per_unit=8) is the largest pool unit that fits L1.
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    for _ in range(5):  # tracy logs each op's device duration; the outer test takes the min
+        ttnn.experimental.indexer_score_msa(
+            q_dev,
+            k_dev,
+            chunk_start_idx=M3_CHUNK_START,
+            scale=M3_DIM**-0.5,
+            num_groups=1,
+            block_size=128,
+            program_config=cfg,
+        ).deallocate()
+    ttnn.synchronize_device(device)
+
+
+# ---------------------------------------------------------------------------
+# The three math-utilization band checks (CI-gated by INDEXER_SCORE_PERF_CHECKS=1): GLM5, DSv32, and
+# MiniMax-M3, all at the deployed HiFi2 dtypes (bf16 q + bfp8 k), sp_rank 7. Each spawns its perf_impl
+# under tracy, reads the min DEVICE KERNEL DURATION, computes math_util = matmul FLOPs / (cores x device
+# cycles x matmul peak), and asserts it within +/- INDEXER_PERF_MARGIN of the value measured on a Blackhole
+# dev board. mm_flops is a thunk so the shape-derived FLOP count is evaluated at run time.
+# (M3 is a single index head, so its matmul is a small slice -- the block-pool dominates -- hence the much
+# lower expected util than the multi-head DSA cases.)
+# ---------------------------------------------------------------------------
+_MATH_UTIL_CASES = [
+    # (case_id, perf_impl_node_id, profiler_subdir, mm_flops_thunk, expected_util) -- HiFi2 (bf16 q, bfp8 k)
+    (
+        "glm5",
+        "test_indexer_score_sp7_perf_impl[glm5]",
+        "ttnn_indexer_score_sp7",
+        lambda: indexer_mm_flops(sp7_valid_tiles(), 8),
+        70.1,
+    ),
+    (
+        "dsv32",
+        "test_indexer_score_sp7_perf_impl[dsv32]",
+        "ttnn_indexer_score_sp7",
+        lambda: indexer_mm_flops(sp7_valid_tiles(), 16),
+        76.1,
+    ),
+    (
+        "minimax_m3",
+        "test_indexer_score_msa_m3_perf_impl",
+        "ttnn_indexer_score_msa_m3",
+        lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
+        43.55,
+    ),
+]
+
+
+@pytest.mark.skipif(
+    os.environ.get("INDEXER_SCORE_PERF_CHECKS") != "1",
+    reason="Set INDEXER_SCORE_PERF_CHECKS=1 to run (CI: ops perf tests job)",
+)
+@pytest.mark.parametrize(
+    "case_id, perf_id, subdir, mm_flops_thunk, expected_util",
+    _MATH_UTIL_CASES,
+    ids=[c[0] for c in _MATH_UTIL_CASES],
+)
+def test_indexer_score_math_util(case_id, perf_id, subdir, mm_flops_thunk, expected_util):
+    """GLM5 / DSv32 / MiniMax-M3 sp_rank-7 HiFi2 (bf16 q, bfp8 k) matmul math utilization via tracy, asserted
+    within +/- INDEXER_PERF_MARGIN. Spawns the case's perf_impl under the profiler and compares the achieved
+    math_util to the expected value (measured on a BH dev board)."""
+    from tracy.process_model_log import run_device_profiler
+    from tests.nightly.sdpa_perf_utils import post_process_ops_log
+
+    command = "pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::" + perf_id
+    with mock.patch.dict(os.environ, {"CI": "false"}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir,
+        float_columns=["CORE COUNT", "DEVICE KERNEL DURATION [ns]"],
+        columns=["ATTRIBUTES"],
+        sum_vals=False,
+        has_signposts=False,
+    )
+    assert len(r["DEVICE KERNEL DURATION [ns]"]) > 0, "profiler returned no indexer_score ops"
+
+    core_count = int(r["CORE COUNT"][0])
+    duration_ns = float(r["DEVICE KERNEL DURATION [ns]"].min())
+    peak = _MM_FLOPS_PER_CYCLE_PER_CORE["HiFi2"]
+    cycles = duration_ns * _BH_CLOCK_GHZ
+    utilization = (mm_flops_thunk() / (core_count * cycles * peak)) * 100 if core_count > 0 else 0.0
+
+    lower = expected_util * (1 - INDEXER_PERF_MARGIN)
+    upper = expected_util * (1 + INDEXER_PERF_MARGIN)
+    logger.info(
+        f"indexer_score math util {case_id} (HiFi2): duration={duration_ns / 1e6:.3f} ms, cores={core_count}, "
+        f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+    assert lower <= utilization <= upper, (
+        f"{case_id} math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {INDEXER_PERF_MARGIN * 100:.1f}%)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# block-max-pool (block_size > 0): MiniMax M3 MSA block scoring. The op fuses the per-block max, so the
+# output is [B, G, Sq, T/block_size]; the downstream topk picks per-group top-k BLOCKS. block_size==0 is
+# byte-identical to before. Pooled-path constraints: T % bs == 0, k_chunk % bs == 0, k_chunk | T, and
+# k_chunk/bs in {8,16,24,32} (16 B output-slice alignment). bs=128, k_chunk=1024 -> blocks_per_unit=8.
+# ---------------------------------------------------------------------------
+BLOCK_POOL_BS = 128  # MiniMax M3 sparse_block_size
+
+
+@pytest.mark.parametrize("num_groups", [1, 4], ids=["g1", "g4"])
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["k_bf16", "k_bfp8"])
+def test_indexer_score_block_pool(device, k_dtype, num_groups):
+    """block_size=128 block-max-pool on a small MSA shape. Small chunk_start -> some blocks fully future
+    (-inf) and one straddles the causal boundary. Checked per group against indexer_score_msa_ref. 0.995 PCC
+    floor: block-max amplifies the bf16 raw-dot error; the pool itself is pinned exact by the tests below."""
+    heads, dim, sq, t = 4, GLX_DIM, 128, 2048
+    chunk_start = 512  # leaves fully-future blocks for early queries + a straddling block
+    scale = dim**-0.5
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    out = run_msa(
+        q,
+        k,
+        chunk_start,
+        device,
+        scale=scale,
+        num_groups=num_groups,
+        block_size=BLOCK_POOL_BS,
+        k_dtype=k_dtype,
+        program_config=cfg,
+    )
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, num_groups, block_size=BLOCK_POOL_BS)
+    assert_pooled_match(out, ref, num_groups, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
+
+
+@pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["k_bf16", "k_bfp8"])
+@pytest.mark.parametrize("sp_rank", [0, 7], ids=["rank0", "rank7"])
+def test_indexer_score_block_pool_m3(device, k_dtype, sp_rank):
+    """MSA block scoring at GLX geometry: 4 GQA groups on one chip (TP<4 fallback), raw dot, scale gate,
+    block_size=128 -> per-group block scores [1,4,640,440]."""
+    heads, dim, sq, t = 4, GLX_DIM, GLX_SQ, GLX_T
+    chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
+    scale = 1.0 / (dim**0.5)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    out = run_msa(
+        q,
+        k,
+        chunk_start,
+        device,
+        scale=scale,
+        num_groups=heads,
+        block_size=BLOCK_POOL_BS,
+        k_dtype=k_dtype,
+        program_config=cfg,
+    )
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k, w_scale, chunk_start, heads, block_size=BLOCK_POOL_BS)
+    # 0.995 floor: block-max amplifies the bf16 raw-dot error; the exact pool logic is pinned by the -inf
+    # map here and by test_indexer_score_block_pool_exact_vs_unpooled.
+    assert_pooled_match(out, ref, heads, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
+
+
+def test_indexer_score_block_pool_exact_vs_unpooled(device):
+    """Pool exactness, free of matmul precision: block-max-pooling the op's OWN unpooled bf16 scores must
+    equal the op's pooled output (both share the same matmul accumulator, so only the in-kernel reduce-MAX
+    differs). Isolates the fused pool from the bf16 q.kT error that relaxes the fp32-reference comparison."""
+    heads, dim, sq, t = 4, GLX_DIM, 128, 2048
+    chunk_start = 512
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    unpooled = run_msa(q, k, chunk_start, device, num_groups=heads, program_config=cfg)
+    pooled = run_msa(q, k, chunk_start, device, num_groups=heads, block_size=BLOCK_POOL_BS, program_config=cfg)
+    # torch max over the op's own [1,G,Sq,T] scores, with the same forced-local (+inf) the pooled path applies.
+    ref = msa_block_max_pool(unpooled.float(), BLOCK_POOL_BS, chunk_start)
+    masked = ref == float("-inf")
+    assert torch.equal(pooled <= torch.finfo(torch.bfloat16).min, masked)
+    # bf16 max is exact selection of identical values -> the visible block maxes must match bit-for-bit
+    # (forced-local blocks are +inf on both sides: inf == inf under torch.equal).
+    assert torch.equal(pooled[~masked].float(), ref[~masked])
+
+
+@pytest.mark.parametrize(
+    "block_size, k_chunk_size, blocks_per_unit",
+    # blocks_per_unit = KC / block_tiles = k_chunk_size / block_size. Keep KC=32 (same as the passing
+    # tests above, so L1 fits) and shrink block_size to push blocks_per_unit past 8.
+    [
+        (64, 1024, 16),  # block_tiles=2, KC=32 -> 16
+        (32, 1024, 32),  # block_tiles=1, KC=32 -> 32 (max allowed)
+    ],
+    ids=["bpu16", "bpu32"],
+)
+@pytest.mark.parametrize("num_groups", [1, 4], ids=["g1", "g4"])
+def test_indexer_score_block_pool_large_blocks_per_unit(device, num_groups, block_size, k_chunk_size, blocks_per_unit):
+    """blocks_per_unit > 8 routes the in-kernel pool to the library reduce (compute_kernel_lib::reduce)
+    instead of the batched custom reduce (the <=8 fast path). Exact-vs-unpooled pins the reduce bit-for-bit,
+    free of bf16 matmul noise, confirming the fallback lands each block max in col 0 as the writer expects."""
+    heads, dim, sq, t = 4, GLX_DIM, 128, 2048
+    chunk_start = 512
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk_size, head_group_size=0)
+    unpooled = run_msa(q, k, chunk_start, device, num_groups=num_groups, program_config=cfg)
+    pooled = run_msa(q, k, chunk_start, device, num_groups=num_groups, block_size=block_size, program_config=cfg)
+    ref = msa_block_max_pool(unpooled.float(), block_size, chunk_start)
+    masked = ref == float("-inf")
+    assert torch.equal(pooled <= torch.finfo(torch.bfloat16).min, masked)
+    assert torch.equal(pooled[~masked].float(), ref[~masked])
+
+
+@pytest.mark.parametrize(
+    "block_size, k_chunk_size, t, match",
+    [
+        # bs=48 is not a multiple of 32 -> rejected before the divisibility checks
+        (48, 1024, 2048, "block_size 48 must be a multiple of 32"),
+        # bs=128, KC=16 -> blocks_per_unit=4, not a multiple of 8 (16 B output-slice alignment)
+        (128, 512, 2048, "to be a multiple of 8 so each unit"),
+        # Tt=80 not divisible by KC=32 -> a partial last work unit
+        (128, 1024, 2560, "to divide T 2560"),
+    ],
+    ids=["bs_not_tile_multiple", "slice_unaligned", "partial_unit"],
+)
+def test_indexer_score_block_pool_validation(device, expect_error, block_size, k_chunk_size, t, match):
+    """The pooled-path constraints are rejected loudly (asserting the SPECIFIC FATAL fires) rather than
+    silently producing a misaligned write -- `match` pins each case to its own guard."""
+    heads, dim, sq = 4, GLX_DIM, 128
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=k_chunk_size, head_group_size=0)
+    with expect_error(RuntimeError, match):
+        run_msa(q, k, 512, device, num_groups=heads, block_size=block_size, program_config=cfg)

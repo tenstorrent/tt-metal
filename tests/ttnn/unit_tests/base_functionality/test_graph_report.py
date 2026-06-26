@@ -2281,6 +2281,77 @@ class TestGraphReportImport:
 
         conn.close()
 
+    def test_import_includes_git_sha_and_url_in_report_metadata(self, device, tmp_report_dir):
+        """Importer stamps report_metadata with tt-metal origin URL and HEAD SHA when available."""
+        report_path = tmp_report_dir / "report.json"
+        db_dir = tmp_report_dir / "db"
+
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        db_path = graph_report.import_report(report_path, db_dir)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM report_metadata WHERE key IN ('git_sha', 'git_url') ORDER BY key")
+        rows = dict(cursor.fetchall())
+        conn.close()
+
+        assert "git_sha" in rows and "git_url" in rows
+        git_meta = graph_report.get_tt_metal_git_report_metadata()
+        assert rows["git_sha"] == git_meta["git_sha"]
+        assert rows["git_url"] == git_meta["git_url"]
+        if git_meta["git_sha"]:
+            assert len(rows["git_sha"]) >= 7
+
+
+class TestSanitizeGitRemoteUrl:
+    """``sanitize_git_remote_url`` must not persist credentials into report_metadata."""
+
+    def test_strips_userinfo_query_fragment_https(self):
+        assert (
+            graph_report.sanitize_git_remote_url("https://user:secret@github.com/org/repo.git?x=1#frag")
+            == "https://github.com/org/repo.git"
+        )
+
+    def test_strips_empty_userinfo(self):
+        assert graph_report.sanitize_git_remote_url("https://@github.com/org/repo.git") == (
+            "https://github.com/org/repo.git"
+        )
+
+    def test_strips_token_as_username(self):
+        assert graph_report.sanitize_git_remote_url("https://token@github.com/org/repo.git") == (
+            "https://github.com/org/repo.git"
+        )
+
+    def test_scp_style_drops_user(self):
+        assert graph_report.sanitize_git_remote_url("git@github.com:tenstorrent/tt-metal.git") == (
+            "github.com:tenstorrent/tt-metal.git"
+        )
+
+    def test_ssh_url_strips_userinfo(self):
+        assert graph_report.sanitize_git_remote_url("ssh://git@github.com/org/repo.git") == (
+            "ssh://github.com/org/repo.git"
+        )
+
+    def test_ipv6_host_preserved(self):
+        assert graph_report.sanitize_git_remote_url("http://[::1]:8080/path/to/repo") == (
+            "http://[::1]:8080/path/to/repo"
+        )
+
+    def test_whitespace_trimmed(self):
+        assert graph_report.sanitize_git_remote_url("  https://a@b/c  ") == "https://b/c"
+
+    def test_non_numeric_port_does_not_raise(self):
+        # urlparse parses ':org' as the port token; .port raises ValueError without the guard.
+        result = graph_report.sanitize_git_remote_url("ssh://git@github.com:org/repo.git")
+        assert "git@" not in result
+        assert "github.com" in result
+
 
 class TestReportVersion:
     """Tests for report version handling."""

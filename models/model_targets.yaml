@@ -538,7 +538,7 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 55.5
+              decode_t/s/u: 64.0
               prefill_time_to_first_token: 40
             accuracy: {}
       wh_galaxy_perf:

@@ -16,9 +16,9 @@
 
 void kernel_main() {
     constexpr int onetile = 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
+    constexpr std::uint32_t Ht = get_compile_time_arg_val(0);
+    constexpr std::uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr std::uint32_t NC = get_compile_time_arg_val(2);
 
 #ifndef ROWWISE
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
@@ -31,9 +31,9 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
-    for (uint32_t nc = 0; nc < NC; ++nc) {
-        for (uint32_t wt = 0; wt < Wt; ++wt) {
-            for (uint32_t ht = 0; ht < Ht; ++ht) {
+    for (std::uint32_t nc = 0; nc < NC; ++nc) {
+        for (std::uint32_t wt = 0; wt < Wt; ++wt) {
+            for (std::uint32_t ht = 0; ht < Ht; ++ht) {
                 cb16.reserve_back(onetile);
                 tile_regs_acquire();
                 cb0.wait_front(onetile);
@@ -46,7 +46,7 @@ void kernel_main() {
 #endif
                 cumsum_tile(0, ht == 0);
 #ifdef ROWWISE
-                transpose_dest_init();
+                transpose_dest_init(tt::CBIndex::c_0);
                 transpose_dest(0);
 #endif
 

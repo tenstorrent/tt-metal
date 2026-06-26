@@ -743,7 +743,7 @@ void kernel_main() {
                 // Skip the intra-ring prefetch when this Q is on the normalize-only path
                 // (balanced_skip_q + is_last_ring_iter): normalize produces cb_out incrementally
                 // and blocks on cb_out space; cb_out can't drain until the writer reaches
-                // write_out below. A cb_reserve_back(cb_prev_out) here would block until
+                // write_out below. Reserving space in cb_prev_out here would block until
                 // normalize finishes, creating a cycle with cb_out. Deferred prefetch below
                 // runs after write_out to break the cycle.
                 const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;

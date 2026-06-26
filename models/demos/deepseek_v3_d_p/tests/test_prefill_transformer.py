@@ -482,7 +482,7 @@ def run_model(
             first_token_id, _, tt_intermediates = transformer(
                 tt_tokens,
                 tt_kvpe_cache,
-                number_of_non_padded_tokens=number_of_non_padded_tokens,
+                actual_isl=number_of_non_padded_tokens,
                 return_intermediates=True,
                 read_profiler=False,
                 temperature=temperature,
@@ -540,7 +540,7 @@ def run_model(
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
             tt_kvpe_cache,
-            number_of_non_padded_tokens=number_of_non_padded_tokens,
+            actual_isl=number_of_non_padded_tokens,
             return_intermediates=pcc_validation,
             read_profiler=False,
             temperature=temperature,
