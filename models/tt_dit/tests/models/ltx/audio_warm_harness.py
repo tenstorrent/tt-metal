@@ -9,7 +9,7 @@ eager-vs-traced (Phase 1b) is answered in one ~6-min process instead of two ~14-
 Env knobs:
   EAGER_REPS   (default 5)  warm eager decodes to average
   TRACED_REPS  (default 5)  warm traced decodes to average (0 to skip the traced leg)
-  LTX_VOC_TRACE / LTX_BWE_TRACE / LTX_VAE_TRACE  passed through to the traced leg
+  LTX_VOC_TRACE / LTX_VAE_TRACE  passed through to the traced leg (BWE follows LTX_TRACED)
   WARMUP_DECODES (default 1) untimed decodes after a mode switch to settle steady state
   NUM_FRAMES / HEIGHT / WIDTH  clip shape (defaults match test_audio_decode_girl)
 
@@ -192,7 +192,8 @@ def test_warm_harness(
         pipeline.release_traces()
         pipeline._traced = True
         # _prepare_audio_decoder re-reads self._traced + env each call, so the next decode
-        # lazily captures the vocoder/VAE trace per LTX_VOC_TRACE/LTX_BWE_TRACE/LTX_VAE_TRACE.
+        # lazily captures the vocoder/BWE/VAE trace (BWE follows self._traced; vocoder/VAE per
+        # LTX_VOC_TRACE/LTX_VAE_TRACE).
         # Use extra warmups so the lazy capture cost isn't counted in the timed reps.
         traced_total, _ = _avg_leg(pipeline, latent, num_frames, traced_reps, max(warmups, 2), "TRACED")
         if probe:
