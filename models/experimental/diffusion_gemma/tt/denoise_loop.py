@@ -160,6 +160,12 @@ def _deallocate_decision_tensors(res: TtDenoiseStepResult) -> None:
     res.argmax.deallocate(True)
 
 
+def _reset_logits_fn(logits_fn: TtLogitsFn) -> None:
+    reset = getattr(logits_fn, "reset", None)
+    if callable(reset):
+        reset()
+
+
 def denoise_block(
     logits_fn: TtLogitsFn,
     init_canvas: ttnn.Tensor,
@@ -226,10 +232,12 @@ def denoise_block(
 
         if stable and confident:
             next_canvas.deallocate(True)
+            _reset_logits_fn(logits_fn)
             return DenoiseTrajectory(committed, step + 1, True, records)
 
         canvas = next_canvas
 
     if config.max_denoise_steps > 0:
         canvas.deallocate(True)
+    _reset_logits_fn(logits_fn)
     return DenoiseTrajectory(committed, config.max_denoise_steps, False, records)

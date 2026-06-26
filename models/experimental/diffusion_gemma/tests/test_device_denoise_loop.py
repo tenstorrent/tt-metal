@@ -50,6 +50,21 @@ def _budget_for_accept_count(entropy: torch.Tensor, count: int):
     return float((exclusive[0, count - 1] + exclusive[0, count]) / 2)
 
 
+class _ResettableStaticLogits:
+    def __init__(self, logits):
+        self.logits = logits
+        self.reset_calls = 0
+
+    def __call__(self, canvas, step):
+        return self.logits
+
+    def reset(self):
+        self.reset_calls += 1
+        if self.logits is not None:
+            self.logits.deallocate(True)
+            self.logits = None
+
+
 def test_single_denoise_step_matches_reference(device):
     torch.manual_seed(11)
     length = 256
@@ -144,13 +159,13 @@ def test_multi_step_denoise_control_flow_smoke_matches_reference(device):
         noise_tokens_fn=lambda step: noise_tokens[step],
     )
 
-    tt_logits = _to_device(device, logits.unsqueeze(1))
+    tt_logits = _ResettableStaticLogits(_to_device(device, logits.unsqueeze(1)))
     tt_gumbel_noise = [_to_device(device, noise.unsqueeze(1)) for noise in gumbel_noise]
     tt_noise_tokens = [
         _to_device(device, noise.view(batch, 1, length, 1).to(torch.int32), dtype=ttnn.uint32) for noise in noise_tokens
     ]
     tt = denoise_block(
-        lambda canvas, step: tt_logits,
+        tt_logits,
         _to_device(device, init_canvas.view(batch, 1, length, 1).to(torch.int32), dtype=ttnn.uint32),
         cfg,
         gumbel_noise_fn=lambda step: tt_gumbel_noise[step],
@@ -163,3 +178,4 @@ def test_multi_step_denoise_control_flow_smoke_matches_reference(device):
     assert ref.halted and tt.halted
     assert ref.num_steps == tt.num_steps == 2
     assert accept_flips == 0
+    assert tt_logits.reset_calls == 1
