@@ -119,6 +119,18 @@ struct TensorBindingHandle {
     bool runtime_field_is_page_size = false;
 };
 
+// Metal 2.0: per-kernel resolved scratchpad binding.
+// A scratchpad is a private, blank, node-local L1 region bound to exactly one kernel. Unlike a
+// TensorBindingHandle (whose address is filled per-enqueue from a user TensorArgument), a scratchpad's
+// L1 is allocated by the framework at program-compile time; allocated_address is filled in then (0
+// until allocated) and written into the kernel's CRTA buffer at addr_crta_offset.
+struct ScratchpadBindingHandle {
+    std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
+    uint32_t size_bytes = 0;         // per-node size; emitted as the token's compile-time SIZE_BYTES
+    uint32_t addr_crta_offset = 0;   // byte offset of the base-address slot within the kernel's CRTA buffer
+    uint32_t allocated_address = 0;  // L1 base address; filled by allocate_dataflow_buffers (0 until allocated)
+};
+
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
@@ -185,6 +197,19 @@ public:
                                             uint32_t addr_crta_offset,
                                             uint32_t num_runtime_field_crta_words)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
+    void process_scratchpad_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_offset)>)
+        const override;
+    // Scratchpad binding handles are set post-construction (their size is part of compute_hash, so this
+    // must run before the kernel is compiled). Non-const accessor lets allocate_dataflow_buffers fill
+    // each handle's allocated_address after L1 allocation.
+    const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {
+        return scratchpad_binding_handles_;
+    }
+    std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() { return scratchpad_binding_handles_; }
+    void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
+        scratchpad_binding_handles_ = std::move(handles);
+    }
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
@@ -277,6 +302,9 @@ protected:
     const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
+    // NON-const (unlike tensor_binding_handles_): set post-construction via set_scratchpad_binding_handles,
+    // and allocate_dataflow_buffers fills each handle's allocated_address after L1 allocation.
+    std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
