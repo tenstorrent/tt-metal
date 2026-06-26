@@ -179,9 +179,10 @@ void kernel_main() {
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
-    // Open the egress (Direct: open_finish + bind direction; mux: connect to the endpoint), yielding
-    // the opened stream. Packet headers are owned by `stream` and allocated lazily on each arm_*.
-    auto stream = sender.open();
+    // Open the egress (Direct: open_finish + bind direction; mux: connect to the endpoint), binding
+    // this stream's unicast route, and yielding the opened stream. Packet headers are owned by
+    // `stream` and allocated lazily on each arm_*. The barrier's multicast route is passed separately.
+    auto stream = sender.open(unicast_route_info);
 
     // Egress goes uniformly through the helper (stream) for both the Direct and worker-mux policies;
     // the per-send #ifdef + the raw connection-templated calls and pre-allocated headers are gone.
@@ -190,9 +191,8 @@ void kernel_main() {
         if (detail::valid_targets(direction)) {
             // only initialize if we're actually going to send something over fabric
 
-            // The multicast-inc channel shares the sem header with the unicast counting channel
-            // armed below, so `barrier` is block-scoped here — it is destroyed before arm_inc
-            // re-arms that header (see the helper's SHARED SEM HEADER warning).
+            // The multicast-inc channel has its own pooled header (independent of the unicast
+            // counting channel), so this is just the barrier-phase scope, not a sharing constraint.
             auto barrier = stream.arm_multicast_inc(barrier_multicast_route_info, 1);
 
             if constexpr (topology == Topology::Linear) {
@@ -257,13 +257,13 @@ void kernel_main() {
 
     static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
     // Arm the unicast write + scatter + counting-inc channels at function scope — their issues
-    // happen in the loops below, so the handles must outlive the gated blocks. The barrier's
-    // multicast handle was destroyed at the end of its block, so arm_inc safely re-arms the shared
-    // sem header for the counting phase. Arming is a local header program (no fabric I/O), so it is
-    // unconditional; only the issues are gated on valid_targets / num_targets, exactly as before.
-    auto scatter = stream.arm_scatter_write(unicast_route_info, page_size, num_tiles_to_write_per_packet);
-    auto writer = stream.arm_unicast_write(unicast_route_info, page_size);
-    auto counter = stream.arm_inc(unicast_route_info, 1);
+    // happen in the loops below, so the handles must outlive the gated blocks. Each draws its own
+    // pooled header, all reusing the stream's route bound at open(). Arming is a local header
+    // program (no fabric I/O), so it is unconditional; only the issues are gated on valid_targets /
+    // num_targets, exactly as before.
+    auto scatter = stream.arm_scatter_write(page_size, num_tiles_to_write_per_packet);
+    auto writer = stream.arm_unicast_write(page_size);
+    auto counter = stream.arm_inc(1);
 
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -544,10 +544,9 @@ void kernel_main() {
         slice_writes++;
     }
 
-    // Drain (write + atomic barriers) then close: Direct closes the connection; mux disconnects
-    // and runs the termination-master handshake — both behind the uniform helper teardown.
-    // close() is explicit so the trailing barrier stays after it; the stream dtor then no-ops.
-    stream.drain();
+    // close() drains (write + atomic barriers) then closes: Direct closes the connection; mux
+    // disconnects and runs the termination-master handshake — both behind the uniform helper
+    // teardown. The stream dtor then no-ops. The trailing barrier stays after it.
     stream.close();
     noc_async_write_barrier();
 }

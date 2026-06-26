@@ -18,17 +18,17 @@
  * (all_reduce, reduce_scatter) are out of scope.
  *
  * @par Safety by construction — the call order IS the type progression.
- *   The legal fabric-egress sequence is open -> route -> arm -> issue -> close. Rather than
+ *   The legal fabric-egress sequence is open(route) -> arm -> issue -> close. Rather than
  *   document that order and trust callers, this API makes each stage a distinct type that
  *   exposes ONLY the operations legal at that stage, so a mis-ordered sequence fails to compile:
  *
- *     FabricStreamSender<ConnT>      // UNOPENED: the only method is open().
- *          | open()  -> open_finish() + bind the forward/backward direction
+ *     FabricStreamSender<ConnT>      // UNOPENED: open(route) (the stream), or signal() (one-shot).
+ *          | open(route)  -> open_finish() + bind the direction + BIND THE STREAM'S ROUTE
  *          v
- *     FabricStream<ConnT>            // OPENED: arm_*(route, ...), drain(), close().
- *          | arm_unicast_write(route, page_size)      -> UnicastWriteChannel
- *          | arm_scatter_write(route, chunk, n)       -> ScatterWriteChannel
- *          | arm_inc(route, val)                      -> AtomicIncChannel
+ *     FabricStream<ConnT>            // OPENED: arm_*(...), drain(), close().
+ *          | arm_unicast_write(page_size)             -> UnicastWriteChannel
+ *          | arm_scatter_write(chunk, n)              -> ScatterWriteChannel
+ *          | arm_inc(val)                             -> AtomicIncChannel
  *          | arm_multicast_inc(mcast_route, val)      -> MulticastIncChannel
  *          v
  *     <channel handle>               // ARMED: the issue methods, and nothing else.
@@ -36,20 +36,28 @@
  *
  *   What this rules out at compile time:
  *     1. arm or issue before open() — arm_* live only on FabricStream, which only open() yields.
- *     2. arm without a route — the route is a MANDATORY argument of every arm_* (there is no
- *        separate set_route_* to forget). A wrong/absent route silently corrupts the packet, so
- *        making it un-omittable is the central footgun this API removes.
+ *     2. arm without a route — the route is bound ONCE at open(route) and reused by every arm_*,
+ *        so an unrouted send cannot be written and a stream's channels cannot disagree on the
+ *        route. A wrong/absent route silently corrupts the packet, so binding it un-omittably at
+ *        the stream is the central footgun this API removes. (arm_multicast_inc takes its own
+ *        multicast route, since that is a different cast mode than the stream's unicast route.)
  *     3. issue before arm — write()/inc()/etc. exist only on the handle arm_* returns; you
  *        cannot name an issue without first holding an armed channel.
- *     4. forgot close() — close() is idempotent and the FabricStream destructor closes if you
- *        did not. close() stays callable explicitly, so teardown ordering (e.g. all_gather's
- *        drain() -> close() -> trailing barrier) is unchanged.
+ *     4. forgot close()/drain() — close() DRAINS (write + atomic barriers) then closes; it is
+ *        idempotent and the FabricStream destructor closes if you did not. drain() stays callable
+ *        for an explicit mid-stream flush, but the teardown drain is automatic.
+ *
+ * @par One-shot convenience — FabricStreamSender::signal().
+ *   The common "send exactly one atomic-inc over the fabric, then tear down" (a ready/done
+ *   handshake) is a single call: @c signal(route_or_hops, remote_sem_noc_addr) opens, arms the
+ *   inc, issues it, and closes — the whole open/arm/issue/close sequence collapsed. Use the staged
+ *   open()->arm_*->issue path when a stream issues MANY packets across a loop.
  *
  * @par The armed-channel model — "arm once -> issue many".
  *   A fabric egress is a stateful packet header: arm_* programs its INVARIANT fields once
- *   (route + payload size, or route + inc value) via set_state and OWNS the @c UpdateMask; the
- *   returned channel issues many packets that update only the VARIABLE field (the destination
- *   NOC address) via with_state. The op never names an @c UpdateMask.
+ *   (the stream's route + payload size, or route + inc value) via set_state and OWNS the
+ *   @c UpdateMask; the returned channel issues many packets that update only the VARIABLE field
+ *   (the destination NOC address) via with_state. The op never names an @c UpdateMask.
  *
  * @par SCOPE & EXTENSION.
  *   Shipped + verified: the 1-D UNICAST pattern (point_to_point) and the line-MULTICAST barrier
@@ -67,11 +75,10 @@
  *   @warning CACHE-REUSE FOOTGUN: programs are cached and GlobalSemaphores reused, so each side
  *     must @c noc_semaphore_set(sem, 0) to re-arm — a SENDER resets BEFORE its outgoing inc, a
  *     RECEIVER after its wait. Missing reset = first run green, second hangs or corrupts.
- *   @warning SHARED SEM HEADER: arm_inc and arm_multicast_inc reuse ONE pooled header (the pool
- *     hangs on exhaustion; all_gather intentionally reuses it for barrier then counting). They
- *     therefore cannot both be live at once. This is the one ordering the type system can't
- *     express; CONTAIN it by block-scoping the MulticastIncChannel to the barrier phase so it is
- *     destroyed before arm_inc re-arms the header for the counting phase.
+ *   @note Each arm_* draws its OWN pooled header (unicast-write, scatter, unicast-inc, and
+ *     multicast-inc are independent), so any mix of channels may be live at once with no ordering
+ *     constraint between them. The pool holds several headers per RISC (8 on Wormhole/Blackhole)
+ *     and is reset every kernel launch; a stream arms at most four, well within budget.
  *
  * It WRAPS, and does not reinvent, the existing fragmented fabric layer:
  *   - @c FabricConnectionManager (connection + per-direction @c WorkerToFabricEdmSender)
@@ -318,8 +325,8 @@ private:
 
 /// Armed multicast atomic-inc channel (the N-party barrier): increment a semaphore on all peers
 /// on the armed multicast route by the armed value. The matching local barrier wait/reset
-/// (noc_semaphore_wait_min(sem, ring_size-1) + set 0) stays op-owned. SHARES the sem header with
-/// AtomicIncChannel — see the file banner's SHARED SEM HEADER warning; block-scope this handle.
+/// (noc_semaphore_wait_min(sem, ring_size-1) + set 0) stays op-owned. Draws its own pooled header,
+/// independent of the unicast AtomicIncChannel — the two may be live at once in any order.
 template <typename ConnT>
 class MulticastIncChannel {
 public:
@@ -350,9 +357,11 @@ public:
     FORCE_INLINE FabricStream(FabricStream&& o) :
         conn_(o.conn_),
         alignment_(o.alignment_),
+        route_(o.route_),
         payload_hdr_(o.payload_hdr_),
         scatter_hdr_(o.scatter_hdr_),
         sem_hdr_(o.sem_hdr_),
+        mcast_hdr_(o.mcast_hdr_),
         closed_(o.closed_) {
         o.closed_ = true;
     }
@@ -360,56 +369,58 @@ public:
     FORCE_INLINE ~FabricStream() { close(); }  // RAII backstop; idempotent with explicit close()
 
     // --- Armed unicast-write channel -------------------------------------------------
-    /// Arm the unicast-write channel: program route + on-wire payload size onto a pooled header
-    /// once (set_state). Helper owns the @c UpdateMask. Returns the channel to issue write()s.
-    FORCE_INLINE UnicastWriteChannel<ConnT> arm_unicast_write(
-        const ccl_routing_utils::line_unicast_route_info_t& route, uint32_t page_size_bytes);
+    /// Arm the unicast-write channel: program the stream's route + on-wire payload size onto a
+    /// pooled header once (set_state). Helper owns the @c UpdateMask. Returns the channel to write.
+    FORCE_INLINE UnicastWriteChannel<ConnT> arm_unicast_write(uint32_t page_size_bytes);
 
     // --- Armed scatter-write channel (<=4 chunks/packet) ----------------------------
-    /// Arm the scatter-write channel: program route + per-chunk sizes + chunk count + payload
-    /// size onto a pooled header once (set_state, ChunkSizes|PayloadSize). Returns the channel.
+    /// Arm the scatter-write channel: program the stream's route + per-chunk sizes + chunk count +
+    /// payload size onto a pooled header once (set_state, ChunkSizes|PayloadSize). Returns it.
     /// @param chunk_size_bytes  Per-chunk (per-tile) payload size.
     /// @param num_chunks        Chunks per packet (2..4).
-    FORCE_INLINE ScatterWriteChannel<ConnT> arm_scatter_write(
-        const ccl_routing_utils::line_unicast_route_info_t& route, uint32_t chunk_size_bytes, uint32_t num_chunks);
+    FORCE_INLINE ScatterWriteChannel<ConnT> arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks);
 
     // --- Armed unicast atomic-inc channel --------------------------------------------
-    /// Arm the unicast atomic-inc channel: program route + increment value (+ flush) onto the
-    /// shared sem header once (set_state, Val|Flush). Returns the channel to issue inc()s.
-    FORCE_INLINE AtomicIncChannel<ConnT> arm_inc(
-        const ccl_routing_utils::line_unicast_route_info_t& route, uint32_t val = 1);
+    /// Arm the unicast atomic-inc channel: program the stream's route + increment value (+ flush)
+    /// onto a pooled header once (set_state, Val|Flush). Returns the channel to issue inc()s.
+    FORCE_INLINE AtomicIncChannel<ConnT> arm_inc(uint32_t val = 1);
 
     // --- Armed multicast atomic-inc channel (the N-party barrier) --------------------
-    /// Arm the multicast atomic-inc channel: program a MULTICAST route + increment value (+ flush)
-    /// onto the shared sem header once (set_state, Val|Flush). Returns the channel.
-    /// @warning Reuses the SAME pooled header as arm_inc (see the file banner). Block-scope the
-    ///   returned handle so it is destroyed before any later arm_inc re-arms the header.
+    /// Arm the multicast atomic-inc channel: program a MULTICAST route (its own, distinct from the
+    /// stream's unicast route) + increment value (+ flush) onto a dedicated pooled header once
+    /// (set_state, Val|Flush). Returns the channel. Independent of arm_inc's header.
     FORCE_INLINE MulticastIncChannel<ConnT> arm_multicast_inc(
         const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t val = 1);
 
     // --- Lifecycle -------------------------------------------------------------------
     /// Drain outstanding local NoC writes + fabric atomic-incs (noc_async_write_barrier +
-    /// noc_async_atomic_barrier). all_gather ends with this; p2p's close() drains its trailing inc.
+    /// noc_async_atomic_barrier). Optional — close() drains automatically; call this only for an
+    /// explicit mid-stream flush before more issues.
     FORCE_INLINE void drain();
-    /// Close the connection. Idempotent — safe to call explicitly and again from the destructor.
+    /// Drain, then close the connection. Idempotent — safe to call explicitly and again from the
+    /// destructor (the RAII backstop).
     FORCE_INLINE void close();
 
 private:
     friend class FabricStreamSender<ConnT>;
-    FORCE_INLINE FabricStream(ConnT* conn, uint32_t alignment) : conn_(conn), alignment_(alignment) {}
+    FORCE_INLINE FabricStream(
+        ConnT* conn, uint32_t alignment, const ccl_routing_utils::line_unicast_route_info_t& route) :
+        conn_(conn), alignment_(alignment), route_(route) {}
 
     ConnT* conn_;                                         // borrowed from the FabricStreamSender
     uint32_t alignment_;                                  // L1 alignment for on-wire payload sizing
+    ccl_routing_utils::line_unicast_route_info_t route_;  // bound at open(); reused by every unicast arm_*
     volatile PACKET_HEADER_TYPE* payload_hdr_ = nullptr;  // lazily allocated by arm_unicast_write
     volatile PACKET_HEADER_TYPE* scatter_hdr_ = nullptr;  // lazily allocated by arm_scatter_write
-    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;      // lazily allocated by arm_inc / arm_multicast_inc (shared)
+    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;      // lazily allocated by arm_inc
+    volatile PACKET_HEADER_TYPE* mcast_hdr_ = nullptr;    // lazily allocated by arm_multicast_inc (independent)
     bool closed_ = false;
 };
 
 // ============================================================================================
-// FabricStreamSender — the UNOPENED egress. Owns the connection policy. Its only operation is
-// open(), which finishes the connection and yields the FabricStream. Construct it, optionally
-// do a pre-open noc_semaphore_wait_min, then open().
+// FabricStreamSender — the UNOPENED egress. Owns the connection policy. open(route) finishes the
+// connection and yields the FabricStream; signal() is the one-shot "send one inc then close"
+// shortcut. Construct it, optionally do a pre-open noc_semaphore_wait_min, then open() or signal().
 // ============================================================================================
 template <typename ConnT = DirectConn>
 class FabricStreamSender {
@@ -431,11 +442,22 @@ public:
     FabricStreamSender(const FabricStreamSender&) = delete;
     FabricStreamSender& operator=(const FabricStreamSender&) = delete;
 
-    /// Finish opening the connection + bind the direction, and yield the opened FabricStream.
-    /// The returned stream borrows this sender's connection, so this sender must outlive it.
-    FORCE_INLINE FabricStream<ConnT> open() {
+    /// Finish opening the connection + bind the direction, bind the stream's unicast @c route, and
+    /// yield the opened FabricStream. Every unicast arm_* reuses this route. The returned stream
+    /// borrows this sender's connection, so this sender must outlive it.
+    FORCE_INLINE FabricStream<ConnT> open(const ccl_routing_utils::line_unicast_route_info_t& route) {
         conn_.open();
-        return FabricStream<ConnT>(&conn_, alignment_);
+        return FabricStream<ConnT>(&conn_, alignment_, route);
+    }
+
+    /// One-shot: send exactly one fabric atomic-inc of @c val to @c remote_sem_noc_addr along
+    /// @c route, then tear down. Collapses open() -> arm_inc() -> inc() -> close() for the common
+    /// ready/done handshake. Terminal — do not also call open() on this sender afterwards.
+    FORCE_INLINE void signal(
+        const ccl_routing_utils::line_unicast_route_info_t& route, uint64_t remote_sem_noc_addr, uint32_t val = 1);
+    /// signal() convenience taking a hop distance instead of a route info.
+    FORCE_INLINE void signal(uint32_t num_hops, uint64_t remote_sem_noc_addr, uint32_t val = 1) {
+        signal(unicast_route(num_hops), remote_sem_noc_addr, val);
     }
 
 private:

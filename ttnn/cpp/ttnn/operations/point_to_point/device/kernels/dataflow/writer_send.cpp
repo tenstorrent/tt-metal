@@ -53,12 +53,11 @@ void kernel_main() {
     noc_semaphore_wait_min(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
 
-    // open() yields the opened stream; arm_* yield the only objects that can issue. The route is
-    // a mandatory arm argument, so an unrouted send cannot be written.
-    auto stream = sender.open();
-    const auto route = unicast_route(dst_num_hops);
-    auto writer = stream.arm_unicast_write(route, payload_size_bytes);  // invariant payload size per page write
-    auto done = stream.arm_inc(route, 1);                               // invariant inc value for the "done" signal
+    // open(route) binds the stream's route once; arm_* yield the only objects that can issue and
+    // reuse that route, so an unrouted send cannot be written.
+    auto stream = sender.open(unicast_route(dst_num_hops));
+    auto writer = stream.arm_unicast_write(payload_size_bytes);  // invariant payload size per page write
+    auto done = stream.arm_inc(1);                               // invariant inc value for the "done" signal
 
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
         cb_wait_front(sender_cb_id, 1);
@@ -90,5 +89,5 @@ void kernel_main() {
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
     done.inc(receive_sem_noc_addr);
 
-    stream.close();  // explicit so teardown order is fixed here; the dtor would also close (idempotent)
+    stream.close();  // drains the trailing inc, then closes (the dtor would also close — idempotent)
 }

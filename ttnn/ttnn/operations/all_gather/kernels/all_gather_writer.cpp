@@ -64,11 +64,11 @@ void kernel_main() {
     const auto output = TensorAccessor(output_args, output_addr, page_size);
     const uint32_t P = pages_per_shard;
 
-    // open() yields the opened stream; arm_* yield the only handles that can issue.
-    auto stream = sender.open();
-    const auto route = unicast_route(num_hops);
-    auto writer = stream.arm_unicast_write(route, page_size);  // invariant per-page payload size
-    auto counter = stream.arm_inc(route, 1);                   // invariant counting inc value
+    // open(route) binds the stream's route once; arm_* yield the only handles that can issue and
+    // reuse it.
+    auto stream = sender.open(unicast_route(num_hops));
+    auto writer = stream.arm_unicast_write(page_size);  // invariant per-page payload size
+    auto counter = stream.arm_inc(1);                   // invariant counting inc value
 
     const uint64_t neighbor_sem = safe_get_noc_addr(target_noc_x, target_noc_y, counting_sem_addr, 0);
 
@@ -92,6 +92,5 @@ void kernel_main() {
         counter.inc(neighbor_sem);
     }
 
-    stream.drain();
-    stream.close();
+    stream.close();  // drains (write + atomic barriers) then closes
 }

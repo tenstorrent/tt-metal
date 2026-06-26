@@ -31,12 +31,10 @@ void kernel_main() {
     const bool sender_is_forward = get_arg_val<uint32_t>(conn_arg_idx);
     FabricStreamSender<> ack_sender(conn_arg_idx, sender_is_forward, alignment);
 
-    // Signal the sender we are "ready" to receive (atomic-inc over fabric), then tear down.
-    auto ack = ack_sender.open();
-    auto ready = ack.arm_inc(unicast_route(sender_num_hops), 1);
+    // Signal the sender we are "ready" to receive: one fabric atomic-inc, then tear down. signal()
+    // collapses open() -> arm_inc() -> inc() -> close() for this one-shot handshake.
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
-    ready.inc(sender_sem_noc_addr);
-    ack.close();
+    ack_sender.signal(sender_num_hops, sender_sem_noc_addr);
 
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.
