@@ -4,17 +4,16 @@
 
 #pragma once
 
-#include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/quasar/untilize/device/untilize_device_operation_types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim::qsr {
 
 struct UntilizeMultiCoreSubCoreGridsProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UntilizeOperationAttributes& operation_attributes,
         const UntilizeTensorArgs& tensor_args,
-        const UntilizeTensorReturnValue& tensor_return_value);
+        UntilizeTensorReturnValue& tensor_return_value);
 };
 }  // namespace ttnn::prim::qsr
