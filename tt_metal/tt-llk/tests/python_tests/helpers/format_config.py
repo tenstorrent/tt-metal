@@ -68,6 +68,12 @@ class DataFormat(Enum):
     UInt8 = DataFormatInfo("UInt8", 1)
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
+    MxFp6R = DataFormatInfo(
+        "MxFp6R", 1
+    )  # QSR specific - E3M2, 6 bits used in an 8-bit L1 container
+    MxFp6P = DataFormatInfo(
+        "MxFp6P", 1
+    )  # QSR specific - E2M3, 6 bits used in an 8-bit L1 container
     MxFp4 = DataFormatInfo(
         "MxFp4", Fraction(1, 2)
     )  # QSR specific - 4 bits (0.5 bytes) per element
@@ -164,6 +170,8 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
@@ -183,6 +191,8 @@ class DataFormat(Enum):
         return self in {
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
         }
 
@@ -217,6 +227,12 @@ MX_FORMAT_MAX_NORMAL = {
     DataFormat.MxFp8P: float(
         ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
     ),  # 448.0 from dtype,
+    DataFormat.MxFp6R: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).max
+    ),  # 28.0 from dtype
+    DataFormat.MxFp6P: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).max
+    ),  # 7.5 from dtype
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).max
     ),  # 6.0 from dtype,
@@ -230,6 +246,12 @@ MX_FORMAT_MAX_NORMAL = {
 MX_FORMAT_MIN_NORMAL = {
     DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal),
     DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal),
+    DataFormat.MxFp6R: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).smallest_normal
+    ),  # 0.25 from dtype
+    DataFormat.MxFp6P: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).smallest_normal
+    ),  # 1.0 from dtype
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal
     ),  # 1.0 from dtype
@@ -245,6 +267,10 @@ MX_FORMAT_MAX_SUBNORMAL = {
     * 0.75,
     DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal)
     * 0.875,
+    DataFormat.MxFp6R: float(ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).smallest_normal)
+    * 0.75,  # (2^2 - 1) / 2^2, E3M2 has 2 mantissa bits
+    DataFormat.MxFp6P: float(ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).smallest_normal)
+    * 0.875,  # (2^3 - 1) / 2^3, E2M3 has 3 mantissa bits
     DataFormat.MxFp4: float(ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal)
     * 0.5,
 }
@@ -259,6 +285,12 @@ MX_FORMAT_MIN_SUBNORMAL = {
     DataFormat.MxFp8P: float(
         ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_subnormal
     ),
+    DataFormat.MxFp6R: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).smallest_subnormal
+    ),  # 0.0625 from dtype
+    DataFormat.MxFp6P: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).smallest_subnormal
+    ),  # 0.125 from dtype
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_subnormal
     ),
@@ -268,6 +300,8 @@ MX_FORMAT_MIN_SUBNORMAL = {
 MX_FORMAT_MIN_MAGNITUDE = {
     DataFormat.MxFp8R: 2.44e-4,
     DataFormat.MxFp8P: 0.0625,
+    DataFormat.MxFp6R: 0.25,  # min normal (E3M2)
+    DataFormat.MxFp6P: 1.0,  # min normal (E2M3)
     DataFormat.MxFp4: 1.0,
 }
 
@@ -620,6 +654,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.MxFp8R: 18,
     DataFormat.MxFp8P: 20,
+    DataFormat.MxFp6R: 19,
+    DataFormat.MxFp6P: 21,
     DataFormat.MxFp4: 22,
     DataFormat.MxInt8: 2,
     DataFormat.MxInt4: 3,
@@ -683,7 +719,7 @@ class InputOutputFormat:
     def __str__(self):
         if self.register_format_hint is not None:
             return f"InputOutputFormat[L1_Input:{self.input},A(reg_hint):{self.register_format_hint},B(reg_hint):{self.register_format_hint},out:{self.output}]"
-        return f"InputOutputFormat[A:{self.input},B:{self.input_B},out:{self.output}]"
+        return f"InputOutputFormat[L1_Input_A:{self.input},L1_Input_B:{self.input_B},out:{self.output}]"
 
 
 def create_formats_for_testing(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:

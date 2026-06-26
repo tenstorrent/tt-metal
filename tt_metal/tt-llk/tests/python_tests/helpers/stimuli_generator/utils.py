@@ -442,43 +442,26 @@ def _clamp_mx_tensors(
     Returns:
         tuple: (clamped_srcA_tensor, clamped_srcB_tensor)
     """
-    # Clamp inputs if both are different MX formats (use more restrictive MxFp8P)
-    if stimuli_format_A.is_mx_format() and stimuli_format_B.is_mx_format():
-        if stimuli_format_A != stimuli_format_B:
-            srcA_tensor = torch.clamp(
-                srcA_tensor,
-                -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-                MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-            )
-            srcB_tensor = torch.clamp(
-                srcB_tensor,
-                -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-                MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-            )
+    # Clamp inputs when both are different MX *float* formats to the more
+    # restrictive of the two operand ranges, so neither operand overflows what
+    # it can represent. Only MX-FP formats have a MX_FORMAT_MAX_NORMAL entry.
+    if (
+        stimuli_format_A.is_mx_fp_format()
+        and stimuli_format_B.is_mx_fp_format()
+        and stimuli_format_A != stimuli_format_B
+    ):
+        elem_max = min(
+            MX_FORMAT_MAX_NORMAL[stimuli_format_A],
+            MX_FORMAT_MAX_NORMAL[stimuli_format_B],
+        )
+        srcA_tensor = torch.clamp(srcA_tensor, -elem_max, elem_max)
+        srcB_tensor = torch.clamp(srcB_tensor, -elem_max, elem_max)
 
-    # Clamp inputs based on output format to prevent excessive rounding errors
-    if output_format == DataFormat.MxFp8P:
-        srcA_tensor = torch.clamp(
-            srcA_tensor,
-            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-        )
-        srcB_tensor = torch.clamp(
-            srcB_tensor,
-            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-        )
-    elif output_format == DataFormat.MxFp8R:
-        srcA_tensor = torch.clamp(
-            srcA_tensor,
-            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
-            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
-        )
-        srcB_tensor = torch.clamp(
-            srcB_tensor,
-            -MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
-            MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
-        )
+    # Clamp inputs to the output format's range to prevent excessive rounding errors.
+    if output_format is not None and output_format.is_mx_fp_format():
+        elem_max = MX_FORMAT_MAX_NORMAL[output_format]
+        srcA_tensor = torch.clamp(srcA_tensor, -elem_max, elem_max)
+        srcB_tensor = torch.clamp(srcB_tensor, -elem_max, elem_max)
 
     return srcA_tensor, srcB_tensor
 

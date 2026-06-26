@@ -350,96 +350,91 @@ def _pad_to_l1_alignment(data: list[int]) -> list[int]:
     return data if pad == 0 else data + [0] * pad
 
 
-def _pack_mxfp8(tensor, fp8_dtype, element_max_normal, num_faces=4, face_r_dim=16):
-    """
-    Internal helper to pack MXFP8 formats with FULLY SEPARATED layout.
-
-    Layout (similar to BFP8_b): [all_scales][all_elements], each section 16-byte aligned.
-    Padding bytes (zeros) are appended after scales and after FP8 payload as needed.
-    - Full tile: 32 scales (32 B, aligned) + 1024 FP8 (aligned) → 1056 B.
-    - SrcS slice (8×16): 4 scales + pad to 16 B + 128 FP8 (aligned) → 144 B per slice.
-
-    Element count must be a multiple of MX_FORMAT_BLOCK_SIZE (32).
-
-    Uses ml_dtypes for FP8 element conversion and E8M0 scale encoding.
-
-    Args:
-        tensor: Input tensor (first face_r_dim * FACE_C_DIM * num_faces elements used)
-        fp8_dtype: ml_dtypes dtype (float8_e5m2 or float8_e4m3fn)
-        element_max_normal: Maximum normal value for element format
-        num_faces: Number of faces to pack (1, 2, or 4). Defaults to 4.
-        face_r_dim: Number of rows per face (1, 2, 4, 8, or 16). Defaults to 16.
-
-    Returns:
-        List of packed bytes: [all scales][all elements]
-    """
-    # Convert to numpy and prepare data
-    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
-
-    # Calculate elements per face based on face_r_dim
-    elements_per_face = face_r_dim * FACE_C_DIM
-    elements_to_pack = elements_per_face * num_faces
-    assert (
-        len(fp32_array) >= elements_to_pack
-    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
-    assert elements_to_pack % MX_FORMAT_BLOCK_SIZE == 0, (
-        f"Element count ({elements_to_pack}) must be a multiple of "
-        f"MX_FORMAT_BLOCK_SIZE ({MX_FORMAT_BLOCK_SIZE})"
-    )
-
-    fp32_array = fp32_array[:elements_to_pack]
-
-    # Reshape into blocks: (num_blocks, 32)
-    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
-    blocks = fp32_array[: num_blocks * MX_FORMAT_BLOCK_SIZE].reshape(
-        num_blocks, MX_FORMAT_BLOCK_SIZE
-    )
-
-    # Vectorized scale encoding - calculate all scales at once
-    max_abs_values = np.max(np.abs(blocks), axis=1)
-
-    # Handle special cases: zero, nan, inf
-    scale_ratio = max_abs_values / element_max_normal
-    exponents = np.ceil(
-        np.log2(scale_ratio, where=(scale_ratio > 0), out=np.zeros_like(scale_ratio))
-    )
-
-    # Apply special case handling
-    exponents = np.where(
-        (max_abs_values == 0) | np.isnan(max_abs_values),
-        0,  # Neutral scale (2^0 = 1) for zero/nan
-        np.where(np.isinf(max_abs_values), 127, exponents),  # Max scale for inf
-    )
-
-    # Clamp to E8M0 range [-127, 127] and add bias
-    scales_e8m0_array = np.clip(exponents, -127, 127).astype(np.int32) + 127
-    scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
-
-    # Vectorized scale decoding for applying to blocks
-    scale_factors = np.where(
-        scales_e8m0_array == 255,
-        np.nan,
-        np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
-    )
-
-    # Scale blocks and convert to FP8
-    scaled_blocks = blocks / scale_factors[:, np.newaxis]
-    fp8_blocks = scaled_blocks.astype(fp8_dtype)
-
-    # FULLY SEPARATED layout: all scales first, then all elements (both 16B-aligned)
-    # Convert FP8 blocks to list of bytes (integers 0-255)
-    fp8_bytes = list(fp8_blocks.tobytes())
-    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(fp8_bytes)
+# MX-FP8 element parameters (per the Tensix Formats doc). Stored 1 byte/element.
+#   MxFp8R = E5M2: exp_bias=15, max normal 2^15 * 1.75 = 28672*2 = 57344; Inf + NaN
+#                  representable, so the whole exp=all-ones block is reserved and
+#                  man_max is the full 2-bit field.
+#   MxFp8P = E4M3: exp_bias=7,  max normal 2^8 * 1.75 = 448; NaN only (no Inf), and
+#                  {exp=all-ones, man=all-ones} is reserved for NaN, so man_max is
+#                  6 (not 7). NaN code = {0, 1111, 111} = 0x7F.
+_MXFP8_PARAMS = {
+    "r": dict(
+        exp_bits=5,
+        man_bits=2,
+        exp_bias=15,
+        exp_max_unbiased=15,
+        exp_min_unbiased=-14,
+        man_max=3,
+        nan_code=0x7F,
+    ),
+    "p": dict(
+        exp_bits=4,
+        man_bits=3,
+        exp_bias=7,
+        exp_max_unbiased=8,
+        exp_min_unbiased=-6,
+        man_max=6,
+        nan_code=0x7F,
+    ),
+}
 
 
 def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = False):
-    """Pack a tensor into per-slice SrcS blocks for MX formats.
+    """Pack a tensor into per-slice SrcS blocks for MXFP8 (legacy ml_dtypes path).
 
     Splits the tensor into SrcS slices and packs each independently as
-    [scales][elements].  Slice geometry depends on *dest_acc*:
+    [scales][elements], using ml_dtypes element conversion and a ceil-of-ratio
+    E8M0 block scale. This is kept self-contained here; the full-tile
+    ``_pack_mxfp8`` path instead uses the shared MX-FP floor-scale /
+    element-code model (matching MXFP6/MXFP4). Slice geometry depends on
+    *dest_acc*:
       - 16-bit (dest_acc=False): 8×16 = 128 elements/slice, 144 bytes
       - 32-bit (dest_acc=True):  4×16 =  64 elements/slice,  80 bytes
     """
+
+    def _pack_slice(slice_tensor, face_r_dim):
+        # FULLY SEPARATED layout [scales][elements] for one SrcS slice (one face),
+        # both sections 16B-aligned. Element count must be a multiple of 32.
+        fp32_array = slice_tensor.cpu().to(torch.float32).numpy().flatten()
+        elements_to_pack = face_r_dim * FACE_C_DIM
+        assert (
+            len(fp32_array) >= elements_to_pack
+        ), f"Slice has {len(fp32_array)} elements, need {elements_to_pack}"
+        assert elements_to_pack % MX_FORMAT_BLOCK_SIZE == 0, (
+            f"Element count ({elements_to_pack}) must be a multiple of "
+            f"MX_FORMAT_BLOCK_SIZE ({MX_FORMAT_BLOCK_SIZE})"
+        )
+        fp32_array = fp32_array[:elements_to_pack]
+        num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
+        blocks = fp32_array[: num_blocks * MX_FORMAT_BLOCK_SIZE].reshape(
+            num_blocks, MX_FORMAT_BLOCK_SIZE
+        )
+
+        # Vectorized E8M0 scale encoding (ceil-of-ratio against element max-normal).
+        max_abs_values = np.max(np.abs(blocks), axis=1)
+        scale_ratio = max_abs_values / element_max_normal
+        exponents = np.ceil(
+            np.log2(
+                scale_ratio, where=(scale_ratio > 0), out=np.zeros_like(scale_ratio)
+            )
+        )
+        exponents = np.where(
+            (max_abs_values == 0) | np.isnan(max_abs_values),
+            0,  # Neutral scale (2^0 = 1) for zero/nan
+            np.where(np.isinf(max_abs_values), 127, exponents),  # Max scale for inf
+        )
+        scales_e8m0_array = np.clip(exponents, -127, 127).astype(np.int32) + 127
+        scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
+
+        scale_factors = np.where(
+            scales_e8m0_array == 255,
+            np.nan,
+            np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
+        )
+        scaled_blocks = blocks / scale_factors[:, np.newaxis]
+        fp8_bytes = list(scaled_blocks.astype(fp8_dtype).tobytes())
+        return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(fp8_bytes)
+
     if dest_acc:
         slice_elem_count = SRCS_SLICE_32B_ELEMENT_COUNT
         slice_row_dim = SRCS_SLICE_32B_ROW_DIM
@@ -451,20 +446,61 @@ def _pack_mxfp8_srcs(tensor, fp8_dtype, element_max_normal, dest_acc: bool = Fal
     num_elements = flat.numel()
     out: list[int] = []
     for i in range(0, num_elements, slice_elem_count):
-        out.extend(
-            _pack_mxfp8(
-                flat[i : i + slice_elem_count],
-                fp8_dtype,
-                element_max_normal,
-                num_faces=1,
-                face_r_dim=slice_row_dim,
-            )
-        )
+        out.extend(_pack_slice(flat[i : i + slice_elem_count], slice_row_dim))
     return out
 
 
+def _pack_mxfp8(tensor, *, variant, num_faces=4, face_r_dim=16, exp_rnd_en=False):
+    """Pack a full MXFP8R/MXFP8P tile with FULLY SEPARATED layout: [scales][elements].
+
+    MXFP8 uses 32-element OCP blocks, each with one shared E8M0 scale and 32
+    eight-bit elements (1 byte/element in L1). ``variant`` is "r" (E5M2) or
+    "p" (E4M3). Shares the block-scale and element-quantization model with
+    MXFP6/MXFP4 (floor block exp with optional round-to-inf, RNE elements,
+    saturate on overflow). E5M2/E4M3 additionally represent NaN (-> NaN);
+    overflow resolves to the format max-normal (the OCP saturation default,
+    i.e. FMT_CTRL_FP8_OVF_EN=0).
+
+    Layout: 32 scales (32 B, aligned) + 1024 elements (aligned) -> 1056 B for a
+    full tile. Element count must be a multiple of MX_FORMAT_BLOCK_SIZE (32).
+    (The SrcS path keeps a separate legacy implementation, ``_pack_mxfp8_srcs``.)
+    """
+    params = _MXFP8_PARAMS[variant]
+    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
+
+    elements_per_face = face_r_dim * FACE_C_DIM
+    elements_to_pack = elements_per_face * num_faces
+    assert (
+        len(fp32_array) >= elements_to_pack
+    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
+    assert elements_to_pack % MX_FORMAT_BLOCK_SIZE == 0, (
+        f"Element count ({elements_to_pack}) must be a multiple of "
+        f"MX_FORMAT_BLOCK_SIZE ({MX_FORMAT_BLOCK_SIZE})"
+    )
+
+    fp32_array = fp32_array[:elements_to_pack]
+    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
+    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+
+    scales_e8m0, scaled_blocks = _mxfp_block_scales(
+        blocks_raw,
+        elem_exp_max_unbiased=params["exp_max_unbiased"],
+        exp_rnd_en=exp_rnd_en,
+    )
+
+    # E5M2/E4M3 element codes are a full byte each, stored directly in L1.
+    elem_codes = _quantize_to_mx_fp_element_codes(scaled_blocks, **params)
+
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(elem_codes.tolist())
+
+
 def pack_mxfp8r(
-    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
 ):
     """
     Pack tensor into MXFP8R format (MXFP8 E5M2 variant).
@@ -503,15 +539,20 @@ def pack_mxfp8r(
         )
     return _pack_mxfp8(
         tensor,
-        ml_dtypes.float8_e5m2,
-        MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8R],
-        num_faces,
-        face_r_dim,
+        variant="r",
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        exp_rnd_en=exp_rnd_en,
     )
 
 
 def pack_mxfp8p(
-    tensor, num_faces=4, face_r_dim=16, use_srcs: bool = False, dest_acc: bool = False
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
 ):
     """
     Pack tensor into MXFP8P format (MXFP8 E4M3 variant).
@@ -550,10 +591,10 @@ def pack_mxfp8p(
         )
     return _pack_mxfp8(
         tensor,
-        ml_dtypes.float8_e4m3fn,
-        MX_FORMAT_MAX_NORMAL[DataFormat.MxFp8P],
-        num_faces,
-        face_r_dim,
+        variant="p",
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        exp_rnd_en=exp_rnd_en,
     )
 
 
@@ -624,27 +665,63 @@ def pack_mxfp4(
 
     # Reshape into blocks: (num_blocks, 32)
     num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
-    blocks = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
-    # Pre-process blocks for element conversion: NaN -> 0.0 (MXFP4 has no NaN)
-    blocks_raw = blocks
-    blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
+    # Shared block scale (E8M0); elem_exp_max_unbiased is 2 for E2M1.
+    scales_e8m0, scaled_blocks = _mxfp_block_scales(
+        blocks_raw, elem_exp_max_unbiased=2, exp_rnd_en=exp_rnd_en
+    )
 
-    # Scale selection aligned to ws-tensix storage.py verification model:
-    # shared_exp = floor(log2(amax))
-    # shared_exp_adj = max(shared_exp - elem_exp_max_unbiased, -127)
-    # E8M0 = shared_exp_adj + 127
-    # (elem_exp_max_unbiased is 2 for E2M1)
-    elem_exp_max_unbiased = 2
+    # Convert to FP4 (E2M1) element codes.
+    fp4_nibbles = _quantize_to_mx_fp_element_codes(
+        scaled_blocks,
+        exp_bits=2,
+        man_bits=1,
+        exp_bias=1,
+        exp_max_unbiased=2,
+        exp_min_unbiased=0,
+    )
 
-    # Max abs over finite values only (NaN/Inf ignored for scale selection)
+    # Pack FP4 elements: 2 per byte (low nibble = element 0)
+    packed_bytes = ((fp4_nibbles[1::2] & 0x0F) << 4) | (fp4_nibbles[0::2] & 0x0F)
+
+    # FULLY SEPARATED layout: [scales padded to 16B][packed elements padded to 16B]
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        packed_bytes.tolist()
+    )
+
+
+def _mxfp_block_scales(
+    blocks_raw: np.ndarray, *, elem_exp_max_unbiased: int, exp_rnd_en: bool
+) -> tuple[list[int], np.ndarray]:
+    """Compute E8M0 block scales and the scaled (per-block) values for an MX-FP format.
+
+    Shared by every MX floating-point pack path (MxFp4, MxFp6R/P). The shared
+    exponent follows the MX block-scale model:
+      shared_exp     = floor(log2(amax))               (over finite values)
+      shared_exp_adj = max(shared_exp - elem_exp_max_unbiased, -127)
+      E8M0           = shared_exp_adj + 127
+    `elem_exp_max_unbiased` is the element format's max unbiased exponent
+    (2 for E2M1/E2M3, 4 for E3M2). Special block scales mirror the HW spec:
+    all-NaN block -> 0xFF; a block of only {Inf, NaN, 0} containing an Inf -> 0xFE.
+
+    Args:
+        blocks_raw: (num_blocks, MX_FORMAT_BLOCK_SIZE) float array (NaN/Inf intact).
+        elem_exp_max_unbiased: element format max unbiased exponent.
+        exp_rnd_en: model FMT_CTRL_MX_BLOCK_EXP_RND_TO_INF (increment non-special scales).
+
+    Returns:
+        (scales_e8m0 list[int], scaled_blocks) where scaled_blocks is each block
+        divided by its decoded scale factor. NaN/Inf inputs are preserved (the
+        element quantizer applies the per-format NaN/Inf rules).
+    """
+    # Max abs over finite values only (NaN/Inf ignored for scale selection).
     finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
     max_abs_values = np.max(np.abs(finite_blocks), axis=1)
 
-    # np.where evaluates both branches eagerly, so log2(0) is still computed
-    # for all-zero blocks even though the result is discarded by the mask.
-    # That raises a "divide by zero" RuntimeWarning — silence it since the
-    # mask handles the zero case correctly.
+    # np.where evaluates both branches eagerly, so log2(0) is still computed for
+    # all-zero blocks even though the result is discarded by the mask. Silence
+    # the "divide by zero" RuntimeWarning since the mask handles it correctly.
     with np.errstate(divide="ignore"):
         max_abs_exp = np.where(
             max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
@@ -656,7 +733,7 @@ def pack_mxfp4(
     )
     scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
 
-    # Special cases (match storage.py):
+    # Special cases (per the HW spec):
     # - All NaN -> 0xFF (NaN block)
     # - Block contains only {Inf, NaN, 0} and has at least one Inf -> 0xFE
     all_nan_blocks = np.all(np.isnan(blocks_raw), axis=1)
@@ -668,7 +745,7 @@ def pack_mxfp4(
     scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
 
     if exp_rnd_en:
-        # Match mx_block_exp_rnd_to_inf: increment only for non-zero, non-special exponents.
+        # Match mx_block_exp_rnd_to_inf: increment only non-zero, non-special exps.
         can_inc = (
             (scales_e8m0_array != 0)
             & (scales_e8m0_array != 254)
@@ -678,28 +755,54 @@ def pack_mxfp4(
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
-    # Vectorized scale decoding for applying to blocks
     scale_factors = np.where(
         scales_e8m0_array == 255,
         np.nan,
         np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
     )
-
-    # Scale blocks and convert to FP4 using storage.py-style rounding.
-    scaled_blocks = blocks / scale_factors[:, np.newaxis]
-    fp4_nibbles = _quantize_fp4_storage_model(scaled_blocks)
-
-    # Pack FP4 elements: 2 per byte (low nibble = element 0)
-    packed_bytes = ((fp4_nibbles[1::2] & 0x0F) << 4) | (fp4_nibbles[0::2] & 0x0F)
-
-    # FULLY SEPARATED layout: [scales padded to 16B][packed elements padded to 16B]
-    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
-        packed_bytes.tolist()
-    )
+    scaled_blocks = blocks_raw / scale_factors[:, np.newaxis]
+    return scales_e8m0, scaled_blocks
 
 
-def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
-    """Quantize scaled values to FP4 nibbles."""
+def _quantize_to_mx_fp_element_codes(
+    scaled_blocks: np.ndarray,
+    *,
+    exp_bits: int,
+    man_bits: int,
+    exp_bias: int,
+    exp_max_unbiased: int,
+    exp_min_unbiased: int,
+    man_max: int = None,
+    nan_code: int = None,
+) -> np.ndarray:
+    """Quantize scaled values to packed MX-FP element codes (sign|exp|man).
+
+    Models the hardware element quantization (round-ties-to-even, saturate on
+    overflow, IEEE-style subnormals, Inf -> Saturation) for any SxEyMz element
+    with ``exp_bits`` exponent and ``man_bits`` mantissa bits (no hidden bit):
+    E2M1 (MxFp4), E3M2 (MxFp6R), E2M3 (MxFp6P), E5M2 (MxFp8R), E4M3 (MxFp8P).
+
+    ``man_max`` is the largest mantissa of a *normal* element at the max
+    exponent; it defaults to the full field ``(1 << man_bits) - 1`` but is one
+    less for E4M3, where ``{exp=all-ones, man=all-ones}`` is reserved for NaN.
+
+    ``nan_code`` is the element code a NaN input maps to (E5M2/E4M3 represent
+    NaN). When ``None`` (E2M1/E3M2/E2M3, which have no NaN), NaN maps to +Zero.
+
+    Returns a ``uint8`` array of element codes, each ``1 + exp_bits + man_bits``
+    bits wide with the sign in the MSB. The caller owns the L1 bit layout
+    (FP4 packs 2 codes/byte; FP6 stores ``code << 2`` per byte; FP8 is 1
+    byte/element).
+    """
+    sign_shift = exp_bits + man_bits
+    man_mask = (1 << man_bits) - 1
+    if man_max is None:
+        man_max = man_mask
+    # Saturated element code = max-normal element (max biased exp, max-normal mantissa).
+    sat_pos = ((exp_max_unbiased + exp_bias) << man_bits) | man_max
+    sat_neg = sat_pos | (1 << sign_shift)
+    shift_out = 23 - man_bits  # fp32 23-bit mantissa -> man_bits
+
     flat = scaled_blocks.astype(np.float32).ravel()
     ui32 = flat.view(np.uint32)
     sign = (ui32 >> 31) & 0x1
@@ -714,10 +817,14 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
     finite_nonzero = ~(is_nan | is_inf | is_zero)
 
     if np.any(is_inf):
-        sat_vals = np.where(sign == 0, 0x7, 0xF).astype(np.uint8)
+        sat_vals = np.where(sign == 0, sat_pos, sat_neg).astype(np.uint8)
         out[is_inf] = sat_vals[is_inf]
     if np.any(is_zero):
-        out[is_zero] = sign[is_zero].astype(np.uint8) << 3
+        out[is_zero] = sign[is_zero].astype(np.uint8) << sign_shift
+    # NaN -> format NaN code (E5M2/E4M3) or, for formats without NaN, +Zero
+    # (out is already zero-initialised, so the None case needs no action).
+    if nan_code is not None and np.any(is_nan):
+        out[is_nan] = np.uint8(nan_code)
 
     if np.any(finite_nonzero):
         exp_unbiased = exp_biased.astype(np.int32) - 127
@@ -725,7 +832,6 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
         def _round_ties_to_even(
             input_mantissa: np.ndarray,
         ) -> tuple[np.ndarray, np.ndarray]:
-            shift_out = 22  # 23 -> 1
             rounded_bits = input_mantissa & ((1 << shift_out) - 1)
             rounded_msb = (rounded_bits >> (shift_out - 1)) & 0x1
             rounded_lsbs = rounded_bits & ((1 << (shift_out - 1)) - 1)
@@ -734,40 +840,204 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
                 (rounded_msb == 1) & ((rounded_lsbs != 0) | (mantissa_lsb == 1))
             ).astype(np.uint32)
             new_mantissa = (input_mantissa >> shift_out) + round_inc
-            mant_round = new_mantissa & 0x1
-            expo_inc = new_mantissa >> 1
+            mant_round = new_mantissa & man_mask
+            expo_inc = new_mantissa >> man_bits
             return mant_round.astype(np.int32), expo_inc.astype(np.int32)
 
         mant_round, expo_inc = _round_ties_to_even(mant)
         elem_exp_unbiased = exp_unbiased + expo_inc
 
-        subnormal = elem_exp_unbiased < 0
+        subnormal = elem_exp_unbiased < exp_min_unbiased
         if np.any(subnormal):
             mant_with_hb = mant | (1 << 23)
-            shift = np.abs(exp_unbiased).astype(np.uint32)
+            shift = np.abs(exp_min_unbiased - exp_unbiased).astype(np.uint32)
             shift = np.minimum(shift, np.uint32(24))
             mant_exp_adjusted = mant_with_hb >> shift
             mant_round_sub, expo_inc_sub = _round_ties_to_even(mant_exp_adjusted)
-            elem_exp_unbiased_sub = -1 + expo_inc_sub
+            # Subnormal encoding: biased exp 0 unless rounding carried back to normal.
+            elem_exp_unbiased_sub = -exp_bias + expo_inc_sub
             mant_round[subnormal] = mant_round_sub[subnormal]
             elem_exp_unbiased[subnormal] = elem_exp_unbiased_sub[subnormal]
 
-        sat_mask = (elem_exp_unbiased > 2) | (
-            (elem_exp_unbiased == 2) & (mant_round > 1)
+        sat_mask = (elem_exp_unbiased > exp_max_unbiased) | (
+            (elem_exp_unbiased == exp_max_unbiased) & (mant_round > man_max)
         )
         sat_mask &= finite_nonzero
         if np.any(sat_mask):
-            sat_vals = np.where(sign == 0, 0x7, 0xF).astype(np.uint8)
+            sat_vals = np.where(sign == 0, sat_pos, sat_neg).astype(np.uint8)
             out[sat_mask] = sat_vals[sat_mask]
 
         normal_mask = finite_nonzero & ~sat_mask
         if np.any(normal_mask):
-            elem_exp_biased = elem_exp_unbiased + 1
-            elem_bits = ((elem_exp_biased << 1) | (mant_round & 0x1)).astype(np.uint8)
-            elem_bits |= sign.astype(np.uint8) << 3
+            elem_exp_biased = elem_exp_unbiased + exp_bias
+            elem_bits = (
+                (elem_exp_biased << man_bits) | (mant_round & man_mask)
+            ).astype(np.uint8)
+            elem_bits |= sign.astype(np.uint8) << sign_shift
             out[normal_mask] = elem_bits[normal_mask]
 
     return out
+
+
+# MX-FP6 element parameters (per the Tensix Formats doc).
+# Stored in L1 as an 8-bit container holding the 6-bit code in the upper bits:
+# {1b sign, exp, man, 2'b0}, i.e. byte = code << 2.
+#   MxFp6R = E3M2: exp_bias=3, max normal 2^4 * 1.75 = 28.0
+#   MxFp6P = E2M3: exp_bias=1, max normal 2^2 * 1.875 = 7.5
+_MXFP6_PARAMS = {
+    "r": dict(
+        exp_bits=3, man_bits=2, exp_bias=3, exp_max_unbiased=4, exp_min_unbiased=-2
+    ),
+    "p": dict(
+        exp_bits=2, man_bits=3, exp_bias=1, exp_max_unbiased=2, exp_min_unbiased=0
+    ),
+}
+
+
+def _pack_mxfp6(tensor, *, variant, num_faces=4, face_r_dim=16, exp_rnd_en=False):
+    """Pack MXFP6R/MXFP6P with FULLY SEPARATED layout: [scales][elements].
+
+    MXFP6 uses 32-element OCP blocks, each with one shared E8M0 scale and 32
+    six-bit elements. Each element occupies one 8-bit L1 container with the 6-bit
+    code in the upper bits and the low 2 bits zero (byte = code << 2), so the L1
+    geometry matches MXFP8 (1 byte/element):
+      - Full tile: 32 scales (32 B, aligned) + 1024 elements (aligned) -> 1056 B.
+
+    ``variant`` is "r" (E3M2) or "p" (E2M3).
+    """
+    params = _MXFP6_PARAMS[variant]
+    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
+
+    elements_per_face = face_r_dim * FACE_C_DIM
+    elements_to_pack = elements_per_face * num_faces
+    assert (
+        len(fp32_array) >= elements_to_pack
+    ), f"Tensor has {len(fp32_array)} elements, need {elements_to_pack} for {num_faces} face(s)"
+    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
+        raise ValueError(
+            "pack_mxfp6 requires a block-aligned geometry: "
+            f"elements_to_pack={elements_to_pack} is not a multiple of "
+            f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
+            f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
+        )
+
+    fp32_array = fp32_array[:elements_to_pack]
+    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
+    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+
+    scales_e8m0, scaled_blocks = _mxfp_block_scales(
+        blocks_raw,
+        elem_exp_max_unbiased=params["exp_max_unbiased"],
+        exp_rnd_en=exp_rnd_en,
+    )
+
+    elem_codes = _quantize_to_mx_fp_element_codes(scaled_blocks, **params)
+
+    # Each 6-bit element is stored in its own byte, shifted into the upper bits.
+    elem_bytes = (elem_codes & 0x3F) << 2
+
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(elem_bytes.tolist())
+
+
+def _pack_mxfp6_srcs(tensor, *, variant, exp_rnd_en=False, dest_acc: bool = False):
+    """Pack a tensor into per-slice SrcS blocks for MXFP6 (mirrors _pack_mxfp8_srcs)."""
+    if dest_acc:
+        slice_elem_count = SRCS_SLICE_32B_ELEMENT_COUNT
+        slice_row_dim = SRCS_SLICE_32B_ROW_DIM
+    else:
+        slice_elem_count = SRCS_SLICE_ELEMENT_COUNT
+        slice_row_dim = SRCS_SLICE_ROW_DIM
+
+    flat = tensor.flatten()
+    num_elements = flat.numel()
+    out: list[int] = []
+    for i in range(0, num_elements, slice_elem_count):
+        out.extend(
+            _pack_mxfp6(
+                flat[i : i + slice_elem_count],
+                variant=variant,
+                num_faces=1,
+                face_r_dim=slice_row_dim,
+                exp_rnd_en=exp_rnd_en,
+            )
+        )
+    return out
+
+
+def pack_mxfp6r(
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
+):
+    """
+    Pack tensor into MXFP6R format (E3M2 variant).
+
+    Element format E3M2:
+    - 1 sign bit, 3 exponent bits (bias=3), 2 mantissa bits
+    - Max normal: ±28.0, Min normal: ±0.25
+    - Max/Min subnormal: ±0.1875 / ±0.0625
+    - No Inf or NaN support
+    - Stored in an 8-bit L1 container: {1b sign, 3b exp, 2b man, 2'b0}
+
+    Args mirror pack_mxfp8r / pack_mxfp4. Returns the packed byte list in
+    FULLY SEPARATED layout: [all_scales][all_elements].
+    """
+    assert tensor.numel() <= MAX_TILE_ELEMENTS, (
+        f"pack_mxfp6r handles at most one tile ({MAX_TILE_ELEMENTS} elements), "
+        f"got {tensor.numel()}"
+    )
+    if use_srcs:
+        return _pack_mxfp6_srcs(
+            tensor, variant="r", exp_rnd_en=exp_rnd_en, dest_acc=dest_acc
+        )
+    return _pack_mxfp6(
+        tensor,
+        variant="r",
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        exp_rnd_en=exp_rnd_en,
+    )
+
+
+def pack_mxfp6p(
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+    exp_rnd_en: bool = False,
+):
+    """
+    Pack tensor into MXFP6P format (E2M3 variant).
+
+    Element format E2M3:
+    - 1 sign bit, 2 exponent bits (bias=1), 3 mantissa bits
+    - Max normal: ±7.5, Min normal: ±1.0
+    - Max/Min subnormal: ±0.875 / ±0.125
+    - No Inf or NaN support
+    - Stored in an 8-bit L1 container: {1b sign, 2b exp, 3b man, 2'b0}
+
+    Args mirror pack_mxfp8p / pack_mxfp4. Returns the packed byte list in
+    FULLY SEPARATED layout: [all_scales][all_elements].
+    """
+    assert tensor.numel() <= MAX_TILE_ELEMENTS, (
+        f"pack_mxfp6p handles at most one tile ({MAX_TILE_ELEMENTS} elements), "
+        f"got {tensor.numel()}"
+    )
+    if use_srcs:
+        return _pack_mxfp6_srcs(
+            tensor, variant="p", exp_rnd_en=exp_rnd_en, dest_acc=dest_acc
+        )
+    return _pack_mxfp6(
+        tensor,
+        variant="p",
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        exp_rnd_en=exp_rnd_en,
+    )
 
 
 def _mxint_block_scale_and_quantize(
