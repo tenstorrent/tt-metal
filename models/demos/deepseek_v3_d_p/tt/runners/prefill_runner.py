@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
+
 def _apply_manifest_env():
     """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
     the runner (and migration/validation helpers) read. setdefault => an explicitly
