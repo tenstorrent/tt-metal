@@ -120,9 +120,6 @@ def load_model(
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
-        # Commit marker written last: a directory without it (e.g. an interrupted save) is treated
-        # as a miss and regenerated rather than half-loaded. Mirrors the deepseek CAS cache, which
-        # only counts an entry as present when its committed data file exists.
         _mark_cache_complete(cache_dir)
 
 
@@ -152,40 +149,21 @@ def model_cache_dir(
 
     path = Path(cache_dir) / model_name / subfolder / key
 
-    # On a multi-host run each rank dumps only its locally-owned shards (DumpTensorMode.LOCAL) and
-    # must therefore read/write its own cache directory; a shared, fully-gathered file would make
-    # `to_device` try to pin chips owned by other hosts, which TT_FATALs. Single-process runs keep
-    # the original (un-suffixed) layout so existing caches remain valid.
-    world_size = _distributed_world_size()
-    if world_size > 1:
+    if _distributed_world_size() > 1:
         path = path / f"rank_{int(ttnn.distributed_context_world_rank())}"
 
     return path
 
 
 def _cache_is_complete(cache_dir: str | Path) -> bool:
-    """Whether `cache_dir` holds a fully-written cache.
-
-    Following the deepseek content-addressed cache, presence is decided by the committed-data
-    marker rather than mere directory existence: `Module.save` creates the directory up front, so a
-    crashed/interrupted save leaves a directory that exists but is incomplete. Requiring the marker
-    means such a directory is treated as a miss (and regenerated) instead of partially loaded.
-    """
     return (Path(cache_dir) / CACHE_DICT_FILE).is_file()
 
 
 def _mark_cache_complete(cache_dir: str | Path) -> None:
-    """Write the commit marker as the final step of a successful save."""
     (Path(cache_dir) / CACHE_DICT_FILE).write_text(json.dumps({"complete": True}))
 
 
 def _distributed_world_size() -> int:
-    """Distributed world size, or 1 when no distributed context is active.
-
-    `distributed_context_world_size()` raises if the context has not been initialized, so the
-    `is_initialized()` check must come first. A plain single-process run has no context and is
-    treated as world size 1.
-    """
     if not ttnn.distributed_context_is_initialized():
         return 1
     return int(ttnn.distributed_context_world_size())
