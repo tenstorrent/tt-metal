@@ -86,6 +86,52 @@ the FW via the low-level `Cluster` and reports results).
   (`control_vector[32]` + 5 per-RISC buffers of 2048 B = 10368 B), holding the
   FW/kernel start/end timestamps that `profrelay` drains.
 
+## How the X280 reaches the NoC — TLB windows, not NIU commands
+
+This is the foundation the throughput results rest on, and it differs from Tensix.
+
+**The TLB does the NoC addressing; the hart only issues plain loads/stores.** A hart
+**never names a NoC coordinate in an instruction**. The only way it reaches the NoC:
+
+1. Software pre-programs a **2 MiB TLB window** descriptor (config regs at
+   `0x2FF00000`) with the destination — NoC **x/y coord**, remote **address**
+   (`addr>>21`), **NoC selector** (NOC0/1), and the **posted / ordering / VC** bits.
+2. The hart does an ordinary **load/store to a CPU address inside that window's
+   aperture** (System Port base `0x430000000 + window*2MB + offset`).
+3. The tile's NoC-access hardware matches the address to the descriptor, **forms the
+   NoC packet** (read request or write), and the **NIU injects it** onto the mesh;
+   the read response comes back and completes the load.
+
+So: **TLB = addressing/translation + routing/ordering attributes** (turns "a memory
+access in this aperture" into "a NoC transaction to (x,y,addr)"); **NIU = the
+physical NoC port** that transports it. The hart only ever sees memory loads/stores.
+Even the **DMA engine** addresses the NoC *through* TLB windows — there is no
+TLB-less NoC path.
+
+**Harts cannot software-drive the NIU to post async reads.** On **Tensix**, the RISC
+cores program the NIU **command buffers** directly (`noc_async_read` writes
+src/dst/size into NIU registers, fires, polls a counter later — explicit
+software-issued async). On the **X280 that path does not exist** — proven
+empirically (`noc1_probe`/`x280_niu_read` lineage): programming a cmd buffer like a
+Tensix `ncrisc_noc_fast_read` and firing it gave `CMD_ACCEPTED += 0`,
+`RD_REQ_SENT += 0` — the NIU front-end never accepts a software-issued command. The
+TLB-window memory-mapped load/store is the **only** NoC mechanism for the hart.
+
+**So what is the "async"/overlap we exploit?** (Important: "ILP helped" does *not*
+mean we issued async NIU reads — we can't.)
+- A TLB-window read is a **synchronous CPU load**. The in-order hart can't
+  "issue-and-poll-later" at the NIU. But it stalls at the instruction that *uses*
+  the result, not at issue — so issuing several independent loads to *different*
+  windows before consuming any keeps multiple loads outstanding **in the CPU
+  LSU/memory pipeline**, and they overlap in the NoC. That is **load-level
+  concurrency**, not NIU-command async — and it's the entire ILP trick (`gridilp`).
+- **Writes are non-blocking**: a store to a *posted* TLB window is fire-and-forget
+  (accepted into the store buffer/NIU; the hart moves on) — why one hart saturates
+  the D2H write path.
+- **True core-free async** comes only from the **DMA engine** (Synopsys DMAC, 2
+  channels): a separate engine that runs transfers without the hart, but still
+  TLB-addressed and slower per byte — its value is offload, not peak throughput.
+
 ## Why ILP helped — the "530 MB/s wall" was an artifact
 
 **The wall.** The early grid poll (`poll4`) measured ~530 MB/s aggregate (≈135
@@ -147,3 +193,77 @@ the read-side ILP trick isn't needed.
 **number of outstanding transactions**, not bytes-per-instruction, port type, or VC.
 The "530 MB/s wall" was a 1-outstanding-read-per-hart measurement artifact; ILP
 exposes the ~3–4× of headroom that was always there.
+
+## Why the DMA engine didn't help throughput (even in re-trigger mode)
+
+The same "outstanding transactions" lesson explains why the Synopsys DMAC lost. A
+single-channel DMA transfer fits `cycles ≈ 7,600 + ~571 × flits` — two parts:
+
+- **Fixed setup ≈ 7,305 cycles** — channel reset + CTL/CFG init + TLB program +
+  word-size descent + completion poll. *One-time per fresh setup.*
+- **Steady-state ≈ 571 cycles per 64 B flit** — the actual streaming work.
+
+**Re-trigger killed the setup term** (reuse a configured channel: restore
+`block_ts` + SAR/DAR, clear int, kick — skip the ~7,305 cyc), which is why 2 KB went
+80 → 112 MB/s (1.4×) and tiny transfers improved ~10×. **But it can't touch the
+~571 cyc/flit steady-state term, and that is the wall** — re-trigger amortizes fixed
+overhead, it doesn't make the transfer itself faster.
+
+**Why ~571 cyc/flit is slow** (two compounding, structural reasons):
+1. **One channel keeps only ONE NoC read outstanding** — it issues a burst, *waits*
+   for the completion handshake, then the next. Same latency-bound trap as a single
+   hart with one outstanding load, with **no overlap**. It can't do the ILP trick: a
+   channel is inherently one-transaction-at-a-time.
+2. **Per-burst engine/handshake overhead on top of NoC latency** — making the DMA
+   channel actually *slower per byte than a single hart load* (~571 vs ~475 ns/flit).
+
+**Only 2 channels, sharing one ingress.** Two channels gave 111 vs 96 MB/s —
+**1.15×, not 2×** — because both funnel through the same NIU/mesh ingress into the
+tile *and* the host must serially program+kick both before they overlap.
+
+| Path | Rate | Why |
+|---|---|---|
+| 1 DMA channel, re-triggered | ~112 MB/s | 1 outstanding read + per-burst overhead |
+| 2 DMA channels | ~111 MB/s | shared ingress + serial kicks |
+| 1 hart, ILP 4 | 860 MB/s | multiple reads in flight |
+| 2 harts, ILP 4 | 1534 MB/s | — |
+
+**The DMA's value is offload, not throughput:** it drains the grid at ~111 MB/s with
+the harts completely free. Beating the hart-ILP rate would need many channels each
+deeply pipelining multiple outstanding NoC reads; the X280 DMAC (2 channels,
+one-outstanding, software-handshake) doesn't have that. Harts win because they can
+cheaply hold many loads in flight in the LSU; one DMA channel cannot.
+
+## How would a normal Tensix RISC compare? (estimate — not yet measured)
+
+Reasoned guess for the same two patterns on a Tensix data-movement RISC
+(BRISC/NCRISC), to frame what the X280 numbers mean. **These are estimates from the
+architecture, not measurements** — a quick `noc_async_read` / `noc_async_write`
+kernel benchmark would give real figures.
+
+| Path | X280 (measured) | Tensix RISC (estimate) | Why |
+|---|---|---|---|
+| Read from grid (scatter, 64 B/core) | ~1.5 GB/s | **~5–15+ GB/s (1 NCRISC)** | Tensix has the async NIU path the X280 lacks |
+| Write to host (D2H) | ~3 GB/s | **~3 GB/s (similar)** | bottleneck is downstream of the issuer |
+
+- **Reads: Tensix should far exceed the X280.** The X280's ~1.5–1.8 GB/s ceiling is
+  *its own* handicap — no software NIU path, so reads are synchronous TLB-window
+  loads overlapped only by the LSU-pipeline ILP trick. A Tensix RISC is a
+  purpose-built NoC client: `noc_async_read` programs the NIU command buffers and
+  the core continues, natively holding **many** outstanding NoC transactions (a pool
+  of transaction IDs) with no LSU trickery. Scatter of 64 B × 110 still pays
+  per-transaction overhead, so not full link BW, but a single NCRISC should reach
+  several-to-~10+ GB/s, scaling with more issuers and climbing toward the NoC link
+  rate for larger per-core reads — easily **5–10×+ the X280**.
+- **Writes: roughly the same (~3 GB/s).** The X280's D2H ceiling is downstream of
+  the issuer — the PCIe tile's NoC→PCIe→host egress (one hart already saturated it;
+  more harts didn't help). A Tensix core writing posted flits to the same PCIe tile
+  hits the same wall. Writes are posted (fire-and-forget) for both, so neither is
+  issue-limited; the PCIe/host path is. (Tensix could edge higher only if part of the
+  X280's 3 GB/s was its own injection rate, but D2H is fundamentally PCIe-bound.)
+
+**The asymmetry is the point.** X280 = read 1.5 / write 3; Tensix would flip the
+shape — reads jump way up (real async NoC engine), writes stay ~flat
+(downstream-bound). This is exactly why the X280 is interesting as an *observability*
+engine: a poor bulk-NoC client, but a free CPU that can run logic while draining at
+"good enough" rates **without stealing Tensix cycles**.
