@@ -1350,6 +1350,30 @@ class ModelArgs:
                     )
         elif mode == Mode.PREFILL:
             if seq_len > 128:
+                # FF2 down-proj prefill at the 512-token bucket (512x2304x3072, BFP8 x BF16 =>
+                # BFP8, HiFi4 on BH P150x4) is FLOP-bound (~74% util) via minimal_matmul. The
+                # production grid find_prefill_grid(8,288)=(8,8) uses 64 cores; minimal_matmul
+                # parallelizes M over rows and N over cols, and N=3072 (96 tiles) lets an (11,8)
+                # grid use 88 cores (11 = device max usable columns). A trace-based device-time
+                # sweep found grid (11,8) + M_block=2,K_block=4,N_block=6 runs ~85us vs ~115us for
+                # the (8,8) M8K8N8 config -> ~1.34x, PCC 0.9999, no L1 OOM. (A regular ttnn.linear
+                # at (11,8) is ~5% faster still (~81us) but would require switching the FF2 op away
+                # from minimal_matmul in mlp.py.) See tests/perf/test_ff2_prefill_512_trace_sweep_p150.py.
+                if (
+                    is_blackhole()
+                    and not self.is_galaxy
+                    and self.dim == 3072
+                    and (self.hidden_dim // self.cluster_shape[1]) == 2304
+                    and min(seq_len, self.prefill_len_cutoff) == 512
+                ):
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=2,
+                        K_block_size=4,
+                        N_block_size=6,
+                        subblock_h=1,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
+                    )
                 grid = self.mlp2_grid(seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
