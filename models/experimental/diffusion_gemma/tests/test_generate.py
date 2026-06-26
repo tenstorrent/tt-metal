@@ -11,7 +11,7 @@ import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference import generate as RG
-from models.experimental.diffusion_gemma.reference.generate import generate_blocks
+from models.experimental.diffusion_gemma.reference.generate import generate_blocks, make_replay_canvas_init_fn
 
 
 def _gen(seed=0):
@@ -223,6 +223,20 @@ def test_can_replay_fixed_initial_canvases(monkeypatch):
     assert [call[0] for call in calls] == [0, 1]
     assert torch.equal(calls[0][1], prompt)
     assert torch.equal(calls[1][1], torch.cat([prompt, out.trajectories[0].committed], dim=1))
+
+
+def test_replay_canvas_init_fn_clones_fixed_canvases():
+    canvases = [torch.tensor([[4, 5]], dtype=torch.long), torch.tensor([[6, 7]], dtype=torch.long)]
+    init_canvas_fn = make_replay_canvas_init_fn(canvases)
+    canvases[0][0, 0] = 99
+
+    first = init_canvas_fn(0, torch.zeros(1, 2, dtype=torch.long))
+    first[0, 1] = 88
+    second_read = init_canvas_fn(0, torch.zeros(1, 2, dtype=torch.long))
+
+    assert torch.equal(first, torch.tensor([[4, 88]], dtype=torch.long))
+    assert torch.equal(second_read, torch.tensor([[4, 5]], dtype=torch.long))
+    assert torch.equal(init_canvas_fn(1, torch.zeros(1, 2, dtype=torch.long)), torch.tensor([[6, 7]]))
 
 
 @pytest.mark.parametrize(

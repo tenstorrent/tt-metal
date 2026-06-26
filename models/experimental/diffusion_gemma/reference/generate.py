@@ -40,6 +40,17 @@ class Generation(NamedTuple):
     trajectories: List[DenoiseTrajectory]  # one per block
 
 
+def make_replay_canvas_init_fn(host_canvases) -> BlockCanvasFn:
+    """Create an ``init_canvas_fn`` that replays fixed host canvases by block."""
+    canvases = [canvas.clone() for canvas in host_canvases]
+
+    def init_canvas_fn(block_idx: int, prefix_tokens: torch.Tensor) -> torch.Tensor:
+        del prefix_tokens
+        return canvases[block_idx].clone()
+
+    return init_canvas_fn
+
+
 def _validate_generate_args(
     prompt_tokens: torch.Tensor,
     *,
