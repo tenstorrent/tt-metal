@@ -52,11 +52,11 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     y = a * 0.0f + 1.0f;
     x1 = x0 + 1.0f;
 
-    // computes x0/x1 via reciprocal and residual correction
-    rcp = sfpi::approx_recip(x1);
-    t = -x1 * rcp + 1.0f;
-    rcp = rcp * t + rcp;
     v_if(i < 61) {
+        // computes x0/x1 via reciprocal and residual correction
+        rcp = sfpi::approx_recip(x1);
+        t = -x1 * rcp + 1.0f;
+        rcp = rcp * t + rcp;
         y = x0 * rcp;
         t = -x1 * y + x0;
         y = t * rcp + y;
