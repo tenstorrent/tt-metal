@@ -26,21 +26,6 @@ from .utils import (
     calculate_tile_and_face_counts_w_tile_dimensions,
 )
 
-
-def _is_compile_only_build() -> bool:
-    """True when pytest runs in --compile-producer (compile-only) mode.
-
-    Imported lazily to avoid an import cycle (test_config -> stimuli_config ->
-    stimuli_generator) at module load; by the time stimuli are generated every
-    module is already imported, so this resolves the cached modules.
-    """
-    try:
-        from ..test_config import BuildMode, TestConfig
-    except Exception:
-        return False
-    return TestConfig.BUILD_MODE == BuildMode.PRODUCE
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Public: single-face generator
 # ─────────────────────────────────────────────────────────────────────────────
@@ -369,22 +354,6 @@ def generate_stimuli(
 
     num_elements_A = input_dimensions_A[0] * input_dimensions_A[1]
     num_elements_B = input_dimensions_B[0] * input_dimensions_B[1]
-
-    if _is_compile_only_build():
-        # --compile-producer only needs the ELFs. Stimuli values are never written
-        # to the device (run() skips before that) and never affect the compiled ELF
-        # (runtime args / stimuli are excluded from the build hash; see
-        # TestConfig.generate_variant_hash). Skip the per-element RNG / quantization
-        # and return correctly-shaped, correctly-typed zero tensors so the calling
-        # test body can still slice / reshape / cast them up to the run() skip. Every
-        # strategy derives its dtype from _get_dtype_for_format, so these match the
-        # real generator's dtype exactly.
-        return (
-            torch.zeros(num_elements_A, dtype=_get_dtype_for_format(stimuli_format_A)),
-            tile_cnt_A,
-            torch.zeros(num_elements_B, dtype=_get_dtype_for_format(stimuli_format_B)),
-            tile_cnt_B,
-        )
 
     srcA_tensor = _generate_source_tensor(
         stimuli_format=stimuli_format_A,
