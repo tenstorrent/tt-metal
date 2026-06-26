@@ -326,9 +326,17 @@ class TTPenalties(LightweightModule):
         # Non-row-sharded: token shape is [1,1,1,batch] → shape[-1]==batch, shape[-2]==1
         # Row-sharded:     token shape is [1,1,batch,1] → shape[-2]==batch, shape[-1]==1
         batch = self.per_row_batch_size
-        if (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
+        fast_path = (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
             new_tokens.shape[-2] == batch and new_tokens.shape[-1] == 1
-        ):
+        )
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "TTPenalties update output tokens",
+            new_tokens_shape=list(new_tokens.shape),
+            per_row_batch=batch,
+            fast_path=fast_path,
+        )
+        if fast_path:
             new_tokens = ttnn.reshape(new_tokens, [batch, 1], **self._op_kwargs)
             src = self.decode_src
         else:
