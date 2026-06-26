@@ -169,9 +169,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
     if is_blackhole() and is_llk_assert_enabled() and not use_welford and w == 4096:
-        pytest.skip(
-            "Large FP32 residual layer norm fails numeric checks on Blackhole with LLK asserts enabled. Issue #48065."
-        )
+        pytest.skip("Residual layer norm fails numeric checks on Blackhole with LLK asserts enabled. Issue #48065.")
 
     torch.manual_seed(0)
 
@@ -413,7 +411,7 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
     if is_blackhole() and is_llk_assert_enabled() and (h, w) in ((32, 3232), (19, 4083), (1001, 4083)):
         pytest.skip(
-            "Large FP32 residual layer norm fails numeric checks on Blackhole with LLK asserts enabled. Issue #48065."
+            "Large residual layer norm fails numeric checks on Blackhole with LLK asserts enabled. Issue #48065."
         )
 
     torch.manual_seed(3333)
