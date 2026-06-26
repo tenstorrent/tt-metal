@@ -26,6 +26,58 @@ from __future__ import annotations
 
 import ttnn
 
+from models.experimental.diffusion_gemma.weight_mapping import expected_self_conditioning_shapes
+
+
+def _config_value(config, name: str):
+    if isinstance(config, dict):
+        return config[name]
+    return getattr(config, name)
+
+
+def validate_self_conditioning_state(state_dict, *, hidden_size: int, intermediate_size: int) -> None:
+    """Validate remapped self-conditioning weights before moving them to device."""
+    expected = expected_self_conditioning_shapes(hidden_size, intermediate_size)
+    missing = sorted(set(expected) - set(state_dict))
+    if missing:
+        raise ValueError(f"missing self-conditioning weights: {missing}")
+    for key, shape in expected.items():
+        if tuple(state_dict[key].shape) != shape:
+            raise ValueError(f"{key} has shape {tuple(state_dict[key].shape)}, expected {shape}")
+
+
+def build_self_conditioning(
+    device,
+    state_dict,
+    *,
+    config=None,
+    hidden_size: int | None = None,
+    intermediate_size: int | None = None,
+    eps: float | None = None,
+    dtype=ttnn.bfloat16,
+    module_cls=None,
+):
+    """Build ``TtSelfConditioning`` from remapped checkpoint weights and config."""
+    if config is not None:
+        hidden_size = hidden_size if hidden_size is not None else _config_value(config, "hidden_size")
+        intermediate_size = (
+            intermediate_size if intermediate_size is not None else _config_value(config, "intermediate_size")
+        )
+        eps = eps if eps is not None else _config_value(config, "rms_norm_eps")
+    if hidden_size is None or intermediate_size is None:
+        raise ValueError("hidden_size and intermediate_size are required")
+    eps = 1e-6 if eps is None else eps
+    validate_self_conditioning_state(state_dict, hidden_size=hidden_size, intermediate_size=intermediate_size)
+    cls = TtSelfConditioning if module_cls is None else module_cls
+    return cls(
+        device,
+        state_dict,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        eps=eps,
+        dtype=dtype,
+    )
+
 
 class TtSelfConditioning:
     def __init__(
