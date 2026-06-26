@@ -125,6 +125,9 @@ def msa_indexer_sparse(
         scale=scale,
         block_size=BLOCK_SIZE,
     )
+    # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
+    # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
+    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
     return (out, block_ids) if return_block_ids else out
 
 
