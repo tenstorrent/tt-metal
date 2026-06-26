@@ -18,13 +18,21 @@ void NlpCreateQkvHeadsRopeDeviceOperation::validate_on_program_cache_miss(
     const auto& cos = tensor_args.cos;
     const auto& sin = tensor_args.sin;
 
-    auto check = [](const Tensor& t, const char* name) {
+    auto check = [](const Tensor& t, const char* name, bool allow_sharded = false) {
         TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(t.buffer() != nullptr, "{} must be allocated", name);
         TT_FATAL(t.layout() == Layout::TILE, "{} must be tilized", name);
-        TT_FATAL(t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "{} must be INTERLEAVED", name);
+        // qkv may be width-sharded (e.g. straight off matmul_decode, no interleaved scatter): the
+        // reader's TensorAccessor resolves each logical tile-page to the right core regardless of
+        // layout, so a sharded qkv is read transparently. cos/sin stay interleaved.
+        const auto ml = t.memory_config().memory_layout();
+        TT_FATAL(
+            ml == TensorMemoryLayout::INTERLEAVED || (allow_sharded && ml == TensorMemoryLayout::WIDTH_SHARDED),
+            "{} must be INTERLEAVED{}",
+            name,
+            allow_sharded ? " or WIDTH_SHARDED" : "");
     };
-    check(qkv, "qkv");
+    check(qkv, "qkv", /*allow_sharded=*/true);
     check(cos, "cos");
     check(sin, "sin");
 
