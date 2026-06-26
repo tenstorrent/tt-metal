@@ -40,4 +40,14 @@ struct LayerCompletionMessage {
 
 static_assert(sizeof(LayerCompletionMessage) == 24, "LayerCompletionMessage wire size changed");
 
+// A message whose `reserved` field equals this is an end-of-stream SENTINEL, not a real completion:
+// a subordinate router sends exactly one as its final message at teardown so the master knows no more
+// completions will arrive from that rank and can stop without cancelling a live receive (coordinated
+// teardown — see LayerCompletionRouter). Real completions always carry reserved == 0.
+inline constexpr uint32_t kLayerCompletionSentinel = 0xFFFFFFFFu;
+
+inline bool is_layer_completion_sentinel(const LayerCompletionMessage& m) noexcept {
+    return m.reserved == kLayerCompletionSentinel;
+}
+
 }  // namespace tt::tt_metal::distributed
