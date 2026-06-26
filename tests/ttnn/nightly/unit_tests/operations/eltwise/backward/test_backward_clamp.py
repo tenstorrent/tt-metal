@@ -44,9 +44,9 @@ def test_clamp_bw_tensor_both_bounds_in_range_gradient(device):
     result_tt = ttnn.clamp_bw(grad_tt, input_tt, min_tt, max_tt)
     result_torch = ttnn.to_torch(result_tt[0])
 
-    assert torch.allclose(result_torch.float(), expected.float(), atol=1e-2), (
-        f"clamp_bw tensor both-bounds: got\n{result_torch}\nexpected\n{expected}"
-    )
+    assert torch.allclose(
+        result_torch.float(), expected.float(), atol=1e-2
+    ), f"clamp_bw tensor both-bounds: got\n{result_torch}\nexpected\n{expected}"
 
 
 @pytest.mark.parametrize(
