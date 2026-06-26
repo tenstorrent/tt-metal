@@ -15,9 +15,12 @@
 #include "eval_method.h"
 
 // Include reciprocal function for tan range reduction (tan_expand needs -1/poly),
-// the exp2 sigmoid compose (1/(1+exp(-x))), and the pow path's final 1/result
+// the exp2 sigmoid compose (1/(1+exp(-x))), sigmoid-product compose
+// (x/(1+exp(-x))), and the pow path's final 1/result
 // (rsqrt = 1/sqrt(x), tagged expalu_reciprocal -> POW_HW_RECIPROCAL).
-#if (defined(RANGE_REDUCTION_TAN) || defined(EXP_HW_COMPOSE_SIGMOID) || defined(POW_HW_RECIPROCAL)) && \
+#if (                                                                                                             \
+    defined(RANGE_REDUCTION_TAN) || defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT) || \
+    defined(POW_HW_RECIPROCAL)) &&                                                                                \
     defined(TRISC_MATH)
 #include "ckernel_sfpu_recip.h"
 #endif
@@ -333,9 +336,16 @@ inline vFloat exp_hw_eval(vFloat x) {
     vFloat y = setexp(p, ep + pe - 127);  // 2^i * 2^f == base^x
 
     // Optional compose post-transform (fitter folds the activation around exp2).
-#if defined(EXP_HW_COMPOSE_SIGMOID)
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
     // y == exp(-x); sigmoid(x) = 1 / (1 + exp(-x)).
-    y = ckernel::sfpu::sfpu_reciprocal<false>(1.0f + y);
+#if defined(USE_BF16)
+    y = ckernel::sfpu::sfpu_reciprocal_iter<1>(1.0f + y);
+#else
+    y = ckernel::sfpu::sfpu_reciprocal_iter<2>(1.0f + y);
+#endif
+#if defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
+    y = x * y;
+#endif
 #elif defined(EXP_HW_COMPOSE_MINUS_ONE)
     // expm1(x) = exp(x) - 1.
     y = y - 1.0f;
@@ -365,9 +375,10 @@ inline vFloat exp_hw_eval(vFloat x) {
 // Anything past the prgm + LREG budget the compiler simply emits as in-body
 // literals; the codegen logs that count (HW_PRELOAD_SPILL) — never silent.
 //
-// COMPOSE_SIGMOID reserves vConstFloatPrgm0 for sfpu_reciprocal (it expects 2.0
-// there, set by sfpu_reciprocal_init). In that case MULT is demoted from prgm0
-// to a hoisted LREG param (mult_hoist) so the two uses of prgm0 never collide.
+// COMPOSE_SIGMOID and COMPOSE_SIGMOID_PRODUCT reserve vConstFloatPrgm0 for
+// sfpu_reciprocal (it expects 2.0 there, set by sfpu_reciprocal_init). In that
+// case MULT is demoted from prgm0 to a hoisted LREG param (mult_hoist) so the
+// two uses of prgm0 never collide.
 //
 // The remaining coefficients (c[DEG-2..0]) are read from the constexpr global
 // EXP_HW_COEFFS: the compiler hoists what fits in the LREG budget and emits the
@@ -388,7 +399,7 @@ inline vFloat exp_hw_eval_preloaded(
     vFloat thr_hi_hoist,
     vFloat c127_hoist,
     const vFloat* cvspill
-#if defined(EXP_HW_COMPOSE_SIGMOID)
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
     ,
     vFloat mult_hoist
 #endif
@@ -398,7 +409,7 @@ inline vFloat exp_hw_eval_preloaded(
     // is supplied via a hoisted, loop-invariant register (c127_hoist) so the
     // compiler fuses x*MULT + 127 into ONE SFPMAD (matching TTNN exp_21f) rather
     // than emitting a separate SFPMUL + SFPADDI for the literal addend.
-#if defined(EXP_HW_COMPOSE_SIGMOID)
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
     vFloat xlog2 = x * mult_hoist + c127_hoist;
 #else
     vFloat xlog2 = x * vConstFloatPrgm0 + c127_hoist;
@@ -478,8 +489,15 @@ inline vFloat exp_hw_eval_preloaded(
     vFloat y = setexp(p, ep + pe - 127);  // 2^i * 2^f == base^x
 #endif
 
-#if defined(EXP_HW_COMPOSE_SIGMOID)
-    y = ckernel::sfpu::sfpu_reciprocal<false>(1.0f + y);
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
+#if defined(USE_BF16)
+    y = ckernel::sfpu::sfpu_reciprocal_iter<1>(1.0f + y);
+#else
+    y = ckernel::sfpu::sfpu_reciprocal_iter<2>(1.0f + y);
+#endif
+#if defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
+    y = x * y;
+#endif
 #elif defined(EXP_HW_COMPOSE_MINUS_ONE)
     y = y - 1.0f;
 #endif
@@ -2625,7 +2643,7 @@ void kernel_main() {
     // ONCE (they persist across every replayed body and every tile). The
     // per-kind ranking matches the *_hw_eval_preloaded readers above.
 #if defined(EXPONENT_ALU_EXP2)
-#if !defined(EXP_HW_COMPOSE_SIGMOID)
+#if !defined(EXP_HW_COMPOSE_SIGMOID) && !defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
     // Under sigmoid compose, prgm0 is reserved for sfpu_reciprocal (set to 2.0 by
     // sfpu_reciprocal_init); MULT is hoisted into an LREG instead (see hw_reduce).
     sfpi::vConstFloatPrgm0 = EXP_HW_MULT;  // touched every element
@@ -2676,7 +2694,7 @@ void kernel_main() {
 #if defined(RANGE_REDUCTION_TAN) && defined(TRISC_MATH)
     ckernel::sfpu::sfpu_reciprocal_init<false>();
 #endif
-#if defined(EXP_HW_COMPOSE_SIGMOID) && defined(TRISC_MATH)
+#if (defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)) && defined(TRISC_MATH)
     ckernel::sfpu::sfpu_reciprocal_init<false>();
 #endif
 

@@ -64,7 +64,7 @@ inline void piecewise_generic_lut_hw_reduce(const std::array<float, LUT_SIZE>& /
     // GENERIC constant-pool preload path (exp2 / log2 / pow, any degree). The 3
     // hottest constants live in vConstFloatPrgm0/1/2 (programmed ONCE in
     // kernel_main). A few more loop-invariant scalars (clamp 255.0, the round
-    // magic, the sigmoid MULT) are hoisted into pre-loop LREGs here; the remaining
+    // magic, the sigmoid/sigmoid-product MULT) are hoisted into pre-loop LREGs here; the remaining
     // coefficients are read from their constexpr global inside *_hw_eval_preloaded
     // (compiler hoists what fits, literals the rest — the codegen-logged spill).
 #if defined(EXPONENT_ALU_EXP2)
@@ -72,7 +72,7 @@ inline void piecewise_generic_lut_hw_reduce(const std::array<float, LUT_SIZE>& /
     // Hoist the 127.0 bias into a loop-invariant LREG so x*MULT+127 fuses into a
     // single SFPMAD per element (no separate SFPMUL+SFPADDI for the literal).
     vFloat c127_hoist = 127.0f;
-#if defined(EXP_HW_COMPOSE_SIGMOID)
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
     vFloat mult_hoist = EXP_HW_MULT;  // prgm0 reserved for sfpu_reciprocal
 #endif
     // FIX A: hoist the below-prgm coeffs (c[DEG-2..0]) into pre-loop LREGs ONCE so
@@ -100,7 +100,7 @@ inline void piecewise_generic_lut_hw_reduce(const std::array<float, LUT_SIZE>& /
             thr_hoist,
             c127_hoist,
             exp_cvspill
-#if defined(EXP_HW_COMPOSE_SIGMOID)
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
             ,
             mult_hoist
 #endif

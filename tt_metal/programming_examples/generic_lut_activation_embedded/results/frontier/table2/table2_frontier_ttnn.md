@@ -57,14 +57,14 @@ Comparable rows: 52. Win on ULP and runtime: 42. Accuracy match but slower: 9. F
 | selu | poly:s2/d13 | 0.00 | 2.79 | 0.00 | 3.63 | 1.301 | win_both |
 | sigmoid | exponent_alu_exp2:s8/d2 | 0.50 | 2.46 | 0.50 | 2.89 | 1.175 | win_both |
 | sigmoid_accurate | exponent_alu_exp2:s1/d2 | 0.50 | 2.47 | 0.50 | 2.93 | 1.186 | win_both |
-| silu | poly:s2/d12 | 0.25 | 3.85 | 0.25 | 3.11 | 0.808 | accuracy_match_slow |
+| silu | exponent_alu_exp2:s1/d3 | 0.03 | 3.35 | 0.25 | 3.11 | 0.928 | accuracy_match_slow |
 | sin | trig:s1/d11 | 0.00 | 2.87 | 0.00 | 2.35 | 0.819 | accuracy_match_slow |
 | sinh | rational:s1/d14d2 | 0.00 | 3.03 | 0.00 | 3.25 | 1.073 | win_both |
 | softplus | poly:s2/d9 | 0.12 | 3.29 | 0.12 | 5.31 | 1.614 | win_both |
 | softshrink | threshold_softshift:s3/d2 | 0.00 | 1.78 | 0.00 | 1.91 | 1.073 | win_both |
 | softsign | abs_denominator_rational:s2/d1d1 | 0.00 | 1.80 | 1.00 | 1.96 | 1.089 | win_both |
 | sqrt | newton_root:s1/d14 | 0.00 | 2.16 | 0.00 | 2.28 | 1.056 | win_both |
-| swish | poly:s2/d12 | 0.25 | 3.85 | 0.25 | 3.10 | 0.805 | accuracy_match_slow |
+| swish | exponent_alu_exp2:s1/d3 | 0.03 | 3.36 | 0.25 | 3.10 | 0.923 | accuracy_match_slow |
 | tan | tan:s1/d7 | 0.12 | 3.31 | 0.12 | 2.94 | 0.888 | accuracy_match_slow |
 | tanh | poly:s1/d6 | 0.50 | 2.10 | 0.50 | 2.29 | 1.090 | win_both |
 | tanhshrink | rational:s1/d12d3 | 0.12 | 2.87 | 0.12 | 3.17 | 1.105 | win_both |
