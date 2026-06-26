@@ -621,6 +621,7 @@ def generate_text_from_checkpoint_state(
     init_canvas_fn: Callable[[int, int], object] | None = None,
     vocab_size: int | None = None,
     seed: int | None = None,
+    noise_seed: int | None = None,
     batch: int = 1,
     adapter_kwargs: dict | None = None,
     logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
@@ -637,6 +638,18 @@ def generate_text_from_checkpoint_state(
             canvas_len=config.canvas_length,
             vocab_size=vocab_size,
             seed=seed,
+        )
+    if (
+        "noise_tokens_fn" not in generate_kwargs
+        and vocab_size is not None
+        and (seed is not None or noise_seed is not None)
+    ):
+        generate_kwargs["noise_tokens_fn"] = make_seeded_host_noise_tokens_fn(
+            tt_model.mesh_device,
+            batch=batch,
+            canvas_len=config.canvas_length,
+            vocab_size=vocab_size,
+            seed=noise_seed if noise_seed is not None else seed + 1,
         )
     logits_fn_builder = logits_fn_builder_factory(
         dg_state_dict,

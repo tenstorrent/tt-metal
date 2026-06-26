@@ -463,6 +463,10 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
         calls["canvas_init"] = (mesh_device, kwargs)
         return "init"
 
+    def fake_noise_tokens_fn(mesh_device, **kwargs):
+        calls["noise_tokens"] = (mesh_device, kwargs)
+        return "noise"
+
     def fake_builder_factory(dg_state_dict, **kwargs):
         calls["builder"] = (dg_state_dict, kwargs)
         return "builder"
@@ -472,6 +476,7 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
         return result
 
     monkeypatch.setattr(G, "make_seeded_host_canvas_init_fn", fake_canvas_init_fn)
+    monkeypatch.setattr(G, "make_seeded_host_noise_tokens_fn", fake_noise_tokens_fn)
 
     out = generate_text_from_checkpoint_state(
         _Model(),
@@ -482,6 +487,7 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
         config=DiffusionConfig(canvas_length=4),
         vocab_size=99,
         seed=123,
+        noise_seed=456,
         batch=2,
         logits_fn_builder_factory=fake_builder_factory,
         generate_text_fn=fake_generate_text,
@@ -497,8 +503,52 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
             "seed": 123,
         },
     )
+    assert calls["noise_tokens"] == (
+        "mesh",
+        {
+            "batch": 2,
+            "canvas_len": 4,
+            "vocab_size": 99,
+            "seed": 456,
+        },
+    )
     assert calls["generate"][4]["init_canvas_fn"] == "init"
+    assert calls["generate"][4]["noise_tokens_fn"] == "noise"
     assert calls["generate"][4]["logits_fn_builder"] == "builder"
+
+
+def test_generate_text_from_checkpoint_state_preserves_explicit_noise_tokens(monkeypatch):
+    calls = {}
+
+    class _Model:
+        mesh_device = "mesh"
+
+    def fail_noise_tokens_fn(*args, **kwargs):
+        raise AssertionError("explicit noise_tokens_fn should not be replaced")
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    monkeypatch.setattr(G, "make_seeded_host_noise_tokens_fn", fail_noise_tokens_fn)
+
+    out = generate_text_from_checkpoint_state(
+        _Model(),
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        vocab_size=99,
+        seed=123,
+        noise_tokens_fn="explicit-noise",
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["generate"]["noise_tokens_fn"] == "explicit-noise"
 
 
 def test_generate_text_from_checkpoint_state_requires_canvas_source():
