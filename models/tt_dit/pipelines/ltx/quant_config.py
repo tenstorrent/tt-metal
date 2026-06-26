@@ -136,12 +136,17 @@ class QuantConfig:
 
 
 def _quantize_weight(param, new_dtype: ttnn.DataType) -> None:
-    """Typecast a Parameter's weight tensor in-place, bypassing dtype check."""
-    if param is None or param._data is None:
+    """Set a Parameter's weight dtype, typecasting resident data in place.
+
+    ``param.dtype`` must be set even when ``_data is None`` (weights not yet loaded):
+    under ``dynamic_load`` the cache load runs ``Parameter.load`` which checks the
+    on-disk tile dtype against ``param.dtype``, and the torch fallback casts to it — both
+    need the quantized dtype set BEFORE load, or a bf8 cache hit clashes with a bf16 param.
+    """
+    if param is None or param.dtype == new_dtype:
         return
-    if param.dtype == new_dtype:
-        return
-    param._data = ttnn.typecast(param._data, new_dtype)
+    if param._data is not None:
+        param._data = ttnn.typecast(param._data, new_dtype)
     param.dtype = new_dtype
 
 
