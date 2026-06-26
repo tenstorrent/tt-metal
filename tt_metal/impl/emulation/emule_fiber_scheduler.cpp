@@ -82,6 +82,8 @@ size_t env_size(const char* name, size_t dflt) {
 struct FiberSchedulerImpl {
     std::mutex mu_;
     std::condition_variable cv_;                       // workers wait here for ready fibers
+    std::mutex wd_mu_;                                 // guards the watchdog's shutdown wait
+    std::condition_variable wd_cv_;                    // wakes the watchdog promptly on teardown
     std::vector<std::deque<Fiber*>> ready_;            // per-worker ready queues (fibers are
                                                        // pinned: ready_[w] holds only home==w)
     std::unordered_map<const void*, Fiber*> parked_;   // key -> intrusive list head
@@ -349,9 +351,15 @@ void FiberSchedulerImpl::watchdog() {
     uint64_t last_resump = resumptions_.load();
     auto last_advance = std::chrono::steady_clock::now();
     while (run_active_.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(interval);
-        if (!run_active_.load(std::memory_order_acquire)) {
-            break;
+        {
+            // Interruptible sleep: wake immediately when run_until_idle clears run_active_
+            // (set under wd_mu_, so the notify can't be lost), else time out after `interval`
+            // to do the progress check. Avoids a ~`interval` join stall at every program end.
+            std::unique_lock<std::mutex> lk(wd_mu_);
+            if (wd_cv_.wait_for(lk, interval,
+                                [this] { return !run_active_.load(std::memory_order_acquire); })) {
+                break;
+            }
         }
         uint64_t p = progress_.load();
         uint64_t r = resumptions_.load();
@@ -417,7 +425,11 @@ void FiberScheduler::run_until_idle() {
     for (auto& t : workers) {
         t.join();
     }
-    p_->run_active_.store(false, std::memory_order_release);
+    {   // Clear under wd_mu_ + notify so the watchdog wakes at once (no lost wakeup).
+        std::lock_guard<std::mutex> lk(p_->wd_mu_);
+        p_->run_active_.store(false, std::memory_order_release);
+    }
+    p_->wd_cv_.notify_all();
     wd.join();
 
     std::exception_ptr eptr = p_->first_eptr_;
