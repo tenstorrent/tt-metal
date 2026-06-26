@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <functional>
-
 namespace tt::tt_metal {
 class IDevice;
 class Program;
@@ -25,12 +23,17 @@ namespace tt::tt_metal::emule {
 ///
 /// Memory I/O from kernels goes through the SWEmuleChip's backing store
 /// via UMD Cluster::write_core / Cluster::read_core.
-///
-/// `post_setup_barrier`, if set, is invoked after this device finishes writing its per-core CB/semaphore
-/// initial values to L1 but BEFORE it launches kernels. Under concurrent multi-device dispatch it must
-/// block until every participating device has reached the same point, so a peer's fabric teleport (e.g.
-/// a barrier / out-ready atomic-inc) can never land before this device has initialized that semaphore.
-void execute_program_emulated(
-    IDevice* device, Program& program, const std::function<void()>& post_setup_barrier = {});
+void execute_program_emulated(IDevice* device, Program& program);
+
+/// Multi-device (mesh) register/run split. A mesh command queue brackets its per-device
+/// LaunchProgram / DispatchCompiledProgramToDevice loop with these: begin_mesh_dispatch()
+/// puts the runner in "defer" mode so each execute_program_emulated registers its fibers
+/// (and keeps the per-device state they borrow alive) WITHOUT running; run_mesh_dispatch()
+/// then drives a single run_until_idle so all devices' fibers execute concurrently on the
+/// worker pool — the foundation for future inter-chip communication, where chips must
+/// co-run. The single-device path (begin_mesh_dispatch not called) is unchanged:
+/// execute_program_emulated spawns and runs synchronously per program.
+void begin_mesh_dispatch();
+void run_mesh_dispatch();
 
 }  // namespace tt::tt_metal::emule

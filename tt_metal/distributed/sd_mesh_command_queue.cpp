@@ -14,6 +14,9 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
+#endif
 #include <utility>
 #include <unordered_set>
 #include <llrt/tt_cluster.hpp>
@@ -206,73 +209,15 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
-#ifdef TT_METAL_USE_EMULE
-    if (this->get_target_device_type() == tt::TargetDevice::Emule && local_devices.size() > 1) {
-        // Emule: a coord range that spans multiple devices runs one replicated program on each. A CCL /
-        // point_to_point program contains a cross-chip handshake (a worker blocks on a semaphore that a
-        // worker on the *other* chip increments over fabric). With emule's synchronous teleport, that
-        // increment lands in the peer's L1 immediately — but only if the peer's program is *also running*.
-        // Sequential launch (LaunchProgram(dev0) then dispatch dev1) would therefore deadlock. So run all
-        // local devices' programs CONCURRENTLY. Finalize + write-runtime-args serially first (they read the
-        // shared program / write per-device L1) to avoid racing on program mutation, then execute each
-        // device's kernels on its own host thread and join.
-        program.impl().finalize_dataflow_buffer_configs();
-        if (!program.impl().is_finalized()) {
-            program.impl().finalize_offsets(local_devices[0]);
-        }
-        for (auto* device : local_devices) {
-            tt_metal::detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
-            tt_metal::detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
-        }
-        std::vector<std::thread> emule_threads;
-        std::vector<std::exception_ptr> emule_excs(local_devices.size());
-        emule_threads.reserve(local_devices.size());
-        // Cross-device setup barrier: each device's execute_program_emulated calls this after it has
-        // written its CB/semaphore initial values to L1 but before launching kernels. It releases only
-        // once every device has set up, so a peer's fabric teleport can't clobber an as-yet-uninitialized
-        // semaphore. Exception-safe: a device that throws (setup or launch) sets `failed`, releasing any
-        // peers blocked at the barrier (they then throw) so the join + fail-fast below report the error
-        // instead of deadlocking.
-        struct EmuleSetupBarrier {
-            std::atomic<int> arrived{0};
-            std::atomic<bool> failed{false};
-            int total{0};
-        };
-        auto barrier = std::make_shared<EmuleSetupBarrier>();
-        barrier->total = static_cast<int>(local_devices.size());
-        auto barrier_fn = [barrier]() {
-            barrier->arrived.fetch_add(1, std::memory_order_acq_rel);
-            while (barrier->arrived.load(std::memory_order_acquire) < barrier->total) {
-                if (barrier->failed.load(std::memory_order_acquire)) {
-                    throw std::runtime_error("emule: a peer device failed during program setup");
-                }
-                std::this_thread::yield();
-            }
-        };
-        for (size_t i = 0; i < local_devices.size(); ++i) {
-            IDevice* device = local_devices[i];
-            emule_threads.emplace_back([device, &program, &emule_excs, i, barrier, barrier_fn]() {
-                try {
-                    tt::tt_metal::emule::execute_program_emulated(device, program, barrier_fn);
-                } catch (...) {
-                    barrier->failed.store(true, std::memory_order_release);
-                    emule_excs[i] = std::current_exception();
-                }
-            });
-        }
-        for (auto& t : emule_threads) {
-            t.join();
-        }
-        // Fail-fast: surface the first per-device failure (e.g. a JIT compile error) instead of letting
-        // a peer chip spin forever on a cross-chip semaphore the failed device never increments.
-        for (auto& e : emule_excs) {
-            if (e) {
-                std::rethrow_exception(e);
-            }
-        }
-        return;
-    }
-#endif
+    // Emule note: under TT_METAL_USE_EMULE the mesh register/run split is bracketed by
+    // enqueue_mesh_workload around the WHOLE workload (begin_mesh_dispatch ... run_mesh_dispatch),
+    // not here per-program. That is essential for cross-chip handshakes: a point_to_point workload
+    // has a SENDER program on one chip and a RECEIVER program on another, and the receiver blocks on
+    // a semaphore the sender increments over fabric. Both must be REGISTERED before a single
+    // run_until_idle so the two sides co-run in ONE scheduler generation and the teleport's fiber
+    // wake reaches the parked receiver. With begin/run here (per program) they would run in separate
+    // generations and the wake would miss. So LaunchProgram / DispatchCompiledProgramToDevice below
+    // just register (the defer flag is set by the outer begin_mesh_dispatch).
 
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);
@@ -327,6 +272,29 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     auto& range_program_map = mesh_workload.get_programs();
+
+#ifdef TT_METAL_USE_EMULE
+    if (this->get_target_device_type() == tt::TargetDevice::Emule) {
+        // Co-schedule EVERY program in this workload in ONE fiber run. A point_to_point workload
+        // carries a SENDER program on one chip and a RECEIVER program on another; the receiver
+        // blocks on a semaphore the sender increments over fabric. Both must be REGISTERED before a
+        // single run_until_idle so the two sides co-run in one scheduler generation and the
+        // teleport's fiber wake reaches the parked receiver. Register all (deferred) sequentially,
+        // then run once. (Sequential, not the thread pool, so fiber registration can't race.)
+        tt::tt_metal::emule::begin_mesh_dispatch();
+        for (auto& [coord_range, program] : range_program_map) {
+            dispatch_program(coord_range, program, /*blocking=*/false);  // register only (defer)
+        }
+        tt::tt_metal::emule::run_mesh_dispatch();  // one concurrent run across all programs/chips
+        // run_until_idle completed every program synchronously, so all cores are idle now; keep the
+        // "previous workload cores" map empty (the emule invariant wait_for_cores_idle relies on).
+        {
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+            logical_cores_for_previous_workload_.clear();
+        }
+        return;
+    }
+#endif
 
     if (launch_thread_pool_) {
         // Dispatch programs in parallel

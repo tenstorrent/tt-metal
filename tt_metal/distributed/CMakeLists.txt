@@ -93,4 +93,10 @@ if(TT_UMD_BUILD_SIMULATION)
     target_compile_definitions(distributed PRIVATE TT_UMD_BUILD_SIMULATION)
 endif()
 
+if(TT_METAL_USE_EMULE)
+    # The slow-dispatch mesh command queue routes per-device dispatch through the emule
+    # register/run split (emulated_program_runner.hpp) — gated on this define.
+    target_compile_definitions(distributed PRIVATE TT_METAL_USE_EMULE=1)
+endif()
+
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)

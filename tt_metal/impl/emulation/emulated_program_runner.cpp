@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -59,6 +60,8 @@
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/tile_counter.hpp"
+#include "jit_hw/internal/emule_thread_ctx.h"
+#include "emule_fiber_scheduler.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <tt-logger/tt-logger.hpp>
@@ -80,68 +83,23 @@
 // We use the real type directly here.
 using __emule_cb_state = tt_emule::CBSyncState;
 
-// Point into this core's L1 at kernel_config_base + rta_offset[proc_idx],
-// where WriteRuntimeArgsToDevice already wrote the bytes. nullptr = sentinel
-// (kernel declared no rt-args for this RISC).
-thread_local uint32_t* __rt_args = nullptr;
-thread_local uint32_t* __common_rt_args = nullptr;
+// The per-RISC identity / handles — rt_args, common_rt_args, core_obj, device,
+// bridge_l1/dram, cbs, dfbs, tc_array, processor_id, neo_id, trisc_id,
+// num_threads, my_thread_id, core_map — are now fields of the per-thread
+// ThreadCommonCtx, reached via __emule_self (defined just below; see
+// emule_thread_ctx.h). The runner sets them in the launch lambda; the JIT kernel
+// and the extern-C resolvers above read them through __emule_self->X. (The
+// mhartid regex now emits `__emule_self->processor_id`; CSR/get_num_threads/
+// get_arg shims read the corresponding ctx fields.)
 
-thread_local tt_emule::Core* __core = nullptr;
-
-// Memory bridge pointers — now non-static for -rdynamic export.
-thread_local uint8_t* __emule_bridge_l1 = nullptr;
-thread_local uint8_t* __emule_bridge_dram = nullptr;
-
-// Per-core CB state array, shared between threads on the same core.
-thread_local __emule_cb_state* __emule_cbs = nullptr;
-
-// Per-thread DFB interface array (one entry per DFB on the core).
-thread_local tt_emule::EmuleDFBInterface* __emule_dfbs = nullptr;
-
-// Per-core tile counter array, shared between threads on the same core.
-thread_local tt_emule::TileCounterArray* __emule_tc_array = nullptr;
-
-// Quasar-specific per-thread identity, written by the runner at thread start
-// (see launch_cores below) and read inside the JIT'd kernel .so. Each variable
-// stands in for a different hardware signal; they are NOT interchangeable.
-//
-// __processor_id  — RISC-V mhartid analogue. DM threads: DM index 0..7.
-//                   Compute threads: Neo engine index 0..3. Consumed by the
-//                   JIT regex that rewrites `asm volatile("csrr %0, mhartid" ...)`
-//                   into `VAR = __processor_id;` (x86 can't execute the CSR).
-//
-// __emule_neo_id  — Quasar NEO_ID CSR (0xBC2). Which of the 4 compute engines
-//                   in a Neo is executing. Set to processor_id for compute
-//                   threads, 0 for DM. Read by ckernel::csr_read<CSR::NEO_ID>().
-//
-// __emule_trisc_id — Quasar TRISC_ID CSR (0xBC3). Which TRISC sub-engine
-//                    (0=UNPACK, 1=MATH, 2=PACK, 3=ISOLATE_SFPU) is running.
-//                    Starts at 0; for Quasar compute kernels the launcher
-//                    iterates it 0..3 across ki.variants (see the variant
-//                    loop in launch_cores). Read by
-//                    ckernel::csr_read<CSR::TRISC_ID>().
-//
-// __emule_num_threads  — backs get_num_threads(). Total threads this kernel
-//                        runs on (DM count for DM kernels, active-engine count
-//                        for compute).
-//
-// __emule_my_thread_id — backs get_my_thread_id(). Index of this processor within
-//                        the kernel's processor list (0-based), matching the Quasar
-//                        firmware's my_thread_id semantics. NOT the same as
-//                        __processor_id: e.g. a consumer on RISCV_1 has
-//                        __processor_id=1 but __emule_my_thread_id=0 (first consumer).
-thread_local uint8_t __processor_id = 0;
-thread_local uint8_t __emule_neo_id = 0;
-thread_local uint8_t __emule_trisc_id = 0;
-thread_local uint32_t __emule_num_threads = 1;
-thread_local uint32_t __emule_my_thread_id = 0;
-
-// Core map for cross-core NOC address resolution (shared across all threads).
-thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
+// Per-thread execution context — the single source of truth for an emulated
+// RISC's thread-local state, specialized by RISC type (see emule_thread_ctx.h).
+// Defined here, exported via -rdynamic so the JIT .so resolves it at dlopen; set
+// per kernel thread in the launch lambda below.
+thread_local ThreadCommonCtx* __emule_self = nullptr;
 
 // Which chip this kernel thread is executing as. Set per (core,RISC) thread in the launch prologue.
 // Read by the fabric teleport hook to know the source chip for cross-chip routing.
-thread_local uint32_t __emule_chip_id = 0;
 
 // ---------------------------------------------------------------------------
 // Bank mapping arrays — populated from SoC descriptor before kernel launch.
@@ -177,23 +135,41 @@ static constexpr uint64_t NOC_LOCAL_MASK = (1ULL << NOC_LOCAL_BITS) - 1;
 static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 
 // C-linkage bridge functions for JIT kernels.
+// These run on the kernel thread (called synchronously by the JIT kernel), so
+// __emule_self is set; the null guards preserve the old "unset → nullptr" behavior.
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
-    return __emule_bridge_dram ? __emule_bridge_dram + offset : nullptr;
+    return (__emule_self && __emule_self->bridge_dram) ? __emule_self->bridge_dram + offset : nullptr;
 }
 
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
-    return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
+    return (__emule_self && __emule_self->bridge_l1) ? __emule_self->bridge_l1 + offset : nullptr;
 }
 
 extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
-    if (__emule_core_map) {
+    if (__emule_self && __emule_self->core_map) {
         uint64_t key = (uint64_t(x) << 32) | y;
-        auto it = __emule_core_map->find(key);
-        if (it != __emule_core_map->end()) {
+        auto it = __emule_self->core_map->find(key);
+        if (it != __emule_self->core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
     }
     return nullptr;
+}
+
+// Fiber-scheduler bridge — the dlopen'd kernel .so calls these (declared in
+// include/jit_hw/internal/emule_fiber_bridge.h) to park/wake/yield on the one
+// scheduler instance. Resolved at dlopen via -rdynamic, like the resolvers above.
+namespace efib = tt::tt_metal::emule_fiber;
+extern "C" void __emule_fiber_lock(void) { efib::FiberScheduler::instance().lock(); }
+extern "C" void __emule_fiber_unlock(void) { efib::FiberScheduler::instance().unlock(); }
+extern "C" void __emule_fiber_park_locked(const void* key) {
+    efib::FiberScheduler::instance().park_locked(key);
+}
+extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
+extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
+extern "C" void __emule_fiber_read_latency(void) { efib::FiberScheduler::instance().latency_park(); }
+extern "C" void __emule_fiber_note_publish(unsigned pages) {
+    efib::FiberScheduler::instance().note_publish(pages);
 }
 
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
@@ -217,10 +193,10 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
     static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 
-    if (__emule_core_map) {
+    if (__emule_self && __emule_self->core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
-        auto it = __emule_core_map->find(key);
-        if (it != __emule_core_map->end()) {
+        auto it = __emule_self->core_map->find(key);
+        if (it != __emule_self->core_map->end()) {
             uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
                                   ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
                                   : static_cast<uint32_t>(local_addr);
@@ -257,7 +233,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
     l1_offset &= L1_SLOT_MASK;
 
-    if (!__emule_core_map) {
+    if (!__emule_self || !__emule_self->core_map) {
         return;
     }
 
@@ -273,8 +249,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
                 continue;
             }
             uint64_t key = (uint64_t(x) << 32) | y;
-            auto it = __emule_core_map->find(key);
-            if (it != __emule_core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
+            auto it = __emule_self->core_map->find(key);
+            if (it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
                 uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
@@ -285,6 +261,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
                     uint32_t val;
                     std::memcpy(&val, src, sizeof(uint32_t));
                     reinterpret_cast<std::atomic<uint32_t>*>(dst)->store(val, std::memory_order_release);
+                    efib::FiberScheduler::instance().wake(dst);  // wake the target core's sem waiter
                 } else {
                     std::memcpy(dst, src, size);
                     std::atomic_thread_fence(std::memory_order_release);
@@ -563,7 +540,7 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 static void apply_x86_rewrites(std::string& src) {
     static const std::regex mhartid_re(
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
-    src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
+    src = std::regex_replace(src, mhartid_re, "$1 = __emule_self->processor_id;");
 
     static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*(:::\s*"memory"\s*)?\)\s*;)");
     src = std::regex_replace(src, fence_re, "__sync_synchronize();");
@@ -1807,7 +1784,7 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     // them is WRONG — it can collapse distinct DRAM banks onto one backing. So: verbatim first; only if
     // the verbatim core is a WORKER (or there is no verbatim hit) do we translate src->logical->dst.
     auto cit = find_core(noc_x, noc_y);
-    const uint32_t src_chip = __emule_chip_id;
+    const uint32_t src_chip = __emule_self->chip_id;
     const bool verbatim_is_worker =
         (cit != m.end() && cit->second->role() == tt_emule::CoreRole::WORKER);
     if (src_chip != dst_chip && (verbatim_is_worker || cit == m.end())) {
@@ -1857,7 +1834,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
     if (h == nullptr) {
         return;
     }
-    const uint32_t dst_chip = __emule_fabric_neighbor(__emule_chip_id);
+    const uint32_t dst_chip = __emule_fabric_neighbor(__emule_self->chip_id);
     const uint16_t hdr_payload_size = *reinterpret_cast<const uint16_t*>(h + 40);
     const uint8_t noc_send_type = *(h + 42);
     const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
@@ -1868,7 +1845,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
         fprintf(
             stderr,
             "[EMULE_FABRIC] teleport src=%u dst=%u send_type=%u noc_addr=0x%llx payload_size=%u resolved=%p\n",
-            __emule_chip_id, dst_chip, noc_send_type, (unsigned long long)noc_address, size, (void*)dd);
+            __emule_self->chip_id, dst_chip, noc_send_type, (unsigned long long)noc_address, size, (void*)dd);
     }
 
     switch (noc_send_type) {
@@ -1877,6 +1854,9 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             if (d != nullptr && payload != nullptr && size > 0) {
                 std::memcpy(d, payload, size);
                 std::atomic_thread_fence(std::memory_order_release);
+                // Fiber model: a peer fiber may be parked on this address (e.g. a CB/data poll).
+                // The write changed its sync object, so re-queue it (no-op if none parked).
+                __emule_fiber_wake(d);
             }
             break;
         }
@@ -1885,6 +1865,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
             if (d != nullptr) {
                 reinterpret_cast<std::atomic<uint32_t>*>(d)->store(value, std::memory_order_release);
+                __emule_fiber_wake(d);  // wake the peer fiber parked on this semaphore (set)
             }
             break;
         }
@@ -1896,6 +1877,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
                 if (dbg) {
                     fprintf(stderr, "[EMULE_FABRIC]   atomic_inc dst=%p %u->%u (val=%u)\n", (void*)d, old, old + val, val);
                 }
+                __emule_fiber_wake(d);  // wake the peer fiber parked on this semaphore (the CCL handshake)
             }
             break;
         }
@@ -1906,10 +1888,12 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             if (d != nullptr && payload != nullptr && size > 0) {
                 std::memcpy(d, payload, size);
                 std::atomic_thread_fence(std::memory_order_release);
+                __emule_fiber_wake(d);
             }
             uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
             if (s != nullptr) {
                 reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
+                __emule_fiber_wake(s);  // wake the peer fiber parked on the fused semaphore
             }
             break;
         }
@@ -1923,6 +1907,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
                 uint8_t* d = __emule_fabric_resolve_remote(dst_chip, na[i]);
                 if (d != nullptr && csz > 0) {
                     std::memcpy(d, static_cast<const uint8_t*>(payload) + off, csz);
+                    __emule_fiber_wake(d);
                 }
                 off += csz;
             }
@@ -1948,7 +1933,7 @@ extern "C" uint8_t* __emule_chip_relative_l1(uint8_t* p) {
     if (g_core_map_cache.size() <= 1) {
         return p;  // single chip: the pointer is already this chip's
     }
-    const uint32_t cur = __emule_chip_id;
+    const uint32_t cur = __emule_self->chip_id;
     auto cur_it = g_core_map_cache.find(cur);
     for (auto& [chip, mapp] : g_core_map_cache) {
         if (!mapp) {
@@ -2443,237 +2428,200 @@ struct EmuleSigfpeGuard {
 }  // namespace
 #endif  // __x86_64__ && __linux__
 
+// [MESH] Register/run split for concurrent multi-device dispatch. A mesh command queue
+// brackets its per-device LaunchProgram/DispatchCompiledProgramToDevice loop with
+// begin_mesh_dispatch()/run_mesh_dispatch(): in defer mode each execute_program_emulated
+// REGISTERS its fibers (spawn, no run) and keeps the per-device state those fibers borrow
+// alive; run_mesh_dispatch then drives ONE run_until_idle so all chips' fibers run
+// concurrently on the worker pool. Per-fiber ctx already carries each device's core_map /
+// bridge_dram, so concurrent fibers resolve NOC addresses to the correct chip; the bank
+// arrays are topology-invariant across identical chips (homogeneous mesh). Single-device
+// (defer off) is unchanged. The kept state is freed in run_mesh_dispatch.
+static bool g_emule_mesh_defer = false;
+static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>>
+    g_mesh_dfb_keep;
+
+// Resolved-program cache — emule's analogue of silicon's program.impl().is_compiled():
+// collect_kernels + JIT compile + resolve run ONCE per program (keyed by ProgramId, stable
+// across the mesh's devices and program-cache reuse). Every device dispatches against the
+// shared resolved core_kernels (read-only at run time), mirroring LaunchProgram(compile) /
+// DispatchCompiledProgramToDevice(reuse). An entry is valid for the program's life (ids are
+// never reused, so no stale hits); LRU-bounded only as a safety net against unbounded growth.
+struct ResolvedProgram {
+    std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
+    uint32_t emule_sem_base = 0;
+};
+static std::unordered_map<ProgramId, ResolvedProgram> g_resolved_programs;
+static std::deque<ProgramId> g_resolved_lru;
+static constexpr size_t kMaxResolvedPrograms = 256;
+
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
-    ChipId device_id) {
+    ChipId device_id,
+    bool defer_run) {
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;
 #endif
-    std::vector<std::thread> core_threads;
-    std::vector<std::exception_ptr> core_exceptions(core_setups.size());
+    // Fiber engine: one cooperatively-scheduled fiber per (core, RISC), multiplexed
+    // onto a runtime-sized worker pool (TT_EMULE_FIBER_WORKERS). A blocked fiber parks
+    // (yields its worker) instead of blocking an OS thread — no thread ceiling, no spin.
+    // See docs/fiber-engine.md.
+    auto& sched = tt::tt_metal::emule_fiber::FiberScheduler::instance();
 
-    // Startup barrier modeling silicon's simultaneous multi-core dispatch. emule
-    // spawns kernel threads sequentially, so without it an early thread can run its
-    // whole kernel (including cross-core semaphore increments) before a later peer
-    // has executed its prologue — e.g. racing ahead of an argmax reducer's k=0
-    // done_sem reset. Releasing all threads from one barrier restores "all cores
-    // start together".
-    size_t total_kernel_threads = 0;
-    for (const auto& cs : core_setups) {
-        total_kernel_threads += cs.ki_list->size();
-    }
-    std::atomic<uint32_t> kernel_start_barrier{0};
+    // The fibers borrow the per-core DFB interface arrays; own them here so they
+    // outlive run_until_idle.
+    std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>> dfb_keepalive;
+    dfb_keepalive.reserve(core_setups.size());
 
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
-        core_threads.emplace_back(
-            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx],
-             &kernel_start_barrier, total_kernel_threads, device_id]() {
-                try {
-                    auto* core = cs.core;
-                    uint8_t* l1_data = core->l1_data();
-                    tt_emule::CBSyncState* cb_array = core->cb_sync_array();
-                    tt_emule::TileCounterArray* tc_array = cs.has_dfbs ? core->tile_counters() : nullptr;
-                    uint8_t px = cs.phys_x;
-                    uint8_t py = cs.phys_y;
+        auto& cs = core_setups[core_idx];
+        auto* core = cs.core;
+        uint8_t* l1_data = core->l1_data();
+        tt_emule::CBSyncState* cb_array = core->cb_sync_array();
+        tt_emule::TileCounterArray* tc_array = cs.has_dfbs ? core->tile_counters() : nullptr;
+        const uint8_t px = cs.phys_x;
+        const uint8_t py = cs.phys_y;
+        const uint32_t lx = cs.logical_core.x;
+        const uint32_t ly = cs.logical_core.y;
 
-                    std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
-                    if (cs.has_dfbs) {
-                        per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
-                    }
+        // Per-core logical coords (shared by all RISC fibers on this core).
+        auto& cstate = core->core_state();
+        cstate.logical_x = lx;
+        cstate.logical_y = ly;
 
-                    std::vector<std::thread> threads;
-                    std::vector<std::exception_ptr> kernel_exceptions(cs.ki_list->size());
-                    uint32_t lx = cs.logical_core.x;
-                    uint32_t ly = cs.logical_core.y;
-                    for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
-                        KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
-                        tt_emule::EmuleDFBInterface* dfb_array =
-                            cs.has_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
-                        threads.emplace_back([ki_ptr,
-                                              core,
-                                              l1_data,
-                                              dram_data,
-                                              cb_array,
-                                              dfb_array,
-                                              tc_array,
-                                              core_map_ptr,
-                                              px,
-                                              py,
-                                              lx,
-                                              ly,
-                                              kidx,
-                                              &kernel_start_barrier,
-                                              total_kernel_threads,
-                                              device_id,
-                                              &kep = kernel_exceptions[kidx]]() {
-                            (void)kidx;
-                            auto& ki = *ki_ptr;
-                            __rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
-                                      ki.kernel_config_base + ki.rta_offset_in_kc))
-                                : nullptr;
-                            __common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
-                                      ki.kernel_config_base + ki.crta_offset_in_kc))
-                                : nullptr;
-                            __emule_bridge_l1 = l1_data;
-                            __emule_bridge_dram = dram_data;
-                            __emule_cbs = cb_array;
-                            __emule_dfbs = dfb_array;
-                            __emule_tc_array = tc_array;
-                            __processor_id = ki.processor_id;
-                            __core = core;
-                            __emule_chip_id = static_cast<uint32_t>(device_id);
-                            __emule_core_map = core_map_ptr;
-                            my_x[0] = px;
-                            my_x[1] = px;
-                            my_y[0] = py;
-                            my_y[1] = py;
-                            __emule_logical_x = lx;
-                            __emule_logical_y = ly;
-
-                            __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
-                            __emule_trisc_id = 0;
-                            __emule_num_threads = ki.num_threads;
-                            __emule_my_thread_id = ki.thread_idx;
-
-                            // Startup barrier (declared in launch_cores): all
-                            // kernel threads start together.
-                            kernel_start_barrier.fetch_add(1, std::memory_order_acq_rel);
-                            while (kernel_start_barrier.load(std::memory_order_acquire) < total_kernel_threads) {
-                                std::this_thread::yield();
-                            }
-
-                            log_debug(
-                                tt::LogMetal,
-                                "  Launching kernel[{}] on logical ({},{}) phys ({},{}) rta_off=0x{:x} crta_off=0x{:x}",
-                                kidx, lx, ly, px, py, ki.rta_offset_in_kc, ki.crta_offset_in_kc);
-
-                            try {
-                                for (size_t t = 0; t < ki.variants.size(); ++t) {
-                                    if (ki.run_all_variants) {
-                                        __emule_trisc_id = static_cast<uint8_t>(t);
-                                    }
-                                    ki.variants[t]();
-                                }
-                            } catch (...) {
-                                kep = std::current_exception();
-                            }
-
-                            __core = nullptr;
-                            __rt_args = nullptr;
-                            __common_rt_args = nullptr;
-                            __emule_bridge_l1 = nullptr;
-                            __emule_bridge_dram = nullptr;
-                            __emule_cbs = nullptr;
-                            __emule_dfbs = nullptr;
-                            __emule_tc_array = nullptr;
-                            __emule_core_map = nullptr;
-                        });
-                    }
-
-                    for (auto& t : threads) {
-                        t.join();
-                    }
-
-                    // Rethrow first kernel exception
-                    for (size_t i = 0; i < kernel_exceptions.size(); ++i) {
-                        if (kernel_exceptions[i]) {
-                            try {
-                                std::rethrow_exception(kernel_exceptions[i]);
-                            } catch (const std::exception& e) {
-                                std::throw_with_nested(std::runtime_error(
-                                    "EMULE: kernel[" + std::to_string(i) + "] on core (" + std::to_string(lx) + "," +
-                                    std::to_string(ly) + ") failed"));
-                            } catch (...) {
-                                throw std::runtime_error(
-                                    "EMULE: kernel[" + std::to_string(i) + "] on core (" + std::to_string(lx) + "," +
-                                    std::to_string(ly) + ") threw unknown exception");
-                            }
-                        }
-                    }
-                } catch (...) {
-                    core_ep = std::current_exception();
-                }
-            });
-    }
-
-    for (auto& t : core_threads) {
-        t.join();
-    }
-
-    // Rethrow first core exception
-    for (size_t i = 0; i < core_exceptions.size(); ++i) {
-        if (core_exceptions[i]) {
-            std::rethrow_exception(core_exceptions[i]);
+        std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
+        if (cs.has_dfbs) {
+            per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
         }
+
+        for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
+            KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
+            auto& ki = *ki_ptr;
+            tt_emule::EmuleDFBInterface* dfb_array = cs.has_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
+
+            // Build + populate the fiber-owned ctx (set-once identity). The scheduler
+            // repoints __emule_self to this ctx on swap-in; my_x/my_y are restored from
+            // the FiberIdentity (they cannot move into the ctx — silicon-named globals).
+            std::unique_ptr<ThreadCommonCtx> ctx =
+                ki.is_tensix ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
+                             : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
+            ctx->rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.rta_offset_in_kc))
+                : nullptr;
+            ctx->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
+                : nullptr;
+            ctx->bridge_l1 = l1_data;
+            ctx->bridge_dram = dram_data;
+            ctx->cbs = cb_array;
+            ctx->dfbs = dfb_array;
+            ctx->tc_array = tc_array;
+            ctx->processor_id = ki.processor_id;
+            ctx->core_obj = core;
+            ctx->device = nullptr;
+            ctx->chip_id = static_cast<uint32_t>(device_id);
+            ctx->core_map = core_map_ptr;
+            ctx->neo_id = ki.is_tensix ? ki.processor_id : 0;
+            ctx->trisc_id = 0;
+            ctx->num_threads = ki.num_threads;
+            ctx->my_thread_id = ki.thread_idx;
+            ctx->core = &cstate;
+
+            tt::tt_metal::emule_fiber::FiberIdentity id;
+            id.phys_x = px;
+            id.phys_y = py;
+            id.logical_x = lx;
+            id.logical_y = ly;
+            id.proc_id = ki.processor_id;
+            id.kernel_src = nullptr;
+
+            // The fiber entry is the kernel body. __emule_self is set by the scheduler
+            // on swap-in; the no-op start-barrier of the OS-thread model is gone (a
+            // blocked fiber parks rather than spins, so start order is irrelevant).
+            sched.spawn(
+                [ki_ptr, lx, ly]() {
+                    auto& ki = *ki_ptr;
+                    try {
+                        for (size_t t = 0; t < ki.variants.size(); ++t) {
+                            if (ki.run_all_variants) {
+                                __emule_self->trisc_id = static_cast<uint8_t>(t);
+                            }
+                            ki.variants[t]();
+                        }
+                    } catch (...) {
+                        std::throw_with_nested(std::runtime_error(
+                            "EMULE: kernel on core (" + std::to_string(lx) + "," + std::to_string(ly) +
+                            ") failed"));
+                    }
+                },
+                std::move(ctx),
+                id);
+        }
+
+        dfb_keepalive.push_back(std::move(per_thread_dfbs));
     }
+
+    if (defer_run) {
+        // Mesh register phase: fibers are spawned but not run yet. Keep the DFB arrays they
+        // borrow alive until run_mesh_dispatch (the spawned ctx is already owned by the
+        // scheduler; core_kernels is kept by execute_program_emulated). The SIGFPE guard
+        // above is a no-op here since no kernel runs; run_mesh_dispatch installs its own.
+        g_mesh_dfb_keep.push_back(std::move(dfb_keepalive));
+        return;
+    }
+
+    // Run all registered fibers to completion; rethrows the first kernel exception,
+    // throws on a quiescent deadlock, aborts with a dump on livelock/hang.
+    sched.run_until_idle();
 }
 
 // ---------------------------------------------------------------------------
-// execute_program_emulated: Main entry point.
+// prepare_program: resolve a program's kernels ONCE (collect + JIT-compile + resolve),
+// memoized by ProgramId. emule's analogue of silicon's CompileProgram / is_compiled — the
+// first device of the mesh (and the first invocation) resolves; the rest reuse. The device-
+// derived compile defines are taken from this first device (identical across identical chips
+// of a homogeneous mesh).
 // ---------------------------------------------------------------------------
-void execute_program_emulated(IDevice* device, Program& program, const std::function<void()>& post_setup_barrier) {
+static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
     auto& impl = program.impl();
-    auto device_id = device->id();
-    log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
-    if (std::getenv("EMULE_FABRIC_DEBUG") != nullptr) {
-        fprintf(stderr, "[EMULE_FABRIC] execute_program_emulated device=%u START\n", (unsigned)device_id);
+    const ProgramId pid = impl.get_id();
+    if (auto it = g_resolved_programs.find(pid); it != g_resolved_programs.end()) {
+        return it->second;  // already resolved (peer mesh device or repeated invocation)
     }
 
+    auto device_id = device->id();
     auto* sw_emu = get_sw_emulated_chip(device_id);
 
-    // Phase 0: Populate bank mapping arrays
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
     populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
 
-    // Build worker coordinate mapping strings
     std::string worker_col_map_str, worker_row_map_str;
     build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
 
     std::string extra_inc = get_extra_include_flags();
 
-    // Compute semaphore base from HAL kernel config layout
     const auto& hal = MetalContext::instance().hal();
     uint32_t tensix_pct_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t kernel_config_base =
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
     const auto& prog_config = impl.get_program_config(tensix_pct_index);
     uint32_t emule_sem_base = kernel_config_base + prog_config.sem_offset;
-    log_debug(
-        tt::LogMetal,
-        "  EMULE_SEM_BASE: 0x{:x} (kernel_config_base=0x{:x}, sem_offset=0x{:x})",
-        emule_sem_base,
-        kernel_config_base,
-        prog_config.sem_offset);
 
-    // Phase 1: Collect kernels and resolve/compile
     std::map<CoreCoord, std::vector<PendingKernelInfo>> pending_core_kernels;
     std::map<std::string, DeferredCompile> deferred_compiles;
     std::unordered_map<std::string, std::function<void()>> resolved_fns;
     std::vector<std::string> inline_src_temps;
-
     collect_kernels(
-        impl,
-        num_dram_channels,
-        num_l1_banks,
-        worker_col_map_str,
-        worker_row_map_str,
-        emule_sem_base,
-        extra_inc,
-        pending_core_kernels,
-        deferred_compiles,
-        resolved_fns,
-        inline_src_temps);
-
+        impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str,
+        emule_sem_base, extra_inc, pending_core_kernels, deferred_compiles, resolved_fns, inline_src_temps);
     jit_compile_pending(deferred_compiles, resolved_fns, inline_src_temps);
 
-    // Resolve pending kernels to function pointers
-    std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
+    ResolvedProgram resolved;
+    resolved.emule_sem_base = emule_sem_base;
     for (auto& [logical_core, pending_list] : pending_core_kernels) {
         for (auto& pk : pending_list) {
             KernelInfo ki{
@@ -2684,31 +2632,93 @@ void execute_program_emulated(IDevice* device, Program& program, const std::func
             for (const auto& key : pk.variant_cache_keys) {
                 ki.variants.push_back(resolved_fns.at(key));
             }
-            core_kernels[logical_core].push_back(std::move(ki));
+            resolved.core_kernels[logical_core].push_back(std::move(ki));
         }
     }
+    log_info(
+        tt::LogMetal,
+        "execute_program_emulated: program {} resolved ({} logical cores)",
+        pid,
+        resolved.core_kernels.size());
 
-    log_info(tt::LogMetal, "execute_program_emulated: {} logical cores", core_kernels.size());
-
-    // Phase 2: Build core map and set up per-core state
-    auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
-
-    std::vector<CoreSetup> core_setups;
-    setup_core_state(impl, device, sw_emu, core_kernels, emule_sem_base, core_setups);
-
-    // Cross-device ordering barrier: under concurrent multi-device dispatch every device must finish
-    // writing its CB/semaphore initial values (setup_core_state, above) before ANY device launches
-    // kernels — otherwise a peer chip's fabric teleport (a barrier / out-ready atomic-inc) can land in
-    // this chip's L1 before this chip initializes that semaphore and be clobbered, deadlocking the CCL.
-    if (post_setup_barrier) {
-        post_setup_barrier();
+    // LRU-bound the cache (safety net; entries are otherwise valid for the program's life).
+    if (g_resolved_programs.size() >= kMaxResolvedPrograms && !g_resolved_lru.empty()) {
+        g_resolved_programs.erase(g_resolved_lru.front());
+        g_resolved_lru.pop_front();
     }
+    g_resolved_lru.push_back(pid);
+    return g_resolved_programs.emplace(pid, std::move(resolved)).first->second;
+}
 
-    // Phase 3: Launch all cores concurrently
+// ---------------------------------------------------------------------------
+// dispatch_to_device: per-device setup + launch, reusing the program's resolved kernels.
+// emule's analogue of dispatching the already-compiled program to one chip. dram_core (the
+// chip's DRAM backing) and the bank-table globals are per device.
+// ---------------------------------------------------------------------------
+static void dispatch_to_device(
+    IDevice* device, Program& program, ResolvedProgram& resolved, bool defer_run) {
+    auto& impl = program.impl();
+    auto device_id = device->id();
+    auto* sw_emu = get_sw_emulated_chip(device_id);
+
+    tt_emule::Core* dram_core = nullptr;
+    uint32_t num_dram_channels = 0;
+    uint32_t num_l1_banks = 0;
+    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
+
+    auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
+    std::vector<CoreSetup> core_setups;
+    setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, core_setups);
+
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
-    launch_cores(core_setups, dram_data, core_map_ptr, device_id);
+    launch_cores(core_setups, dram_data, core_map_ptr, device_id, defer_run);
+}
 
+// ---------------------------------------------------------------------------
+// execute_program_emulated: Main entry point. Mirrors silicon's compile-once / dispatch-
+// reuse: prepare_program resolves once (memoized by program id), dispatch_to_device runs
+// per device against the shared resolved kernels.
+// ---------------------------------------------------------------------------
+void execute_program_emulated(IDevice* device, Program& program) {
+    auto device_id = device->id();
+    log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
+
+    ResolvedProgram& resolved = prepare_program(device, program);  // compile-once (memoized)
+
+    const bool defer = g_emule_mesh_defer;  // mesh register phase (the run is deferred)
+    dispatch_to_device(device, program, resolved, defer);
+
+    if (defer) {
+        log_debug(tt::LogMetal, "execute_program_emulated: device {} registered (deferred mesh run)", device_id);
+        return;
+    }
     log_debug(tt::LogMetal, "execute_program_emulated: device {} done", device_id);
+}
+
+// ---------------------------------------------------------------------------
+// Mesh register/run split (see header). begin_mesh_dispatch puts execute_program_emulated
+// into defer mode; run_mesh_dispatch drives the single concurrent run + frees kept state.
+// ---------------------------------------------------------------------------
+void begin_mesh_dispatch() {
+    g_emule_mesh_defer = true;
+    g_mesh_dfb_keep.clear();
+}
+
+void run_mesh_dispatch() {
+#if defined(__x86_64__) && defined(__linux__)
+    EmuleSigfpeGuard sigfpe_guard;  // the actual kernel run happens here, across all chips
+#endif
+    // Reset defer + free the kept per-device state even if the run throws.
+    struct Cleanup {
+        ~Cleanup() {
+            g_emule_mesh_defer = false;
+            g_mesh_dfb_keep.clear();
+        }
+    } cleanup;
+    // All devices' fibers were registered (spawned) during the per-device register phase;
+    // run them concurrently on the worker pool in one pass. Each fiber's ctx carries its
+    // device's core_map/bridge_dram, so cross-chip NOC resolution stays correct.
+    tt::tt_metal::emule_fiber::FiberScheduler::instance().run_until_idle();
 }
 
 }  // namespace tt::tt_metal::emule
