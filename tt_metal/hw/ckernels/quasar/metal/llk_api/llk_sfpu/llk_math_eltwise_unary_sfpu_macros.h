@@ -20,8 +20,8 @@ inline __attribute__((always_inline)) void _sfpu_check_(
     [[maybe_unused]] std::uint32_t dst_index, VectorMode vector_mode) {
     LLK_ASSERT(
         vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
-            vector_mode == VectorMode::None,
-        "Quasar SFPU supports vector modes R, C, RC, None");
+            vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
+        "Quasar SFPU supports vector modes R, C, RC, None, RC_custom");
 }
 
 }  // namespace ckernel
