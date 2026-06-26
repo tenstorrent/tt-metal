@@ -541,6 +541,74 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
     assert calls["generate"][4]["logits_fn_builder"] == "builder"
 
 
+def test_generate_text_from_checkpoint_state_uses_tokenizer_vocab_size_for_seeded_hooks(monkeypatch):
+    calls = {}
+
+    class _Model:
+        mesh_device = "mesh"
+
+    class _Tokenizer:
+        vocab_size = 99
+
+    def fake_canvas_init_fn(mesh_device, **kwargs):
+        calls["canvas_init"] = (mesh_device, kwargs)
+        return "init"
+
+    def fake_noise_tokens_fn(mesh_device, **kwargs):
+        calls["noise_tokens"] = (mesh_device, kwargs)
+        return "noise"
+
+    monkeypatch.setattr(G, "make_seeded_host_canvas_init_fn", fake_canvas_init_fn)
+    monkeypatch.setattr(G, "make_seeded_host_noise_tokens_fn", fake_noise_tokens_fn)
+
+    generate_text_from_checkpoint_state(
+        _Model(),
+        _Tokenizer(),
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        seed=123,
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=lambda *args, **kwargs: "result",
+    )
+
+    assert calls["canvas_init"][1]["vocab_size"] == 99
+    assert calls["noise_tokens"][1]["vocab_size"] == 99
+
+
+def test_generate_text_from_checkpoint_state_can_use_tokenizer_len_for_vocab_size(monkeypatch):
+    calls = {}
+
+    class _Model:
+        mesh_device = "mesh"
+
+    class _Tokenizer:
+        def __len__(self):
+            return 101
+
+    def fake_canvas_init_fn(mesh_device, **kwargs):
+        calls["canvas_init"] = (mesh_device, kwargs)
+        return "init"
+
+    monkeypatch.setattr(G, "make_seeded_host_canvas_init_fn", fake_canvas_init_fn)
+
+    generate_text_from_checkpoint_state(
+        _Model(),
+        _Tokenizer(),
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        seed=123,
+        noise_tokens_fn="noise",
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=lambda *args, **kwargs: "result",
+    )
+
+    assert calls["canvas_init"][1]["vocab_size"] == 101
+
+
 def test_generate_text_from_checkpoint_state_preserves_explicit_noise_tokens(monkeypatch):
     calls = {}
 

@@ -546,6 +546,16 @@ def decode_generation(
     return [tokenizer.decode(ids, **decode_kwargs) for ids in token_ids]
 
 
+def _infer_tokenizer_vocab_size(tokenizer):
+    vocab_size = getattr(tokenizer, "vocab_size", None)
+    if vocab_size is not None:
+        return vocab_size
+    try:
+        return len(tokenizer)
+    except TypeError:
+        return None
+
+
 def generate_text(
     tt_model,
     logits_fn,
@@ -636,6 +646,8 @@ def generate_text_from_checkpoint_state(
         if max_new_tokens < 0:
             raise ValueError("max_new_tokens must be non-negative")
         num_blocks = (max_new_tokens + config.canvas_length - 1) // config.canvas_length
+    if vocab_size is None:
+        vocab_size = _infer_tokenizer_vocab_size(tokenizer)
     if init_canvas_fn is None:
         if vocab_size is None or seed is None:
             raise ValueError("init_canvas_fn is required unless vocab_size and seed are provided")
