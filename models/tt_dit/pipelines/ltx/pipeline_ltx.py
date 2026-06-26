@@ -885,6 +885,7 @@ class LTXPipeline:
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=state.state_dict_provider,
+            post_load_hook=getattr(self, "_transformer_post_load_hook", None),
         )
         self.transformer = state.model
 

@@ -266,20 +266,12 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
     """Install a quantization config on an LTX pipeline.
 
     Applies compute configs now (they survive eviction — module attributes, not Parameter
-    data) and patches ``_prepare_transformer`` so the weight typecast re-runs after every
-    reload (required under ``dynamic_load=True``, which evicts/reloads transformer weights).
+    data) and installs a post-load hook so the weight typecast re-runs after every reload
+    (required under ``dynamic_load=True``, which evicts/reloads transformer weights). The
+    hook runs inside ``load_model`` BEFORE the cache write, so cached tensorbins hold the
+    quantized dtype and a reload's cache hit matches the module's expected dtype.
     """
     for state in pipeline.transformer_states:
         apply_quant_config(state.model, config)
 
-    if not hasattr(pipeline, "_orig_prepare_transformer"):
-        pipeline._orig_prepare_transformer = pipeline._prepare_transformer
-    original_prepare = pipeline._orig_prepare_transformer
-
-    def _prepare_with_quant(idx: int = 0):
-        was_loaded = pipeline.transformer_states[idx].model.is_loaded()
-        original_prepare(idx)
-        if not was_loaded:
-            apply_quant_config(pipeline.transformer_states[idx].model, config)
-
-    pipeline._prepare_transformer = _prepare_with_quant
+    pipeline._transformer_post_load_hook = lambda model: apply_quant_config(model, config)

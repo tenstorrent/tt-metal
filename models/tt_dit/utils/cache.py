@@ -51,6 +51,7 @@ def load_model(
     is_fsdp: bool = False,
     get_torch_state_dict: Callable[[], dict] | None = None,
     create_cache: bool = True,
+    post_load_hook: Callable[[Module], None] | None = None,
 ) -> None:
     """
     Load model weights from cache or PyTorch state dict.
@@ -97,12 +98,16 @@ def load_model(
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
         tt_model.load_torch_state_dict(get_torch_state_dict())
+        if post_load_hook is not None:
+            post_load_hook(tt_model)
         ttnn.distributed_context_barrier()
         return
 
     if Path(cache_dir).is_dir():
         logger.info(f"loading cache at '{cache_dir}'.")
         tt_model.load(cache_dir)
+        if post_load_hook is not None:
+            post_load_hook(tt_model)
         ttnn.distributed_context_barrier()
         return
 
@@ -111,6 +116,12 @@ def load_model(
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
     tt_model.load_torch_state_dict(get_torch_state_dict())
+
+    # Hook (e.g. quant typecast) must run BEFORE save so the cache holds the post-hook
+    # weight dtype; otherwise a dynamic-load reload reads stale-dtype tensorbins into a
+    # hook-mutated module and the dtype check fails.
+    if post_load_hook is not None:
+        post_load_hook(tt_model)
 
     # If distributed, ensure that all processes have completed the check whether cache_dir exists,
     # before any rank might proceed to create that dir to save.
