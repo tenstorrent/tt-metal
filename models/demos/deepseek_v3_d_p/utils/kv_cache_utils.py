@@ -325,10 +325,6 @@ def create_kv_chunk_address_table_kimi(
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
     )
 
-    assert (
-        tt_kvpe_cache.shape[0] == num_users * num_layers
-    ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
-
     # tt-blaze-style merge: for every STAGE place its layers' chunks on ITS mesh at ITS base addr.
     # Within a stage we replay the original single-stage build exactly (one device group per SP row, an
     # independent bank round-robin per row sequencing slot -> local layer -> chunk), but write to the
