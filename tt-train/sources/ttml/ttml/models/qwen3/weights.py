@@ -263,9 +263,7 @@ def load_weights_from_hf(
     # The per-param mesh layout (placements + distribution shape) and its mapper
     # are read via the parallelism-agnostic ``ttml.sharding.Sharding`` helper --
     # the public owner of "read a tensor's live topology, rebuild the mapper that
-    # redistributes a host array onto the mesh exactly as the tensor was
-    # distributed" -- rather than this module reaching into ``ttml.fsdp``'s
-    # private placement reader.
+    # redistributes a host array onto the mesh exactly as the tensor was distributed".
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
     sharded_mappers: dict = {}
     if sharded:
@@ -277,12 +275,13 @@ def load_weights_from_hf(
             if mapper is not None and not sharding.is_fully_replicated:
                 # The param is genuinely sharded on some mesh axis. Scale the
                 # local per-device shape back up to the global shape on each
-                # sharded dim using the live distribution shape, then reuse the
+                # sharded dim using the live distribution shape, writing it back
+                # into ``ttml_shapes`` so ``_prepare`` pads to the global shape
+                # (the mapper re-slices the per-device shards). Then reuse the
                 # mapper Sharding built from that same topology.
-                global_shape = ttml_shapes[name]
                 for axis_idx, placement in enumerate(sharding.placements):
                     if isinstance(placement, ttnn.PlacementShard):
-                        global_shape[placement.dim] *= sharding.dist_shape[axis_idx]
+                        ttml_shapes[name][placement.dim] *= sharding.dist_shape[axis_idx]
                 sharded_mappers[name] = mapper
             else:
                 # Replicated (any param fully_shard leaves un-sharded) or

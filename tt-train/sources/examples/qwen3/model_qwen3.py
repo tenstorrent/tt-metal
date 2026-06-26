@@ -2,31 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3 HF weight loading and re-exports.
+"""Qwen3 ``linear`` helper and backwards-compat alias.
 
-The model implementation lives in ``ttml.models.qwen3``.  This module provides
-``load_weights_from_hf`` for loading HuggingFace checkpoints into the
-single-device ``Qwen3`` model, and re-exports symbols consumed by
-``model_qwen3_distributed.py``, ``model_factory.py`` and external callers.
+The model implementation and HF weight loader live in ``ttml.models.qwen3`` /
+``ttml.models.qwen3.weights``; import those directly. This module provides the
+``linear`` helper (used by ``model_qwen3_distributed``) and the
+``Qwen3ForCausalLM`` alias for callers that predate the rename.
 """
 
 import ttml
-
-# Re-export shared components so existing callers (model_qwen3_distributed,
-# model_factory, etc.) continue to work with ``from model_qwen3 import ...``
-from ttml.models.qwen3 import Qwen3, Qwen3Config  # noqa: F401
-
-# The HF -> ttml weight loader and its helpers now live in the shared
-# ttml.models.qwen3.weights module (single source of truth, shared with the GRPO
-# example). Re-export them so existing ``from model_qwen3 import ...`` callers
-# keep working.
-from ttml.models.qwen3.weights import (  # noqa: F401
-    load_weights_from_hf,
-    torch_to_ttml,
-    unpermute_proj_rows,
-    unpermute_norm_weights,
-    build_weight_mapping_single,
-)
+from ttml.models.qwen3 import Qwen3
 
 # Backwards-compat alias: callers that imported ``Qwen3ForCausalLM`` from this
 # module now get the canonical ``Qwen3`` from ``ttml.models.qwen3``.  Tying,

@@ -63,11 +63,11 @@ from ttml.models.qwen3 import (
 from model_qwen3 import linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
-from utils.param_utils import (
+from ttml.models.qwen3.weights import (
     unpermute_proj_rows,
     unpermute_norm_weights,
-    build_weight_mapping_distributed,
 )
+from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
     get_tp_size,

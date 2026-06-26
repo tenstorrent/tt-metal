@@ -11,10 +11,9 @@ import ttml
 
 from utils.context_managers import is_empty_init
 
-# ``torch_to_ttml`` now lives in the shared ttml.models.qwen3.weights module
-# (single source of truth, shared with the GRPO example); re-export it here so
-# existing ``from utils.tensor_utils import torch_to_ttml`` call sites keep working.
-from ttml.models.qwen3.weights import torch_to_ttml  # noqa: F401
+# ``torch_to_ttml`` lives in the shared ttml.models.qwen3.weights module (single
+# source of truth, shared with the GRPO example); the make_* helpers below use it.
+from ttml.models.qwen3.weights import torch_to_ttml
 
 
 def get_device():

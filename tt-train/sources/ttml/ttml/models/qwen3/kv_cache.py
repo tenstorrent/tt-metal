@@ -134,7 +134,7 @@ class KVCache:
         Unlike :meth:`reset` (which only rewinds the position and keeps the K/V
         DRAM resident for reuse), this destroys the cached tensors so the memory
         is returned before the next, unrelated forward pass (e.g. the training
-        ``compute_nlog_probs`` that runs right after generation).
+        ``compute_nlog_probs`` that runs right after generation in GRPO).
         """
         if self._cpp_cache is not None:
             self._cpp_cache.clear()

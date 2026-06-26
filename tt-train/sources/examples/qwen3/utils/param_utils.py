@@ -14,21 +14,6 @@ import torch
 import ttnn
 import ttml
 
-# The single-device weight permutation / inverse-permutation helpers and the
-# single-device name mapping builder now live in the shared
-# ttml.models.qwen3.weights module (single source of truth, shared with the GRPO
-# example). They are re-exported here so existing ``from utils.param_utils
-# import ...`` call sites keep working. The distributed (TP) mapping/gradient
-# builders below are qwen3-example-specific and remain local.
-from ttml.models.qwen3.weights import (  # noqa: F401
-    unpermute_proj_rows,
-    unpermute_norm_weights,
-    repermute_proj_rows,
-    repermute_norm_weights,
-    build_weight_mapping_single,
-)
-
-
 # =====================================================================
 # Parameter name mapping builders (distributed / TP — qwen3-specific)
 # =====================================================================

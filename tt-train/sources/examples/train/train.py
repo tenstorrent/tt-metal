@@ -101,8 +101,6 @@ class TrainingConfig(BaseTrainingConfig):
 
 
 # ── Mesh / device ─────────────────────────────────────────────────────────────
-# build_mesh now lives in ttml.common.utils (shared with the GRPO example); it is
-# imported above.
 
 
 def _device_arch_name() -> str:
