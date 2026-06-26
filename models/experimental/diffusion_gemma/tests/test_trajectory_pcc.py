@@ -74,6 +74,18 @@ def test_entropy_abs_gate_catches_affine_error_pcc_misses():
     assert cmp.min_argmax_agreement == 1.0 and cmp.min_canvas_agreement == 1.0 and cmp.min_accept_iou == 1.0
 
 
+def test_constant_mean_entropy_offset_fails_trajectory_pcc():
+    ref = _peaked_traj()
+    shifted_steps = [r._replace(entropy_mean=r.entropy_mean + 0.5) for r in ref.per_step]
+    cand = ref._replace(per_step=shifted_steps)
+
+    cmp = compare_trajectories(ref, cand)
+    assert cmp.entropy_trajectory_pcc == 0.0
+    assert not cmp.passed
+    assert cmp.max_entropy_abs_err == 0.0
+    assert cmp.min_argmax_agreement == 1.0
+
+
 def test_decision_level_fields_distinguish_drifted_trajectories():
     """Distinct trajectories must fail on EVERY decision class — sampled, accept,
     canvas, per-token entropy — not just the clean argmax."""

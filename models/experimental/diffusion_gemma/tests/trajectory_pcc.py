@@ -29,7 +29,13 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 
 def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
     """Repo-standard PCC wrapper; magnitude drift is gated separately by max |Δ|."""
-    _, pcc = comp_pcc(a.flatten().float(), b.flatten().float(), pcc=0.0)
+    a = a.flatten().float()
+    b = b.flatten().float()
+    a_const = bool(torch.all(a == a[0])) if a.numel() else True
+    b_const = bool(torch.all(b == b[0])) if b.numel() else True
+    if a_const or b_const:
+        return 1.0 if a_const and b_const and torch.equal(a, b) else 0.0
+    _, pcc = comp_pcc(a, b, pcc=0.0)
     return float(pcc)
 
 
