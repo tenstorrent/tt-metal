@@ -907,6 +907,9 @@ def test_sampling1d_deterministic_with_same_seed(ttnn_mesh_device):
     [
         pytest.param(1024, id="v1024"),
         pytest.param(32000, id="v32000"),
+        # #48222: confirm the ttnn.sampling batch-32 divergence at the real qwen-vl vocab sizes
+        pytest.param(151936, id="v151936-qwen3"),
+        pytest.param(152064, id="v152064-qwen25"),
     ],
 )
 def test_topk_allgather_isolation(ttnn_mesh_device, vocab_size):
@@ -1044,6 +1047,9 @@ def test_topk_allgather_isolation(ttnn_mesh_device, vocab_size):
     [
         pytest.param(1024, id="v1024"),
         pytest.param(32000, id="v32000"),
+        # #48222: confirm the ttnn.sampling batch-32 divergence at the real qwen-vl vocab sizes
+        pytest.param(151936, id="v151936-qwen3"),
+        pytest.param(152064, id="v152064-qwen25"),
     ],
 )
 def test_ttnn_sampling_isolation(ttnn_mesh_device, vocab_size):
