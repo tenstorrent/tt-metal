@@ -9,6 +9,24 @@
 **Current best decode latency (Galaxy, batch=1):** ~74.8 ms @ ISL=128, ~75.4 ms @ ISL=512, ~77.3 ms @ ISL=1024 (~13.4 tok/s)
 **Current best aggregate TPS (Galaxy, batch=32):** ~367 tok/s @ ISL=128, ~358 tok/s @ ISL=512, ~350 tok/s @ ISL=1024
 
+## Performance Results
+
+### Blackhole QB-2 (1×4 mesh, batch=1, bf16 KV)
+
+Measured with `run_sweep_isl_batch.py` (tuned env flags, trace sampling, 128 decode tokens).
+
+| ISL | Prefill (s) | tok/s | TTFT (ms) | Decode mean (ms) | Decode min–max (ms) |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 2048 | 25.3 | 31.45 | 29,178 | 31.8 | 31.6–32.2 |
+| 4096 | 22.3 | 30.86 | 25,356 | 32.4 | 32.1–36.7 |
+| 8192 | 44.7 | 30.40 | 47,855 | 32.9 | 32.6–33.3 |
+| 16384 | 90.3 | 29.41 | 93,434 | 34.0 | 33.9–34.3 |
+| 32768 | 192.9 | 27.40 | 196,108 | 36.5 | 36.2–37.0 |
+| 65536 | 454.1 | 24.15 | 457,374 | 41.4 | 40.7–43.9 |
+| 131072 | 1195.7 | 19.65 | 1,199,115 | 50.9 | 50.1–51.3 |
+
+Decode latency stays ~32 ms/token through ISL=8K, then rises gradually to ~51 ms/token at 131K context. Prefill time scales roughly linearly with ISL at long context (e.g. ~20 min for 131K tokens).
+
 ## Directory Structure
 
 ```
@@ -42,8 +60,9 @@ models/experimental/glm4_moe_lite/
 1. [Quick Start](#quick-start)
    - [Greedy Debug Script (single run)](#greedy-debug-script-single-run)
    - [Batch & ISL Sweep](#batch--isl-sweep)
-2. [Script & CLI Options](#script--cli-options)
-3. [Environment Variables](#environment-variables)
+2. [Performance Results](#performance-results)
+3. [Script & CLI Options](#script--cli-options)
+4. [Environment Variables](#environment-variables)
    - [Required](#required)
    - [Feature Toggles](#feature-toggles)
    - [Performance Tuning](#performance-tuning)
