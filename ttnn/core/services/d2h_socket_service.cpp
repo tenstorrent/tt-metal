@@ -357,6 +357,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     }
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    start_host_read_workers();
 }
 
 D2HStreamService::D2HStreamService(
@@ -384,10 +385,12 @@ D2HStreamService::D2HStreamService(
     if (cfg_.metadata_size_bytes > 0) {
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
     }
+    start_host_read_workers();
 }
 
 D2HStreamService::~D2HStreamService() {
     try {
+        stop_host_read_workers();
         if (!is_owner_) {
             sockets_.clear();
             return;
@@ -453,6 +456,160 @@ D2HStreamService::~D2HStreamService() {
         log_warning(tt::LogOp, "D2HStreamService: shutdown failed: {}", e.what());
     } catch (...) {
         log_warning(tt::LogOp, "D2HStreamService: shutdown failed with unknown exception");
+    }
+}
+
+size_t D2HStreamService::effective_host_read_worker_count() const {
+    if (sockets_.size() <= 1 || !cfg_.parallel_host_read) {
+        return 0;
+    }
+    if (cfg_.host_read_thread_count == 0) {
+        return std::min<size_t>(kAutoHostReadThreadCount, sockets_.size());
+    }
+    if (cfg_.host_read_thread_count <= 1) {
+        return 0;
+    }
+    return std::min<size_t>(cfg_.host_read_thread_count, sockets_.size());
+}
+
+void D2HStreamService::start_host_read_workers() {
+    const size_t worker_count = effective_host_read_worker_count();
+    if (worker_count == 0 || !host_read_workers_.empty()) {
+        return;
+    }
+
+    host_read_worker_states_.reserve(worker_count);
+    host_read_workers_.reserve(worker_count);
+    for (size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+        auto state = std::make_unique<HostReadWorkerState>();
+        state->socket_begin = (worker_index * sockets_.size()) / worker_count;
+        state->socket_end = ((worker_index + 1) * sockets_.size()) / worker_count;
+        TT_FATAL(
+            state->socket_begin < state->socket_end,
+            "D2HStreamService: host read worker {} got an empty socket range [{}, {})",
+            worker_index,
+            state->socket_begin,
+            state->socket_end);
+        host_read_worker_states_.push_back(std::move(state));
+        host_read_workers_.emplace_back([this, worker_index]() { host_read_worker_loop(worker_index); });
+    }
+}
+
+void D2HStreamService::stop_host_read_workers() {
+    for (auto& state_ptr : host_read_worker_states_) {
+        auto& state = *state_ptr;
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            state.job = HostReadJobKind::Stop;
+            state.done = false;
+        }
+        state.cv.notify_one();
+    }
+
+    for (auto& worker : host_read_workers_) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+    host_read_workers_.clear();
+    host_read_worker_states_.clear();
+}
+
+void D2HStreamService::read_payload_with_host_read_workers(const std::vector<std::byte*>& bases) {
+    TT_FATAL(
+        bases.size() == sockets_.size(),
+        "D2HStreamService::read_payload_with_host_read_workers: bases size {} does not match sockets size {}",
+        bases.size(),
+        sockets_.size());
+
+    for (size_t worker_index = 0; worker_index < host_read_worker_states_.size(); ++worker_index) {
+        submit_host_read_job(worker_index, HostReadJobKind::Payload, &bases);
+    }
+    wait_host_read_jobs();
+}
+
+void D2HStreamService::submit_host_read_job(
+    size_t worker_index, HostReadJobKind job, const std::vector<std::byte*>* payload_bases) {
+    TT_FATAL(
+        worker_index < host_read_worker_states_.size(),
+        "D2HStreamService::submit_host_read_job: worker index {} out of range",
+        worker_index);
+    TT_FATAL(
+        job == HostReadJobKind::Payload || job == HostReadJobKind::Stop,
+        "D2HStreamService::submit_host_read_job: invalid job {}",
+        static_cast<int>(job));
+    TT_FATAL(
+        job != HostReadJobKind::Payload || payload_bases != nullptr,
+        "D2HStreamService::submit_host_read_job: payload job requires payload bases");
+
+    auto& state = *host_read_worker_states_[worker_index];
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        TT_FATAL(
+            state.done && state.job == HostReadJobKind::None,
+            "D2HStreamService::submit_host_read_job: worker {} is still busy",
+            worker_index);
+        state.payload_bases = payload_bases;
+        state.error = nullptr;
+        state.done = false;
+        state.job = job;
+    }
+    state.cv.notify_one();
+}
+
+void D2HStreamService::wait_host_read_jobs() {
+    std::exception_ptr first_error;
+    for (auto& state_ptr : host_read_worker_states_) {
+        auto& state = *state_ptr;
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.cv.wait(lock, [&state]() { return state.done; });
+        if (state.error != nullptr && first_error == nullptr) {
+            first_error = state.error;
+        }
+    }
+    if (first_error != nullptr) {
+        std::rethrow_exception(first_error);
+    }
+}
+
+void D2HStreamService::host_read_worker_loop(size_t worker_index) {
+    auto& state = *host_read_worker_states_[worker_index];
+
+    while (true) {
+        HostReadJobKind job = HostReadJobKind::None;
+        const std::vector<std::byte*>* payload_bases = nullptr;
+        {
+            std::unique_lock<std::mutex> lock(state.mutex);
+            state.cv.wait(lock, [&state]() { return state.job != HostReadJobKind::None; });
+            job = state.job;
+            payload_bases = state.payload_bases;
+            state.job = HostReadJobKind::None;
+        }
+
+        if (job == HostReadJobKind::Stop) {
+            break;
+        }
+
+        std::exception_ptr error;
+        try {
+            TT_FATAL(payload_bases != nullptr, "D2HStreamService::host_read_worker_loop: payload job missing bases");
+            for (size_t socket_index = state.socket_begin; socket_index < state.socket_end; ++socket_index) {
+                for (uint32_t i = 0; i < num_socket_pages_; ++i) {
+                    const size_t offset = static_cast<size_t>(i) * socket_page_size_;
+                    sockets_[socket_index]->read((*payload_bases)[socket_index] + offset, /*num_pages=*/1);
+                }
+            }
+        } catch (...) {
+            error = std::current_exception();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            state.payload_bases = nullptr;
+            state.error = error;
+            state.done = true;
+        }
+        state.cv.notify_one();
     }
 }
 
@@ -612,7 +769,10 @@ std::string D2HStreamService::export_descriptor(const std::string& service_id) {
 }
 
 std::unique_ptr<D2HStreamService> D2HStreamService::connect(
-    const std::string& service_id, std::optional<uint32_t> timeout_ms) {
+    const std::string& service_id,
+    std::optional<uint32_t> timeout_ms,
+    bool parallel_host_read,
+    uint32_t host_read_thread_count) {
     auto desc = distributed::D2HStreamServiceDescriptor::wait_and_read(
         distributed::descriptor_path_for_d2h_service(service_id), timeout_ms.value_or(10000));
 
@@ -640,6 +800,8 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
         .worker_cores = std::nullopt,
         .metadata_master_core = std::nullopt,
         .metadata_size_bytes = desc.metadata_size_bytes,
+        .parallel_host_read = parallel_host_read,
+        .host_read_thread_count = host_read_thread_count,
     };
 
     auto service = std::unique_ptr<D2HStreamService>(
@@ -739,27 +901,14 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
         bases.push_back(shard_span.data());
     }
 
-    std::vector<std::thread> read_threads;
-    std::vector<std::exception_ptr> read_errors(sockets_.size());
-    read_threads.reserve(sockets_.size());
-    for (size_t s = 0; s < sockets_.size(); ++s) {
-        read_threads.emplace_back([&, s] {
-            try {
-                for (uint32_t i = 0; i < num_socket_pages_; ++i) {
-                    const size_t offset = static_cast<size_t>(i) * socket_page_size_;
-                    sockets_[s]->read(bases[s] + offset, /*num_pages=*/1);
-                }
-            } catch (...) {
-                read_errors[s] = std::current_exception();
+    if (!host_read_worker_states_.empty()) {
+        read_payload_with_host_read_workers(bases);
+    } else {
+        for (size_t s = 0; s < sockets_.size(); ++s) {
+            for (uint32_t i = 0; i < num_socket_pages_; ++i) {
+                const size_t offset = static_cast<size_t>(i) * socket_page_size_;
+                sockets_[s]->read(bases[s] + offset, /*num_pages=*/1);
             }
-        });
-    }
-    for (auto& thread : read_threads) {
-        thread.join();
-    }
-    for (const auto& error : read_errors) {
-        if (error) {
-            std::rethrow_exception(error);
         }
     }
 

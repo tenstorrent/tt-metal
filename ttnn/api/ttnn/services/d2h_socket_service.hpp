@@ -6,8 +6,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include <tt_stl/span.hpp>
@@ -35,6 +40,9 @@ class MeshBuffer;
 namespace tt::tt_metal {
 class D2HStreamService {
 public:
+    // Tuned auto worker count used when parallel_host_read is enabled and host_read_thread_count == 0.
+    static constexpr uint32_t kAutoHostReadThreadCount = 32;
+
     struct Config {
         TensorSpec global_spec;
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
@@ -44,6 +52,14 @@ public:
         std::optional<CoreRange> worker_cores;
         std::optional<CoreCoord> metadata_master_core;
         uint32_t metadata_size_bytes = 0;
+        // Host-side drain parallelism. D2H historically used one host thread per socket per
+        // read_from_tensor() call; this keeps the default parallel behavior but uses a persistent,
+        // grouped worker pool to avoid per-call thread creation.
+        bool parallel_host_read = true;
+        // Optional explicit host worker count. Only used when parallel_host_read is enabled.
+        // 0 = auto: start the tuned default worker count, clamped by num_sockets. 1 forces serial.
+        // N > 1 starts up to N grouped workers, each reading a contiguous socket range.
+        uint32_t host_read_thread_count = 0;
     };
 
     D2HStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -77,7 +93,10 @@ public:
 
     std::string export_descriptor(const std::string& service_id);
     static std::unique_ptr<D2HStreamService> connect(
-        const std::string& service_id, std::optional<uint32_t> timeout_ms = std::nullopt);
+        const std::string& service_id,
+        std::optional<uint32_t> timeout_ms = std::nullopt,
+        bool parallel_host_read = true,
+        uint32_t host_read_thread_count = 0);
 
 private:
     D2HStreamService(
@@ -87,6 +106,28 @@ private:
         uint32_t num_socket_pages);
 
     void signal_termination();
+
+    enum class HostReadJobKind { None, Payload, Stop };
+
+    struct alignas(64) HostReadWorkerState {
+        std::mutex mutex;
+        std::condition_variable cv;
+        HostReadJobKind job = HostReadJobKind::None;
+        const std::vector<std::byte*>* payload_bases = nullptr;
+        size_t socket_begin = 0;
+        size_t socket_end = 0;
+        bool done = true;
+        std::exception_ptr error;
+    };
+
+    size_t effective_host_read_worker_count() const;
+    void start_host_read_workers();
+    void stop_host_read_workers();
+    void read_payload_with_host_read_workers(const std::vector<std::byte*>& bases);
+    void submit_host_read_job(
+        size_t worker_index, HostReadJobKind job, const std::vector<std::byte*>* payload_bases = nullptr);
+    void wait_host_read_jobs();
+    void host_read_worker_loop(size_t worker_index);
 
     bool is_owner_ = true;
 
@@ -118,5 +159,8 @@ private:
 
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
+
+    std::vector<std::unique_ptr<HostReadWorkerState>> host_read_worker_states_;
+    std::vector<std::thread> host_read_workers_;
 };
 }  // namespace tt::tt_metal

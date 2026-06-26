@@ -42,7 +42,9 @@ void py_module_types(nb::module_& mod) {
                std::optional<tt::tt_metal::distributed::MeshComposerConfig> composer_config,
                std::optional<CoreRange> worker_cores,
                std::optional<CoreCoord> metadata_master_core,
-               uint32_t metadata_size_bytes) {
+               uint32_t metadata_size_bytes,
+               bool parallel_host_read,
+               uint32_t host_read_thread_count) {
                 tt::tt_metal::D2HStreamService::Config cfg{
                     .global_spec = global_spec,
                     .mapper = std::move(mapper),
@@ -52,6 +54,8 @@ void py_module_types(nb::module_& mod) {
                     .worker_cores = worker_cores,
                     .metadata_master_core = metadata_master_core,
                     .metadata_size_bytes = metadata_size_bytes,
+                    .parallel_host_read = parallel_host_read,
+                    .host_read_thread_count = host_read_thread_count,
                 };
                 new (self) tt::tt_metal::D2HStreamService(mesh_device, std::move(cfg));
             },
@@ -63,7 +67,9 @@ void py_module_types(nb::module_& mod) {
             nb::arg("composer_config").none() = nb::none(),
             nb::arg("worker_cores").none() = nb::none(),
             nb::arg("metadata_master_core").none() = nb::none(),
-            nb::arg("metadata_size_bytes") = 0u)
+            nb::arg("metadata_size_bytes") = 0u,
+            nb::arg("parallel_host_read") = true,
+            nb::arg("host_read_thread_count") = 0u)
         .def(
             "read_from_tensor",
             [](tt::tt_metal::D2HStreamService& self, tt::tt_metal::Tensor& host_tensor) {
@@ -118,11 +124,17 @@ void py_module_types(nb::module_& mod) {
         .def("export_descriptor", &tt::tt_metal::D2HStreamService::export_descriptor, nb::arg("service_id"))
         .def_static(
             "connect",
-            [](const std::string& service_id, std::optional<uint32_t> timeout_ms) {
-                return tt::tt_metal::D2HStreamService::connect(service_id, timeout_ms);
+            [](const std::string& service_id,
+               std::optional<uint32_t> timeout_ms,
+               bool parallel_host_read,
+               uint32_t host_read_thread_count) {
+                return tt::tt_metal::D2HStreamService::connect(
+                    service_id, timeout_ms, parallel_host_read, host_read_thread_count);
             },
             nb::arg("service_id"),
-            nb::arg("timeout_ms") = nb::none());
+            nb::arg("timeout_ms") = nb::none(),
+            nb::arg("parallel_host_read") = true,
+            nb::arg("host_read_thread_count") = 0u);
 }
 
 void py_module(nb::module_& /* mod */) {}

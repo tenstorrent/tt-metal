@@ -87,6 +87,8 @@ struct BenchmarkCase {
     uint32_t per_device_bytes = 0;
     uint32_t tensor_num_pages = 0;
     uint32_t fifo_socket_pages = kDefaultFifoSocketPages;
+    bool parallel_host_read = true;
+    uint32_t host_read_thread_count = 0;
 };
 
 struct ServiceGeometryConfig {
@@ -124,6 +126,18 @@ uint64_t ceil_div(uint64_t numerator, uint64_t denominator) {
 uint32_t core_range_size(const CoreRange& core_range) {
     return (core_range.end_coord.x - core_range.start_coord.x + 1) *
            (core_range.end_coord.y - core_range.start_coord.y + 1);
+}
+
+uint32_t effective_host_read_thread_count(
+    bool parallel_host_read, uint32_t host_read_thread_count, size_t num_sockets) {
+    if (!parallel_host_read || host_read_thread_count == 1 || num_sockets <= 1) {
+        return 1;
+    }
+    const size_t worker_count =
+        host_read_thread_count == 0
+            ? std::min<size_t>(tt::tt_metal::D2HStreamService::kAutoHostReadThreadCount, num_sockets)
+            : std::min<size_t>(host_read_thread_count, num_sockets);
+    return static_cast<uint32_t>(worker_count);
 }
 
 ttsl::SmallVector<MeshMapperConfig::Placement> full_shard_2d_placements() {
@@ -314,7 +328,8 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     log_info(
         tt::LogTest,
         "[{}] Starting: global_shape={}, per_device_bytes={}, tensor_num_pages={}, tensor_page_bytes={}, "
-        "scratch_cb_size_bytes={}, fifo_size_bytes={}, ack_worker_count={}, perf_iters={}",
+        "scratch_cb_size_bytes={}, fifo_size_bytes={}, ack_worker_count={}, parallel_host_read={}, "
+        "host_read_thread_count={}, perf_iters={}",
         cs.label,
         stream_string(global_shape),
         cs.per_device_bytes,
@@ -323,6 +338,8 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         geometry.scratch_cb_size_bytes,
         geometry.fifo_size_bytes,
         ack_worker_count,
+        cs.parallel_host_read,
+        cs.host_read_thread_count,
         kPerfIters);
 
     const auto tensor_layout = TensorLayout(
@@ -337,6 +354,8 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         .fifo_size_bytes = geometry.fifo_size_bytes,
         .scratch_cb_size_bytes = geometry.scratch_cb_size_bytes,
         .worker_cores = kProducerCores,
+        .parallel_host_read = cs.parallel_host_read,
+        .host_read_thread_count = cs.host_read_thread_count,
     };
 
     tt::tt_metal::D2HStreamService service(g_mesh_device, std::move(cfg));
@@ -361,6 +380,8 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     const uint32_t pages_per_chunk = socket_page_size / backing_buf->page_size();
     const uint64_t fifo_socket_pages = geometry.fifo_size_bytes / socket_page_size;
     const double fifo_transfer_depth = static_cast<double>(fifo_socket_pages) / static_cast<double>(num_socket_pages);
+    const uint32_t effective_host_read_threads =
+        effective_host_read_thread_count(cs.parallel_host_read, cs.host_read_thread_count, sockets.size());
     const WarmupPlan warmup_plan = compute_warmup_plan(geometry.fifo_size_bytes, per_shard_payload_bytes);
     const uint32_t warmup_iters = warmup_plan.warmup_iters;
     const uint32_t latency_iters = kLatencyIters;
@@ -371,7 +392,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         tt::LogTest,
         "[{}] Geometry: sockets={}, per_shard_payload_bytes={}, socket_page_size={}, num_socket_pages={}, "
         "pages_per_chunk={}, fifo_socket_pages={}, fifo_transfer_depth={:.3f}, "
-        "host_fifo_depth_transfers={}, warmup_iters={}",
+        "effective_host_read_thread_count={}, host_fifo_depth_transfers={}, warmup_iters={}",
         cs.label,
         sockets.size(),
         per_shard_payload_bytes,
@@ -380,6 +401,7 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         pages_per_chunk,
         fifo_socket_pages,
         fifo_transfer_depth,
+        effective_host_read_threads,
         warmup_plan.host_fifo_depth_transfers,
         warmup_iters);
 
@@ -491,6 +513,9 @@ void run_d2h_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["fifo_socket_pages_configured"] = static_cast<double>(cs.fifo_socket_pages);
         state.counters["fifo_size_bytes"] = static_cast<double>(geometry.fifo_size_bytes);
         state.counters["ack_worker_count"] = static_cast<double>(ack_worker_count);
+        state.counters["parallel_host_read"] = cs.parallel_host_read ? 1.0 : 0.0;
+        state.counters["host_read_thread_count"] = static_cast<double>(cs.host_read_thread_count);
+        state.counters["effective_host_read_thread_count"] = static_cast<double>(effective_host_read_threads);
         state.counters["per_shard_bytes"] = static_cast<double>(per_shard_payload_bytes);
         state.counters["socket_page_size"] = static_cast<double>(socket_page_size);
         state.counters["num_socket_pages"] = static_cast<double>(num_socket_pages);
