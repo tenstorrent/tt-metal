@@ -92,13 +92,17 @@ y=0:  DRAM(0,0)       DRAM(1,0)
 
 1. **`Cluster::get_virtual_coordinate_from_logical_coordinates`** only supports TENSIX/WORKER, DRAM, and ETH — it **throws** for other core types (`tt_metal/llrt/tt_cluster.cpp`).
 
-2. **`DispatchMemMap`** only implements WORKER and ETH — no `CoreType::DISPATCH` path.
+2. **`DispatchMemMap`** only implements WORKER and ETH — no `CoreType::DISPATCH` path. Its constructor also builds a **`DispatchSettings`**, whose `switch` over core type likewise handles only WORKER/ETH (`default` throws) — both need a `CoreType::DISPATCH` case.
 
 3. **`HalProgrammableCoreType`** has TENSIX, ETH, DRAM — **no DISPATCH yet**. Will add `HalProgrammableCoreType::DISPATCH` (confirmed). Device-side **`ProgrammableCoreType::DISPATCH`** in `core_config.h` is also required (confirmed). Quasar HAL currently registers DM firmware for Tensix only.
 
 4. **`get_logical_dispatch_cores()`** always reads from core descriptor YAML (Tensix-relative), not from UMD soc descriptor.
 
 5. **`dispatch_core_manager::get_dispatch_core_type()`** derives type from user-facing `DispatchCoreConfig`, which only maps to WORKER or ETH.
+
+6. **`MetalContext::is_coord_in_range`** (used by `ProgramImpl::create_semaphore` / `CreateSemaphore`) only checks worker, ETH, and DRAM cores — it returns false for dispatch-engine coords, so `CreateSemaphore(..., CoreType::DISPATCH)` throws `Coordinates out of range`. Needs a `Cluster::is_dispatch_core` check.
+
+7. **DISPATCH HAL `KERNEL_CONFIG` size** — `create_dispatch_mem_map` copies the Tensix mem-map sizes, where `KERNEL_CONFIG` size is 0 (Tensix runtime-arg validation uses the hardcoded `max_runtime_args` constant instead). `Kernel::validate_runtime_args_size` sizes DISPATCH runtime args from `get_dev_size(DISPATCH, KERNEL_CONFIG)`, so without an explicit size `SetRuntimeArgs` fails with "Max allowable is 0". Must populate it in the dispatch memmap.
 
 ---
 
@@ -203,6 +207,7 @@ Extend **`HalProgrammableCoreType::DISPATCH`** (Quasar-only initially) and match
 - **JIT / firmware build:** extend **`hal_2xx_common.cpp`** `srcs()` / `target_name()` so `HalProgrammableCoreType::DISPATCH` + `HalProcessorClassType::DM` + `is_fw` → **`dispatch_dm.cc`** (not `dm.cc`); execution kernels still use `dmk.cc`
 - **L1 size: 4 MiB** — same as Tensix workers (`worker_l1_size` in soc descriptor)
 - **`dev_mem_map`:** reuse the common Quasar Tensix `dev_mem_map.h` layout until a dispatch-specific difference is required
+- **`KERNEL_CONFIG` size:** the DISPATCH memmap (`create_dispatch_mem_map`) copies the Tensix mem-map sizes, but Tensix leaves `mem_map_sizes[KERNEL_CONFIG] = 0` (its runtime-arg validation uses the hardcoded `max_runtime_args` constant). DISPATCH cores instead size runtime args from `get_dev_size(DISPATCH, KERNEL_CONFIG)` in `Kernel::validate_runtime_args_size`, so the dispatch memmap **must set** `KERNEL_CONFIG` size to the real region (gap between `KERNEL_CONFIG` base and `DEFAULT_UNRESERVED` base) — otherwise SetRuntimeArgs fails with "Max allowable is 0"
 - **Processor count: 8 DMs** (DM0–DM7; all valid for FD)
 - Extend `llrt::get_core_type()` to map virtual dispatch cores → `HalProgrammableCoreType::DISPATCH`
 - Reuse existing Tensix dispatch config buffer features where layout matches; add a dispatch-specific `DispatchFeature` only if needed later
@@ -214,6 +219,8 @@ Add `CoreType::DISPATCH` branch in `DispatchMemMap`:
 - **L1 size: 4 MiB** — use `HalProgrammableCoreType::DISPATCH` addresses (same layout as Tensix worker L1 for now)
 - **v1:** `are_fd_kernels_on_same_core=true` (single dispatch core; prefetch DM0 + dispatcher DM1 share L1 layout)
 - **Future:** derive same-core vs split-core from topology + soc dispatch core count; support multiple CQ/kernel instances without redesign
+
+Also add a `CoreType::DISPATCH` case in the **`DispatchSettings`** constructor (`dispatch_settings.cpp`): the `DispatchMemMap` constructor builds a `DispatchSettings(num_hw_cqs, core_type, ...)`, and its `switch` previously handled only `WORKER`/`ETH` (`default` throws `init_defaults not implemented for core type DISPATCH`). Route `CoreType::DISPATCH` through `init_worker_defaults` — the DISPATCH HAL memmap mirrors the Tensix (worker) L1 layout, so worker buffer sizes apply; `core_type_` is set to `DISPATCH` after the switch, overriding the `WORKER` value the builder sets internally.
 
 Register in `MetalContext` and `DispatchTopology` for Phase 4b. **`DispatchKernelInitializer`** registers `DispatchMemMap(CoreType::DISPATCH)` when fast dispatch is enabled (replaces today’s Quasar-specific `DispatchMemMap(WORKER)` wiring — see Phase 4b):
 
@@ -487,6 +494,7 @@ Full FD later reuses the same dispatch-engine core type, DM assignment model, an
 - Add `TT_METAL_TENSIX_DISPATCH_CORES` to `rtoptions` / `RunTimeOptions` (**checked first**; always forces Tensix pool when set)
 - Synthetic logical coord mapping in `metal_soc_descriptor`
 - Extend `Cluster::get_virtual_coordinate_from_logical_coordinates` for DISPATCH
+- Extend **`MetalContext::is_coord_in_range`** to accept dispatch-engine coords (`Cluster::is_dispatch_core`) — required by `ProgramImpl::create_semaphore` / `CreateSemaphore(..., CoreType::DISPATCH)` in Phase 4a
 - Internal `get_quasar_dispatch_cores()` / override in `get_logical_dispatch_cores()`
 
 ### Phase 2 — Internal type resolution
@@ -497,11 +505,11 @@ Full FD later reuses the same dispatch-engine core type, DM assignment model, an
 ### Phase 3 — HAL and firmware
 
 - `HalProgrammableCoreType::DISPATCH` + device **`ProgrammableCoreType::DISPATCH`** (new enum index; 4 MiB L1; shared Quasar `dev_mem_map`)
-- **`qa_hal_dispatch.cpp`** — L1/memmap/launch registration for dispatch-engine cores
+- **`qa_hal_dispatch.cpp`** — L1/memmap/launch registration for dispatch-engine cores; set **`KERNEL_CONFIG` mem-map size** explicitly (Tensix leaves it 0 since it uses the `max_runtime_args` constant, but DISPATCH runtime-arg validation reads `get_dev_size(DISPATCH, KERNEL_CONFIG)`)
 - Extend **`hal_2xx_common.cpp`**: JIT routes DISPATCH DM firmware → **`dispatch_dm.cc`**
 - New **`dispatch_dm.cc`** (DM-only FW derived from `dm.cc`; same `subordinate_map_t`, TRISC fields unused; DM0 orchestrates DM1–7)
 - **`risc_firmware_initializer`:** load `dispatch_dm.cc` on soc dispatch-engine cores at **every `CreateDevice`**; `DISPATCH_MODE_HOST` — **must complete before Phase 4a SD `LaunchProgram`**
-- **`DispatchMemMap` for `CoreType::DISPATCH`** (implementation; SD tests query directly in Phase 4a)
+- **`DispatchMemMap` for `CoreType::DISPATCH`** (implementation; SD tests query directly in Phase 4a) — includes the **`DispatchSettings`** `CoreType::DISPATCH` case (reuse `init_worker_defaults`); `MetalContext` builds `DispatchMemMap(CoreType::DISPATCH)` during init on Quasar, so this must be in place in Phase 3
 - **`DispatchEngineKernel`** + **`internal::CreateDispatchEngineKernel`** in required internal header
 - **`dispatch_kernel_initializer`:** **not in Phase 3** — Phase 4b only (see below)
 - **DPRINT (device-side only):** L1 `DPRINT_BUFFERS` in dispatch HAL memmap; `dprint.h` in **`dispatch_dm.cc`** — **host DPrint server attach is Phase 3b**
@@ -572,12 +580,12 @@ Phase 3 provides device-side DPRINT infrastructure (L1 `DPRINT_BUFFERS` in dispa
 | Type resolution | `dispatch_core_common.cpp`, `dispatch_core_manager.{hpp,cpp}`, `llrt/rtoptions.{hpp,cpp}` |
 | HAL | `hal_types.hpp`, **`qa_hal_dispatch.cpp`**, `qa_hal.cpp`, **`hal_2xx_common.cpp`**, `llrt/llrt.cpp` |
 | Dispatch FW | `hw/firmware/src/tt-2xx/dispatch_dm.cc` (new; based on `dm.cc`, TRISC removed) |
-| FD | `fd_kernel.cpp`, `prefetch.cpp`, `dispatch.cpp`, `dispatch_mem_map.cpp`, `topology.cpp`, `kernel.{hpp,cpp}` |
+| FD | `fd_kernel.cpp`, `prefetch.cpp`, `dispatch.cpp`, `dispatch_mem_map.cpp`, `dispatch_settings.cpp` (DISPATCH core-type case), `topology.cpp`, `kernel.{hpp,cpp}` |
 | SD bringup tests | `tests/.../dispatch/common.h`, `test_prefetcher.cpp`, `test_dispatcher.cpp` |
 | Internal (required) | `tt_metal/api/internal/dispatch/dispatch_engine_cores.hpp` — **`CreateDispatchEngineKernel`**, coordinate helpers |
 | FW init | `risc_firmware_initializer.cpp`, `dispatch_kernel_initializer.cpp` |
 | Allocator | `l1_banking_allocator.cpp` |
-| Validation | `program.cpp` |
+| Validation | `program.cpp`, `metal_context.cpp` (`is_coord_in_range` accepts DISPATCH coords) |
 | Debug (DPRINT) | **Phase 3b:** `debug_helpers.hpp`, `dprint_server.cpp`, `device_print.h`, `rtoptions.cpp` |
 | Debug (other) | **Phase 5:** `profiler.cpp`, inspector, watcher, NOC sanitize |
 

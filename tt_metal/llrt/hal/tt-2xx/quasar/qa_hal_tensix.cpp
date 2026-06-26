@@ -309,13 +309,23 @@ HalCoreInfoType create_dispatch_mem_map() {
          {"DM6", "DM6"},
          {"DM7", "DM7"}},
     };
+    auto mem_map_bases = tensix_mem_map.mem_map_bases();
+    auto mem_map_sizes = tensix_mem_map.mem_map_sizes();
+    // TENSIX leaves KERNEL_CONFIG size at 0 because its runtime-arg validation uses the hardcoded
+    // max_runtime_args constant. DISPATCH cores instead size runtime args from
+    // get_dev_size(DISPATCH, KERNEL_CONFIG), so populate it here with the real kernel-config region
+    // (the gap between the KERNEL_CONFIG base and DEFAULT_UNRESERVED base).
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
+        static_cast<uint32_t>(
+            mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] -
+            mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)]);
     return HalCoreInfoType(
         HalProgrammableCoreType::DISPATCH,
         CoreType::DISPATCH,
         std::move(processor_classes),
         std::vector<uint8_t>{1},
-        tensix_mem_map.mem_map_bases(),
-        tensix_mem_map.mem_map_sizes(),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
         tensix_mem_map.eth_fw_mailbox_msgs(),
         std::move(processor_classes_names),
         true,

@@ -12,7 +12,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -181,8 +180,7 @@ namespace {
 
 const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const tt::tt_metal::IDevice* device) {
     auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
-    const auto& dispatch_core_config =
-        MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_config();
     return get_quasar_dispatch_cores(env, device->id(), device->num_hw_cqs(), dispatch_core_config);
 }
 
@@ -190,9 +188,8 @@ const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const tt::tt_metal::IDevi
 
 CoreType resolve_sd_cq_kernel_core_type(const tt::tt_metal::IDevice* device) {
     auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
-    const auto& dispatch_core_config =
-        MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    return resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
+    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_config();
+    return tt::tt_metal::resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
 }
 
 CoreCoord dispatch_engine_core(const tt::tt_metal::IDevice* device, uint32_t index) {
