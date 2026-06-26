@@ -570,7 +570,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
 # ---------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
 def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dtype):
     torch.manual_seed(1234)
     g = device.compute_with_storage_grid_size()
@@ -634,7 +634,9 @@ def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dt
         .reshape(ref.shape)
     )
 
-    passing, pcc = comp_pcc(ref, ot, pcc=0.999)
+    # BFLOAT8_B uses a shared exponent per 16-element sub-block -> fundamentally lower accuracy.
+    pcc_threshold = 0.98 if dtype == ttnn.bfloat8_b else 0.999
+    passing, pcc = comp_pcc(ref, ot, pcc=pcc_threshold)
     assert (
         passing
     ), f"block-sharded {'welford' if use_welford else 'legacy'} {dtype} gamma={gamma_dtype} PCC failed: {pcc}"
