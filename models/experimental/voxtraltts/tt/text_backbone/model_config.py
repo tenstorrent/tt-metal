@@ -1684,6 +1684,20 @@ class ModelArgs:
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
                 )
             else:
+                # 512-token bucket: opted out of minimal_matmul above; use a wide-grid 2D-mcast
+                # matmul. Trace sweep (512x3072x1536, BH P150x4, HiFi4): grid (11,8) in0_block_w=12,
+                # per_core_M=2, per_core_N=5 -> ~63us vs ~105us minimal_matmul (1.65x), PCC 0.9999,
+                # no L1 OOM. (gx=10/11 + per_core_N=5 is the sweet spot; gx=8/per_core_N=6 is ~70us.
+                # More cores beyond ~80 do not help: N=1536 is only 48 tiles.)
+                # See tests/perf/test_qkv_prefill_512_trace_sweep_p150.py.
+                if is_blackhole() and not self.is_galaxy and self.dim == 3072 and seq_len == 512:
+                    return self.matmul_config(
+                        m=512,
+                        k=self.dim // self.cluster_shape[0],
+                        n=self.qkv_size // self.cluster_shape[1],
+                        grid_size=(11, 8),
+                        in0_block_w=12,
+                    )
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
                     # in0_block_w sweep (128x3072x1536 QKV, BH P150x4, HiFi4): in0_block_w=1 re-streams
@@ -1715,6 +1729,13 @@ class ModelArgs:
             raise ValueError(f"Invalid mode: {mode}")
 
     def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
+        # QKV prefill at the 512-token bucket (512x3072x1536, BF16, BH P150x4) is much faster as a
+        # regular 2D-mcast ttnn.linear than as minimal_matmul: a trace device-time sweep found grid
+        # (11,8) in0_block_w=12 runs ~63us vs ~105us for minimal_matmul (8,10) M8K8N8 -> ~1.65x.
+        # So opt this case out of minimal_matmul (forward_prefill then uses ttnn.linear with the
+        # MatmulMMCMC config from get_attn_qkv_program_config). See test_qkv_prefill_512_trace_sweep_p150.py.
+        if is_blackhole() and not self.is_galaxy and self.dim == 3072 and seq_len == 512:
+            return False
         if seq_len > 128:
             return True
 
