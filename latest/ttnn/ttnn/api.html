@@ -25,7 +25,29 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="ttnn.open_device" href="api/ttnn.open_device.html" />
-    <link rel="prev" title="Tensor" href="tensor.html" /> 
+    <link rel="prev" title="Tensor" href="tensor.html" />
+ 
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        // Add noindex to keep old versions out of search results
+        var noindex = document.createElement('meta');
+        noindex.name = 'robots';
+        noindex.content = 'noindex';
+        document.head.appendChild(noindex);
+        // Add canonical pointing to latest (clean URL, no query/fragment)
+        var canonical = document.createElement('link');
+        canonical.rel = 'canonical';
+        canonical.href = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        document.head.appendChild(canonical);
+    }
+})();
+</script>
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -347,6 +369,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sampling.html">ttnn.sampling</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.std.html">ttnn.std</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sum.html">ttnn.sum</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.topk_large_indices.html">ttnn.experimental.topk_large_indices</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.var.html">ttnn.var</a></li>
 </ul>
@@ -437,8 +460,10 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.ring_mla.html">ttnn.transformer.ring_mla</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention.html">ttnn.transformer.scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention_decode.html">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.sparse_sdpa.html">ttnn.transformer.sparse_sdpa</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.windowed_scaled_dot_product_attention.html">ttnn.transformer.windowed_scaled_dot_product_attention</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.indexer_score.html">ttnn.experimental.indexer_score</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#ccl">CCL</a><ul>
@@ -649,6 +674,32 @@
       </nav>
 
       <div class="wy-nav-content">
+<div id="tt-version-warning" style="display:none"></div>
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        var latestUrl = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        var banner = document.getElementById('tt-version-warning');
+        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
+        banner.textContent = 'You are viewing documentation for an older version (';
+        var versionEl = document.createElement('strong');
+        versionEl.textContent = version;
+        banner.appendChild(versionEl);
+        banner.appendChild(document.createTextNode('). '));
+        var link = document.createElement('a');
+        link.href = latestUrl;
+        link.textContent = 'Click here for the latest version.';
+        banner.appendChild(link);
+        banner.style.display = 'block';
+    }
+})();
+</script>
+
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -1028,7 +1079,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.erf.html#ttnn.erf" title="ttnn.erf"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.erf</span></code></a></p></td>
-<td><p>Applies erf to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise Gaussian error function of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.erfc.html#ttnn.erfc" title="ttnn.erfc"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.erfc</span></code></a></p></td>
@@ -1040,7 +1091,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.exp.html#ttnn.exp" title="ttnn.exp"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.exp</span></code></a></p></td>
-<td><p>Applies exp to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise exponential operation on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.exp2.html#ttnn.exp2" title="ttnn.exp2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.exp2</span></code></a></p></td>
@@ -1076,7 +1127,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.gelu.html#ttnn.gelu" title="ttnn.gelu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.gelu</span></code></a></p></td>
-<td><p>Applies gelu to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise Gaussian Error Linear Unit activation function on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.gez.html#ttnn.gez" title="ttnn.gez"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.gez</span></code></a></p></td>
@@ -1172,19 +1223,19 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.log.html#ttnn.log" title="ttnn.log"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log</span></code></a></p></td>
-<td><p>Applies log to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise natural logarithm (base e) operation on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.log10.html#ttnn.log10" title="ttnn.log10"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log10</span></code></a></p></td>
-<td><p>Applies log10 to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise base-10 logarithm operation on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.log1p.html#ttnn.log1p" title="ttnn.log1p"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log1p</span></code></a></p></td>
-<td><p>Applies log1p to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise natural logarithm operation of one plus the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.log2.html#ttnn.log2" title="ttnn.log2"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log2</span></code></a></p></td>
-<td><p>Applies log2 to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise base-2 logarithm operation on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.log_sigmoid.html#ttnn.log_sigmoid" title="ttnn.log_sigmoid"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.log_sigmoid</span></code></a></p></td>
@@ -1208,7 +1259,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.logit.html#ttnn.logit" title="ttnn.logit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.logit</span></code></a></p></td>
-<td><p>Performs logit function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>.</p></td>
+<td><p>Performs the logit function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> after clamping its elements to the interval [<code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>, 1 - <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>].</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.ltz.html#ttnn.ltz" title="ttnn.ltz"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.ltz</span></code></a></p></td>
@@ -1216,7 +1267,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.mish.html#ttnn.mish" title="ttnn.mish"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.mish</span></code></a></p></td>
-<td><p>Applies mish to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise Mish activation function on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.multigammaln.html#ttnn.multigammaln" title="ttnn.multigammaln"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.multigammaln</span></code></a></p></td>
@@ -1296,7 +1347,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.rsqrt.html#ttnn.rsqrt" title="ttnn.rsqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.rsqrt</span></code></a></p></td>
-<td><p>Applies rsqrt to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise reciprocal (inverse) square root operation on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.selu.html#ttnn.selu" title="ttnn.selu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.selu</span></code></a></p></td>
@@ -1344,7 +1395,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.sqrt.html#ttnn.sqrt" title="ttnn.sqrt"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sqrt</span></code></a></p></td>
-<td><p>Applies sqrt to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p></td>
+<td><p>Performs the element-wise square root operation on the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.square.html#ttnn.square" title="ttnn.square"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.square</span></code></a></p></td>
@@ -1783,10 +1834,14 @@
 <td><p>Computes the sum of the input tensor <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along the specified dimension(s) <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
 <tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.experimental.topk_large_indices.html#ttnn.experimental.topk_large_indices" title="ttnn.experimental.topk_large_indices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.topk_large_indices</span></code></a></p></td>
+<td><p>Experimental Top-K over the last dimension of a row-major BFLOAT16 tensor.</p></td>
+</tr>
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.topk.html#ttnn.topk" title="ttnn.topk"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.topk</span></code></a></p></td>
 <td><p>Returns the <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> largest or <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> smallest elements of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along a given dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.var.html#ttnn.var" title="ttnn.var"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.var</span></code></a></p></td>
 <td><p>Computes the var of the input tensor <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along the specified dimension(s) <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
@@ -2136,12 +2191,20 @@
 <td><p>A version of scaled dot product attention specifically for decode.</p></td>
 </tr>
 <tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.transformer.sparse_sdpa.html#ttnn.transformer.sparse_sdpa" title="ttnn.transformer.sparse_sdpa"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.sparse_sdpa</span></code></a></p></td>
+<td><p>Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip.</p></td>
+</tr>
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.split_query_key_value_and_split_heads.html#ttnn.transformer.split_query_key_value_and_split_heads" title="ttnn.transformer.split_query_key_value_and_split_heads"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.split_query_key_value_and_split_heads</span></code></a></p></td>
 <td><p>Splits <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">3</span> <span class="pre">*</span> <span class="pre">hidden_size]</span></code> into 3 tensors (Query, Key, Value) of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">hidden_size]</span></code>.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.windowed_scaled_dot_product_attention.html#ttnn.transformer.windowed_scaled_dot_product_attention" title="ttnn.transformer.windowed_scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.windowed_scaled_dot_product_attention</span></code></a></p></td>
 <td><p>Windowed scaled dot product attention.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.experimental.indexer_score.html#ttnn.experimental.indexer_score" title="ttnn.experimental.indexer_score"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.indexer_score</span></code></a></p></td>
+<td><p>DeepSeek-V3.2 DSA lightning-indexer scorer.</p></td>
 </tr>
 </tbody>
 </table>
@@ -2865,14 +2928,18 @@
 </div>
 
 <script>
-const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+// versions.json is regenerated on gh-pages by the docs deploy workflow after every successful
+// deploy, so the dropdown always matches what's actually being served. See #45572.
+const VERSIONS_URL = '/tt-metal/versions.json';
 
 async function loadVersions() {
     try {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const projectCode = location.pathname.split('/')[3];
+        const pathParts = location.pathname.split('/');
+        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
+        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -2890,7 +2957,9 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    return window.location.pathname.split('/')[2];
+    const parts = window.location.pathname.split('/');
+    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
+    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 

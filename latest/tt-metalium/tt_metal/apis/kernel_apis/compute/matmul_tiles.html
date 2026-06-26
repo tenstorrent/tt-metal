@@ -25,7 +25,29 @@
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
     <link rel="next" title="matmul_block" href="matmul_block.html" />
-    <link rel="prev" title="mul_tiles_bcast" href="mul_tiles_bcast.html" /> 
+    <link rel="prev" title="mul_tiles_bcast" href="mul_tiles_bcast.html" />
+ 
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        // Add noindex to keep old versions out of search results
+        var noindex = document.createElement('meta');
+        noindex.name = 'robots';
+        noindex.content = 'noindex';
+        document.head.appendChild(noindex);
+        // Add canonical pointing to latest (clean URL, no query/fragment)
+        var canonical = document.createElement('link');
+        canonical.rel = 'canonical';
+        canonical.href = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        document.head.appendChild(canonical);
+    }
+})();
+</script>
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -96,6 +118,32 @@
       </nav>
 
       <div class="wy-nav-content">
+<div id="tt-version-warning" style="display:none"></div>
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        var latestUrl = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        var banner = document.getElementById('tt-version-warning');
+        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
+        banner.textContent = 'You are viewing documentation for an older version (';
+        var versionEl = document.createElement('strong');
+        versionEl.textContent = version;
+        banner.appendChild(versionEl);
+        banner.appendChild(document.createTextNode('). '));
+        var link = document.createElement('a');
+        link.href = latestUrl;
+        link.textContent = 'Click here for the latest version.';
+        banner.appendChild(link);
+        banner.style.display = 'block';
+    }
+})();
+</script>
+
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -121,19 +169,6 @@
 <span class="target" id="namespaceckernel_1a98ec3548059036d6ad4ae29c9ac08a2b"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mm_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in0_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">in1_cb_id</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">out_cb_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">transpose</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">call_line</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">__builtin_LINE</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel7mm_initE8uint32_t8uint32_t8uint32_tK8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Which matmul init to call, and when:</p>
-<p>Pick the init that matches the matmul you run, and call it once before the first matmul:</p>
-<ul class="simple">
-<li><p>matmul_tiles (single tile) -&gt; mm_init</p></li>
-<li><p>matmul_block (block of tiles) -&gt; mm_block_init</p></li>
-</ul>
-
-<p>The _with_dt / _with_both_dt variants also reconfigure input data formats before init:</p>
-<ul class="simple">
-<li><p>Use _with_dt when the input data format changed since the last init (it reconfigures srcA first).</p></li>
-<li><p>Use _with_both_dt when both input data formats changed (it reconfigures srcA and srcB).</p></li>
-</ul>
-
 <p>Initialization for matmul_tiles operation. Must be called before matmul_tiles.</p>
 <p>Return value: None</p>
 <p></p>
@@ -383,14 +418,18 @@
 </div>
 
 <script>
-const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+// versions.json is regenerated on gh-pages by the docs deploy workflow after every successful
+// deploy, so the dropdown always matches what's actually being served. See #45572.
+const VERSIONS_URL = '/tt-metal/versions.json';
 
 async function loadVersions() {
     try {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const projectCode = location.pathname.split('/')[3];
+        const pathParts = location.pathname.split('/');
+        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
+        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -408,7 +447,9 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    return window.location.pathname.split('/')[2];
+    const parts = window.location.pathname.split('/');
+    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
+    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 

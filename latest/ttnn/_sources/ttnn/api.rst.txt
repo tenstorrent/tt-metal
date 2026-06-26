@@ -366,6 +366,7 @@ Reduction
    ttnn.sampling
    ttnn.std
    ttnn.sum
+   ttnn.experimental.topk_large_indices
    ttnn.topk
    ttnn.var
 
@@ -480,8 +481,10 @@ Transformer
    ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_sdpa
    ttnn.transformer.split_query_key_value_and_split_heads
    ttnn.transformer.windowed_scaled_dot_product_attention
+   ttnn.experimental.indexer_score
 
 CCL
 ===
