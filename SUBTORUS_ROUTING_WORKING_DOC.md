@@ -1,142 +1,145 @@
 # Sub-torus Routing — Working Doc
 
-**Branch:** `agupta/subtorus-routing`  ·  **Status:** in progress
+**Branch:** `agupta/subtorus-routing`  ·  **Status:** stages 0–5 GREEN (8×4 single-process + 32×4 multi-rank)
 
-**Two tracks, different destinations:**
-- **Capture instrumentation** (dump/markers/parser) — **local-only, throwaway.** Used for scoping
-  the work and spot-checking correctness of upcoming changes. Drop/stash before any feature PR.
-- **Skip-link feature** (proto `skip_links` + stages 0–5) — **production work, meant for main.**
-  Must meet merge standards: clean proto design, validation, unit tests, firmware considerations,
-  CODEOWNERS/review.
+Goal: **skip-link ("sub-torus") routing** — extra intra-mesh links that let packets jump `step`-wide
+blocks along an axis, layered on a base torus. Declared by **pattern** in the mesh-graph descriptor,
+expanded into `RoutingDirection::Z` edges, routed over when strictly shorter, and lowered onto physical
+eth channels.
 
-Goal: capture the real fabric routing state from a live Blackhole-galaxy `4x32` Torus-XY run,
-parse it into analyzable tables, and use it to design + validate **skip-link ("sub-torus")
-routing** — extra intra-mesh links that let packets jump `stride` hops along an axis. Long
-term: develop routing-table generation against captured topology on a CPU-only box.
-
----
-
-## 1. Status — DONE
-
-### Capture instrumentation (local-only, do NOT upstream)
-- **`tt_metal/fabric/control_plane.cpp`** — `print_routing_tables()` / `print_ethernet_channels()`
-  bumped `log_debug` → `log_info` so they survive a Release build (`log_debug` is compiled out
-  unless `TT_METAL_ENABLE_LOGGING=ON`, which defaults OFF for Release). Markers:
-  - `FABRIC_RT_DUMP`  — IntraMesh routing table (InterMesh kept at `log_debug` → compiled out, acts as a filter)
-  - `FABRIC_ETH_DUMP` — physical eth channels per direction
-- **`tests/.../routing/tt_fabric_test_context.cpp`** — dump gated on `TT_FABRIC_DUMP_DIR`:
-  - `FABRIC_RANK_HOST rank=.. host=..` — **all ranks** (supplies rank↔host join)
-  - `FABRIC_NODE_MAP host=.. tray=.. asic_loc=.. node=M<m>D<c>` — **all ranks** (see finding below)
-  - PSD (`psd.textproto`/`psd.yaml`) + routing tables — **rank 0 only**
-- **`tools/scaleout/exabox/run_fabric_tests.sh`** — `--dump-fabric-state` flag (sets env, copies
-  mesh_graph_descriptor, prints artifact summary).
-- **`tools/scaleout/exabox/parse_fabric_node_map.py`** — parses the markers into CSVs, defaulting
-  output to the run's `fabric_state_<ts>/` dir:
-  - `node_map.csv` (rank, host, tray, asic_loc, node)
-  - `directional_channels.csv` (rank, node, direction, channels)
-  - `intramesh_routing.csv` (rank, node, eth_chan, dest_chip, egress_chan — long form)
-
-### Findings
-- **PSD is identical across ranks** (modulo ordering) → dump from rank 0 only.
-- **Routing tables are full-mesh on every rank** (`control_plane` iterates the *global* chip-id
-  container) and deterministic from mesh-graph + PSD → identical across ranks → dump rank 0 only.
-- **Node map (asic_id→FabricNodeId) is rank-local** — `get_fabric_node_id_from_asic_id` resolves
-  only local asics (throws for remote), so `FABRIC_NODE_MAP` is emitted on **all ranks**; the union
-  covers the full mesh.
-- Latest good capture `fabric_state_20260617_200614/`: 128 nodes, even 32/rank across 4 hosts,
-  full rank attribution, directional + intramesh routing complete.
-
-### Understanding captured (MGD lowering pipeline)
-`textproto → proto::MeshGraphDescriptor → MeshGraphDescriptor (instances/connections) →
-MeshGraph (IntraMeshConnectivity adjacency + coords + host-rank split) → RoutingTableGenerator
-(per-dest RoutingDirection LUTs) → ControlPlane (per-eth-channel egress tables, plane-preserving)`.
-- A "plane" = the *index* of a channel within its direction's channel list (N[0]↔S[0]↔E[0]…).
-- Physical channels > requested `channels.count`: surplus is **trimmed** (warning) and unused;
-  plane count per direction = min(requested/golden, physical, row/col-min). `< requested` = fatal.
+> **Capture instrumentation removed.** The early effort used a live-cluster PSD/node-map dump harness
+> (`TT_FABRIC_DUMP_DIR` block in `tt_fabric_test_context.cpp`, `--dump-fabric-state` in
+> `run_fabric_tests.sh`, `log_debug`→`log_info` markers in `control_plane.cpp`) to scope the work. That
+> approach was replaced by the captured-`ClusterDescriptor` + mock-cluster replay, so all of it has been
+> **reverted to main** — `control_plane.cpp`, `tt_fabric_test_context.cpp`, and `run_fabric_tests.sh`
+> now have zero diff vs main. The `parse_fabric_node_map.py` / capture-yaml were never created.
 
 ---
 
-## 2. Plan — skip-link feature (NEXT) — *intended for main*
+## 1. Status — stages 0–5 complete
 
-> This track ships. Hold it to merge standards (proto review, validation, unit tests, firmware
-> impact) — unlike the throwaway instrumentation in §1.
+| Stage | File(s) | Work | State |
+|---|---|---|---|
+| 0–3 | proto + `mesh_graph_descriptor.cpp` + `mesh_graph.cpp` | `skip_links` message/field; parse + expand pattern; fold into `intra_mesh_connectivity_` as `Z` `RouterEdge`s | **GREEN** |
+| validation | `mesh_graph_descriptor.cpp` | legacy validator already passes `skip_links` (only `express_connections` rejected) — no change needed | **GREEN** |
+| 4 | `routing_table_generator.cpp` | route *over* skip links (strict-shorter policy) | **GREEN** |
+| 5 | `control_plane.cpp` | plane/egress lowering for intra `Z` channels | **GREEN** (8×4 + 32×4) |
 
-New proto field on `MeshDescriptor` to declare skip links by **pattern**, not enumerated pairs:
+### Verified results
+- **8×4 single-process (CPU-only mock cluster):** logical expansion (4 `Z` edges for `[LINE,RING]`),
+  skip-aware routing (incl. base-then-Z `t[4][24]=S` and strict-shorter `8→24`=Z vs `8→16`=S), and
+  physical lowering (`Z` channels bound, base directions intact).
+- **32×4 multi-rank (`tt-run`, 4 ranks):** 32 `Z` edges expand; every skip endpoint routes `Z` with
+  non-empty physical `Z` channels on all 4 ranks. The earlier "skip drops under tt-run" was a **stale
+  lib** issue — rebuild with `build_metal`, not `cmake --target`, or the loaded lib's old proto silently
+  drops `skip_links` (`AllowUnknownField(true)`).
+
+---
+
+## 2. Geometry rule (LOCKED)
+
+New proto field on `MeshDescriptor`, declares skip links by **pattern**, not enumerated pairs:
 
 ```protobuf
-skip_links { axis: ROW  pattern { start: 2  step: 4 } }   // names TBD
+skip_links { axis: ROW  pattern { start: 2  step: 4 } }
 ```
 
-**Geometry rule (LOCKED):**
 - Tile the chosen `axis` into consecutive `step`-wide blocks starting at `start`.
 - Each skip link connects a block's **endpoints**: `b ↔ b + step − 1` (interior nodes get none).
-- RING wrap: last block `[30,31,0,1]` → edge **30-1** (uniform stride; covers nodes before `start`).
-- Replicate the pattern across the **orthogonal axis** (×4 for a 32×4 mesh — one per line), mapping
-  `(row,col) → linearized chip id (row*4+col)`.
-- `start=2, step=4`, axis=ROW → 8 blocks × 4 lines = **32 skip edges**.
-
-**Implementation surface:**
-| Stage | File | Work | CPU-only? |
-|---|---|---|---|
-| 0–3 | proto + `mesh_graph_descriptor.cpp` + `mesh_graph.cpp` | add `skip_links` message/field; parse + expand pattern; fold into `intra_mesh_connectivity_` as `RouterEdge`s | **yes** (`MeshGraph(ClusterType, path)`) |
-| validation | `mesh_graph_descriptor.cpp` | lift the MGD-1.0-compat rejection of express/skip connections | yes |
-| 4 | `routing_table_generator.cpp` | route *over* skip links — algorithm: when to take skip vs base ring | yes |
-| 5 | `control_plane.cpp` | plane/egress lowering for skip links | needs HW or replay |
-
-**Dev loop:** `MeshGraphValidation` test in `tests/tt_metal/tt_fabric/fabric_router/test_routing_tables.cpp`
-(target `fabric_unit_tests`) — build a mesh from a skip descriptor, assert the 32 endpoint edges in
-`get_intra_mesh_connectivity()`. Red → implement stages 0–3 → green, then move to stage 4.
-
-**Still to pin (not blocking stages 0–3):** `channels` (lanes per skip link).
+- RING wrap: last block wraps (e.g. `[30,31,0,1]` → edge **30–1**).
+- A block only forms if **all** its rows exist on the axis: on a `LINE` axis, blocks that would wrap
+  are **dropped** (so `[8,4] [LINE,RING]` start=2 step=4 → only block `[2,5]` forms → 4 edges; the
+  `[32,4] [RING,RING]` case forms all 8 blocks → 32 edges).
+- Replicate across the **orthogonal axis** (×4 columns), `(row,col) → row*4+col`.
 
 ---
 
-## 3. Identity fork — DECIDED: skip links use the Z direction
+## 3. Identity fork — skip links use `RoutingDirection::Z` (LOCKED)
 
-**How does a skip link get a `RoutingDirection`?** Everything in stages 4–5 and the device firmware
-keys off `RoutingDirection` (`N=0, E=1, S=2, W=3, Z=4, C=5, NONE=6`).
-
-**Decision: assign skip links `RoutingDirection::Z`.** Z is an existing, first-class direction
-(already used for the Blackhole 8/9 inter-mesh-on-galaxy path via `assign_z_direction`), so:
+Z is an existing first-class direction (`N=0,E=1,S=2,W=3,Z=4,C=5,NONE=6`), already used for the
+Blackhole inter-mesh-on-galaxy path. Using it for skip links:
 - Skip channels get their **own bucket** `router_port_directions_to_physical_eth_chan_map_[node][Z]`,
-  cleanly separate from the in-plane N/S/E/W grid links (the disambiguation Option 1 lacked).
-- **No new enum value** → avoids the `*_SKIP` firmware blast radius of Option 2.
-- The N/S/E/W routing-plane **trimmer** (`trim_ethernet_channels_not_mapped_to_live_routing_planes`,
-  control_plane.cpp:1014–1015) only iterates N/S/E/W, so Z skip channels are **not trimmed away**.
+  separate from the N/S/E/W grid.
+- **No new enum value** → no `*_SKIP` firmware blast radius.
+- The N/S/E/W plane **trimmer** (`control_plane.cpp`) only iterates N/S/E/W, so `Z` channels survive.
 
-Implemented in `mesh_graph.cpp` (both ends of each bidirectional skip edge → `Z`). The `[8,4]` test
-asserts `port_direction == Z`.
+Assigned in `mesh_graph.cpp` (both ends of each bidirectional skip edge). Open: multiple skip families
+(ROW + COLUMN) would currently share the single `Z` bucket — revisit if that needs separating.
 
-**Still TBD (stage 4+):** make `RoutingTableGenerator` actually route over Z for **intra-mesh** skip
-links (today Z is exercised for inter-mesh), and confirm Z plane-count handling in the control-plane
-lowering for intra skip channels. Also: multiple skip families (ROW + COLUMN) would currently share
-the single Z bucket — revisit if that needs separating.
+## 4. Stage-4 routing policy (LOCKED)
+
+**Emit `Z` first-hop iff the skip-inclusive shortest path is STRICTLY shorter than base-ring-only;
+equal-length stays on the base ring.** Distributed/per-hop (each chip independently picks its first
+hop). In `routing_table_generator.cpp`, the two `get_shorter_direction_on_row_or_col` calls go through
+`first_hop_along_axis`, which BFSs scoped to `{base±, Z}` on the axis being resolved: when a skip
+helps, the first hop is the edge from src on a shortest skip-inclusive path — prefer `Z` if src can
+skip, else the base hop *toward* the skip (handles the base-then-Z case where `Z` is a later hop).
+Skip-free meshes are unaffected (`skip_dist==base_dist` defers to ring).
 
 ---
 
-## 4. Reference
+## 5. Test harness (CPU-only / mock cluster)
 
-**Capture run (single Torus-XY case):**
+`RoutingTableGenerator` needs a `TopologyMapper` (→ `tt::Cluster` + PSD). Run deviceless from artifacts:
+- **Mock cluster:** `TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_8x4_bh_galaxy_cluster_desc.yaml` — a captured
+  UMD `ClusterDescriptor` (this env var + plumbing is pre-existing on main; only our *usage* is new).
+- **PSD derived, not captured:** `run_physical_system_discovery` builds it CPU-only (`run_live=false`).
+- **No-discovery `TopologyMapper`** with an **identity** `FabricNodeId→ChipId` map (inert to intra-mesh
+  routing, which reads only MeshGraph geometry). Avoids the discovery ctor, which would reject `Z` edges
+  (no physical cabling for skips).
+- **Physical lowering** (`ControlPlaneFixture` tests) needs `configure_ethernet_cores_for_fabric_routers`
+  (done in fixture `SetUp`) + `TT_METAL_SLOW_DISPATCH_MODE=1`, and the matching torus `FabricConfig`
+  (`FABRIC_2D` flattens the torus → use `FABRIC_2D_TORUS_X` for `[LINE,RING]`, `FABRIC_2D_TORUS_XY` for
+  `[RING,RING]`).
+- **32×4 is multi-rank:** host topology `[4,1]` → 4 `tt-run` ranks, each its own mock cluster.
+
+### Tests
+| Test | Suite / file | Covers |
+|---|---|---|
+| `SkipLinks8x4` | `MeshGraphDescriptorTests` · `test_mesh_graph_descriptor.cpp` | stage 0–3 logical expansion (8×4, shared descriptor) |
+| `SkipLinks32x4` | `MeshGraphDescriptorTests` · `test_mesh_graph_descriptor.cpp` | stage 0–3 logical expansion (32×4, shared descriptor) |
+| `IntraMesh8x4Replay` | `SkipLinkRouting` · `test_routing_tables.cpp` | stage 4 skip-aware routing |
+| `MockHarness8x4KnownRouting` | `SkipLinkRouting` · `test_routing_tables.cpp` | harness sanity vs known XY routing |
+| `PhysicalLowering8x4` | `ControlPlaneFixture` · `test_routing_tables.cpp` | stage 5 lowering, 8×4 |
+| `PhysicalLowering32x4` | `ControlPlaneFixture` · `test_routing_tables.cpp` | stage 5 lowering, 32×4 multi-rank |
+
+---
+
+## 6. Reference
+
+**Build (REQUIRED):** rebuild with **`build_metal`** after any `tt_metal/` or proto edit — `cmake
+--build build_Release --target fabric_unit_tests` leaves `libtt_metal.so` stale and silently drops the
+`skip_links` field.
+
+**Single-process (CPU-only, logical + 8×4 lowering):**
 ```bash
-./tools/scaleout/exabox/run_fabric_tests.sh \
-  --hosts $HOST --image $IMG --config 4x32 \
-  --test-config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_subtorus_routing_capture.yaml \
-  --dump-fabric-state
+TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_8x4_bh_galaxy_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 \
+  ./build_Release/test/tt_metal/tt_fabric/fabric_unit_tests \
+  --gtest_filter='MeshGraphDescriptorTests.SkipLinks8x4:MeshGraphDescriptorTests.SkipLinks32x4:SkipLinkRouting.*:ControlPlaneFixture.PhysicalLowering8x4'
 ```
-**Parse:**
+
+**32×4 multi-rank (`tt-run`, 4 local ranks):**
 ```bash
-tools/scaleout/exabox/parse_fabric_node_map.py fabric_test_logs/fabric_tests_<ts>.log
-# → CSVs in fabric_test_logs/fabric_state_<ts>/
+TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
+  --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_32x4_bh_galaxy_cluster_desc_mapping.yaml \
+  --rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_32x4_rank_bindings.yaml \
+  --mpi-args "--allow-run-as-root" \
+  ./build_Release/test/tt_metal/tt_fabric/fabric_unit_tests \
+  --gtest_filter='ControlPlaneFixture.PhysicalLowering32x4'
 ```
-**CPU-only stage 0–3 test:**
-```bash
-cmake --build build_Release --target fabric_unit_tests
-./build_Release/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter='MeshGraphValidation.*'
-```
+
+**MGD lowering pipeline:**
+`textproto → proto::MeshGraphDescriptor → MeshGraphDescriptor → MeshGraph (IntraMeshConnectivity +
+coords + host-rank split) → RoutingTableGenerator (per-dest RoutingDirection LUTs) → ControlPlane
+(per-eth-channel egress tables, plane-preserving)`. A "plane" = the index of a channel within its
+direction's list (N[0]↔S[0]↔E[0]…). Surplus physical channels beyond `channels.count` are trimmed;
+`< requested` is fatal.
 
 **Notes / gotchas:**
-- `express_connections` (existing proto field) is a stub for this purpose: bare src/dst, rejected by
-  the 1.0-compat validator, never folded into `intra_mesh_connectivity_`, gets `routing_direction = C`.
-  Pattern-based `skip_links` is the chosen replacement.
-- Custom descriptors live in `tests/tt_metal/tt_fabric/custom_mesh_descriptors/` (incl. `fabric_cpu_only_*`).
-- This instrumentation is local-only; expect to drop/stash it when prepping the real feature PR.
+- `express_connections` (existing proto field) was a dead end: rejected by the 1.0-compat validator,
+  never folded into connectivity, gets `routing_direction = C`. Pattern-based `skip_links` replaces it.
+- Custom descriptors live in `tests/tt_metal/tt_fabric/custom_mesh_descriptors/`. Each skip descriptor
+  is shared across its logical + routing/lowering tests: `skip_links_8x4` by `SkipLinks8x4` /
+  `IntraMesh8x4Replay` / `PhysicalLowering8x4`; `skip_links_32x4` by `SkipLinks32x4` /
+  `PhysicalLowering32x4`.
+- Still to pin: `channels` (lanes per skip link).
