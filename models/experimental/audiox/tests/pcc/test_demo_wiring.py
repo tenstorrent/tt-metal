@@ -8,6 +8,8 @@ pieces together with the right shapes and that the empty-feat shortcuts fire
 on the text-to-audio path."""
 
 import torch
+from torch import nn
+from torch.nn.utils import weight_norm
 
 from models.experimental.audiox.demo import demo as demo_mod
 from models.experimental.audiox.demo import tt_runtime as tt_runtime_mod
@@ -177,3 +179,27 @@ def test_tt_demo_main_uses_requested_device_id(monkeypatch, tmp_path):
     assert rc == 0
     assert opened == [3]
     assert closed == ["device"]
+
+
+def test_tt_demo_cpu_decode_env_default_and_override(monkeypatch):
+    from models.experimental.audiox.demo import tt_demo as tt_demo_mod
+
+    monkeypatch.delenv("AUDIOX_TT_CPU_DECODE", raising=False)
+    assert tt_demo_mod._should_use_cpu_decode() is True
+
+    monkeypatch.setenv("AUDIOX_TT_CPU_DECODE", "0")
+    assert tt_demo_mod._should_use_cpu_decode() is False
+
+
+def test_tt_demo_cpu_decoder_fuses_weight_norm(monkeypatch):
+    from models.experimental.audiox.demo import tt_demo as tt_demo_mod
+
+    decoder = nn.Sequential(weight_norm(nn.Conv1d(2, 2, 3, padding=1)))
+    monkeypatch.setattr(tt_demo_mod, "_build_decoder", lambda: decoder)
+    monkeypatch.setattr(tt_demo_mod, "load_into", lambda module, state_dict, label: None)
+
+    fused = tt_demo_mod._build_cpu_decoder_fused({})
+
+    assert fused is decoder
+    assert not hasattr(fused[0], "weight_g")
+    assert not hasattr(fused[0], "weight_v")

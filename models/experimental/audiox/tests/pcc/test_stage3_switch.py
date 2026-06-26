@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 
 import torch
 
@@ -70,6 +69,16 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
         def __init__(self, checkpoint, device, seed=None):
             session_inits.append((str(checkpoint), device, seed))
 
+        def prepare_conditioning(
+            self,
+            *,
+            prompt,
+            video_path=None,
+            video_prompt_tensor=None,
+            duration_seconds=None,
+        ):
+            return torch.zeros(1, 3, 8)
+
         def run(
             self,
             prompt,
@@ -77,6 +86,7 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
             *,
             video_path=None,
             video_prompt_tensor=None,
+            cross_attn_cond_torch=None,
             steps=0,
             seed=0,
             duration_seconds=None,
@@ -90,6 +100,7 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
                     "output": str(output),
                     "video_path": None if video_path is None else str(video_path),
                     "synthetic": video_prompt_tensor is not None,
+                    "precomputed_conditioning": cross_attn_cond_torch is not None,
                     "steps": steps,
                     "duration_seconds": duration_seconds,
                 }
@@ -133,7 +144,9 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
             "diffusion_tokens_per_second": 8.0,
         }
 
-    monkeypatch.setattr(switch_mod, "_build_session", lambda checkpoint, device, seed: FakeSession(checkpoint, device, seed))
+    monkeypatch.setattr(
+        switch_mod, "_build_session", lambda checkpoint, device, seed: FakeSession(checkpoint, device, seed)
+    )
     monkeypatch.setattr(switch_mod, "_open_tt_device", fake_open_tt_device)
     monkeypatch.setattr(switch_mod, "_close_tt_device", fake_close_tt_device)
     monkeypatch.setattr(switch_mod, "_build_synthetic_video_prompt", fake_build_synthetic_video_prompt)
@@ -158,6 +171,8 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
     assert len(session_inits) == 1
     assert device_tokens == [("open", 0), ("close", "device-0")]
     assert len(session_runs) == 5
+    assert all(run["precomputed_conditioning"] for run in session_runs)
     summary = (tmp_path / "stage3_switch_summary.json").read_text()
     assert "text_to_audio" in summary
     assert "video_to_music" in summary
+    assert '"all_runs_without_error": true' in summary

@@ -3,10 +3,11 @@
 
 """End-to-end text/video/image-to-audio demo for the AudioX bringup, running on TT.
 
-Same generation flow as ``demo.demo`` but the DiT denoiser and Oobleck VAE
-decoder run on a Tenstorrent device through the TTNN ports. The conditioner
-stack stays on CPU since it runs once per generation and is <0.1% of total
-compute (porting it to TTNN wouldn't move the needle).
+Same generation flow as ``demo.demo`` but the DiT denoiser runs on a
+Tenstorrent device through the TTNN port. The decoder defaults to CPU
+(``AUDIOX_TT_CPU_DECODE=1``) and can be forced onto TT with
+``AUDIOX_TT_CPU_DECODE=0``. The conditioner stack stays on CPU since it runs
+once per generation and is <0.1% of total compute.
 
 Run from the tt-metal root with a connected device:
 
@@ -162,6 +163,22 @@ def _nct_to_nhwc(x_nct: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.unsqueeze(x_btc, 2)  # [B, T, 1, C]
 
 
+def _should_use_cpu_decode() -> bool:
+    return os.environ.get("AUDIOX_TT_CPU_DECODE", "1") == "1"
+
+
+def _build_cpu_decoder_fused(decoder_sd: dict):
+    cpu_decoder = _build_decoder().eval()
+    load_into(cpu_decoder, decoder_sd, label="decoder")
+    for m in cpu_decoder.modules():
+        if hasattr(m, "weight_g"):
+            try:
+                torch.nn.utils.remove_weight_norm(m)
+            except Exception:
+                pass
+    return cpu_decoder
+
+
 class TtAudioXSession:
     def __init__(self, checkpoint: Path, device, seed: int | None = None):
         self.device = device
@@ -169,6 +186,7 @@ class TtAudioXSession:
         self.audio_pretransform = None
         self._conditioning_cache_key = None
         self._conditioning_cache_value = None
+        self.use_cpu_decode = _should_use_cpu_decode()
 
         if seed is not None:
             torch.manual_seed(seed)
@@ -191,17 +209,22 @@ class TtAudioXSession:
         self.tt_dit_state_dict = cpu_dit.state_dict()
         self.tt_dit = _build_tt_dit(self.tt_dit_state_dict, device)
 
-        cpu_decoder = _build_decoder().eval()
-        load_into(cpu_decoder, decoder_sd, label="decoder")
-        self.tt_decoder = TtOobleckDecoder(
-            mesh_device=device,
-            state_dict=cpu_decoder.state_dict(),
-            out_channels=_HF_CONFIG["decoder_out_channels"],
-            channels=_HF_CONFIG["decoder_channels"],
-            latent_dim=_HF_CONFIG["decoder_latent_dim"],
-            c_mults=_HF_CONFIG["decoder_c_mults"],
-            strides=_HF_CONFIG["decoder_strides"],
-        )
+        if self.use_cpu_decode:
+            self.cpu_decoder = _build_cpu_decoder_fused(decoder_sd)
+            self.tt_decoder = None
+        else:
+            self.cpu_decoder = None
+            cpu_decoder = _build_decoder().eval()
+            load_into(cpu_decoder, decoder_sd, label="decoder")
+            self.tt_decoder = TtOobleckDecoder(
+                mesh_device=device,
+                state_dict=cpu_decoder.state_dict(),
+                out_channels=_HF_CONFIG["decoder_out_channels"],
+                channels=_HF_CONFIG["decoder_channels"],
+                latent_dim=_HF_CONFIG["decoder_latent_dim"],
+                c_mults=_HF_CONFIG["decoder_c_mults"],
+                strides=_HF_CONFIG["decoder_strides"],
+            )
         _synchronize_tt_device(device)
         self.setup_timings["tt_module_build_seconds"] = time.perf_counter() - started_at
 
@@ -216,6 +239,7 @@ class TtAudioXSession:
             self.tt_dit = None
         if self.tt_decoder is not None and hasattr(self.tt_decoder, "deallocate"):
             self.tt_decoder.deallocate()
+        self.cpu_decoder = None
         self._conditioning_cache_key = None
         self._conditioning_cache_value = None
 
@@ -360,34 +384,70 @@ class TtAudioXSession:
         timings["latent_copy_seconds"] = time.perf_counter() - started_at
 
         started_at = time.perf_counter()
-        tt_audio_nhwc = self.tt_decoder(_nct_to_nhwc(tt_latent))
-        _synchronize_tt_device(self.device)
-        timings["decode_seconds"] = time.perf_counter() - started_at
-        timings["decoder_profile_present"] = getattr(self.tt_decoder, "last_profile", None) is not None
-        if timings["decoder_profile_present"]:
-            timings["decoder_profile"] = self.tt_decoder.last_profile
-        _deallocate_tt(tt_latent)
+        if self.use_cpu_decode and self.cpu_decoder is not None:
+            latent_nct = tt_latent_torch.float()  # [B, C, T]
+            with torch.no_grad():
+                audio_nct = self.cpu_decoder(latent_nct)  # [B, 2, T_audio]
+            timings["decode_seconds"] = time.perf_counter() - started_at
+            timings["decode_backend"] = "cpu"
+            timings["decoder_profile_present"] = False
+            _deallocate_tt(tt_latent)
 
-        timings["generation_seconds"] = (
-            timings["conditioning_seconds"]
-            + timings["tt_input_setup_seconds"]
-            + timings["sampling_seconds"]
-            + timings["latent_copy_seconds"]
-            + timings["decode_seconds"]
-        )
+            timings["generation_seconds"] = (
+                timings["conditioning_seconds"]
+                + timings["tt_input_setup_seconds"]
+                + timings["sampling_seconds"]
+                + timings["latent_copy_seconds"]
+                + timings["decode_seconds"]
+            )
 
-        started_at = time.perf_counter()
-        if isinstance(tt_audio_nhwc, list):
-            audio_chunks = []
-            for tt_chunk in tt_audio_nhwc:
-                audio_chunks.append(
-                    _tt_to_torch(tt_chunk, self.device).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().float().cpu()
-                )
-                _deallocate_tt(tt_chunk)
-            audio = torch.cat(audio_chunks, dim=2)
+            started_at = time.perf_counter()
+            audio = audio_nct.clamp(-1.0, 1.0).detach().float().cpu()
         else:
-            audio = _tt_to_torch(tt_audio_nhwc, self.device).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().float().cpu()
-            _deallocate_tt(tt_audio_nhwc)
+            tt_audio_nhwc = self.tt_decoder(_nct_to_nhwc(tt_latent))
+            _synchronize_tt_device(self.device)
+            timings["decode_seconds"] = time.perf_counter() - started_at
+            timings["decode_backend"] = "tt"
+            timings["decoder_profile_present"] = getattr(self.tt_decoder, "last_profile", None) is not None
+            if timings["decoder_profile_present"]:
+                timings["decoder_profile"] = self.tt_decoder.last_profile
+            _deallocate_tt(tt_latent)
+
+            timings["generation_seconds"] = (
+                timings["conditioning_seconds"]
+                + timings["tt_input_setup_seconds"]
+                + timings["sampling_seconds"]
+                + timings["latent_copy_seconds"]
+                + timings["decode_seconds"]
+            )
+
+            started_at = time.perf_counter()
+            if isinstance(tt_audio_nhwc, list):
+                audio_chunks = []
+                for tt_chunk in tt_audio_nhwc:
+                    audio_chunks.append(
+                        _tt_to_torch(tt_chunk, self.device)
+                        .squeeze(2)
+                        .transpose(1, 2)
+                        .clamp(-1.0, 1.0)
+                        .detach()
+                        .float()
+                        .cpu()
+                    )
+                    _deallocate_tt(tt_chunk)
+                audio = torch.cat(audio_chunks, dim=2)
+            else:
+                audio = (
+                    _tt_to_torch(tt_audio_nhwc, self.device)
+                    .squeeze(2)
+                    .transpose(1, 2)
+                    .clamp(-1.0, 1.0)
+                    .detach()
+                    .float()
+                    .cpu()
+                )
+                _deallocate_tt(tt_audio_nhwc)
+
         audio = resample_output_audio(
             audio,
             input_sample_rate=_HF_CONFIG["sample_rate"],
