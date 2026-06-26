@@ -313,6 +313,10 @@ inline void piecewise_generic_lut_specialized_N(const std::array<float, LUT_SIZE
         result = result * x_eval;
 #endif
 
+#if defined(BASIS_AFFINE_EVEN)
+        result = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig + (BASIS_AFFINE_EVEN_SCALE * x_eval) * result;
+#endif
+
 #if defined(BASIS_CLAMP_MAX)
         vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
         vec_min_max(result, basis_clamp_max_value);
@@ -320,6 +324,16 @@ inline void piecewise_generic_lut_specialized_N(const std::array<float, LUT_SIZE
 
 #if defined(BASIS_POST_SIGN_X)
         result = copysgn(result, x_orig);
+#endif
+
+#if defined(BASIS_LEFT_TAIL_ZERO)
+        v_if(x_orig < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { result = 0.0f; }
+        v_endif;
+#endif
+
+#if defined(BASIS_RIGHT_TAIL_IDENTITY)
+        v_if(x_orig > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { result = x_orig; }
+        v_endif;
 #endif
 
 #if defined(RANGE_REDUCTION_EXP)
@@ -580,6 +594,11 @@ inline void piecewise_generic_lut_specialized_N_dual(const std::array<float, LUT
         result2 = result2 * x2;
 #endif
 
+#if defined(BASIS_AFFINE_EVEN)
+        result1 = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig1 + (BASIS_AFFINE_EVEN_SCALE * x1) * result1;
+        result2 = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig2 + (BASIS_AFFINE_EVEN_SCALE * x2) * result2;
+#endif
+
 #if defined(BASIS_CLAMP_MAX)
         vFloat basis_clamp_max_value1 = BASIS_CLAMP_MAX_VALUE;
         vFloat basis_clamp_max_value2 = BASIS_CLAMP_MAX_VALUE;
@@ -590,6 +609,20 @@ inline void piecewise_generic_lut_specialized_N_dual(const std::array<float, LUT
 #if defined(BASIS_POST_SIGN_X)
         result1 = copysgn(result1, x_orig1);
         result2 = copysgn(result2, x_orig2);
+#endif
+
+#if defined(BASIS_LEFT_TAIL_ZERO)
+        v_if(x_orig1 < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { result1 = 0.0f; }
+        v_endif;
+        v_if(x_orig2 < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { result2 = 0.0f; }
+        v_endif;
+#endif
+
+#if defined(BASIS_RIGHT_TAIL_IDENTITY)
+        v_if(x_orig1 > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { result1 = x_orig1; }
+        v_endif;
+        v_if(x_orig2 > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { result2 = x_orig2; }
+        v_endif;
 #endif
 
 #if defined(RANGE_REDUCTION_EXP)
@@ -834,6 +867,10 @@ inline void piecewise_generic_lut_specialized_N_blend(const std::array<float, LU
         acc = acc * x;
 #endif
 
+#if defined(BASIS_AFFINE_EVEN)
+        acc = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig + (BASIS_AFFINE_EVEN_SCALE * x) * acc;
+#endif
+
 #if defined(BASIS_CLAMP_MAX)
         vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
         vec_min_max(acc, basis_clamp_max_value);
@@ -841,6 +878,16 @@ inline void piecewise_generic_lut_specialized_N_blend(const std::array<float, LU
 
 #if defined(BASIS_POST_SIGN_X)
         acc = copysgn(acc, x_orig);
+#endif
+
+#if defined(BASIS_LEFT_TAIL_ZERO)
+        v_if(x_orig < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { acc = 0.0f; }
+        v_endif;
+#endif
+
+#if defined(BASIS_RIGHT_TAIL_IDENTITY)
+        v_if(x_orig > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { acc = x_orig; }
+        v_endif;
 #endif
 
 #ifdef HAS_CRITICAL_POINT
@@ -943,6 +990,10 @@ inline void piecewise_generic_lut_specialized_N_blend_dense(const std::array<flo
         acc = acc * x;
 #endif
 
+#if defined(BASIS_AFFINE_EVEN)
+        acc = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig + (BASIS_AFFINE_EVEN_SCALE * x) * acc;
+#endif
+
 #if defined(BASIS_CLAMP_MAX)
         vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
         vec_min_max(acc, basis_clamp_max_value);
@@ -950,6 +1001,16 @@ inline void piecewise_generic_lut_specialized_N_blend_dense(const std::array<flo
 
 #if defined(BASIS_POST_SIGN_X)
         acc = copysgn(acc, x_orig);
+#endif
+
+#if defined(BASIS_LEFT_TAIL_ZERO)
+        v_if(x_orig < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { acc = 0.0f; }
+        v_endif;
+#endif
+
+#if defined(BASIS_RIGHT_TAIL_IDENTITY)
+        v_if(x_orig > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { acc = x_orig; }
+        v_endif;
 #endif
 
 #ifdef HAS_CRITICAL_POINT

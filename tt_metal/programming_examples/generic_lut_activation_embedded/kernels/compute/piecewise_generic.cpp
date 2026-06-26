@@ -2118,6 +2118,10 @@ inline void piecewise_generic_lut(const std::array<float, LUT_SIZE>& lut) {
         result = result * x_eval;
 #endif
 
+#if defined(BASIS_AFFINE_EVEN)
+        result = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig + (BASIS_AFFINE_EVEN_SCALE * x_eval) * result;
+#endif
+
 #if defined(BASIS_CLAMP_MAX)
         vFloat basis_clamp_max_value = BASIS_CLAMP_MAX_VALUE;
         vec_min_max(result, basis_clamp_max_value);
@@ -2125,6 +2129,16 @@ inline void piecewise_generic_lut(const std::array<float, LUT_SIZE>& lut) {
 
 #if defined(BASIS_POST_SIGN_X)
         result = copysgn(result, x_orig);
+#endif
+
+#if defined(BASIS_LEFT_TAIL_ZERO)
+        v_if(x_orig < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { result = 0.0f; }
+        v_endif;
+#endif
+
+#if defined(BASIS_RIGHT_TAIL_IDENTITY)
+        v_if(x_orig > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { result = x_orig; }
+        v_endif;
 #endif
 
 #if defined(RANGE_REDUCTION_EXP)
@@ -2261,6 +2275,11 @@ inline void piecewise_generic_lut_dual(const std::array<float, LUT_SIZE>& lut) {
         vFloat x2 = x_orig2;
 #endif
 
+#if defined(BASIS_INPUT_ABS_X)
+        x1 = setsgn(x_orig1, 0);
+        x2 = setsgn(x_orig2, 0);
+#endif
+
         // Clamping unnecessary: segment cascade v_if(x >= boundary) naturally selects
         // the edge segment for out-of-range inputs. Removing saves SFPU registers.
         vFloat& x1_clamped = x1;
@@ -2281,6 +2300,42 @@ inline void piecewise_generic_lut_dual(const std::array<float, LUT_SIZE>& lut) {
             }
             v_endif;
         }
+
+#if defined(BASIS_MUL_ABS_X_BEFORE_POST)
+        result1 = result1 * x1;
+        result2 = result2 * x2;
+#endif
+
+#if defined(BASIS_AFFINE_EVEN)
+        result1 = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig1 + (BASIS_AFFINE_EVEN_SCALE * x1) * result1;
+        result2 = BASIS_AFFINE_BIAS + BASIS_AFFINE_SCALE * x_orig2 + (BASIS_AFFINE_EVEN_SCALE * x2) * result2;
+#endif
+
+#if defined(BASIS_CLAMP_MAX)
+        vFloat basis_clamp_max_value1 = BASIS_CLAMP_MAX_VALUE;
+        vFloat basis_clamp_max_value2 = BASIS_CLAMP_MAX_VALUE;
+        vec_min_max(result1, basis_clamp_max_value1);
+        vec_min_max(result2, basis_clamp_max_value2);
+#endif
+
+#if defined(BASIS_POST_SIGN_X)
+        result1 = copysgn(result1, x_orig1);
+        result2 = copysgn(result2, x_orig2);
+#endif
+
+#if defined(BASIS_LEFT_TAIL_ZERO)
+        v_if(x_orig1 < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { result1 = 0.0f; }
+        v_endif;
+        v_if(x_orig2 < BASIS_LEFT_TAIL_ZERO_THRESHOLD) { result2 = 0.0f; }
+        v_endif;
+#endif
+
+#if defined(BASIS_RIGHT_TAIL_IDENTITY)
+        v_if(x_orig1 > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { result1 = x_orig1; }
+        v_endif;
+        v_if(x_orig2 > BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD) { result2 = x_orig2; }
+        v_endif;
+#endif
 
 #if defined(RANGE_REDUCTION_EXP)
         v_if(x_orig1 > EXP_OVERFLOW) { result1 = std::numeric_limits<float>::infinity(); }

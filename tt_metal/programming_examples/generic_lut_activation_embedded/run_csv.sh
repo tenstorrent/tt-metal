@@ -371,6 +371,11 @@ has_abs_sign_basis = (not is_rational) and basis_kind_norm in (
     'odd_factored_q',
     'odd_factor_q',
 )
+has_affine_even_basis = (not is_rational) and basis_kind_norm in (
+    'affine_even',
+    'affine_even_poly',
+    'affine_even_cdf',
+)
 if has_abs_sign_basis:
     is_odd_factored = basis_kind_norm.startswith('odd_factored') or basis_kind_norm == 'odd_factor_q'
     odd_factored_q_coeffs = is_odd_factored and basis_coeffs_are_q
@@ -405,13 +410,65 @@ if has_abs_sign_basis:
     coeff_label = 'Q(abs(x))' if odd_factored_q_coeffs else 'P(abs(x))'
     clamp_label = basis_clamp_max if basis_clamp_max else 'none'
     print(f'Basis: {basis_kind_norm} coeffs={coeff_label} clamp_max={clamp_label}')
+elif has_affine_even_basis:
+    def _meta_float(default, *keys):
+        for key in keys:
+            val = metadata.get(key, '').strip()
+            if val:
+                return float(val)
+        return float(default)
+
+    affine_bias = _meta_float(0.0, 'basis_bias', 'affine_bias', 'basis_affine_bias')
+    affine_scale = _meta_float(1.0, 'basis_scale_x', 'affine_scale', 'basis_affine_scale')
+    affine_even_scale = _meta_float(1.0, 'affine_even_scale', 'basis_even_scale', 'even_scale')
+    left_tail_mode = _meta_norm('basis_left_tail_mode', 'left_tail_mode')
+    right_tail_mode = _meta_norm('basis_right_tail_mode', 'right_tail_mode')
+    left_tail_zero = metadata.get(
+        'basis_left_tail_max',
+        metadata.get('left_tail_zero', metadata.get('basis_left_tail_zero', '')),
+    ).strip() if left_tail_mode in ('', 'zero') else ''
+    right_tail_identity = metadata.get(
+        'basis_right_tail_min',
+        metadata.get('right_tail_identity', metadata.get('basis_right_tail_identity', '')),
+    ).strip() if right_tail_mode in ('', 'identity') else ''
+    if left_tail_mode not in ('', 'zero'):
+        raise ValueError(f'unsupported affine_even left tail mode {left_tail_mode!r}')
+    if right_tail_mode not in ('', 'identity'):
+        raise ValueError(f'unsupported affine_even right tail mode {right_tail_mode!r}')
+
+    eval_basis_macro = (
+        f'\n// basis_kind={basis_kind_norm}: y = bias + scale*x + even_scale*abs(x)*P(abs(x))\n'
+        '#define BASIS_AFFINE_EVEN\n'
+        '#define BASIS_INPUT_ABS_X\n'
+        f'#define BASIS_AFFINE_BIAS {clamp(affine_bias):.10e}f\n'
+        f'#define BASIS_AFFINE_SCALE {clamp(affine_scale):.10e}f\n'
+        f'#define BASIS_AFFINE_EVEN_SCALE {clamp(affine_even_scale):.10e}f\n'
+    )
+    if left_tail_zero:
+        eval_basis_macro += (
+            '#define BASIS_LEFT_TAIL_ZERO\n'
+            f'#define BASIS_LEFT_TAIL_ZERO_THRESHOLD {clamp(float(left_tail_zero)):.10e}f\n'
+        )
+    if right_tail_identity:
+        eval_basis_macro += (
+            '#define BASIS_RIGHT_TAIL_IDENTITY\n'
+            f'#define BASIS_RIGHT_TAIL_IDENTITY_THRESHOLD {clamp(float(right_tail_identity)):.10e}f\n'
+        )
+    left_tail_zero_label = left_tail_zero or 'none'
+    right_tail_identity_label = right_tail_identity or 'none'
+    print(
+        f'Basis: {basis_kind_norm} affine_bias={affine_bias:.6g} '
+        f'affine_scale={affine_scale:.6g} even_scale={affine_even_scale:.6g} '
+        f'left_tail_zero={left_tail_zero_label} '
+        f'right_tail_identity={right_tail_identity_label}'
+    )
 elif basis_kind_norm not in plain_basis_kinds:
     raise ValueError(f'unsupported basis_kind={basis_kind!r}; refusing to generate a normal polynomial kernel')
 
 # Detect parity from coefficient values
 poly_parity_macro = ''
 threshold = 1e-30
-if has_abs_sign_basis:
+if has_abs_sign_basis or has_affine_even_basis:
     # Do not infer parity: abs/sign basis coefficients are dense in abs(x),
     # not expanded odd/even coefficients in x.
     pass
@@ -696,7 +753,7 @@ if any(asymptotic_flags):
 # one SFPMAD. Generic — any activation whose fit reduces to this shape qualifies.
 # (Rational / range-reduced fits never collapse this way.)
 affine_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and rr_method in ('', 'none') and num_segments == 1:
+if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and num_segments == 1:
     seg0_coeffs = coefficients[0:degree + 1]
     higher_zero = all(c == 0.0 for c in seg0_coeffs[2:])
     if higher_zero:
