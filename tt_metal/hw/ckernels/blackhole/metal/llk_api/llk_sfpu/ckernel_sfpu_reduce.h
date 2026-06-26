@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "api/numeric/bfloat16.h"
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
@@ -821,8 +822,42 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
     }
 }
 
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
-inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode) {
+/**
+ * @brief Reciprocal divisor for a row average, carried as two SFPLOADI halves.
+ *
+ * A row reduction collapses every column of a row of tiles, so the average divides the row sum by
+ * num_cols = 32 * block_ct_dim columns. The column path always divides by the fixed 32 rows of a
+ * tile and can use the compile-time 1/32 constant the init preloads into the programmable float
+ * const register; the row divisor instead depends on the runtime block_ct_dim. A runtime value
+ * cannot be written into that programmable const register with a plain SFPLOADI (it requires a
+ * config write), so the row path keeps the reciprocal in an ordinary working LREG and multiplies
+ * with it directly. This struct carries the precomputed 16-bit halves so each divide site can
+ * reload the reciprocal into a scratch register.
+ */
+struct RowAvgReciprocal {
+    std::uint16_t high16 = 0;
+    std::uint16_t low16 = 0;
+};
+
+inline RowAvgReciprocal make_row_avg_reciprocal(std::uint32_t num_cols) {
+    const FloatBits bits(1.0f / static_cast<float>(num_cols));
+    return RowAvgReciprocal{bits.high16, bits.low16};
+}
+
+/**
+ * @brief Load the row-average reciprocal into @p scratch_lreg (an SFPLOADI pair).
+ */
+inline void load_row_avg_reciprocal_into(std::uint32_t scratch_lreg, RowAvgReciprocal recip) {
+    TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_UPPER, recip.high16);
+    TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_LOWER, recip.low16);
+}
+
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool is_avg = false>
+inline void perform_reduce_row_sum_tile(
+    std::uint32_t tile_row_offset,
+    std::uint32_t result_store_mode,
+    bool divide_now = false,
+    RowAvgReciprocal recip = {}) {
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
@@ -916,6 +951,20 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint
                 convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
             }
 
+            // For a single-column-tile AVG the per-tile sum is already the full row sum, so divide it
+            // here (float-only path; row AVG is restricted to float formats). When block_ct_dim > 1 the
+            // per-tile store is an intermediate partial sum and the division is deferred to
+            // sum_first_columns_across_tiles instead. The two results (first/second 4-row group) live in
+            // LREG0/LREG4; LREG2 is free after the horizontal reduce and holds the reciprocal.
+            if constexpr (is_avg) {
+                if (divide_now) {
+                    load_row_avg_reciprocal_into(p_sfpu::LREG2, recip);
+                    TT_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+                    TT_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+                    TTI_SFPNOP;  // cover the 2-cycle SFPMUL latency before the stores below
+                }
+            }
+
             // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
             // final, packer-visible result (single column tile); otherwise it is an intermediate store
             // re-loaded by the cross-tile accumulation and must stay in the low 16 bits.
@@ -946,8 +995,9 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint
  * @param tile_row_base Base address of the first tile in this row of tiles
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
-inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uint32_t block_ct_dim) {
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16, bool is_avg = false>
+inline void sum_first_columns_across_tiles(
+    std::uint32_t tile_row_base, std::uint32_t block_ct_dim, RowAvgReciprocal recip = {}) {
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
          INSTRUCTION_MODE == InstrModLoadStore::LO16);
@@ -1028,6 +1078,18 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
             convert_int_representation_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
         }
 
+        // LREG0-3 now hold the full per-row sum across all column tiles. For AVG (float-only path)
+        // this is the point to divide by num_cols, before the final packer-visible store. LREG4 is
+        // free after the accumulation loop and holds the reciprocal for the four multiplies.
+        if constexpr (is_avg) {
+            load_row_avg_reciprocal_into(p_sfpu::LREG4, recip);
+            TT_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TT_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TT_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+            TT_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPNOP;  // cover the 2-cycle SFPMUL latency before the stores below
+        }
+
         // Store LREG0-3 back to tile 0. This is the final, packer-visible result, so it uses mode 9
         // (SFPSTORE_MOD0_FMT_LO16) only when the OUTPUT is UInt16 in a 32-bit dest (packer reads the
         // high 16 bits); a 32-bit output (e.g. UInt32) is stored with the plain INSTRUCTION_MODE.
@@ -1040,8 +1102,17 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
     }
 }
 
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
-inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+template <PoolType pool_type, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
+inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+    static_assert(
+        pool_type == PoolType::SUM || pool_type == PoolType::AVG,
+        "perform_reduce_row_sum_avg only supports SUM and AVG pool types");
+
+    // AVG divides each row sum by the number of reduced columns (32 per tile * block_ct_dim tiles).
+    // The reciprocal is computed once and passed down to whichever step performs the final store.
+    constexpr bool is_avg = (pool_type == PoolType::AVG);
+    const RowAvgReciprocal recip = is_avg ? make_row_avg_reciprocal(32u * block_ct_dim) : RowAvgReciprocal{};
+
     // When there is a single column tile, the per-tile store is the final packer-visible result and must
     // use mode 9 only when the OUTPUT is UInt16 in a 32-bit dest (pack_low16). With multiple column tiles
     // the per-tile store is intermediate (re-loaded by sum_first_columns_across_tiles) and must stay in the
@@ -1050,19 +1121,24 @@ inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t blo
                                               ? 9u /* SFPSTORE_MOD0_FMT_LO16 */
                                               : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
+    // For AVG, the divide happens at the point the full row sum is known: in the per-tile reducer for a
+    // single column tile, or in the cross-tile accumulation step for multiple column tiles.
+    const bool divide_in_tile = is_avg && (block_ct_dim == 1);
+
     for (std::uint32_t i = 0; i < block_rt_dim; i++) {
         std::uint32_t tile_row_offset = ROWS_PER_TILE * block_ct_dim * i;
 
         // Step 1: Reduce each tile individually (horizontal reduction within each tile)
         for (std::uint32_t j = 0; j < block_ct_dim; j++) {
             std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
-            perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits>(tile_offset, tile_store_mode);
+            perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits, is_avg>(
+                tile_offset, tile_store_mode, divide_in_tile, recip);
         }
 
         // Step 2: Sum column 0 from all tiles in this row into tile 0's column 0
         if (block_ct_dim > 1) {
-            sum_first_columns_across_tiles<INSTRUCTION_MODE, clear_high_bits, pack_low16>(
-                tile_row_offset, block_ct_dim);
+            sum_first_columns_across_tiles<INSTRUCTION_MODE, clear_high_bits, pack_low16, is_avg>(
+                tile_row_offset, block_ct_dim, recip);
         }
     }
 }
@@ -1583,10 +1659,20 @@ template <
     bool clear_high_bits,
     bool pack_low16>
 inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+    // Integer vs float is determined by the load/store mode. Row AVG divides the row sum by the
+    // (runtime) column count, which is only exact via a reciprocal multiply for float formats; an
+    // integer row AVG by an arbitrary column count would need a general integer divide and is not
+    // supported (integer AVG stays column-only, where the divisor is the fixed 32 rows of a tile).
+    constexpr bool is_integer_mode =
+        (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP ||
+         INSTRUCTION_MODE == InstrModLoadStore::LO16);
+
     // Compile-time assertions to restrict to currently supported operations
     static_assert(
-        reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_ROW),
-        "Only column reduction (REDUCE_COL) is supported, except row reduction (REDUCE_ROW) is allowed only for SUM");
+        reduce_dim == ReduceDim::REDUCE_COL ||
+            (reduce_dim == ReduceDim::REDUCE_ROW &&
+             (pool_type == PoolType::SUM || (pool_type == PoolType::AVG && !is_integer_mode))),
+        "Row reduction (REDUCE_ROW) supports SUM (all formats) and AVG (float formats only)");
     static_assert(
         pool_type == PoolType::SUM || pool_type == PoolType::AVG,
         "Only SUM and AVG pool types are currently supported on SFPU");
@@ -1603,8 +1689,8 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
     if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
         perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
     } else {
-        static_assert(pool_type == PoolType::SUM, "Row reduction (REDUCE_ROW) is allowed only for SUM");
-        perform_reduce_row_sum<INSTRUCTION_MODE, clear_high_bits, pack_low16>(block_ct_dim, block_rt_dim);
+        perform_reduce_row_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>(
+            block_ct_dim, block_rt_dim);
     }
     // For column reductions: sums are stored horizontally in the first row of tensor in dest reg
     // For row reductions: sums are stored vertically in the first column of tensor in dest reg
@@ -1677,8 +1763,8 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
  * @brief Unified reduction kernel wrapper for a 32x32 tile.
  *        Determines the instruction mode from format, then dispatches to the appropriate reduction kernel.
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (SUM/MAX/MIN,
- * FP32/FP16B/Int32).
+ * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (SUM/MAX/MIN all
+ * formats; AVG float formats only).
  * @tparam format The INPUT data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b). Drives the
  *         instruction mode and load-time high-bit masking.
  * @tparam output_format The packer-visible OUTPUT data format (defaults to @p format). Drives the final store mode:
@@ -1697,11 +1783,16 @@ template <
     bool is_fp32_dest_acc_en,
     DataFormat output_format = format>
 inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1) {
+    // Row reduction supports SUM/MAX/MIN for every supported format; AVG is row-supported only for
+    // float formats, because the row divisor is the runtime column count and only the float
+    // reciprocal-multiply divides exactly (integer AVG stays column-only with its fixed /32 divisor).
+    constexpr bool is_float_format = (format == DataFormat::Float32 || format == DataFormat::Float16_b);
     static_assert(
-        reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_ROW) ||
-            (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW) ||
-            (pool_type == PoolType::MIN && reduce_dim == ReduceDim::REDUCE_ROW),
-        "Row reduction (REDUCE_ROW) is supported for SUM, MAX and MIN pool types");
+        reduce_dim == ReduceDim::REDUCE_COL ||
+            (reduce_dim == ReduceDim::REDUCE_ROW &&
+             (pool_type == PoolType::SUM || pool_type == PoolType::MAX || pool_type == PoolType::MIN ||
+              (pool_type == PoolType::AVG && is_float_format))),
+        "Row reduction (REDUCE_ROW) supports SUM/MAX/MIN (all formats) and AVG (float formats only)");
     static_assert(
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
