@@ -150,7 +150,6 @@ using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 // DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
-using ScratchpadNameToIdMap = std::unordered_map<ScratchpadSpecName, uint32_t>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -2313,7 +2312,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 
     uint32_t cta_word_offset = 0;
     size_t crta_word_index = base_named_crta_count;
-    uint32_t binding_section_words = 0;
+    uint32_t tensor_binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
         const std::vector<uint32_t>& binding_ctas = resolved.cta_payload;
@@ -2330,14 +2329,16 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
         const uint32_t binding_words = 1u + resolved.extra_crta_words;
         crta_word_index += binding_words;
-        binding_section_words += binding_words;
+        tensor_binding_section_words += binding_words;
 
         out.handles.push_back(std::move(handle));
     }
 
     out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
-    out.crta_layout.binding_section_words = binding_section_words;
-    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
+    out.crta_layout.tensor_binding_section_words = tensor_binding_section_words;
+    // Provisional: assumes no scratchpad section. ResolveScratchpadBindingsForKernel folds the
+    // scratchpad section in and rewrites vararg_section_offset accordingly.
+    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + tensor_binding_section_words;
 
     return out;
 }
@@ -2378,21 +2379,38 @@ tt::tt_metal::SemaphoreLocalAccessorHandleMap MakeSemaphoreLocalAccessorHandles(
     return out;
 }
 
-// Create map of local accessor name -> scratchpad id
-tt::tt_metal::ScratchpadLocalAccessorHandleMap MakeScratchpadLocalAccessorHandles(
-    const KernelSpec& kernel_spec, const ScratchpadNameToIdMap& scratchpad_name_to_id) {
-    tt::tt_metal::ScratchpadLocalAccessorHandleMap out;
-    out.reserve(kernel_spec.scratchpad_bindings.size());
-    for (const auto& scratchpad_binding : kernel_spec.scratchpad_bindings) {
-        const uint32_t id = scratchpad_name_to_id.at(scratchpad_binding.scratchpad_spec_name);
-        TT_FATAL(
-            id <= std::numeric_limits<uint16_t>::max(),
-            "Kernel '{}' scratchpad '{}' id {} does not fit uint16_t",
-            kernel_spec.unique_id,
-            scratchpad_binding.scratchpad_spec_name,
-            id);
-        out.emplace(scratchpad_binding.accessor_name, static_cast<uint16_t>(id));
+// Resolve the scratchpad bindings for a single kernel.
+// A scratchpad's per-node base L1 address is injected at enqueue time via a CRTA slot, placed in the
+// CRTA buffer's Scratchpad section (immediately after the TensorBinding section). Each binding
+// occupies exactly one CRTA word (the base-address word); the size is static and baked into the
+// generated accessor, so it does not consume a CRTA slot.
+//
+// crta_start_word is the first CRTA word index of the scratchpad section
+// (= num_named_words + tensor_binding_section_words). Each handle's crta_offset is a WORD index
+// (the device reads it directly with get_common_arg_val<uint32_t>(crta_offset)).
+struct ScratchpadBindingsForKernel {
+    std::vector<tt::tt_metal::ScratchpadBindingHandle> handles;
+    uint32_t scratchpad_section_words = 0;
+};
+
+ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
+    const KernelSpec& kernel,
+    const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
+    uint32_t crta_start_word) {
+    ScratchpadBindingsForKernel out;
+    out.handles.reserve(kernel.scratchpad_bindings.size());
+
+    uint32_t crta_word_index = crta_start_word;
+    for (const auto& binding : kernel.scratchpad_bindings) {
+        const ScratchpadSpec* spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
+        out.handles.push_back(tt::tt_metal::ScratchpadBindingHandle{
+            .accessor_name = binding.accessor_name,
+            .scratchpad_spec_name = binding.scratchpad_spec_name.get(),
+            .crta_offset = crta_word_index,
+            .size_in_bytes = spec->size_per_node});
+        crta_word_index += 1;  // one CRTA word per scratchpad (base address only)
     }
+    out.scratchpad_section_words = static_cast<uint32_t>(kernel.scratchpad_bindings.size());
     return out;
 }
 
@@ -2882,16 +2900,17 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
-    // Create Scratchpads and build name -> ID map.
+    // Create Scratchpads (allocate per-node L1 + register name -> id for enqueue-time address lookup).
     // NOTE: Iterate over spec.scratchpads to preserve user-provided deterministic ordering.
     // Allocation nodes are the owning kernel's node set (a scratchpad is private to one kernel).
-    ScratchpadNameToIdMap scratchpad_name_to_id;
+    // The kernel-facing accessor does NOT carry this id: it carries a CRTA word offset (assigned per
+    // kernel in ResolveScratchpadBindingsForKernel); SetProgramRunArgs writes the allocated address
+    // (looked up by name) into that slot at enqueue.
     for (const auto& scratchpad_spec : spec.scratchpads) {
         const ScratchpadSpecName& scratchpad_name = scratchpad_spec.unique_id;
         uint32_t scratchpad_id = program_impl->add_scratchpad(
             collected.scratchpad_node_set.at(scratchpad_name), scratchpad_spec.size_per_node);
         program_impl->register_scratchpad_spec_name(scratchpad_name.get(), scratchpad_id);
-        scratchpad_name_to_id[scratchpad_name] = scratchpad_id;
     }
 
     // Create Kernels (arch-specific)
@@ -2904,8 +2923,6 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
         const tt::tt_metal::SemaphoreLocalAccessorHandleMap semaphore_handles =
             MakeSemaphoreLocalAccessorHandles(kernel_spec, semaphore_name_to_id);
-        const tt::tt_metal::ScratchpadLocalAccessorHandleMap scratchpad_handles =
-            MakeScratchpadLocalAccessorHandles(kernel_spec, scratchpad_name_to_id);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
@@ -2916,6 +2933,18 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
+
+        // Resolve ScratchpadBindings: their CRTA address slots follow the TensorBinding section.
+        // Fold the scratchpad section into the CRTA layout (it sits before the vararg section).
+        ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
+            kernel_spec,
+            collected.scratchpad_by_name,
+            /*crta_start_word=*/ta_bindings.crta_layout.num_named_words +
+                ta_bindings.crta_layout.tensor_binding_section_words);
+        const std::vector<tt::tt_metal::ScratchpadBindingHandle>& scratchpad_binding_handles = sp_bindings.handles;
+        KernelCrtaLayout crta_layout = ta_bindings.crta_layout;
+        crta_layout.scratchpad_section_words = sp_bindings.scratchpad_section_words;
+        crta_layout.vararg_section_offset += sp_bindings.scratchpad_section_words;
 
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
@@ -2946,8 +2975,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout,
-                    scratchpad_handles);
+                    crta_layout,
+                    scratchpad_binding_handles);
             } else {
                 auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
                 config.compile_args = ta_bindings.cta_words;
@@ -2963,8 +2992,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout,
-                    scratchpad_handles);
+                    crta_layout,
+                    scratchpad_binding_handles);
             }
         } else {  // gen1
             if (kernel_spec.is_data_movement_kernel()) {
@@ -2980,8 +3009,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout,
-                    scratchpad_handles);
+                    crta_layout,
+                    scratchpad_binding_handles);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
                 config.compile_args = ta_bindings.cta_words;
@@ -2995,8 +3024,8 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     named_rtas,
                     user_named_crtas,
                     tensor_binding_handles,
-                    ta_bindings.crta_layout,
-                    scratchpad_handles);
+                    crta_layout,
+                    scratchpad_binding_handles);
             }
         }
 

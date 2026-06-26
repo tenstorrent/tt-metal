@@ -344,12 +344,20 @@ struct Metal2BindingsSnapshot {
         uint32_t addr_crta_offset;
     };
 
+    // Scratchpad bindings, in insertion order (matches genfiles.cpp's vector).
+    struct ScratchEntry {
+        std::string name;
+        uint32_t crta_offset;
+        uint32_t size_in_bytes;
+    };
+
     bool is_metal2 = false;
     std::vector<std::string> runtime_arg_names;
     std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
     std::map<std::string, uint16_t> sem_accessors;
     std::vector<TaEntry> ta_accessors;
+    std::vector<ScratchEntry> scratch_accessors;
 
     // Distinguishes kernels that share source/CTAs/defines but bind different
     // IDs — without this they collide on cache key and the second silently
@@ -365,6 +373,9 @@ struct Metal2BindingsSnapshot {
         for (const auto& ta : ta_accessors) {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
                  std::to_string(ta.addr_crta_offset);
+        }
+        for (const auto& sp : scratch_accessors) {
+            s += ":scratch:" + sp.name + "=" + std::to_string(sp.crta_offset) + "," + std::to_string(sp.size_in_bytes);
         }
         for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
@@ -695,6 +706,10 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
                 num_rt_words);
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
+    kernel.process_scratchpad_binding_handles(
+        [&s](const std::string& name, uint32_t crta_offset, uint32_t size_in_bytes) {
+            s.scratch_accessors.push_back({name, crta_offset, size_in_bytes});
+        });
     return s;
 }
 
@@ -719,6 +734,9 @@ static void emit_metal2_namespaces(
     }
     if (!s.ta_accessors.empty()) {
         f << "#include \"api/tensor/tensor_accessor.h\"\n";
+    }
+    if (!s.scratch_accessors.empty()) {
+        f << "#include \"api/scratchpad.h\"\n";
     }
 
     if (has_args) {
@@ -756,10 +774,14 @@ static void emit_metal2_namespaces(
         }
         f << "}  // namespace sem\n";
     }
-    // TODO: emit the `scratch::` namespace. Add a scratchpad_accessors map to Metal2BindingsSnapshot,
-    // populate it in build_metal2_snapshot via kernel.process_scratchpad_local_accessor_handles, emit
-    // `namespace scratch { constexpr ScratchpadAccessor <name>{id}; }` here (with the api/scratchpad.h
-    // include), and include it in cache_key_suffix(). Must stay in sync with genfiles.cpp.
+    if (!s.scratch_accessors.empty()) {
+        f << "namespace scratch {\n";
+        for (const auto& sp : s.scratch_accessors) {
+            f << "constexpr ScratchpadAccessor " << sp.name << "{" << sp.crta_offset << "u, " << sp.size_in_bytes
+              << "u};\n";
+        }
+        f << "}  // namespace scratch\n";
+    }
     if (!s.ta_accessors.empty()) {
         f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {

@@ -289,6 +289,13 @@ public:
     // TODO: real per-core L1 reservation (mirror add_dataflow_buffer). Currently a stub.
     uint32_t add_scratchpad(const CoreRangeSet& core_range_set, uint32_t size_per_node);
 
+    // Metal 2.0: the per-node base L1 address of a registered scratchpad (uniform across the
+    // scratchpad's cores, like DataflowBufferImpl::uniform_alloc_addr). SetProgramRunArgs writes this
+    // into the kernel's scratchpad CRTA slot at enqueue.
+    // TODO: return the real allocated address once add_scratchpad/allocate_scratchpads land; currently
+    // returns a fixed sentinel so the CRTA-injection path can be exercised end-to-end.
+    uint32_t get_scratchpad_address(const std::string& scratchpad_spec_name) const;
+
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
 

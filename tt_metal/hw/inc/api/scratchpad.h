@@ -8,17 +8,26 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 
-// TODO: Write doc
+// Binding token for a Program-scope scratchpad, emitted into the `scratch::` namespace of
+// kernel_bindings_generated.h. The per-node base L1 address is injected at enqueue time via a CRTA
+// slot (crta_offset is its word index in the common-runtime-args buffer); the size is static (known
+// from ScratchpadSpec at spec time) and baked in here. Mirrors TensorAccessorBindingToken's
+// static-CTA / runtime-CRTA split, address-only.
 struct ScratchpadAccessor {
-    uint16_t id;
-    // entry size could be injected.
+    uint32_t crta_offset;    // word index of the base-address slot in the CRTA buffer
+    uint32_t size_in_bytes;  // static per-node size
 };
 
 template <typename T>
 class Scratchpad {
 public:
-    // TODO: Implement this.
-    [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept;
+    // Resolve a scratchpad from its binding token: read the per-node base L1 address from the CRTA
+    // slot at accessor.crta_offset; size_in_bytes is the static spec value. Not constexpr — it reads
+    // a runtime CRTA value.
+    [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept :
+        Scratchpad(
+            CoreLocalMem<T>{get_common_arg_val<uint32_t>(static_cast<int>(accessor.crta_offset))},
+            accessor.size_in_bytes) {}
 
     [[nodiscard]] constexpr Scratchpad(CoreLocalMem<T> base_addr, uint32_t size_in_bytes) noexcept :
         start_addr_(base_addr), end_addr_(CoreLocalMem<T>{base_addr.get_address() + size_in_bytes}) {

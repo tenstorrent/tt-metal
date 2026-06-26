@@ -134,7 +134,7 @@ Kernel::Kernel(
     const std::vector<std::string>& common_runtime_arg_names,
     const std::vector<TensorBindingHandle>& tensor_binding_handles,
     const KernelCrtaLayout& crta_layout,
-    const ScratchpadLocalAccessorHandleMap& scratchpad_local_accessor_handles) :
+    const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -148,7 +148,7 @@ Kernel::Kernel(
     common_runtime_arg_names_(common_runtime_arg_names),
     tensor_binding_handles_(tensor_binding_handles),
     crta_layout_(crta_layout),
-    scratchpad_local_accessor_handles_(scratchpad_local_accessor_handles),
+    scratchpad_binding_handles_(scratchpad_binding_handles),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -321,11 +321,12 @@ void Kernel::process_semaphore_local_accessor_handles(
     }
 }
 
-void Kernel::process_scratchpad_local_accessor_handles(
-    const std::function<void(const std::string& accessor_name, uint16_t scratchpad_id)> /*callback*/) const {
-    // TODO: iterate this->scratchpad_local_accessor_handles_ and invoke callback(name, id), mirroring
-    // process_dataflow_buffer_local_accessor_handles. Left as a no-op until the scratch:: codegen
-    // (genfiles.cpp / emulated_program_runner.cpp) is wired up to consume it.
+void Kernel::process_scratchpad_binding_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t crta_offset, uint32_t size_in_bytes)> callback)
+    const {
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        callback(handle.accessor_name, handle.crta_offset, handle.size_in_bytes);
+    }
 }
 
 void Kernel::process_tensor_binding_handles(const std::function<void(

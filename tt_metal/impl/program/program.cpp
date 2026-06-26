@@ -544,6 +544,13 @@ void ProgramImpl::register_scratchpad_spec_name(const std::string& /*name*/, uin
     // mirror register_dfb_spec_name (lazy-init registry, try_emplace, duplicate-name FATAL). No-op for now.
 }
 
+uint32_t ProgramImpl::get_scratchpad_address(const std::string& /*scratchpad_spec_name*/) const {
+    // TODO: return the scratchpad's allocated per-node base L1 address (uniform across its cores),
+    // once add_scratchpad/allocate_scratchpads perform the real reservation. For now return a fixed
+    // sentinel so the enqueue CRTA-write + device-read path can be exercised and DPRINT-verified.
+    return 0xCAFE0000u;
+}
+
 KernelHandle ProgramImpl::get_kernel_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->kernel_handles.find(name);

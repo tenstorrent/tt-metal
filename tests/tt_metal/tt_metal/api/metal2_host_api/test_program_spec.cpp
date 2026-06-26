@@ -3599,10 +3599,12 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     const uint32_t expected_vararg_offset = expected_named_words + expected_binding_words;
 
     EXPECT_EQ(layout.num_named_words, expected_named_words);
-    EXPECT_EQ(layout.binding_section_words, expected_binding_words);
+    EXPECT_EQ(layout.tensor_binding_section_words, expected_binding_words);
+    EXPECT_EQ(layout.scratchpad_section_words, 0u);  // no scratchpad bindings in this kernel
     EXPECT_EQ(layout.vararg_section_offset, expected_vararg_offset)
-        << "vararg_section_offset must equal num_named_words + binding_section_words; this is the "
-           "value baked into get_common_vararg(idx) by the kernel headergen.";
+        << "vararg_section_offset must equal num_named_words + tensor_binding_section_words + "
+           "scratchpad_section_words; this is the value baked into get_common_vararg(idx) by the "
+           "kernel headergen.";
 
     // Sanity: the dynamic-shape binding's runtime-field word count should be > 0, so this test
     // genuinely exercises a variable-size binding (not just two 1-word bindings that would also
@@ -3826,6 +3828,7 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
 // side through the ScratchPad accessor (hw/inc/api/scratchpad.h).
 using ScratchpadSpecTest = ProgramSpecTestGen1;
 
+// TODO: this test should not exist
 TEST_F(ScratchpadSpecTest, ScratchpadConfiguredEmptyKernelCompiles) {
     NodeCoord node{0, 0};
 
@@ -3861,6 +3864,39 @@ TEST_F(ScratchpadSpecTest, ScratchpadConfiguredEmptyKernelCompiles) {
         .unique_id = ScratchpadSpecName{"scratch"},
         .size_per_node = 1024,
     }};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// DM kernel constructs a Scratchpad from its binding token (scratch::<name>) and reads the
+// CRTA-injected base address. Exercises: scratch:: namespace emission, ScratchpadAccessor, the
+// device-side Scratchpad(ScratchpadAccessor) ctor, and get_common_arg_val for the base address.
+// Compile-only on the mock device (mirrors TensorAccessorBindingJITSmokeDMKernel). The DPRINT lets
+// you eyeball the base address on real hardware — get_scratchpad_address currently returns the
+// sentinel 0xCAFE0000, so a hardware run should print "scratch base: cafe0000".
+TEST_F(ScratchpadSpecTest, ScratchpadAccessorJITSmokeDMKernel) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratch_smoke_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+#include "api/debug/dprint.h"
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    DPRINT("scratch base: {:x}\n", pad.get_base_addr().get_address());
+    (void)pad;
+}
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);

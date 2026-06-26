@@ -183,6 +183,55 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
 }
 
 // ============================================================================
+// Scratchpad Accessor Dispatch Test
+// ============================================================================
+//
+// Dispatches a program whose DM kernel binds a scratchpad and DPRINTs the CRTA-injected base
+// address. The scratchpad's per-node base address is program-sourced (get_scratchpad_address) and
+// written into the kernel's scratchpad CRTA slot by SetProgramRunArgs' binding-only second pass;
+// the kernel recovers it via Scratchpad(scratch::<name>) -> get_common_arg_val.
+//
+// get_scratchpad_address currently returns the sentinel 0xCAFE0000 (real per-node L1 reservation is
+// not yet implemented), so this is verified by eye: run with DPRINT enabled and confirm
+//   scratch base: cafe0000
+// appears in the terminal:
+//   TT_METAL_DPRINT_CORES=0,0 ./build/test/tt_metal/unit_tests_api \
+//       --gtest_filter='ProgramSpecHWTest.ScratchpadAccessorDispatch'
+// The kernel only reads the address (never dereferences it), so the fake sentinel is safe.
+TEST_F(ProgramSpecHWTest, ScratchpadAccessorDispatch) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    const NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratch_dispatch";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+#include "api/debug/dprint.h"
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    DPRINT("scratch base: {:x}\n", pad.get_base_addr().get_address());
+}
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    // No user runtime args: the scratchpad CRTA slot is program-sourced, filled by SetProgramRunArgs'
+    // binding-only second pass (the kernel has no named RTAs/CRTAs/varargs/tensor bindings).
+    SetProgramRunArgs(program, ProgramRunArgs{});
+
+    detail::LaunchProgram(device, program);
+}
+
+// ============================================================================
 // Named RTA / CRTA / CTA Loopback Test
 // ============================================================================
 //

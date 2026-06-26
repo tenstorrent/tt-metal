@@ -122,6 +122,19 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
 
+    // Get the scratchpad binding handles from the settings callback.
+    // Like tensor bindings, these come from a std::vector in user-specified order, so no sort.
+    struct ScratchEntry {
+        string name;
+        uint32_t crta_offset;
+        uint32_t size_in_bytes;
+    };
+    vector<ScratchEntry> scratch_entries;
+    settings.process_scratchpad_binding_handles(
+        [&scratch_entries](const string& name, uint32_t crta_offset, uint32_t size_in_bytes) {
+            scratch_entries.push_back({name, crta_offset, size_in_bytes});
+        });
+
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
@@ -141,7 +154,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -152,6 +165,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
         if (!ta_entries.empty()) {
             content << "#include \"api/tensor/tensor_accessor.h\"\n";
+        }
+        if (!scratch_entries.empty()) {
+            content << "#include \"api/scratchpad.h\"\n";
         }
         content << "\n";
 
@@ -171,10 +187,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
-        // TODO: emit the `scratch::` namespace. Collect entries via
-        // settings.process_scratchpad_local_accessor_handles, sort by name, emit
-        // `#include "api/scratchpad.h"` then `namespace scratch { constexpr ScratchpadAccessor
-        // <name>{id}; }`, parallel to the dfb/sem blocks above.
+        // Scratchpad accessors are emitted into the scratch namespace. Each carries its CRTA base-
+        // address slot (crta_offset, a word index) and its static size — the device-side
+        // Scratchpad(scratch::<name>) ctor reads the address from that CRTA slot and uses the size as-is.
+        if (!scratch_entries.empty()) {
+            content << "namespace scratch {\n";
+            for (const auto& entry : scratch_entries) {
+                content << "constexpr ScratchpadAccessor " << entry.name << "{" << entry.crta_offset << "u, "
+                        << entry.size_in_bytes << "u};\n";
+            }
+            content << "}  // namespace scratch\n";
+        }
 
         if (!ta_entries.empty()) {
             // TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
