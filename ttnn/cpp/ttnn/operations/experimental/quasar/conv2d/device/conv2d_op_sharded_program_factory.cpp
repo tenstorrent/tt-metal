@@ -961,10 +961,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             });
         }
         spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
-    } else if (is_conv_1d_depthwise_conv) {
-        spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
     } else {
-        // Height-sharded non-depthwise: the compute kernel tilizes ACT internally into ACT_TILIZED.
+        // Non-block-sharded paths consume ACT_TILIZED from compute:
+        // - depthwise path emits/consumes ACT_TILIZED in compute
+        // - height-sharded non-depthwise path tilizes ACT internally in compute
         spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
     }
 
