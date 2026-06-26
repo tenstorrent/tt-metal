@@ -324,9 +324,12 @@ def pytest_configure(config):
     worker_id = getattr(config, "workerinput", {}).get("workerid", "master")
 
     if worker_id != "master":
-        import torch
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        os.environ.setdefault("MKL_NUM_THREADS", "1")
+        os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
         torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
 
     TestConfig.setup_mode(
         worker_id,
