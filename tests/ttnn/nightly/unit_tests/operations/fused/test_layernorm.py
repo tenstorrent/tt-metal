@@ -13,6 +13,7 @@ import ttnn
 from models.common.utility_functions import torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm, ttnn_rms_norm
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 TEST_PADDING_VALUE = -42
 
@@ -362,4 +363,62 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
         rtol=0.006,
         atol=0.018,
         frobenius_threshold=0.003,
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# FP32 coverage for the complete (non-distributed) interleaved LayerNorm op (issue #44650).
+# Spans the full config matrix: {legacy, welford} x {fp32, bf16} input x {TILE, ROW_MAJOR} input
+# x {bf16, fp32} gamma/beta. FP32 requires fp32_dest_acc_en=True. Welford requires TILE input
+# (ROW_MAJOR input hangs for every dtype), so welford x rm_in is skipped to record the limitation.
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile_in", "rm_in"])
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_layernorm_interleaved_all_config(device, dtype, use_welford, input_layout, gamma_dtype):
+    if use_welford and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Welford requires TILE input; ROW_MAJOR input hangs (dtype-independent limitation)")
+
+    torch.manual_seed(0)
+    M, K = 256, 1024
+    x = torch.rand((1, 1, M, K), dtype=torch.float32)
+    w = torch.rand((K,), dtype=torch.float32)
+    b = torch.rand((K,), dtype=torch.float32)
+    ref = torch.nn.functional.layer_norm(x, (K,), weight=w, bias=b, eps=1e-12)
+
+    xt = ttnn.from_torch(x, dtype=dtype, layout=input_layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    wt = ttnn.from_torch(w.reshape(1, 1, 1, K), dtype=gamma_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    bt = ttnn.from_torch(b.reshape(1, 1, 1, K), dtype=gamma_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32
+        packer_l1_acc=False,
+    )
+    cfg = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+
+    recip = None
+    if use_welford:
+        grid = device.compute_with_storage_grid_size()
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        recip = ttnn.create_layer_norm_reciprocals(device, crs, K)
+
+    out = ttnn.layer_norm(
+        xt,
+        epsilon=1e-12,
+        weight=wt,
+        bias=bt,
+        program_config=cfg,
+        compute_kernel_config=compute_kernel_config,
+        recip_tensor=recip,
+    )
+    ot = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+
+    passing, pcc = comp_pcc(ref, ot, pcc=0.999)
+    assert passing, (
+        f"interleaved {'welford' if use_welford else 'legacy'} {dtype} "
+        f"in_layout={input_layout} gamma={gamma_dtype} PCC failed: {pcc}"
     )
