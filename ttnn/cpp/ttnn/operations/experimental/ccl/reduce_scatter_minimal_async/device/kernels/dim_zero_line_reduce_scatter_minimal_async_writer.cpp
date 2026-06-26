@@ -372,16 +372,14 @@ void kernel_main() {
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                 cb_compute_output.wait_front(tile_granularity);
-                size_t l1_read_offset = 0;
+                // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no
+                // noc_traits_t specialization, so Noc::async_write rejects it at compile time.
+                uint32_t l1_read_addr = cb_compute_output.get_read_ptr();
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t output_tile_id = output_tile_id_start + tiles_read;
-                    noc_obj.async_write(
-                        cb_compute_output,
-                        output_addrgen,
-                        page_size,
-                        {.offset_bytes = l1_read_offset},
-                        {.page_id = output_tile_id});
-                    l1_read_offset += page_size;
+                    uint64_t noc_write_addr = output_addrgen.get_noc_addr(output_tile_id);
+                    noc_async_write(l1_read_addr, noc_write_addr, page_size);
+                    l1_read_addr += page_size;
                     tiles_read++;
                 }
 
