@@ -11,7 +11,7 @@ from helpers.constraints import (
 )
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
-    EltwiseBinaryGolden,
+    ReduceGolden,
     TilizeGolden,
     get_golden_generator,
     quantize_mx_tensor_chunked,
@@ -22,7 +22,8 @@ from helpers.llk_params import (
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
-    TilizeUnpackerSel,
+    ReduceDimension,
+    ReducePool,
     format_dict,
 )
 from helpers.param_config import (
@@ -40,27 +41,26 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
-    TILIZE_UNPACKER_SEL,
     generate_input_dim,
 )
 from helpers.utils import passed_test
 
 
-def generate_unpack_tilize_operands_combinations(
+def generate_unpack_reduce_col_tilizeA_strided_combinations(
     formats_list: List[FormatConfig],
 ):
     """
-    Generate unpack_tilize_operands test combinations for Quasar.
+    Generate unpack_reduce_col_tilizeA_strided test combinations for Quasar.
 
     Args:
         formats_list: List of input/output format pairs
 
     Returns:
-        List of (format, dest_acc, dest_sync, tilize_unpacker_sel, input_dimensions) tuples
+        List of (format, dest_acc, dest_sync, input_dimensions, pool_type) tuples
     """
 
-    def _requires_dest_acc_for_eltwise_binary(in_fmt, out_fmt):
-        """Int8->Int8 and UInt8->UInt8 eltwise binary ops need 32-bit dest.
+    def _requires_dest_acc_for_reduce(in_fmt, out_fmt):
+        """Int8->Int8 and UInt8->UInt8 reduce ops need 32-bit dest.
         This is in addition to the base constraints which are true for every operation.
         """
         return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
@@ -68,7 +68,7 @@ def generate_unpack_tilize_operands_combinations(
     # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
     # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
     # and max-square (both loops at capacity).
-    tilize_operands_dims = {
+    unpack_reduce_col_tilizeA_strided_dims = {
         (DestSync.Half, DestAccumulation.No): [
             [32, 32],
             [32, 256],
@@ -105,32 +105,30 @@ def generate_unpack_tilize_operands_combinations(
             continue
         for acc in get_valid_dest_accumulation_modes(fmt):
             if (
-                _requires_dest_acc_for_eltwise_binary(in_fmt, out_fmt)
+                _requires_dest_acc_for_reduce(in_fmt, out_fmt)
                 and acc == DestAccumulation.No
             ):
                 continue
             for dest_sync in (DestSync.Half, DestSync.Full):
-                for unp_tilize_sel in (
-                    TilizeUnpackerSel.UnpA,
-                    TilizeUnpackerSel.UnpB,
-                    TilizeUnpackerSel.UnpAB,
-                ):
-                    for dimensions in tilize_operands_dims[(dest_sync, acc)]:
+                for dimensions in unpack_reduce_col_tilizeA_strided_dims[
+                    (dest_sync, acc)
+                ]:
+                    for pool_type in (
+                        ReducePool.Max,
+                        ReducePool.Sum,
+                        ReducePool.Average,
+                    ):
+                        if pool_type == ReducePool.Average and in_fmt.is_integer():
+                            continue
                         combinations.append(
-                            (fmt, acc, dest_sync, unp_tilize_sel, dimensions)
+                            (fmt, acc, dest_sync, dimensions, pool_type)
                         )
 
     return combinations
 
 
-UNPACK_TILIZE_OPERANDS_FORMATS = input_output_formats(
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
     [
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp4,
         DataFormat.Float32,
         DataFormat.Float16_b,
         DataFormat.Float16,
@@ -139,80 +137,78 @@ UNPACK_TILIZE_OPERANDS_FORMATS = input_output_formats(
         DataFormat.Int32,
     ],
 )
-ALL_UNPACK_TILIZE_OPERANDS_COMBINATIONS = generate_unpack_tilize_operands_combinations(
-    UNPACK_TILIZE_OPERANDS_FORMATS
+ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
+    generate_unpack_reduce_col_tilizeA_strided_combinations(
+        UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS
+    )
 )
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_tilize_sel_dims=ALL_UNPACK_TILIZE_OPERANDS_COMBINATIONS,
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
 )
-def test_unpack_tilize_operands_quasar(
-    formats_dest_acc_sync_tilize_sel_dims, boot_mode=BootMode.DEFAULT
+def test_unpack_reduce_col_tilizeA_strided_quasar(
+    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
+    boot_mode=BootMode.DEFAULT,
 ):
-    (formats, dest_acc, dest_sync_mode, unp_tilize_sel, input_dimensions) = (
-        formats_dest_acc_sync_tilize_sel_dims[0]
+    (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
+        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
     )
 
     num_faces = 4
+    reduce_dim = ReduceDimension.Column
+    math_fidelity = MathFidelity.LoFi
 
-    tilize_a = unp_tilize_sel in (TilizeUnpackerSel.UnpA, TilizeUnpackerSel.UnpAB)
-    tilize_b = unp_tilize_sel in (TilizeUnpackerSel.UnpB, TilizeUnpackerSel.UnpAB)
-
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
 
+    if pool_type == ReducePool.Average:
+        src_B = torch.full((1024,), 1.0 / 32)
+    else:
+        src_B = torch.full((1024,), 1)
+
     tilize_gen = get_golden_generator(TilizeGolden)
-    eltwise_binary_gen = get_golden_generator(EltwiseBinaryGolden)
 
     golden_src_A = src_A
-    golden_src_B = src_B
     input_fmt = formats.input_format
 
     if formats.input_format.is_mx_format():
         golden_src_A = quantize_mx_tensor_chunked(src_A, formats.input_format)
-        golden_src_B = quantize_mx_tensor_chunked(src_B, formats.input_format)
         input_fmt = DataFormat.Float16_b
 
-    golden_A = (
-        tilize_gen(
-            golden_src_A, input_dimensions, formats.input_format, num_faces=num_faces
-        )
-        if tilize_a
-        else golden_src_A
-    )
-    golden_B = (
-        tilize_gen(
-            golden_src_B, input_dimensions, formats.input_format, num_faces=num_faces
-        )
-        if tilize_b
-        else golden_src_B
+    golden_A = tilize_gen(
+        golden_src_A, input_dimensions, formats.input_format, num_faces=num_faces
     )
 
-    golden_tensor = eltwise_binary_gen(
-        MathOperation.Elwadd,
+    reduce_gen = get_golden_generator(ReduceGolden)
+    golden_tensor = reduce_gen(
         golden_A,
-        golden_B,
+        reduce_dim,
+        pool_type,
         formats.output_format,
-        MathFidelity.LoFi,
+        tile_cnt_A,
         input_format=input_fmt,
-        input_format_B=input_fmt,
     )
+
+    mathop = {
+        ReduceDimension.Row: MathOperation.ReduceRow,
+        ReduceDimension.Column: MathOperation.ReduceColumn,
+        ReduceDimension.Scalar: MathOperation.ReduceScalar,
+    }[reduce_dim]
 
     configuration = TestConfig(
-        "sources/quasar/unpack_tilize_operands_quasar_test.cpp",
+        "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
-            TILIZE_UNPACKER_SEL(unp_tilize_sel),
-            MATH_OP(mathop=MathOperation.Elwadd),
-            MATH_FIDELITY(MathFidelity.LoFi),
+            MATH_OP(mathop=mathop, pool_type=pool_type),
+            MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync_mode),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
@@ -226,7 +222,7 @@ def test_unpack_tilize_operands_quasar(
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_A,
+            tile_count_B=1,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
         ),

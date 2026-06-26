@@ -13,7 +13,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_common.h"
-#include "llk_unpack_tilize_operands.h"
+#include "llk_unpack_reduce_col_tilizeA_strided.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -30,8 +30,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val_A.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
     bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
     bd_val_A.f.x_dim       = TEST_FACE_C_DIM;
-    bd_val_A.f.y_dim       = TEST_FACE_R_DIM;
-    bd_val_A.f.z_dim       = num_faces;
+    bd_val_A.f.y_dim       = 1;
+    bd_val_A.f.z_dim       = 1;
 
     tdma_descriptor_t td_val_A;
     td_val_A.buf_desc        = bd_val_A;
@@ -55,28 +55,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
-    _llk_unpack_tilize_operands_init_<TILIZE_UNP_SEL>(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
+    _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
 
-    const std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
+    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
     {
         std::uint32_t offset = block_rt * y_stride_external;
         for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
         {
             const std::uint32_t l1_unpack_tilize_idx = offset + block_ct;
-            const std::uint32_t l1_unpack_idx        = block_rt * BLOCK_CT_DIM + block_ct;
-            if constexpr (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpA)
-            {
-                _llk_unpack_tilize_operands_<TILIZE_UNP_SEL>(l1_unpack_tilize_idx, l1_unpack_idx);
-            }
-            else if constexpr (TILIZE_UNP_SEL == TilizeUnpackerSel::UnpB)
-            {
-                _llk_unpack_tilize_operands_<TILIZE_UNP_SEL>(l1_unpack_idx, l1_unpack_tilize_idx);
-            }
-            else // UnpAB: both operands are tilized
-            {
-                _llk_unpack_tilize_operands_<TILIZE_UNP_SEL>(l1_unpack_tilize_idx, l1_unpack_tilize_idx);
-            }
+            _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0);
         }
     }
 }
@@ -86,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "llk_math_common.h"
-#include "llk_math_eltwise_binary.h"
+#include "llk_math_reduce.h"
 #include "params.h"
 #include "tensor_shape.h"
 
@@ -110,11 +98,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
     }
 
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE, false /*acc_to_dest*/);
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE);
 
     for (std::uint32_t i = 0; i < TILE_CNT; ++i)
     {
-        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(i, ckernel::DEFAULT_TENSOR_SHAPE);
+        _llk_math_reduce_(i);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
@@ -154,8 +142,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
 
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
     _llk_pack_(0, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_pack_reduce_mask_clear_();
 }
 
 #endif
