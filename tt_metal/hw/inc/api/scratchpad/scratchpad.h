@@ -59,7 +59,9 @@ public:
     explicit Scratchpad(uint32_t base_address, uint32_t size_bytes = 0) :
         mem_(static_cast<uintptr_t>(base_address)), size_bytes_(size_bytes) {}
 
-    // Element access into the scratch region (read and write), bounds-checked in debug builds.
+    // Element access into the scratch region (read and write). The underlying L1 access is
+    // debug-sanitized by CoreLocalMem (an L1-address validity check); it is NOT bounded against the
+    // scratchpad's own size — staying within size()/size_bytes() is the caller's responsibility.
     T& operator[](uint32_t index) const { return mem_[index]; }
 
     // Raw, directly-dereferenceable L1 pointer to the start of the scratch region.

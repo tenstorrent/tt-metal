@@ -801,6 +801,11 @@ static void emit_metal2_namespaces(
     // section, and the scratchpad section.
     if (s.is_metal2) {
         const uint32_t named_rta_words = static_cast<uint32_t>(s.runtime_arg_names.size());
+        // NOTE: ta_accessors.size() and scratch_accessors.size() are used here as WORD counts, valid only
+        // because each TA binding is exactly 1 CRTA word (the dynamic-shape FATAL in build_metal2_snapshot
+        // rejects multi-word bindings) and each scratchpad binding is exactly 1 word. If that FATAL is ever
+        // lifted, convert the TA term to a real per-binding word sum (and thread the host KernelCrtaLayout
+        // through) so the vararg/scratchpad base stays correct.
         const uint32_t named_crta_words = static_cast<uint32_t>(
             s.common_runtime_arg_names.size() + s.ta_accessors.size() + s.scratch_accessors.size());
         f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "

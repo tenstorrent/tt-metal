@@ -525,7 +525,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
     // binding, holding the scratchpad's allocated L1 base address. The address is 0 here on the first
     // SetProgramRunArgs (the scratchpad is allocated later, at program-compile time, and the slot is
-    // then patched in place — see ProgramImpl::bind_scratchpad_crtas); on any later re-assembly the
+    // then patched in place — see ProgramImpl::allocate_scratchpads); on any later re-assembly the
     // handle already carries the allocated address, so it is filled directly. The section is always
     // present (sized by the kernel's scratchpad bindings), so the buffer's word count is stable across
     // re-set calls (install_crtas asserts that).
@@ -564,10 +564,12 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     //
     // Layout:
     //   RTA per-node:  [named_rta_0 ... named_rta_N-1, vararg_0 ... vararg_M-1]
-    //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, vararg_0 ... vararg_L-1]
+    //   CRTA:          [named_crta_0 ... named_crta_K-1, ta_addr_0 ... ta_addr_B-1, scratch_addr_0 ...
+    //   scratch_addr_S-1,
+    //                   vararg_0 ... vararg_L-1]
     //
     // RTA layout has two sections: named RTAs and RTA varargs.
-    // CRTA layout has three sections: named CRTAs, TensorBinding addresses, and CRTA varargs.
+    // CRTA layout has four sections: named CRTAs, TensorBinding addresses, Scratchpad addresses, and CRTA varargs.
     //
     // TensorBinding address section is used by headergen to emit the `tensor::` namespace tokens.
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
@@ -681,13 +683,15 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             }
         }
 
-        // Assemble the kernel's per-enqueue CRTA buffer in three structurally-separate sections:
+        // Assemble the kernel's per-enqueue CRTA buffer in four structurally-separate sections:
         //   1. User-named CRTAs, in schema order, sourced from common_runtime_arg_values.
         //   2. TensorBinding section, in binding-handle order, sourced from TensorArgument via the
         //      tensor_by_param lookup. Each binding occupies (1 + num_runtime_field_crta_words)
         //      words: [address, optional shape...]. The handle's addr_crta_offset lines up with
         //      the address slot position chosen here.
-        //   3. Common runtime varargs, in caller-supplied order.
+        //   3. Scratchpad section, in binding order, one word each (the allocated L1 base address,
+        //      0 here until allocate_scratchpads patches it at program-compile time).
+        //   4. Common runtime varargs, in caller-supplied order.
         const auto& binding_handles = kernel->tensor_binding_handles();
         std::size_t binding_section_words = 0;
         for (const auto& handle : binding_handles) {
