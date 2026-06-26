@@ -347,31 +347,31 @@ python models/demos/blackhole/pplx_embed_0_6b/demo/embed_client.py \
 
 ### Load benchmark (DP=32, ISL 512, base64)
 
-Measured on the Blackhole Galaxy with all 32 chips resident, 1200 requests per
-concurrency level, each input padded to the full 512-token bucket (worst case).
-"In-flight" is the number of concurrent requests; "on-device replay" is the
-per-chip prefill+RMSNorm+pool latency reported by the worker (`GET /metrics`).
+Measured on the Blackhole Galaxy with all 32 chips resident (400–1500 requests
+per concurrency level), each input padded to the full 512-token bucket (worst
+case). "In-flight" is the number of concurrent requests; "on-device replay" is
+the per-chip prefill+RMSNorm+pool latency reported by the worker (`GET /metrics`).
 
 | In-flight | Throughput (req/s) | Throughput (tok/s) | On-device replay p50 / p99 (ms) | Client e2e p50 / p99 (ms) |
 | --------: | -----------------: | -----------------: | :-----------------------------: | :-----------------------: |
-|         1 |                 81 |              41.4k |          7.81 / 7.92            |        12.5 / 13.2        |
-|         8 |                636 |               326k |          7.66 / 7.70            |        12.2 / 18.8        |
-|        32 |              2,383 |              1.22M |          7.64 / 7.68            |        11.9 / 41.0        |
-|        64 |              2,589 |              1.33M |          7.63 / 7.67            |        22.2 / 57.0        |
+|         1 |                 86 |              43.9k |          7.42 / 7.55            |        11.7 / 12.6        |
+|         8 |                690 |               353k |          7.41 / 7.45            |        11.2 / 14.4        |
+|        32 |              2,461 |              1.26M |          7.38 / 7.42            |        11.5 / 43.9        |
+|        64 |              2,840 |              1.45M |          7.37 / 7.41            |        20.4 / 54.0        |
 
 **Key result — per-chip latency is flat under full load.** On-device replay stays
-at ~7.6–7.8 ms (p99 < 8 ms) from 1 to 64 concurrent requests: a request served
+at ~7.4 ms (p99 < 7.6 ms) from 1 to 64 concurrent requests: a request served
 while all 32 chips are busy costs the same on-device as one served in isolation.
 
 Tokenization runs in the workers, distributed across the 32 processes and
 overlapping device work, so its host cost does not limit throughput (the system is
 device-bound).
 
-**Operating point.** Throughput peaks around **~2,600 req/s (~1.3M tokens/s)** at
-64 in-flight requests (two per chip, pipelined). Beyond that the chips are
-saturated, so extra concurrency only adds queuing delay (client e2e tail grows
-while on-device stays flat). The host overhead overlaps across the 32 workers, so
-it costs throughput but not device time. Keep 32–64 requests in flight and prefer
+**Operating point.** Throughput peaks around **~2,840 req/s (~1.45M tokens/s)** at
+64 in-flight requests (two per chip, pipelined). For the lowest latency, keep
+**~32 in flight** — e2e p50 stays ~11.5 ms at ~2,460 req/s, whereas at 64 the
+extra queuing pushes e2e p50 to ~20 ms while on-device replay stays flat. Beyond
+64 the chips are saturated, so more concurrency only adds queuing delay. Prefer
 `encoding_format: "base64"` to minimize host serialization.
 
 ---

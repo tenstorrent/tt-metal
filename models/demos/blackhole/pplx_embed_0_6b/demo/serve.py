@@ -90,7 +90,7 @@ class AsyncEmbeddingPool:
         normalize: bool = True,
         cores_per_worker: int = 0,
         server_phys: int = 0,
-        server_tokenize: bool = True,
+        server_tokenize: bool = False,
     ):
         self.n = dp
         self.normalize = normalize
