@@ -4,11 +4,15 @@
 """Softmax operation entry point.
 
 Numerically-stable softmax along the last (W, dim=-1) or second-to-last
-(H, dim=-2) dimension of a 4D tile-aligned float32 tensor.
+(H, dim=-2) dimension of a 2D/3D/4D tensor.
 
 Math:
     output[n,c,h,w] = exp(x[n,c,h,w] - max(x[n,c,row_or_col]))
                     / sum(exp(x[n,c,h,w] - max(x[n,c,row_or_col])))
+
+Rank 2/3 tensors are internally unsqueezed to 4D before kernel dispatch,
+then reshaped back to the original rank on return. The kernels are
+rank-agnostic — they only see Ht, Wt, and num_slabs.
 """
 
 from __future__ import annotations
@@ -77,7 +81,7 @@ SUPPORTED = {
     "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
-    "rank": [4],
+    "rank": [2, 3, 4],
     "dim": [-1, -2],
     "fp32_dest_acc_en": [True],
 }
@@ -153,7 +157,8 @@ def softmax(
     """Numerically-stable softmax along dim.
 
     Args:
-        input_tensor: Input tensor (float32, TILE_LAYOUT, rank 4, H/W divisible by 32)
+        input_tensor: Input tensor (float32/bfloat16/bfloat8_b, TILE/ROW_MAJOR,
+                      rank 2/3/4, H/W divisible by 32 for tile-aligned cases)
         dim: Dimension along which softmax is computed (-1 = W, -2 = H). Default: -1.
         compute_kernel_config: Compute kernel config. Default: fp32_dest_acc_en=True.
 
@@ -165,21 +170,32 @@ def softmax(
 
     device = input_tensor.device()
 
-    # Allocate output tensor (same shape, dtype, layout as input)
+    # Save original shape for output reshape. The program descriptor and
+    # kernels operate on 4D internally — lower-rank tensors are unsqueezed
+    # to 4D before kernel dispatch and reshaped back on return.
+    original_shape = ttnn.Shape(list(input_tensor.shape))
+    input_4d = ttnn.unsqueeze_to_4D(input_tensor) if len(input_tensor.shape) < 4 else input_tensor
+
+    # Allocate output tensor (4D shape, same dtype, layout as input)
     output_tensor = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(input_tensor.shape)),
-        input_tensor.dtype,
-        input_tensor.layout,
+        ttnn.Shape(list(input_4d.shape)),
+        input_4d.dtype,
+        input_4d.layout,
         device,
-        input_tensor.memory_config(),
+        input_4d.memory_config(),
     )
 
     program_descriptor = create_program_descriptor(
-        input_tensor,
+        input_4d,
         output_tensor,
         dim=canonical_dim,
         compute_kernel_config=cfg,
     )
 
     # Output tensor MUST be last in the list
-    return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    result = ttnn.generic_op([input_4d, output_tensor], program_descriptor)
+
+    # Reshape back to the original rank if the input was lower-dimensional
+    if len(original_shape) < 4:
+        result = ttnn.reshape(result, original_shape)
+    return result
