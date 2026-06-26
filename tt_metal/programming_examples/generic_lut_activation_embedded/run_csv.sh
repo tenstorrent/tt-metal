@@ -24,7 +24,20 @@ source "$SCRIPT_DIR/sweep_helpers.sh"
 init_arch_detection
 
 # TT_POLY_FIT_DIR needed for extract_accuracy.py (ground truth + ULP computation)
-TT_POLY_FIT_DIR="${TT_POLY_FIT_DIR:-/localdev/nkapre/tt-polynomial-fitter}"
+if [[ -z "${TT_POLY_FIT_DIR:-}" ]]; then
+    for candidate in \
+        "$REPO_ROOT/../tt-polynomial-fitter" \
+        "$HOME/tt-polynomial-fitter" \
+        "$HOME/workspace/tt-polynomial-fitter" \
+        "/localdev/$USER/tt-polynomial-fitter" \
+        "/localdev/nkapre/tt-polynomial-fitter"; do
+        if [[ -f "$candidate/extract_accuracy.py" ]]; then
+            TT_POLY_FIT_DIR="$(cd "$candidate" && pwd)"
+            break
+        fi
+    done
+fi
+TT_POLY_FIT_DIR="${TT_POLY_FIT_DIR:-/localdev/$USER/tt-polynomial-fitter}"
 ACCURACY_SCRIPT="$TT_POLY_FIT_DIR/extract_accuracy.py"
 # Use system python for accuracy (python_env's torch has broken BF16 ULP spacing)
 ACCURACY_PYTHON="/usr/bin/python3"

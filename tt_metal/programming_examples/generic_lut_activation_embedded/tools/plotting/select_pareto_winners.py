@@ -102,6 +102,7 @@ def default_coeff_dir():
     if fit:
         candidates.append(Path(fit) / "data" / "coefficients")
     candidates += [
+        Path.home() / "tt-polynomial-fitter" / "data" / "coefficients",
         Path.home() / "workspace" / "tt-polynomial-fitter" / "data" / "coefficients",
         Path("/localdev") / os.environ.get("USER", "") / "tt-polynomial-fitter" / "data" / "coefficients",
     ]

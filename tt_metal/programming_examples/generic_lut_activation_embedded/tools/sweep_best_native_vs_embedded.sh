@@ -28,8 +28,14 @@
 # =============================================================================
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${TT_POLY_FIT_DIR:-}" ]]; then
+  for c in "$SCRIPT_DIR/../../../../../tt-polynomial-fitter" "$HOME/tt-polynomial-fitter" "$HOME/workspace/tt-polynomial-fitter" "/localdev/$USER/tt-polynomial-fitter"; do
+    [[ -d "$c/data/coefficients" ]] && { TT_POLY_FIT_DIR="$(cd "$c" && pwd)"; break; }
+  done
+fi
 TT_POLY_FIT_DIR="${TT_POLY_FIT_DIR:-/localdev/$USER/tt-polynomial-fitter}"
 COEFF_DIR="$TT_POLY_FIT_DIR/data/coefficients"
+COMPARE_SCRIPT="$SCRIPT_DIR/compare_native_vs_embedded.sh"
 
 BEST_CSV=""; PREC_FILTER="both"; ACT_FILTER=""; TILES=256
 OUT=""; CSV_OUT=""; DUMP_DIR=""; RUN_DIR=""; SHARD=0; NUM_SHARDS=1; CACHE=""; PER_CFG_TIMEOUT=900
@@ -53,6 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$BEST_CSV" ]] && BEST_CSV="$TT_POLY_FIT_DIR/best.csv"
 [[ ! -f "$BEST_CSV" ]] && { echo "Error: best csv not found: $BEST_CSV"; exit 1; }
+[[ ! -x "$COMPARE_SCRIPT" ]] && { echo "Error: missing compare helper: $COMPARE_SCRIPT"; exit 1; }
 if [[ "$NUM_SHARDS" -lt 1 || "$SHARD" -lt 0 || "$SHARD" -ge "$NUM_SHARDS" ]]; then
   echo "Error: invalid shard $SHARD/$NUM_SHARDS" >&2
   exit 1
@@ -124,7 +131,7 @@ while IFS=, read -r act prec csv; do
   if [[ -n "$DUMP_DIR" ]]; then
     dump_args=(--dump-dir "$DUMP_DIR/shard${SHARD}")
   fi
-  timeout "$PER_CFG_TIMEOUT" "$SCRIPT_DIR/compare_native_vs_embedded.sh" \
+  timeout "$PER_CFG_TIMEOUT" "$COMPARE_SCRIPT" \
      --activation "$act" --precision "$prec" --csv "$COEFF_DIR/$csv" \
      --tiles "$TILES" --csv-out "$CSV_OUT" "${dump_args[@]}" \
      2>/dev/null | grep -E '\| NATIVE' | tee -a "$OUT"

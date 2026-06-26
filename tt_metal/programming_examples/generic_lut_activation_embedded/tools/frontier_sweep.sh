@@ -39,6 +39,11 @@ if [[ -z "${TT_METAL_HOME:-}" || ! -d "${TT_METAL_HOME}/tt_metal" ]]; then
     [[ -n "$c" && -x "$c/tt_metal/programming_examples/generic_lut_activation_embedded/run_csv.sh" ]] && { TT_METAL_HOME="$(cd "$c" && pwd)"; break; }
   done
 fi
+if [[ -z "${TT_POLY_FIT_DIR:-}" ]]; then
+  for c in "$TT_METAL_HOME/../tt-polynomial-fitter" "$HOME/tt-polynomial-fitter" "$HOME/workspace/tt-polynomial-fitter" "/localdev/$USER/tt-polynomial-fitter"; do
+    [[ -d "$c/data/coefficients" ]] && { TT_POLY_FIT_DIR="$(cd "$c" && pwd)"; break; }
+  done
+fi
 FIT_DIR="${TT_POLY_FIT_DIR:-/localdev/$USER/tt-polynomial-fitter}"
 export TT_METAL_HOME TT_POLY_FIT_DIR="$FIT_DIR"
 RUN_CSV="$TT_METAL_HOME/tt_metal/programming_examples/generic_lut_activation_embedded/run_csv.sh"
@@ -79,10 +84,17 @@ mkdir -p "$(dirname "$OUT")"
 
 # activation name = filename up to the first _p<digit> / _n<digit> config token.
 act_of() { basename "$1" .csv | sed -E 's/_[pn][0-9].*$//'; }
-# method = range_reduction_method metadata, else poly/rational.
+# method = canonical eval_method when present, else range_reduction_method, else poly/rational.
 method_of() {
-  local m; m="$(grep -aE '^METADATA,range_reduction_method,' "$1" 2>/dev/null | head -1 | cut -d, -f3)"
-  if [[ -n "$m" && "$m" != "none" ]]; then echo "$m"
+  local em rr
+  em="$(grep -aE '^METADATA,eval_method,' "$1" 2>/dev/null | head -1 | cut -d, -f3)"
+  rr="$(grep -aE '^METADATA,range_reduction_method,' "$1" 2>/dev/null | head -1 | cut -d, -f3)"
+  case "$em" in
+    identity|affine|affine_collapse|clamped_affine|clamped_affine_collapse|threshold_identity|threshold_identity_select|gated_affine_product|gated_quadratic_collapse|abs_denominator_rational|basis)
+      echo "$em"; return ;;
+  esac
+  if [[ -n "$rr" && "$rr" != "none" ]]; then echo "$rr"
+  elif [[ -n "$em" && "$em" != "poly_cascade" && "$em" != "rational_cascade" ]]; then echo "$em"
   elif grep -qaE '^(METADATA|segment_id)?,?.*[,]n0[,]' "$1" 2>/dev/null || basename "$1" | grep -q 'rational'; then echo rational
   else echo poly; fi
 }
