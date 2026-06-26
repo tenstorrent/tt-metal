@@ -160,3 +160,12 @@
 {"source":"run_safe_pytest","pid":1068907,"started_at_ms":1782439515078,"wait_ms":2,"run_ms":64971,"test_path":"eval/golden_tests/softmax/","exit_code":1}
 {"source":"run_safe_pytest","pid":1071448,"started_at_ms":1782439588583,"wait_ms":2,"run_ms":64984,"test_path":"eval/golden_tests/softmax/","exit_code":1}
 {"source":"tt-probe","pid":1074019,"started_at_ms":1782439668959,"wait_ms":180,"run_ms":23203,"test_path":"softmax","exit_code":0}
+{"source":"run_safe_pytest","pid":1075523,"started_at_ms":1782439717198,"wait_ms":2,"run_ms":166231,"test_path":"tests/ttnn/unit_tests/operations/softmax/","exit_code":0}
+{"source":"run_safe_pytest","pid":1084325,"started_at_ms":1782439910665,"wait_ms":3,"run_ms":13143,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1085001,"started_at_ms":1782439929413,"wait_ms":3,"run_ms":9526,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1085542,"started_at_ms":1782439952187,"wait_ms":3,"run_ms":9571,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1086068,"started_at_ms":1782439969171,"wait_ms":3,"run_ms":9552,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1086585,"started_at_ms":1782439985046,"wait_ms":3,"run_ms":7464,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py::test_softmax_v2_data_distributions","exit_code":1}
+{"source":"run_safe_pytest","pid":1086962,"started_at_ms":1782440005145,"wait_ms":3,"run_ms":9552,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1087479,"started_at_ms":1782440020209,"wait_ms":3,"run_ms":9482,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1088014,"started_at_ms":1782440039814,"wait_ms":3,"run_ms":9526,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement5_l1_budget.py","exit_code":0}
