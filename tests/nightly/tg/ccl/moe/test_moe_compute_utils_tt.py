@@ -44,7 +44,7 @@ def is_mesh_graph_descriptor_set(expected_path):
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
 
 
-_MESH_PARAM_8x4 = (
+_MESH_PARAM_8x4 = [
     pytest.param(
         (8, 4),
         (8, 4),
@@ -54,9 +54,9 @@ _MESH_PARAM_8x4 = (
         ),
         id="8x4",
     ),
-)
+]
 
-_MESH_PARAM_1x16 = (
+_MESH_PARAM_1x16 = [
     pytest.param(
         (1, 16),
         (1, 16),
@@ -66,9 +66,9 @@ _MESH_PARAM_1x16 = (
         ),
         id="1x16",
     ),
-)
+]
 
-MESH_PARAMS = [_MESH_PARAM_8x4, _MESH_PARAM_1x16]
+MESH_PARAMS = _MESH_PARAM_8x4 + _MESH_PARAM_1x16
 
 # (hidden_size, intermediate_size) — DeepSeek matches the production layout; the
 # small config catches edge cases in the shard formulas (Nt = num_cores, etc.).
@@ -455,7 +455,7 @@ def _build_shared_test_setup(num_layers, num_devices, hidden_size, N, E_total):
 # Note, only test this on linear meshes as the C++ version now includes TP sharding across the replicate axis and has
 # thus diverged from the OG python.
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [_MESH_PARAM_1x16], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", _MESH_PARAM_1x16, indirect=["mesh_device"])
 @pytest.mark.parametrize("hidden_size, N", DIM_PARAMS)
 @pytest.mark.parametrize("num_layers, experts_per_device", [(1, 2)])
 @torch.no_grad()

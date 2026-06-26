@@ -19,7 +19,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer
 
 from .transformer import RMSNormLayer
-from .autograd_ops import autograd_slice, autograd_concat, split_heads
+from .autograd_ops import autograd_slice, autograd_concat, autograd_split, split_heads
 
 
 class MultiHeadLatentAttention(AbstractModuleBase):
@@ -97,8 +97,9 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         kv_full = self.wkv_a(x)  # [B, 1, S, kv_lora_rank + qk_rope]
         kv_lora = self.kv_lora_rank
 
-        kv = autograd_slice(kv_full, [0, 0, 0, 0], [B, 1, S, kv_lora])
-        k_pe = autograd_slice(kv_full, [0, 0, 0, kv_lora], [B, 1, S, kv_lora + qk_rope])
+        # Single split (one concat in backward) instead of two autograd_slice
+        # (which each rebuild a full-width grad with zeros + concat, then sum).
+        kv, k_pe = autograd_split(kv_full, [kv_lora, qk_rope], dim=3)
 
         # RoPE on k_pe (shared across heads, shape [B, 1, S, qk_rope])
         k_pe = ttml.ops.rope.rope(k_pe, self.rope_params)

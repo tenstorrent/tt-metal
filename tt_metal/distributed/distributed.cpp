@@ -36,47 +36,57 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto& programs = mesh_workload.impl().get_programs();
     if (svc.impl().has_any_claims()) {
-        bool saw_service = false;
-        bool saw_normal = false;
-        for (auto& [device_range, program] : programs) {
-            size_t service_cores = 0;
-            size_t total_cores = 0;
-            for (const auto& coord : device_range) {
-                auto* device = mesh_cq.device()->impl().get_device(coord);
-                if (device == nullptr) {
-                    continue;
-                }
-                for (const auto& per_type : program.impl().logical_cores()) {
-                    for (const auto& core : per_type) {
-                        ++total_cores;
-                        if (svc.impl().is_service_core(device->id(), core)) {
-                            ++service_cores;
+        // Classify the workload as service vs normal once and cache it on the workload, so steady-state
+        // re-enqueues skip the O(programs*coords*cores) scan (see is_service_workload_ for why
+        // classify-once stays correct across re-enqueues).
+        auto& is_service_workload = mesh_workload.impl().is_service_workload_;
+        if (!is_service_workload.has_value()) {
+            bool saw_service = false;
+            bool saw_normal = false;
+            for (auto& [device_range, program] : programs) {
+                const auto logical_cores = program.impl().logical_cores();
+                size_t service_cores = 0;
+                size_t total_cores = 0;
+                for (const auto& coord : device_range) {
+                    auto* device = mesh_cq.device()->impl().get_device(coord);
+                    if (device == nullptr) {
+                        continue;
+                    }
+                    for (const auto& per_type : logical_cores) {
+                        for (const auto& core : per_type) {
+                            ++total_cores;
+                            if (svc.impl().is_service_core(device->id(), core)) {
+                                ++service_cores;
+                            }
                         }
                     }
                 }
+                // Level 1: a program targets only claimed service cores or only worker-grid cores, never a
+                // mix. This also catches a core claimed on some devices in the range but not others.
+                TT_FATAL(
+                    service_cores == 0 || service_cores == total_cores,
+                    "MeshWorkload program spans both service and worker-grid cores ({}/{} placements are claimed "
+                    "service cores). A program must target only claimed service cores (on every device in its "
+                    "range) or only worker-grid cores.",
+                    service_cores,
+                    total_cores);
+                const bool program_is_service = service_cores > 0;
+                // Level 2: the workload is all-service or all-normal, not a mix of the two.
+                saw_service |= program_is_service;
+                saw_normal |= !program_is_service;
+                TT_FATAL(
+                    !(saw_service && saw_normal),
+                    "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
+                    "programs on claimed service cores) or entirely normal (all on the worker grid).");
             }
-            // Level 1: a program targets only claimed service cores or only worker-grid cores, never a
-            // mix. This also catches a core claimed on some devices in the range but not others.
-            TT_FATAL(
-                service_cores == 0 || service_cores == total_cores,
-                "MeshWorkload program spans both service and worker-grid cores ({}/{} placements are claimed "
-                "service cores). A program must target only claimed service cores (on every device in its "
-                "range) or only worker-grid cores.",
-                service_cores,
-                total_cores);
-            const bool program_is_service = service_cores > 0;
-            // Level 2: the workload is all-service or all-normal, not a mix of the two.
-            saw_service |= program_is_service;
-            saw_normal |= !program_is_service;
-            TT_FATAL(
-                !(saw_service && saw_normal),
-                "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
-                "programs on claimed service cores) or entirely normal (all on the worker grid).");
+            is_service_workload = saw_service;
         }
 
-        if (saw_service) {
-            // Service workload: every core is claimed (checked above), so mark launch-once and
-            // dispatch each program via SD, bypassing FD. Re-enqueue TT_FATALs in mark_launched.
+        if (is_service_workload.value()) {
+            // Service workload: dispatch each program via SD, bypassing FD. Re-confirm each core is still
+            // a claimed service core (this loop runs every enqueue, unlike the cached scan): guards the
+            // cached classification against a core released between enqueues, failing loudly instead of
+            // SD-launching onto an unclaimed core.
             for (auto& [device_range, program] : programs) {
                 for (const auto& coord : device_range) {
                     auto* device = mesh_cq.device()->impl().get_device(coord);
@@ -86,6 +96,12 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                         coord);
                     for (const auto& per_type : program.impl().logical_cores()) {
                         for (const auto& core : per_type) {
+                            TT_FATAL(
+                                svc.impl().is_service_core(device->id(), core),
+                                "EnqueueMeshWorkload: service workload targets core {} on device {} that is not a "
+                                "claimed service core (released since a prior enqueue?).",
+                                core,
+                                device->id());
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }

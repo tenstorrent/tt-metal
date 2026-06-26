@@ -55,7 +55,8 @@ def draw_broken_cores(broken_cores: set[RiscLocation]) -> str:
             riscs_string += "x" if RiscLocation(location, None, risc_name) in broken_cores else "-"
         return riscs_string
 
-    return next(iter(broken_cores)).location.device.render(axis_coordinate="noc0", cell_renderer=location_render)
+    rendered = next(iter(broken_cores)).location.device.render(axis_coordinate="noc0", cell_renderer=location_render)
+    return str(rendered)
 
 
 def broken_core_serializer(broken_cores: set[RiscLocation] | str) -> str:

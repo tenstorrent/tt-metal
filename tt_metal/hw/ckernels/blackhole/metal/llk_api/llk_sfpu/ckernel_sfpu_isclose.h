@@ -48,8 +48,8 @@ inline void calculate_sfpu_isclose(
         // both the |b| computation for the tolerance and the merged Inf/NaN
         // fix-up branch below, so computing them once avoids any duplicated
         // bit-mask work.
-        sfpi::vInt a_bits = sfpi::reinterpret<sfpi::vInt>(a);
-        sfpi::vInt b_bits = sfpi::reinterpret<sfpi::vInt>(b);
+        sfpi::vInt a_bits = sfpi::as<sfpi::vInt>(a);
+        sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
         sfpi::vFloat a_abs = sfpi::abs(a);
         sfpi::vFloat b_abs = sfpi::abs(b);
 

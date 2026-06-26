@@ -48,6 +48,7 @@ class ComputeNode:
         clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
         acc_to_dest: AccToDest = AccToDest.No,
         unpack_to_dest: UnpackToDest = UnpackToDest.No,
+        reduce_to_tile: bool = False,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -68,6 +69,7 @@ class ComputeNode:
         self.clear_fp32_dst_acc = clear_fp32_dst_acc
         self.acc_to_dest = acc_to_dest
         self.unpack_to_dest = unpack_to_dest
+        self.reduce_to_tile = reduce_to_tile
         self.src_a = src_a
         self.src_b = src_b
 
@@ -204,10 +206,17 @@ class ComputeNode:
             )
 
         if self.sfpu is not None:
+            tile_dims = (
+                operation.tile_shape.total_row_dim(),
+                operation.tile_shape.total_col_dim(),
+            )
+            num_faces = operation.tile_shape.total_num_faces()
             tilized_dst = tilize_block(
                 tensor_dst,
                 operation.max_output_dimensions,
                 config.sentinel.golden_math_format,
+                num_faces=num_faces,
+                tile_dimensions=tile_dims,
             )
 
             tile_count_x = (
@@ -243,7 +252,10 @@ class ComputeNode:
                     return
 
                 block_tensor = tilized_dst[block_tile_ids, :].clone().flatten()
-                block_dims = (block_tile_cnt * 32, 32)
+                block_dims = (
+                    block_tile_cnt * operation.tile_shape.total_row_dim(),
+                    operation.tile_shape.total_col_dim(),
+                )
 
                 block_tensor = self.sfpu.golden(
                     block_tensor,
@@ -284,6 +296,8 @@ class ComputeNode:
                 tilized_dst.flatten(),
                 config.sentinel.golden_math_format,
                 operation.max_output_dimensions,
+                tile_dimensions=tile_dims,
+                num_faces=num_faces,
             ).reshape(operation.max_output_dimensions)
 
         return (

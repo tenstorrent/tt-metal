@@ -37,7 +37,7 @@ from helpers.llk_params import (
     Transpose,
     UnpackToDest,
 )
-from helpers.tile_shape import TileShape
+from helpers.tile_shape import TileShape, construct_tile_shape
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -45,6 +45,32 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+SUPPORTED_TILE_SIZES = {
+    (1, 32),
+    (2, 32),
+    (4, 32),
+    (8, 32),
+    (16, 32),
+    (32, 32),
+    (16, 16),
+    (32, 16),
+}
+
+
+def _tile_dims(ts: TileShape) -> Tuple[int, int]:
+    return (ts.total_row_dim(), ts.total_col_dim())
+
+
+def _is_sfpu_tile(dims: Tuple[int, int]) -> bool:
+    return dims in ((16, 32), (32, 32), (32, 16))
+
+
+def _has_transpose(schema) -> bool:
+    return (
+        schema.unpack_transpose_faces == Transpose.Yes
+        or schema.unpack_transpose_within_face == Transpose.Yes
+    )
 
 
 class UnarySfpuMathSchema(BaseModel):
@@ -169,6 +195,7 @@ class FpuMathSchemaBase(BaseModel):
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
     unpack_to_dest: UnpackToDest = UnpackToDest.No
+    reduce_to_tile: bool = False
     src_a: str = Field(..., min_length=1)
     src_b: str = Field(..., min_length=1)
 
@@ -235,6 +262,7 @@ class FpuMathSchemaBase(BaseModel):
             "clear_fp32_dst_acc": clear_fp32_dst_acc,
             "acc_to_dest": self.acc_to_dest,
             "unpack_to_dest": self.unpack_to_dest,
+            "reduce_to_tile": self.reduce_to_tile,
         }
         if self.unpacker is not None:
             unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]
@@ -292,26 +320,82 @@ class OperationSchemaBase(BaseModel):
     def _arch_kwargs(self) -> dict:
         return {}
 
-    def _resolve_tile_shape(self, operands) -> TileShape:
-        tile_shapes = []
-        for m in self.math:
-            if hasattr(m, "src_a"):
-                tile_shapes.append(operands.get(m.src_a).tile_shape)
-            if hasattr(m, "src_b"):
-                tile_shapes.append(operands.get(m.src_b).tile_shape)
-        for entry in self.pack:
-            tile_shapes.append(operands.get(entry.output).tile_shape)
+    def _resolve_output_tile_shape(self, operands) -> TileShape:
+        """Resolve the output/dest tile shape for this operation.
 
-        first = tile_shapes[0]
-        for ts in tile_shapes[1:]:
-            if ts != first:
-                raise ValueError(
-                    f"All operands in an operation must have the same tile shape"
+        For most ops, all operands share the same tile shape. For matmul,
+        output tile shape derives from input tile shapes: out_rows = in0_rows,
+        out_cols = in1_cols.
+        """
+        output_tile_shapes = []
+
+        for m in self.math:
+            if not hasattr(m, "src_a"):
+                continue
+            src_a_ts = operands.get(m.src_a).tile_shape
+            src_b_ts = operands.get(m.src_b).tile_shape
+
+            if m.operation in ("Matmul", "MatmulNoMop"):
+                out_tile_dims = (
+                    src_a_ts.total_row_dim(),
+                    src_b_ts.total_col_dim(),
                 )
+                output_tile_shapes.append(construct_tile_shape(out_tile_dims))
+            else:
+                if _tile_dims(src_a_ts) != _tile_dims(src_b_ts):
+                    raise ValueError(
+                        f"src_a tile shape {_tile_dims(src_a_ts)} != src_b tile shape "
+                        f"{_tile_dims(src_b_ts)} for {m.operation}"
+                    )
+                output_tile_shapes.append(src_a_ts)
+
+        if not output_tile_shapes:
+            output_tile_shapes = [operands.get(e.output).tile_shape for e in self.pack]
+
+        first = output_tile_shapes[0]
+        for ts in output_tile_shapes[1:]:
+            if _tile_dims(ts) != _tile_dims(first):
+                raise ValueError(
+                    f"All math nodes must produce the same output tile shape. "
+                    f"Got {_tile_dims(first)} and {_tile_dims(ts)}"
+                )
+
+        for entry in self.pack:
+            pack_ts = operands.get(entry.output).tile_shape
+            if _tile_dims(pack_ts) != _tile_dims(first):
+                raise ValueError(
+                    f"Pack output '{entry.output}' tile shape {_tile_dims(pack_ts)} "
+                    f"does not match computed output tile shape {_tile_dims(first)}"
+                )
+
         return first
 
-    def to_fused_operation(self, operands):
-        tile_shape = self._resolve_tile_shape(operands)
+    def to_fused_operation(self, operands, dest_acc=False):
+        tile_shape = self._resolve_output_tile_shape(operands)
+
+        tile_r = tile_shape.total_row_dim()
+        tile_c = tile_shape.total_col_dim()
+        block_r, block_c = self.block_size
+
+        if block_r % tile_r != 0 or block_c % tile_c != 0:
+            raise ValueError(
+                f"Block size ({self.block_size}) must be a multiple of tile dimensions "
+                f"({tile_r}, {tile_c})"
+            )
+
+        block_tiles = (block_r // tile_r) * (block_c // tile_c)
+        dest_faces = 32 if self.dest_sync == DestSync.Half else 64
+        if dest_acc:
+            dest_faces //= 2
+        dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
+
+        if block_tiles > dest_tile_capacity:
+            raise ValueError(
+                f"Block size {self.block_size} requires {block_tiles} tiles "
+                f"({block_tiles * tile_shape.total_num_faces()} faces) but dest can hold "
+                f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
+                f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
+            )
 
         pack_nodes = []
         for entry in self.pack:
@@ -335,6 +419,16 @@ class OperationSchemaBase(BaseModel):
             )
 
         math_ops = [m.to_compute_node(operands) for m in self.math]
+
+        has_sfpu = any(node.sfpu is not None for node in math_ops)
+        has_fpu = any(node.fpu is not None for node in math_ops)
+        if has_sfpu and not has_fpu:
+            dims = _tile_dims(tile_shape)
+            if not _is_sfpu_tile(dims):
+                raise ValueError(
+                    f"Tile shape {dims} is not supported for SFPU operations. "
+                    f"Supported: [(16, 32), (32, 16), (32, 32)]"
+                )
 
         max_out_dims = self._calculate_max_output_dimensions(operands)
 

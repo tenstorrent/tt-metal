@@ -88,13 +88,15 @@ class ReduceBlockMaxFpu(Fpu):
         generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
 
         def process_block(block_x, block_y, block_tiles_x_eff, block_tiles_y_eff):
-            src_start_row = block_y * 32
-            src_end_row = (block_y + block_tiles_y_eff) * 32
-            start_col = block_x * 32
-            end_col = (block_x + block_tiles_x_eff) * 32
-            dst_start_row = block_y * 32
-            dst_end_row = (block_y + block_tiles_y_eff) * 32
-            block_dims = [block_tiles_y_eff * 32, block_tiles_x_eff * 32]
+            tile_r = operation.tile_shape.total_row_dim()
+            tile_c = operation.tile_shape.total_col_dim()
+            src_start_row = block_y * tile_r
+            src_end_row = (block_y + block_tiles_y_eff) * tile_r
+            start_col = block_x * tile_c
+            end_col = (block_x + block_tiles_x_eff) * tile_c
+            dst_start_row = block_y * tile_r
+            dst_end_row = (block_y + block_tiles_y_eff) * tile_r
+            block_dims = [block_tiles_y_eff * tile_r, block_tiles_x_eff * tile_c]
 
             src_a_reduced_tensor[dst_start_row:dst_end_row, start_col:end_col] = (
                 generate_golden(

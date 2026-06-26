@@ -27,6 +27,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     tokenizer_name = "bigscience/bloom-560m"
     comments = "560M"
 
+    # NOTE(transformers-5.x): `torchscript=` was removed from transformers configs in 5.x; drop it (a default no-op) when running this experimental model under 5.x.
     HF_model_top = BloomForCausalLM.from_pretrained(model_name, torchscript=False)
     HF_model_top.eval()
 

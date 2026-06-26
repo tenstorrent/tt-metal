@@ -2,18 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 op-local compute kernel for transpose's tiled WH factory. The compute logic is
+// unchanged; only the resource bindings move to the Metal 2.0 namespaces (dfb::/args::).
+
 #include <cstdint>
 
 #include "api/compute/transpose_wh.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t NHtWt = get_arg_val<uint32_t>(0);
+    uint32_t NHtWt = get_arg(args::NHtWt);
 
-    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    transpose_wh_init(dfb::cb_in0, dfb::cb_out0);
 
-    CircularBuffer cb_in(tt::CBIndex::c_0);
-    CircularBuffer cb_out(tt::CBIndex::c_16);
+    DataflowBuffer cb_in(dfb::cb_in0);
+    DataflowBuffer cb_out(dfb::cb_out0);
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
@@ -24,11 +28,11 @@ void kernel_main() {
         cb_out.reserve_back(1);
 
         tile_regs_acquire();
-        transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+        transpose_wh_tile(dfb::cb_in0, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, tt::CBIndex::c_16);
+        pack_tile(0, dfb::cb_out0);
         tile_regs_release();
 
         cb_out.push_back(1);

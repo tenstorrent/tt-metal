@@ -96,6 +96,14 @@ set(BUILD_SHARED_LIBS OFF)
 # Disable Tracy's -march=native for portable CLI binaries in CI.
 set(NO_ISA_EXTENSIONS ON)
 
+# Tracy's csvexport/capture each include cmake/config.cmake, which sets
+# RULE_LAUNCH_COMPILE ccache as a GLOBAL property.  tt-metal already wires
+# ccache via CMAKE_CXX_COMPILER_LAUNCHER (cmake/ccache.cmake), so having both
+# active causes double-wrapping: the outer ccache sees the entire
+# "cmake -E env ... ccache clang++ -c file.cpp" as its argument list and
+# rejects every tt_metal translation unit as "Multiple source files".
+# Suppress Tracy's own ccache logic; ours handles it correctly.
+set(NO_CCACHE ON)
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
 

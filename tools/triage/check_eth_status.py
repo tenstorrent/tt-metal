@@ -34,22 +34,22 @@ script_config = ScriptConfig(
 class EthCoreDefinitions:
     """Arch specific addresses of various ethernet core fields"""
 
-    port_status: int
+    port_status: int | None
     retrain_count: int
     rx_link_up: int
     heartbeat: int
-    mailbox: int
+    mailbox: int | None
     mailbox_slots: int
 
 
 @dataclass
 class EthCoreCheckData:
-    location: OnChipCoordinate = triage_field("Loc")
-    port_status: str = triage_field("Port Status")
-    retrain_count: int = triage_field("Retrain Count")
-    rx_link_up: str = triage_field("RX Link Up")
-    heartbeat: bool = triage_field("Heartbeat")
-    mailbox: list[int] = triage_field("Mailbox")
+    location: OnChipCoordinate | None = triage_field("Loc")
+    port_status: str | None = triage_field("Port Status")
+    retrain_count: int | None = triage_field("Retrain Count")
+    rx_link_up: str | None = triage_field("RX Link Up")
+    heartbeat: bool | None = triage_field("Heartbeat")
+    mailbox: list[str] | None = triage_field("Mailbox")
 
     def __init__(self):
         self.location = None
@@ -72,15 +72,15 @@ class EthCore(ABC):
         self.context = context
 
     @abstractmethod
-    def port_status_to_string(self, port_status: int) -> str:
+    def port_status_to_string(self, port_status: int) -> str | None:
         """Convert port status value to a readable string."""
         pass
 
-    def check_for_heartbeat(self):
+    def check_for_heartbeat(self) -> bool:
         """Check for heartbeat at the heartbeat address."""
         previous_data = 0
         # Check for a changing value at the heartbeat address. Read up to 100 times
-        for i in range(100):
+        for _ in range(100):
             read_data = read_word_from_device(self.location, self.eth_core_definitions.heartbeat, context=self.context)
             if read_data != previous_data:
                 return True
@@ -88,7 +88,7 @@ class EthCore(ABC):
         log_check_location(self.location, False, "No heartbeat detected")
         return False
 
-    def get_results(self):
+    def get_results(self) -> EthCoreCheckData:
         """Get and log all ethernet core status results."""
         output = EthCoreCheckData()
         # HEARTBEAT
@@ -100,7 +100,7 @@ class EthCore(ABC):
                 self.location, self.eth_core_definitions.port_status, context=self.context
             )
             port_status_str = self.port_status_to_string(port_status)
-            if port_status_str == None:
+            if port_status_str is None:
                 output.port_status = "Unknown"
             else:
                 output.port_status = port_status_str
@@ -169,7 +169,7 @@ class WormholeEthCore(EthCore):
             mailbox_slots=0,
         )
 
-    def port_status_to_string(self, port_status: int) -> str:
+    def port_status_to_string(self, port_status: int) -> str | None:
         """Convert Wormhole port status to readable string."""
         # Undefined right now for Wormhole. Need to find the mapping
         status_map = {0: "Undefined", 1: "Undefined", 2: "Undefined", 3: "Undefined"}
@@ -190,22 +190,23 @@ class BlackholeEthCore(EthCore):
             mailbox_slots=4,
         )
 
-    def port_status_to_string(self, port_status: int) -> str:
+    def port_status_to_string(self, port_status: int) -> str | None:
         """Convert Blackhole port status to readable string."""
-        status_map = {0: None, 1: "Up", 2: "Down", 3: "Unused"}
+        status_map: dict[int, str | None] = {0: None, 1: "Up", 2: "Down", 3: "Unused"}
         return status_map.get(port_status, None)
 
 
-def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Context) -> EthCoreCheckData:
+def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Context) -> EthCoreCheckData | None:
     """Create appropriate EthCore instance based on device type and get results."""
+    eth_core: EthCore
     if device.is_wormhole():
         eth_core = WormholeEthCore(location, context)
-        eth_core.get_results()
     elif device.is_blackhole():
         eth_core = BlackholeEthCore(location, context)
-        eth_core.get_results()
     else:
         utils.ERROR(f"Unsupported architecture for check_eth_status: {device._arch}")
+        return None
+    return eth_core.get_results()
 
 
 def run(args, context: Context):

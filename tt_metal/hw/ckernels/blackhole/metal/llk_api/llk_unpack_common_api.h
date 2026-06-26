@@ -288,12 +288,6 @@ inline void llk_unpack_reconfig_data_format(
 }
 
 /**
- * Disable unpacker debug features.
- */
-// TODO NC: Remove as a part of tt-metal#36411
-inline void llk_unpack_dbg_feature_disable() { _llk_unpack_dbg_feature_disable_(); }
-
-/**
  * Mark srcB as holding dummy-valid data so the math thread can proceed without a real srcB unpack.
  */
 inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }

@@ -67,7 +67,6 @@ struct DataflowBufferImpl {
     std::unordered_map<CoreCoord, std::pair<size_t, uint32_t>> core_lookup_;
 
     // Shared config fields (written to dfb_initializer_t, same for all cores)
-    uint32_t entry_size = 0;
     uint32_t stride_in_entries = 0;
     dfb_txn_id_descriptor_t producer_txn_descriptor = {};
     dfb_txn_id_descriptor_t consumer_txn_descriptor = {};
@@ -107,6 +106,11 @@ struct DataflowBufferImpl {
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
     std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
+
+    // Override entry_size and/or num_entries. Recomputes capacity/stride and, on a re-entry
+    // (already-finalized) DFB with implicit sync, recomputes the txn descriptors in place while
+    // preserving the allocated transaction IDs and TC assignment.
+    void update_size(std::optional<uint32_t> new_entry_size, std::optional<uint32_t> new_num_entries);
 
     // Returns the L1 data-buffer base address, which is identical for every core in the
     // DFB's core range (guaranteed by finalize_dataflow_buffer_configs).

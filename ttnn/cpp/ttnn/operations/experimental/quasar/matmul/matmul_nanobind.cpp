@@ -644,7 +644,7 @@ void py_module(nb::module_& mod) {
             additional memory round-trips in DRAM-based operations.
         )doc");
 
-    ttnn::bind_function<"matmul">(
+    ttnn::bind_function<"matmul", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns the matrix product of two tensors.
@@ -809,7 +809,7 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function<"linear">(
+    ttnn::bind_function<"linear", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns the linear transformation of the inputs.
@@ -882,7 +882,7 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function<"matmul_batched_weights">(
+    ttnn::bind_function<"matmul_batched_weights", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         DEPRECATED: This is for experimental internal use and is not supported.
@@ -948,7 +948,7 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function<"addmm">(
+    ttnn::bind_function<"addmm", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns a matrix products of tensors mat1_tensor and mat2_tensor. Tensor input_tensor is added to the final result.
@@ -1032,7 +1032,7 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none()));
 
-    ttnn::bind_function<"sparse_matmul">(
+    ttnn::bind_function<"sparse_matmul", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns the matrix product of two tensors. Based on `is_input_a_sparse`, `is_input_b_sparse` and the sparsity tensor, some parts of the output computation is skipped.
@@ -1199,83 +1199,20 @@ void py_module(nb::module_& mod) {
             "compute_output_specs",
             &ttnn::prim::qsr::MatmulDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
-            nb::arg("tensor_args"))
-        .def_static(
-            "compute_program_hash",
-            &ttnn::prim::qsr::MatmulDeviceOperation::compute_program_hash,
-            nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
-    // Bind MatmulMultiCoreReuseOptimizedProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::qsr::MatmulMultiCoreReuseOptimizedProgramFactory>(
-        mod, "MatmulMultiCoreReuseOptimizedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::qsr::MatmulParams& operation_attributes,
-               const ttnn::prim::qsr::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::qsr::MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt)
-        .def_static(
-            "default_core_range",
-            &ttnn::prim::qsr::MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range,
-            nb::arg("device"));
+    // MatmulMultiCoreReuseOptimizedProgramFactory has been ported to the Metal 2.0 host API
+    // (create_program_artifacts). Its legacy ProgramDescriptor create_descriptor entry point and the
+    // pybind-only core_range_set parameter / default_core_range hook were removed by the port
+    // (port_op_to_metal2_ttnn_factory.md exceptions 2 and 3).
 
-    // Bind MatmulMultiCoreProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::qsr::MatmulMultiCoreProgramFactory>(mod, "MatmulMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::qsr::MatmulParams& operation_attributes,
-               const ttnn::prim::qsr::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::qsr::MatmulMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
+    // MatmulMultiCoreReuseMcast1DProgramFactory has been ported to the Metal 2.0 host API
+    // (create_program_artifacts). Its legacy ProgramDescriptor create_descriptor entry point and the
+    // pybind-only core_range_set parameter were removed by the port (mirrors the reuse_optimized port).
 
-    // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::qsr::MatmulMultiCoreReuseMcast1DProgramFactory>(
-        mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::qsr::MatmulParams& operation_attributes,
-               const ttnn::prim::qsr::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::qsr::MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
-
-    // Bind MatmulMultiCoreReuseMcast2DProgramFactory for descriptor creation
-    nb::class_<ttnn::prim::qsr::MatmulMultiCoreReuseMcast2DProgramFactory>(
-        mod, "MatmulMultiCoreReuseMcast2DProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::qsr::MatmulParams& operation_attributes,
-               const ttnn::prim::qsr::MatmulInputs& tensor_args,
-               std::vector<ttnn::Tensor>& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::qsr::MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt);
+    // MatmulMultiCoreReuseMcast2DProgramFactory has been ported to the Metal 2.0 host API
+    // (create_program_artifacts). Its legacy ProgramDescriptor create_descriptor entry point and the
+    // pybind-only core_range_set parameter were removed by the port (mirrors the reuse_optimized port).
 
     // Bind MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory for descriptor creation
     nb::class_<ttnn::prim::qsr::MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory>(

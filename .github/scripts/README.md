@@ -42,7 +42,7 @@ Scripts that collect CI/CD metrics and benchmark data for upload to the analytic
 
 | Script | Description |
 |--------|-------------|
-| `ci_digest.py` | One named CI digest. Reports each watched workflow's latest completed scheduled run (real/infra/passing job counts + a collapsible failed-jobs table from `ai_job_summary_*` artifacts) to the step summary + an artifact. Stateless; self-gates on the digest's cron via `--schedule`. Driven by `.github/workflows/ci-digest.yaml`. Usage: `ci_digest.py --name <digest> --workflows <foo.yaml …> [--schedule "0 8 * * *"] [--force]`. Tests: `ci_digest.py --self-test`. |
+| `ci_digest.py` | One named CI digest. For each watched workflow, reads the latest completed scheduled run's `ai_run_summary_<run_id>` JSON artifact (succeeded / failed / infra_failure, produced by the `ai_summary/run` action) and renders a consolidated report — per-workflow health bar, counts, and a collapsible failed-jobs table — to the step summary + an artifact; falls back to the run conclusion when no JSON is present. Stateless; scheduling/gating lives in the workflow (`github.event.schedule`). Driven by `.github/workflows/ci-digest.yaml`. Usage: `ci_digest.py --name <digest> --workflows <foo.yaml …>`. Tests: `ci_digest.py --self-test`. |
 
 ## Test & CI Utilities (`utils/`)
 

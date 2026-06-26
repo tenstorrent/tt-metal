@@ -67,9 +67,11 @@ set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
 )
 
 set(UNIT_TESTS_TTNN_TENSOR_SOURCES
-    tensor/test_create_tensor.cpp
     tensor/test_create_tensor_multi_device.cpp
     tensor/test_h2d_stream_service.cpp
+    tensor/test_d2h_stream_service.cpp
+    tensor/test_d2d_stream_service.cpp
+    tensor/test_stream_pipeline.cpp
     tensor/test_device_storage_ownership.cpp
     tensor/test_tensor_deallocation.cpp
     tensor/test_distributed_tensor.cpp
