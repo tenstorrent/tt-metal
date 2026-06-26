@@ -3839,18 +3839,6 @@ TEST_F(ScratchpadSpecTest, ScratchpadConfiguredEmptyKernelCompiles) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
         #include "api/scratchpad.h"
 
-        // Constexpr checks
-        static_assert([](){
-            CoreLocalMem<int> ptr{0x24};
-            uint32_t num_ints{24};
-            uint32_t num_bytes{sizeof(int) * num_ints};
-
-            Scratchpad pad(ptr, num_bytes);
-            return pad.size() == num_ints
-                && pad.size_in_bytes() == num_bytes
-                && pad.get_base_addr() == ptr;
-        }());
-
         // No-op
         void kernel_main() {}
     )"};

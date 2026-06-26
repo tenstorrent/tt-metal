@@ -69,7 +69,7 @@ public:
     [[nodiscard]] explicit Scratchpad(const ScratchpadAccessor& accessor) noexcept :
         Scratchpad(pointer{get_common_arg_val<uint32_t>(accessor.crta_offset_)}, accessor.size_in_bytes_) {}
 
-    [[nodiscard]] constexpr Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
+    [[nodiscard]] Scratchpad(pointer base_addr, size_type size_in_bytes) noexcept :
         start_addr_(base_addr), sentinel_addr_(pointer{base_addr.get_address() + uintptr_t{size_in_bytes}}) {
         ASSERT(base_addr.get_address() % alignof(T) == 0);
         ASSERT(size_in_bytes % sizeof(T) == 0);
@@ -92,7 +92,7 @@ public:
      *
      * @return number of element T sized elements in this scratchpad.
      */
-    [[nodiscard]] constexpr size_type size() const noexcept { return size_type{size_in_bytes() / sizeof(T)}; }
+    [[nodiscard]] size_type size() const noexcept { return size_type{size_in_bytes() / sizeof(T)}; }
 
     /** @brief Get the size of this scratchpad in number of bytes.
      *
@@ -100,7 +100,7 @@ public:
      *
      * @return size of the scratchpad in bytes.
      */
-    [[nodiscard]] constexpr size_type size_in_bytes() const noexcept {
+    [[nodiscard]] size_type size_in_bytes() const noexcept {
         return size_type{sentinel_addr_.get_address() - start_addr_.get_address()};
     }
 
@@ -111,16 +111,26 @@ public:
      *
      * @return the base address of the scratchpad
      */
-    [[nodiscard]] constexpr pointer get_base_addr() const noexcept { return start_addr_; }
+    [[nodiscard]] pointer get_base_addr() const noexcept { return start_addr_; }
 
     // begin/end pair to enable range-based-for over the entire scratchpad region.
     // This does not support standard-library algorithms that require a conforming iterator:
     // `CoreLocalMem<T>` does not satisfy the named iterator requirements.
     using iterator = pointer;
-    [[nodiscard]] constexpr iterator begin() const noexcept { return start_addr_; }
-    [[nodiscard]] constexpr iterator end() const noexcept { return sentinel_addr_; }
+    [[nodiscard]] iterator begin() const noexcept { return start_addr_; }
+    [[nodiscard]] iterator end() const noexcept { return sentinel_addr_; }
 
 private:
+    // constexpr note:
+    // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
+    // construction/copy and a constexpr `get_address()`:
+    //   - Scratchpad(pointer, size_type)
+    //   - size(), size_in_bytes()
+    //   - get_base_addr()
+    //   - begin(), end()
+    // They are currently runtime-only because `CoreLocalMem<T>` does not provide constexpr support
+    // for those operations.
+
     // Invariant:
     // - `start_addr_` and `sentinel_addr_` are always aligned to the alignment of T.
     // - `sentinel_addr_` - `start_addr_` is always a multiple of sizeof(T).

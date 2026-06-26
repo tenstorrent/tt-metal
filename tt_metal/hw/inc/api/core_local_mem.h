@@ -40,7 +40,7 @@ public:
      *
      * @param address The raw address of the structure in the core's local memory
      */
-    constexpr CoreLocalMem(AddressType address) : address_(address) {}
+    CoreLocalMem(AddressType address) : address_(address) {}
 
     /** @brief Construct a CoreLocalMem instance from a raw pointer
      *
@@ -52,14 +52,14 @@ public:
      *
      * @param other The other CoreLocalMem to copy from
      */
-    constexpr CoreLocalMem(const CoreLocalMem&) = default;
+    CoreLocalMem(const CoreLocalMem&) = default;
 
     /** @brief Copy assignment operator
      *
      * @param other The other CoreLocalMem to copy from
      * @return A reference to the assigned CoreLocalMem
      */
-    constexpr CoreLocalMem& operator=(const CoreLocalMem&) = default;
+    CoreLocalMem& operator=(const CoreLocalMem&) = default;
 
     /** @brief Get the raw pointer to the structure in the core's local memory
      *
@@ -71,7 +71,7 @@ public:
      *
      * @return The address
      */
-    constexpr AddressType get_address() const { return address_; }
+    AddressType get_address() const { return address_; }
 
     /** @brief Get the element at the given index
      *
@@ -155,13 +155,13 @@ public:
         });
     }
 
-    constexpr bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
-    constexpr bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
-    constexpr bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
-    constexpr bool operator<=(const CoreLocalMem& other) const { return address_ <= other.address_; }
-    constexpr bool operator>(const CoreLocalMem& other) const { return address_ > other.address_; }
-    constexpr bool operator>=(const CoreLocalMem& other) const { return address_ >= other.address_; }
-    constexpr explicit operator bool() const { return address_ != 0; }
+    bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
+    bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
+    bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
+    bool operator<=(const CoreLocalMem& other) const { return address_ <= other.address_; }
+    bool operator>(const CoreLocalMem& other) const { return address_ > other.address_; }
+    bool operator>=(const CoreLocalMem& other) const { return address_ >= other.address_; }
+    explicit operator bool() const { return address_ != 0; }
 
 private:
     AddressType address_;
