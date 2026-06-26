@@ -59,6 +59,7 @@ static constexpr uint64_t MBOX_PARAMS = 0x08011000ULL;
 static constexpr uint64_t MBOX_RESULTS = 0x08011040ULL;
 static constexpr uint64_t MBOX_COORDS = 0x08011200ULL;
 static constexpr uint64_t P_STOP = MBOX_PARAMS + 0x28;
+static constexpr uint64_t BENCH_CFG = 0x08011600ULL;  // +0x00 words/ring/pass, +0x08 passes (0 = normal)
 static constexpr uint64_t DONE_MAGIC = 0xC0570FFEE1ULL;
 static constexpr uint64_t FOOTER_MAGIC = 0xC05D09F11E12345ULL;
 static constexpr uint64_t WIN_STRIDE = 0x200000ULL;
@@ -203,6 +204,8 @@ int main(int argc, char** argv) {
     std::string bin_path = "tools/x280_bm/build/profcons.bin";
     int device_id = 0, l2cpu = 0, pll = 1000, loop = 150;
     uint64_t slice_words = 768, nharts = 2;  // fastest read setup: 2 harts x ILP 4
+    int bench = 0;                           // --bench N: isolated drain benchmark, N passes (no producers)
+    int bench_ro = 0;                        // --bench-ro: read-only (skip relay) to isolate read vs relay
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -221,6 +224,10 @@ int main(int argc, char** argv) {
             slice_words = std::stoull(next());
         } else if (a == "--nharts") {
             nharts = std::stoull(next());
+        } else if (a == "--bench") {
+            bench = std::stoi(next());
+        } else if (a == "--bench-ro") {
+            bench_ro = 1;
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -316,6 +323,10 @@ int main(int argc, char** argv) {
     pack<uint64_t>(params, 0x30, 0xC05ULL);
     pack<uint64_t>(params, 0x38, nharts);
     x280.write_block(params, MBOX_PARAMS);
+    // bench config (0 = normal continuous consumer; else N drain passes of a full ring)
+    x280.lim_wr_u64(BENCH_CFG + 0x00, bench ? 512ULL : 0ULL);
+    x280.lim_wr_u64(BENCH_CFG + 0x08, bench ? (uint64_t)bench : 0ULL);
+    x280.lim_wr_u64(BENCH_CFG + 0x10, (uint64_t)bench_ro);
     x280.set_reset_vectors(LIM_BASE);
     x280.set_pll(pll);
     x280.release_reset();
@@ -324,6 +335,56 @@ int main(int argc, char** argv) {
         (unsigned long long)nharts,
         num_cores,
         NRISC);
+
+    // --- BENCH MODE: no producers; the FW times `bench` drain passes of a full ring ---
+    if (bench) {
+        printf("[bench] %d passes x %u rings x 512 words via fast path (no producers) ...\n", bench, num_cores * NRISC);
+        auto bdl = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+        bool bd = false;
+        while (std::chrono::steady_clock::now() < bdl) {
+            bool all = true;
+            for (uint64_t h = 0; h < nharts; h++) {
+                if (x280.lim_rd_u64(MBOX_RESULTS + h * 0x40 + 0x18) != DONE_MAGIC) {
+                    all = false;
+                    break;
+                }
+            }
+            if (all) {
+                bd = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (!bd) {
+            fprintf(stderr, "[bench] timed out\n");
+            std::fflush(stdout);
+            std::_Exit(1);
+        }
+        uint64_t tot_bytes = 0, max_cyc = 0;
+        for (uint64_t h = 0; h < nharts; h++) {
+            uint64_t b = x280.lim_rd_u64(MBOX_RESULTS + h * 0x40 + 0x00);
+            uint64_t cyc = x280.lim_rd_u64(MBOX_RESULTS + h * 0x40 + 0x08);
+            double hmbps = cyc ? (double)b / 1e6 / ((double)cyc / ((double)pll * 1e6)) : 0.0;
+            printf(
+                "  hart %llu: %llu B in %llu cycles -> %.0f MB/s\n",
+                (unsigned long long)h,
+                (unsigned long long)b,
+                (unsigned long long)cyc,
+                hmbps);
+            tot_bytes += b;
+            if (cyc > max_cyc) {
+                max_cyc = cyc;
+            }
+        }
+        double agg = max_cyc ? (double)tot_bytes / 1e6 / ((double)max_cyc / ((double)pll * 1e6)) : 0.0;
+        printf("  -------------------------------------------------\n");
+        printf(
+            "  AGGREGATE drain+relay : %.0f MB/s   (%llu harts x ILP4; gridilp read ref ~1534 MB/s)\n",
+            agg,
+            (unsigned long long)nharts);
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
 
     // --- launch a workload that OVERFLOWS the rings (would deadlock w/o consumer) ---
     {

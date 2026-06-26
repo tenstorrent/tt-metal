@@ -319,6 +319,46 @@ readback path — then validate via Tracy capture/`csvexport`.
   (bh-8 is single-chip / no `tt-run`+MPI, so the literal multi-host smoke test can't
   run multi-rank here; the loop is validated single-host.)
 
+### 15. Continuous SPSC profiler — producer backend + live X280 consumer
+
+§14 relayed a *snapshot*. To make it continuous and lossless, the device profiler's
+on-device backend was swapped to an SPSC ring drained live by the X280.
+
+- **Producer backend (`tt_metal/tools/profiler/kernel_profiler.hpp`, SPSC variant).**
+  The original DRAM-push version is preserved verbatim as `kernel_profiler_push.hpp`;
+  the new one keeps the exact public macro API (`DeviceZoneScopedN`/`MainN`/…) but
+  each RISC streams markers into its **per-RISC L1 ring** (reuses the existing
+  `profiler_msg_t`; tail = `DEVICE_BUFFER_END_INDEX_BR_ER+r`, head =
+  `HOST_BUFFER_END_INDEX_BR_ER+r`, monotonic word counts, storage `% 512`). Each
+  append **blocks** (`invalidate_l1_cache` spin) while the ring is full; `quick_push`/
+  `finish` do **no DRAM**. So a profiled run now *requires* the X280 draining, and the
+  stream is lossless/flow-controlled. (Verified: JIT-compiles for all 5 Tensix RISCs.)
+- **Consumer `src/profcons.c` + `test_x280_profcons` — flow control proven.** X280
+  drains all 110×5 rings, advances each head (unblocking producers), relays to host.
+  Run a workload that **overflows** the rings (LOOP_COUNT 150 → ~608 words/ring > 512
+  cap): without a consumer it would deadlock; with it, the workload **completes**,
+  **max-outstanding pinned at 512** (never overruns), **334,400 produced == drained
+  (lossless)**. That completion is the flow-control proof.
+- **Drain throughput (bench: `--bench`/`--bench-ro`, no producers).** Naive single-hart
+  fused read+relay = **327 MB/s**; the bottleneck was per-flit interleave + ILP-1.
+  Lessons (each is a real lever, in impact order):
+  1. **Every stage must be ILP-4** (4 NoC transactions in flight): an ILP-1 stage caps
+     the pipe. Read-only sweep: 1h 388 / 2h 748 / 3h 96 (collapse).
+  2. **Decouple read from relay onto separate harts** (`src/profcons_split.c`,
+     `test_x280_profsplit`): reader harts drain rings → per-reader **LIM staging SPSC
+     ring** → dedicated **relay hart** posted-writes to host. No per-flit read↔write
+     dependency.
+  3. **Split the NoCs**: reads on **NOC0**, relay writes on **NOC1** (`noc_selector=1`;
+     NOC1→PCIe→host verified via footer) → ingress and egress don't contend.
+- **Result (`profcons_split`, 2 readers ILP-4 NOC0 + 1 relay ILP-4 NOC1): 1097 MB/s**,
+  lossless, NOC1-verified — **3.4× the fused 327, past the 748 read-only mark, ~72% of
+  gridilp's 1534**. Progression: 327 → 421 (decouple/NOC0) → 406 (reader-ILP4 alone:
+  no gain, still relay-bound, proven by 1r≈2r) → **1097 (relay-ILP4 was the unlock)**.
+  1 reader = 747; 3 readers = 1070 (2 is the knee). **2 relays is invalid** in this
+  design (both consume one per-reader ring → SPMC race; the consistency check catches
+  it). The single relay hart is the current cap; correct multi-relay (partition reader
+  rings, one consumer each) is the path toward ~1.5 GB/s.
+
 ---
 
 ## Hardware facts established
@@ -378,9 +418,19 @@ Firmware — `tools/x280_bm/`:
 | `src/pollmp.c` | §11 ILP / cached port / static VC — breaks the wall (~1.8 GB/s) |
 | `src/gridilp.c` | §12 real 110-core scatter drain + ILP (1533 MB/s, 2 harts) |
 | `src/d2hbw.c` | §13 X280→host D2H write BW (~3.0 GB/s, posted vse64 via PCIe tile) |
+| `src/profrelay.c` | §14 relay device-profiler L1 snapshot → host (bit-exact, all RISCs/cores) |
+| `src/profcons.c` | §15 continuous SPSC consumer (lossless flow control) + `--bench` |
+| `src/profcons_split.c` | §15 reader/relay-hart split, two-sided ILP-4, NOC split (1097 MB/s) |
+
+Producer backend — `tt_metal/tools/profiler/`:
+| File | Purpose |
+|---|---|
+| `kernel_profiler.hpp` | §15 SPSC ring backend (per-RISC L1 ring, block-on-full, no DRAM) |
+| `kernel_profiler_push.hpp` | original DRAM-push backend, preserved verbatim |
 
 Host examples — `tt_metal/programming_examples/profiler/`:
 `test_x280_counter`, `test_x280_poll_rate` (+`kernels/brisc_counter.cpp`),
 `test_x280_dma_probe`, `test_x280_grid_drain`, `test_x280_grid_drain4`,
 `test_x280_poll4`, `test_x280_noc1_probe`, `test_x280_poll4n1`,
-`test_x280_poll6n1`, `test_x280_pollmp`, `test_x280_gridilp`, `test_x280_d2hbw`.
+`test_x280_poll6n1`, `test_x280_pollmp`, `test_x280_gridilp`, `test_x280_d2hbw`,
+`test_x280_profrelay`, `test_x280_profcons`, `test_x280_profsplit`.

@@ -63,6 +63,17 @@
 #define CTRL_HEAD(r) (r)
 #define CTRL_TAIL(r) (5u + (r))
 
+/* Isolated-throughput bench config (host-set), separate from the params block. */
+#define BENCH_CFG 0x08011600UL
+#define B_WORDS (BENCH_CFG + 0x00) /* words drained per ring per pass (0 = normal mode) */
+#define B_REPS (BENCH_CFG + 0x08)  /* number of drain passes */
+#define B_MODE (BENCH_CFG + 0x10)  /* bit0: 1 = read-only (skip relay), 0 = read+relay */
+
+static inline uint64_t rdcycle(void) {
+    uint64_t c;
+    __asm__ volatile("rdcycle %0" : "=r"(c));
+    return c;
+}
 static inline uint32_t r32(uint64_t a) { return *(volatile uint32_t*)a; }
 static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
 static inline uint64_t r64(uint64_t a) { return *(volatile uint64_t*)a; }
@@ -93,6 +104,21 @@ static inline void copy1_flit(uint64_t rp, uint64_t wp) {
         :
         : "r"(rp), "r"(wp)
         : "memory", "v0");
+}
+/* read-only variants (bench diagnostic): 4 / 1 flits in flight, no relay write */
+static inline void read4_flits(uint64_t rp) {
+    __asm__ volatile(
+        "vsetivli zero, 8, e64, m1, ta, ma\n"
+        "vle64.v v0, (%0)\n"
+        "vle64.v v1, (%1)\n"
+        "vle64.v v2, (%2)\n"
+        "vle64.v v3, (%3)\n"
+        :
+        : "r"(rp), "r"(rp + 64), "r"(rp + 128), "r"(rp + 192)
+        : "memory", "v0", "v1", "v2", "v3");
+}
+static inline void read1_flit(uint64_t rp) {
+    __asm__ volatile("vsetivli zero, 8, e64, m1, ta, ma\n vle64.v v0, (%0)\n" : : "r"(rp) : "memory", "v0");
 }
 
 int main(uint64_t hartid) {
@@ -168,6 +194,61 @@ int main(uint64_t hartid) {
     fence_();
 
     uint64_t wbase = NOC_2M_WINDOW_BASE + (uint64_t)write_win * NOC_2M_WINDOW_STRIDE + off_w;
+
+    /* --- isolated throughput benchmark: drain `bench_words`/ring for `bench_reps`
+     * passes with no producers, timed; measures the consumer's peak read+relay rate.
+     * (bench_words <= slice_words and <= RING_CAP so head=0 needs no wrap/clamp.) --- */
+    uint64_t bench_words = r64(B_WORDS);
+    uint64_t bench_reps = r64(B_REPS);
+    uint64_t bench_ro = r64(B_MODE) & 1ULL; /* 1 = read-only (no relay) */
+    if (bench_words) {
+        uint64_t bytes = 0;
+        uint64_t t0 = rdcycle();
+        for (uint64_t rep = 0; rep < bench_reps; rep++) {
+            for (uint64_t c = lo; c < hi; c++) {
+                uint64_t rbufs = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off + 128;
+                for (uint32_t r = 0; r < NRISC; r++) {
+                    uint64_t rp = rbufs + (uint64_t)r * 2048;
+                    uint64_t wp = wbase + (uint64_t)(c * NRISC + r) * slice_words * 4;
+                    uint32_t nflits = (uint32_t)(bench_words / 8);
+                    uint32_t fi = 0;
+                    if (bench_ro) {
+                        for (; fi + 4 <= nflits; fi += 4) {
+                            read4_flits(rp + (uint64_t)fi * 64);
+                        }
+                        for (; fi < nflits; fi++) {
+                            read1_flit(rp + (uint64_t)fi * 64);
+                        }
+                        for (uint32_t ww = nflits * 8; ww < bench_words; ww++) {
+                            (void)r32(rp + (uint64_t)ww * 4);
+                        }
+                    } else {
+                        for (; fi + 4 <= nflits; fi += 4) {
+                            copy4_flits(rp + (uint64_t)fi * 64, wp + (uint64_t)fi * 64);
+                        }
+                        for (; fi < nflits; fi++) {
+                            copy1_flit(rp + (uint64_t)fi * 64, wp + (uint64_t)fi * 64);
+                        }
+                        for (uint32_t ww = nflits * 8; ww < bench_words; ww++) {
+                            w32(wp + (uint64_t)ww * 4, r32(rp + (uint64_t)ww * 4));
+                        }
+                    }
+                    bytes += bench_words * 4;
+                }
+            }
+        }
+        uint64_t t1 = rdcycle();
+        fence_();
+        w64(RES_SLOT(hartid) + RES_TOTAL, bytes);
+        w64(RES_SLOT(hartid) + RES_LOOPS, t1 - t0); /* cycles */
+        fence_();
+        w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
+        fence_();
+        for (;;) {
+            __asm__ volatile("wfi");
+        }
+    }
+
     uint64_t total = 0, loops = 0, max_out = 0;
 
     for (;;) {

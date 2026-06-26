@@ -27,7 +27,7 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin $(BUILD)/profcons_split.bin
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
@@ -173,6 +173,16 @@ $(BUILD)/profcons.elf: $(BUILD)/entry.o $(BUILD)/profcons.o $(LD_SCRIPT) | toolc
 $(BUILD)/profcons.bin: $(BUILD)/profcons.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "profcons.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/profcons_split.o: src/profcons_split.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/profcons_split.elf: $(BUILD)/entry.o $(BUILD)/profcons_split.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/profcons_split.o
+
+$(BUILD)/profcons_split.bin: $(BUILD)/profcons_split.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "profcons_split.bin: $$(wc -c < $@) bytes"
 
 $(BUILD):
 	mkdir -p $@

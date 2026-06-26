@@ -32,7 +32,10 @@ the FW via the low-level `Cluster` and reports results).
 | `pollmp` | poll via **m**emory-**p**ort | §11 sequential-stream experiment: cached Memory Port (#3) + static VC (#4) + the ILP sweep that revealed the real lever. |
 | `gridilp` | **grid** drain + **ILP** | §12 the real profiler read: each hart drains its slice of all 110 cores with multiple NoC reads in flight (ILP). 1.5 GB/s. |
 | `d2hbw` | **d**evice-**2**-**h**ost **b**and**w**idth | §13 X280 fabricates packets and posted-writes them to host memory through the PCIe tile. ~3 GB/s. |
-| `profrelay` | **prof**iler **relay** | §14 the close-the-loop: drains each core's real device-profiler L1 timestamps and relays them to the host D2H socket. |
+| `profrelay` | **prof**iler **relay** | §14 close-the-loop snapshot: drains each core's real device-profiler L1 timestamps, relays to host D2H. |
+| `profcons` | **prof**iler **cons**umer | §15 continuous SPSC consumer: drains all rings live, advances heads (unblocks producers), relays to host. Lossless, flow-controlled. |
+| `profcons_split` | profcons + reader/relay **split** | §15 fast consumer: reader harts → LIM staging ring → dedicated relay hart; two-sided ILP-4, reads NOC0 / writes NOC1 → 1097 MB/s. |
+| `kernel_profiler_push.hpp` / `kernel_profiler.hpp` | — | the device profiler producer: original DRAM-push backend (kept as `_push`) vs the new SPSC-ring backend (`kernel_profiler.hpp`) that the X280 drains. |
 
 (§ numbers refer to `FINDINGS.md`.)
 
