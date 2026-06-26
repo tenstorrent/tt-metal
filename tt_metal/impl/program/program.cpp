@@ -1273,6 +1273,93 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
+bool detail::ProgramImpl::has_scratchpads() const {
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            if (!kernel->scratchpad_binding_handles().empty()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
+    if (this->scratchpads_allocated_) {
+        return;
+    }
+
+    const uint64_t base_l1_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+
+    for (auto& kernels_of_core_type : this->kernels_) {
+        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
+            if (scratchpad_handles.empty()) {
+                continue;
+            }
+            const CoreRangeSet& kernel_cores = kernel->core_range_set();
+
+            for (auto& handle : scratchpad_handles) {
+                // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
+                // (DFBs and CBs are mutually exclusive in a program, so dfb_allocators_ own the whole
+                // region.) Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
+                // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
+                for (const CoreRange& core_range : kernel_cores.ranges()) {
+                    bool exists = false;
+                    for (const CircularBufferAllocator& a : this->dfb_allocators_) {
+                        if (a.core_range == core_range) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        this->dfb_allocators_.emplace_back(core_range);
+                    }
+                }
+
+                // Uniform per-node base address: the scratchpad address is delivered as a common runtime
+                // arg — one value broadcast to every core the kernel runs on — so it must sit at the same
+                // L1 offset everywhere. Take the max region-end over EVERY allocator that intersects the
+                // kernel's cores (not just exact-range matches), so the scratchpad cannot overlap a DFB on
+                // an overlapping-but-different core range. Mark each such allocator exactly once.
+                std::vector<CircularBufferAllocator*> touched;
+                for (CircularBufferAllocator& a : this->dfb_allocators_) {
+                    for (const CoreRange& core_range : kernel_cores.ranges()) {
+                        if (a.core_range.intersects(core_range)) {
+                            touched.push_back(&a);
+                            break;
+                        }
+                    }
+                }
+                uint64_t addr = base_l1_address;
+                for (const CircularBufferAllocator* a : touched) {
+                    addr = std::max<uint64_t>(addr, a->get_cb_region_end());
+                }
+                addr = align(addr, alignment);
+                for (CircularBufferAllocator* a : touched) {
+                    a->mark_address(addr, handle.size_bytes, base_l1_address);
+                }
+
+                handle.allocated_address = static_cast<uint32_t>(addr);
+
+                // Patch the allocated address into the kernel's CRTA buffer. This runs at program-compile
+                // time, which (in the fast/mesh path) is upstream of dispatch-command assembly, so the
+                // value is snapshotted into the command stream. SetProgramRunArgs reserved the slot (with
+                // this handle's then-zero allocated_address); fill it now. The common_runtime_args_data
+                // pointer is the forward-compatible write path: pre-assembly it aliases the host vector,
+                // post-assembly (a re-allocation cycle) it points into the live command stream.
+                if (!kernel->common_runtime_args().empty()) {
+                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                    crta.data()[handle.addr_crta_offset / sizeof(uint32_t)] = handle.allocated_address;
+                }
+            }
+        }
+    }
+
+    this->scratchpads_allocated_ = true;
+}
+
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     // ZoneScoped;
 

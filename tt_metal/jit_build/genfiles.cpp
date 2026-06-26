@@ -122,6 +122,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
 
+    // Get the scratchpad bindings from the settings callback.
+    // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
+    // (Kernel::compute_hash hashes them in the same order — the two must agree).
+    struct ScratchEntry {
+        string name;
+        uint32_t size_bytes;
+        uint32_t addr_crta_offset;
+    };
+    vector<ScratchEntry> scratch_entries;
+    settings.process_scratchpad_binding_handles(
+        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_offset) {
+            scratch_entries.push_back({name, size_bytes, addr_crta_offset});
+        });
+
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
@@ -141,7 +155,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -154,6 +168,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // This header defines TensorBindingToken, a type which can be used
             // to construct a TensorAccessor or LocalTensorAccessor.
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+        }
+        if (!scratch_entries.empty()) {
+            // The full Scratchpad accessor (NOC-free, so it compiles on both data-movement and
+            // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
+            content << "#include \"api/scratchpad/scratchpad.h\"\n";
         }
         content << "\n";
 
@@ -188,6 +207,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             content << "}  // namespace tensor\n";
+        }
+
+        if (!scratch_entries.empty()) {
+            // ScratchpadBindingToken<SIZE_BYTES, ADDR_CRTA_OFFSET>: pairs the scratchpad's compile-time
+            // size with the byte offset of its (framework-allocated) base-address CRTA. The kernel-side
+            // Scratchpad(token) constructor unpacks both. Per-binding type alias (`<name>_t`) lets the
+            // framework extend the underlying token template later without touching kernel source.
+            content << "namespace scratch {\n";
+            for (const auto& entry : scratch_entries) {
+                content << "using " << entry.name << "_t = ::scratchpad::ScratchpadBindingToken<" << entry.size_bytes
+                        << "u, " << entry.addr_crta_offset << "u>;\n";
+                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            content << "}  // namespace scratch\n";
         }
     }
     write_file(path, content.str());
