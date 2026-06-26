@@ -1835,12 +1835,9 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
 }
 
 TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTensor) {
-    // TEMPORARILY SKIPPED: this test binds the shared tensor to the compute kernel (kernels[1]),
-    // which ValidateProgramSpec now rejects until compute-path tensor bindings are supported (a day
-    // or two out). The host-side patching it exercises is unaffected by that gap; re-enable this test
-    // when the temporary compute-kernel tensor-binding guard in ValidateProgramSpec is removed.
-    GTEST_SKIP() << "Compute-kernel tensor bindings are temporarily rejected by ValidateProgramSpec.";
-
+    // Binds the shared tensor to both a DM kernel and the compute kernel (kernels[1]) — now legal,
+    // since a compute kernel constructs a LocalTensorAccessor from the binding token. Exercises the
+    // host-side address patching reaching every kernel bound to the same tensor.
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     auto binding = MakeMinimalTensorParameter("shared_tensor");
