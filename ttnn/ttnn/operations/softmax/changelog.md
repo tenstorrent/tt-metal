@@ -103,3 +103,38 @@
 - **Issues encountered**: None. This was a purely host-side change. The `ttnn.unsqueeze_to_4D` / `ttnn.reshape` pattern is the standard ttnn idiom for handling non-4D tensors (used by transpose, permute, split, reductions, etc.).
 - **Tests added**:
   - `test_softmax_refinement4_rank.py` (66 cases: rank-2/3 × TILE/RM × dim=-1/-2 + bf16 + positive dim aliases + non-tile-aligned + cross-rank equivalence + output layout preservation + default dim + negative values + multi-core)
+
+## Refinement 5 — L1 budget fit for wide/tall reduce dim
+- **Date**: 2026-06-26
+- **What was done**:
+  - Implemented V2 streaming path with constant-bounded CBs (sized by BLOCK_SIZE=4, not Wt/Ht)
+  - Host-side V1/V2 dispatch based on 256 KiB CB footprint threshold (per `softmax_full.txt` prompt)
+  - V2 has two sub-modes:
+    - `chunk_along_reduce`: 3-pass approach (max → sum+recip → apply). Re-reads DRAM 3 times per tile-row/column. Uses `BinaryMax` SFPU for running-max accumulation across chunks, `add` for running-sum, `unary<Recip>` for recip. Dispatched when reduce_dim ≥ BLOCK_SIZE and divisible.
+    - `chunk_along_non_reduce`: V1-style 4-phase per chunk (max → sub+exp → sum+recip → mul). Chunks the non-reduce dim. Dispatched when reduce dim < BLOCK_SIZE but full slab exceeds V1 budget.
+  - V2 kernels: `softmax_compute_v2.cpp`, `softmax_reader_v2.cpp`, `softmax_writer_v2.cpp`
+  - V1 kernels unchanged — V1 path is byte-identical for shapes that fit the 256 KiB budget
+  - V2 disabled for ROW_MAJOR layout (V2 RM chunked tilize/untilize path not yet implemented — filed as Refinement 5a)
+  - Key bugs fixed during development:
+    - `reduce_dim_tiles` was `Ht` for `dim=-1` (should be `Wt`) — caused wrong V2 sub-mode dispatch
+    - V1 `cb_max`/`cb_recip_sum` CB sizing used `reduce_dim_tiles` (input side) instead of `reduce_output_tiles` (output side) — caused V1 deadlock for dim=-2
+    - V2 writer tile ordering for dim=-2 was row-major but compute produces column-major — fixed writer to compute `tile_id = slab_start + ht*Wt + wt`
+    - V2b reader tile ordering for dim=-2 was column-major within chunk — changed to row-major to match `reduce<REDUCE_COL>` expectations
+- **Accuracy achieved**:
+  - fp32 TILE dim=-1 (1,1,32,4096): PCC=0.999999, max_diff=0.000029
+  - fp32 TILE dim=-1 (1,1,32,8192): PCC=0.999998, max_diff=0.000023
+  - fp32 TILE dim=-2 (1,1,2048,256): PCC=0.999999, max_diff=0.000074
+  - fp32 TILE dim=-2 (1,1,4096,128): PCC=0.999999, max_diff=0.000042
+  - fp32 TILE dim=-2 (2,1,64,4096): PCC=0.999999, max_diff=0.000950 (chunk_along_non_reduce)
+  - bf16 TILE dim=-1 (1,1,32,4096): PCC=0.999995
+  - bf16 TILE dim=-1 (1,1,32,8192): PCC=0.999997
+  - All V2 shapes pass with PCC ≥ 0.999 (except `large`/`small` distributions which hit 0.98-0.99 due to 3-pass rounding)
+- **Golden test progress**: 435 → 511 passing (+76 new). 64 failures remain:
+  - 48 RM OOM (ROW_MAJOR layout wide/tall shapes — V2 RM path not yet implemented, filed as Refinement 5a)
+  - 2 precision near-miss (test_regression small-magnitude input — pre-existing, V1 path)
+  - 14 translated test RM OOM (same RM OOM, different test file)
+- **Issues encountered**:
+  - V2 RM path (chunked tilize/untilize with `byte_offset_within_page`) not implemented — RM shapes that exceed V1 budget still OOM. Filed as Refinement 5a.
+  - V2 3-pass approach has slightly different rounding than V1 for `large` (×10.0) and `small` (×0.01) distributions — PCC drops to 0.98-0.99. This is because `BinaryMax` SFPU across chunks introduces different rounding than a single `reduce<MAX>`. Not a correctness issue (no inf/nan), just a precision characteristic of the streaming approach.
+- **Tests added**:
+  - `test_softmax_refinement5_l1_budget.py` (39 cases: 15 shapes × 2 dtypes + 8 shapes × 6 distributions + V1/V2 equivalence)

@@ -62,7 +62,7 @@
 
 **Done when**: all `rank ∈ {2, 3}` cells currently in `xfail_expected` with `dtype=float32`, `layout=TILE`, `alignment=tile_aligned`, `fp32_dest_acc_en=True` pass.
 
-### [ ] Refinement 5 — L1 budget fit for wide/tall reduce dim
+### [~] Refinement 5 — L1 budget fit for wide/tall reduce dim
 
 **Goal**: rewrite the reduction phase so the per-core L1 CB footprint is bounded by a constant (chunking on the reduce dim), so the op stops OOMing on the wide-hidden shapes in `feature_spec.INPUTS` (W ∈ {4096, 8192}, H ∈ {2048, 4096, 512}). Phase 0 leaves these cells failing with `OOM`; this refinement moves them to passing. No SUPPORTED axis is added — `shape_size` is not a kernel-level branch, just a resource boundary, and bucketing it would hide the gap.
 
@@ -71,3 +71,11 @@
 **Verifier notes**: this is the per-core L1 fit refinement — Phase 0 sizes `cb_input_tiles` and `cb_exp` as `Ht × Wt × tile_size`, which exceeds the 1.5 MB budget around `Wt = 128` (W = 4096) for fp32. The skill's streaming-reduce wrapper (`accumulate_reduce_block`) is the natural fit; the online-softmax algorithm (single-pass running max + running sum-of-exp) would allow sub-slab processing with constant-size CBs. The `softmax_full.txt` prompt describes a two-variation dispatch (V1 fast path ≤ 256 KiB, V2 conservative streaming path > 256 KiB) — the implementer should follow that host-side selection rule. This refinement goes last — by the time it runs, the rest of the SUPPORTED rectangle is stable.
 
 **Done when**: every Phase 0 cell currently in the `OOM` category passes.
+
+### [ ] Refinement 5a — V2 RM layout streaming path
+
+**Goal**: extend the V2 streaming path to support ROW_MAJOR layout. The V2 TILE path (3-pass chunk_along_reduce + V1-style chunk_along_non_reduce) is working and passes all TILE-layout wide/tall shapes. The V2 RM path (chunked tilize/untilize with `byte_offset_within_page` per chunk) is not yet implemented — RM shapes that exceed the V1 CB budget (256 KiB) still OOM. The specific cells that need this are `layout=ROW_MAJOR` × wide/tall shapes (W∈{4096,8192}, H∈{2048,4096}, 1024×1024).
+
+**Verifier notes**: the V2 RM path requires the reader to use `read_sticks_for_tilize` with `byte_offset_within_page` to read W-chunks of each stick, and the writer to use `write_sticks_after_untilize` with the same offset. The compute kernel's tilize/untilize helpers need to be called per-chunk (InitAndUninit lifecycle). The `chunk_along_non_reduce` path for dim=-2 RM is the hardest case — the output tiles are in column-major order, which doesn't map to contiguous RM sticks. The next implementer should start with `chunk_along_reduce` dim=-1 RM (the attention use case) and handle `chunk_along_non_reduce` dim=-2 RM as a stretch goal.
+
+**Done when**: all `layout=ROW_MAJOR` cells with wide/tall shapes that currently OOM pass.
