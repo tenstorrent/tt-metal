@@ -346,13 +346,14 @@ template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
+    sfpi::vSMag16 sm;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
     j = 1.442695f * a;
     r = 1.37805939e-3f;
-    i = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(i, sfpi::RoundMode::Nearest);
+    sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
     f = j * -6.93145752e-1f + a;
@@ -364,7 +365,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
-    i = sfpi::abs(i);
+    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + 1.0f;
     i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + 1.0f;
