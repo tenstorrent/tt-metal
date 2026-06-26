@@ -375,10 +375,12 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
 @pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile_in", "rm_in"])
 @pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
 def test_layernorm_interleaved_all_config(device, dtype, use_welford, input_layout, gamma_dtype):
     if use_welford and input_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Welford requires TILE input; ROW_MAJOR input hangs (dtype-independent limitation)")
+    if dtype == ttnn.bfloat8_b and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("BFLOAT8_B is TILE-only (shared exponent per 16-elem sub-block is undefined under ROW_MAJOR)")
 
     torch.manual_seed(0)
     M, K = 256, 1024
@@ -417,7 +419,10 @@ def test_layernorm_interleaved_all_config(device, dtype, use_welford, input_layo
     )
     ot = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
 
-    passing, pcc = comp_pcc(ref, ot, pcc=0.999)
+    # BFLOAT8_B uses a shared exponent per 16-element sub-block, so its accuracy is fundamentally
+    # lower than bf16/fp32 -- use the same relaxed threshold as test_layernorm_mix_precision.
+    pcc_threshold = 0.98 if dtype == ttnn.bfloat8_b else 0.999
+    passing, pcc = comp_pcc(ref, ot, pcc=pcc_threshold)
     assert passing, (
         f"interleaved {'welford' if use_welford else 'legacy'} {dtype} "
         f"in_layout={input_layout} gamma={gamma_dtype} PCC failed: {pcc}"
