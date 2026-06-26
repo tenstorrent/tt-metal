@@ -359,12 +359,21 @@ inline void set_packer_strides(const std::uint32_t pack_src_format)
 
     std::uint32_t xy_stride = (x_stride << PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT) | (y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT);
     std::uint32_t zw_stride = (z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT) | (w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT);
+
+    // Load both stride words (TMP0/TMP1) up front, then drain the packer, then issue both WRCFGs.
+    // Draining is required so an in-flight pack cannot sample the stride config mid-update -- this makes
+    // set_packer_strides self-draining instead of relying on every caller to leave the packer idle.
+    // The STALLWAIT is placed AFTER the SETDMAREGs so those Scalar-Unit writes overlap the packer drain:
+    // STALL_CFG blocks WRCFG, and since the Wait Gate is in-order, the first blocked WRCFG would otherwise
+    // strand any SETDMAREG sequenced behind it until the drain completed. No THCON fence is needed --
+    // same-thread Scalar-Unit serialization guarantees each SETDMAREG write lands before its WRCFG reads it.
     TT_SETDMAREG(0, LOWER_HALFWORD(xy_stride), 0, LO_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(xy_stride), 0, HI_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, LOWER_HALFWORD(zw_stride), 0, LO_16(p_gpr_pack::TMP1));
+    TT_SETDMAREG(0, UPPER_HALFWORD(zw_stride), 0, HI_16(p_gpr_pack::TMP1));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
-    TT_SETDMAREG(0, LOWER_HALFWORD(zw_stride), 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, UPPER_HALFWORD(zw_stride), 0, HI_16(p_gpr_pack::TMP0));
-    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
 }
