@@ -11,7 +11,10 @@ import torch
 import ttnn
 from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.tt import sampling as TS
-from models.experimental.diffusion_gemma.tt.sampling_params import canvas_sample_from_params
+from models.experimental.diffusion_gemma.tt.sampling_params import (
+    canvas_sample_from_params,
+    canvas_sampling_config_from_params,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [
@@ -63,6 +66,10 @@ def test_canvas_sample_from_params_matches_injected_gumbel_reference(device):
     logits = _structured_logits(length, vocab_size)
     noise = S.sample_gumbel_noise(logits.shape, generator=torch.Generator().manual_seed(41))
     sampling_params = {"temperature": temperature, "top_k": 64, "top_p": 0.95, "seed": 41}
+    config = canvas_sampling_config_from_params(sampling_params, default_temperature=0.8)
+    assert config.top_k == 64
+    assert config.top_p == 0.95
+    assert config.top_k_top_p_supported is False
 
     ref = S.gumbel_max_sample(logits, temperature, noise=noise)
     out = canvas_sample_from_params(
