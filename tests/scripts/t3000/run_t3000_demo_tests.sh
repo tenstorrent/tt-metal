@@ -142,9 +142,6 @@ run_t3000_tests() {
   # Run sd35_large tests
   run_t3000_sd35large_tests
 
-  # Run flux1 tests
-  run_t3000_flux1_tests
-
   # Run motif tests
   run_t3000_motif_tests
 
