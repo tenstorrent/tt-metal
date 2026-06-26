@@ -332,6 +332,14 @@ A packed gate/up candidate must include the cost of splitting or reshaping the p
 
 The final report for a material gate/up group must list packed and split candidate rows, program configs, input/output memory configs, weight memory configs, dtype/fidelity, split/slice/layout rows, elementwise row, downstream reduce-scatter or all-gather rows, whole-layer traced latency, correctness, and kept/rejected decision. If one family is impossible, report the exact API, shape, memory, program-config, L1, trace, or correctness blocker.
 
+### OPT-011: Use phase-specific activation shards when they unlock matmul geometry
+
+Do not force one residual or norm shard grid to be the working input shard for every decoder sub-block. A layout that is good for a boundary, norm, or one projection can make another material matmul group slower by giving each core too few inner-dimension tiles for a larger `in0_block_w` or output subblock. When a material matmul is stuck at a small block size because the producer shard is too narrow, try a phase-specific working shard for that sub-block: usually fewer cores with wider shards, immediately before the projections that share that input.
+
+Keep the model-visible boundary contract fixed while testing the working shard. Restore or preserve the residual layout only where it is actually required: residual adds, following norms, layer boundaries, cache/head helpers, or collective contracts. Compare the full traced sub-block, not the isolated matmul: include the added reshard/layout rows, all matmuls that consume the working shard, elementwise rows, downstream collectives, and any saved conversions. If the same working shard feeds multiple projections, account for the reshard cost once across the group.
+
+The final report must list the boundary memory config, candidate working memory configs, shard shapes in tiles, legal and rejected `in0_block_w`/subblock values, exact divisibility or L1 errors, added layout rows, row times, whole-layer latency, correctness, and kept/rejected decision. A dominant matmul group blocked by an error like "shard inner tiles must be divisible by `in0_block_w`" is not optimized until a wider working-shard candidate has been measured or a precise blocker is recorded.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
