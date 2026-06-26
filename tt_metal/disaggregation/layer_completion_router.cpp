@@ -121,8 +121,16 @@ void LayerCompletionRouter::run_master() {
     // Final sweep: harvest any subordinate completion that already landed in its receive buffer
     // before stop_ was observed — otherwise the cancel() below would discard a physically-arrived
     // message (and a lost seq head-of-line-blocks the reorder buffer). Then cancel whatever is still
-    // genuinely outstanding so MPI can release it. (Subordinate sends still in flight at teardown are
-    // the separately-tracked uncoordinated-teardown gap.)
+    // genuinely outstanding so MPI can release it.
+    //
+    // RESIDUAL RACE (uncoordinated-teardown future work): a message that completes the irecv in the
+    // window between this test() returning nullopt and the cancel() below is still lost — cancel()
+    // does MPI_Cancel + MPI_Request_free with no MPI_Wait/MPI_Test_cancelled, so a request that
+    // actually received data is freed and its bytes dropped, and that missing seq head-of-line-blocks
+    // the reorder buffer. Closing it needs coordinated shutdown (subordinates send an end-of-stream
+    // sentinel; the master drains until it has seen one per subordinate, then stops without cancel),
+    // not a test-after-cancel (the request is already freed). Same root cause as the run_subordinate
+    // blocking-send hang below.
     for (std::size_t i = 0; i < subs.size(); ++i) {
         if (reqs[i] && reqs[i]->test().has_value()) {
             LayerCompletionMessage recv{};
@@ -139,6 +147,12 @@ void LayerCompletionRouter::run_master() {
 }
 
 void LayerCompletionRouter::run_subordinate() {
+    // TEARDOWN HANG (uncoordinated-teardown future work): the ctx->send() below is blocking. If this
+    // rank sends after the master has already broken out of run_master and cancelled its matching
+    // irecv (steady-state or in the post-stop drain), the send has no receiver and blocks forever, so
+    // this thread never returns and stop()/~LayerCompletionRouter's join() hangs. The fix is the same
+    // coordinated shutdown noted in run_master (drain to an end-of-stream sentinel, no mid-stream
+    // cancel); a blocking send with no teardown handshake cannot be made safe on its own.
     const mh::ContextPtr ctx = mh::DistributedContext::get_current_world();
     LayerCompletionMessage m{};
     while (!stop_.load(std::memory_order_acquire)) {
