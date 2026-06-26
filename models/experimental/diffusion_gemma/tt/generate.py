@@ -679,6 +679,8 @@ def generate_text_from_checkpoint_state(
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
         if eos_token_id is not None:
             generate_kwargs["eos_token_id"] = eos_token_id
+    if "decode_kwargs" not in generate_kwargs:
+        generate_kwargs["decode_kwargs"] = {"skip_special_tokens": True}
     adapter_kwargs = dict(adapter_kwargs or {})
     if "config" not in adapter_kwargs:
         adapter_config = getattr(tt_model, "hf_config", None)

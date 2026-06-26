@@ -808,6 +808,52 @@ def test_generate_text_from_checkpoint_state_preserves_explicit_eos():
     assert calls["generate"]["eos_token_id"] is None
 
 
+def test_generate_text_from_checkpoint_state_defaults_to_skip_special_tokens():
+    calls = {}
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    out = generate_text_from_checkpoint_state(
+        "model",
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["generate"]["decode_kwargs"] == {"skip_special_tokens": True}
+
+
+def test_generate_text_from_checkpoint_state_preserves_explicit_decode_kwargs():
+    calls = {}
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    generate_text_from_checkpoint_state(
+        "model",
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        decode_kwargs={"clean_up_tokenization_spaces": False},
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert calls["generate"]["decode_kwargs"] == {"clean_up_tokenization_spaces": False}
+
+
 def test_generate_text_from_checkpoint_state_requires_canvas_source():
     with pytest.raises(ValueError, match="init_canvas_fn"):
         generate_text_from_checkpoint_state(
