@@ -49,19 +49,6 @@ struct ReduceScatterMinimalAsyncParams {
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
     // Compile-time attributes drive the default program-cache reflection hash and the canonical key
-    // (ttsl::hash::hash_objects_with_default_seed + ttsl::hash::canonical_key). They list exactly the
-    // structure-affecting fields, mirroring the set the (now-removed) custom compute_program_hash used:
-    //   - `semaphore` (std::vector<GlobalSemaphore>) is excluded: it is runtime-only (semaphore
-    //     addresses are passed to runtime args) and was never part of the old custom hash.
-    //   - `barrier_semaphore` (std::optional<GlobalSemaphore>) is reduced to its presence bool: the old
-    //     hash hashed only `barrier_semaphore.has_value()`, since only the presence (not the runtime
-    //     address) affects program structure.
-    //   - `sub_device_id` is included: the old hash hashed the derived subdevice worker-core range
-    //     (mesh_device->worker_cores(TENSIX, sub_device_id...)), which is per-device-constant given the
-    //     sub-device id. `sub_device_id` is the structural input of that computation (the program cache
-    //     is per-device, so the derived core range need not be re-encoded).
-    // The program-factory selection (Ring vs Line) is a pure function of `topology`, which is included,
-    // so the default path (which does not encode program_factory.index()) stays correct.
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",
