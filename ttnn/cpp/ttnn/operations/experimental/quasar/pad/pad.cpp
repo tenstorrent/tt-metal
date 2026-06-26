@@ -6,6 +6,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
@@ -265,11 +266,12 @@ ttnn::Tensor invoke_rm(
             auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
             remove_prefix(output_shape, rank_diff);
             remove_prefix(padded_shape, rank_diff);
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
+            output_tensor = ttnn::operations::experimental::quasar::reshape(
+                output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
+            output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, ttnn::Shape(padded_shape));
         }
     } else {
-        output_tensor = ttnn::reshape(
+        output_tensor = ttnn::operations::experimental::quasar::reshape(
             output_tensor, update_original_shape(output_tensor.padded_shape(), input_tensor.logical_shape()));
     }
     return output_tensor;
