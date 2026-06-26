@@ -61,6 +61,10 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         const std::uint32_t tile_base = dst_index * 64;
 
         // Switch from the default SrcA format bank to the override bank so manual SrcA_val writes control MOVB2D behavior.
+        // NOTE: Unlike Blackhole, Wormhole needs no ALU_ACC_CTRL_Fp32_enabled toggle around the DEST_32B_LOW writes
+        // below. Per the WH MOVB2D ISA model the low-half write is gated solely by SrcA format (SrcAFmt != TF32),
+        // not by Fp32 dest mode -- so switching SrcA_val (Tf32 for hi16, Float32 for lo16) is sufficient. The BH
+        // toggle defends erratum TEN-4245 (SrcAFmt==TF32 + DEST_32B_LOW), which is Blackhole-specific.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
 
         // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
