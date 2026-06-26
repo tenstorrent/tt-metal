@@ -321,6 +321,11 @@ private:
     // stdout, or nothing.
     ostream* get_output_stream(const RiscKey& risc_key);
 
+    // Flushes the shared output stream and any per-risc file streams. print_buffer_data no longer
+    // flushes per line (that turned into millions of write() syscalls under heavy load); both the
+    // DRAM-aggregation path and the L1-fallback path call this once after processing instead.
+    void flush_output_streams();
+
     // Helper functions to init/attach/detach a single device
     void init_device(ChipId device_id);
     void attach_device(ChipId device_id);
@@ -867,14 +872,7 @@ bool DPrintServer::Impl::poll_device_print_data(
         // Flush once per drain window instead of per line (see print_buffer_data). This batches the
         // millions of lines a drain can emit into far fewer write() syscalls, which is what dominated
         // runtime on a journaled filesystem. Output still appears per drain (every few ms).
-        if (stream_ != nullptr) {
-            stream_->flush();
-        }
-        for (auto& [risc_key, risc_stream] : risc_to_file_stream_) {
-            if (risc_stream != nullptr) {
-                risc_stream->flush();
-            }
-        }
+        flush_output_streams();
 
         // Update read pointer in DRAM.
         const uint32_t new_read_pointer = wpos;
@@ -1308,6 +1306,7 @@ bool DPrintServer::Impl::poll_device_print_data_l1(
             // re-throw the exception.
             if (env_.get_rtoptions().get_test_mode_enabled()) {
                 server_killed_due_to_hang_ = true;
+                flush_output_streams();
                 return new_data_this_iter;  // Stop the print loop
             }  // Re-throw for instant exit
             throw e;
@@ -1315,11 +1314,29 @@ bool DPrintServer::Impl::poll_device_print_data_l1(
 
         // If this read detected a print hang, stop processing prints.
         if (server_killed_due_to_hang_) {
+            flush_output_streams();
             return new_data_this_iter;
         }
     }
+    // Flush here too: the L1-fallback path (used when dispatch_s isn't running — early boot,
+    // self-disabled, or after the dispatcher finished) is where prompt, complete output matters
+    // most for hang debugging, and print_buffer_data no longer flushes per line.
+    if (new_data_this_iter) {
+        flush_output_streams();
+    }
     return new_data_this_iter;
 }  // poll_device_print_data_l1
+
+void DPrintServer::Impl::flush_output_streams() {
+    if (stream_ != nullptr) {
+        stream_->flush();
+    }
+    for (auto& [risc_key, risc_stream] : risc_to_file_stream_) {
+        if (risc_stream != nullptr) {
+            risc_stream->flush();
+        }
+    }
+}  // flush_output_streams
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;
