@@ -21,10 +21,12 @@ from models.demos.gemma4.tests.unit.test_model import (
     _create_hf_text_config,
     _hf_model_state_to_tt_state,
 )
+from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.tt_transformers.tt.common import PagedAttentionConfig
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -34,6 +36,13 @@ pytestmark = pytest.mark.use_module_device
 def _cache_region(cache_tensor, start, end, *, is_mesh):
     device_tensors = ttnn.get_device_tensors(cache_tensor) if is_mesh else [cache_tensor]
     return [ttnn.to_torch(t)[:, :, start:end, :].clone() for t in device_tensors]
+
+
+def _paged_cache_slot(cache_tensor, slot, *, block_size, is_mesh):
+    device_tensors = ttnn.get_device_tensors(cache_tensor) if is_mesh else [cache_tensor]
+    block = slot // block_size
+    offset = slot % block_size
+    return [ttnn.to_torch(t)[block : block + 1, :, offset : offset + 1, :].clone() for t in device_tensors]
 
 
 def _assert_regions_equal(before, after):
@@ -80,7 +89,16 @@ def _build_tiny_gemma4_state(vocab_size=256):
     return model_args, _hf_model_state_to_tt_state(hf_model)
 
 
-def _build_tiny_gemma4_model(mesh_device, *, vocab_size=256, max_seq_len=64, model_args=None, tt_state=None):
+def _build_tiny_gemma4_model(
+    mesh_device,
+    *,
+    vocab_size=256,
+    max_seq_len=64,
+    model_args=None,
+    tt_state=None,
+    paged_attention_config=None,
+    bounded_sliding_kv_cache=False,
+):
     if model_args is None or tt_state is None:
         model_args, tt_state = _build_tiny_gemma4_state(vocab_size=vocab_size)
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
@@ -96,7 +114,9 @@ def _build_tiny_gemma4_model(mesh_device, *, vocab_size=256, max_seq_len=64, mod
         max_seq_len=max_seq_len,
         max_local_batch_size=1,
         num_layers=1,
+        paged_attention_config=paged_attention_config,
         create_kv_cache=True,
+        bounded_sliding_kv_cache=bounded_sliding_kv_cache,
     )
     return model
 
@@ -258,6 +278,77 @@ def test_commit_append_decode_writes_full_256_token_canvas(mesh_device, reset_se
     _assert_regions_changed(
         v_canvas_before, _cache_region(v_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
     )
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_bounded_sliding_commit_append_wraps_cache_slot(mesh_device, reset_seeds):
+    torch.manual_seed(23)
+    vocab_size = 256
+    block_size = 32
+    sliding_window = 64
+    max_seq_len = sliding_window * 2
+    wrap_position = sliding_window
+    model_args, tt_state = _build_tiny_gemma4_state(vocab_size=vocab_size)
+    model_args.sliding_window = sliding_window
+    model_args._hf_text_config.sliding_window = sliding_window
+    paged_attention_config = PagedAttentionConfig(
+        block_size=block_size,
+        max_num_blocks=max_seq_len // block_size,
+    )
+    model = _build_tiny_gemma4_model(
+        mesh_device,
+        vocab_size=vocab_size,
+        max_seq_len=max_seq_len,
+        model_args=model_args,
+        tt_state=tt_state,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=True,
+    )
+    assert model.layers[0].self_attn.config.cache_position_modulo == sliding_window
+
+    page_tables_per_layer = build_hybrid_page_tables(
+        num_layers=1,
+        sliding_layers_mask=[True],
+        num_users=1,
+        block_size=block_size,
+        max_seq_len=max_seq_len,
+        sliding_window=sliding_window,
+    )
+    k_cache, v_cache = model.tt_kv_cache[0]
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    expected_slot = wrap_position % sliding_window
+    k_before = _paged_cache_slot(k_cache, expected_slot, block_size=block_size, is_mesh=is_mesh)
+    v_before = _paged_cache_slot(v_cache, expected_slot, block_size=block_size, is_mesh=is_mesh)
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+    append_tokens = torch.randint(0, vocab_size, (1, 1), dtype=torch.long)
+    pos_u32 = ttnn.from_torch(
+        F.pad(torch.tensor([[wrap_position]], dtype=torch.int32), (0, 31), "constant", 0),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=mesh_mapper,
+    )
+    pos_i32 = ttnn.from_torch(
+        torch.tensor([wrap_position], dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.int32,
+        mesh_mapper=mesh_mapper,
+    )
+
+    append_logits, _ = model.ttnn_decode_forward(
+        _embed_tokens(model, append_tokens, mesh_device),
+        pos_u32,
+        pos_i32,
+        page_table=None,
+        kv_cache=model.tt_kv_cache,
+        page_tables_per_layer=page_tables_per_layer,
+        kv_phase=KVCachePhase.COMMIT_APPEND,
+    )
+    append_logits.deallocate(True)
+
+    _assert_regions_changed(k_before, _paged_cache_slot(k_cache, expected_slot, block_size=block_size, is_mesh=is_mesh))
+    _assert_regions_changed(v_before, _paged_cache_slot(v_cache, expected_slot, block_size=block_size, is_mesh=is_mesh))
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
