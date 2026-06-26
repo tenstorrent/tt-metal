@@ -20,7 +20,7 @@ on:
           - qwen3-32b
           - qwen2.5-32b
           - qwen2.5-coder-32b
-          - qwen2.5-72b-vl
+          - qwen2.5-vl-72b
           - mistral-7b
           - gemma-3-4b
           - gemma-3-27b

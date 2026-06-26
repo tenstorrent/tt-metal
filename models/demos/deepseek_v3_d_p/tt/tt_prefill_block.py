@@ -287,6 +287,7 @@ class TtPrefillBlock(LightweightModule):
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                is_balanced=is_balanced,
             )
         else:
             self.ffn = TtFfn(
@@ -317,6 +318,7 @@ class TtPrefillBlock(LightweightModule):
         weight_cache_path=None,
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
+        is_balanced=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -366,6 +368,7 @@ class TtPrefillBlock(LightweightModule):
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+            is_balanced=is_balanced,
         )
 
     def forward(
@@ -381,6 +384,8 @@ class TtPrefillBlock(LightweightModule):
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
     ):
         """
         Args:
@@ -400,6 +405,9 @@ class TtPrefillBlock(LightweightModule):
             return_kv_intermediates: if True, MLA surfaces its 4 KV stages (tt_kv, tt_kv_nope,
                 tt_kv_rope, tt_kvpe) and this returns (output_tensor, kv_intermediates_dict) — also
                 carrying post_mla_residual + post_attn_norm — instead of (output_tensor, kv_cache).
+            actual_isl: actual (unpadded) count of real tokens; threaded to the MoE FFN for
+                padding-aware routing.
+            padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
@@ -442,7 +450,12 @@ class TtPrefillBlock(LightweightModule):
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
         if self.is_moe:
-            ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
+            ffn_out = self._moe_path(
+                ffn_norm_out,
+                return_intermediates=return_intermediates,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+            )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
@@ -456,11 +469,22 @@ class TtPrefillBlock(LightweightModule):
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
         return x, kv_cache
 
-    def _moe_path(self, ffn_norm_out: ttnn.Tensor, return_intermediates: bool = False) -> ttnn.Tensor:
+    def _moe_path(
+        self,
+        ffn_norm_out: ttnn.Tensor,
+        return_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+    ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
 
-        moe_out, _ = self.ffn(moe_input, return_intermediates=return_intermediates)
+        moe_out, _ = self.ffn(
+            moe_input,
+            return_intermediates=return_intermediates,
+            actual_isl=actual_isl,
+            padding_side=padding_side,
+        )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
         return moe_out

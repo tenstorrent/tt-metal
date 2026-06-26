@@ -106,6 +106,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
     binary_ng/device/binary_ng_program_factory.cpp
+    binary_ng/device/binary_ng_metal_v2_factory.cpp
     binary_ng/device/binary_ng_utils.cpp
     # binary (host front-end: add/subtract/multiply/... -> quasar binary_ng device op)
     binary/binary.cpp

@@ -1284,6 +1284,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # The host position itself may lag the device by one step under
                 # async scheduling, so accept both.
                 host_pos = start_pos[i].reshape(-1).to(torch.int64)
+                # The device token/position buffers are read from a single device
+                # shard (get_device_tensors(...)[0]). That holds the full per-chunk
+                # batch only when the decode inputs are replicated across the mesh
+                # (e.g. Llama-3.1-8B, which this async-ahead keep was designed for).
+                # Models that shard the decode batch across mesh devices
+                # (users_row_sharded, e.g. GPT-OSS) expose only B/num_shards entries
+                # on shard 0, so dev_toks/dev_pos are shorter than the full host
+                # chunk. Reconstructing the full batch needs the model's mesh layout,
+                # which the shared generator doesn't have; rather than crash on the
+                # mismatched comparison, fall back to the host-provided tokens and
+                # positions for this chunk (the pre-fix behaviour).
+                if dev_pos.shape[0] != host_pos.shape[0] or dev_toks.shape[0] != tok_chunk.reshape(-1).shape[0]:
+                    new_tokens.append(tok_chunk)
+                    new_start_pos.append(start_pos[i])
+                    continue
                 use_dev = (dev_pos == host_pos) | (dev_pos == host_pos + 1)
                 prefilled = getattr(self, "_slots_prefilled_since_decode", None)
                 if prefilled:
@@ -1642,19 +1657,26 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             logits_i = tt_logits[i]
             if isinstance(logits_i, tuple):
                 logits_i = logits_i[0]
+            # Some models must run the on-device sampling op eagerly rather than from its
+            # own captured trace: the force-argmax path does an all_gather_async whose
+            # multi_device_global_semaphore is taken from get_and_cycle_*() at capture time
+            # and frozen into the trace, so replaying the sampling trace reuses a stale
+            # semaphore and the gather corrupts from the 2nd decode step (#48037). Running
+            # sampling eagerly re-acquires a fresh semaphore each step.
+            sampling_enable_trace = enable_trace and not getattr(self.model[i], "_tt_disable_sampling_trace", False)
             # Must match the capture-time decision in _capture_decode_trace_text:
             # only feed the sampled token back into device_inputs[0] for models
             # that use on-device token feedback (see _decode_token_feedback_buffer).
             tt_out_tok = (
                 self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[True][i])
-                if enable_trace and self.trace_inputs_decode[True]
+                if sampling_enable_trace and self.trace_inputs_decode[True]
                 else None
             )
             sampled_outputs.append(
                 sampling_module.sample(
                     logits=logits_i,
                     tt_out_tok=tt_out_tok,
-                    enable_trace=enable_trace,
+                    enable_trace=sampling_enable_trace,
                 )
             )
         return sampled_outputs
