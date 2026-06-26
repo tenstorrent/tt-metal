@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 
 
-OLD_TT_METAL_ROOT = Path("/Users/nachiket/workspace/tt-metal")
-OLD_FIT_ROOT = Path("/Users/nachiket/workspace/tt-polynomial-fitter")
+LEGACY_TT_METAL_ROOT = os.environ.get("LEGACY_TT_METAL_ROOT")
+LEGACY_FIT_ROOT = os.environ.get("LEGACY_TT_POLY_FIT_ROOT")
 
 
 def repo_root() -> Path:
@@ -29,16 +29,18 @@ def resolve_manifest_path(path: str, repo: Path, fit: Path) -> Path:
     if not path:
         return Path()
     p = Path(path)
-    try:
-        rel = p.relative_to(OLD_TT_METAL_ROOT)
-        return repo / rel
-    except ValueError:
-        pass
-    try:
-        rel = p.relative_to(OLD_FIT_ROOT)
-        return fit / rel
-    except ValueError:
-        pass
+    if LEGACY_TT_METAL_ROOT:
+        try:
+            rel = p.relative_to(Path(LEGACY_TT_METAL_ROOT))
+            return repo / rel
+        except ValueError:
+            pass
+    if LEGACY_FIT_ROOT:
+        try:
+            rel = p.relative_to(Path(LEGACY_FIT_ROOT))
+            return fit / rel
+        except ValueError:
+            pass
     return p
 
 
@@ -154,11 +156,7 @@ def run_embedded_dump(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument(
-        "--tt-poly-fit-dir",
-        type=Path,
-        default=Path(os.environ.get("TT_POLY_FIT_DIR", "/home/ttuser/tt-polynomial-fitter")),
-    )
+    parser.add_argument("--tt-poly-fit-dir", type=Path, default=None)
     parser.add_argument("--tiles", type=int, default=256)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
@@ -166,7 +164,11 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = repo_root()
-    fit = args.tt_poly_fit_dir.expanduser().resolve()
+    fit = (
+        (args.tt_poly_fit_dir or Path(os.environ.get("TT_POLY_FIT_DIR", repo.parent / "tt-polynomial-fitter")))
+        .expanduser()
+        .resolve()
+    )
     manifest = args.manifest.expanduser().resolve()
     rows = read_manifest(manifest)
     if args.limit:

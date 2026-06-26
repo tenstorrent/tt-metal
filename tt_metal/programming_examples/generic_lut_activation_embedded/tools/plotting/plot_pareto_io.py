@@ -18,7 +18,7 @@ def existing(path):
     return Path(path).expanduser().resolve()
 
 
-OLD_TT_METAL_ROOT = Path("/Users/nachiket/workspace/tt-metal")
+LEGACY_TT_METAL_ROOT = None
 
 
 def repo_root():
@@ -29,10 +29,13 @@ def resolve_repo_path(path, repo):
     p = Path(path or "")
     if not p:
         return p
-    try:
-        return repo / p.relative_to(OLD_TT_METAL_ROOT)
-    except ValueError:
-        return p
+    global LEGACY_TT_METAL_ROOT
+    if LEGACY_TT_METAL_ROOT:
+        try:
+            return repo / p.relative_to(LEGACY_TT_METAL_ROOT)
+        except ValueError:
+            pass
+    return p
 
 
 def plot_path(row, manifest, repo):
@@ -57,6 +60,11 @@ def parse_args():
         help="Fail if any selected dump is missing. Default: skip incomplete activations.",
     )
     parser.add_argument("--max-points", type=int, default=50000)
+    parser.add_argument(
+        "--legacy-tt-metal-root",
+        type=Path,
+        help="Optional old checkout root used to remap legacy absolute manifest paths.",
+    )
     return parser.parse_args()
 
 
@@ -126,6 +134,8 @@ def main():
         raise SystemExit(f"plot_pareto_io: manifest not found: {args.manifest}")
 
     repo = repo_root()
+    global LEGACY_TT_METAL_ROOT
+    LEGACY_TT_METAL_ROOT = args.legacy_tt_metal_root.expanduser().resolve() if args.legacy_tt_metal_root else None
     groups = defaultdict(list)
     with args.manifest.open() as f:
         for row in csv.DictReader(f):

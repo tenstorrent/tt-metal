@@ -11,25 +11,31 @@ results/
 |-- frontier/
 |   |-- bf16/
 |   |   |-- data/csv/
+|   |   |-- data/dumps/
 |   |   |-- logs/
 |   |   |-- plots/
 |   |   `-- summary.txt
 |   `-- fp32/
 |       |-- data/csv/
+|       |-- data/dumps/
 |       |-- logs/
 |       |-- plots/
 |       `-- summary.txt
+|-- frontier/table2/
 `-- native_vs_embedded/
     `-- bf16/
         |-- data/csv/
         `-- logs/
 ```
 
-`frontier/<dtype>/data/csv/` contains the shard CSVs from the frontier sweep and
-any TTNN reference CSVs available for that dtype. `logs/` contains worker,
-plotting, TTNN reference, and failure logs where those artifacts exist. `plots/`
-contains generated PNGs. `summary.txt` is the text summary emitted by the
-frontier plotting pass.
+`frontier/<dtype>/data/csv/` contains the shard CSVs from the frontier sweep,
+Pareto winner manifests, and any TTNN reference CSVs available for that dtype.
+`frontier/<dtype>/data/dumps/` contains raw Pareto IO dumps when those have been
+materialized. `logs/` contains worker, plotting, TTNN reference, and failure
+logs where those artifacts exist. `plots/` contains generated PNGs.
+`summary.txt` is the text summary emitted by the frontier plotting pass.
+`frontier/table2/` contains the tt-metal-local Table 2 CSV/Markdown generated
+from the committed Pareto winner manifests.
 
 `native_vs_embedded/bf16/data/csv/` contains the native-vs-embedded comparison
 summary CSVs that feed tier comparison plots. This comparison currently has a
@@ -49,6 +55,11 @@ The canonical tree currently carries these generated plot families:
 - `frontier/bf16/plots/tiers/*.png`: per-activation comparison of
   selected native-vs-embedded BF16 tiers against the TTNN reference. This family
   depends on BF16 native-vs-embedded summary CSVs.
+- `frontier/<dtype>/plots/ulp_by_input/*.png`: per-activation ULP-by-input plots
+  for selected Pareto winners. These require the matching raw dumps under
+  `frontier/<dtype>/data/dumps/`.
+- `frontier/table2/table2_frontier_ttnn.{csv,md}`: compact frontier-vs-TTNN
+  Table 2 generated from `pareto_winners.csv` manifests.
 
 The FP32 frontier run does not currently have `tiers` plots because
 there is no canonical `native_vs_embedded/fp32` summary set.
@@ -59,12 +70,9 @@ Some older plot families mentioned elsewhere in this example predate this
 embedded result layout. They require raw or broader data artifacts that are not
 part of the canonical result set above:
 
-- ULP-by-input plots require explicit raw hardware dump CSVs with `input,output`
-  columns. These are consumed by `tools/plotting/ulp_by_input.py`; summary
+- ULP-by-input plots require explicit raw hardware dumps: NPZ with
+  `input`/`output` arrays, or CSV/CSV.GZ with `input,output` columns. Summary
   frontier CSVs are not sufficient.
-- Pareto-winner IO plots use `frontier/<dtype>/data/csv/pareto_winners.csv` as
-  a manifest, raw dumps under `frontier/<dtype>/data/dumps`, and generated PNGs
-  under `frontier/<dtype>/plots/ulp_by_input`.
 - Hardware error analysis and ULP distribution plots require raw hardware output
   dumps from the retired `*_hardware_outputs` or `data/hardware_outputs` style
   layouts, or equivalent raw dumps migrated into a documented location.

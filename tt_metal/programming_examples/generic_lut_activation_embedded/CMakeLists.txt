@@ -50,12 +50,12 @@ target_include_directories(
 # ADHOC TARGETS - For dynamic kernel generation at sweep time
 # =============================================================================
 # These targets are used by sweep scripts with the adhoc workflow:
-#   1. generate_adhoc_kernel.py generates kernels/compute/adhoc/adhoc{N}.cpp
+#   1. run_csv.sh generates kernels/compute/adhoc/adhoc.cpp
 #   2. ninja rebuilds just that target (fast incremental build)
 #   3. Binary is executed to collect metrics
 #
 # This eliminates the need for 500+ pre-generated embedded kernels.
-# Multiple adhoc targets allow parallel sweep execution.
+# Use one checkout per concurrent worker because adhoc.cpp is checkout-local.
 
 # Primary adhoc target (backward compatible with run_csv.sh)
 add_executable(programming_examples_generic_lut_activation_embedded_adhoc)

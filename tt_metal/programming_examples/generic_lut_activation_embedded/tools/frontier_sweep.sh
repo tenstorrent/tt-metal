@@ -17,7 +17,8 @@
 #   # in checkout 0:  TT_VISIBLE_DEVICES=0 frontier_sweep.sh --shard 0 --num-shards 4 \
 #   #                   --out /shared/frontier_chip0.csv --cache /tmp/cache0
 #   # in checkout 1:  TT_VISIBLE_DEVICES=1 frontier_sweep.sh --shard 1 --num-shards 4 ...
-#   # ... chips 2,3 likewise. Then: frontier_plot.py /shared/frontier_chip*.csv
+#   # ... chips 2,3 likewise. Then:
+#   #   python3 tools/plotting/frontier_scatter.py /shared/frontier_chip*.csv --outdir frontier_plots
 #
 # TT_VISIBLE_DEVICES=C restricts UMD to physical chip C; the binary's device_id=0
 # then maps to it. Each worker needs a distinct --out and --cache.
@@ -51,7 +52,7 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --run-dir) RUN_DIR="$2"; shift 2 ;;
   --out) OUT="$2"; shift 2 ;;
   --cache) CACHE="$2"; shift 2 ;;
-  --activations) FILTER="$2"; shift 2 ;;   # space-separated; default = all
+  --activations) FILTER="$2"; shift 2 ;;   # comma or space separated; default = all
   --precision|-p) PRECISION="$2"; shift 2 ;;
   --timeout) PER_CFG_TIMEOUT="$2"; shift 2 ;;
   -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
@@ -66,6 +67,7 @@ esac
 if [[ -n "$RUN_DIR" && -z "$OUT" ]]; then
   OUT="$RUN_DIR/data/csv/frontier_chip${SHARD}.csv"
 fi
+FILTER="${FILTER//,/ }"
 [[ -z "$OUT" ]] && OUT="/tmp/frontier_chip${SHARD}.csv"
 [[ -z "$CACHE" ]] && CACHE="/tmp/tt-metal-cache-frontier-${SHARD}"
 [[ -x "$RUN_CSV" ]] || { echo "ERROR: run_csv.sh not found at $RUN_CSV (set TT_METAL_HOME)" >&2; exit 1; }

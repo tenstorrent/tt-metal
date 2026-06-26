@@ -164,7 +164,7 @@ while IFS=, read -r act lo hi; do
   ( source "$VENV"; TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$prof_dir" \
       python3 "$NATIVE_PY" "$act" "$PRECISION" "$lo" "$hi" "$acc_dump" "$([[ -n "$RUN_DIR" ]] && echo "$dump")" "$TILES" >/dev/null 2>&1 )
   rc=$?
-  set -e
+  set +e
   if [[ "$rc" -ne 0 || ! -s "$dump" ]]; then
     printf '%s,%s,,,,,,%s,%s,%s,native_fail_rc_%s\n' "$act" "$PRECISION" "$lo" "$hi" "$TILES" "$rc" >> "$OUT"
     echo "$act $PRECISION native_fail_rc_$rc" >&2

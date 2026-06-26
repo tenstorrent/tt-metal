@@ -22,7 +22,7 @@ tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_swe
 ```bash
 python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plotting/frontier_scatter.py \
   tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/frontier_chip*.csv \
-  --ttnn tt_metal/programming_examples/generic_lut_activation_embedded/results/native_vs_embedded/bf16/data/csv/ttnn_ref.csv \
+  --ttnn tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/ttnn_ref.csv \
   --tier best=tt_metal/programming_examples/generic_lut_activation_embedded/results/native_vs_embedded/bf16/data/csv/best_native_vs_embedded.csv \
   --tier best99=tt_metal/programming_examples/generic_lut_activation_embedded/results/native_vs_embedded/bf16/data/csv/best99_native_vs_embedded.csv \
   --tier best95=tt_metal/programming_examples/generic_lut_activation_embedded/results/native_vs_embedded/bf16/data/csv/best95_native_vs_embedded.csv \
@@ -55,7 +55,7 @@ manifest for per-activation Pareto configs:
 ```bash
 python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plotting/select_pareto_winners.py \
   --frontier tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16 \
-  --ttnn tt_metal/programming_examples/generic_lut_activation_embedded/results/native_vs_embedded/bf16/data/csv/ttnn_ref.csv \
+  --ttnn tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/ttnn_ref.csv \
   --include-ttnn
 ```
 
@@ -83,13 +83,14 @@ Each generated IO PNG keeps the dtype-specific result location and splits
 Canonical raw dump and plot locations are:
 
 ```text
-results/frontier/<dtype>/data/dumps/frontier/<dtype>/<activation>/<role>_<config>.csv
-results/frontier/<dtype>/data/dumps/ttnn/<dtype>/<activation>/ttnn.csv
+results/frontier/<dtype>/data/dumps/frontier/<dtype>/<activation>/<role>_<config>.npz
+results/frontier/<dtype>/data/dumps/ttnn/<dtype>/<activation>/ttnn.npz
 results/frontier/<dtype>/plots/ulp_by_input/<activation>.png
 ```
 
-`ulp_by_input.py` reads explicit raw dump CSVs with `input,output` columns and
-writes one requested PNG. It is intentionally separate from frontier summaries:
+`ulp_by_input.py` reads explicit raw dumps, either compressed NPZ with
+`input`/`output` arrays or CSV/CSV.GZ with `input,output` columns, and writes
+one requested PNG. It is intentionally separate from frontier summaries:
 
 ```bash
 python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/plotting/ulp_by_input.py \

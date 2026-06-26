@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""frontier_plot.py — merge frontier_sweep shard CSVs into ULP-vs-runtime
+"""frontier_scatter.py — merge frontier_sweep shard CSVs into ULP-vs-runtime
 Pareto scatters per activation, with optional TTNN reference.
 
 Usage:
-  frontier_plot.py frontier_chip*.csv [--ttnn ttnn_ref.csv] [--outdir plots]
+  frontier_scatter.py frontier_chip*.csv [--ttnn ttnn_ref.csv] [--outdir plots]
 
 Input rows (from frontier_sweep.sh):
   csv,activation,method,degree,segments,precision,bf16_maxulp,runtime_us,compiles,range
@@ -90,7 +90,7 @@ def load(paths):
                 rows.append(r)
     if not explicit_dtype and precisions - {"bf16"}:
         raise SystemExit(
-            "frontier_plot: input rows do not have a dtype column and are not a BF16-only sweep. "
+            "frontier_scatter: input rows do not have a dtype column and are not a BF16-only sweep. "
             f"Found precision values: {', '.join(sorted(precisions))}"
         )
     return rows, explicit_dtype
@@ -101,7 +101,7 @@ def load_ttnn(path):
     if not path:
         return ttnn, False
     if not os.path.exists(path):
-        raise SystemExit(f"frontier_plot: TTNN reference not found: {path}")
+        raise SystemExit(f"frontier_scatter: TTNN reference not found: {path}")
     has_typed_rows = False
     with open(path) as f:
         for r in _csv.DictReader(f):
@@ -125,7 +125,7 @@ def load_picked(path):
     if not path:
         return picked
     if not os.path.exists(path):
-        raise SystemExit(f"frontier_plot: picked manifest not found: {path}")
+        raise SystemExit(f"frontier_scatter: picked manifest not found: {path}")
     with open(path) as f:
         for r in _csv.DictReader(f):
             act = (r.get("activation") or "").strip()
@@ -227,7 +227,7 @@ def load_tier_csvs(specs):
             path = spec
             label = os.path.basename(path).replace("_native_vs_embedded.csv", "")
         if not os.path.exists(path):
-            raise SystemExit(f"frontier_plot: tier CSV not found: {path}")
+            raise SystemExit(f"frontier_scatter: tier CSV not found: {path}")
         rows = []
         with open(path) as f:
             for r in _csv.DictReader(f):
@@ -254,7 +254,9 @@ def pareto(points):
 def add_one_ulp_inset(ax, comp, front, tus, tulp, method_color, method_marker, pick=None):
     low_ulp = [r for r in comp if r["_us"] is not None and r["_ulp"] is not None and 0 <= r["_ulp"] <= 1.0]
     ttnn_in_band = tus is not None and tulp is not None and 0 <= tulp <= 1.0
-    picked_in_band = pick is not None and pick["_us"] is not None and pick["_ulp"] is not None and 0 <= pick["_ulp"] <= 1.0
+    picked_in_band = (
+        pick is not None and pick["_us"] is not None and pick["_ulp"] is not None and 0 <= pick["_ulp"] <= 1.0
+    )
     if not low_ulp and not ttnn_in_band and not picked_in_band:
         return
 
@@ -330,9 +332,7 @@ def add_one_ulp_inset(ax, comp, front, tus, tulp, method_color, method_marker, p
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Plot frontier_sweep shard CSVs as per-activation scatters."
-    )
+    parser = argparse.ArgumentParser(description="Plot frontier_sweep shard CSVs as per-activation scatters.")
     parser.add_argument("csvs", nargs="+", help="Shard CSV paths or globs")
     parser.add_argument("--ttnn", help="Optional TTNN reference CSV")
     parser.add_argument("--picked", help="Optional pareto_winners.csv manifest to highlight the IO-dumped frontier row")
@@ -358,10 +358,10 @@ def expand_paths(patterns):
         matches = sorted(glob.glob(pattern))
         paths.extend(matches or [pattern])
     if not paths:
-        raise SystemExit("frontier_plot: no input CSVs")
+        raise SystemExit("frontier_scatter: no input CSVs")
     missing = [p for p in paths if not os.path.exists(p)]
     if missing:
-        raise SystemExit(f"frontier_plot: input CSV not found: {missing[0]}")
+        raise SystemExit(f"frontier_scatter: input CSV not found: {missing[0]}")
     return paths
 
 

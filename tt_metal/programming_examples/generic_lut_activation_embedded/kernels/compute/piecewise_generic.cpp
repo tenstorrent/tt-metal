@@ -243,7 +243,8 @@ inline vFloat cbrt_expand(vFloat poly_result, vInt q, vInt r, vInt sign_bits) {
 // addexp) and evaluate a LOW-DEGREE polynomial on the reduced domain — the same
 // algorithm TTNN's native exp/log/sqrt use. The fitter owns WHAT to approximate
 // and the natural-basis coefficients; the kernel owns the intrinsic decompose +
-// scale fold + recombine (see /tmp/exponent_alu_contract.md).
+// scale fold + recombine. The evaluator tag owns this standalone path; the
+// coefficient CSV owns the reduced-domain fit.
 //
 // These are standalone evaluators: when one of RANGE_REDUCTION_*_HW is defined
 // the per-tile loop calls the matching exp_hw_eval / log_hw_eval / pow_hw_eval

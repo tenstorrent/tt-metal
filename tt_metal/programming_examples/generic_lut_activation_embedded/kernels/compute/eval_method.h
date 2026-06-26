@@ -7,8 +7,7 @@
  * ============================================================================
  *
  * This header is the SINGLE source of truth for "which evaluator owns the
- * approximation". The codegen (both tools/generate_adhoc_kernel.py and
- * run_csv.sh) emits exactly ONE EVAL_METHOD_* selector; the kernel dispatcher
+ * approximation". Codegen emits exactly ONE EVAL_METHOD_* selector; the kernel dispatcher
  * reads that one tag and routes. This replaces the historically overloaded
  * RANGE_REDUCTION_* namespace, where reduce-then-poly, standalone
  * hardware-exponent-ALU evaluators, and the Newton-root evaluator (which fits
@@ -48,12 +47,15 @@
  *                                  selection and Horner.
  *
  * Selection policy:
- *   1. Prefer whole-function collapses when the coefficient algebra proves the
- *      entire fit is identity, affine, or clamped-affine.
- *   2. Use standalone methods when the CSV metadata declares a non-cascade
+ *   1. Validate CSV rows and metadata before emitting routing tags.
+ *   2. Preserve declared basis wrappers; do not collapse the inner polynomial
+ *      over raw x unless the whole raw-x function algebra proves it.
+ *   3. Prefer whole-function collapses when the coefficient algebra proves the
+ *      entire raw-x fit is identity, affine, or clamped-affine.
+ *   4. Use standalone methods when the CSV metadata declares a non-cascade
  *      evaluator (exponent-ALU or Newton-root).
- *   3. Use reduced-poly when the metadata declares real range reduction.
- *   4. Otherwise use the poly/rational cascade; future per-segment lowering
+ *   5. Use reduced-poly when the metadata declares real range reduction.
+ *   6. Otherwise use the poly/rational cascade; future per-segment lowering
  *      belongs inside that family, not as activation-name branches.
  *
  * Data-detail macros (coefficient arrays, magic constants, scales, degrees)

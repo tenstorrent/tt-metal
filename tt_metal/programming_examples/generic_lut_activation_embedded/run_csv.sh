@@ -74,8 +74,9 @@ show_help() {
     echo "  --range-max <X>           Override input range max (default: from CSV)"
     echo "  --runs <N>                Number of timing runs per shape (default: 3)"
     echo "  --skip-build              Skip build (reuse last binary)"
-    echo "  --dump-csv <path>         Dump per-element hardware output CSV"
-    echo "  --dump-npz <path>         Dump per-element hardware output NPZ with input/output arrays"
+    echo "  --dump-csv <path>         Copy the first measured shape/precision raw output CSV"
+    echo "                            Use --tiles and one --precision for deterministic dumps"
+    echo "  --dump-npz <path>         Same as --dump-csv, but compressed NPZ with input/output arrays"
     echo "  --no-dual-eval            Disable dual x-vector evaluation"
     echo "  --no-adaptive-degree      Disable per-segment degree optimization"
     echo "  -h, --help                Show this help"
@@ -161,6 +162,12 @@ mkdir -p "$KERNEL_DIR"
 rm -f "$KERNEL_DIR/adhoc.cpp"
 
 # Inline Python: parse CSV, auto-detect degree/segments, write kernel .cpp
+RUN_CSV_GEN_LOG="$(mktemp "${TMPDIR:-/tmp}/run_csv_gen.XXXXXX.log")"
+cleanup_gen_log() {
+    rm -f "$RUN_CSV_GEN_LOG"
+}
+trap cleanup_gen_log EXIT
+
 python3 -c "
 import csv, sys, os
 
@@ -956,24 +963,24 @@ print(f'DETECTED_IS_RATIONAL={1 if is_rational else 0}')
 if is_rational:
     print(f'DETECTED_NUM_DEGREE={num_degree}')
     print(f'DETECTED_DEN_DEGREE={den_degree}')
-" 2>&1 | tee /tmp/run_csv_gen.log
+" 2>&1 | tee "$RUN_CSV_GEN_LOG"
 
 # Extract detected values from Python output
 if [[ -z "$RANGE_MIN" ]]; then
-    RANGE_MIN=$(grep '^DETECTED_RANGE_MIN=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+    RANGE_MIN=$(grep '^DETECTED_RANGE_MIN=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
 fi
 if [[ -z "$RANGE_MAX" ]]; then
-    RANGE_MAX=$(grep '^DETECTED_RANGE_MAX=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+    RANGE_MAX=$(grep '^DETECTED_RANGE_MAX=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
 fi
-POLY_DEGREE=$(grep '^DETECTED_DEGREE=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
-NUM_SEGMENTS=$(grep '^DETECTED_SEGMENTS=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
-COEFFS=$(grep '^DETECTED_DEGREE_SUM=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
-IS_RATIONAL=$(grep '^DETECTED_IS_RATIONAL=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+POLY_DEGREE=$(grep '^DETECTED_DEGREE=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
+NUM_SEGMENTS=$(grep '^DETECTED_SEGMENTS=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
+COEFFS=$(grep '^DETECTED_DEGREE_SUM=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
+IS_RATIONAL=$(grep '^DETECTED_IS_RATIONAL=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
 [[ -z "$COEFFS" || "$COEFFS" == "0" ]] && COEFFS=$((POLY_DEGREE * NUM_SEGMENTS))
 
 if [[ "$IS_RATIONAL" == "1" ]]; then
-    NUM_DEG=$(grep '^DETECTED_NUM_DEGREE=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
-    DEN_DEG=$(grep '^DETECTED_DEN_DEGREE=' /tmp/run_csv_gen.log | tail -1 | cut -d= -f2)
+    NUM_DEG=$(grep '^DETECTED_NUM_DEGREE=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
+    DEN_DEG=$(grep '^DETECTED_DEN_DEGREE=' "$RUN_CSV_GEN_LOG" | tail -1 | cut -d= -f2)
     CONFIG_NAME="n${NUM_DEG}d${DEN_DEG}_s${NUM_SEGMENTS}"
     COEFFS=$(( (NUM_DEG + 1 + DEN_DEG + 1) * NUM_SEGMENTS ))
 else
@@ -1173,7 +1180,7 @@ for prec in "${PRECISION_LIST[@]}"; do
         pkey="${prec}_${shape_name}"
         csv_output="${csv_output_paths[$pkey]}"
 
-        # If a dump path was specified, export first shape's output to user-requested path.
+        # Export exactly one raw dump: first requested precision, first requested shape.
         if [[ -n "$DUMP_CSV" && "${test_shape}" == "${TEST_SHAPES[0]}" && "$prec" == "${PRECISION_LIST[0]}" && -f "$csv_output" ]]; then
             cp "$csv_output" "$DUMP_CSV"
         fi
