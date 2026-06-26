@@ -578,12 +578,13 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        # Greedy decode samples on the HOST (full-precision argmax), not on-device. The on-device decode
-        # sampler introduced by the #45166 sampling-separation refactor selects wrong tokens for qwen3-vl
-        # (sporadic garbage during greedy decode, BERTScore F1 collapse); a host fp32 argmax over the same
-        # logits is correct and restores quality. See #47818. TODO: re-enable on-device sampling once the
-        # shared tt_transformers on-device decode sampler is fixed (tracked in #48222).
-        argmax_on_device = False
+        # Diagnostic A/B toggle (#48037). The actual gibberish fix is on the model side
+        # (Transformer in tt/model.py: force-argmax sampling path + always-refresh + eager sampling),
+        # which keeps on-device sampling. Setting TT_QWEN_FORCE_HOST_SAMPLING=1 forces host argmax
+        # instead: a known-good reference (correct output) but slower (per-step logits read-back),
+        # useful to compare against the on-device path locally.
+        force_host_sampling = os.environ.get("TT_QWEN_FORCE_HOST_SAMPLING", "0") == "1"
+        argmax_on_device = model._supports_on_device_sampling and not force_host_sampling
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
