@@ -388,10 +388,14 @@ class TestMemoryEfficientRunner:
         _ = forward_fn(input, mask)
         captured["inter"].backward(retain_graph=False)
 
-        # Memory-efficient runner
+        # Memory-efficient runner. forward_fn runs with gradients disabled inside
+        # the runner, so the intermediate it stores in captured["inter"] (which
+        # overwrites the baseline one) gets no backward graph node recorded --
+        # that's the property under test.
         _ = memory_efficient_runner(forward_fn, input, mask)
 
-        with expect_error(RuntimeError, "This backward function should not be called"):
+        # Backward on that grad-less intermediate raises because it has no node.
+        with expect_error(RuntimeError, "This tensor has no associated gradient function"):
             captured["inter"].backward(retain_graph=False)
 
 
