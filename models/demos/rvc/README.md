@@ -31,20 +31,29 @@ Source WAV  →  HuBERT (CPU)  →  [optional FAISS retrieval]  →  TextEncoder
 - tt-metal SDK with the `ttnn` Python package
 
 ### Assets
-Place in `models/demos/rvc/data/`:
 
-| File | Source |
-|---|---|
-| `f0G48k.safetensors` + `f0G48k.json` | [RVC-Project HuggingFace](https://huggingface.co/lj1995/VoiceConversionWebUI) |
-| `hubert.safetensors` + `hubert.json` | [facebook/hubert-base-ls960](https://huggingface.co/facebook/hubert-base-ls960) |
-| `rmvpe.safetensors` | Converted from [rmvpe.pt](https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/rmvpe.pt) |
-| `sample.wav` | Any speech recording (input audio) |
+Run the helper to fetch and convert all weights from public sources in one step:
 
-Helper: `bash assets-download.sh`.
+```bash
+bash models/demos/rvc/assets-download.sh
+```
+
+The script downloads `pretrained_v2/f0G48k.pth`, `hubert_base.pt`, and `rmvpe.pt` from the public [lj1995/VoiceConversionWebUI](https://huggingface.co/lj1995/VoiceConversionWebUI) HuggingFace repo, converts each `.pt` to `.safetensors` in bfloat16 (collapsing PyTorch `weight_norm`, renumbering flow indices `0/2/4/6 → 0/1/2/3` to skip the Flip layers, squeezing kernel-1 convs to Linear weights, renaming `conv_{q,k,v,o} → linear_{q,k,v,o}` in the TextEncoder, reindexing HuBERT's `feature_extractor.conv_layers.0.2 → .0.1`, and dropping fairseq pretraining-only heads), and copies the two configs from `models/demos/rvc/scripts/configs/` (committed alongside the script). Then drop a 16 kHz+ mono speech `.wav` at `data/speech/sample-speech-0.wav`.
+
+Final on-disk layout under `models/demos/rvc/data/` — the paths `utils/config.py` and `torch_impl/rmvpe.py` actually load:
+
+| Path | Size | Source |
+|---|---:|---|
+| `assets/pretrained_v2/f0G48k.safetensors` | 55 MB | derived from `lj1995/VoiceConversionWebUI/pretrained_v2/f0G48k.pth` |
+| `assets/hubert.safetensors`               | 181 MB | derived from `lj1995/VoiceConversionWebUI/hubert_base.pt` (== `facebook/hubert-base-ls960`) |
+| `rmvpe.safetensors`                       | 173 MB | derived from `lj1995/VoiceConversionWebUI/rmvpe.pt` |
+| `configs/v2/48k.json`                     | ~1 KB | copied from `scripts/configs/v2/48k.json` (upstream RVC v2 48k config) |
+| `configs/hubert_cfg.json`                 | ~10 KB | copied from `scripts/configs/hubert_cfg.json` (fairseq HuBERT-base config) |
+| `speech/sample-speech-0.wav`              | user-provided | any 16 kHz+ mono speech recording |
 
 ### Python dependencies
 ```bash
-pip install pyworld scipy soundfile safetensors librosa faiss-cpu
+pip install pyworld scipy soundfile safetensors librosa faiss-cpu 'av>=14'
 pip install resemblyzer openai-whisper       # optional, for evaluation
 ```
 
@@ -73,7 +82,7 @@ python -m models.demos.rvc.benchmark --max_secs 3.0 --warmup 1 --runs 3
 # Single-stream with Flow trace+execute_trace (~5% TTNN-only RTF win at B=1)
 python -m models.demos.rvc.benchmark --max_secs 3.0 --warmup 1 --runs 3 --trace
 
-# Batched, 5 concurrent, with CPU/TTNN pipeline overlap (meets RTF<0.2)
+# Batched, 5 concurrent, with CPU/TTNN pipeline overlap (best full-pipeline RTF)
 python -m models.demos.rvc.benchmark --batch 5 --max_secs 3.0 --warmup 1 --runs 2 \
     --f0_method dio --overlap
 ```
@@ -87,34 +96,48 @@ python -m models.demos.rvc.evaluate \
 ```
 
 ### Tests
+
+Run each suite in a separate `pytest` invocation. Co-execution (single invocation across all three) segfaults — this is a documented limitation related to TTNN device lifecycle across test modules.
+
 ```bash
-pytest models/demos/rvc/tests/ -v
+pytest models/demos/rvc/tests/test_runtime.py -v
+pytest models/demos/rvc/tests/test_ttnn_ops.py -v
+pytest models/demos/rvc/tests/test_production_shapes.py -v
 ```
 
 ## Performance
 
-Measured on N300 (Wormhole B0), warm JIT cache, 3 s input audio. Numbers are means across warm runs.
+Measured on Koyeb `gpu-tenstorrent-n300s` (Wormhole B0), warm JIT cache, 3 s input audio. Numbers are means across warm runs. Two measurement points are shown to honour the reviewer's F3 request (record hardware + tt-metal commit for reported numbers):
+
+- **Original** — measured 2026-06-08 at PR commit [`46d99b55c99`](../../../../commit/46d99b55c99) (the commit that introduced `--overlap` and first reported the 0.187 number). PR branch was rebased onto tt-metal main at commit [`153dbef60ff`](../../../../commit/153dbef60ff) (2026-05-21, "SFPI 7.52.0 637"). Built on a prior Koyeb `gpu-tenstorrent-n300s` instance.
+- **Current (2026-06-26 rebuild)** — fresh tt-metal rebuild from PR tip [`1c2510f8b62`](../../../../commit/1c2510f8b62), same merge-base on main, on a newly-provisioned Koyeb `gpu-tenstorrent-n300s` instance of the same SKU, with bfloat16 weights produced by this PR's `assets-download.sh`. This is what a fresh CI run today would see.
+
+Differences come from (a) tt-metal HEAD drift between the two build times (the B>1 conv slicer chooses layout per-shape per-call with no pinned shard config — see F3 in the review), and (b) Koyeb hardware/silicon-binning variance across instances of the same SKU. CPU preprocessing (HuBERT, RMVPE) is also notably slower on the current instance, which dominates single-stream wall time independent of TTNN.
 
 ### Single-stream (`--batch 1`)
 
-| Metric | Value | Bounty target |
-|---|---:|---|
-| TTNN-only RTF | 0.177 | < 0.5 |
-| Full-pipeline RTF | 0.300 | < 0.5 |
-| Audio PCC vs torch reference | 0.998 | > 0.95 |
+| Metric | Original | Current | Bounty target |
+|---|---:|---:|---|
+| TTNN-only RTF | 0.177 | 0.594 | < 0.5 (met original; fails current) |
+| Full-pipeline RTF | 0.300 | 1.569 | < 0.5 (met original; fails current — CPU-bound) |
+| Audio PCC vs torch | 0.998 | 0.996 | > 0.95 ✓ |
+
+On the current Koyeb instance, HuBERT + RMVPE alone take 2.5–3.2 s for a 3 s clip — even with zero TTNN time, single-stream cannot meet RTF<0.5. This is provisioning variance, not a code-path issue.
 
 ### Batched (B=5)
 
-Two configs measured; pick by use case. Per-row PCC vs B=1 reference > 0.995 in both.
+Per-row PCC vs B=1 reference > 0.995 in both configs.
 
-| Config | TTNN-only RTF / sample | Full-pipeline RTF / sample |
+| Config | TTNN-only / sample (orig → current) | Full / sample (orig → current) |
 |---|---:|---:|
-| `--batch 5 --f0_method dio` (no overlap) | **0.143** | 0.209 |
-| `--batch 5 --overlap --f0_method dio` | 0.155 | **0.187** (stretched RTF<0.2 MET) |
+| `--batch 5 --f0_method dio` (no overlap) | **0.143** → 0.327 | 0.209 → 0.444 |
+| `--batch 5 --overlap --f0_method dio` | 0.155 → 0.339 | **0.187** → 0.476 |
+
+Both configs meet the bounty `RTF<0.5` target on both builds. On the current build the full-pipeline margin is ~11% for no-overlap and ~5% for the overlapped variant; TTNN-only margins are 32–35%. The stretched `RTF<0.2` was met on the original build only; on the current build full RTF exceeds the stretched goal — see F3 (non-blocking) for the root-cause and three attempted fixes.
 
 Without `--overlap`, TTNN-only is best (compute is contiguous, no per-flow dispatch overhead from micro-batch splitting). With `--overlap`, full-pipeline is best (CPU preprocess of mb2 hidden by TTNN compute of mb1).
 
-### Where time goes (single-stream, 3 s warm)
+### Where time goes (single-stream, 3 s warm — original build)
 
 | Stage | Per-sample time | Share | Where |
 |---|---:|---:|---|
@@ -124,9 +147,9 @@ Without `--overlap`, TTNN-only is best (compute is contiguous, no per-flow dispa
 | Flow (TTNN) | 0.04 s | 4% | N300 |
 | Generator (TTNN) | 0.49 s | 54% | N300 |
 
-CPU preprocess is ~40% of single-stream wall and is correctly off TTNN by architecture (HuBERT/RMVPE not ported — see Limitations).
+CPU preprocess is ~40% of single-stream wall on the original build and is correctly off TTNN by architecture (HuBERT/RMVPE not ported — see Limitations). On the current build it dominates further (HuBERT 0.9 s + RMVPE 1.2 s + Generator 1.7 s mean), making single-stream wall preprocessing-bound on this Koyeb instance.
 
-### Pitch method comparison (B=5, ProcessPool spawn)
+### Pitch method comparison (B=5, ProcessPool spawn — original build)
 
 | Pitch | Preprocess /sample | Full RTF /sample | Speaker sim vs RMVPE | WER vs RMVPE |
 |---|---:|---:|---:|---:|
@@ -134,7 +157,7 @@ CPU preprocess is ~40% of single-stream wall and is correctly off TTNN by archit
 | DIO | 0.196 s | 0.209 | 0.969 | 0.000 |
 | DIO + `--overlap` | 0.102 s (observable) | 0.187 | 0.969 | 0.000 |
 
-DIO and RMVPE are perceptually equivalent (cosine sim 0.969, Whisper produces identical transcriptions). RMVPE remains the default.
+DIO and RMVPE are perceptually equivalent (cosine sim 0.969, Whisper produces identical transcriptions). RMVPE remains the default. Quality comparison numbers (speaker sim, WER) are model-intrinsic and reproduce across builds; only timing varies with hardware/build.
 
 ## Diverse use case validation
 
@@ -142,7 +165,7 @@ DIO and RMVPE are perceptually equivalent (cosine sim 0.969, Whisper produces id
 |---|---|
 | Speaker diversity (speaker_id 0 / 50 / 100) | Resemblyzer cosine similarity between pairs: 0.576 / 0.636 / 0.771. Same-speaker reference is 0.969, so 0.58–0.77 confirms meaningfully distinct target voices. |
 | Pitch transposition (-12, -6, +6, +12 semitones) | All four shifts produce valid audio (NaN=0, Inf=0, amplitude within [-0.95, +0.95]) and all audibly different from the k=0 baseline (cosine sim 0.76–0.86, all below 0.90). |
-| Real-time conversion | RTF 0.187 at B=5 with `--overlap --f0_method dio` (~5× real-time per sample). |
+| Real-time conversion | RTF 0.187 (original measurement) / 0.476 (current build rebuild) at B=5 with `--overlap --f0_method dio`. Both meet bounty `<0.5`. |
 
 ## Bounty status
 
@@ -162,7 +185,7 @@ Stage 1 (bring-up) and Stage 2 (optimization) targets are met with margin. Stage
 | Caching feature indices | N/A by design |
 | Document tuning and trade-offs | Done (this README + commit history) |
 | **Stretched:** 60+ tokens/second | Done (Flow at B=8: ~6900 tokens/s) |
-| **Stretched:** RTF < 0.2 | Met. Best full-pipeline RTF 0.187 at `--batch 5 --overlap --f0_method dio` (TTNN-only 0.155 at that config). Best TTNN-only RTF 0.143 at `--batch 5 --f0_method dio` (no overlap). |
+| **Stretched:** RTF < 0.2 | Met on the original measurement build (0.187 full-pipeline at `--batch 5 --overlap --f0_method dio`). Not reproducible on a fresh tt-metal HEAD rebuild today (0.476 on the same Koyeb SKU). F3 in the review documents the root cause (B>1 conv shard config not pinned; auto-slicer behaviour drifts with tt-metal HEAD); three on-hardware fix attempts (HEIGHT_SHARDED+act_bh=32, act_bh=16 narrow whitelist, WIDTH_SHARDED) each failed with a different L1/runtime error — a real fix requires per-shape conv-op tuning. Non-blocking per reviewer recommendation. |
 | **Stretched:** 5+ concurrent conversions | Done (verified end-to-end at B=5 and B=8) |
 
 ## Limitations
@@ -182,7 +205,8 @@ models/demos/rvc/
 ├── demo.py                    End-to-end inference with timing
 ├── benchmark.py               RTF + audio PCC harness (no-fallback, --overlap, --batch)
 ├── evaluate.py                Audio PCC, speaker similarity, WER
-├── assets-download.sh         Model weight download helper
+├── assets-download.sh         Public-source weight download + .pt → .safetensors converter
+├── scripts/configs/           Demo configs (hubert_cfg.json, v2/48k.json) copied during install
 │
 ├── torch_impl/                PyTorch reference implementations
 │   ├── reference.py
