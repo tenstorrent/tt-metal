@@ -36,16 +36,13 @@ def test_sink_pushes_dense_seq_and_router_orders_them():
     producer = ttnn.layer_completion.LayerCompletionQueue.connect(ring, connect_timeout_ms=5000)
 
     num_layers = 4
-    request_id = [0]
-    sink = build_layer_completion_sink(
-        producer, source_rank=0, num_layers=num_layers, get_request_id=lambda: request_id[0]
-    )
+    sink = build_layer_completion_sink(producer, source_rank=0, num_layers=num_layers)
 
-    # Two requests, each completing layers 0..3 in order.
+    # Two requests, each completing layers 0..3 in order. The runtime binds the
+    # request/chunk id per prefill() call, so the sink takes it as a second arg.
     for req in range(2):
-        request_id[0] = req
         for layer in range(num_layers):
-            sink(layer)
+            sink(layer, req)
 
     deadline = time.time() + 5.0
     while router.processed < 8 and time.time() < deadline:
