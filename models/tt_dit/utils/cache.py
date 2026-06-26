@@ -145,7 +145,29 @@ def model_cache_dir(
     if is_fsdp:
         key += "_FSDP"
 
-    return Path(cache_dir) / model_name / subfolder / key
+    path = Path(cache_dir) / model_name / subfolder / key
+
+    # On a multi-host run each rank dumps only its locally-owned shards (DumpTensorMode.LOCAL) and
+    # must therefore read/write its own cache directory; a shared, fully-gathered file would make
+    # `to_device` try to pin chips owned by other hosts, which TT_FATALs. Single-process runs keep
+    # the original (un-suffixed) layout so existing caches remain valid.
+    world_size = _distributed_world_size()
+    if world_size > 1:
+        path = path / f"rank_{int(ttnn.distributed_context_world_rank())}"
+
+    return path
+
+
+def _distributed_world_size() -> int:
+    """Distributed world size, or 1 when no distributed context is active.
+
+    `distributed_context_world_size()` raises if the context has not been initialized, so the
+    `is_initialized()` check must come first. A plain single-process run has no context and is
+    treated as world size 1.
+    """
+    if not ttnn.distributed_context_is_initialized():
+        return 1
+    return int(ttnn.distributed_context_world_size())
 
 
 def _cache_root() -> str | None:

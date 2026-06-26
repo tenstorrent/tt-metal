@@ -394,7 +394,11 @@ class Parameter:
         )
 
     def save(self, path: str | Path, /) -> None:
-        ttnn.dump_tensor(path, self.data)
+        # Dump only this rank's locally-owned shards. In a multi-host run a fully-gathered file
+        # would force `to_device` to pin chips owned by other hosts on load, which TT_FATALs since
+        # baca09000d3. With LOCAL every shard in the file is local to the rank that reads it back.
+        # On a single host this is equivalent to the previous (gathered) dump.
+        ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
     def load(self, path: str | Path, /) -> None:
         try:
