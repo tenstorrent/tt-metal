@@ -541,5 +541,5 @@ void kernel_main() {
         // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         noc_semaphore_inc(sem_noc_addr, 1);
     }
-    noc_async_atomic_barrier();
+    noc_obj.async_atomic_barrier();
 }
