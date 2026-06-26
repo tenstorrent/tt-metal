@@ -894,6 +894,42 @@ def test_indexer_score_streaming_qmcast_uneven_bands(device):
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
 
 
+# ---------------------------------------------------------------------------
+# Block-split grid fill (accuracy): short sequences (group_count < grid.y) leave grid rows idle, so each
+# q-group is replicated across num_blocks row-blocks with its band range split across them (a band-chunk
+# per block). This is the path with BOTH group_rows>1 (per-block k-mcast is a contiguous vertical rect)
+# AND num_blocks>1 (two-or-more mcast rectangles per column, disjoint output columns, no reduce) -- the
+# genmcast prime case only exercises group_rows==1 (k-mcast off). Same exact -inf + PCC + neg-gate check.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group",
+    [
+        (8, 128, 160, 2816, 1024, 32, 64, 0),  # G=5 -> group_rows=5, num_blocks=2 (target 64h/160 shape)
+        (8, 128, 64, 3584, 1536, 32, 64, 0),  # G=2 -> group_rows=2, num_blocks=5 (deep split, 2 rows/block)
+        (8, 128, 96, 2176, 768, 32, 64, 0),  # G=3 -> group_rows=3, num_blocks=3 (9 rows used)
+        (8, 128, 160, 2880, 1024, 32, 128, 0),  # G=5, num_blocks=2 + KC not dividing Tt (partial last band)
+    ],
+    ids=["fill_5x2", "fill_2x5", "fill_3x3", "fill_5x2_partial"],
+)
+def test_indexer_score_block_split_fill(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
+    """Under-filled short sequences split each q-group's bands across num_blocks row-blocks to use the idle
+    rows. Asserts the shape really hits the block-split-with-k-mcast regime (group_rows>1 AND num_blocks>1),
+    then checks exact causality + PCC. The scheduler/mcast change is head-independent, so heads=8 (L1-safe)
+    exercises it fully."""
+    grid = device.compute_with_storage_grid_size()
+    QC, KC = q_chunk // 32, k_chunk // 32
+    group_count = (sq // 32) // QC
+    band_count = ((t // 32) + KC - 1) // KC
+    group_rows = max(d for d in range(1, min(group_count, grid.y) + 1) if group_count % d == 0)
+    cols_used = min(band_count, grid.x)
+    num_blocks = max(1, min(grid.y // group_rows, band_count // cols_used))
+    # Precondition: this is the target regime -- per-block k-mcast (>1 row/block) AND >1 band-row-block.
+    assert group_rows > 1, f"need a multi-row block for k-mcast: group_rows={group_rows}"
+    assert num_blocks > 1, f"need block replication: num_blocks={num_blocks}"
+
+    _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
 # ==============================================================================================
 # Multi-device (QuietBox, 4 BH) tests: PER-DEVICE chunk_start derived from the mesh coordinate.
 # ==============================================================================================
