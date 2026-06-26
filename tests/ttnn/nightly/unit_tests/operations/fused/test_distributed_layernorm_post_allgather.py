@@ -32,8 +32,8 @@ def run_layernorm_part_2(
     input_dtype,
     output_dtype,
     device,
+    gamma_beta_dtype,
     fp32_enabled=False,
-    gamma_beta_dtype=ttnn.bfloat16,
 ):
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -150,15 +150,22 @@ def run_layernorm_part_2(
         (ttnn.bfloat16, ttnn.bfloat16),
         (ttnn.bfloat8_b, ttnn.bfloat8_b),
         (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.float32),
     ],
-    ids=["BFLOAT16", "BFLOAT8_B", "BFLOAT16_BFLOAT8_B"],
+    ids=["BFLOAT16", "BFLOAT8_B", "BFLOAT16_BFLOAT8_B", "FLOAT32"],
 )
+@pytest.mark.parametrize("gamma_beta_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize(
     "inp_shape",
     [
+        # Large (8192-wide) shapes for bf16/bf8.
         (1, 1, 2048, 8192),
         (1, 1, 128, 8192),
         (2, 1, 128, 8192),
+        # Small (2048-wide) shapes for FP32: FP32 doubles tile size, so the 8192-wide shapes
+        # exceed L1 for layernorm (2 stats tiles + beta). FP32 runs only on these.
+        (1, 1, 128, 2048),
+        (2, 1, 128, 2048),
     ],
 )
 @pytest.mark.parametrize(
@@ -176,35 +183,25 @@ def run_layernorm_part_2(
     ids=["fp32_enabled", "fp32_disabled"],
 )
 def test_layernorm_part_2_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device
+    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, gamma_beta_dtype, fp32_enabled, device
 ):
-    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
+    """Post-all-gather correctness matrix, covering FP32 (input + FP32 stats + bf16/fp32 gamma/beta)
+    alongside the bf16/bf8 cases. FP32 requires fp32_dest_acc_en=True and -- because it doubles tile
+    size -- only fits on the 2048-wide shapes; bf16/bf8 run on the 8192-wide shapes. The guard-skips
+    below keep each dtype on the shapes/flags it supports (this produces many skipped param IDs)."""
+    is_fp32 = input_dtype == ttnn.float32
+    is_small_shape = inp_shape[-1] <= 2048
 
+    # FP32 -> small shapes (L1); everything else -> large shapes.
+    if is_fp32 != is_small_shape:
+        pytest.skip("FP32 runs on the 2048-wide shapes (L1); bf16/bf8 on the 8192-wide shapes")
+    # FP32 requires fp32_dest_acc_en.
+    if is_fp32 and not fp32_enabled:
+        pytest.skip("FP32 input requires fp32_dest_acc_en=True")
+    # FP32 gamma/beta is only exercised with FP32 input; bf16/bf8 keep bf16 gamma/beta.
+    if gamma_beta_dtype == ttnn.float32 and not is_fp32:
+        pytest.skip("fp32 gamma/beta only exercised with FP32 input")
 
-@pytest.mark.parametrize(
-    "inp_shape",
-    [
-        # FP32 doubles tile sizes vs bf16, so the 8192-wide shapes used above exceed L1 for
-        # layernorm (2 stats tiles + beta). Use a width that fits while still spanning n_devices.
-        (1, 1, 128, 2048),
-        (2, 1, 128, 2048),
-    ],
-)
-@pytest.mark.parametrize("n_devices", [4, 8])
-@pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
-@pytest.mark.parametrize("gamma_beta_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16_gamma_beta", "fp32_gamma_beta"])
-@pytest.mark.parametrize(
-    "input_dtype, output_dtype",
-    [
-        (ttnn.float32, ttnn.float32),
-        (ttnn.bfloat16, ttnn.bfloat16),
-    ],
-    ids=["FLOAT32", "BFLOAT16"],
-)
-def test_layernorm_part_2_fp32(inp_shape, n_devices, is_rmsnorm, gamma_beta_dtype, input_dtype, output_dtype, device):
-    """FP32 input + FP32 stats on the post-all-gather op (issue #44650). FP32 requires
-    fp32_dest_acc_en=True so the unpacker preserves the full mantissa into DEST. Also covers
-    FP32 ROW_MAJOR gamma/beta (exercises the datum-aware stick reader)."""
     run_layernorm_part_2(
         inp_shape,
         n_devices,
@@ -212,7 +209,7 @@ def test_layernorm_part_2_fp32(inp_shape, n_devices, is_rmsnorm, gamma_beta_dtyp
         input_dtype,
         output_dtype,
         device,
-        fp32_enabled=True,
+        fp32_enabled=fp32_enabled,
         gamma_beta_dtype=gamma_beta_dtype,
     )
 
