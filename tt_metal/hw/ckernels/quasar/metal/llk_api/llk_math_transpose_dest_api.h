@@ -40,4 +40,4 @@ inline void llk_math_transpose_dest_init(const std::uint32_t operand) {
  * @note Call @ref llk_math_transpose_dest_init first; it applies the faces / 32-bit configuration,
  * so this runs the pre-configured MOP and takes no template params.
  */
-inline void llk_math_transpose_dest(uint dst_index) { _llk_math_transpose_dest_(dst_index); }
+inline void llk_math_transpose_dest(const std::uint32_t dst_index) { _llk_math_transpose_dest_(dst_index); }
