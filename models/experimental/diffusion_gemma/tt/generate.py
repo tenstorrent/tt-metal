@@ -346,6 +346,15 @@ def _validate_canvas_length(config: DiffusionConfig) -> None:
         raise ValueError("config.canvas_length must be positive")
 
 
+def _validate_max_new_tokens_capacity(num_blocks: int, canvas_length: int, max_new_tokens: int | None) -> None:
+    if max_new_tokens is None:
+        return
+    if max_new_tokens < 0:
+        raise ValueError("max_new_tokens must be non-negative")
+    if max_new_tokens > num_blocks * canvas_length:
+        raise ValueError("num_blocks is too small for max_new_tokens")
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -627,6 +636,7 @@ def generate_text(
     """Tokenize a prompt, run device generation, and decode host-visible text."""
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
+    _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, max_new_tokens)
     prompt_tokens = tokenize_prompt(
         tokenizer,
         prompt,
@@ -696,6 +706,7 @@ def generate_text_from_checkpoint_state(
             raise ValueError("max_new_tokens must be non-negative")
         num_blocks = (max_new_tokens + config.canvas_length - 1) // config.canvas_length
     _validate_num_blocks(num_blocks)
+    _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, generate_kwargs.get("max_new_tokens"))
     if vocab_size is None:
         vocab_size = _infer_generation_vocab_size(tokenizer, tt_model)
     if init_canvas_fn is None:

@@ -445,6 +445,25 @@ def test_generate_text_rejects_non_positive_canvas_length_before_tokenize():
         )
 
 
+def test_generate_text_rejects_max_new_tokens_beyond_block_capacity_before_tokenize():
+    class _FailTokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            raise AssertionError("tokenizer should not run for impossible length budget")
+
+    with pytest.raises(ValueError, match="num_blocks is too small"):
+        generate_text(
+            "model",
+            "logits",
+            _FailTokenizer(),
+            "hello",
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            max_new_tokens=5,
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_can_build_logits_after_prompt_prefill():
     calls = []
     tokenizer = _FakeChatTokenizer()
@@ -1058,6 +1077,22 @@ def test_generate_text_from_checkpoint_state_rejects_negative_num_blocks():
             num_blocks=-1,
             config=DiffusionConfig(canvas_length=4),
             init_canvas_fn="init",
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_generate_text_from_checkpoint_state_rejects_max_new_tokens_beyond_explicit_blocks():
+    with pytest.raises(ValueError, match="num_blocks is too small"):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            max_new_tokens=5,
             logits_fn_builder_factory=lambda *args, **kwargs: "builder",
             generate_text_fn=lambda *args, **kwargs: None,
         )
