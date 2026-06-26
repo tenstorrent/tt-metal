@@ -102,3 +102,68 @@ def allocate_kv_caches(
         max_seq_len=max_seq_len,
         sp=sp,
     )
+
+
+def _write_one(cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_axis):
+    """Write one SP-sharded chunk tensor into a packed cache via update_padded_kv_cache.
+
+    The op requires TILE layout and input.dtype == cache.dtype (bf8), so cast a bf8 copy when needed
+    (the original stays live for the attention op that follows). At ``kv_actual % 32 == 0`` chunk
+    boundaries the per-device write offset is contiguous (block-cyclic degenerates to a reshape).
+    """
+    src = tensor if tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        cache,
+        src,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        kv_actual_global=kv_actual,
+        cluster_axis=sp_axis,
+    )
+    if src is not tensor:
+        src.deallocate(True)
+
+
+def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_idx, layer_idx, kv_actual, sp_axis):
+    """Write this chunk's post-RoPE K and raw V into the packed cache (every layer type).
+
+    tt_k / tt_v are the per-device SP shards [1, n_kv_local, s_local, head_dim] (heads TP-sharded on the
+    cols, sequence SP-sharded on the ``sp_axis`` rows) — exactly the per-chip cache layout, so they write
+    in place. ``kv_actual`` is the cumulative valid prefix before this chunk (0 for non-chunked).
+    """
+    _write_one(
+        kv_cache.k,
+        tt_k,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=kv_cache.num_layers,
+        kv_actual=kv_actual,
+        sp_axis=sp_axis,
+    )
+    _write_one(
+        kv_cache.v,
+        tt_v,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=kv_cache.num_layers,
+        kv_actual=kv_actual,
+        sp_axis=sp_axis,
+    )
+
+
+def write_index_k_chunk(kv_cache: MiniMaxKVCache, tt_index_k, *, slot_idx, layer_idx, kv_actual, sp_axis):
+    """Write this chunk's post-norm/post-RoPE MSA index_k (MSA layers only).
+
+    tt_index_k is the single shared index head [1, 1, s_local, head_dim], SP-sharded on the rows and
+    REPLICATED across the TP cols (so each col writes the same data into its replicated cache slot).
+    """
+    _write_one(
+        kv_cache.index_k,
+        tt_index_k,
+        slot_idx=slot_idx,
+        layer_idx=layer_idx,
+        num_layers=kv_cache.num_layers,
+        kv_actual=kv_actual,
+        sp_axis=sp_axis,
+    )

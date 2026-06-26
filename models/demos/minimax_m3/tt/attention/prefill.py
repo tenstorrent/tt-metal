@@ -5,6 +5,7 @@ import ttnn
 
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention_nocache
+from .kv_cache import write_index_k_chunk, write_kv_chunk
 from .msa import index_branch_forward, msa_sp_attention_sharded
 from .operations import (
     apply_allgather_and_slice,
@@ -117,11 +118,13 @@ def prefill_forward(
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
-    # STEP 2 SEAM (per-layer KV cache write) — not wired yet (kv_cache is currently unused here).
-    # This is the single write point for ALL layer types: tt_k here is post-RoPE and tt_v is raw, which
-    # is exactly what the golden cache stores. update_padded_kv_cache(kv_cache.k/.v, slot=user_id,
-    # layer_idx, kv_actual=...) goes here; the MSA index_k write lives in the is_sparse branch below
-    # (after index_branch_forward produces the post-norm/post-RoPE index_k).
+    # Per-layer KV cache write: post-RoPE K + raw V into the packed SP cache. Single write point for
+    # ALL layer types (the MSA index_k write is in the is_sparse branch below). kv_actual=0 here is the
+    # non-chunked single-shot offset; step 4 (multi-chunk) threads the real cumulative offset in.
+    if kv_cache is not None:
+        write_kv_chunk(
+            kv_cache, tt_k, tt_v, slot_idx=user_id, layer_idx=layer_idx, kv_actual=0, sp_axis=mesh_config.sp_axis
+        )
 
     # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
     #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
@@ -136,6 +139,12 @@ def prefill_forward(
             hidden_states, weights, rope_mats_sliced, transformation_mat, rms_norm_eps=config.rms_norm_eps
         )
         hidden_states.deallocate(True)
+        # MSA-only: cache the post-norm/post-RoPE index_k (single shared head, TP-replicated) so the
+        # multi-chunk read (step 4) can score against the accumulated context. kv_actual=0 (non-chunked).
+        if kv_cache is not None:
+            write_index_k_chunk(
+                kv_cache, tt_ik, slot_idx=user_id, layer_idx=layer_idx, kv_actual=0, sp_axis=mesh_config.sp_axis
+            )
         tt_sdpa_out = msa_sp_attention_sharded(
             tt_q,
             tt_k,
