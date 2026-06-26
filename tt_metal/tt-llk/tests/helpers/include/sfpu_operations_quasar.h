@@ -80,7 +80,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        _init_square_();
+        init_square();
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -199,7 +199,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        _llk_math_eltwise_unary_sfpu_params_(_calculate_square_<ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_square<ITERATIONS>, dst_index);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {

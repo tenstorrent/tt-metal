@@ -476,7 +476,7 @@ class TtIndexer:
         # must divide sq (Sqt % QC == 0); 32 is the fallback when 64 doesn't (e.g. sq=160).
         q_chunk = next(c for c in (64, 32) if (sq // ttnn.TILE_SIZE) % (c // ttnn.TILE_SIZE) == 0)
         cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=min(64, end_pos), head_group_size=0)
-        logits = ttnn.experimental.indexer_score(
+        logits = ttnn.experimental.indexer_score_dsa(  # renamed from indexer_score on the grid-fill perf branch
             q_dev,
             self._index_kbuf,
             weights,

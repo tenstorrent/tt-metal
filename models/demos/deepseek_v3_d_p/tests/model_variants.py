@@ -123,9 +123,10 @@ KIMI_V2_6 = TestVariant(
     ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.971,
-    # vllm-traced golden: metadata.json + kv_cache nest under a run-hash subdir (resolve_trace_dir
-    # descends), and kv_post_transform is row-sharded (the transformer test's loader reassembles it).
-    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320",
+    # vllm-traced golden: metadata.json at top level + row-sharded kv_post_transform
+    # (kv_cache/layer_N/rows_*.safetensors, the transformer test's loader reassembles it).
+    # resolve_trace_dir descends a run-hash subdir if metadata.json isn't at the top level.
+    prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm",
     prefill_trace_layout="chunked_group_a_v1",
 )
 
