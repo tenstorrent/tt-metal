@@ -45,9 +45,9 @@ inline constexpr bool _typecast_is_unsigned_int_() {
  * Sets ADDR_MOD_6 to post-increment Dest by one SFPU pass (Quasar writes SFP_ROWS = 2 rows per
  * pass), so the per-pass store advances Dest and the execute loop needs no separate increment.
  *
- * @note Call before @ref _calculate_typecast_, whose store walks Dest through ADDR_MOD_6.
+ * @note Call before @ref calculate_typecast, whose store walks Dest through ADDR_MOD_6.
  */
-inline void _init_typecast_() {
+inline void init_typecast() {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -70,7 +70,7 @@ inline VTYPE _typecast_load_() {
 
 // ADDR_MOD_6 post-increments Dest by one SFPU pass (SFP_ROWS), so the store both writes the result
 // and advances to the next pair of rows — replacing the per-iteration _incr_counters_. Requires
-// _init_typecast_ to have programmed ADDR_MOD_6.
+// init_typecast to have programmed ADDR_MOD_6.
 // TODO: once DataLayout gains Int8/UInt8, store via sfpi::dst_reg[0].mode<...>() instead of the raw builtin.
 template <DataFormat FMT, typename TYPE>
 inline void _typecast_store_(TYPE value) {
@@ -170,10 +170,10 @@ inline void _calculate_typecast_arith_sfp_rows_() {
  * @tparam SRC_FMT: Source data format (the format currently in Dest).
  * @tparam DST_FMT: Destination data format to convert each element to.
  * @tparam ITERATIONS: Number of SFPU passes (each covers SFP_ROWS rows) needed to span the tile.
- * @note Call @ref _init_typecast_ first to program the ADDR_MOD_6 it stores through.
+ * @note Call @ref init_typecast first to program the ADDR_MOD_6 it stores through.
  */
 template <DataFormat SRC_FMT, DataFormat DST_FMT, int ITERATIONS = SFPU_ITERATIONS>
-inline void _calculate_typecast_() {
+inline void calculate_typecast() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         _calculate_typecast_arith_sfp_rows_<SRC_FMT, DST_FMT>();
