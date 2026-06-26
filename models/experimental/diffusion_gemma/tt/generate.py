@@ -365,6 +365,20 @@ def _validate_batch_size(batch_size: int) -> None:
         raise ValueError("batch_size must be positive")
 
 
+def _validate_prompt_tokens(prompt_tokens: torch.Tensor) -> None:
+    if prompt_tokens.dim() != 2:
+        raise ValueError("prompt_tokens must have shape [batch, seq_len]")
+
+
+def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -> DeviceGeneration:
+    return DeviceGeneration(
+        generated=torch.zeros((batch_size, 0), dtype=torch.long, device=device),
+        prompt_len=prompt_len,
+        next_pos=prompt_len,
+        trajectories=[],
+    )
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -492,7 +506,14 @@ def generate_from_prompt_tokens(
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
     _validate_logits_fn_args(logits_fn, logits_fn_builder)
+    _validate_prompt_tokens(prompt_tokens)
     init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
+    if num_blocks == 0:
+        return _empty_device_generation(
+            prompt_tokens.shape[0],
+            prompt_tokens.shape[1],
+            device=prompt_tokens.device,
+        )
     prompt_len = prefill_fn(
         tt_model,
         prompt_tokens,

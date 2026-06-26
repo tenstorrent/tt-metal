@@ -340,22 +340,13 @@ def test_generate_from_prompt_tokens_can_build_logits_after_prefill():
 
 
 def test_generate_from_prompt_tokens_allows_zero_blocks_without_logits():
-    calls = []
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
-    generation = G.DeviceGeneration(
-        generated=torch.empty((1, 0), dtype=torch.long),
-        prompt_len=3,
-        next_pos=3,
-        trajectories=[],
-    )
 
     def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
-        calls.append(("prefill", tt_model, tokens))
-        return tokens.shape[1]
+        raise AssertionError("prefill should not run for zero generated blocks")
 
     def fake_blocks(tt_model, logits_fn, **kwargs):
-        calls.append(("blocks", tt_model, logits_fn, kwargs))
-        return generation
+        raise AssertionError("blocks should not run for zero generated blocks")
 
     out = generate_from_prompt_tokens(
         "model",
@@ -367,14 +358,17 @@ def test_generate_from_prompt_tokens_allows_zero_blocks_without_logits():
         blocks_fn=fake_blocks,
     )
 
-    assert out is generation
-    assert calls[0][0] == "prefill"
-    assert calls[1][0:3] == ("blocks", "model", None)
-    assert calls[1][3]["num_blocks"] == 0
+    assert out.prompt_len == 3
+    assert out.next_pos == 3
+    assert out.trajectories == []
+    assert torch.equal(out.generated, torch.empty((1, 0), dtype=torch.long))
 
 
 def test_generate_from_prompt_tokens_zero_blocks_preserves_prompt_batch():
     prompt_tokens = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long)
+
+    def fail_prefill(*args, **kwargs):
+        raise AssertionError("prefill should not run")
 
     out = generate_from_prompt_tokens(
         "model",
@@ -382,12 +376,24 @@ def test_generate_from_prompt_tokens_zero_blocks_preserves_prompt_batch():
         prompt_tokens,
         num_blocks=0,
         config=DiffusionConfig(canvas_length=4),
-        prefill_fn=lambda *args, **kwargs: prompt_tokens.shape[1],
+        prefill_fn=fail_prefill,
     )
 
     assert out.prompt_len == 3
     assert out.next_pos == 3
     assert torch.equal(out.generated, torch.empty((2, 0), dtype=torch.long))
+
+
+def test_generate_from_prompt_tokens_rejects_bad_prompt_shape_before_zero_block_fast_path():
+    with pytest.raises(ValueError, match="prompt_tokens must have shape"):
+        generate_from_prompt_tokens(
+            "model",
+            None,
+            torch.tensor([1, 2, 3], dtype=torch.long),
+            num_blocks=0,
+            config=DiffusionConfig(canvas_length=4),
+            prefill_fn=lambda *args, **kwargs: None,
+        )
 
 
 def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
@@ -550,20 +556,12 @@ def test_generate_text_rejects_max_new_tokens_beyond_block_capacity_before_token
 
 def test_generate_text_allows_zero_blocks_without_init_canvas():
     tokenizer = _FakeChatTokenizer()
-    generation = G.DeviceGeneration(
-        generated=torch.empty((1, 0), dtype=torch.long),
-        prompt_len=3,
-        next_pos=3,
-        trajectories=[],
-    )
 
     def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
-        return tokens.shape[1]
+        raise AssertionError("prefill should not run for zero generated blocks")
 
     def fake_blocks(tt_model, logits_fn, **kwargs):
-        assert kwargs["num_blocks"] == 0
-        assert callable(kwargs["init_canvas_fn"])
-        return generation
+        raise AssertionError("blocks should not run for zero generated blocks")
 
     out = generate_text(
         "model",
@@ -579,6 +577,7 @@ def test_generate_text_allows_zero_blocks_without_init_canvas():
 
     assert out.text == [""]
     assert torch.equal(out.generation.generated, torch.empty((1, 0), dtype=torch.long))
+    assert out.generation.prompt_len == 3
 
 
 def test_generate_text_can_build_logits_after_prompt_prefill():
