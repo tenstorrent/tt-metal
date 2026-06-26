@@ -11,7 +11,6 @@ global_env:
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
   # ttrun does NOT propagate PREFILL_* from the shell -- migration knobs must live here.
-  # (TT_MIGRATION_* vars DO propagate via ttrun's TT_* forwarding, so they stay in cluster_env.sh.)
   PREFILL_ENABLE_MIGRATION: "0"
   # Worker shmem queue names -- must match the running migration_endpoint (see cluster_env.sh).
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
