@@ -853,7 +853,7 @@ def run_chunked_transformer_no_pcc(
         state_dict={},
         num_layers=num_layers,
         seq_len=CHUNK,  # per-chunk size -> MoE/FFN dispatch buffers
-        max_seq_len=SEQ_CACHE,  # KV ring buffer = full cache
+        max_seq_len=SEQ_CACHE_NOPCC,  # KV ring buffer + RoPE cos/sin cache = full no-PCC cache (up to 100k)
         dispatch_buffer_capacity_factor=8,
         num_links=num_links,
         topology=topology,
@@ -874,7 +874,7 @@ def run_chunked_transformer_no_pcc(
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
-        seq_len=SEQ_CACHE,
+        seq_len=SEQ_CACHE_NOPCC,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
