@@ -402,6 +402,8 @@ def generate_blocks(
     HF canvases; the full prompt/tokenizer path will later own default canvas
     creation. This helper owns commit-append and absolute position advancement.
     """
+    if num_blocks < 0:
+        raise ValueError("num_blocks must be non-negative")
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []
     trajectories: list[DenoiseTrajectory] = []
@@ -678,6 +680,8 @@ def generate_text_from_checkpoint_state(
         if max_new_tokens < 0:
             raise ValueError("max_new_tokens must be non-negative")
         num_blocks = (max_new_tokens + config.canvas_length - 1) // config.canvas_length
+    if num_blocks < 0:
+        raise ValueError("num_blocks must be non-negative")
     if vocab_size is None:
         vocab_size = _infer_generation_vocab_size(tokenizer, tt_model)
     if init_canvas_fn is None:

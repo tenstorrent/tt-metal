@@ -165,6 +165,18 @@ def test_generate_blocks_advances_position_and_concatenates_commits():
     ]
 
 
+def test_generate_blocks_rejects_negative_num_blocks():
+    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=-1,
+            config=DiffusionConfig(canvas_length=3),
+            init_canvas_fn=lambda *args: "canvas",
+        )
+
+
 def test_generate_blocks_stops_after_committed_stop_token():
     calls = []
 
@@ -949,6 +961,21 @@ def test_generate_text_from_checkpoint_state_requires_length_budget():
             "tokenizer",
             "hello",
             dg_state_dict={"raw": "state"},
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_generate_text_from_checkpoint_state_rejects_negative_num_blocks():
+    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=-1,
             config=DiffusionConfig(canvas_length=4),
             init_canvas_fn="init",
             logits_fn_builder_factory=lambda *args, **kwargs: "builder",
