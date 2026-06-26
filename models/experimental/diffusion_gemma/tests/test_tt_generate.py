@@ -6,11 +6,25 @@ import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
-from models.experimental.diffusion_gemma.tt.generate import GeneratedBlock, denoise_and_commit_block, generate_blocks
+from models.experimental.diffusion_gemma.tt import generate as G
+from models.experimental.diffusion_gemma.tt.generate import (
+    GeneratedBlock,
+    denoise_and_commit_block,
+    generate_blocks,
+    host_canvas_to_device,
+    make_host_canvas_init_fn,
+)
 
 
 class _FakeLogitsFn:
     q_rope_offset = None
+
+
+class _FakeMesh:
+    shape = (1, 4)
+
+    def get_num_devices(self):
+        return 4
 
 
 def test_denoise_and_commit_block_threads_position_and_commits():
@@ -116,3 +130,49 @@ def test_generate_blocks_advances_position_and_concatenates_commits():
         ("block", "canvas-1", 35, "gumbel-1", "noise-1"),
         ("block", "canvas-2", 38, "gumbel-2", "noise-2"),
     ]
+
+
+def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
+    calls = {}
+
+    class _FakeTtnn:
+        TILE_LAYOUT = "tile"
+        uint32 = "uint32"
+
+        @staticmethod
+        def ReplicateTensorToMesh(mesh_device):
+            return ("replicate", mesh_device)
+
+        @staticmethod
+        def from_torch(value, **kwargs):
+            calls["from_torch"] = (value.clone(), kwargs)
+            return "device-canvas"
+
+    monkeypatch.setattr(G, "ttnn", _FakeTtnn)
+    canvas = torch.tensor([[1, 2, 3]], dtype=torch.long)
+
+    out = host_canvas_to_device(_FakeMesh(), canvas)
+
+    value, kwargs = calls["from_torch"]
+    assert out == "device-canvas"
+    assert value.shape == (1, 1, 3, 1)
+    assert value.dtype == torch.int32
+    assert kwargs["layout"] == "tile"
+    assert kwargs["dtype"] == "uint32"
+    assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
+
+
+def test_make_host_canvas_init_fn_replays_fixed_canvases(monkeypatch):
+    calls = []
+
+    def fake_host_canvas_to_device(mesh_device, canvas):
+        calls.append((mesh_device, canvas.clone()))
+        return f"device-{int(canvas[0, 0])}"
+
+    monkeypatch.setattr(G, "host_canvas_to_device", fake_host_canvas_to_device)
+    init_fn = make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]]), torch.tensor([[6, 7]])])
+
+    assert init_fn(0, 32) == "device-4"
+    assert init_fn(1, 34) == "device-6"
+    assert torch.equal(calls[0][1], torch.tensor([[4, 5]]))
+    assert torch.equal(calls[1][1], torch.tensor([[6, 7]]))

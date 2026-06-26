@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Callable, NamedTuple
 
 import torch
+import ttnn
 
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.experimental.diffusion_gemma.config import DiffusionConfig
@@ -38,6 +39,36 @@ def _deallocate_decode_inputs(device_inputs) -> None:
     for value in device_inputs:
         if value is not None and hasattr(value, "deallocate"):
             value.deallocate(True)
+
+
+def _replicate_mapper(mesh_device):
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
+
+
+def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
+    """Move host canvas token ids ``[batch, canvas_len]`` to W3 device layout."""
+    if canvas_tokens.dim() != 2:
+        raise ValueError("canvas_tokens must have shape [batch, canvas_len]")
+    batch, canvas_len = canvas_tokens.shape
+    return ttnn.from_torch(
+        canvas_tokens.view(batch, 1, canvas_len, 1).to(torch.int32),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=_replicate_mapper(mesh_device),
+    )
+
+
+def make_host_canvas_init_fn(mesh_device, host_canvases):
+    """Create a ``generate_blocks`` init hook from fixed host canvas tensors."""
+    canvases = list(host_canvases)
+
+    def init_canvas_fn(block_idx: int, start_pos: int):
+        del start_pos
+        return host_canvas_to_device(mesh_device, canvases[block_idx])
+
+    return init_canvas_fn
 
 
 def commit_canvas_tokens(
@@ -147,9 +178,9 @@ def generate_blocks(
     """Run the minimal device outer loop for ``num_blocks`` canvases.
 
     ``init_canvas_fn(block_idx, start_pos)`` supplies the initial device canvas
-    for each block. The full prompt/tokenizer path will later own how those
-    canvases are created; this helper owns commit-append and absolute position
-    advancement.
+    for each block. Use ``make_host_canvas_init_fn`` when replaying fixed torch /
+    HF canvases; the full prompt/tokenizer path will later own default canvas
+    creation. This helper owns commit-append and absolute position advancement.
     """
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []
