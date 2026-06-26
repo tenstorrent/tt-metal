@@ -156,6 +156,7 @@ def test_replay_walltime():
     )
     from models.experimental.pi0_5.tt.tt_pipeline._d2d_pipeline import Pipeline
     from models.experimental.pi0_5.tt.tt_pipeline import denoise_block as _db
+    from models.experimental.pi0_5.tt.tt_pipeline.mesh_carve import carve_n_submeshes
 
     _db.DECODE_ALL = _DECODE_ALL  # route projection matmuls through matmul_decode when set
 
@@ -174,6 +175,11 @@ def test_replay_walltime():
     parent = _open_parent(_N_SUBMESHES)
     drv = None
     try:
+        # Carve exactly _N_SUBMESHES 1x1 submeshes and pass them through. Without this,
+        # build_denoise_loop_pipeline falls back to carve_four_submeshes (4-way only), so an
+        # 8-way split binds just 4 of 8 stages -> IndexError in _bind_stage_runtime. The carved
+        # submeshes are closed centrally by _close_parent() (parent.get_submeshes()) in finally.
+        submeshes = carve_n_submeshes(parent, _N_SUBMESHES)
         drv = build_denoise_loop_pipeline(
             ref_blocks,
             fmw,
@@ -191,6 +197,7 @@ def test_replay_walltime():
             num_steps=_N_STEPS,
             action_horizon=ah,
             splits=_SPLITS[_N_SUBMESHES],
+            submeshes=submeshes,
             block_cls=TTNNPi05DenoiseExpertBlock,
             use_concat_kv=True,
             drain=_DRAIN,
