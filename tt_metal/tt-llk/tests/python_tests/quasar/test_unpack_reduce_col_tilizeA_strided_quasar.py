@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import OrderedDict
 from typing import List
 
 import pytest
@@ -30,6 +31,7 @@ from helpers.param_config import (
     compile_time,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -145,22 +147,45 @@ ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS = (
 )
 
 
+def _split_compile_runtime(combinations):
+    """Split combinations into a compile-time key and a runtime-only dimensions axis.
+
+    Compile-time = (fmt, dest_acc, dest_sync, pool_type): POOL_TYPE / REDUCE_DIM are
+    template args of _llk_math_reduce_init_ / _llk_pack_reduce_mask_config_, so pool_type
+    must be baked in. Runtime = dimensions: the strided kernel consumes the dims only as
+    runtime function args and loop bounds (FULL_CT_DIM / BLOCK_*_DIM / TILE_CNT), so they
+    can vary without recompiling. Variants that differ only in dimensions therefore collapse.
+    """
+    compile_combos = OrderedDict()
+    runtime_dims = OrderedDict()
+    for fmt, acc, dest_sync, dimensions, pool_type in combinations:
+        compile_combo = (fmt, acc, dest_sync, pool_type)
+        key = repr(compile_combo)
+        compile_combos.setdefault(key, compile_combo)
+        runtime_dims.setdefault(key, []).append(dimensions)
+    return list(compile_combos.values()), runtime_dims
+
+
+UNPACK_REDUCE_COMPILE_COMBOS, UNPACK_REDUCE_RUNTIME_DIMS = _split_compile_runtime(
+    ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    # input_dimensions is baked into the kernel here (generate_input_dim / TILE_COUNT
-    # live in templates=[...], runtimes=[] is empty), so the whole tuple is compile-time
-    # and there is nothing to collapse.
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=compile_time(
-        ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS
+    formats_dest_acc_sync_pool=compile_time(UNPACK_REDUCE_COMPILE_COMBOS),
+    input_dimensions=runtime(
+        lambda formats_dest_acc_sync_pool: UNPACK_REDUCE_RUNTIME_DIMS[
+            repr(formats_dest_acc_sync_pool)
+        ]
     ),
 )
 def test_unpack_reduce_col_tilizeA_strided_quasar(
-    formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims,
+    formats_dest_acc_sync_pool,
+    input_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
-    (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
-        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
-    )
+    formats, dest_acc, dest_sync_mode, pool_type = formats_dest_acc_sync_pool
 
     num_faces = 4
     reduce_dim = ReduceDimension.Column
@@ -211,16 +236,17 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync_mode),
-            TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
             NUM_FACES(),
         ],
-        runtimes=[],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

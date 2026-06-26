@@ -55,13 +55,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
     constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
-    _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
+    _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, params.FULL_CT_DIM, tensor_shape);
 
-    std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
-    for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+    std::uint32_t y_stride_external = params.FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
+    for (std::uint32_t block_rt = 0; block_rt < params.BLOCK_RT_DIM; block_rt++)
     {
         std::uint32_t offset = block_rt * y_stride_external;
-        for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
+        for (std::uint32_t block_ct = 0; block_ct < params.BLOCK_CT_DIM; block_ct++)
         {
             const std::uint32_t l1_unpack_tilize_idx = offset + block_ct;
             _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0);
@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE);
 
-    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_math_reduce_(i);
     }
@@ -122,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     std::uint32_t const buf_desc_id        = 8;
-    const std::uint32_t num_tiles_per_pack = TILE_CNT;
+    const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
