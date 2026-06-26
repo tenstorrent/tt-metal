@@ -919,11 +919,55 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
         )
         print(f'THRESHOLD IDENTITY SELECT: y=x when |x|>{hi_thr:.6g}, else 0 -> threshold bypass')
 
+# Absolute-value collapse: y = abs(x), recognized from two affine pieces.
+abs_value_macro = ''
+if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and num_segments == 2:
+    cps = degree + 1
+    tol = 1.0e-5
+    segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
+    def _coeff(coeff, idx):
+        return float(coeff[idx]) if len(coeff) > idx else 0.0
+    def _is_affine(coeff, c0, c1):
+        return abs(_coeff(coeff, 0) - c0) <= tol and abs(_coeff(coeff, 1) - c1) <= tol and all(abs(c) <= tol for c in coeff[2:])
+    if _is_affine(segs[0], 0.0, -1.0) and _is_affine(segs[1], 0.0, 1.0) and abs(boundaries[1]) <= tol:
+        abs_value_macro = (
+            '\n// eval_method: abs_value. y=abs(x).\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_ABS_VALUE\n'
+            '#define EVAL_METHOD_ABS_VALUE\n'
+            '#define ABS_VALUE\n'
+        )
+        print('ABS VALUE: y=abs(x) -> sign-clear bypass')
+
+# Soft-threshold collapse: y=sign(x)*(abs(x)-lambda) outside |x|<=lambda.
+threshold_softshift_macro = ''
+if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and not abs_value_macro and num_segments == 3:
+    cps = degree + 1
+    tol = 1.0e-5
+    segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
+    def _coeff(coeff, idx):
+        return float(coeff[idx]) if len(coeff) > idx else 0.0
+    def _is_affine(coeff, c0, c1):
+        return abs(_coeff(coeff, 0) - c0) <= tol and abs(_coeff(coeff, 1) - c1) <= tol and all(abs(c) <= tol for c in coeff[2:])
+    def _is_zero(coeff):
+        return all(abs(c) <= tol for c in coeff)
+    lo_thr = abs(boundaries[1])
+    hi_thr = abs(boundaries[2])
+    if _is_affine(segs[0], lo_thr, 1.0) and _is_zero(segs[1]) and _is_affine(segs[2], -hi_thr, 1.0) and abs(lo_thr - hi_thr) <= tol:
+        threshold_softshift_macro = (
+            '\n// eval_method: threshold_softshift. y=sign(x)*(abs(x)-lambda) outside dead zone.\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_THRESHOLD_SOFTSHIFT\n'
+            '#define EVAL_METHOD_THRESHOLD_SOFTSHIFT\n'
+            '#define THRESHOLD_SOFTSHIFT_SELECT\n'
+            f'#define TT_ACT_THRESHOLD_LAMBDA {clamp(hi_thr):.10e}f\n'
+            '#define THRESHOLD_SOFTSHIFT_LAMBDA TT_ACT_THRESHOLD_LAMBDA\n'
+        )
+        print(f'THRESHOLD SOFTSHIFT: y=sign(x)*(abs(x)-{hi_thr:.6g}) outside dead zone -> threshold bypass')
+
 # Gated affine-product collapse: y = x * clamp(q0 + q1*x, low, high).
 # This captures hardmish/hardswish-like exact piecewise polynomials without
 # naming the op.
 gated_affine_product_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and num_segments == 3:
+if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and not abs_value_macro and not threshold_softshift_macro and num_segments == 3:
     cps = degree + 1
     tol = 1.0e-5
     segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
@@ -1007,8 +1051,11 @@ declared_to_macro = {
     'affine_collapse': affine_macro,
     'clamped_affine': clamped_affine_macro,
     'clamped_affine_collapse': clamped_affine_macro,
+    'abs_value': abs_value_macro,
     'threshold_identity': threshold_select_macro,
     'threshold_identity_select': threshold_select_macro,
+    'threshold_softshift': threshold_softshift_macro,
+    'softshrink_select': threshold_softshift_macro,
     'gated_affine_product': gated_affine_product_macro,
     'gated_quadratic_collapse': gated_affine_product_macro,
     'abs_denominator_rational': abs_den_rational_macro,
@@ -1028,7 +1075,9 @@ has_codegen_eval_method = any(
         rr_macro,
         affine_macro,
         clamped_affine_macro,
+        abs_value_macro,
         threshold_select_macro,
+        threshold_softshift_macro,
         gated_affine_product_macro,
         abs_den_rational_macro,
     )
@@ -1095,7 +1144,7 @@ constexpr std::array<float, LUT_SIZE_FP32> LUT_DATA_FP32 = {{{{
     constexpr auto& LUT_DATA = LUT_DATA_FP32;
     constexpr uint32_t LUT_SIZE = LUT_SIZE_FP32;
 #endif
-{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}{threshold_select_macro}{gated_affine_product_macro}{postcompose_macro}
+{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}{abs_value_macro}{threshold_select_macro}{threshold_softshift_macro}{gated_affine_product_macro}{postcompose_macro}
 #include \"../piecewise_generic.cpp\"
 '''
 

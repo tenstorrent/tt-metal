@@ -2497,6 +2497,22 @@ inline void clamped_affine_collapse_eval() {
 }
 #endif
 
+#if defined(ABS_VALUE)
+// y=abs(x). Exact whole-function lowering for two affine pieces (-x, +x).
+inline void abs_value_eval() {
+#pragma GCC unroll 8
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat y = setsgn(x, 0);
+        y = apply_output_postcompose(y);
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+}
+#endif
+
 #if defined(THRESHOLD_IDENTITY_SELECT)
 // y=x for |x|>lambda, else zero. Equality belongs to zero.
 inline void threshold_identity_select_eval() {
@@ -2507,6 +2523,30 @@ inline void threshold_identity_select_eval() {
         vFloat y = x;
         vFloat ax = setsgn(x, 0);
         v_if(ax <= LAMBDA) { y = 0.0f; }
+        v_endif;
+        y = apply_output_postcompose(y);
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+}
+#endif
+
+#if defined(THRESHOLD_SOFTSHIFT_SELECT)
+// y=sign(x)*(abs(x)-lambda) for |x|>lambda, else zero. Equality belongs to zero.
+inline void threshold_softshift_select_eval() {
+    constexpr float LAMBDA = THRESHOLD_SOFTSHIFT_LAMBDA;
+#pragma GCC unroll 8
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat ax = setsgn(x, 0);
+        vFloat y = 0.0f;
+        v_if(ax > LAMBDA) {
+            y = ax - LAMBDA;
+            v_if(x < 0.0f) { y = -y; }
+            v_endif;
+        }
         v_endif;
         y = apply_output_postcompose(y);
 #ifdef USE_BF16
@@ -2660,9 +2700,15 @@ void kernel_main() {
         // Clamped affine collapse: one SFPMAD plus optional min/max clamps.
         (void)p_lut;
         sfpi::clamped_affine_collapse_eval();
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_ABS_VALUE || defined(ABS_VALUE)
+        (void)p_lut;
+        sfpi::abs_value_eval();
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_THRESHOLD_IDENTITY || defined(THRESHOLD_IDENTITY_SELECT)
         (void)p_lut;
         sfpi::threshold_identity_select_eval();
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_THRESHOLD_SOFTSHIFT || defined(THRESHOLD_SOFTSHIFT_SELECT)
+        (void)p_lut;
+        sfpi::threshold_softshift_select_eval();
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_GATED_AFFINE_PRODUCT || defined(GATED_AFFINE_PRODUCT) || defined(GATED_QUADRATIC_COLLAPSE)
         (void)p_lut;
         sfpi::gated_affine_product_eval();

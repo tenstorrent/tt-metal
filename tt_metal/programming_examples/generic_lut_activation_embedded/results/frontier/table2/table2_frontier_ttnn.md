@@ -5,11 +5,11 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 42. Accuracy match but slower: 9. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
-| abs | poly:s2/d2 | 0.00 | 1.78 | 0.00 | 1.71 | 0.961 | accuracy_match_slow |
+| abs | abs_value:s2/d2 | 0.00 | 1.71 | 0.00 | 1.71 | 1.000 | win_both |
 | acos | rational:s2/d10d3 | 0.06 | 6.47 | 0.00 | 5.74 | 0.887 | loss |
 | acosh | rational:s1/d4d3 | 1.00 | 2.93 | 1.00 | 4.73 | 1.614 | win_both |
 | asin | rational:s1/d8d8 | 0.00 | 3.03 | 0.00 | 5.70 | 1.881 | win_both |
@@ -61,7 +61,7 @@ Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. 
 | sin | trig:s1/d11 | 0.00 | 2.87 | 0.00 | 2.35 | 0.819 | accuracy_match_slow |
 | sinh | rational:s1/d14d2 | 0.00 | 3.03 | 0.00 | 3.25 | 1.073 | win_both |
 | softplus | poly:s2/d9 | 0.12 | 3.29 | 0.12 | 5.31 | 1.614 | win_both |
-| softshrink | poly:s3/d2 | 0.00 | 2.00 | 0.00 | 1.91 | 0.955 | accuracy_match_slow |
+| softshrink | threshold_softshift:s3/d2 | 0.00 | 1.78 | 0.00 | 1.91 | 1.073 | win_both |
 | softsign | abs_denominator_rational:s2/d1d1 | 0.00 | 1.80 | 1.00 | 1.96 | 1.089 | win_both |
 | sqrt | newton_root:s1/d14 | 0.00 | 2.16 | 0.00 | 2.28 | 1.056 | win_both |
 | swish | poly:s2/d12 | 0.25 | 3.85 | 0.25 | 3.10 | 0.805 | accuracy_match_slow |

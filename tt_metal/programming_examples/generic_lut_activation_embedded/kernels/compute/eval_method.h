@@ -43,7 +43,9 @@
  *     identity                    - y = x, no SFPU body.
  *     affine                      - y = a*x + b.
  *     clamped_affine              - y = clamp(a*x + b, lo?, hi?).
+ *     abs_value                   - y = abs(x).
  *     threshold_identity          - y = abs(x)>lambda ? x : 0.
+ *     threshold_softshift         - y = sign(x)*(abs(x)-lambda) outside the dead zone.
  *     gated_affine_product        - y = x * clamp(a*x + b, lo, hi).
  *     abs_denominator_rational    - y = x / (c0 + c1*abs(x)).
  *
@@ -98,6 +100,8 @@
 #define TT_ACT_EVAL_THRESHOLD_IDENTITY 13
 #define TT_ACT_EVAL_GATED_AFFINE_PRODUCT 14
 #define TT_ACT_EVAL_ABS_DENOMINATOR_RATIONAL 15
+#define TT_ACT_EVAL_ABS_VALUE 16
+#define TT_ACT_EVAL_THRESHOLD_SOFTSHIFT 17
 
 #ifndef TT_ACT_EVAL_KIND
 #define TT_ACT_EVAL_KIND 0

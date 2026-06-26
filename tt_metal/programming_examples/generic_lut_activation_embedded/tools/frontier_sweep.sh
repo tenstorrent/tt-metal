@@ -90,7 +90,7 @@ method_of() {
   em="$(grep -aE '^METADATA,eval_method,' "$1" 2>/dev/null | head -1 | cut -d, -f3)"
   rr="$(grep -aE '^METADATA,range_reduction_method,' "$1" 2>/dev/null | head -1 | cut -d, -f3)"
   case "$em" in
-    identity|affine|affine_collapse|clamped_affine|clamped_affine_collapse|threshold_identity|threshold_identity_select|gated_affine_product|gated_quadratic_collapse|abs_denominator_rational|basis)
+    identity|affine|affine_collapse|clamped_affine|clamped_affine_collapse|abs_value|threshold_identity|threshold_identity_select|threshold_softshift|softshrink_select|gated_affine_product|gated_quadratic_collapse|abs_denominator_rational|basis)
       echo "$em"; return ;;
   esac
   if [[ -n "$rr" && "$rr" != "none" ]]; then echo "$rr"
