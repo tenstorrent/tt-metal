@@ -2009,10 +2009,12 @@ class LTXPipeline:
         # eager — T-shard=8 AllGather/halo dominates, audio decode does not scale with chips), so
         # set LTX_VOC_TRACE=0 there.
         self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
-        # BWE/VAE trace default OFF: device-compute-bound at real frame counts, trace-replay
-        # net-negative (mel-VAE 0.86x; BWE 1.74s traced vs 1.17s eager, bh 4x8). LTX_BWE_TRACE=1 /
-        # LTX_VAE_TRACE=1 to force on for short, host-dispatch-bound inputs.
-        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "0") == "1"
+        # BWE trace follows the master LTX_TRACED gate, like every other trace region — no
+        # separate opt-in. On the traced steady-state path replay is net-positive (audio decode
+        # ~0.5s traced vs ~0.9s eager, bh 4x8); it captures at warmup alongside the vocoder.
+        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced
+        # mel-VAE audio-decoder trace stays OFF behind its own flag (LTX_VAE_TRACE=1): the
+        # captured replay is broken, so it is opt-in only and never tied to LTX_TRACED.
         self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "0") == "1"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
