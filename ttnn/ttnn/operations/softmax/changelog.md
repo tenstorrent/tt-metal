@@ -57,3 +57,28 @@
 - **Tests added**:
   - `test_softmax_layout_matrix.py` (40 cases: 2 layouts × 5 shapes × 2 dtypes × 2 dims + 12 L1 memory cases)
   - `test_softmax_refinement2_layout.py` (33 cases: RM basic, multi-core distribution, RM-vs-TILE equivalence, output layout match, numerical stability, L1 memory)
+
+## Refinement 3 — Non-tile-aligned H/W (reduction-axis masking)
+- **Date**: 2026-06-26
+- **What was done**:
+  - Added `w_non_aligned` and `h_non_aligned` to `SUPPORTED["alignment"]`
+  - Fixed Ht/Wt computation to use ceil division `(H + 31) // 32` instead of floor `H // 32` — the old code computed wrong tile counts for non-aligned shapes (e.g. W=50 → Wt=1 instead of 2)
+  - Added `origin_W` and `origin_H` as compile-time args to reader, writer, and compute kernels (indices 4-5 for reader/compute, 3-4 for writer)
+  - Reader: uses `prepare_partial_reduce_scalers<cb, PoolType, ReduceDim, partial>(1.0f)` when the reduction axis is non-tile-aligned, emitting full + partial scaler tile pair (2 tiles); falls back to `prepare_reduce_scaler` (1 tile) when aligned
+  - Compute: passes `ReducePartialScaler::last_tile_at(1)` to all four `reduce<>()` calls (Phase 1 MAX and Phase 3 SUM) when non-aligned; `ReducePartialScaler::none()` when aligned. The scaler CBs are never popped (constants persist across slabs — 2 tiles persist correctly)
+  - Scaler CBs (`cb_scaler_max`, `cb_scaler_sum`) sized for 2 tiles when partial, 1 when aligned
+  - RM path: fixed `row_bytes` from `Wt * tile_size / 32` (tile-padded width) to `origin_W * tile_size / (32*32)` (actual row width in bytes) — the old formula read past page boundaries for non-aligned W
+  - RM path: changed `read_sticks_for_tilize` / `write_sticks_after_untilize` to use `origin_H` (actual H) instead of `Ht * 32` (padded H) for total_num_rows and stick advancement — the old formula read past slab boundaries for non-aligned H
+  - bf8b + non_aligned EXCLUSIONS from Refinement 1 activate correctly (all xfail as expected)
+- **Accuracy achieved**:
+  - fp32 TILE dim=-1 W=50: PCC=0.999999, max_diff=0.000544
+  - fp32 TILE dim=-2 H=50: PCC=0.999999, max_diff=0.000489
+  - fp32 RM dim=-1 W=50: PCC=1.000000, max_diff=0.000548
+  - fp32 RM dim=-2 H=50: PCC=0.999999, max_diff=0.000368
+  - fp32 RM dim=-1 H=50 W=50 (both non-aligned): PCC=1.000000, max_diff=0.000461
+  - bf16 TILE dim=-1 W=50: PCC=0.999998, max_diff=0.000450
+  - All golden test cells with alignment ∈ {w_non_aligned, h_non_aligned} pass
+- **Golden test progress**: 42 → 228 passing (+186 new). All non-aligned cells (fp32/bf16 × TILE/RM × dim=-1/-2) pass. 78 failures remain (all OOM on wide shapes — same as Phase 0, Refinement 5 scope). 802 xfailed (bf8b+non_aligned, fp32_dest_acc_en=False, rank=2/3).
+- **Issues encountered**: None. The partial scaler mechanism from `/partial-scaler-reduce` skill worked perfectly for both MAX and SUM reduces. The `toy_reduce_partial` reference example confirmed the pattern works for MAX with garbage padding and negative values.
+- **Tests added**:
+  - `test_softmax_refinement3_non_aligned.py` (74 cases: w_non_aligned/h_non_aligned/both × TILE/RM × fp32/bf16 × dim=-1/-2 + aligned baselines + negative values + garbage padding masking + bf8b exclusion)

@@ -52,6 +52,17 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr int32_t dim = static_cast<int32_t>(get_compile_time_arg_val(2));
     constexpr uint32_t is_rm = get_compile_time_arg_val(3);
+    constexpr uint32_t origin_W = get_compile_time_arg_val(4);
+    constexpr uint32_t origin_H = get_compile_time_arg_val(5);
+
+    // Partial scaler: needed when the REDUCTION axis is non-tile-aligned.
+    // dim=-1 reduces along W → partial if W % 32 != 0
+    // dim=-2 reduces along H → partial if H % 32 != 0
+    constexpr uint32_t partial_W = origin_W % 32;
+    constexpr uint32_t partial_H = origin_H % 32;
+    constexpr bool has_partial = (dim == -1) ? (partial_W > 0) : (partial_H > 0);
+    constexpr auto partial_scaler = has_partial ? compute_kernel_lib::ReducePartialScaler::last_tile_at(1)
+                                                : compute_kernel_lib::ReducePartialScaler::none();
 
     uint32_t num_slabs = get_arg_val<uint32_t>(0);  // slabs assigned to this core
 
@@ -105,7 +116,12 @@ void kernel_main() {
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop,
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ckl::NoAccumulation,
-                ckl::NoOp>(reduce_block_shape);
+                ckl::NoOp>(
+                reduce_block_shape,
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::NoAccumulation{},
+                ckl::NoOp{},
+                partial_scaler);
 
             // Phase 2: Sub + Exp (fused chain)
             ckl::eltwise_chain(
@@ -138,7 +154,11 @@ void kernel_main() {
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ckl::NoAccumulation,
                 decltype(recip_op)>(
-                reduce_block_shape, ckl::ReduceInputMemoryLayout::contiguous(), ckl::NoAccumulation{}, recip_op);
+                reduce_block_shape,
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::NoAccumulation{},
+                recip_op,
+                partial_scaler);
 
             // Phase 4: Mul (broadcast recip_sum across W columns)
             ckl::mul<
@@ -170,7 +190,12 @@ void kernel_main() {
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop,
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ckl::NoAccumulation,
-                ckl::NoOp>(reduce_block_shape);
+                ckl::NoOp>(
+                reduce_block_shape,
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::NoAccumulation{},
+                ckl::NoOp{},
+                partial_scaler);
 
             // Phase 2: Sub + Exp (fused chain)
             ckl::eltwise_chain(
@@ -203,7 +228,11 @@ void kernel_main() {
                 ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ckl::NoAccumulation,
                 decltype(recip_op)>(
-                reduce_block_shape, ckl::ReduceInputMemoryLayout::contiguous(), ckl::NoAccumulation{}, recip_op);
+                reduce_block_shape,
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::NoAccumulation{},
+                recip_op,
+                partial_scaler);
 
             // Phase 4: Mul (broadcast recip_sum across H rows)
             ckl::mul<

@@ -87,3 +87,24 @@
 {"source":"run_safe_pytest","pid":791632,"started_at_ms":1782430947468,"wait_ms":2,"run_ms":18085,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
 {"source":"run_safe_pytest","pid":791871,"started_at_ms":1782430965564,"wait_ms":2,"run_ms":18070,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
 {"source":"run_safe_pytest","pid":792233,"started_at_ms":1782430992321,"wait_ms":3,"run_ms":18096,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"event": "phase", "phase": "refinement_2", "state": "end", "at_ms": 1782431076520}
+{"event": "phase", "phase": "refinement_2_golden", "state": "start", "at_ms": 1782431076785}
+{"source":"eval_test_runner","pid":794817,"started_at_ms":1782431076788,"wait_ms":3392,"run_ms":225110,"test_path":"eval/golden_tests/softmax/","exit_code":0}
+{"event": "phase", "phase": "refinement_2_golden", "state": "end", "at_ms": 1782431305293}
+{"event": "phase", "phase": "refinement_3", "state": "start", "at_ms": 1782431308831}
+{"source":"run_safe_pytest","pid":822334,"started_at_ms":1782431943160,"wait_ms":2,"run_ms":7834,"test_path":"tests/ttnn/unit_tests/operations/toy_reduce_partial/test_toy_reduce_partial.py","exit_code":1}
+{"source":"run_safe_pytest","pid":822769,"started_at_ms":1782431956423,"wait_ms":3,"run_ms":7213,"test_path":"tests/ttnn/unit_tests/operations/toy_reduce_partial/test_toy_reduce_partial.py","exit_code":0}
+{"source":"tt-probe","pid":825245,"started_at_ms":1782432261020,"wait_ms":175,"run_ms":32018,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":825926,"started_at_ms":1782432308828,"wait_ms":178,"run_ms":22242,"test_path":"softmax","exit_code":0}
+{"source":"run_safe_pytest","pid":826579,"started_at_ms":1782432340125,"wait_ms":2,"run_ms":27337,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax.py","exit_code":0}
+{"source":"run_safe_pytest","pid":828193,"started_at_ms":1782432374727,"wait_ms":2,"run_ms":80728,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement1_dtypes.py","exit_code":0}
+{"source":"run_safe_pytest","pid":832929,"started_at_ms":1782432466315,"wait_ms":3,"run_ms":18784,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":833819,"started_at_ms":1782432489774,"wait_ms":3,"run_ms":8314,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":834148,"started_at_ms":1782432505498,"wait_ms":2,"run_ms":8318,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":834476,"started_at_ms":1782432521006,"wait_ms":2,"run_ms":270306,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":849353,"started_at_ms":1782432798995,"wait_ms":3,"run_ms":40632,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":851819,"started_at_ms":1782432845779,"wait_ms":3,"run_ms":40573,"test_path":"eval/golden_tests/softmax/","exit_code":1}
+{"source":"run_safe_pytest","pid":854302,"started_at_ms":1782432898065,"wait_ms":2,"run_ms":13743,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":854653,"started_at_ms":1782432919447,"wait_ms":3,"run_ms":13733,"test_path":"eval/golden_tests/softmax/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":855112,"started_at_ms":1782432960169,"wait_ms":2,"run_ms":104816,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement3_non_aligned.py","exit_code":0}
+{"source":"run_safe_pytest","pid":861036,"started_at_ms":1782433073019,"wait_ms":3,"run_ms":23188,"test_path":"tests/ttnn/unit_tests/operations/softmax/test_softmax_refinement3_non_aligned.py","exit_code":0}

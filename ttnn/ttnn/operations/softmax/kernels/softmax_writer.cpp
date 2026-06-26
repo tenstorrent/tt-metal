@@ -13,7 +13,7 @@
 //       via write_sticks_after_untilize (always TILE granularity)
 //     - Compute kernel untilizes cb_output_tiles → cb_rm_out
 //
-// CT args: Ht, Wt, is_rm, then TensorAccessorArgs starting at index 3
+// CT args: Ht, Wt, is_rm, origin_W, origin_H, then TensorAccessorArgs starting at index 5
 // RT args: output_buffer_address, start_id, num_slabs
 //   TILE: start_id = starting tile index
 //   RM:   start_id = starting stick (page) index
@@ -38,33 +38,35 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t is_rm = get_compile_time_arg_val(2);
+    constexpr uint32_t origin_W = get_compile_time_arg_val(3);
+    constexpr uint32_t origin_H = get_compile_time_arg_val(4);
 
-    // CT args: 3 scalar, then TensorAccessorArgs
-    constexpr auto dst_args = TensorAccessorArgs<3>();
+    // CT args: 5 scalar, then TensorAccessorArgs
+    constexpr auto dst_args = TensorAccessorArgs<5>();
     const auto dst_accessor = TensorAccessor(dst_args, output_buffer_address);
 
     if constexpr (is_rm) {
         // ===== ROW_MAJOR path: write sticks from cb_rm_out =====
         // write_sticks_after_untilize reads Wt tile-sized pages from cb_rm_out
-        // per tile-row, writes H sticks per call.
-        // For tile-aligned shapes: row_bytes = W * elem_size = Wt * tile_size / 32.
+        // per tile-row, writes origin_H sticks per call.
+        // row_bytes = actual bytes per stick = origin_W * elem_size.
         constexpr uint32_t tile_h = 32;
         const uint32_t tile_size = get_tile_size(cb_rm_out);
-        const uint32_t row_bytes = Wt * tile_size / 32;
+        const uint32_t row_bytes = origin_W * tile_size / (tile_h * tile_h);
 
         // start_id is a stick (page) index in the RM tensor.
-        // Each slab has H = Ht * 32 sticks.
+        // Each slab has origin_H sticks (may be non-tile-aligned).
         uint32_t stick_id = start_id;
 
         for (uint32_t slab = 0; slab < num_slabs; ++slab) {
             dataflow_kernel_lib::write_sticks_after_untilize<cb_rm_out>(
                 dst_accessor,
-                Ht * tile_h,  // total_num_rows = H (all rows at once for the slab)
-                row_bytes,    // bytes per stick
-                stick_id,     // start_page (stick index)
-                0             // byte_offset_within_page
+                origin_H,   // total_num_rows = actual H (handles non-aligned)
+                row_bytes,  // bytes per stick
+                stick_id,   // start_page (stick index)
+                0           // byte_offset_within_page
             );
-            stick_id += Ht * tile_h;  // H sticks per slab
+            stick_id += origin_H;  // advance by actual H sticks
         }
     } else {
         // ===== TILE path: write tiles from cb_output_tiles =====

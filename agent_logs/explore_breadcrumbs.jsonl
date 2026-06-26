@@ -1,1 +1,2 @@
 {"event":"read_eltwise_chain","details":"Analyzed HeldStream+Col wait behavior in eltwise_chain.inl and eltwise_chain.hpp","ts":"2026-06-25T21:41:06+00:00"}
+{"event":"search_complete","details":"Found all requested signatures: reduce_helpers_dataflow.hpp, reduce_helpers_compute.hpp, reduce_helpers_common.hpp, toy_reduce_partial kernels","ts":"2026-06-25T23:53:07+00:00"}

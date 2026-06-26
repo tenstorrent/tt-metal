@@ -46,7 +46,7 @@
 
 **Done when**: all `layout=ROW_MAJOR` cells currently in `xfail_expected` with `dtype ∈ {float32, bfloat16}` (after Refinement 1), `alignment=tile_aligned`, `rank=4`, `fp32_dest_acc_en=True` pass.
 
-### [ ] Refinement 3 — Non-tile-aligned H/W (reduction-axis masking)
+### [x] Refinement 3 — Non-tile-aligned H/W (reduction-axis masking)
 
 **Goal**: add `w_non_aligned` and `h_non_aligned` to `SUPPORTED["alignment"]`. The kernel must mask padded lanes on the **reduction axis** before max and exp — for `dim=-1` with `W % 32 != 0`, the `(32 - W % 32)` trailing lanes in the tail tile of each row must be treated as `-inf` before the max reduction (so `exp(-inf) = 0` and they contribute nothing to `sum_exp`); for `dim=-2` with `H % 32 != 0`, same rule along the column direction. Padded lanes on the non-reduction axis are don't-care (golden checks compare on logical shape via `ttnn.to_torch`).
 

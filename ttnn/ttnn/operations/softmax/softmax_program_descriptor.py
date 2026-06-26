@@ -45,9 +45,21 @@ def create_program_descriptor(
     input_shape = list(input_tensor.shape)
     N, C = input_shape[0], input_shape[1]
     H, W = input_shape[2], input_shape[3]
-    Ht = H // TILE_DIM
-    Wt = W // TILE_DIM
+    # Ceil-division: for non-tile-aligned H/W, the tensor is padded to the next
+    # tile boundary (TILE_LAYOUT) or the tilize helper pads internally (RM).
+    Ht = (H + TILE_DIM - 1) // TILE_DIM
+    Wt = (W + TILE_DIM - 1) // TILE_DIM
     NC = N * C  # number of slabs
+
+    # Partial scaler: needed when the REDUCTION axis is non-tile-aligned.
+    # dim=-1 reduces along W → partial if W % 32 != 0
+    # dim=-2 reduces along H → partial if H % 32 != 0
+    origin_W = W
+    origin_H = H
+    partial_W = W % TILE_DIM
+    partial_H = H % TILE_DIM
+    has_partial = (partial_W > 0) if dim == -1 else (partial_H > 0)
+    num_scaler_tiles = 2 if has_partial else 1
 
     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
 
@@ -115,10 +127,11 @@ def create_program_descriptor(
         )
     )
 
-    # --- cb_scaler_max: 1 page, bf16 ---
+    # --- cb_scaler_max: 1 or 2 pages, bf16 ---
+    # 2 pages when the reduction axis is non-tile-aligned (full + partial scaler).
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=1 * scaler_tile_size,
+            total_size=num_scaler_tiles * scaler_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -130,10 +143,10 @@ def create_program_descriptor(
         )
     )
 
-    # --- cb_scaler_sum: 1 page, bf16 ---
+    # --- cb_scaler_sum: 1 or 2 pages, bf16 ---
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=1 * scaler_tile_size,
+            total_size=num_scaler_tiles * scaler_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -265,8 +278,8 @@ def create_program_descriptor(
     units_per_slab = H if is_rm else tiles_per_slab  # H = Ht * 32 sticks, or Ht*Wt tiles
 
     # --- Reader kernel ---
-    # CT args: Ht, Wt, dim, is_rm (4 scalar), then TensorAccessorArgs
-    reader_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag]
+    # CT args: Ht, Wt, dim, is_rm, origin_W, origin_H (6 scalar), then TensorAccessorArgs
+    reader_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag, origin_W, origin_H]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
@@ -290,8 +303,8 @@ def create_program_descriptor(
     reader_kernel.runtime_args = reader_rt_args
 
     # --- Writer kernel ---
-    # CT args: Ht, Wt, is_rm (3 scalar), then TensorAccessorArgs
-    writer_ct_args = [Ht, Wt, is_rm_flag]
+    # CT args: Ht, Wt, is_rm, origin_W, origin_H (5 scalar), then TensorAccessorArgs
+    writer_ct_args = [Ht, Wt, is_rm_flag, origin_W, origin_H]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_rt_args = ttnn.RuntimeArgs()
@@ -315,8 +328,8 @@ def create_program_descriptor(
     writer_kernel.runtime_args = writer_rt_args
 
     # --- Compute kernel ---
-    # CT args: Ht, Wt, dim, is_rm (4 scalar)
-    compute_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag]
+    # CT args: Ht, Wt, dim, is_rm, origin_W, origin_H (6 scalar)
+    compute_ct_args = [Ht, Wt, dim & 0xFFFFFFFF, is_rm_flag, origin_W, origin_H]
 
     compute_rt_args = ttnn.RuntimeArgs()
     for i, core in enumerate(cores):
