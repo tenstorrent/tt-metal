@@ -137,11 +137,7 @@ void kernel_main() {
     // Phase 2: H-pad rows (corners) from OUTPUT DRAM (after H halo received)
     // =========================================================================
     if (barrier_count > 0) {
-        // Device 2.0 migration: legacy primitive retained: barrier_sem_addr is a GlobalSemaphore address. Semaphore<>
-        // binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
-        // Device 2.0 migration: legacy primitive retained: barrier_sem_addr is a GlobalSemaphore address. Semaphore<>
-        // binds to per-program ids via get_semaphore<>(id), so it cannot wrap a GlobalSemaphore
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
     }
 
@@ -233,9 +229,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
         // Wait for t_count * h_out increments (one per row sent by our W neighbor)
-        // Device 2.0 migration: legacy primitive retained: w_neighbor_sem_addr is a GlobalSemaphore address.
         noc_semaphore_wait_min(w_neighbor_sem_ptr, t_count * h_out);
-        // Device 2.0 migration: legacy primitive retained: w_neighbor_sem_addr is a GlobalSemaphore address.
         noc_semaphore_set(w_neighbor_sem_ptr, 0);
     }
 }
