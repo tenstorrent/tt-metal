@@ -21,6 +21,13 @@ pytestmark = [
     pytest.mark.use_module_device,
 ]
 
+DIST_NUM_SAMPLES = 4096
+# Fixed-seed QB2 toy-vocab smoke margin for the regenerated-noise workarounds:
+# observed max_top1_freq_error is ~0.03 at N=4096, so 0.05 catches large RNG
+# regressions without pretending to validate the production 262144-vocab regime.
+DIST_MAX_TOP1_FREQ_ERROR = 0.05
+DIST_MAX_MEAN_KL = 0.05
+
 
 def _to_device(device, value, *, dtype=ttnn.float32):
     return ttnn.from_torch(value, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -64,10 +71,9 @@ def test_canvas_sample_consumes_regenerated_device_noise(device):
 
 
 def test_canvas_sample_chunked_regenerated_noise_distribution(device):
-    # N=4096 keeps 32-way categorical frequency error below 0.05 with fixed
-    # device seeds. The vocab-chunked path is intentionally slow and diagnostic:
-    # it proves the sampler distribution when the regenerated noise is iid enough.
-    num_samples = 4096
+    # The vocab-chunked path is intentionally slow and diagnostic: it proves the
+    # sampler distribution when the regenerated noise is iid enough.
+    num_samples = DIST_NUM_SAMPLES
     length = 32
     vocab_size = 32
     temperature = 0.7
@@ -88,14 +94,14 @@ def test_canvas_sample_chunked_regenerated_noise_distribution(device):
         f"\n[canvas sampling chunked dist] N={num_samples} max_top1_freq_error={max_top1_freq_error:.4f} "
         f"mean_kl={mean_kl:.4f}"
     )
-    assert max_top1_freq_error < 0.05
-    assert mean_kl < 0.05
+    assert max_top1_freq_error < DIST_MAX_TOP1_FREQ_ERROR
+    assert mean_kl < DIST_MAX_MEAN_KL
 
 
 def test_canvas_sample_permuted_vocab_regenerated_noise_distribution(device):
     # One ttnn.rand call is still used, but vocab is generated as the outer axis
     # and permuted back to avoid the known innermost-vocab correlation.
-    num_samples = 4096
+    num_samples = DIST_NUM_SAMPLES
     length = 32
     vocab_size = 32
     temperature = 0.7
@@ -111,14 +117,14 @@ def test_canvas_sample_permuted_vocab_regenerated_noise_distribution(device):
         f"\n[canvas sampling permuted-vocab dist] N={num_samples} "
         f"max_top1_freq_error={max_top1_freq_error:.4f} mean_kl={mean_kl:.4f}"
     )
-    assert max_top1_freq_error < 0.05
-    assert mean_kl < 0.05
+    assert max_top1_freq_error < DIST_MAX_TOP1_FREQ_ERROR
+    assert mean_kl < DIST_MAX_MEAN_KL
 
 
 def test_canvas_sample_from_params_chunked_regenerated_noise_distribution(device):
     # Covers the vLLM seam's seed-regenerated path without using the known-biased
     # single-call ttnn.rand noise over the whole vocab axis.
-    num_samples = 4096
+    num_samples = DIST_NUM_SAMPLES
     length = 32
     vocab_size = 32
     temperature = 0.7
@@ -141,12 +147,12 @@ def test_canvas_sample_from_params_chunked_regenerated_noise_distribution(device
         f"\n[canvas sampling params chunked dist] N={num_samples} "
         f"max_top1_freq_error={max_top1_freq_error:.4f} mean_kl={mean_kl:.4f}"
     )
-    assert max_top1_freq_error < 0.05
-    assert mean_kl < 0.05
+    assert max_top1_freq_error < DIST_MAX_TOP1_FREQ_ERROR
+    assert mean_kl < DIST_MAX_MEAN_KL
 
 
 def test_canvas_sample_from_params_permuted_vocab_regenerated_noise_distribution(device):
-    num_samples = 4096
+    num_samples = DIST_NUM_SAMPLES
     length = 32
     vocab_size = 32
     temperature = 0.7
@@ -167,8 +173,8 @@ def test_canvas_sample_from_params_permuted_vocab_regenerated_noise_distribution
         f"\n[canvas sampling params permuted-vocab dist] N={num_samples} "
         f"max_top1_freq_error={max_top1_freq_error:.4f} mean_kl={mean_kl:.4f}"
     )
-    assert max_top1_freq_error < 0.05
-    assert mean_kl < 0.05
+    assert max_top1_freq_error < DIST_MAX_TOP1_FREQ_ERROR
+    assert mean_kl < DIST_MAX_MEAN_KL
 
 
 @pytest.mark.xfail(
@@ -179,7 +185,7 @@ def test_canvas_sample_from_params_permuted_vocab_regenerated_noise_distribution
     strict=True,
 )
 def test_canvas_sample_regenerated_noise_distribution(device):
-    num_samples = 4096
+    num_samples = DIST_NUM_SAMPLES
     length = 32
     vocab_size = 32
     temperature = 0.7
@@ -195,5 +201,5 @@ def test_canvas_sample_regenerated_noise_distribution(device):
         f"\n[canvas sampling dist] N={num_samples} max_top1_freq_error={max_top1_freq_error:.4f} "
         f"mean_kl={mean_kl:.4f}"
     )
-    assert max_top1_freq_error < 0.05
-    assert mean_kl < 0.05
+    assert max_top1_freq_error < DIST_MAX_TOP1_FREQ_ERROR
+    assert mean_kl < DIST_MAX_MEAN_KL
