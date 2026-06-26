@@ -48,7 +48,8 @@ void sigmoid(uint32_t cb_in_scores_id, uint32_t cb_sigmoid_scores_id, uint32_t w
     }
 }
 
-void add_bias(uint32_t cb_sigmoid_scores_id, uint32_t cb_in_bias_id, uint32_t cb_biased_scores_id, uint32_t width_tiles) {
+void add_bias(
+    uint32_t cb_sigmoid_scores_id, uint32_t cb_in_bias_id, uint32_t cb_biased_scores_id, uint32_t width_tiles) {
     CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
@@ -203,8 +204,7 @@ void topk_group_scores(
     cb_sorted_group_order.push_back(1);
 }
 
-void transpose_and_pack(
-    const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
+void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     CircularBuffer input_cb(input_cb_index);
     CircularBuffer output_cb(output_cb_index);
     reconfig_data_format_srca(input_cb_index);
@@ -371,9 +371,7 @@ void normalize_scores(
 }
 
 void scale(
-    const uint32_t cb_normalized_scores_id,
-    const uint32_t cb_route_scale_scalar_id,
-    const uint32_t cb_out_weights_id) {
+    const uint32_t cb_normalized_scores_id, const uint32_t cb_route_scale_scalar_id, const uint32_t cb_out_weights_id) {
     CircularBuffer cb_normalized_scores(cb_normalized_scores_id);
     CircularBuffer cb_route_scale_scalar(cb_route_scale_scalar_id);
     CircularBuffer cb_out_weights(cb_out_weights_id);

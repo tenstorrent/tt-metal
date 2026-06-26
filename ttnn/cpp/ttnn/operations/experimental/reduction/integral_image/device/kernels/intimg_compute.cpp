@@ -36,9 +36,9 @@ struct IntImgComputeCTAs {
     const uint32_t cumsum_stage_1_cb;
     const uint32_t cumsum_stage_2_cb;
     const uint32_t output_cb;
-    const uint32_t axis_2_buffer_cb;  // covers entire propagation
-    const uint32_t axis_3_buffer_cb;  // each tile is spawned from broadcasting the last row of
-                                           // upper block across all rows of a given tile using `add_bcast_rows`.
+    const uint32_t axis_2_buffer_cb;    // covers entire propagation
+    const uint32_t axis_3_buffer_cb;    // each tile is spawned from broadcasting the last row of
+                                        // upper block across all rows of a given tile using `add_bcast_rows`.
 
     const uint32_t tile_height;
     const uint32_t tile_width;
@@ -139,8 +139,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
     acc_cb.pop_front(ONE_TILE);
 }
 
-FORCE_INLINE void cumsum_cube_axis_3(
-    uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth) {
+FORCE_INLINE void cumsum_cube_axis_3(uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth) {
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard read_cumsum_guard{cb_cumsum_stage_wip, ONE_TILE};
         WriteCBGuard cumsum_output_write_guard{cb_cumsum_output, ONE_TILE};
@@ -198,10 +197,7 @@ FORCE_INLINE void propagate_tile_into_cube(
 }
 
 FORCE_INLINE void get_and_propagate_adder_cube(
-    uint32_t cb_cumsum_stage_X,
-    uint32_t cb_axis_3_buffer_read,
-    uint32_t cb_output,
-    uint32_t block_depth) {
+    uint32_t cb_cumsum_stage_X, uint32_t cb_axis_3_buffer_read, uint32_t cb_output, uint32_t block_depth) {
     // there is the necessity to receive a block
 
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
@@ -231,8 +227,7 @@ template <typename ctas_t>
 FORCE_INLINE void perform_intimg_along_row_chunk(
     const ctas_t& ctas, uint32_t num_blocks_in_row, uint32_t rows_block_i) {
     for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {  // go along a row
-        const uint32_t block_depth =
-            std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
+        const uint32_t block_depth = std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
         const bool save_last_tile_after_cumsum_cube_axis_2 = (column_block_i == 0) && (num_blocks_in_row > 1);
         const bool save_last_tile_after_tile_into_cube_propagation =
             (column_block_i > 0) && (column_block_i != (num_blocks_in_row - 1));

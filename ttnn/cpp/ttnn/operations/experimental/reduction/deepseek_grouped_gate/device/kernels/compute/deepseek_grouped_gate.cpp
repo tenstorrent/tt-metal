@@ -18,6 +18,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+
 namespace blocks {
 void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
     CircularBuffer cb_scores(cb_in_scores);
@@ -46,11 +47,7 @@ void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_t
     }
 }
 
-void add_bias(
-    uint32_t cb_sigmoid_scores,
-    uint32_t cb_in_bias,
-    uint32_t cb_biased_scores,
-    uint32_t width_tiles) {
+void add_bias(uint32_t cb_sigmoid_scores, uint32_t cb_in_bias, uint32_t cb_biased_scores, uint32_t width_tiles) {
     CircularBuffer cb_sigmoid(cb_sigmoid_scores);
     CircularBuffer cb_bias(cb_in_bias);
     CircularBuffer cb_biased(cb_biased_scores);
@@ -137,9 +134,7 @@ void process_and_sort_tiles(
 }
 
 void sum_top_experts_per_group(
-    const uint32_t cb_top_experts_per_group,
-    const uint32_t cb_group_summed_scores,
-    uint32_t summed_experts_per_group) {
+    const uint32_t cb_top_experts_per_group, const uint32_t cb_group_summed_scores, uint32_t summed_experts_per_group) {
     CircularBuffer cb_top_experts(cb_top_experts_per_group);
     CircularBuffer cb_group_summed(cb_group_summed_scores);
     // sum the top experts_per_group rows for each group
@@ -207,8 +202,7 @@ void topk_group_scores(
     cb_sorted_order.push_back(1);
 }
 
-void transpose_and_pack(
-    const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
+void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     CircularBuffer cb_input(input_cb_index);
     CircularBuffer cb_output(output_cb_index);
     reconfig_data_format_srca(input_cb_index);
@@ -373,10 +367,7 @@ void normalize_scores() {
     cb_normalized.push_back(1);
 }
 
-void scale(
-    const uint32_t cb_normalized_scores,
-    const uint32_t cb_route_scale_scalar,
-    const uint32_t cb_out_weights) {
+void scale(const uint32_t cb_normalized_scores, const uint32_t cb_route_scale_scalar, const uint32_t cb_out_weights) {
     CircularBuffer cb_normalized(cb_normalized_scores);
     CircularBuffer cb_route_scale(cb_route_scale_scalar);
     CircularBuffer cb_out(cb_out_weights);
@@ -413,8 +404,7 @@ void kernel_main() {
     constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
     constexpr uint32_t bias_page_size = get_named_compile_time_arg_val("bias_page_size");
     constexpr uint32_t cb_sorted_group_scores = get_named_compile_time_arg_val("cb_sorted_group_scores");
-    constexpr uint32_t cb_sorted_expert_indices_temp =
-        get_named_compile_time_arg_val("cb_sorted_expert_indices_temp");
+    constexpr uint32_t cb_sorted_expert_indices_temp = get_named_compile_time_arg_val("cb_sorted_expert_indices_temp");
     constexpr uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
     constexpr uint32_t cb_winning_group_scores = get_named_compile_time_arg_val("cb_winning_group_scores");
     constexpr uint32_t cb_winning_group_indices = get_named_compile_time_arg_val("cb_winning_group_indices");
