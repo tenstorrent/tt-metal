@@ -36,17 +36,16 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
     TT_FATAL(
-        a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::BFLOAT8_B || a.dtype() == DataType::FLOAT32,
-        "Input tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32, got: {}",
+        a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::BFLOAT8_B,
+        "Input tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     TT_FATAL(stats.layout() == Layout::TILE, "Stats tensor must have TILE layout, got: {}", stats.layout());
     TT_FATAL(
-        stats.dtype() == DataType::BFLOAT16 || stats.dtype() == DataType::BFLOAT8_B ||
-            stats.dtype() == DataType::FLOAT32,
-        "Stats tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32, got: {}",
+        stats.dtype() == DataType::BFLOAT16 || stats.dtype() == DataType::BFLOAT8_B,
+        "Stats tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
         stats.dtype());
     TT_FATAL(stats.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(stats.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -94,10 +93,6 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor height must equal tile height ({}), got: {}",
                 tile_height,
                 gamma_tensor.padded_shape()[-2]);
-            TT_FATAL(
-                gamma_tensor.dtype() == DataType::BFLOAT16 || gamma_tensor.dtype() == DataType::FLOAT32,
-                "Gamma tensor must be BFLOAT16 or FLOAT32, got: {}",
-                gamma_tensor.dtype());
         } else {
             TT_FATAL(
                 gamma_tensor.layout() == Layout::ROW_MAJOR,
@@ -116,8 +111,8 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma_tensor.device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
-                gamma_tensor.dtype() == DataType::BFLOAT16 || gamma_tensor.dtype() == DataType::FLOAT32,
-                "Gamma tensor must be BFLOAT16 or FLOAT32, got: {}",
+                gamma_tensor.dtype() == DataType::BFLOAT16,
+                "Gamma tensor must be BFLOAT16, got: {}",
                 gamma_tensor.dtype());
         }
     }
@@ -142,10 +137,6 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "Beta tensor height must equal tile height ({}), got: {}",
                 tile_height,
                 beta_tensor.padded_shape()[-2]);
-            TT_FATAL(
-                beta_tensor.dtype() == DataType::BFLOAT16 || beta_tensor.dtype() == DataType::FLOAT32,
-                "Beta tensor must be BFLOAT16 or FLOAT32, got: {}",
-                beta_tensor.dtype());
         } else {
             TT_FATAL(
                 beta_tensor.layout() == Layout::ROW_MAJOR,
@@ -164,8 +155,8 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 beta_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
             TT_FATAL(
-                beta_tensor.dtype() == DataType::BFLOAT16 || beta_tensor.dtype() == DataType::FLOAT32,
-                "Beta tensor must be BFLOAT16 or FLOAT32, got: {}",
+                beta_tensor.dtype() == DataType::BFLOAT16,
+                "Beta tensor must be BFLOAT16, got: {}",
                 beta_tensor.dtype());
         }
     }
