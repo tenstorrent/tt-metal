@@ -27,7 +27,7 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
@@ -163,6 +163,16 @@ $(BUILD)/profrelay.elf: $(BUILD)/entry.o $(BUILD)/profrelay.o $(LD_SCRIPT) | too
 $(BUILD)/profrelay.bin: $(BUILD)/profrelay.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "profrelay.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/profcons.o: src/profcons.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/profcons.elf: $(BUILD)/entry.o $(BUILD)/profcons.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/profcons.o
+
+$(BUILD)/profcons.bin: $(BUILD)/profcons.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "profcons.bin: $$(wc -c < $@) bytes"
 
 $(BUILD):
 	mkdir -p $@
