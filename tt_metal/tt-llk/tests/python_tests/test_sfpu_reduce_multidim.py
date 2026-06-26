@@ -14,9 +14,12 @@ This configuration is what exposed the Int32 MAX regression analysed in
 trusting state established by the shared init. The single-axis ``test_sfpu_reduce`` suite only
 exercises one path per init and therefore could not catch it.
 
-Pool coverage is MAX and SUM only: the kernel's ``REDUCE_ROW`` path supports SUM and MAX (MIN/AVG
-are column-only, see ``ckernel_sfpu_reduce.h::calculate_reduce`` static_assert), so a MIN/AVG
-column-then-row chain is not expressible at the LLK API level.
+Pool coverage is MAX, SUM and MIN: the kernel's ``REDUCE_ROW`` path now supports SUM/MAX/MIN for all
+formats (and AVG for float formats), so a MAX/SUM/MIN column-then-row chain is expressible at the LLK
+API level. MIN in particular exercises the same shared-init hazard as MAX: the row stage re-establishes
+the SFPSWAP comparator direction (SFPCONFIG bit 8) rather than trusting whatever a preceding column
+calculate left there. AVG is excluded here because an avg-of-avgs chain is not a meaningful multi-axis
+reduction.
 """
 
 import pytest
@@ -51,7 +54,7 @@ from helpers.utils import passed_test
 ROW_TILE_COUNTS = [2, 4]
 
 # Pools whose REDUCE_ROW path exists in the kernel (so a column-then-row chain is valid).
-MULTIDIM_POOLS = [ReducePool.Max, ReducePool.Sum]
+MULTIDIM_POOLS = [ReducePool.Max, ReducePool.Sum, ReducePool.Min]
 
 # Formats exercised. Int32 is the regression target (its column path flips the SFPSWAP-direction
 # config and uses two's-complement); the others are baselines that should pass on both buggy and
@@ -88,6 +91,8 @@ def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
         return flat.max()
     if reduce_pool == ReducePool.Sum:
         return flat.sum()
+    if reduce_pool == ReducePool.Min:
+        return flat.min()
     raise ValueError(f"Unsupported multi-dim reduce pool: {reduce_pool}")
 
 

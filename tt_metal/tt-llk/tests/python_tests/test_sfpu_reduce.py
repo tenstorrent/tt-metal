@@ -66,10 +66,19 @@ def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]
     return [(-1000, 1000), (0, 1000), (-1000, 0)]
 
 
-def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
-    # Row reduce (REDUCE_ROW) is only implemented in the kernel for SUM and MAX
-    # (see ckernel_sfpu_reduce.h::calculate_reduce static_assert); MIN/AVG are column-only.
-    if reduce_pool in (ReducePool.Sum, ReducePool.Max):
+def get_supported_reduce_axioms(
+    reduce_pool: ReducePool, formats: InputOutputFormat
+) -> list[MathOperation]:
+    # Row reduce (REDUCE_ROW) supports SUM/MAX/MIN for every format and AVG for float formats only
+    # (the row AVG divisor is the runtime column count, which only the float reciprocal-multiply
+    # divides exactly; integer AVG stays column-only). See ckernel_sfpu_reduce.h::calculate_reduce.
+    if reduce_pool in (ReducePool.Sum, ReducePool.Max, ReducePool.Min):
+        return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
+    if reduce_pool == ReducePool.Average and formats.input_format in (
+        DataFormat.Float32,
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+    ):
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
     return [MathOperation.ReduceColumn]
 
@@ -301,14 +310,14 @@ def test_sfpu_reduce(
 
     if (
         mathop == MathOperation.ReduceRow
-        and reduce_pool == ReducePool.Max
+        and reduce_pool in (ReducePool.Max, ReducePool.Min)
         and formats.input_format == DataFormat.UInt16
     ):
         pytest.skip(
-            reason="UInt16 row MAX is unsupported by the kernel: without a 32-bit dest it loads with "
-            "LO16 (rejected by the row-MAX static_assert), and with a 32-bit dest it routes through "
-            "the INT32 sign-magnitude row path, which does not mask UInt16's high bits and returns "
-            "garbage. Column UInt16 MAX (the ttnn-exercised path) is still covered."
+            reason="UInt16 row MAX/MIN is unsupported by the kernel: without a 32-bit dest it loads "
+            "with LO16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
+            "through the INT32 sign-magnitude row path, which does not mask UInt16's high bits and "
+            "returns garbage. Column UInt16 MAX/MIN (the ttnn-exercised path) is still covered."
         )
 
     if (
