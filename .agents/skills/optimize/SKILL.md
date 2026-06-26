@@ -287,6 +287,14 @@ When reporting or comparing decode attention, list logical user batch, tile-padd
 
 If an optimized decoder candidate changes logical batch from the target workload, the stage is not optimized for that target, even if PCC passes and the matmul rows look good. Such a run can be kept only as a separate throughput-scaling experiment, clearly labeled with active batch and excluded from single-user decoder signoff.
 
+### OPT-006: Sign off cumulative optimized contracts, not isolated wins
+
+Optimized decoder work is cumulative. Before a new focused experiment, write the strongest prior correct candidate's required contracts: projection topology, weight dtypes and math fidelity by tensor group, KV-cache dtype/layout, logical batch and tile padding, attention program config, residual/norm memory layout, dominant matmul geometry, and known required layout transitions. The new candidate must preserve those contracts unless the experiment is explicitly testing one of them.
+
+A focused experiment may vary one contract to answer a local question, but it is not an optimized-decoder signoff if it regresses another previously validated material contract. For example, fixing SDPA while losing MLP precision, fixing MLP geometry while changing logical batch, or fixing logical batch while reverting attention weights to BF16 are local evidence, not final optimized evidence. Either integrate the old and new contracts in one candidate and remeasure, or record the conflict as a blocker with exact rows.
+
+The final report for an optimized decoder must include a cumulative contract table: packed/fused projections and head path, attention weight dtype/fidelity, KV-cache dtype/layout, logical active batch versus tile-padded rows, SDPA/FlashDecode config and row, residual/norm layout and norm rows, MLP/expert dtype/fidelity and geometry rows, total device time, op-to-op gap, correctness, and any intentional deviations. Use the strongest cumulative correct candidate as the baseline for the next step, not the latest focused run that happened to pass its local target.
+
 ## Matmul Choices
 
 - Decode matmuls with small activations and large weights are usually DRAM-bound. Use `ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`.
