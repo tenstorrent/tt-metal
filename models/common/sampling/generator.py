@@ -634,6 +634,9 @@ class SeedManager:
         # True only for the most recent get_new_values() call when at least
         # one active slot used an explicit request seed.
         self._active_request_seed = False
+        # Last non-identity slot remap applied, used to ignore a steady-state
+        # remap that is (incorrectly) re-emitted verbatim every decode step.
+        self._last_applied_remap = None
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
         if tt_sampling._sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
@@ -782,13 +785,32 @@ class SeedManager:
         no-ops. Only non-identity entries trigger a move.
         """
         if not self._seed_active:
+            self._last_applied_remap = None
             return
-        moves = [(int(remap[i]), i) for i in range(len(remap)) if int(remap[i]) != i]
+        remap_key = tuple(int(remap[i]) for i in range(len(remap)))
+        moves = [(remap_key[i], i) for i in range(len(remap_key)) if remap_key[i] != i]
         if not moves:
+            # Identity: nothing moved. Clear the dedupe guard so a later genuine
+            # condense with the same shape is still applied.
+            self._last_applied_remap = None
             _log_sampling_debug(
                 self._sampling_debug_enabled, "SeedManager slot remap identity", seed_active=self._seed_active
             )
             return
+        # A genuine condense emits a one-shot delta: vLLM pops the remap and
+        # resets it to identity, so the next step is identity. A non-identity
+        # remap repeated verbatim on consecutive steps is a steady-state
+        # replication/layout map, not a condense — re-applying it every token
+        # would keep relabelling slots and corrupt per-user RNG state. Apply it
+        # once and ignore the verbatim repeats.
+        if remap_key == self._last_applied_remap:
+            _log_sampling_debug(
+                self._sampling_debug_enabled,
+                "SeedManager slot remap skipped repeat",
+                seed_active=self._seed_active,
+            )
+            return
+        self._last_applied_remap = remap_key
         # Snapshot the state we're about to overwrite.
         _log_sampling_debug(
             self._sampling_debug_enabled,
@@ -799,8 +821,6 @@ class SeedManager:
         old_seeds = list(self.seeds)
         old_counters = list(self.seed_counters)
         old_rngs = list(self.rngs)
-        moved_sources = {old_slot for old_slot, _ in moves}
-        moved_destinations = {new_slot for _, new_slot in moves}
         for old_slot, new_slot in moves:
             self.seeds[new_slot] = old_seeds[old_slot]
             self.seed_counters[new_slot] = old_counters[old_slot]
@@ -808,9 +828,12 @@ class SeedManager:
             # independent object so the old slot reference does not alias
             # the new one.
             self.rngs[new_slot] = copy.copy(old_rngs[old_slot])
-        for old_slot in moved_sources - moved_destinations:
-            self.seeds[old_slot] = None
-            self.seed_counters[old_slot] = 0
+        # NOTE: deliberately do not clear "moved source" slots to None here.
+        # A source that was genuinely vacated by a condense is harmless to leave
+        # populated (an inactive slot is pushed MAX_UINT32/SKIP and is never read
+        # back, and a reused slot is reset via reset_seed). Clearing was unsafe
+        # because a replication map lists real, still-active requests as sources;
+        # zeroing them dropped reproducible seeds and broke determinism.
         self._seed_active = any(s is not None for s in self.seeds)
         _log_sampling_debug(
             self._sampling_debug_enabled,
