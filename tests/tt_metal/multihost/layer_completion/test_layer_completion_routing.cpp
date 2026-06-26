@@ -32,7 +32,7 @@ constexpr uint32_t kLayersPerRank = 16;  // each rank emits this many completion
 // All blocks tile [0, world*kLayersPerRank) densely. The master router
 // must inject exactly world*kLayersPerRank completions, in order.
 TEST(LayerCompletionRoutingMPI, AllRanksRouteToMasterInOrder) {
-    const auto ctx = mh::DistributedContext::get_current_world();
+    const auto& ctx = mh::DistributedContext::get_current_world();
     const int rank = *ctx->rank();
     const int world = *ctx->size();
     ASSERT_GE(world, 2) << "run with mpirun -np >=2";

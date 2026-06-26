@@ -153,7 +153,7 @@ void LayerCompletionRouter::run_master() {
 }
 
 void LayerCompletionRouter::run_subordinate() {
-    const mh::ContextPtr ctx = mh::DistributedContext::get_current_world();
+    const mh::ContextPtr& ctx = mh::DistributedContext::get_current_world();
     auto send_blocking = [&](const LayerCompletionMessage& msg) {
         std::array<std::byte, sizeof(msg)> buf{};
         std::memcpy(buf.data(), &msg, sizeof(msg));

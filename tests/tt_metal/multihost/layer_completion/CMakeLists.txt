@@ -2,7 +2,8 @@ add_library(multi_host_layer_completion OBJECT)
 add_library(TT::Metalium::Test::Distributed::MultihostLayerCompletion ALIAS multi_host_layer_completion)
 TT_ENABLE_UNITY_BUILD(multi_host_layer_completion)
 
-set(LAYER_COMPLETION_DIR ${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill)
+# Shared layer-completion impl source list (LAYER_COMPLETION_IMPL_SRCS / LAYER_COMPLETION_DIR).
+include(${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill/sources.cmake)
 target_sources(
     multi_host_layer_completion
     PRIVATE
@@ -10,9 +11,7 @@ target_sources(
         test_layer_completion_routing.cpp
         # layer-completion impls live with the pipelined-prefill feature; compile them in so this
         # MPI routing test links without the feature's standalone .so.
-        ${LAYER_COMPLETION_DIR}/layer_completion_queue.cpp
-        ${LAYER_COMPLETION_DIR}/layer_completion_reorder_buffer.cpp
-        ${LAYER_COMPLETION_DIR}/layer_completion_router.cpp
+        ${LAYER_COMPLETION_IMPL_SRCS}
 )
 
 target_include_directories(
