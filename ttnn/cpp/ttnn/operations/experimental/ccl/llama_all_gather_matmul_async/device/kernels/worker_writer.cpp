@@ -136,7 +136,6 @@ void kernel_main() {
         cb0.wait_front(num_tiles_to_read_this_core);
         size_t l1_read_addr = cb0.get_read_ptr();
 
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;

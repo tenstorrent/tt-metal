@@ -33,7 +33,6 @@ FORCE_INLINE void read_data_from_remote_core(
     cb.reserve_back(num_pages_per_block);
     auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
     auto l1_write_addr = cb.get_write_ptr();
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     noc_async_read(remote_read_addr, l1_write_addr, block_size);
     noc_obj.async_read_barrier();
     cb.push_back(num_pages_per_block);

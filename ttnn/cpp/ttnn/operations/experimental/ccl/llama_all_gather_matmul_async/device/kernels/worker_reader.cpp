@@ -42,7 +42,6 @@ void kernel_main() {
     uint32_t intermediate_first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     uint32_t ring_index = get_arg_val<uint32_t>(arg_idx++);
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -105,7 +104,6 @@ void kernel_main() {
     // notify local receiver core
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();

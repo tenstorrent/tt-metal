@@ -64,7 +64,6 @@ void kernel_main() {
     constexpr uint32_t other_devices = num_devices - 1;
 
     // Runtime arguments
-    // Device 2.0 migration: legacy primitive retained: receiver_semaphore_address is a GlobalSemaphore address.
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     Semaphore<> local_sem(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);

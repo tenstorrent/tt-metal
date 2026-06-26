@@ -79,7 +79,6 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
                 cb0.reserve_back(1);
                 auto l1_write_addr = cb0.get_write_ptr();
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                 noc_async_read<whole_packet_size>(noc_read_addr, l1_write_addr, whole_packet_size);
                 noc_read_addr += whole_packet_size;
                 noc_obj.async_read_barrier();
@@ -88,7 +87,6 @@ void kernel_main() {
             if constexpr (partial_packet_size > 0) {
                 cb0.reserve_back(1);
                 auto l1_write_addr = cb0.get_write_ptr();
-                // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                 noc_async_read<partial_packet_size>(noc_read_addr, l1_write_addr, partial_packet_size);
                 noc_obj.async_read_barrier();
                 cb0.push_back(1);
