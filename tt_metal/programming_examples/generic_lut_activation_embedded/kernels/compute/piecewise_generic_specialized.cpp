@@ -1137,10 +1137,15 @@ inline void piecewise_generic_lut_dispatch(const std::array<float, LUT_SIZE>& lu
 #if defined(EVAL_METHOD_REDUCED_POLY)
     piecewise_generic_lut_specialized_N<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
 #elif defined(BASIS_INPUT_ABS_X)
-    // signed_abs/odd_factored basis keeps abs(x), original-sign postprocess,
-    // and optional clamp/mul temporaries live. The dual path crosses SFPI's
-    // reload limit even at low degree with adaptive-degree metadata.
-    piecewise_generic_lut_specialized_N<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
+    // signed_abs/odd_factored/affine-even basis keeps abs(x), original-sign
+    // postprocess, and optional clamp/mul temporaries live. The compact
+    // one-segment basis kernels fit dual-eval and recover the ILP win; larger
+    // cascades stay on single-eval because they can trip SFPI reload spills.
+    if constexpr (NUM_SEGMENTS == 1 && POLY_DEGREE <= 8) {
+        piecewise_generic_lut_specialized_N_dual<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
+    } else {
+        piecewise_generic_lut_specialized_N<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
+    }
 #elif defined(POLY_PARITY_ODD) || defined(POLY_PARITY_EVEN)
     // Parity x²-Horner threads x² through BOTH dual lanes; at higher degree the combined
     // live-register count overflows the SFPU register file and crashes GCC's reload pass
