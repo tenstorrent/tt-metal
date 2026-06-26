@@ -16,7 +16,7 @@ This file is the **single source of truth** for the branch (the former `STATUS.m
 
 ## Where we are (2026-06-26)
 
-Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus three of the four device pieces are validated **in isolation**: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA ≤32768 (W2a/#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
+Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus the device attention/KV/sampling pieces are validated: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA — **both** ≤32768 (W2a) **and** the long-prompt >32768 path (W2b, resolved via the maskless reframe — no new kernel) (#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
 
 **Nothing runs end-to-end.** There is no callable — device, or even CPU-against-real-weights — that takes a prompt string and returns text. The validated halves (the full 26B backbone ↔ the device denoise loop) have **never been joined**: no device commit-append, no per-block position advancement, no full-model + self-conditioning assembly from the real checkpoint, no tokenizer/text I/O, and no end-to-end acceptance test.
 
@@ -47,9 +47,10 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 
 **Phase 0 — Foundation** ✅ done — torch reference + PCC harness (#47468 ✅ closed), causal backbone PCC (#47461 ✅), QB2 memory fit (#47487).
 
-**Phase 1 — Device pieces (W1–W4)** — three done, one blocked:
+**Phase 1 — Device pieces (W1–W4)** — built; one blocked:
 - W1 KV-phase machine ✅ (#47474) — residual: bounded-sliding commit-append wrap correctness still unverified (test is non-discriminating).
 - W2a bidirectional masked SDPA, prompt+canvas ≤ 32768 ✅ (#47462).
+- W2b long-prompt (>32768) attention ✅ via the maskless reframe (D1, no new kernel) — SDPA op + RoPE reachability + integrated tiny-model denoise pass PCC≥0.99 through **262144** for **both** full and sliding layers, wired into the BH QuietBox2 pipeline (`tests/pipeline_reorg/blackhole_e2e_tests.yaml`). Residual: integration is a tiny config (hidden=128, head_dim=32); real-26B denoise integration is #47464 (#47462).
 - W4 on-device canvas sampling ✅ (#47472) — residual: SAMP-3 mesh-mapper `TT_FATAL` (latent), regenerated-noise unvalidated at production vocab.
 - W3 decode-loop control flow ✅ built & validated on synthetic logits, 🔴 blocked on #48291 (#47463).
 
@@ -203,7 +204,7 @@ not exist yet, and W2/W3 can't run correctly without it.
 
 ---
 
-## W2 — #47462 bidirectional canvas attention (integration)  ✅ W2a · 🔴 W2b
+## W2 — #47462 bidirectional canvas attention (integration)  ✅ W2a · ✅ W2b (maskless reframe, no new kernel)
 
 **State:** mask geometry reference (`reference/attention_mask.py`, 8 tests) ✅ and an
 **isolated** non-causal SDPA spike (`test_device_bidirectional_sdpa.py`, 4/4) ✅ are done.
@@ -256,8 +257,8 @@ every layer type.
   `test_device_windowed_mask_path` driving `local_window=True` purely to prove the ttnn
   SDPA masked path handles a windowed mask. Clearly label it non-canonical.
 
-### W2b — long-prompt masked chunking, prompt + canvas > 32768  🔴 SEPARATE HIGH-RISK BLOCKER
-> 📋 **Detailed spike-first plan: [`DEVICE_LOOP_W2B.md`](./DEVICE_LOOP_W2B.md).** Source investigation reframed this: the denoise attention is a `[256 × (P+C)]` *all-attend rectangle* (no mask, no causal logic), and the maskless non-causal SDPA path already exists — so W2b may be **near-zero kernel work** (lift the `prefill.py:180-181` guard), pending one gating spike (**S1**: does the existing op return correct results at `[256 × >32768]`?). If S1 fails, fall to host K-chunking or a paged kernel. See the W2b plan for the full decision tree.
+### W2b — long-prompt masked attention, prompt + canvas > 32768  ✅ RESOLVED via the maskless reframe (no new kernel)
+> 📋 **Detailed spike-first plan + status: [`DEVICE_LOOP_W2B.md`](./DEVICE_LOOP_W2B.md).** Outcome: the gating spike **S1 PASSED** — the existing maskless non-causal SDPA returns correct results (PCC≥0.99 vs an independent fp32 oracle) at `[256 × Sk]` up to **262144**, so the original "new kernel" framing was wrong. W2b reduced to **D1**: re-key the `prefill.py` `long_seq` guard against K-length + run maskless (`is_causal=False`, no mask, no `sliding_window_size`). SDPA op, RoPE reachability, and integrated tiny-model denoise (both full & sliding layers) all pass through 262144, wired into the BH QuietBox2 pipeline. Real-26B denoise integration is #47464. **The original framing below is superseded** (kept for the source map / decision history).
 
 **Do NOT bundle this into W2a acceptance.** The existing gemma4 chunked-prefill long-context
 path is **causal-only** (`operations.py:25-29`, `prefill.py:106-130`) and `attn_mask` is
