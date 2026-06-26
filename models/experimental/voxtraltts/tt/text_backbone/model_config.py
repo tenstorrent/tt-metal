@@ -1275,6 +1275,29 @@ class ModelArgs:
                         num_cores=self.mlp_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
+            # FF1/FF3 prefill at the 512-token bucket (512x3072x2304, BF16 x BF16 => BF16, HiFi4
+            # on BH P150x4) is FLOP-bound (~85% util). The production (8,8) grid uses 64 cores;
+            # M=512 (16 tiles) and N=2304 (72 tiles) let an (11,8) grid use 88 cores (11 is the
+            # device's max usable columns). A trace-based device-time sweep found grid (11,8) +
+            # in0_block_w=12 runs ~87us vs ~106us for the production config -> ~1.22x, PCC 0.9999,
+            # no L1 OOM. (More rows, e.g. (11,10)/110 cores, do not help: M is only 16 tiles, so
+            # 8 rows at per_core_M=2 already cover it. Activation L1-width-sharding is rejected by
+            # the 2D-mcast matmul, and L1 vs DRAM in0 makes no difference for this FLOP-bound op.)
+            # See tests/perf/test_ff1_3_prefill_512_trace_sweep_p150.py.
+            if (
+                is_blackhole()
+                and not self.is_galaxy
+                and self.dim == 3072
+                and (self.hidden_dim // self.cluster_shape[1]) == 2304
+                and min(seq_len, self.prefill_len_cutoff) == 512
+            ):
+                return self.matmul_config(
+                    m=512,
+                    k=self.dim // self.cluster_shape[0],
+                    n=self.hidden_dim // self.cluster_shape[1],
+                    grid_size=(11, 8),
+                    in0_block_w=12,
+                )
             return self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
@@ -1499,10 +1522,14 @@ class ModelArgs:
         # SPDA limitation: chunk_start_idx must be a multiple of q_chunk_size
         # Here (x & -x) is the highest power of 2 that divides x.
         # When chunk_start_idx=0, we use default values since 0 is a multiple of any number.
+        # q_chunk sweep (q[1,8,128,128] kv[1,2,128,128], BH P150x4, HiFi4): with only 8
+        # local q-heads, q_chunk_size=32 yields more parallel q-chunks than 64 -> ~16.6us vs
+        # ~19.7us (1.18x), pcc 0.9999, exact (no exp_approx). Only the <=128 bucket was swept,
+        # so larger prefill chunks stay at 64. See tests/perf/test_sdpa_prefill_sweep_p150.py.
         q_chunk = (
             256
             if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
-            else 64
+            else (32 if seq_len <= 128 else 64)
             if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
             else min(256, chunk_start_idx & -chunk_start_idx)
             if seq_len >= 2048
@@ -1969,6 +1996,14 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            # WO prefill at the 128-token bucket (128x1024x3072, BFP8 x BF16 => BFP8, HiFi4 on
+            # BH P150x4) is a small matmul: M=128 is only 4 tiles tall, so any explicit 2D-mcast
+            # config can light up at most 4 grid rows x 8 cols = 32 cores. A hardware sweep found
+            # that letting ttnn auto-select the program config (return None) runs ~28.6us vs ~35us
+            # for the hand-rolled matmul_config -> ~1.22x, same PCC (0.9999), no L1 OOM.
+            # See tests/perf/test_wo_prefill_matmul_sweep_p150.py.
+            if is_blackhole() and self.dim == 3072 and dram_sharded_wo and min(seq_len, 1024) <= 128:
+                return None
             return self.matmul_config(
                 m=min(seq_len, 1024),
                 k=k_dim,
