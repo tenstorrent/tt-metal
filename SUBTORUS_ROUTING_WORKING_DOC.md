@@ -1,6 +1,6 @@
 # Sub-torus Routing — Working Doc
 
-**Branch:** `agupta/subtorus-routing`  ·  **Status:** stages 0–5 GREEN (8×4 single-process + 32×4 multi-rank)
+**Branch:** `agupta/subtorus-routing`  ·  **Status:** GREEN (8×4 single-process + 32×4 multi-rank)
 
 Goal: **skip-link ("sub-torus") routing** — extra intra-mesh links that let packets jump `step`-wide
 blocks along an axis, layered on a base torus. Declared by **pattern** in the mesh-graph descriptor,
@@ -16,14 +16,14 @@ eth channels.
 
 ---
 
-## 1. Status — stages 0–5 complete
+## 1. Status — complete
 
-| Stage | File(s) | Work | State |
+| Area | File(s) | Work | State |
 |---|---|---|---|
-| 0–3 | proto + `mesh_graph_descriptor.cpp` + `mesh_graph.cpp` | `skip_links` message/field; parse + expand pattern; fold into `intra_mesh_connectivity_` as `Z` `RouterEdge`s | **GREEN** |
+| proto + expansion | proto + `mesh_graph_descriptor.cpp` + `mesh_graph.cpp` | `skip_links` message/field; parse + expand pattern; fold into `intra_mesh_connectivity_` as `Z` `RouterEdge`s | **GREEN** |
 | validation | `mesh_graph_descriptor.cpp` | legacy validator already passes `skip_links` (only `express_connections` rejected) — no change needed | **GREEN** |
-| 4 | `routing_table_generator.cpp` | route *over* skip links (strict-shorter policy) | **GREEN** |
-| 5 | `control_plane.cpp` | plane/egress lowering for intra `Z` channels | **GREEN** (8×4 + 32×4) |
+| routing | `routing_table_generator.cpp` | route *over* skip links (strict-shorter policy) | **GREEN** |
+| lowering | `control_plane.cpp` | plane/egress lowering for intra `Z` channels | **GREEN** (8×4 + 32×4) |
 
 ### Verified results
 - **8×4 single-process (CPU-only mock cluster):** logical expansion (4 `Z` edges for `[LINE,RING]`),
@@ -66,7 +66,7 @@ Blackhole inter-mesh-on-galaxy path. Using it for skip links:
 Assigned in `mesh_graph.cpp` (both ends of each bidirectional skip edge). Open: multiple skip families
 (ROW + COLUMN) would currently share the single `Z` bucket — revisit if that needs separating.
 
-## 4. Stage-4 routing policy (LOCKED)
+## 4. Routing policy (LOCKED)
 
 **Emit `Z` first-hop iff the skip-inclusive shortest path is STRICTLY shorter than base-ring-only;
 equal-length stays on the base ring.** Distributed/per-hop (each chip independently picks its first
@@ -81,8 +81,11 @@ Skip-free meshes are unaffected (`skip_dist==base_dist` defers to ring).
 ## 5. Test harness (CPU-only / mock cluster)
 
 `RoutingTableGenerator` needs a `TopologyMapper` (→ `tt::Cluster` + PSD). Run deviceless from artifacts:
-- **Mock cluster:** `TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_8x4_bh_galaxy_cluster_desc.yaml` — a captured
-  UMD `ClusterDescriptor` (this env var + plumbing is pre-existing on main; only our *usage* is new).
+- **Mock cluster:** `TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_cluster_desc/SC20_32x4_revC_subtorus_aisleC_cluster_desc_bh-glx-110-c07u08.yaml`
+  — a UMD `ClusterDescriptor` from the `tt-cluster-descriptors` submodule (the canonical home since #47402;
+  `set_mock_cluster_desc` resolves bare filenames there). 8×4 uses `single_bh_galaxy`; the 32×4 multi-rank
+  case uses the `SC4_32x4_revC_subtorus_aisleC` mapping. (Our own captured fixtures were removed once the
+  MGDs were shown to embed onto these.)
 - **PSD derived, not captured:** `run_physical_system_discovery` builds it CPU-only (`run_live=false`).
 - **No-discovery `TopologyMapper`** with an **identity** `FabricNodeId→ChipId` map (inert to intra-mesh
   routing, which reads only MeshGraph geometry). Avoids the discovery ctor, which would reject `Z` edges
@@ -96,12 +99,11 @@ Skip-free meshes are unaffected (`skip_dist==base_dist` defers to ring).
 ### Tests
 | Test | Suite / file | Covers |
 |---|---|---|
-| `SkipLinks8x4` | `MeshGraphDescriptorTests` · `test_mesh_graph_descriptor.cpp` | stage 0–3 logical expansion (8×4, shared descriptor) |
-| `SkipLinks32x4` | `MeshGraphDescriptorTests` · `test_mesh_graph_descriptor.cpp` | stage 0–3 logical expansion (32×4, shared descriptor) |
-| `IntraMesh8x4Replay` | `SkipLinkRouting` · `test_routing_tables.cpp` | stage 4 skip-aware routing |
-| `MockHarness8x4KnownRouting` | `SkipLinkRouting` · `test_routing_tables.cpp` | harness sanity vs known XY routing |
-| `PhysicalLowering8x4` | `ControlPlaneFixture` · `test_routing_tables.cpp` | stage 5 lowering, 8×4 |
-| `PhysicalLowering32x4` | `ControlPlaneFixture` · `test_routing_tables.cpp` | stage 5 lowering, 32×4 multi-rank |
+| `SkipLinks8x4` | `MeshGraphDescriptorTests` · `test_mesh_graph_descriptor.cpp` | logical expansion (8×4, shared descriptor) |
+| `SkipLinks32x4` | `MeshGraphDescriptorTests` · `test_mesh_graph_descriptor.cpp` | logical expansion (32×4, shared descriptor) |
+| `IntraMesh8x4Replay` | `SkipLinkRouting` · `test_routing_tables.cpp` | skip-aware routing |
+| `PhysicalLowering8x4` | `ControlPlaneFixture` · `test_routing_tables.cpp` | physical lowering, 8×4 |
+| `PhysicalLowering32x4` | `ControlPlaneFixture` · `test_routing_tables.cpp` | physical lowering, 32×4 multi-rank |
 
 ---
 
@@ -113,7 +115,7 @@ Skip-free meshes are unaffected (`skip_dist==base_dist` defers to ring).
 
 **Single-process (CPU-only, logical + 8×4 lowering):**
 ```bash
-TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_8x4_bh_galaxy_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 \
+TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_cluster_desc/SC20_32x4_revC_subtorus_aisleC_cluster_desc_bh-glx-110-c07u08.yaml TT_METAL_SLOW_DISPATCH_MODE=1 \
   ./build_Release/test/tt_metal/tt_fabric/fabric_unit_tests \
   --gtest_filter='MeshGraphDescriptorTests.SkipLinks8x4:MeshGraphDescriptorTests.SkipLinks32x4:SkipLinkRouting.*:ControlPlaneFixture.PhysicalLowering8x4'
 ```
@@ -121,7 +123,7 @@ TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_des
 **32×4 multi-rank (`tt-run`, 4 local ranks):**
 ```bash
 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
-  --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_32x4_bh_galaxy_cluster_desc_mapping.yaml \
+  --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml \
   --rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/skip_links_32x4_rank_bindings.yaml \
   --mpi-args "--allow-run-as-root" \
   ./build_Release/test/tt_metal/tt_fabric/fabric_unit_tests \
