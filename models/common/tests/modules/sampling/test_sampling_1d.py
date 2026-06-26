@@ -1052,7 +1052,20 @@ def test_topk_allgather_isolation(ttnn_mesh_device, vocab_size):
         pytest.param(152064, id="v152064-qwen25"),
     ],
 )
-def test_ttnn_sampling_isolation(ttnn_mesh_device, vocab_size):
+@pytest.mark.parametrize(
+    "logit_mode",
+    [
+        # #48222: randn(±4) is NARROW and only ever yields bf16 tie-breaks (true=0). Real decode
+        # logits are wide-range and peaked. "wide" scales the dynamic range; "peaked" gives each
+        # row one clearly-dominant winner (mimics a confident greedy step like the real
+        # "This image" -> wrong-token failure). TRUE mismatches here = ttnn.sampling mis-picks on
+        # realistic logits despite being clean on randn.
+        pytest.param("randn", id="randn"),
+        pytest.param("wide", id="wide"),
+        pytest.param("peaked", id="peaked"),
+    ],
+)
+def test_ttnn_sampling_isolation(ttnn_mesh_device, vocab_size, logit_mode):
     """
     Hypothesis 2: does ttnn.sampling introduce mismatches at k=1, p=0.0, temp=1.0?
 
@@ -1090,7 +1103,22 @@ def test_ttnn_sampling_isolation(ttnn_mesh_device, vocab_size):
 
     # ---- Step A: topk + all_gather (confirmed correct, 0 mismatches) --------
 
-    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    # #48222: logit distribution matters. randn(±4) is narrow (only bf16 tie-breaks).
+    if logit_mode == "randn":
+        logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    elif logit_mode == "wide":
+        # Wide dynamic range, closer to real decode logits.
+        logits_host = (torch.randn(1, 1, B, vocab_size) * 20.0).to(torch.bfloat16)
+    elif logit_mode == "peaked":
+        # One clearly-dominant winner per row (confident greedy step). The argmax is unambiguous;
+        # if ttnn.sampling returns any other token that's a hard mis-pick, not a tie-break.
+        base = torch.randn(1, 1, B, vocab_size)
+        winners = torch.randint(0, vocab_size, (B,))
+        for b in range(B):
+            base[0, 0, b, winners[b]] = 25.0
+        logits_host = base.to(torch.bfloat16)
+    else:
+        raise ValueError(f"unknown logit_mode {logit_mode}")
 
     shard_dims = (None, -1) if cluster_shape[-1] >= cluster_shape[-2] else (-1, None)
     logits_tt = ttnn.from_torch(
@@ -1232,7 +1260,7 @@ def test_ttnn_sampling_isolation(ttnn_mesh_device, vocab_size):
         tokens_host.long(),
         bf16_expected,
         logits_bf16,
-        test_label=f"ttnn.sampling isolation (V={vocab_size}, mesh={cluster_shape})",
+        test_label=f"ttnn.sampling isolation (V={vocab_size}, mesh={cluster_shape}, logits={logit_mode})",
     )
 
 
