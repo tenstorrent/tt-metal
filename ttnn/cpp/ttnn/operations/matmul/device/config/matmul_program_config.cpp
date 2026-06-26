@@ -995,8 +995,9 @@ MatmulProgramConfig get_program_config(
     }
     TT_FATAL(
         !input_tensor_a.device()->mesh_command_queue().trace_id().has_value(),
-        "ttnn.matmul without a program_config is not trace-safe. Pass a program config to use matmul inside trace "
-        "capture.");
+        "ttnn.matmul without a program_config is not trace-safe: it queries live device L1 space to auto-select "
+        "blocking parameters, which can cause non-deterministic program cache misses during trace capture. "
+        "Pass a MatmulProgramConfig (e.g. MatmulMultiCoreReuseProgramConfig) to use matmul inside trace capture.");
     auto config = generate_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
