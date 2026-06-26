@@ -53,11 +53,19 @@ void kernel_main() {
     constexpr uint32_t coordinator_noc_y = get_compile_time_arg_val(13);
     constexpr uint32_t in1_cb_index = get_compile_time_arg_val(14);   // this core's sharded B slice
     constexpr uint32_t in1_num_tiles = get_compile_time_arg_val(15);  // tiles of B resident on this core
+    // reshard_input path: when set, senders NoC-read their K-slice of the INTERLEAVED A buffer into
+    // in0_cb before the multicast gather (folding the caller's to_memory_config reshard into the op).
+    constexpr uint32_t read_interleaved = get_compile_time_arg_val(16);
+    constexpr uint32_t in0_M_tiles = get_compile_time_arg_val(17);           // A height in tiles
+    constexpr uint32_t in0_K_tiles_per_core = get_compile_time_arg_val(18);  // this sender's K-slice width (tiles)
+    constexpr uint32_t in0_K_tiles_total = get_compile_time_arg_val(19);     // global A width in tiles (page stride)
+    constexpr auto in0_args = TensorAccessorArgs<20>();
 
     // ---- Runtime args ----
     const uint32_t is_sender = get_arg_val<uint32_t>(0);       // 1 if this core holds a slice of A
     const uint32_t sender_id = get_arg_val<uint32_t>(1);       // K-slice index (valid when is_sender)
     const uint32_t is_coordinator = get_arg_val<uint32_t>(2);  // 1 if this is the first core
+    const uint32_t in0_buffer_addr = get_arg_val<uint32_t>(3);  // interleaved A base addr (read_interleaved only)
 
     constexpr uint32_t full_num_tiles = num_senders * shard_num_tiles;
     const uint32_t shard_size_bytes = shard_num_tiles * tile_size_bytes;
@@ -78,6 +86,25 @@ void kernel_main() {
     // B (in1) is already resident in L1; just publish it to compute.
     in1_cb.reserve_back(in1_num_tiles);
     in1_cb.push_back(in1_num_tiles);
+
+    // reshard_input: this sender NoC-reads its K-slice of the interleaved A into in0_cb in the SAME
+    // m-major contiguous order the buffer-backed shard used (shard is [M_tiles*th, in0_K_tiles_per_core],
+    // tiles m-major), so the downstream multicast (which reads in0_cb's read_ptr) sees identical bytes.
+    if (read_interleaved && is_sender) {
+        const auto in0_acc = TensorAccessor(in0_args, in0_buffer_addr, tile_size_bytes);
+        in0_cb.reserve_back(shard_num_tiles);
+        uint32_t l1_write_addr = in0_cb.get_write_ptr();
+        const uint32_t k_base = sender_id * in0_K_tiles_per_core;
+        for (uint32_t m = 0; m < in0_M_tiles; ++m) {
+            for (uint32_t kk = 0; kk < in0_K_tiles_per_core; ++kk) {
+                const uint32_t page = m * in0_K_tiles_total + k_base + kk;
+                noc_async_read_tile(page, in0_acc, l1_write_addr);
+                l1_write_addr += tile_size_bytes;
+            }
+        }
+        noc_async_read_barrier();
+        in0_cb.push_back(shard_num_tiles);
+    }
 
     // Reserve space for the whole A matrix; multicast writes land directly here.
     full_in0_cb.reserve_back(full_num_tiles);

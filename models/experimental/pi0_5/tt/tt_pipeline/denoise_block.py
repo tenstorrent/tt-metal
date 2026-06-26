@@ -274,7 +274,6 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if not DECODE_ALL:
             return super().forward(x)
-        s = x.shape[-2]
         # adaRMS norm already emitted width-sharded (== _ws_in_mc); consume x directly, no I2S.
         # x (== the block's `normed`) is owned + freed by the block forward.
         gate = ttnn.matmul_decode(
@@ -286,12 +285,17 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
             fused_gelu_approx=True,
         )
         up = ttnn.matmul_decode(x, self.up_b, partial_width_sharded=True, compute_kernel_config=_LOFI)
-        hid = ttnn.multiply(gate, up, memory_config=gate.memory_config())
-        hid2 = ttnn.to_memory_config(hid, _ws_in_mc(self.device, s, hid.shape[-1]))
+        hid = ttnn.multiply(gate, up, memory_config=_L1)
         out = ttnn.matmul_decode(
-            hid2, self.down_b, partial_width_sharded=True, compute_kernel_config=_LOFI, interleaved_output=True
+            hid,
+            self.down_b,
+            partial_width_sharded=True,
+            reshard_input=True,
+            reshard_cores=_RESHARD_CORES,
+            compute_kernel_config=_LOFI,
+            interleaved_output=True,
         )
-        for t in (gate, up, hid, hid2):
+        for t in (gate, up, hid):
             ttnn.deallocate(t)
         return out
 
