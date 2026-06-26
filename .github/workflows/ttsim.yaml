@@ -153,7 +153,7 @@ jobs:
     env:
       TTNN_TESTS_YAML: |
         tests/pipeline_reorg/ttnn-tests.yaml
-        tests/pipeline_reorg/ttnn_merge_gate_tests.yaml
+        tests/pipeline_reorg/ttnn_smoke_merge_gate_tests.yaml
     outputs:
       ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
     steps:

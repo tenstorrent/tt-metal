@@ -159,6 +159,7 @@ jobs:
 
       - name: Run examples
         id: test
+        working-directory: ${{ github.workspace }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           PRODUCT: ${{ inputs.product }}
