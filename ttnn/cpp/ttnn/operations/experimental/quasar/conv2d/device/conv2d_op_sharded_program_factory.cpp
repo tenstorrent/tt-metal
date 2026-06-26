@@ -1017,7 +1017,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         if (!is_conv_1d_depthwise_conv && block_sharded) {
             return "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                    "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2_metal2.cpp";
-        } else if (is_conv_1d_depthwise_conv) {
+        } if (is_conv_1d_depthwise_conv) {
             return "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                    "reader_depthwise_conv1d_metal2.cpp";
         }
