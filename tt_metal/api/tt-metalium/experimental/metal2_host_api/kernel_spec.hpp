@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -160,8 +161,18 @@ struct KernelSpec {
     };
     Group<TensorBinding> tensor_bindings;
 
+    // Scratchpad bindings
+    // Declares that this kernel uses a scratchpad resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via Scratchpad(scratch::<accessor_name>)
+    // A scratchpad is private to one kernel: each ScratchpadSpec is bound by exactly one
+    // ScratchpadBinding across the whole ProgramSpec.
+    struct ScratchpadBinding {
+        ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
+        std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
+    };
+    Group<ScratchpadBinding> scratchpad_bindings;
+
     // Additional resource binding types:
-    //  - Scratchpad bindings (Program-local memory resource)
     //  - Buffer bindings (User-managed memory resource)
     //  - GlobalSemaphore bindings (User-managed resource)
     //  - GlobalDataflowBuffer bindings (User-managed resource)
@@ -218,6 +229,7 @@ using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 //------------------------------------------------
 // Convenience factories for DFBBinding
