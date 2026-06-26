@@ -13,7 +13,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
-
 NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 
 
@@ -140,11 +139,28 @@ def test_multi_device_multi_trace(mesh_device, shape, use_all_gather, enable_mul
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
     weight_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
 
+    # ttnn.matmul without a program_config queries live device L1 to auto-select blocking, which is not
+    # trace-safe. The matmuls below are square, batched (lhs @ replicated [.., N, N] weight), so build an
+    # explicit reuse config: the grid parallelizes over the batch dimension, and one core computes each
+    # batch's full M x N output (per_core_N == Nt, per_core_M == Mt, in0_block_w == 1 to fit L1).
+    batch = shape[0] * shape[1]
+    Mt, Nt = shape[-2] // 32, shape[-1] // 32
+    matmul_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(batch, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=Mt,
+        per_core_N=Nt,
+    )
+
     # Op chains to be traced
     def run_op_chain(input_0, input_1, weight):
-        single_dev_output = ttnn.neg(
-            ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1))
-        ) @ ttnn.silu(weight)
+        single_dev_output = ttnn.matmul(
+            ttnn.neg(ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1))),
+            ttnn.silu(weight),
+            program_config=matmul_program_config,
+        )
         if use_all_gather:
             # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             assert False, "Legacy ccl call removed until new implementation is done"
@@ -152,7 +168,11 @@ def test_multi_device_multi_trace(mesh_device, shape, use_all_gather, enable_mul
         return single_dev_output
 
     def run_op_chain_1(input_0, input_1, weight):
-        single_dev_output = ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight)) @ ttnn.softmax(weight, dim=1)
+        single_dev_output = ttnn.matmul(
+            ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight)),
+            ttnn.softmax(weight, dim=1),
+            program_config=matmul_program_config,
+        )
         if use_all_gather:
             # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             assert False, "Legacy ccl call removed until new implementation is done"
@@ -160,7 +180,11 @@ def test_multi_device_multi_trace(mesh_device, shape, use_all_gather, enable_mul
         return single_dev_output
 
     def run_op_chain_2(input_0, input_1, weight):
-        single_dev_output = ttnn.neg(ttnn.mul(input_0, input_1)) @ ttnn.gelu(weight)
+        single_dev_output = ttnn.matmul(
+            ttnn.neg(ttnn.mul(input_0, input_1)),
+            ttnn.gelu(weight),
+            program_config=matmul_program_config,
+        )
         if use_all_gather:
             # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
             assert False, "Legacy ccl call removed until new implementation is done"

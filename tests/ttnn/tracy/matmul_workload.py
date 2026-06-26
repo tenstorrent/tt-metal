@@ -28,6 +28,35 @@ import torch
 
 import ttnn
 
+# ttnn.matmul with only core_grid (and no program_config) routes through the auto-config path, which
+# queries live device L1 to pick blocking parameters. That is not trace-safe, so build explicit configs
+# for the 1024x1024x1024 matmuls below. These reproduce the config the auto path selects in a clean L1
+# state (MatmulMultiCoreReuseMultiCast with in0_block_w=4): the output is bit-identical to core_grid=...
+MATMUL_PROGRAM_CONFIG_8x8 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    in0_block_w=4,
+    out_subblock_h=2,
+    out_subblock_w=2,
+    out_block_h=4,
+    out_block_w=4,
+    per_core_M=4,
+    per_core_N=4,
+    transpose_mcast=False,
+    fused_activation=None,
+)
+MATMUL_PROGRAM_CONFIG_1x1 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(1, 1),
+    in0_block_w=4,
+    out_subblock_h=2,
+    out_subblock_w=2,
+    out_block_h=4,
+    out_block_w=4,
+    per_core_M=32,
+    per_core_N=32,
+    transpose_mcast=False,
+    fused_activation=None,
+)
+
 
 def _make_tensors(device, single_core: bool):
     torch.manual_seed(0)
@@ -96,17 +125,17 @@ def main():
         if mode == "simple":
             a, b = _make_tensors(device, single_core=False)
             for _ in range(10):
-                ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+                ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
             ttnn.synchronize_device(device)
         else:  # trace
             a, b = _make_tensors(device, single_core=True)
             # Warm-up so binaries are loaded before trace capture.
-            ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+            ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_1x1)
             ttnn.synchronize_device(device)
 
             tid = ttnn.begin_trace_capture(device, cq_id=0)
             for _ in range(50):
-                ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+                ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_1x1)
             ttnn.end_trace_capture(device, tid, cq_id=0)
 
             for _ in range(10):

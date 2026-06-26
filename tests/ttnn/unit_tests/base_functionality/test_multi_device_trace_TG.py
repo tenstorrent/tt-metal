@@ -122,17 +122,42 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_multi_cq):
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
     weight_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
 
+    # ttnn.matmul without a program_config queries live device L1 to auto-select blocking, which is not
+    # trace-safe. The matmuls below are square, batched (lhs @ replicated [.., N, N] weight), so build an
+    # explicit reuse config: the grid parallelizes over the batch dimension, and one core computes each
+    # batch's full M x N output (per_core_N == Nt, per_core_M == Mt, in0_block_w == 1 to fit L1).
+    batch = shape[0] * shape[1]
+    Mt, Nt = shape[-2] // 32, shape[-1] // 32
+    matmul_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(batch, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=Mt,
+        per_core_N=Nt,
+    )
+
     # Op chains to be traced
     def run_op_chain(input_0, input_1, weight):
-        return ttnn.neg(ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1))) @ ttnn.silu(
-            weight
+        return ttnn.matmul(
+            ttnn.neg(ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1))),
+            ttnn.silu(weight),
+            program_config=matmul_program_config,
         )
 
     def run_op_chain_1(input_0, input_1, weight):
-        return ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight)) @ ttnn.softmax(weight, dim=1)
+        return ttnn.matmul(
+            ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight)),
+            ttnn.softmax(weight, dim=1),
+            program_config=matmul_program_config,
+        )
 
     def run_op_chain_2(input_0, input_1, weight):
-        return ttnn.neg(ttnn.mul(input_0, input_1)) @ ttnn.gelu(weight)
+        return ttnn.matmul(
+            ttnn.neg(ttnn.mul(input_0, input_1)),
+            ttnn.gelu(weight),
+            program_config=matmul_program_config,
+        )
 
     if enable_multi_cq:
         trace_cq = 0

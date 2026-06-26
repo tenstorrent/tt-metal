@@ -78,11 +78,25 @@ def test_single_device_multi_trace(device, shape, blocking):
     input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     weight_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
 
+    # ttnn.matmul without a program_config queries live device L1 to auto-select blocking, which is not
+    # trace-safe. Build an explicit config for this (square, batched) matmul so it can run inside a trace.
+    # The reuse factory requires per_core_N == Nt and per_core_M to divide the per-batch Mt; the grid
+    # parallelizes over the batch dimension, so one core handles each batch's full matrix.
+    batch = shape[0] * shape[1]
+    Mt, Nt = shape[-2] // 32, shape[-1] // 32
+    matmul_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(batch, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=Mt,
+        per_core_N=Nt,
+    )
+
     # Op chains to be traced
     def run_op_chain(input_0, input_1, weight):
-        return ttnn.neg(ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1))) @ ttnn.silu(
-            weight
-        )
+        lhs = ttnn.neg(ttnn.add(ttnn.mul(input_1, ttnn.neg(ttnn.gelu(input_0))), ttnn.relu(input_1)))
+        return ttnn.matmul(lhs, ttnn.silu(weight), program_config=matmul_program_config)
 
     def run_op_chain_1(input_0, input_1, weight):
         return ttnn.gelu(ttnn.add(ttnn.tanh(ttnn.mul(ttnn.sub(input_0, input_1), weight)), input_1))

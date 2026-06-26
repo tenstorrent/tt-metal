@@ -9,6 +9,36 @@ from loguru import logger
 
 import ttnn
 
+# ttnn.matmul with only core_grid (and no program_config) routes through the auto-config path, which
+# queries live device L1 to pick blocking parameters. That is not trace-safe, so build explicit configs
+# for the 1024x1024x1024 matmuls used below. These reproduce the config the auto path selects in a clean
+# L1 state (MatmulMultiCoreReuseMultiCast with in0_block_w=4): the output is bit-identical to the previous
+# core_grid=... behavior.
+MATMUL_PROGRAM_CONFIG_8x8 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    in0_block_w=4,
+    out_subblock_h=2,
+    out_subblock_w=2,
+    out_block_h=4,
+    out_block_w=4,
+    per_core_M=4,
+    per_core_N=4,
+    transpose_mcast=False,
+    fused_activation=None,
+)
+MATMUL_PROGRAM_CONFIG_1x1 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(1, 1),
+    in0_block_w=4,
+    out_subblock_h=2,
+    out_subblock_w=2,
+    out_block_h=4,
+    out_block_w=4,
+    per_core_M=32,
+    per_core_N=32,
+    transpose_mcast=False,
+    fused_activation=None,
+)
+
 
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}], indirect=True
@@ -30,13 +60,13 @@ def test_with_ops(device):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+    ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
     # Ensure all binaries are compiled/loaded before starting trace capture.
     # Trace capture does not allow device writes (e.g. binary loading) on fast dispatch paths.
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(100):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(5):
@@ -70,12 +100,12 @@ def test_with_ops_single_core(device, capture_count, replay_count):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+    ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_1x1)
     # Ensure all binaries are compiled/loaded before starting trace capture.
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(capture_count):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+        ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_1x1)
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(replay_count):
@@ -103,7 +133,7 @@ def test_with_ops_multiple_trace_ids(device):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+    ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
     # Warm-up the add op as well so its binaries are loaded outside trace capture.
     ttnn.add(a, b)
     # Ensure all binaries are compiled/loaded before starting trace capture.
@@ -118,7 +148,7 @@ def test_with_ops_multiple_trace_ids(device):
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(2):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     trace_ids.append(tid)
 
@@ -155,14 +185,14 @@ def test_with_ops_trace_with_non_trace(device):
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
     for _ in range(5):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
 
     trace_ids = []
     # Ensure all binaries are compiled/loaded before starting trace capture.
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(10):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     trace_ids.append(tid)
 
@@ -171,7 +201,7 @@ def test_with_ops_trace_with_non_trace(device):
             ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
 
     for _ in range(5):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b, program_config=MATMUL_PROGRAM_CONFIG_8x8)
 
     for tid in trace_ids:
         ttnn.release_trace(device, tid)
