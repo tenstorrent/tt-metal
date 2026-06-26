@@ -9,9 +9,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-constexpr std::uint32_t ONE_TILE = 1;
+constexpr uint32_t ONE_TILE = 1;
 
-FORCE_INLINE void transpose(std::uint32_t cb_in, std::uint32_t cb_out) {
+FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_out_obj(cb_out);
     cb_in_obj.wait_front(ONE_TILE);
@@ -33,25 +33,25 @@ FORCE_INLINE void transpose(std::uint32_t cb_in, std::uint32_t cb_out) {
 }
 
 void kernel_main() {
-    std::uint32_t num_blocks = get_arg_val<std::uint32_t>(0);
-    std::uint32_t input_num_blocks_h = get_arg_val<std::uint32_t>(1);
+    uint32_t num_blocks = get_arg_val<uint32_t>(0);
+    uint32_t input_num_blocks_h = get_arg_val<uint32_t>(1);
 
-    constexpr std::uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr std::uint32_t scalar_cb_id = get_compile_time_arg_val(1);
-    constexpr std::uint32_t intermed_cb_id0 = get_compile_time_arg_val(2);
-    constexpr std::uint32_t intermed_cb_id1 = get_compile_time_arg_val(3);
-    constexpr std::uint32_t intermed_cb_id2 = get_compile_time_arg_val(4);
-    constexpr std::uint32_t output_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t scalar_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t intermed_cb_id0 = get_compile_time_arg_val(2);
+    constexpr uint32_t intermed_cb_id1 = get_compile_time_arg_val(3);
+    constexpr uint32_t intermed_cb_id2 = get_compile_time_arg_val(4);
+    constexpr uint32_t output_cb_id = get_compile_time_arg_val(5);
 
     CircularBuffer cb_scalar(scalar_cb_id);
 
     compute_kernel_hw_startup(input_cb_id, scalar_cb_id, intermed_cb_id1);
 
-    for (std::uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++) {
+    for (uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++) {
         cb_scalar.wait_front(ONE_TILE);
 
-        for (std::uint32_t output_idx = 0; output_idx < num_blocks; output_idx++) {
-            for (std::uint32_t slice_idx = 0; slice_idx < TILE_WIDTH; slice_idx++) {
+        for (uint32_t output_idx = 0; output_idx < num_blocks; output_idx++) {
+            for (uint32_t slice_idx = 0; slice_idx < TILE_WIDTH; slice_idx++) {
                 reconfig_data_format_srca(intermed_cb_id2, input_cb_id);
                 pack_reconfig_data_format(output_cb_id, intermed_cb_id0);
                 transpose(input_cb_id, intermed_cb_id0);  // 32 x B

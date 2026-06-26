@@ -30,31 +30,31 @@
 
 void kernel_main() {
     // Compile-time args
-    constexpr std::uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
-    constexpr std::uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
+    constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+    constexpr uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
 
     // Run-time arguments (shared layout with dm0 and dm1)
-    std::uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<std::uint32_t>(argidx++);
-    const auto vchannel = get_arg_val<std::uint32_t>(argidx++);
-    const auto weight_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto input_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto bias_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto sem_partial_ready = get_arg_val<std::uint32_t>(argidx++);
-    const auto is_sender = get_arg_val<std::uint32_t>(argidx++);
-    const auto is_worker = get_arg_val<std::uint32_t>(argidx++);
-    const auto is_collector = get_arg_val<std::uint32_t>(argidx++);
-    const auto num_k_tiles = get_arg_val<std::uint32_t>(argidx++);
-    const auto k_tile_offset = get_arg_val<std::uint32_t>(argidx++);
-    const auto n_tile_id = get_arg_val<std::uint32_t>(argidx++);
-    const auto worker_phys_x = get_arg_val<std::uint32_t>(argidx++);
-    const auto worker_phys_y = get_arg_val<std::uint32_t>(argidx++);
-    const auto sender_slot = get_arg_val<std::uint32_t>(argidx++);
-    const auto worker_gather_slot = get_arg_val<std::uint32_t>(argidx++);
-    const auto sem_topk_ready = get_arg_val<std::uint32_t>(argidx++);
-    const auto indices_rm_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto weights_rm_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto aligned_page_size = get_arg_val<std::uint32_t>(argidx++);
+    uint32_t argidx = 0;
+    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    const auto vchannel = get_arg_val<uint32_t>(argidx++);
+    const auto weight_addr = get_arg_val<uint32_t>(argidx++);
+    const auto input_addr = get_arg_val<uint32_t>(argidx++);
+    const auto bias_addr = get_arg_val<uint32_t>(argidx++);
+    const auto sem_partial_ready = get_arg_val<uint32_t>(argidx++);
+    const auto is_sender = get_arg_val<uint32_t>(argidx++);
+    const auto is_worker = get_arg_val<uint32_t>(argidx++);
+    const auto is_collector = get_arg_val<uint32_t>(argidx++);
+    const auto num_k_tiles = get_arg_val<uint32_t>(argidx++);
+    const auto k_tile_offset = get_arg_val<uint32_t>(argidx++);
+    const auto n_tile_id = get_arg_val<uint32_t>(argidx++);
+    const auto worker_phys_x = get_arg_val<uint32_t>(argidx++);
+    const auto worker_phys_y = get_arg_val<uint32_t>(argidx++);
+    const auto sender_slot = get_arg_val<uint32_t>(argidx++);
+    const auto worker_gather_slot = get_arg_val<uint32_t>(argidx++);
+    const auto sem_topk_ready = get_arg_val<uint32_t>(argidx++);
+    const auto indices_rm_addr = get_arg_val<uint32_t>(argidx++);
+    const auto weights_rm_addr = get_arg_val<uint32_t>(argidx++);
+    const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_weight_id = tt::CBIndex::c_0;
@@ -94,7 +94,7 @@ void kernel_main() {
     // =====================================================================
     // PHASE 1: Partial Matmul (all cores) — block-by-block
     // =====================================================================
-    constexpr std::uint32_t BLOCK_SIZE = 2;
+    constexpr uint32_t BLOCK_SIZE = 2;
 
     // NOTE: dst_full_sync_en = false (half-sync mode). We use tile_regs_*
     // consistently throughout the kernel for correctness. acquire_dst/release_dst
@@ -103,9 +103,9 @@ void kernel_main() {
     matmul_block_init(cb_input_id, cb_weight_id, /*transpose=*/0, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
     tile_regs_acquire();
 
-    std::uint32_t tiles_done = 0;
+    uint32_t tiles_done = 0;
     while (tiles_done < num_k_tiles) {
-        std::uint32_t block = num_k_tiles - tiles_done;
+        uint32_t block = num_k_tiles - tiles_done;
         if (block > BLOCK_SIZE) {
             block = BLOCK_SIZE;
         }
@@ -113,7 +113,7 @@ void kernel_main() {
         cb_input.wait_front(block);
         cb_weight.wait_front(block);
 
-        for (std::uint32_t k = 0; k < block; k++) {
+        for (uint32_t k = 0; k < block; k++) {
             matmul_block(
                 cb_input_id,
                 cb_weight_id,

@@ -115,8 +115,7 @@ void kernel_main() {
     // However, changing these conditions makes yolov4 and transpose tests fail with a PCC error. For the error to be
     // present in BH, it needs to be run in the full model sweep, but for WH_B0 it can be seen in isolation.
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
-    constexpr uint32_t row_size =
-        last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
+    constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
 
 #else
     uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(0);

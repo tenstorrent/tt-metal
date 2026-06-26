@@ -156,27 +156,25 @@ void kernel_main() {
     }
 #endif
 
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);  // inner block size in tiles
-    constexpr uint32_t in0_num_subblocks =
-        get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
+    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
         get_compile_time_arg_val(2);  // out_subblock_h*in0_block_w*in0_num_subblocks;
     constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
     constexpr uint32_t in1_num_subblocks =
         get_compile_time_arg_val(4);  // outer column block size (in inner column blocks)
     constexpr uint32_t in1_block_num_tiles =
-        get_compile_time_arg_val(5);  // out_subblock_w*in0_block_w* in1_num_subblocks;
+        get_compile_time_arg_val(5);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);  // out_subblock_w*in1_num_subblocks
-    constexpr uint32_t num_blocks_inner_dim =
-        get_compile_time_arg_val(7);                                         // outer inner dim (in inner dim blocks)
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);  // outer inner dim (in inner dim blocks)
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);  // outer inner dim (in inner dim blocks)
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);   // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);   // inner column block size in tiles
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);     // outer inner dim (in inner dim blocks)
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);         // outer inner dim (in inner dim blocks)
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);         // outer inner dim (in inner dim blocks)
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);          // inner row block size in tiles
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
     constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
-    constexpr bool untilize_out = get_compile_time_arg_val(15);                     // untilize output
+    constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
     constexpr bool in0_transpose_tile = (bool)get_compile_time_arg_val(17);
@@ -184,7 +182,7 @@ void kernel_main() {
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
     constexpr uint32_t in0_cb_id = in0_transpose_tile ? get_named_compile_time_arg_val("cb_in0_transposed")
-                                                           : get_named_compile_time_arg_val("cb_in0");
+                                                    : get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t mm_partials_cb_id = get_named_compile_time_arg_val("cb_intermed0");

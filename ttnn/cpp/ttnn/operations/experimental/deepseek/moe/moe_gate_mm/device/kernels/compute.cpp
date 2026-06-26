@@ -21,29 +21,29 @@
 #include "top8_merge_sfpu.h"
 
 void kernel_main() {
-    constexpr std::uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr std::uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
-    constexpr std::uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
-    constexpr std::uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
-    constexpr std::uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
-    constexpr std::uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
-    constexpr std::uint32_t column_id = get_named_compile_time_arg_val("column_id");
+    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
+    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
+    constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
+    constexpr uint32_t column_id = get_named_compile_time_arg_val("column_id");
 
     // Run-time arguments
-    std::uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<std::uint32_t>(argidx++);
-    const auto vchannel = get_arg_val<std::uint32_t>(argidx++);
-    const auto in_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto w_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto out_addr = get_arg_val<std::uint32_t>(argidx++);
-    const auto partial_semaphore = get_arg_val<std::uint32_t>(argidx++);
-    const auto is_send_core = get_arg_val<std::uint32_t>(argidx++);
-    const auto neighbor1_physical_x = get_arg_val<std::uint32_t>(argidx++);
-    const auto neighbor1_physical_y = get_arg_val<std::uint32_t>(argidx++);
-    const auto neighbor2_physical_x = get_arg_val<std::uint32_t>(argidx++);
-    const auto neighbor2_physical_y = get_arg_val<std::uint32_t>(argidx++);
-    const auto core_id = get_arg_val<std::uint32_t>(argidx++);
-    const auto raw_scores_semaphore = get_arg_val<std::uint32_t>(argidx++);
+    uint32_t argidx = 0;
+    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    const auto vchannel = get_arg_val<uint32_t>(argidx++);
+    const auto in_addr = get_arg_val<uint32_t>(argidx++);
+    const auto w_addr = get_arg_val<uint32_t>(argidx++);
+    const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    const auto partial_semaphore = get_arg_val<uint32_t>(argidx++);
+    const auto is_send_core = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor1_physical_x = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor1_physical_y = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor2_physical_x = get_arg_val<uint32_t>(argidx++);
+    const auto neighbor2_physical_y = get_arg_val<uint32_t>(argidx++);
+    const auto core_id = get_arg_val<uint32_t>(argidx++);
+    const auto raw_scores_semaphore = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
@@ -73,29 +73,29 @@ void kernel_main() {
     CircularBuffer cb_w2c_in8(cb_w2c_in8_id);
 
     // NOC Packet size
-    constexpr std::uint32_t noc_packet_size = 8192;
+    constexpr uint32_t noc_packet_size = 8192;
 
     // Constants for MoE Gate MM
-    const std::uint32_t num_w_tiles_h = is_send_core ? (2 * 72) : (2 * 76 + 1);
-    constexpr std::uint32_t num_w_tiles_w = 1;
+    const uint32_t num_w_tiles_h = is_send_core ? (2 * 72) : (2 * 76 + 1);
+    constexpr uint32_t num_w_tiles_w = 1;
 
     //-------------------------------------------------------------------------
     // W reading constants
     //-------------------------------------------------------------------------
-    constexpr std::uint32_t w_txns_per_block = 8;
-    constexpr std::uint32_t w_tiles_per_txn = noc_packet_size / 2048;
-    constexpr std::uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
-    const std::uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
-    const std::uint32_t w_remaining_tiles = (num_w_tiles_h * num_w_tiles_w) % w_tiles_per_block;
-    const std::uint32_t w_last_block_txns =
+    constexpr uint32_t w_txns_per_block = 8;
+    constexpr uint32_t w_tiles_per_txn = noc_packet_size / 2048;
+    constexpr uint32_t w_tiles_per_block = w_tiles_per_txn * w_txns_per_block;
+    const uint32_t w_num_blocks = num_w_tiles_h * num_w_tiles_w / w_tiles_per_block;
+    const uint32_t w_remaining_tiles = (num_w_tiles_h * num_w_tiles_w) % w_tiles_per_block;
+    const uint32_t w_last_block_txns =
         (w_remaining_tiles + w_tiles_per_txn - 1) / w_tiles_per_txn;  // Ceiling division
-    const std::uint32_t w_tiles_per_block_last = w_remaining_tiles - 1;
-    const std::uint32_t bias_tile_index = w_tiles_per_block_last;  // Bias is the last tile in the last block
+    const uint32_t w_tiles_per_block_last = w_remaining_tiles - 1;
+    const uint32_t bias_tile_index = w_tiles_per_block_last;  // Bias is the last tile in the last block
 
     //-------------------------------------------------------------------------
     // Collector core
     //-------------------------------------------------------------------------
-    constexpr std::uint32_t COLLECTOR_CORE_ID = 7;
+    constexpr uint32_t COLLECTOR_CORE_ID = 7;
 
     //-------------------------------------------------------------------------
     // Compute configuration
@@ -120,11 +120,11 @@ void kernel_main() {
         //-------------------------------------------------------------------------
         tile_regs_acquire();
 
-        std::uint32_t tile_index = 2 * 76;
-        for (std::uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
+        uint32_t tile_index = 2 * 76;
+        for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
             cb_r2c_w.wait_front(w_tiles_per_block);
 
-            for (std::uint32_t tile_id = 0; tile_id < w_tiles_per_block; tile_id += 2) {
+            for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; tile_id += 2) {
                 // Perform matmul: 1 input tile @ 2 weight tiles
                 matmul_block(
                     cb_s2c_in_id,
@@ -142,7 +142,7 @@ void kernel_main() {
 
         // Last block
         cb_r2c_w.wait_front(w_tiles_per_block);
-        for (std::uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; tile_id += 2) {
+        for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; tile_id += 2) {
             matmul_block(
                 cb_s2c_in_id,
                 cb_r2c_w_id,
@@ -186,11 +186,11 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     tile_regs_acquire();
 
-    std::uint32_t tile_index = 0;
-    for (std::uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
+    uint32_t tile_index = 0;
+    for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
         cb_r2c_w.wait_front(w_tiles_per_block);
 
-        for (std::uint32_t tile_id = 0; tile_id < w_tiles_per_block; ++tile_id) {
+        for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; ++tile_id) {
             // Perform matmul: 1 input tile @ 1 weight tile
             matmul_block(
                 cb_s2c_in_id,
@@ -208,7 +208,7 @@ void kernel_main() {
 
     // Last block
     cb_r2c_w.wait_front(w_tiles_per_block);
-    for (std::uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; ++tile_id) {
+    for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; ++tile_id) {
         matmul_block(
             cb_s2c_in_id,
             cb_r2c_w_id,

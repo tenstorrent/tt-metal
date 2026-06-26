@@ -29,26 +29,26 @@
 namespace {
 
 struct IntImgComputeCTAs {
-    const std::uint32_t start_cb;
-    const std::uint32_t input_cb;
-    const std::uint32_t acc_cb;
-    const std::uint32_t cumsum_stage_0_cb;
-    const std::uint32_t cumsum_stage_1_cb;
-    const std::uint32_t cumsum_stage_2_cb;
-    const std::uint32_t output_cb;
-    const std::uint32_t axis_2_buffer_cb;  // covers entire propagation
-    const std::uint32_t axis_3_buffer_cb;  // each tile is spawned from broadcasting the last row of
+    const uint32_t start_cb;
+    const uint32_t input_cb;
+    const uint32_t acc_cb;
+    const uint32_t cumsum_stage_0_cb;
+    const uint32_t cumsum_stage_1_cb;
+    const uint32_t cumsum_stage_2_cb;
+    const uint32_t output_cb;
+    const uint32_t axis_2_buffer_cb;  // covers entire propagation
+    const uint32_t axis_3_buffer_cb;  // each tile is spawned from broadcasting the last row of
                                            // upper block across all rows of a given tile using `add_bcast_rows`.
 
-    const std::uint32_t tile_height;
-    const std::uint32_t tile_width;
-    const std::uint32_t block_depth;
-    const std::uint32_t num_channels;  // axis 4/4
-    const std::uint32_t input_height;  // axis 3/4
-    const std::uint32_t input_depth;   // axis 2/4
-    const std::uint32_t num_batches;   // axis 1/4
-    const std::uint32_t cores_x;
-    const std::uint32_t cores_y;
+    const uint32_t tile_height;
+    const uint32_t tile_width;
+    const uint32_t block_depth;
+    const uint32_t num_channels;  // axis 4/4
+    const uint32_t input_height;  // axis 3/4
+    const uint32_t input_depth;   // axis 2/4
+    const uint32_t num_batches;   // axis 1/4
+    const uint32_t cores_x;
+    const uint32_t cores_y;
 };
 
 FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
@@ -75,13 +75,13 @@ FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
 }
 
 FORCE_INLINE void cumsum_cube_axis_2(
-    std::uint32_t cb_start,
-    std::uint32_t cb_acc,
-    std::uint32_t cb_input,
-    std::uint32_t cb_cumsum_stage_0,
-    std::uint32_t cb_axis_2_buffer,
+    uint32_t cb_start,
+    uint32_t cb_acc,
+    uint32_t cb_input,
+    uint32_t cb_cumsum_stage_0,
+    uint32_t cb_axis_2_buffer,
     bool save_last_tile,
-    std::uint32_t block_depth) {
+    uint32_t block_depth) {
     CircularBuffer input_cb(cb_input);
     CircularBuffer acc_cb(cb_acc);
     ReadCBGuard start_cb_read_guard{cb_start, ONE_TILE};
@@ -89,10 +89,10 @@ FORCE_INLINE void cumsum_cube_axis_2(
     bool enable_reload = false;
 
     binary_op_init_common(cb_input, cb_acc, cb_cumsum_stage_0);
-    for (std::uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};
         tile_regs_acquire();
-        const std::uint32_t cb_op = enable_reload ? cb_acc : cb_start;
+        const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
         input_cb.wait_front(ONE_TILE);
 
         add_tiles_init(cb_input, cb_op);
@@ -140,8 +140,8 @@ FORCE_INLINE void cumsum_cube_axis_2(
 }
 
 FORCE_INLINE void cumsum_cube_axis_3(
-    std::uint32_t cb_cumsum_stage_wip, std::uint32_t cb_cumsum_output, std::uint32_t block_depth) {
-    for (std::uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+    uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth) {
+    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard read_cumsum_guard{cb_cumsum_stage_wip, ONE_TILE};
         WriteCBGuard cumsum_output_write_guard{cb_cumsum_output, ONE_TILE};
         tile_regs_acquire();
@@ -162,14 +162,14 @@ FORCE_INLINE void cumsum_cube_axis_3(
 }
 
 FORCE_INLINE void propagate_tile_into_cube(
-    std::uint32_t cb_axis_2_buffer,
-    std::uint32_t cb_cumsum_stage_a,
-    std::uint32_t cb_cumsum_stage_b,
+    uint32_t cb_axis_2_buffer,
+    uint32_t cb_cumsum_stage_a,
+    uint32_t cb_cumsum_stage_b,
     bool save_last_tile,
-    std::uint32_t block_depth) {
+    uint32_t block_depth) {
     CircularBuffer axis_2_buffer_cb(cb_axis_2_buffer);
     axis_2_buffer_cb.wait_front(ONE_TILE);
-    for (std::uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard cb_cumsum_stage_0_guard{cb_cumsum_stage_a, ONE_TILE};
         WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, ONE_TILE};
         tile_regs_acquire();
@@ -198,13 +198,13 @@ FORCE_INLINE void propagate_tile_into_cube(
 }
 
 FORCE_INLINE void get_and_propagate_adder_cube(
-    std::uint32_t cb_cumsum_stage_X,
-    std::uint32_t cb_axis_3_buffer_read,
-    std::uint32_t cb_output,
-    std::uint32_t block_depth) {
+    uint32_t cb_cumsum_stage_X,
+    uint32_t cb_axis_3_buffer_read,
+    uint32_t cb_output,
+    uint32_t block_depth) {
     // there is the necessity to receive a block
 
-    for (std::uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+    for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard cb_cumsum_stage_X_read_guard{cb_cumsum_stage_X, ONE_TILE};
         ReadCBGuard cb_axis_3_buffer_read_guard{cb_axis_3_buffer_read, ONE_TILE};
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
@@ -212,7 +212,7 @@ FORCE_INLINE void get_and_propagate_adder_cube(
 
         init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
 
-        constexpr std::uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
+        constexpr uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
 
         add_tiles_bcast_rows(
             cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG, LAST_ROW_INDEX);
@@ -229,9 +229,9 @@ FORCE_INLINE void get_and_propagate_adder_cube(
 
 template <typename ctas_t>
 FORCE_INLINE void perform_intimg_along_row_chunk(
-    const ctas_t& ctas, std::uint32_t num_blocks_in_row, std::uint32_t rows_block_i) {
-    for (std::uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {  // go along a row
-        const std::uint32_t block_depth =
+    const ctas_t& ctas, uint32_t num_blocks_in_row, uint32_t rows_block_i) {
+    for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {  // go along a row
+        const uint32_t block_depth =
             std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
         const bool save_last_tile_after_cumsum_cube_axis_2 = (column_block_i == 0) && (num_blocks_in_row > 1);
         const bool save_last_tile_after_tile_into_cube_propagation =
@@ -278,10 +278,10 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
 void kernel_main() {
     constexpr auto ctas{get_ctas()};
 
-    constexpr std::uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
-    constexpr std::uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
+    constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
 
-    for (std::uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
+    for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
         perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
     }
 }

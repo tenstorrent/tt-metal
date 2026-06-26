@@ -21,27 +21,27 @@ void kernel_main() {
     // Runtime args:
     // Total number of outer-loop iterations (N * C * Ht),
     // i.e. how many independent row-reductions this core must perform.
-    std::uint32_t NCHt = get_arg_val<std::uint32_t>(0);
+    uint32_t NCHt = get_arg_val<uint32_t>(0);
 
     // Compile-time args:
     // Number of tiles along the W (reduction) dimension.
-    constexpr std::uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
     // The actual number of elements along W (before tiling).
-    constexpr std::uint32_t W = get_compile_time_arg_val(1);
+    constexpr uint32_t W = get_compile_time_arg_val(1);
     // Number of elements per tile in the W dimension
     // (typically 32, but can be smaller for narrow tiles).
-    constexpr std::uint32_t tile_width = get_compile_time_arg_val(2);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(2);
 #ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    constexpr std::uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
 #endif
     // Whether to apply Bessel's correction (divide by N-1 instead of N).
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
     constexpr bool is_std = get_compile_time_arg_val(5) != 0;
 
-    constexpr std::uint32_t onetile = 1;
+    constexpr uint32_t onetile = 1;
 
     // Circular buffer that the reader kernel fills with input tiles.
     // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so the welford SFPU
@@ -69,19 +69,19 @@ void kernel_main() {
     //   input_dst (0) – scratch for the current transposed input tile,
     //   mean_dst  (1) – running / final mean accumulator,
     //   var_dst   (2) – running / final variance accumulator.
-    constexpr std::uint32_t input_dst = 0;
-    constexpr std::uint32_t mean_dst = 1;
-    constexpr std::uint32_t var_dst = 2;
+    constexpr uint32_t input_dst = 0;
+    constexpr uint32_t mean_dst = 1;
+    constexpr uint32_t var_dst = 2;
 
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
     // we want to skip some columns from getting processed.
-    constexpr std::uint32_t last_tile_rows = ((W % tile_width) == 0) ? tile_width : (W % tile_width);
+    constexpr uint32_t last_tile_rows = ((W % tile_width) == 0) ? tile_width : (W % tile_width);
 
     compute_kernel_hw_startup(cb_in, cb_out);
     pack_reconfig_data_format(cb_out);
 
-    for (std::uint32_t ncht = 0; ncht < NCHt; ncht++) {
+    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
         // Input tiles are transposed directly from cb_in and fed to welford_update.
         // The Welford SFPU state (running mean in LREG4, M2 in LREG5) persists
@@ -91,7 +91,7 @@ void kernel_main() {
         // start_N is the cumulative sample count across tiles processed so far;
         // passed to the Welford LLK so it can compute the correct 1/(N+1) reciprocal
         // for each sample's running-mean update.
-        std::uint32_t start_N = 0;
+        uint32_t start_N = 0;
 
         // Programs SFPU replay buffer + clears LREG4/5
         welford_init();
@@ -108,7 +108,7 @@ void kernel_main() {
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
         // persists across DST cycles because LREGs are separate from
         // the DST register file managed by tile_regs_acquire/release.
-        for (std::uint32_t wt = 0; wt < Wt; ++wt) {
+        for (uint32_t wt = 0; wt < Wt; ++wt) {
             cb_in_obj.wait_front(onetile);
             if constexpr (welford_fp32_input) {
                 // Re-records the transpose-dest setup at math-thread replay slots [16, 32).
@@ -138,7 +138,7 @@ void kernel_main() {
                 // scale_idx controls the divisor for M2 -> variance conversion:
                 //   correction=false: scale_idx = W-1, reciprocal = 1/W  (population variance)
                 //   correction=true:  scale_idx = W-2, reciprocal = 1/(W-1) (sample variance)
-                constexpr std::uint32_t scale_idx = correction ? (W - 2) : (W - 1);
+                constexpr uint32_t scale_idx = correction ? (W - 2) : (W - 1);
                 welford_finalize_to_row<0>(mean_dst, scale_idx, {});
                 tile_regs_commit();
             }

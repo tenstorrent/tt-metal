@@ -83,8 +83,7 @@ FORCE_INLINE void mark_neginf_indices(uint32_t idst) {
 }
 
 template <uint32_t K>
-FORCE_INLINE void process_chunk(
-    CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
+FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     const uint32_t input_cb_id = input_cb.get_cb_id();
     input_cb.wait_front(tiles_per_sequence);

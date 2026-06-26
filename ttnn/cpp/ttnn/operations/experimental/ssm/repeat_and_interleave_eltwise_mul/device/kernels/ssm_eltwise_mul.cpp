@@ -10,19 +10,19 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    std::uint32_t in1_num_blocks = get_arg_val<std::uint32_t>(0);
-    std::uint32_t in1_num_blocks_h = get_arg_val<std::uint32_t>(1);
+    uint32_t in1_num_blocks = get_arg_val<uint32_t>(0);
+    uint32_t in1_num_blocks_h = get_arg_val<uint32_t>(1);
 
-    constexpr std::uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr std::uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr std::uint32_t cb_id_out = get_compile_time_arg_val(2);
-    constexpr std::uint32_t cb_in0_transposed = get_compile_time_arg_val(3);
-    constexpr std::uint32_t cb_in1_transposed = get_compile_time_arg_val(4);
-    constexpr std::uint32_t cb_in1_bcast_row = get_compile_time_arg_val(5);
-    constexpr std::uint32_t cb_out_transposed = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_in0_transposed = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_in1_transposed = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_in1_bcast_row = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_out_transposed = get_compile_time_arg_val(6);
 
-    constexpr std::uint32_t onetile = 1;
-    constexpr std::uint32_t num_rows_in_one_tile = 32;
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t num_rows_in_one_tile = 32;
 
 #ifdef REPEAT_INTERLEAVE_IN1
     binary_op_init_common(
@@ -39,7 +39,7 @@ void kernel_main() {
     CircularBuffer cb_in1_bcast_row_buf(cb_in1_bcast_row);
     CircularBuffer cb_out_transposed_buf(cb_out_transposed);
 
-    for (std::uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++) {
+    for (uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++) {
 #ifdef REPEAT_IN0
         // Transpose in0
         cb_in0.wait_front(onetile);
@@ -65,7 +65,7 @@ void kernel_main() {
 #endif
 #endif
 
-        for (std::uint32_t in1_block = 0; in1_block < in1_num_blocks; in1_block++) {
+        for (uint32_t in1_block = 0; in1_block < in1_num_blocks; in1_block++) {
             // Transpose in1
             cb_in1.wait_front(onetile);
             tile_regs_acquire();
@@ -100,7 +100,7 @@ void kernel_main() {
             cb_in1.pop_front(onetile);
 
             // Receive in1 as single rows to bcast mul with in0
-            for (std::uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
+            for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
 #ifndef REPEAT_IN0
                 // Transpose in0
                 cb_in0.wait_front(onetile);

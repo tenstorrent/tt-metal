@@ -12,11 +12,11 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    std::uint32_t NHtWt = get_arg(args::NHtWt);
-    std::uint32_t HtWt = get_arg(args::HtWt);
-    std::uint32_t N = get_arg(args::N);
-    std::uint32_t Ht = get_arg(args::Ht);
-    std::uint32_t Wt = get_arg(args::Wt);
+    uint32_t NHtWt = get_arg(args::NHtWt);
+    uint32_t HtWt = get_arg(args::HtWt);
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
 
     compute_kernel_hw_startup(dfb::cb_in0, dfb::cb_out0);
     transpose_init(dfb::cb_in0);
@@ -28,15 +28,15 @@ void kernel_main() {
     // - uses reader_unary_transpose_wh
     // - transpose_wh each tile
 
-    std::uint32_t tile_idx = 0;
-    std::uint32_t tile_idx_N = 0;
+    uint32_t tile_idx = 0;
+    uint32_t tile_idx_N = 0;
 
     cb_in.wait_front(NHtWt);
     cb_out.reserve_back(NHtWt);
-    for (std::uint32_t n = 0; n < N; ++n) {
+    for (uint32_t n = 0; n < N; ++n) {
         tile_idx = tile_idx_N;
-        for (std::uint32_t w = 0; w < Wt; ++w) {
-            for (std::uint32_t h = 0; h < Ht; ++h) {
+        for (uint32_t w = 0; w < Wt; ++w) {
+            for (uint32_t h = 0; h < Ht; ++h) {
                 tile_regs_acquire();
                 transpose_tile(dfb::cb_in0, tile_idx, 0);
                 tile_regs_commit();

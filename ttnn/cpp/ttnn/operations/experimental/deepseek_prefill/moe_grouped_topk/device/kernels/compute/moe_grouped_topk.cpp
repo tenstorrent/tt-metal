@@ -48,11 +48,7 @@ void sigmoid(uint32_t cb_in_scores_id, uint32_t cb_sigmoid_scores_id, uint32_t w
     }
 }
 
-void add_bias(
-    uint32_t cb_sigmoid_scores_id,
-    uint32_t cb_in_bias_id,
-    uint32_t cb_biased_scores_id,
-    uint32_t width_tiles) {
+void add_bias(uint32_t cb_sigmoid_scores_id, uint32_t cb_in_bias_id, uint32_t cb_biased_scores_id, uint32_t width_tiles) {
     CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
@@ -414,8 +410,7 @@ void kernel_main() {
     constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
     constexpr uint32_t bias_page_size = get_named_compile_time_arg_val("bias_page_size");
     constexpr uint32_t cb_sorted_group_scores = get_named_compile_time_arg_val("cb_sorted_group_scores");
-    constexpr uint32_t cb_sorted_expert_indices_temp =
-        get_named_compile_time_arg_val("cb_sorted_expert_indices_temp");
+    constexpr uint32_t cb_sorted_expert_indices_temp = get_named_compile_time_arg_val("cb_sorted_expert_indices_temp");
     constexpr uint32_t cb_expert_index_template = get_named_compile_time_arg_val("cb_expert_index_template");
     constexpr uint32_t cb_winning_group_scores = get_named_compile_time_arg_val("cb_winning_group_scores");
     constexpr uint32_t cb_winning_group_indices = get_named_compile_time_arg_val("cb_winning_group_indices");

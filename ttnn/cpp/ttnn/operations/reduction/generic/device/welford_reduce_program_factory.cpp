@@ -180,7 +180,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         .total_size = input_tiles_per_cb * input_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<std::uint8_t>(input_cb_index),
+            .buffer_index = static_cast<uint8_t>(input_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
@@ -191,7 +191,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         .total_size = scalar_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<std::uint8_t>(scalar_cb_index),
+            .buffer_index = static_cast<uint8_t>(scalar_cb_index),
             .data_format = scalar_cb_data_format,
             .page_size = scalar_single_tile_size,
         }}},
@@ -203,7 +203,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         .total_size = output_tiles_per_cb * dst_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<std::uint8_t>(output_cb_index),
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = dst_cb_data_format,
             .page_size = dst_single_tile_size,
         }}},
@@ -224,7 +224,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             .total_size = scratch_single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<std::uint8_t>(scratch_cb_index),
+                .buffer_index = static_cast<uint8_t>(scratch_cb_index),
                 .data_format = scratch_cb_data_format,
                 .page_size = scratch_single_tile_size,
             }}},
@@ -255,7 +255,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             .total_size = 4 * partial_single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<std::uint8_t>(partial_cb_index),
+                .buffer_index = static_cast<uint8_t>(partial_cb_index),
                 .data_format = partial_cb_data_format,
                 .page_size = partial_single_tile_size,
             }}},
@@ -276,7 +276,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             .total_size = combined_single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<std::uint8_t>(combined_cb_index),
+                .buffer_index = static_cast<uint8_t>(combined_cb_index),
                 .data_format = combined_cb_data_format,
                 .page_size = combined_single_tile_size,
             }}},
