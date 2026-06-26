@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Text decoder PCC at mesh-dependent maximum encoder timeline length.
+"""Text decoder PCC at 4096 encoder timeline length.
 
-Tests T2TT and S2TT production-shaped inputs at ``MAX_ENC_SEQ`` — 256 on 1×1
-and the longest 1024-token encoder timeline validated on BH 1×4 with the
+Tests T2TT and S2TT production-shaped inputs at ``MAX_ENC_SEQ`` with the
 two-token decoder seed.
 """
 
@@ -49,8 +48,7 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
 )
 
 PCC_THRESHOLD = 0.99
-MAX_ENC_SEQ_1X1 = 256
-MAX_ENC_SEQ_1X4 = 1024
+MAX_ENC_SEQ = 4096
 # Number of greedy decode steps to validate after the prefill cache-fill. Each step is one KV-cache
 # decoder forward (``seq_len=1``); a single step already exercises the decode self/cross-attn,
 # paged-cache-write, and position-stepping paths. Bump for deeper cache-drift / decode profiling.
@@ -67,13 +65,6 @@ def _mesh_device_param():
         return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
     except Exception:
         return (1, 1)
-
-
-def _max_enc_seq_for_mesh(mesh_param) -> int:
-    return MAX_ENC_SEQ_1X4 if mesh_param in {(1, 4), 4} else MAX_ENC_SEQ_1X1
-
-
-MAX_ENC_SEQ = _max_enc_seq_for_mesh(_mesh_device_param())
 
 
 def _device_params():

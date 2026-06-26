@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Speech encoder PCC at maximum mel sequence length per mesh shape.
+"""Speech encoder PCC at maximum mel sequence length 4096.
 
-* ``1x1`` — 480 mel frames (faster single-device gate)
+* ``1x1`` — 4096 mel frames
 * ``1x4`` — 4096 mel frames (long-audio paths: chunked matmul, DRAM residual, rel-pos)
 
 Real weights only — skipped when download fails.
@@ -32,8 +32,7 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import cre
 from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
 
 PCC_THRESHOLD = 0.99
-MAX_SEQ_1x1 = 256
-MAX_SEQ_1x4 = 4096
+MAX_SEQ = 4096
 
 
 def _mesh_device_param():
@@ -56,13 +55,6 @@ def _device_params():
     return params
 
 
-def _max_seq_for_mesh() -> int:
-    mesh_param = _mesh_device_param()
-    if mesh_param in ((1, 1), 1):
-        return MAX_SEQ_1x1
-    return MAX_SEQ_1x4
-
-
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
@@ -82,7 +74,7 @@ def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, 
         speech_enc, cfg = load_pretrained_speech_encoder(weights_dir, dtype=torch.bfloat16)
 
         batch = 1
-        seq = _max_seq_for_mesh()
+        seq = MAX_SEQ
         n_mels = cfg.feature_projection_input_dim
         input_features = torch.randn(batch, seq, n_mels, dtype=torch.bfloat16)
         attention_mask = torch.ones(batch, seq, dtype=torch.long)
