@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -2117,10 +2118,38 @@ struct EmuleSigfpeGuard {
 }  // namespace
 #endif  // __x86_64__ && __linux__
 
+// [MESH] Register/run split for concurrent multi-device dispatch. A mesh command queue
+// brackets its per-device LaunchProgram/DispatchCompiledProgramToDevice loop with
+// begin_mesh_dispatch()/run_mesh_dispatch(): in defer mode each execute_program_emulated
+// REGISTERS its fibers (spawn, no run) and keeps the per-device state those fibers borrow
+// alive; run_mesh_dispatch then drives ONE run_until_idle so all chips' fibers run
+// concurrently on the worker pool. Per-fiber ctx already carries each device's core_map /
+// bridge_dram, so concurrent fibers resolve NOC addresses to the correct chip; the bank
+// arrays are topology-invariant across identical chips (homogeneous mesh). Single-device
+// (defer off) is unchanged. The kept state is freed in run_mesh_dispatch.
+static bool g_emule_mesh_defer = false;
+static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>>
+    g_mesh_dfb_keep;
+
+// Resolved-program cache — emule's analogue of silicon's program.impl().is_compiled():
+// collect_kernels + JIT compile + resolve run ONCE per program (keyed by ProgramId, stable
+// across the mesh's devices and program-cache reuse). Every device dispatches against the
+// shared resolved core_kernels (read-only at run time), mirroring LaunchProgram(compile) /
+// DispatchCompiledProgramToDevice(reuse). An entry is valid for the program's life (ids are
+// never reused, so no stale hits); LRU-bounded only as a safety net against unbounded growth.
+struct ResolvedProgram {
+    std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
+    uint32_t emule_sem_base = 0;
+};
+static std::unordered_map<ProgramId, ResolvedProgram> g_resolved_programs;
+static std::deque<ProgramId> g_resolved_lru;
+static constexpr size_t kMaxResolvedPrograms = 256;
+
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
-    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr) {
+    std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
+    bool defer_run) {
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;
 #endif
@@ -2222,70 +2251,65 @@ static void launch_cores(
         dfb_keepalive.push_back(std::move(per_thread_dfbs));
     }
 
+    if (defer_run) {
+        // Mesh register phase: fibers are spawned but not run yet. Keep the DFB arrays they
+        // borrow alive until run_mesh_dispatch (the spawned ctx is already owned by the
+        // scheduler; core_kernels is kept by execute_program_emulated). The SIGFPE guard
+        // above is a no-op here since no kernel runs; run_mesh_dispatch installs its own.
+        g_mesh_dfb_keep.push_back(std::move(dfb_keepalive));
+        return;
+    }
+
     // Run all registered fibers to completion; rethrows the first kernel exception,
     // throws on a quiescent deadlock, aborts with a dump on livelock/hang.
     sched.run_until_idle();
 }
 
 // ---------------------------------------------------------------------------
-// execute_program_emulated: Main entry point.
+// prepare_program: resolve a program's kernels ONCE (collect + JIT-compile + resolve),
+// memoized by ProgramId. emule's analogue of silicon's CompileProgram / is_compiled — the
+// first device of the mesh (and the first invocation) resolves; the rest reuse. The device-
+// derived compile defines are taken from this first device (identical across identical chips
+// of a homogeneous mesh).
 // ---------------------------------------------------------------------------
-void execute_program_emulated(IDevice* device, Program& program) {
+static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
     auto& impl = program.impl();
-    auto device_id = device->id();
-    log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
+    const ProgramId pid = impl.get_id();
+    if (auto it = g_resolved_programs.find(pid); it != g_resolved_programs.end()) {
+        return it->second;  // already resolved (peer mesh device or repeated invocation)
+    }
 
+    auto device_id = device->id();
     auto* sw_emu = get_sw_emulated_chip(device_id);
 
-    // Phase 0: Populate bank mapping arrays
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
     populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
 
-    // Build worker coordinate mapping strings
     std::string worker_col_map_str, worker_row_map_str;
     build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
 
     std::string extra_inc = get_extra_include_flags();
 
-    // Compute semaphore base from HAL kernel config layout
     const auto& hal = MetalContext::instance().hal();
     uint32_t tensix_pct_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t kernel_config_base =
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
     const auto& prog_config = impl.get_program_config(tensix_pct_index);
     uint32_t emule_sem_base = kernel_config_base + prog_config.sem_offset;
-    log_debug(
-        tt::LogMetal,
-        "  EMULE_SEM_BASE: 0x{:x} (kernel_config_base=0x{:x}, sem_offset=0x{:x})",
-        emule_sem_base,
-        kernel_config_base,
-        prog_config.sem_offset);
 
-    // Phase 1: Collect kernels and resolve/compile
     std::map<CoreCoord, std::vector<PendingKernelInfo>> pending_core_kernels;
     std::map<std::string, DeferredCompile> deferred_compiles;
     std::unordered_map<std::string, std::function<void()>> resolved_fns;
     std::vector<std::string> inline_src_temps;
-
     collect_kernels(
-        impl,
-        num_dram_channels,
-        num_l1_banks,
-        worker_col_map_str,
-        worker_row_map_str,
-        emule_sem_base,
-        extra_inc,
-        pending_core_kernels,
-        deferred_compiles,
-        resolved_fns,
-        inline_src_temps);
-
+        impl, num_dram_channels, num_l1_banks, worker_col_map_str, worker_row_map_str,
+        emule_sem_base, extra_inc, pending_core_kernels, deferred_compiles, resolved_fns, inline_src_temps);
     jit_compile_pending(deferred_compiles, resolved_fns, inline_src_temps);
 
-    // Resolve pending kernels to function pointers
-    std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
+    ResolvedProgram resolved;
+    resolved.emule_sem_base = emule_sem_base;
     for (auto& [logical_core, pending_list] : pending_core_kernels) {
         for (auto& pk : pending_list) {
             KernelInfo ki{
@@ -2296,23 +2320,93 @@ void execute_program_emulated(IDevice* device, Program& program) {
             for (const auto& key : pk.variant_cache_keys) {
                 ki.variants.push_back(resolved_fns.at(key));
             }
-            core_kernels[logical_core].push_back(std::move(ki));
+            resolved.core_kernels[logical_core].push_back(std::move(ki));
         }
     }
+    log_info(
+        tt::LogMetal,
+        "execute_program_emulated: program {} resolved ({} logical cores)",
+        pid,
+        resolved.core_kernels.size());
 
-    log_info(tt::LogMetal, "execute_program_emulated: {} logical cores", core_kernels.size());
+    // LRU-bound the cache (safety net; entries are otherwise valid for the program's life).
+    if (g_resolved_programs.size() >= kMaxResolvedPrograms && !g_resolved_lru.empty()) {
+        g_resolved_programs.erase(g_resolved_lru.front());
+        g_resolved_lru.pop_front();
+    }
+    g_resolved_lru.push_back(pid);
+    return g_resolved_programs.emplace(pid, std::move(resolved)).first->second;
+}
 
-    // Phase 2: Build core map and set up per-core state
+// ---------------------------------------------------------------------------
+// dispatch_to_device: per-device setup + launch, reusing the program's resolved kernels.
+// emule's analogue of dispatching the already-compiled program to one chip. dram_core (the
+// chip's DRAM backing) and the bank-table globals are per device.
+// ---------------------------------------------------------------------------
+static void dispatch_to_device(
+    IDevice* device, Program& program, ResolvedProgram& resolved, bool defer_run) {
+    auto& impl = program.impl();
+    auto device_id = device->id();
+    auto* sw_emu = get_sw_emulated_chip(device_id);
+
+    tt_emule::Core* dram_core = nullptr;
+    uint32_t num_dram_channels = 0;
+    uint32_t num_l1_banks = 0;
+    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
+
     auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
-
     std::vector<CoreSetup> core_setups;
-    setup_core_state(impl, device, sw_emu, core_kernels, emule_sem_base, core_setups);
+    setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, core_setups);
 
-    // Phase 3: Launch all cores concurrently
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
-    launch_cores(core_setups, dram_data, core_map_ptr);
+    launch_cores(core_setups, dram_data, core_map_ptr, defer_run);
+}
 
+// ---------------------------------------------------------------------------
+// execute_program_emulated: Main entry point. Mirrors silicon's compile-once / dispatch-
+// reuse: prepare_program resolves once (memoized by program id), dispatch_to_device runs
+// per device against the shared resolved kernels.
+// ---------------------------------------------------------------------------
+void execute_program_emulated(IDevice* device, Program& program) {
+    auto device_id = device->id();
+    log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
+
+    ResolvedProgram& resolved = prepare_program(device, program);  // compile-once (memoized)
+
+    const bool defer = g_emule_mesh_defer;  // mesh register phase (the run is deferred)
+    dispatch_to_device(device, program, resolved, defer);
+
+    if (defer) {
+        log_debug(tt::LogMetal, "execute_program_emulated: device {} registered (deferred mesh run)", device_id);
+        return;
+    }
     log_debug(tt::LogMetal, "execute_program_emulated: device {} done", device_id);
+}
+
+// ---------------------------------------------------------------------------
+// Mesh register/run split (see header). begin_mesh_dispatch puts execute_program_emulated
+// into defer mode; run_mesh_dispatch drives the single concurrent run + frees kept state.
+// ---------------------------------------------------------------------------
+void begin_mesh_dispatch() {
+    g_emule_mesh_defer = true;
+    g_mesh_dfb_keep.clear();
+}
+
+void run_mesh_dispatch() {
+#if defined(__x86_64__) && defined(__linux__)
+    EmuleSigfpeGuard sigfpe_guard;  // the actual kernel run happens here, across all chips
+#endif
+    // Reset defer + free the kept per-device state even if the run throws.
+    struct Cleanup {
+        ~Cleanup() {
+            g_emule_mesh_defer = false;
+            g_mesh_dfb_keep.clear();
+        }
+    } cleanup;
+    // All devices' fibers were registered (spawned) during the per-device register phase;
+    // run them concurrently on the worker pool in one pass. Each fiber's ctx carries its
+    // device's core_map/bridge_dram, so cross-chip NOC resolution stays correct.
+    tt::tt_metal::emule_fiber::FiberScheduler::instance().run_until_idle();
 }
 
 }  // namespace tt::tt_metal::emule

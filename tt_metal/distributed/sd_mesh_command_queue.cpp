@@ -14,6 +14,9 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#ifdef TT_METAL_USE_EMULE
+#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
+#endif
 #include <utility>
 #include <unordered_set>
 #include <llrt/tt_cluster.hpp>
@@ -202,6 +205,17 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
+#ifdef TT_METAL_USE_EMULE
+    // Emule register/run split: register every device's fibers (deferred), then run them
+    // concurrently in one pass so all chips co-run on the worker pool. Each fiber's ctx
+    // carries its device's core_map/bridge_dram (per-device NOC resolution). LaunchProgram /
+    // DispatchCompiledProgramToDevice below register (no run) while in this mode.
+    const bool __emule_mesh = this->get_target_device_type() == tt::TargetDevice::Emule;
+    if (__emule_mesh) {
+        tt::tt_metal::emule::begin_mesh_dispatch();
+    }
+#endif
+
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);
 
@@ -212,6 +226,12 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     for (size_t i = 1; i < local_devices.size(); i++) {
         tt_metal::experimental::DispatchCompiledProgramToDevice(local_devices[i], program);
     }
+
+#ifdef TT_METAL_USE_EMULE
+    if (__emule_mesh) {
+        tt::tt_metal::emule::run_mesh_dispatch();  // single concurrent run across all registered chips
+    }
+#endif
 
     if (blocking) {
         // Can be parallelized: wait across all devices
