@@ -42,7 +42,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 // Writer always populates compute's reduce-scalar / epsilon / trans_mat CBs
-// (shared with the MUX writer) so the reader starts input reads ASAP.
+// (shared helper, used by both writers) so the reader starts input reads ASAP.
 #include "wan_rmsnorm_scalar_setup.hpp"
 
 void kernel_main() {
@@ -179,8 +179,8 @@ void kernel_main() {
             const uint64_t noc0_dest_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], my_slot_addr, 0);
 
             // flush=true: order the payload write before the atomic_inc at the receiver,
-            // so a satisfied semaphore guarantees the remote slot is committed (matches
-            // the MUX writer fix — without it the sem-gated read can see a stale slot).
+            // so a satisfied semaphore guarantees the remote slot is committed (without
+            // it the sem-gated read can see a stale slot).
             fused_write_atomic_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
@@ -238,9 +238,7 @@ void kernel_main() {
                 const uint32_t t_col = c - h * head_dim_tiles;
                 const uint32_t output_tile_idx =
                     h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
-#ifndef WAN_ABL_SKIP_OUTPUT_WRITE
                 noc_async_write_tile(output_tile_idx, output_accessor, output_rd_ptr);
-#endif
                 output_rd_ptr += output_tile_bytes;
             }
             // _flushed (write request committed to NoC) instead of _barrier

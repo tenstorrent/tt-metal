@@ -102,7 +102,7 @@ struct WanFusedDistributedRmsnormInputs {
 // kernels and CBs identically). Keep all derivation in one place so the spec
 // and the factory cannot drift.
 //
-// Packed-page stats AG (Phase 9): the post-reduce stat tile carries only
+// Packed-page stats all-gather: the post-reduce stat tile carries only
 // 32 real values (one per token in the tile-row, in col 0). Transposing the
 // tile moves those 32 values to row 0 — split across face_00[0..63] and
 // face_01[0..63]. We then pack `window_size` such row-0 strips into one
@@ -116,12 +116,12 @@ struct WanFusedDistributedRmsnormInputs {
 struct WanFusedDistributedRmsnormSizing {
     uint32_t num_tile_rows = 0;
     uint32_t num_workers = 0;
-    bool is_tp_1 = false;
-    bool use_mux = false;
-    uint32_t chunk_size_rows = 0;        // same as window_size; kept for legacy field names
+    bool is_tp_1 = false;                // ring_size==1 or per_head_norm: reduce locally, no all-gather
+    bool use_mux = false;                // !is_tp_1: uses the fabric-forwarder all-gather + DRAM scratch
+    uint32_t chunk_size_rows = 0;        // tile-rows a worker processes per round (== window_size)
     uint32_t window_size = 0;            // tile-rows per packed page
     uint32_t num_chunks_per_device = 0;  // ceil(num_tile_rows / window_size)
-    uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 when !use_mux)
+    uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 on the is_tp_1 path)
     uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
 };
 

@@ -25,8 +25,9 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
               3. `wan_fused_rmsnorm_post_allgather` — finalize normalization, optionally
                  split heads, apply RoPE, and cast output dtype.
 
-            First-draft implementation chains the three existing primitives; intended to
-            be replaced by a single device op later.
+            By default chains the three primitives; pass `use_device_op=true` to run the
+            fused single device op (one program: per-chip reader/compute/writer with a
+            fabric-forwarder all-gather) instead.
         )doc",
         &ttnn::experimental::wan_fused_distributed_rmsnorm,
         nb::arg("input_tensor"),
@@ -54,10 +55,10 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
     ttnn::bind_function<"wan_fused_distributed_rmsnorm_create_stats_buffer", "ttnn.experimental.">(
         mod,
         R"doc(
-            Allocate the persistent stats DRAM buffer required by the device op's
-            MUX writer path (TP>1 with multiple workers per chip). Returns None
-            when the MUX path isn't used (TP=1, per_head_norm, or single-worker
-            shapes), in which case the device op also doesn't require a buffer.
+            Allocate the persistent stats DRAM scratch buffer required by the
+            device op's all-gather path (TP>1, whole-row norm). Returns None when
+            the op reduces locally and needs no scratch (TP=1 or per_head_norm),
+            in which case the device op also doesn't require a buffer.
 
             The returned tensor must be held by the caller across launches and
             passed in via the `persistent_output_buffer` kwarg to

@@ -21,9 +21,9 @@
  * through step 4, then is released in step 5. Sizing chunk_size_rows lets the
  * program factory trade off L1 footprint vs AG amortization.
  *
- * For TP=1 (ring_size==1), the forwarder is a no-op that just promotes
- * stats_local_cb tiles to stats_gathered_cb; the per-row reduce in post
- * degenerates to a pass-through (stats_tiles_cols==1).
+ * For is_tp_1 (ring_size==1 or per_head_norm) there is no all-gather and no
+ * forwarder: compute pushes its stats straight into stats_gathered_cb, and the
+ * per-row reduce degenerates to a local reduce (stats_tiles_cols==1 for TP=1).
  */
 
 #include <cstdint>
@@ -71,11 +71,11 @@ void kernel_main() {
     // and pushes per-row stats directly into stats_gathered_cb. This makes
     // TP=1 (single-device) operation self-contained — no forwarder needed.
     constexpr uint32_t is_tp_1 = get_compile_time_arg_val(23);
-    // Phase 9 packed-page AG (only the MUX writer uses it). When enabled the
-    // pre phase transposes the per-row stat tile (real data in col 0 → row 0)
-    // so the writer can extract two contiguous 64-byte spans per tile and
-    // pack `window_size` of them into a single fabric packet. The post phase
-    // then transposes the row-0 gathered tiles back to col 0 before the
+    // Packed-page all-gather (the forwarder AG path). When enabled the pre phase
+    // transposes the per-row stat tile (real data in col 0 → row 0) so the worker
+    // can extract two contiguous 64-byte spans per tile and the forwarder packs
+    // `window_size` of them into a single fabric packet. The post phase then
+    // transposes the row-0 gathered tiles back to col 0 before the
     // existing reduce<AVG,REDUCE_ROW> chain runs.
     constexpr uint32_t stats_transposed_local_cb = get_compile_time_arg_val(24);
     constexpr uint32_t stats_transposed_gathered_cb = get_compile_time_arg_val(25);
@@ -128,29 +128,14 @@ void kernel_main() {
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
     // ring_size tiles live in stats_transposed_gathered_cb (post-transpose);
-    // otherwise the legacy path uses stats_gathered_cb directly.
+    // otherwise (is_tp_1) the local reduce uses stats_gathered_cb directly.
     constexpr uint32_t stats_reduce_src_cb =
         (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 
-    // WAN_ABLATION=7: skip ALL compute LLKs (math, reduce, tile_regs, pack,
-    // reconfig, init) but keep the exact external CB flow so the reader/writer
-    // never stall. This isolates compute time: if wall-clock collapses with
-    // skip_compute, the critical path was the LLKs; if not, it's the
-    // reader/writer/CB-sync/drain path. Only valid for the common AG path
-    // (whole-row norm, packed AG, non-streaming, is_tp_1==0) — i.e. the galaxy
-    // bench shapes. Not bit-correct; this is a timing probe only.
-#ifdef WAN_ABL_SKIP_COMPUTE
-    constexpr bool skip_compute = true;
-#else
-    constexpr bool skip_compute = false;
-#endif
-
-    if constexpr (!skip_compute) {
-        mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
-        binary_op_init_common(input_cb, input_cb, input_cb);
-    }
+    mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    binary_op_init_common(input_cb, input_cb, input_cb);
 
     // One-time waits for reader-produced singletons.
     cb_wait_front(reduce_scalar_sum_cb, 1);
@@ -177,39 +162,9 @@ void kernel_main() {
         constexpr uint32_t per_row_stats_count = (per_head_norm != 0) ? num_heads_per_device : stats_tiles_cols;
         const uint32_t chunk_stats_tiles = rows_in_chunk * per_row_stats_count;
 
-        if constexpr (skip_compute) {
-            // --- PASSTHROUGH: replicate the external CB handshake, no LLKs ---
-            // PRE: produce one local-stats tile per row (forwarder consumes these).
-            for (uint32_t r = 0; r < rows_in_chunk; r++) {
-                cb_reserve_back(stats_dest_cb, 1);
-                cb_push_back(stats_dest_cb, 1);
-            }
-            // AG-wait + consume gathered stats (writer produced them).
-            cb_wait_front(stats_gathered_cb, chunk_stats_tiles);
-            cb_pop_front(stats_gathered_cb, chunk_stats_tiles);
-            // POST: consume rope cos/sin per row, produce output blocks (writer drains).
-            for (uint32_t r = 0; r < rows_in_chunk; r++) {
-                if constexpr (fuse_rope) {
-                    cb_wait_front(rope_cos_cb, head_dim_tiles);
-                    cb_wait_front(rope_sin_cb, head_dim_tiles);
-                    cb_pop_front(rope_cos_cb, head_dim_tiles);
-                    cb_pop_front(rope_sin_cb, head_dim_tiles);
-                }
-                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                    cb_reserve_back(output_cb, block_size);
-                    cb_push_back(output_cb, block_size);
-                }
-            }
-            // Release the resident input chunk (reader produced it).
-            cb_wait_front(input_cb, chunk_input_tiles);
-            cb_pop_front(input_cb, chunk_input_tiles);
-            row_processed += rows_in_chunk;
-            continue;
-        }
-
         // -------- PHASE 1: PRE — sum(x**2) per row --------
-        // Cumulative input wait (Phase 4): instead of one cb_wait_front for the
-        // whole chunk, wait per col-block. Lets the reader push block N+1 while
+        // Cumulative input wait: instead of one cb_wait_front for the whole
+        // chunk, wait per col-block. Lets the reader push block N+1 while
         // compute is processing block N. Counter resets per chunk because we
         // cb_pop_front(input_cb, chunk_input_tiles) at the end.
         // Per-head norm: inner reduce spans head_dim_tiles columns per head;
@@ -338,8 +293,8 @@ void kernel_main() {
         // Transpose each row's stat tile from COL 0 -> ROW 0 so the writer packs
         // two contiguous 64 B face-rows (tile byte offsets {0, 1024}) instead of
         // 32 strided fp32 col-0 loads. transpose_wh maps col 0 (face_00 col0 +
-        // face_10 col0) -> row 0 (face_00 row0 + face_01 row0). MUX/packed-AG path
-        // only; is_tp_1 keeps col 0 and reduces locally (no writer involved).
+        // face_10 col0) -> row 0 (face_00 row0 + face_01 row0). Packed-AG (all-gather)
+        // path only; is_tp_1 keeps col 0 and reduces locally (no forwarder involved).
         if constexpr (packed_ag_enabled != 0) {
             transpose_wh_init_short(stats_local_cb);
             pack_reconfig_data_format(stats_transposed_local_cb);
@@ -360,8 +315,8 @@ void kernel_main() {
         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
         {
             DeviceZoneScopedN("RMS_AGWAIT");
-            // MUX/packed-AG: writer scatters into the transposed (row-0) gathered
-            // CB; is_tp_1 / legacy single-worker fill the plain col-0 gathered CB.
+            // Packed-AG path: the worker writer lands the ring gather in row-0 of the
+            // transposed gathered CB; is_tp_1 fills the plain col-0 gathered CB locally.
             cb_wait_front(stats_reduce_src_cb, chunk_stats_tiles);
         }
 
@@ -386,11 +341,11 @@ void kernel_main() {
                         const uint32_t group_col_base = g * post_group_width;
                         const uint32_t group_abs_base = row_base + group_col_base;
 
-                        // Phase 9 post (TP>1 path): writer scattered the gathered
-                        // packed pages directly into COL 0 of stats_gathered_cb tiles
-                        // (strided stores), so reduce<AVG,REDUCE_ROW> over the row of
-                        // ring_size tiles runs on stats_gathered_cb unchanged. For the
-                        // per-head path each head's stat is a single tile.
+                        // Per-head / is_tp_1 path: the stat is already in COL 0 of
+                        // stats_gathered_cb (compute pushed it locally — no AG), so
+                        // reduce<AVG,REDUCE_ROW> over the row of ring_size tiles runs on
+                        // stats_gathered_cb unchanged. For the per-head path each head's
+                        // stat is a single tile.
                         // Fused reduce + eps + rsqrt: the post_reduce_op runs on DST
                         // (after reduce math, before pack) so we drop a separate
                         // tile_regs cycle, a reduce_result_cb round-trip, and the two
@@ -440,8 +395,8 @@ void kernel_main() {
                                 constexpr uint32_t recip_h_full_bits = __builtin_bit_cast(
                                     uint32_t, 1.0f / static_cast<float>(num_tile_cols * 32u * stats_tiles_cols));
                                 if constexpr (packed_ag_enabled != 0) {
-                                    // MUX path: the writer scatters each device's stats into ROW 0
-                                    // of stats_transposed_gathered_cb (two contiguous 64 B face-rows).
+                                    // All-gather path: the worker writer lands each device's stats in
+                                    // ROW 0 of stats_transposed_gathered_cb (two contiguous 64 B face-rows).
                                     // FPU-add the ring_size row-0 tiles, then transpose the summed
                                     // tile IN DST (row 0 -> col 0) with transpose_wh_dest — no CB
                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
@@ -475,7 +430,7 @@ void kernel_main() {
                                     tile_regs_release();
                                     cb_pop_front(stats_transposed_gathered_cb, stats_tiles_cols);
                                 } else {
-                                    // Legacy single-worker writer: gathered tiles are COL 0.
+                                    // Non-packed path: gathered tiles are in COL 0.
                                     cb_wait_front(stats_gathered_cb, stats_tiles_cols);
                                     reconfig_data_format(stats_gathered_cb, stats_gathered_cb);
                                     pack_reconfig_data_format(reduce_result_cb);
@@ -558,7 +513,7 @@ void kernel_main() {
                                 for (uint32_t col_tile = 0; col_tile < post_group_width; col_tile += block_size) {
                                     // Per_head_norm pushes head_dim_tiles per head (no padding)
                                     // so multiple heads don't blow past intermediate_cb. The
-                                    // legacy whole-row path keeps the block_size-padded push so
+                                    // whole-row path keeps the block_size-padded push so
                                     // downstream sub-phases (still block_size-driven) consume
                                     // matching counts even when num_tile_cols < block_size.
                                     const uint32_t tiles_in_block = (per_head_norm != 0)

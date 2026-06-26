@@ -23,11 +23,10 @@ struct WanFusedDistributedRmsnormSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> forwarder_cores;
     std::vector<tt::tt_metal::CoreCoord> cores;
     // Index of the stats DRAM scratch address inside the worker-writer's
-    // runtime-args vector. Set only when the MUX writer is used (TP>1 with
-    // >1 workers); empty for the legacy single-worker writer. The address
-    // changes per launch because the scratch is a regular device tensor
-    // allocated by create_output_tensors, so override_runtime_arguments
-    // refreshes this slot on cache hits.
+    // runtime-args vector. Set on the all-gather path (TP>1, whole-row norm);
+    // empty on the is_tp_1 path. The address changes per launch because the
+    // scratch is a regular device tensor allocated by create_output_tensors, so
+    // override_runtime_arguments refreshes this slot on cache hits.
     std::optional<size_t> stats_dram_addr_writer_arg_idx;
 };
 

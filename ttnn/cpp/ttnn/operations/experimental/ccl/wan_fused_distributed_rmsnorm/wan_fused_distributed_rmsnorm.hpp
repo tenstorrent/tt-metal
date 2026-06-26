@@ -41,9 +41,9 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     bool use_device_op = false);
 
-// Allocate the persistent stats DRAM buffer required by the device op's MUX
-// writer path (TP>1 with multiple workers). Returns std::nullopt for shapes
-// that don't trigger the MUX path (TP=1, per_head_norm, or single-worker).
+// Allocate the persistent stats DRAM scratch buffer required by the all-gather
+// path (TP>1, whole-row norm). Returns std::nullopt for shapes that don't
+// all-gather (TP=1 or per_head_norm), which reduce locally and need no scratch.
 // The caller is expected to hold this tensor across launches — it's a regular
 // device tensor allocated as a mesh-coherent MeshBuffer, which is what the
 // fabric mcast needs.

@@ -137,7 +137,6 @@ void kernel_main() {
         // ---- 3. read ring_size gathered sticks from DRAM into ROW 0 of gathered tiles ----
         cb_reserve_back(stats_transposed_gathered_cb, ring_size);
         const uint32_t gbase = get_write_ptr(stats_transposed_gathered_cb);
-#ifndef WAN_ABL_SKIP_GATHER_SCATTER
         for (uint32_t d = 0; d < ring_size; d++) {
             const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
             const uint32_t tile_dst = gbase + d * gathered_tile_bytes;
@@ -146,7 +145,6 @@ void kernel_main() {
             noc_async_read(src + kFaceRowBytes, tile_dst + kFace01Off, kFaceRowBytes);  // -> face_01 row0
         }
         noc_async_read_barrier();
-#endif
         cb_push_back(stats_transposed_gathered_cb, ring_size);
 
         // ---- 4. drain this row's output_cb tiles ----
@@ -169,9 +167,7 @@ void kernel_main() {
                     const uint32_t t_col = c - h * head_dim_tiles;
                     const uint32_t out_idx =
                         h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
-#ifndef WAN_ABL_SKIP_OUTPUT_WRITE
                     noc_async_write_tile(out_idx, output_accessor, rd);
-#endif
                     rd += output_tile_bytes;
                 }
             }
