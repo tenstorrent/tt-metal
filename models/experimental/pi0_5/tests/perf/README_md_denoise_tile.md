@@ -9,6 +9,7 @@ All numbers below: device 9, `DEVICE KERNEL DURATION` from tracy (not wall-clock
 ## Tests
 
 - Full denoise step:   `models/experimental/pi0_5/tests/perf/test_denoise_md_by_m.py`
+- MLP matmul tile gain: `models/experimental/pi0_5/tests/perf/test_md_tile_gain.py`
 - Op-level matmul:      `tests/ttnn/unit_tests/operations/matmul/test_matmul_decode.py`
 
 ## 1. Run the full-denoise M=32 / M=16 tests
@@ -60,27 +61,29 @@ in-model M=16 path.
 
 ## 4. 16×32-tile gain over 32×32 for the MLP matmuls (op-level)
 
-From `test_matmul_decode.py` in **full-width** mode at the model's core counts (gate/up 64-
-core shard / 72-core footprint; down 32 / 36), steady-state of 2 invocations:
+Test: **`test_md_tile_gain.py`** — runs each MLP matmul (full-width, model core counts:
+gate/up 64-core B-shard / 72-core footprint, down 32 / 36) under the device profiler at
+M=32 and M=16, reads `DEVICE KERNEL DURATION`, and asserts 16×32 beats 32×32.
+
+```bash
+# asserts the gain — run as plain pytest; run_device_perf wraps the inner op with
+# `python -m tracy` internally (per shape, M=16 and M=32):
+pytest models/experimental/pi0_5/tests/perf/test_md_tile_gain.py::test_md_tile_gain -v -s --device-id 9
+
+# the inner op alone, profiled — needs tracy to emit device-kernel durations:
+python -m tracy -p -r -m pytest \
+    models/experimental/pi0_5/tests/perf/test_md_tile_gain.py::test_md_op --device-id 9
+python models/experimental/pi0_5/tests/perf/_parse_ops_perop.py   # MatmulDecode durations
+```
+
+Measured (device 9, per-op device-kernel):
 
 | MLP matmul (K→N)   | cores | M=32 (32×32) | M=16 (16×32) | gain  | saved   |
 |--------------------|-------|--------------|--------------|-------|---------|
-| gate/up 1024→4096  | 72    | 5359 ns      | 4498 ns      | 1.19× | 861 ns  |
-| down   4096→1024   | 36    | 11331 ns     | 8973 ns      | 1.26× | 2358 ns |
-| **per layer** (2×gate/up + down) | | **22049 ns** | **17969 ns** | **1.23×** | **4080 ns** |
+| gate/up 1024→4096  | 72    | ~5100 ns     | ~4490 ns     | ~1.13–1.19× | ~700 ns |
+| down   4096→1024   | 36    | ~11300 ns    | ~9000 ns     | ~1.25× | ~2300 ns |
+| **per layer** (2×gate/up + down) | | **~21.6 us** | **~18.0 us** | **~1.2×** | **~3.6 us** |
 
-So the 16×32 tile saves ~**4.1 us/layer** of MLP matmul time (~1.23×) — **not** 2× despite
+So the 16×32 tile saves ~**3.6 us/layer** of MLP matmul time (~1.2×) — **not** 2× despite
 half the rows: fixed per-op cost (weight streaming, mcast, K-loop setup) dominates at tiny M.
-
-### Reproduce §4 (requires temporary edits — the committed test hardcodes 128 cores)
-
-The committed `test_matmul_decode` uses `num_inputB_cores = n//32` (=128 for N=4096) and
-only M∈{1..64} at N=4096. To measure on a 120-core P150 at the model's shapes:
-- params → `(16,1024,4096),(32,1024,4096),(16,4096,1024),(32,4096,1024)`
-- after `num_inputB_cores = n // 32`, add: `while num_inputB_cores > 120: num_inputB_cores //= 2`
-
-```bash
-python -m tracy -p -r -n mmd_fw -m pytest \
-    tests/ttnn/unit_tests/operations/matmul/test_matmul_decode.py::test_matmul_decode --device-id 9
-python models/experimental/pi0_5/tests/perf/_parse_ops_perop.py   # filter MatmulDecode, group by M
-```
+gate/up has run-to-run variance (~1.13–1.19×); the test asserts `gain >= 1.05`.
