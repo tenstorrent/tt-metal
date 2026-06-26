@@ -96,11 +96,9 @@ def _denoise_sdpa_pcfg(q_seq, kv_seq, grid_x, grid_y):
 # matmul_decode branch (Sankar Manoj matmul_decode op + alnah005 decode_all wiring).
 DECODE_ALL = False
 
-# decode_all keeps the activation WIDTH-SHARDED across consecutive ops: the adaRMS norm emits its
-# output ALREADY in the 2-core width-sharded layout matmul_decode wants, so the norm's trailing
-# ShardedToInterleaved AND the InterleavedToSharded before qkv / gate-up are eliminated (norm PCC
-# 0.99996 vs golden). Genuine layout boundaries (SDPA out -> concat_heads, gate/up N-shard -> down
-# K-shard) keep their conversion.
+# decode_all: the adaRMS norm emits its result block-sharded; each projection matmul_decode reshards
+# it internally (reshard_input=True), so the norm skips its trailing sharded_to_interleaved and there
+# is no interleaved intermediate between the norm and the projections.
 
 _K_BLOCKS = 2
 _RESHARD_CORES = 2
@@ -140,32 +138,6 @@ def _ws_in_mc(device, m, k):
     )
 
 
-def _wshard_rms_norm(x, weight, eps, bias, device):
-    """adaRMS that emits the result ALREADY in the 2-core WIDTH_SHARDED layout matmul_decode wants
-    (== _ws_in_mc). One I2S to shard the input, the norm computes width-sharded across _RESHARD_CORES
-    cores, NO trailing sharded_to_interleaved -- so the downstream qkv/gate-up matmul_decode consumes
-    it with ZERO reshard. Numerically identical to sharded_rms_norm (PCC 0.99996 vs golden)."""
-    m, k = x.shape[-2], x.shape[-1]
-    ws_mc = _ws_in_mc(device, m, k)
-    x_sh = ttnn.to_memory_config(x, ws_mc)  # I2S (interleaved -> width-shard 2-core); norm needs sharded in
-    m_t = m // 32
-    block_w = (k // 32) // _RESHARD_CORES
-    # subblock_w must be <= 8 tiles (kernel constraint at dst_full_sync_en=false); pick the largest divisor.
-    subblock_w = block_w
-    while subblock_w > 8 or block_w % subblock_w != 0:
-        subblock_w -= 1
-    pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(_RESHARD_CORES, 1),
-        subblock_w=subblock_w,
-        block_h=m_t,
-        block_w=block_w,
-        inplace=False,
-    )
-    normed = ttnn.rms_norm(x_sh, weight=weight, bias=bias, epsilon=eps, program_config=pc, memory_config=ws_mc)
-    ttnn.deallocate(x_sh)
-    return normed  # WIDTH_SHARDED on _RESHARD_CORES cores -- feed straight to matmul_decode
-
-
 class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
     def _proj(self, x, w, dtype, m_t, grid, ck):
         k_t, n_t = w.shape[-2] // 32, w.shape[-1] // 32
@@ -198,12 +170,14 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
 
         m_t = s // 32
         if DECODE_ALL:
-            # adaRMS norm already emitted width-sharded (== _ws_in_mc); consume directly, no I2S.
+            # adaRMS emits block-sharded (fast 8-core norm, no S2I); matmul_decode reshards in0 in its reader.
             # hidden_states (== the block's `normed`) is owned + freed by the block forward.
             qkv = ttnn.matmul_decode(
                 hidden_states,
                 self.wqkv_b,
                 partial_width_sharded=True,
+                reshard_input=True,
+                reshard_cores=_RESHARD_CORES,
                 compute_kernel_config=_LOFI,
                 interleaved_output=True,
                 dtype=ttnn.bfloat8_b,
@@ -274,17 +248,26 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if not DECODE_ALL:
             return super().forward(x)
-        # adaRMS norm already emitted width-sharded (== _ws_in_mc); consume x directly, no I2S.
+        # adaRMS emits block-sharded (fast 8-core norm, no S2I); matmul_decode reshards in0 in its reader.
         # x (== the block's `normed`) is owned + freed by the block forward.
         gate = ttnn.matmul_decode(
             x,
             self.gate_b,
             partial_width_sharded=True,
+            reshard_input=True,
+            reshard_cores=_RESHARD_CORES,
             compute_kernel_config=_LOFI,
             fused_gelu=True,
             fused_gelu_approx=True,
         )
-        up = ttnn.matmul_decode(x, self.up_b, partial_width_sharded=True, compute_kernel_config=_LOFI)
+        up = ttnn.matmul_decode(
+            x,
+            self.up_b,
+            partial_width_sharded=True,
+            reshard_input=True,
+            reshard_cores=_RESHARD_CORES,
+            compute_kernel_config=_LOFI,
+        )
         hid = ttnn.multiply(gate, up, memory_config=_L1)
         out = ttnn.matmul_decode(
             hid,
@@ -310,11 +293,9 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         return new
 
     def _apply_ada(self, x, scale1, shift, eps):
-        # decode_all: emit width-sharded (2-core) so the next matmul_decode skips its input I2S and
-        # the norm skips its trailing S2I. Linear path: parent's block-sharded + S2I-to-interleaved.
-        if DECODE_ALL:
-            return _wshard_rms_norm(x, scale1, eps, shift, self.device)
-        return super()._apply_ada(x, scale1, shift, eps)
+        # decode_all: emit the norm block-sharded so the downstream matmul_decode(reshard_input)
+        # reshards it internally (no trailing S2I / interleaved intermediate); linear path unchanged.
+        return super()._apply_ada(x, scale1, shift, eps, out_block_sharded=DECODE_ALL)
 
     def move_weights_to_device_impl(self):
         # L1-resident projection weights (each stage holds <=5 layers, fits in L1): removes the

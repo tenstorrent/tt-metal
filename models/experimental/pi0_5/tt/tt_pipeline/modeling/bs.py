@@ -45,9 +45,14 @@ def sharded_norm_pcfg(m_tiles, hidden_tiles, *, max_grid_x=8, max_grid_y=8):
         return None
 
 
-def sharded_rms_norm(x, weight, eps, m_padded, hidden, *, batch=1, bias=None):
+def sharded_rms_norm(x, weight, eps, m_padded, hidden, *, batch=1, bias=None, out_block_sharded=False):
     """Sharded RMSNorm with a pre-offset ``weight`` (Gemma ``w+1``), INTERLEAVED-L1 result.
-    Optional ``bias`` (adaRMS fused modulation) is added post-norm inside the kernel."""
+    Optional ``bias`` (adaRMS fused modulation) is added post-norm inside the kernel.
+
+    When ``out_block_sharded`` is True, the trailing ``sharded_to_interleaved`` is SKIPPED and the
+    block-sharded ``normed`` (memory_config == ``memcfg``) is returned directly -- the downstream
+    consumer (matmul_decode with ``reshard_input=True``) reshards it internally, so the S2I and the
+    interleaved intermediate are both eliminated. Falls back to interleaved if no sharded pcfg."""
     m_tiles = m_padded // 32
     cfg = sharded_norm_pcfg(m_tiles, hidden // 32, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
     if cfg is None:
@@ -65,6 +70,8 @@ def sharded_rms_norm(x, weight, eps, m_padded, hidden, *, batch=1, bias=None):
         memory_config=memcfg,
     )
     ttnn.deallocate(x_sh)
+    if out_block_sharded:
+        return normed  # block-sharded (memcfg); fed straight to matmul_decode(reshard_input=True)
     out = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(normed)
     return out

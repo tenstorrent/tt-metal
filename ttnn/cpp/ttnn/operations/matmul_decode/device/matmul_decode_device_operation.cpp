@@ -76,16 +76,22 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
     if (operation_attributes.reshard_input) {
-        // Interleaved in0 path: the reader reshards A internally, so A must be INTERLEAVED (not
-        // pre-width-sharded). The K dimension must split evenly across reshard_cores and each
-        // per-core K-slice must be tile-aligned.
+        // reshard_input path: the reader reshards A internally (each of `reshard_cores` sender
+        // cores NoC-reads its logical K-slice into in0_cb via a TensorAccessor), so A may be
+        // EITHER interleaved OR sharded (block/width-sharded) -- the TensorAccessor abstracts the
+        // source layout, resolving each logical tile-page to the correct bank/core. The reader's
+        // page math indexes A by its logical [M_tiles, K_tiles] shape, which is layout-independent.
+        // The K dimension must split evenly across reshard_cores and each per-core K-slice must be
+        // tile-aligned.
         TT_FATAL(
             operation_attributes.partial_width_sharded,
             "reshard_input is only supported with partial_width_sharded matmul_decode");
+        const auto in0_layout = input_tensor_a.memory_config().memory_layout();
         TT_FATAL(
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "reshard_input requires Input tensor A to be in interleaved memory layout, but got {}",
-            input_tensor_a.memory_config().memory_layout());
+            in0_layout == TensorMemoryLayout::INTERLEAVED || in0_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+                in0_layout == TensorMemoryLayout::WIDTH_SHARDED,
+            "reshard_input requires Input tensor A to be interleaved, block-sharded, or width-sharded, but got {}",
+            in0_layout);
         const uint32_t reshard_cores = operation_attributes.reshard_cores;
         TT_FATAL(reshard_cores > 0, "reshard_cores must be > 0");
         TT_FATAL(
