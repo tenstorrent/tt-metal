@@ -2,11 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// matmul_decode targets a newer tt-metal where the OO dataflow API (Noc / CircularBuffer /
+// Semaphore / UnicastEndpoint) lives in split api/dataflow/*.h headers. In this version those
+// classes live under experimental/*.h in namespace experimental; api/dataflow/dataflow_api.h still
+// provides the C-style primitives (noc_async_write_page, cb_*, get_arg_val, TensorAccessor).
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
-#include "api/dataflow/endpoints.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/endpoints.h"
+using experimental::CircularBuffer;
+using experimental::Noc;
+using experimental::Semaphore;
+using experimental::UnicastEndpoint;
 
 // Partial-width-sharded matmul cross-core K-reduction.
 //
