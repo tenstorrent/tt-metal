@@ -42,11 +42,8 @@ void kernel_main() {
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(4);
 #ifdef BC_ENABLE
-    // Block-cyclic remap constants (appended after kv_batch_page_offset by the factory): {chunk, chunk_local,
-    // seq_len_local}. Passed to the shared gather helper, which maps natural indices -> physical pages.
-    const uint32_t bc_chunk = get_arg_val<uint32_t>(5);
-    const uint32_t bc_chunk_local = get_arg_val<uint32_t>(6);
-    const uint32_t bc_seq_len_local = get_arg_val<uint32_t>(7);
+    // Block-cyclic remap: only bc_delta (= (T-chunk)/sp) is a runtime arg; divisors + K are compile-time defines.
+    const uint32_t bc_delta = get_arg_val<uint32_t>(5);
 #endif
 
     constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
@@ -118,9 +115,7 @@ void kernel_main() {
                 kv_batch_page_offset
 #ifdef BC_ENABLE
                 ,
-                bc_chunk,
-                bc_chunk_local,
-                bc_seq_len_local
+                bc_delta
 #endif
             );
             kack_cb.reserve_back(1);

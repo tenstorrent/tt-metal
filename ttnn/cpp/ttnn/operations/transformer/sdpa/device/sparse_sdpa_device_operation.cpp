@@ -210,9 +210,12 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is a dynamic runtime arg
         // (see get_dynamic_runtime_args), so indexing into a different slot reuses the same program.
         attrs.has_indexed_kv_cache(),
-        // Only WHETHER block-cyclic remap is on (it gates a compile-time #ifdef in the gather kernels); the
-        // sp/chunk-derived constants are runtime args, so the same program serves any sp/chunk/T.
+        // Block-cyclic remap: enable gates a compile-time #ifdef, and the divisors (sp, chunk_size) are
+        // compile-time defines (BC_SP, BC_CHUNK_LOCAL) so different sp/chunk are DISTINCT programs. seq_len_local
+        // (= T/sp) stays a runtime arg, so changing T alone does not recompile.
         attrs.has_block_cyclic(),
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_size : 0u,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -222,36 +225,56 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_ru
     const SparseSDPAInputs& t,
     Tensor& /*output*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Non-indexed: the gather page offset is the baked 0 from create_descriptor (and the non-indexed program
-    // is never shared with an indexed one — has_indexed_kv_cache() is in the hash — so nothing to re-apply).
-    if (!attrs.has_indexed_kv_cache()) {
+    // Two values depend on the runtime cache length T, which is NOT in the program hash for an interleaved kv
+    // (so the same program is reused across different T): kv_batch_page_offset = cache_batch_idx*T (indexed
+    // kv) and bc_delta = (T - chunk_size)/sp (block-cyclic remap). create_descriptor bakes both at build time,
+    // so on a program-cache HIT with a different T they would be STALE — re-apply both here from the current T
+    // every dispatch. (A non-indexed, non-block-cyclic program has neither, so there is nothing to re-apply.)
+    const bool indexed = attrs.has_indexed_kv_cache();
+    const bool block_cyclic = attrs.has_block_cyclic();
+    if (!indexed && !block_cyclic) {
         return {};
     }
-    // Indexed: re-apply kv_batch_page_offset = cache_batch_idx * T to the reader (kernel 0, arg 5) and writer
-    // (kernel 1, arg 4) on every dispatch. The value is the same on every core but the slot is per-core, so
-    // emit one entry per core per kernel. The core partition mirrors the factory exactly.
     const uint32_t T = t.kv.logical_shape()[2];
-    const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value() * T;
+    const uint32_t kv_batch_page_offset = indexed ? attrs.cache_batch_idx.value() * T : 0u;
+    const uint32_t bc_delta = block_cyclic ? (T - attrs.block_cyclic->chunk_size) / attrs.block_cyclic->sp : 0u;
     const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
     const uint32_t num_cores = grid.x * grid.y;
     // Arg slots/kernel indices are defined once in sparse_sdpa_rt (header), shared with the program factory's
-    // emit order so a reorder can't silently desync this re-apply path from the factory.
+    // emit order so a reorder can't silently desync this re-apply path from the factory. The value is the same
+    // on every core but the slot is per-core, so emit one entry per core per kernel.
     std::vector<tt::tt_metal::DynamicRuntimeArg> args;
-    args.reserve(2 * num_cores);
+    args.reserve(static_cast<size_t>(2 * (static_cast<int>(indexed) + static_cast<int>(block_cyclic))) * num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        args.push_back(
-            {sparse_sdpa_rt::kReaderKernelIdx,
-             core,
-             sparse_sdpa_rt::kReaderBatchOffsetArg,
-             kv_batch_page_offset,
-             /*is_common=*/false});
-        args.push_back(
-            {sparse_sdpa_rt::kWriterKernelIdx,
-             core,
-             sparse_sdpa_rt::kWriterBatchOffsetArg,
-             kv_batch_page_offset,
-             /*is_common=*/false});
+        if (indexed) {
+            args.push_back(
+                {sparse_sdpa_rt::kReaderKernelIdx,
+                 core,
+                 sparse_sdpa_rt::kReaderBatchOffsetArg,
+                 kv_batch_page_offset,
+                 /*is_common=*/false});
+            args.push_back(
+                {sparse_sdpa_rt::kWriterKernelIdx,
+                 core,
+                 sparse_sdpa_rt::kWriterBatchOffsetArg,
+                 kv_batch_page_offset,
+                 /*is_common=*/false});
+        }
+        if (block_cyclic) {
+            args.push_back(
+                {sparse_sdpa_rt::kReaderKernelIdx,
+                 core,
+                 sparse_sdpa_rt::kReaderDeltaArg,
+                 bc_delta,
+                 /*is_common=*/false});
+            args.push_back(
+                {sparse_sdpa_rt::kWriterKernelIdx,
+                 core,
+                 sparse_sdpa_rt::kWriterDeltaArg,
+                 bc_delta,
+                 /*is_common=*/false});
+        }
     }
     return args;
 }

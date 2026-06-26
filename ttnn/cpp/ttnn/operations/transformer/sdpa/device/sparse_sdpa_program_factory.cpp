@@ -203,7 +203,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         std::map<std::string, std::string> rdefs{
             {"CB_KREQ", std::to_string(cb_kreq)}, {"CB_KACK", std::to_string(cb_kack)}};
         if (attrs.has_block_cyclic()) {
-            rdefs["BC_ENABLE"] = "1";  // gate the natural->block-cyclic page-id remap in the shared gather helper
+            // Gate the natural->block-cyclic page-id remap. The divisors (chunk_local = chunk/sp, sp) and
+            // K = chunk_local*(sp-1) are compile-time, so the kernel does one mul+shift divide and one runtime
+            // multiply (only bc_delta = (T-chunk)/sp is runtime). page = n + c*bc_delta - slab*BC_K.
+            const uint32_t bc_chunk_local = attrs.block_cyclic->chunk_size / attrs.block_cyclic->sp;
+            rdefs["BC_ENABLE"] = "1";
+            rdefs["BC_CHUNK_LOCAL"] = std::to_string(bc_chunk_local);
+            rdefs["BC_SP"] = std::to_string(attrs.block_cyclic->sp);
+            rdefs["BC_K"] = std::to_string(bc_chunk_local * (attrs.block_cyclic->sp - 1));
         }
         reader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(rdefs.begin(), rdefs.end());
     }
@@ -224,7 +231,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             {"K_DIM", std::to_string(k_dim)},
             {"KV_ELEM_BYTES", std::to_string(kv_elem_bytes)}};
         if (attrs.has_block_cyclic()) {
-            wdefs["BC_ENABLE"] = "1";  // gate the natural->block-cyclic page-id remap in the shared gather helper
+            const uint32_t bc_chunk_local = attrs.block_cyclic->chunk_size / attrs.block_cyclic->sp;
+            wdefs["BC_ENABLE"] = "1";  // see reader defines: compile-time divisors + K for the page-id remap
+            wdefs["BC_CHUNK_LOCAL"] = std::to_string(bc_chunk_local);
+            wdefs["BC_SP"] = std::to_string(attrs.block_cyclic->sp);
+            wdefs["BC_K"] = std::to_string(bc_chunk_local * (attrs.block_cyclic->sp - 1));
         }
         writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(wdefs.begin(), wdefs.end());
     }
@@ -285,44 +296,24 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // (so changing the slot doesn't recompile). 0 when not indexed (kv is a single [1,1,T,K_DIM] cache).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
-    // Block-cyclic remap constants (only consumed when BC_ENABLE; appended after kv_batch_page_offset). The
-    // kernel maps a natural index n to physical page: slab=n/chunk, rem=n%chunk, c=rem/chunk_local,
-    // off=rem%chunk_local, page=c*seq_len_local + slab*chunk_local + off. seq_len_local depends on the runtime
-    // cache length T, so these ride runtime args (not compile-time) — changing T does not recompile.
+    // Block-cyclic remap: only bc_delta = (T - chunk)/sp rides a runtime arg (T is runtime), appended after
+    // kv_batch_page_offset when BC_ENABLE. The divisors (chunk_local, sp) and K are compile-time defines (see the
+    // reader/writer define blocks above). Factory precomputes the subtraction so the kernel just multiplies.
     const bool bc_on = attrs.has_block_cyclic();
-    const uint32_t bc_chunk = bc_on ? attrs.block_cyclic->chunk_size : 0u;
-    const uint32_t bc_chunk_local = bc_on ? bc_chunk / attrs.block_cyclic->sp : 0u;
-    const uint32_t bc_seq_len_local = bc_on ? kv_T / attrs.block_cyclic->sp : 0u;
+    const uint32_t bc_delta = bc_on ? (kv_T - attrs.block_cyclic->chunk_size) / attrs.block_cyclic->sp : 0u;
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
         // kv_batch_page_offset sits at a fixed index (sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg, used by
-        // get_dynamic_runtime_args to re-apply it on a cache hit); the block-cyclic constants follow it (only
-        // when enabled). If you reorder the args before it, update those constants or the re-apply targets the
+        // get_dynamic_runtime_args to re-apply it on a cache hit); bc_seq_len_local follows it (only when
+        // enabled). If you reorder the args before it, update those constants or the re-apply targets the
         // wrong slot.
         if (bc_on) {
             reader_desc.emplace_runtime_args(
-                core,
-                {q_buf,
-                 kv_buf,
-                 idx_buf,
-                 tok_start,
-                 tok_count,
-                 kv_batch_page_offset,
-                 bc_chunk,
-                 bc_chunk_local,
-                 bc_seq_len_local});
+                core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset, bc_delta});
             writer_desc.emplace_runtime_args(
-                core,
-                {out_buf,
-                 tok_start,
-                 tok_count,
-                 kv_buf,
-                 kv_batch_page_offset,
-                 bc_chunk,
-                 bc_chunk_local,
-                 bc_seq_len_local});
+                core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset, bc_delta});
         } else {
             reader_desc.emplace_runtime_args(
                 core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});

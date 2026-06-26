@@ -28,7 +28,12 @@ inline constexpr uint32_t kReaderKernelIdx = 0;
 inline constexpr uint32_t kWriterKernelIdx = 1;
 inline constexpr uint32_t kReaderBatchOffsetArg = 5;  // {q, kv, idx, tok_start, tok_count, [kv_batch_page_offset]}
 inline constexpr uint32_t kWriterBatchOffsetArg = 4;  // {out, tok_start, tok_count, kv, [kv_batch_page_offset]}
-// Block-cyclic remap constants follow kv_batch_page_offset (reader args 6/7/8, writer args 5/6/7) when enabled.
+// Block-cyclic bc_delta follows kv_batch_page_offset (reader arg 6, writer arg 5) when enabled. It is
+// (T-chunk)/sp — T is the runtime cache length, NOT hashed — so it is re-applied every dispatch by
+// get_dynamic_runtime_args (like kv_batch_page_offset), else a cache hit with a different T reads a stale
+// value. The divisors (sp, chunk/sp) ARE compile-time defines (BC_SP, BC_CHUNK_LOCAL).
+inline constexpr uint32_t kReaderDeltaArg = 6;
+inline constexpr uint32_t kWriterDeltaArg = 5;
 }  // namespace sparse_sdpa_rt
 
 struct SparseSDPAOperation {

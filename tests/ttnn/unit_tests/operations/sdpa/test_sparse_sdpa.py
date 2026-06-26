@@ -122,6 +122,47 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
     assert n == 1, f"oversized persistent kv reuse recompiled: {n} program-cache entries (expected 1)"
 
 
+# ---- block-cyclic remap: indices are NATURAL token positions but the kv cache is stored block-cyclic across
+# ---- `sp` shards with global chunk `chunk`; the gather kernel remaps natural -> physical page on the fly. The
+# ---- remap's bc_delta = (T-chunk)/sp depends on the runtime cache length T (NOT in the program hash), so it
+# ---- must be re-applied every dispatch — changing T must stay CORRECT on a program-cache HIT (regression for
+# ---- the stale-bc_delta bug) and must NOT recompile. sp/chunk are just layout numbers (no SP mesh needed). ----
+def _bc_positions(sp, chunk, T):
+    """P[r] = natural token position physically stored at block-cyclic row r (== model blockcyclic_positions)."""
+    sll, cl = T // sp, chunk // sp
+    c = torch.arange(sp).repeat_interleave(sll)
+    lr = torch.arange(sll).repeat(sp)
+    return (lr // cl) * chunk + c * cl + (lr % cl)
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_block_cyclic_kv_len_no_recompile(device):
+    H, S, TOPK, kc = 32, 64, 64, 32
+    sp, chunk = 2, 128  # block-cyclic layout descriptors
+    device.clear_program_cache()
+    for T in (256, 512, 1024):  # same hash (sp/chunk/shapes/dtype fixed); only the runtime cache length T differs
+        q, kv_nat, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=T)
+        P = _bc_positions(sp, chunk, T)
+        kv_bc = kv_nat.clone()
+        kv_bc[0, 0] = kv_nat[0, 0][P]  # physical row r holds natural token P[r]
+        scale = K_DIM**-0.5
+        tt_out = ttnn.transformer.sparse_sdpa(
+            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(kv_bc.to(torch.bfloat16), device, ttnn.bfloat16),
+            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            V_DIM,
+            scale=scale,
+            k_chunk_size=kc,
+            block_cyclic_sp=sp,
+            block_cyclic_chunk=chunk,
+        )
+        # the op gathers kv_bc[invP(n)] == kv_nat[n], so it must match the natural-order golden.
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_nat, indices, scale, V_DIM))
+        assert p >= 0.99, f"PCC {p:.5f} (block-cyclic, T={T}) — stale bc_delta on a program-cache hit?"
+    n = device.num_program_cache_entries()
+    assert n == 1, f"block-cyclic kv length change recompiled: {n} entries (expected 1)"
+
+
 def _indexed_inputs(H, S, T, TOPK, B, seed=0):
     gen = torch.Generator().manual_seed(seed)
     q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
