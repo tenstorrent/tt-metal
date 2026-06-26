@@ -46,10 +46,10 @@ void validate_kernel_config_defines(const std::map<std::string, std::string>& de
     }
 }
 
-void validate_output_dir(const std::string& output_dir) {
+void validate_output_dir(const std::filesystem::path& output_dir) {
     if (output_dir.empty()) {
         throw std::invalid_argument(
-            "OfflineKernelCompileParams::output_dir must be non-empty; an empty string would emit "
+            "OfflineKernelCompileParams::output_dir must be non-empty; an empty path would emit "
             "artifacts relative to the process current working directory.");
     }
 }
@@ -137,7 +137,7 @@ void copy_generated_elfs_to_output_dir(
     BuildEnvManager& build_env_manager,
     const DeviceBuildEnv& device_build_env,
     const Hal& hal,
-    const std::string& output_dir) {
+    const std::filesystem::path& output_dir) {
     const std::string source_kernel_root = device_build_env.build_env.get_out_kernel_root_path();
     const uint32_t programmable_core_type_idx =
         hal.get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
@@ -158,7 +158,7 @@ void copy_generated_elfs_to_output_dir(
             programmable_core_type_idx,
             processor_class_idx,
             processor_id,
-            output_dir,
+            output_dir.string(),
             kernel->get_full_kernel_name());
 
         std::filesystem::create_directories(std::filesystem::path(dest_elf_path).parent_path());

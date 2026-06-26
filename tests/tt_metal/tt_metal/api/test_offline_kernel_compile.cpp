@@ -108,7 +108,7 @@ void seed_precompiled_root(
     using Params = experimental::OfflineKernelCompileParams;
     Params params{
         .mode = Params::AllSupportedProducts{},
-        .output_dir = output_dir.string(),
+        .output_dir = output_dir,
         .cb_compile_configs = cb_compile_configs,
     };
     experimental::CompileKernelOffline(kernel_path, kernel_config, params);
@@ -159,7 +159,7 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsInvalidExplic
     using Params = experimental::OfflineKernelCompileParams;
     Params params{
         .mode = Params::AllSupportedProducts{},
-        .output_dir = "/tmp/unused",
+        .output_dir = fs::path("/tmp/unused"),
         .cb_compile_configs =
             {
                 Params::CBCompileConfig{.cb_index = 0, .data_format = DataFormat::Float16_b},
@@ -174,7 +174,7 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineRejectsEmptyOutputDi
     using Params = experimental::OfflineKernelCompileParams;
     Params params{
         .mode = Params::AllSupportedProducts{},
-        .output_dir = "",
+        .output_dir = fs::path{},
         .cb_compile_configs = {},
     };
     EXPECT_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params), std::invalid_argument);
@@ -220,7 +220,7 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtree
     using Params = experimental::OfflineKernelCompileParams;
     Params params{
         .mode = Params::AllSupportedProducts{},
-        .output_dir = output_dir.path_.string(),
+        .output_dir = output_dir.path_,
         .cb_compile_configs = {},
     };
 

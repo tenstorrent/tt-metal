@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -54,7 +55,7 @@ struct OfflineKernelCompileParams {
     Mode mode = AllSupportedProducts{};
     /// Root directory for emitted offline kernel artifacts. Must be non-empty;
     /// otherwise CompileKernelOffline throws std::invalid_argument.
-    std::string output_dir;
+    std::filesystem::path output_dir;
     /// Per-CB compile configuration used to populate compile metadata.
     std::vector<CBCompileConfig> cb_compile_configs;
 };
