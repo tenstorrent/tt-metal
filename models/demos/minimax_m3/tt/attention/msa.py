@@ -55,13 +55,14 @@ def index_branch_forward(hidden_states, weights, rope_mats, transformation_mat, 
     1/TP col); index_k_proj is replicated (shared head). Per device this yields index_q [1, n_idx_local,
     S, INDEX_DIM] (n_idx_local=1 at TP=4) and index_k [1, 1, S, INDEX_DIM] -> msa_sp_attention's indexer.
 
-    TODO(REVISIT) — confidence on the norm+rope here is uneven:
-      * norm: HIGH — index_q_norm/index_k_norm weights ship in the checkpoint, so they are applied.
-      * rope: MEDIUM — taken from a WebFetch *summary* of transformers-main MiniMaxM3VLIndexer
-        (proj->norm->apply_rotary_pos_emb(cos/sin[..,:head_dim])), matches DeepSeek-DSA. NOT yet
-        verified against the actual modeling source: confirm rope is on BOTH index_q AND index_k, the
-        rotary width (partial-64 like main, via cos[..,:head_dim] on a 64-wide cos, vs full-128), and
-        the order. Re-check before trusting the end-to-end token output. See PREFILL_PROPOSAL.md.
+    VERIFIED 2026-06-26 against transformers-main MiniMaxM3VLIndexer source (not just a summary):
+      * order proj -> q_norm/k_norm -> apply_rotary_pos_emb — matches.
+      * rope on BOTH index_q AND index_k — matches.
+      * rotary width: reference does apply_rotary_pos_emb(idx_q, idx_k, cos[..,:index_head_dim], ...);
+        with head_dim=128, partial_rotary_factor=0.5 the model cos/sin are 64-wide, and index_head_dim=
+        sparse_index_dim=128, so the slice yields the full 64 -> PARTIAL-64 (rotate first 64 of the
+        128-wide index head), same as main attention. Our apply_rope(rope_mats=main 64-wide) matches.
+      * norm: index_q_norm/index_k_norm gains ship in the checkpoint, applied per-head.
     """
     iq = _split_index_heads(ttnn.linear(hidden_states, weights.index_q_proj))  # [1, n_idx_local, S, IDX_DIM]
     iq = apply_qk_norm_per_head(iq, weights.index_q_norm, rms_norm_eps)
