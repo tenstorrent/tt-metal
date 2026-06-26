@@ -978,5 +978,44 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
                                  "mismatched processor placement")));
 }
 
+// ============================================================================
+// Kernel Scratchpad Legality: slow dispatch is rejected
+// ============================================================================
+//
+// A kernel scratchpad is fast/mesh-dispatch only. Its framework-allocated L1 base address is
+// delivered as a common runtime arg, and on the slow-dispatch LaunchProgram path the CRTA buffer is
+// written to the device BEFORE the ephemeral scratchpad L1 is allocated — so the address would never
+// reach the kernel. The runtime rejects a scratchpad-bearing program up front rather than silently
+// shipping a 0 / stale base address (see LaunchProgram in tt_metal/impl/host_api/tt_metal.cpp).
+//
+// This fixture (ProgramSpecHWTest, on MeshDeviceFixture) is the slow-dispatch path, so it is the
+// right place to pin the reject. The spec is otherwise valid: one Gen1 DM kernel binding one
+// scratchpad. The legality TT_FATAL is the very first statement in LaunchProgram, so it fires before
+// any kernel compilation — the minimal kernel source need not actually use the scratchpad.
+TEST_F(ProgramSpecHWTest, ScratchpadRejectedUnderSlowDispatch) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    const NodeCoord node{0, 0};
+
+    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
+    kernel.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"});
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_slow_dispatch_reject";
+    spec.kernels = {kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 64}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"dm_kernel"})};
+
+    // MakeProgramFromSpec succeeds (the spec is legal); the rejection happens at the slow-dispatch
+    // launch.
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    EXPECT_THAT(
+        [&] { detail::LaunchProgram(device, program); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("require fast/mesh dispatch")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
