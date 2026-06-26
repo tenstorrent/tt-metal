@@ -336,8 +336,7 @@ class TtPrefillRuntime:
         {seq, source_rank, layer_idx, request_id} into the host-local
         LayerCompletionQueue, and the LayerCompletionRouter routes it to the
         master host and re-emits it (in seq order) into the scheduler-facing
-        counter channel. See
-        docs/superpowers/plans/2026-06-19-pipelined-prefill-layer-completion-routing.md.
+        counter channel (see runners/pipelined_prefill/).
         """
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink

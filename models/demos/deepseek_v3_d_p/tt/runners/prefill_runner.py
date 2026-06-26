@@ -251,12 +251,10 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
     """
 
     def on_layer_complete(layer_idx: int, request_id: int) -> None:
+        # Hot path: fired once per layer inside model.forward. Push directly (no per-call closure)
+        # and return on the common success; only the rare full-ring case falls into the spin below.
         seq = request_id * num_layers + layer_idx
-
-        def push() -> bool:
-            return producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id)
-
-        if push():
+        if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
             return
 
         # Ring is sized well above in-flight depth; a full ring means the router
@@ -270,7 +268,7 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers):
             f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
         )
         while True:
-            if push():
+            if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
                 logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
                 return
             if _shutdown:
