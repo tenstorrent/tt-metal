@@ -276,11 +276,8 @@ pip install fastapi "uvicorn[standard]" orjson
 
 ```bash
 python models/demos/blackhole/pplx_embed_0_6b/demo/serve.py --dp 32
-# CLI: --dp N (chips, default 32), --host (default 0.0.0.0), --port (default 8000),
-#      --server-phys S    (physical cores reserved for the server; default 4 = recommended)
-#      --cores-per-worker K (pin K physical cores per worker; default 0 = OS-float; NOT recommended)
-#      --fastokens / --server-tokenize  (experimental; NOT recommended — measured to
-#                                         REGRESS DP=32 throughput; see "Tokenization" below)
+# --dp N         chips (default 32)
+# --host/--port  bind address (default 0.0.0.0:8000)
 ```
 
 **Fixed worker configuration** (tuned for lowest per-request latency, not
@@ -288,22 +285,11 @@ per-request toggles): ISL 512, `BucketedEncoder` ON (short text routes to the
 faster 128/256 trace), masked-attn ON (real-token mean-pool + SDPA padding mask,
 near-reference accuracy at any length), batch 1 per chip, 1 command queue.
 
-**Core allocation — isolate the server, OS-float the workers.** The single
-biggest scaling lever is *which process gets dedicated CPU*. Each worker is
-device-bound (its ~7.6 ms is on-chip) and only needs short, un-starved host bursts
-for tokenize + dispatch, so the 32 workers are left **OS-scheduled** — pinning a
-worker to dedicated cores starves its tt-metal dispatch/completion threads and
-causes catastrophic tails (e.g. e2e p99 jumps to ~128 ms). The HTTP **server** is
-the opposite: a *single* process (event loop + result collector + HTTP) serving
-all 32 chips, i.e. the one shared host serialization point. By default
-(`--server-phys 4`) it gets 4 dedicated physical cores while workers float on the
-rest. Measured effect at full load (vs. everything OS-floating): **+46 % throughput
-(1,777 → 2,589 req/s) and −42 % p99 latency at 64 in-flight**, with on-device
-replay still flat at ~7.6 ms. Set `--server-phys 0` to disable, or
-`--cores-per-worker K>0` to dedicate cores per worker (measured to be *worse* —
-provided only for experimentation). Concurrency itself comes from the 32 chips
-running in parallel — the scheduler hands each input to the next idle chip (up to
-32 in flight), and a batched request (`input: [...]`) fans out across free chips.
+Concurrency comes from the 32 chips running in parallel — the scheduler hands each
+input to the next idle chip (up to 32 in flight), and a batched request
+(`input: [...]`) fans out across free chips. The single HTTP server process is
+given a few dedicated cores while the device-bound workers stay OS-scheduled, which
+keeps per-chip latency flat under load.
 
 ### API
 
@@ -366,8 +352,6 @@ concurrency level, each input padded to the full 512-token bucket (worst case).
 "In-flight" is the number of concurrent requests; "on-device replay" is the
 per-chip prefill+RMSNorm+pool latency reported by the worker (`GET /metrics`).
 
-Default core allocation (`--server-phys 4`, workers OS-float):
-
 | In-flight | Throughput (req/s) | Throughput (tok/s) | On-device replay p50 / p99 (ms) | Client e2e p50 / p99 (ms) |
 | --------: | -----------------: | -----------------: | :-----------------------------: | :-----------------------: |
 |         1 |                 81 |              41.4k |          7.81 / 7.92            |        12.5 / 13.2        |
@@ -379,78 +363,9 @@ Default core allocation (`--server-phys 4`, workers OS-float):
 at ~7.6–7.8 ms (p99 < 8 ms) from 1 to 64 concurrent requests: a request served
 while all 32 chips are busy costs the same on-device as one served in isolation.
 
-**Why the server gets dedicated cores (CPU-allocation sweep).** Client e2e p50/p99
-and throughput at 64 in-flight, same workload, three allocations:
-
-| Allocation | e2e p50 / p99 (ms) | Throughput (req/s) |
-| --- | :---: | ---: |
-| Everything OS-floats | 31.0 / 98.7 | 1,777 |
-| 1 dedicated core per worker | 32.8 / 76.7 (p99 **128** at c=1) | 1,805 |
-| **Server isolated (4 phys), workers float — default** | **22.2 / 57.0** | **2,589** |
-
-Workers are device-bound, so dedicating cores to them only starves their tt-metal
-dispatch threads (huge tails); the single server process is the shared host
-bottleneck, so isolating *it* is the win (+46 % throughput, −42 % p99).
-
-Sweeping `--server-phys` shows a clear optimum at **4** (c=64 throughput): 2 phys
-→ 2,372 req/s (the single event loop occasionally starves under load), **4 phys →
-2,589 req/s**, 8 phys → 2,255 req/s (steals cores from the 32 workers). The server
-is one event loop + one collector thread, so ~4 physical cores saturate it; more
-just costs worker throughput.
-
-**Per-request overhead (concurrency 1, p50 ms).** `GET /metrics` decomposes each
-request into its hops. The end-to-end latency is the on-device replay plus a small
-fixed host/IPC/HTTP cost:
-
-| Hop | p50 (ms) | Notes |
-| --- | -------: | ----- |
-| tokenize | 1.3 | host CPU, HF Rust `backend_tokenizer`, in the worker (overlaps across all 32 chips) |
-| build host tensors | 0.14 | token tensor only; page table is cached, RoPE is baked into the trace |
-| task_q (dispatch→worker) | 0.15 | mp.Queue transit |
-| **on-device replay** | **7.5** | prefill + RMSNorm + mean-pool (device-bound floor) |
-| (H2D/D2H/host finalize) | 0.20 | inside worker_total (~7.6) |
-| result (worker→future) | 0.36 | mp.Queue transit + event-loop wakeup |
-| HTTP (parse + base64 resp) | ~0.8 | uvloop + httptools, ~5.5 KB base64 |
-| **client e2e** | **~10.4** | at the c=32 operating point |
-
-The host overhead beyond the device replay is the tokenizer plus a fixed
-IPC/HTTP cost. An earlier version spent an extra ~5 ms in `prepare` because it
-re-tokenized twice and rebuilt the (request-independent) RoPE matrices and page
-table every call; those are now cached/skipped, cutting concurrency-1 e2e from
-~16 ms to ~10–12 ms. Tokenization runs **in the workers** by default, where it is
-distributed across the 32 processes and overlaps device work — so its ~1.3 ms
-does not limit throughput (the system is device-bound at ~2,760 req/s).
-
-#### Tokenization: why fastokens / server-side did *not* help here (`--fastokens`, experimental)
-
-The [fastokens](https://github.com/Atero-ai/fastokens) Rust engine
-(Crusoe/NVIDIA-Dynamo) is genuinely faster in isolation — ~0.09 ms vs HF's
-~0.75 ms for a 512-token input, byte-identical ids on this `Qwen2TokenizerFast`.
-But on this DP=32 server it does **not** improve the operating point, and both
-placements measured *worse* than the default worker-side HF path:
-
-| Config (c=32, ISL 512) | Throughput | e2e p50 |
-| --- | ---: | ---: |
-| **worker-side HF (default)** | **~2,760 req/s** | **~10.4 ms** |
-| server-side + fastokens | ~2,240 req/s | ~13.5 ms |
-| worker-side + fastokens (×32, even `RAYON_NUM_THREADS=1`) | ~510 req/s | ~60 ms |
-
-Why:
-
-* **The single server process is the throughput bottleneck**, not the tokenizer.
-  Moving tokenization onto its 4 dedicated cores adds work to the bottleneck and
-  slows the event loop's dispatch/collect hops (≈ −19 % throughput).
-* **fastokens replicated across 32 workers is pathological** — each instance
-  spins up its own thread pool, oversubscribing the host (tokenize p50 jumps to
-  ~2.6 ms with a ~26 ms tail), regardless of `RAYON_NUM_THREADS`.
-* **At the throughput operating point the tokenizer is off the critical path** —
-  the system is device-bound (~7.5 ms replay × 32 chips), so worker-side HF's
-  ~1.3 ms overlaps and is effectively free. fastokens only helps single-stream
-  (c=1) latency by ~1 ms, which is not the regime that matters here.
-
-**Conclusion: leave tokenization on the worker with the HF tokenizer (the
-default).** `--fastokens` / `--server-tokenize` remain as opt-in experimental
-flags but are **not recommended** for DP=32 serving.
+Tokenization runs in the workers, distributed across the 32 processes and
+overlapping device work, so its host cost does not limit throughput (the system is
+device-bound).
 
 **Operating point.** Throughput peaks around **~2,600 req/s (~1.3M tokens/s)** at
 64 in-flight requests (two per chip, pipelined). Beyond that the chips are
