@@ -228,8 +228,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
     // Upper clamp. SFPSWAP (mode VEC_MIN_MAX = "max into lreg_dest"):
-    //   LREG1 = max(255, xlog2), LREG3 = min(255, xlog2).
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    //   LREG3 = max(255, xlog2), LREG1 = min(255, xlog2).
+    TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
     // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
     // Reads xlog2 from LREG3, leaves int_part in LREG0 (LREG0 freed of val).
