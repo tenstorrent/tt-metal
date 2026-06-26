@@ -6,6 +6,7 @@
 
 #include <circular_buffer_constants.h>
 #include "data_format.hpp"
+#include <tt-metalium/base_types.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
@@ -780,6 +781,13 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
     emit_compute_scalar_descriptors(out, options);
+    // Quasar-only: explicit unpack-to-dest enable, derived from the existing per-CB unpack_to_dest_mode.
+    // WH/BH descriptor output is unchanged (this line is not emitted for them).
+    if (env.get_arch() == tt::ARCH::QUASAR) {
+        const bool unpack_to_dest_en = std::ranges::any_of(
+            options.unpack_to_dest_mode, [](UnpackToDestMode m) { return m == UnpackToDestMode::UnpackToDestFp32; });
+        out << "constexpr bool UNPACK_TO_DEST_EN = " << (unpack_to_dest_en ? "true" : "false") << ";\n";
+    }
     out << "#endif\n";
 
     if (!out) {

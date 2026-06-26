@@ -56,13 +56,14 @@ inline void _llk_unpack_to_dest_init_(const std::uint32_t buf_desc_id, const std
 /**
  * @brief Unpacks a single operand directly into the math DEST register.
  * @tparam DEST_SYNC_MODE: In SyncHalf, flips the DEST section base to the other bank after each tile, values = <SyncFull/SyncHalf>
+ * @tparam EN_32BIT_DEST: DEST register 32-bit (FP32/Int32) mode; sizes the SyncHalf section flip, values = <true/false>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @note The math thread is the middleman with two single-counting semaphores (max = N each). Without an extra wait on
  *       MATH_PACK, unpack could race 2N iterations ahead of pack and overwrite a bank pack has not read yet; waiting on
  *       both keeps unpack within N iterations of pack.
  * @note Call @ref _llk_unpack_to_dest_init_ before this function.
  */
-template <ckernel::DstSync DEST_SYNC_MODE = ckernel::DstSync::SyncFull>
+template <ckernel::DstSync DEST_SYNC_MODE = ckernel::DstSync::SyncFull, bool EN_32BIT_DEST = false>
 inline void _llk_unpack_to_dest_(const std::uint32_t l1_tile_idx)
 {
     _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
@@ -78,6 +79,6 @@ inline void _llk_unpack_to_dest_(const std::uint32_t l1_tile_idx)
     // Unpack owns the DEST section base, so it flips to the other bank for the next iteration.
     if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
     {
-        _llk_sync_advance_dest_section_<ckernel::unpack::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
+        _llk_sync_advance_dest_section_<ckernel::unpack::TRISC_ID, EN_32BIT_DEST, p_stall::UNPACK0>();
     }
 }
