@@ -2,7 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
-from models.experimental.diffusion_gemma.tt.denoise_forward import DenoiseLogitsAdapter, denoise_attention_forward
+import pytest
+
+from models.experimental.diffusion_gemma.tt.denoise_forward import (
+    DenoiseLogitsAdapter,
+    denoise_attention_forward,
+    read_prompt_kv_cache_by_layer,
+)
 
 
 class _FakeTensor:
@@ -25,9 +31,10 @@ class _FakeLayer:
 
 
 class _FakeModel:
-    def __init__(self):
+    def __init__(self, num_layers=1):
         self.mesh_device = object()
-        self.layers = [_FakeLayer()]
+        self.layers = [_FakeLayer() for _ in range(num_layers)]
+        self.tt_kv_cache = [f"cache-{idx}" for idx in range(num_layers)]
         self.rope_requests = []
 
     def _get_rope_mats(self, layer_idx, seq_len):
@@ -94,3 +101,29 @@ def test_denoise_logits_adapter_threads_canvas_rope_offset():
     assert calls[0]["prompt_hidden_by_layer"] == ["prompt"]
     assert calls[0]["canvas_tokens"] == "canvas"
     assert calls[0]["q_rope_offset"] == 576
+
+
+def test_read_prompt_kv_cache_by_layer_reads_every_model_layer():
+    calls = []
+    model = _FakeModel(num_layers=3)
+
+    def fake_read(kv_cache, *, prompt_len, seq_len_start=0):
+        calls.append((kv_cache, prompt_len, seq_len_start))
+        return (f"k-{kv_cache}", f"v-{kv_cache}")
+
+    out = read_prompt_kv_cache_by_layer(model, prompt_len=64, seq_len_start=32, read_fn=fake_read)
+
+    assert out == [
+        ("k-cache-0", "v-cache-0"),
+        ("k-cache-1", "v-cache-1"),
+        ("k-cache-2", "v-cache-2"),
+    ]
+    assert calls == [("cache-0", 64, 32), ("cache-1", 64, 32), ("cache-2", 64, 32)]
+
+
+def test_read_prompt_kv_cache_by_layer_rejects_cache_layer_mismatch():
+    model = _FakeModel(num_layers=2)
+    model.tt_kv_cache = ["cache-0"]
+
+    with pytest.raises(ValueError, match="tt_kv_cache has 1 layers"):
+        read_prompt_kv_cache_by_layer(model, prompt_len=64, read_fn=lambda *args, **kwargs: None)

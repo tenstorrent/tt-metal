@@ -291,6 +291,22 @@ def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int 
     )
 
 
+def read_prompt_kv_cache_by_layer(
+    tt_model, *, prompt_len: int, seq_len_start: int = 0, read_fn=read_prompt_kv_cache_slice
+):
+    """Read frozen prompt K/V prefixes from every layer's Gemma4 KV cache.
+
+    This is the production-shaped prompt source for the denoise adapter: one
+    `(K, V)` tuple per decoder layer, rather than the early single-layer test
+    shim. The returned tensors are owned by the caller.
+    """
+    if len(tt_model.tt_kv_cache) != len(tt_model.layers):
+        raise ValueError(
+            f"tt_kv_cache has {len(tt_model.tt_kv_cache)} layers but model has {len(tt_model.layers)} layers"
+        )
+    return [read_fn(kv_cache, prompt_len=prompt_len, seq_len_start=seq_len_start) for kv_cache in tt_model.tt_kv_cache]
+
+
 def embed_canvas_tokens(tt_model, canvas_tokens):
     """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
     if len(canvas_tokens.shape) == 4 and canvas_tokens.shape[-1] == 1:
