@@ -85,7 +85,8 @@ NB_MODULE(_layer_completion, mod) {
                int master_rank,
                const std::string& ring_shm_name,
                const std::string& scheduler_channel_shm_name,
-               int poll_idle_us) {
+               int poll_idle_us,
+               int teardown_timeout_ms) {
                 LayerCompletionRouterConfig cfg;
                 cfg.rank = rank;
                 cfg.world_size = world_size;
@@ -93,6 +94,7 @@ NB_MODULE(_layer_completion, mod) {
                 cfg.ring_shm_name = ring_shm_name;
                 cfg.scheduler_channel_shm_name = scheduler_channel_shm_name;
                 cfg.poll_idle_us = poll_idle_us;
+                cfg.teardown_timeout_ms = teardown_timeout_ms;
                 new (self) LayerCompletionRouter(std::move(cfg));
             },
             nb::arg("rank"),
@@ -101,6 +103,7 @@ NB_MODULE(_layer_completion, mod) {
             nb::arg("ring_shm_name"),
             nb::arg("scheduler_channel_shm_name") = std::string{},
             nb::arg("poll_idle_us") = 100,
+            nb::arg("teardown_timeout_ms") = 5000,
             "Create the host's router: owns the local ring, spawns the listener thread, and on the master "
             "rank owns the scheduler-facing counter channel.")
         .def("stop", &LayerCompletionRouter::stop, "Idempotent: stop + join the listener thread.")
