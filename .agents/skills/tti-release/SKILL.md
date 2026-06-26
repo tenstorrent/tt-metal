@@ -153,7 +153,7 @@ PY
 
 Do not stop at a matching TTI model name. Before launching, print the selected spec path and check that it contains `models/autoports/<model>`. After the run, inspect the copied run spec and release report data and confirm the same autoport path is present.
 
-Known TTI issue: some `tt-inference-server` checkouts accept a custom `--runtime-model-spec-json` or `--model-spec-json`, then still validate the model/device or benchmark setup against the built-in `MODEL_SPECS` / `BENCHMARK_CONFIGS`. Symptoms include a valid autoport spec failing with `model:=... does not support device:=...` or `not found in BENCHMARKS_CONFIGS`. This is fixed by tenstorrent/tt-inference-server#4345, branch `yieldthought/model-spec-json-custom-registry`, commit `b4bfef73`. If that PR is not merged in the checkout being used, cherry-pick that fix before continuing. Do not work around this bug by switching to a stock TTI model spec or stock implementation.
+Known TTI issue: older `tt-inference-server` checkouts accept a custom `--runtime-model-spec-json` or `--model-spec-json`, then still validate the model/device or benchmark setup against the built-in `MODEL_SPECS` / `BENCHMARK_CONFIGS`. Symptoms include a valid autoport spec failing with `model:=... does not support device:=...` or `not found in BENCHMARKS_CONFIGS`. This is fixed in `tt-inference-server` by tenstorrent/tt-inference-server#4345, merged 2026-06-26 as `6e396b4`. Before debugging this failure, confirm the checkout includes that merge or a later commit. If it does not, update the checkout to include the merged fix. Do not work around this bug by switching to a stock TTI model spec or stock implementation.
 
 ## External-Server Smoke
 
