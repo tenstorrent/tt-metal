@@ -356,171 +356,6 @@ def run_all_gather_impl(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["mesh_1,8"])
-@pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold, mem_config_input, mem_config_ag",
-    [
-        (
-            [1, 1, 32, 128 * 128],
-            2,
-            ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            30,
-            None,
-            None,
-            1.0,
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-                    (1, 128 * 128),  # (shard_height, shard_width)
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
-                    (32, 2048),  # (shard_height, shard_width)
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        ),
-        (
-            [1, 8, 32, 2112],
-            1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            35,
-            None,
-            None,
-            1.0,
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
-                    (32, 288),  # (shard_height, shard_width)
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(
-                        {
-                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7)),
-                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
-                        }
-                    ),
-                    (32 * 8, 64),  # (shard_height, shard_width)
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        ),
-        (
-            [1, 1, 32, 128 * 128],
-            2,
-            ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            30,
-            None,
-            None,
-            1.0,
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-                    (1, 128 * 128),  # (shard_height, shard_width)
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED,
-                ttnn.BufferType.L1,
-            ),
-        ),
-        (
-            [1, 8, 32, 2112],
-            1,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            True,
-            35,
-            None,
-            None,
-            1.0,
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
-                    (32, 288),  # (shard_height, shard_width)
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.INTERLEAVED,
-                ttnn.BufferType.L1,
-            ),
-        ),
-    ],
-    ids=["RM_sharded", "TILED_sharded", "RM_interleaved", "TILED_interleaved"],
-)
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
-    ],
-    indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
-)
-def test_all_gather_async_broadcast(
-    mesh_device,
-    num_links,
-    ag_output_shape,
-    dim,
-    layout,
-    ag_input_dtype,
-    enable_trace,
-    num_iters,
-    use_barrier,
-    use_persistent_buffers,
-    mem_config_input,
-    mem_config_ag,
-    all_gather_topology,
-    pcc_threshold,
-):
-    run_all_gather_impl(
-        mesh_device,
-        ag_output_shape,
-        dim,
-        num_links,
-        ag_input_dtype,
-        layout,
-        mem_config_input,
-        mem_config_ag,
-        all_gather_topology=all_gather_topology,
-        enable_trace=enable_trace,
-        num_iters=num_iters,
-        use_barrier=use_barrier,
-        use_persistent_buffers=use_persistent_buffers,
-        all_gather_function=ttnn.experimental.all_gather_async,
-        allowed_pcc=pcc_threshold,
-        use_broadcast=True,
-    )
-
-
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
@@ -537,7 +372,9 @@ def test_all_gather_async_broadcast(
         ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
         ([1, 1, 1024, 1024], -2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
         ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
+        # composite (RM last-dim unaligned pages)
         ([1, 1, 32, 136], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf, composite
+        # composite (tile padding on gather dim)
         ([1, 1, 48, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, composite
     ],
     ids=[
@@ -817,7 +654,7 @@ def test_all_gather_training_shapes(
             True,
             10,  # perf
         ),
-        # Composite-AG
+        # Composite-AG (tile padding on gather dim)
         (
             [1, 1, 384, 240],
             3,
@@ -918,7 +755,7 @@ def test_all_gather_sharded_to_sharded(
             False,
             1,  # check
         ),
-        # Composite AG
+        # Composite AG (tile padding on gather dim)
         (
             [1, 1, 384, 240],
             3,
@@ -1012,7 +849,7 @@ def test_all_gather_sharded_to_interleaved(
             True,
             10,  # perf
         ),
-        # Composite AG
+        # Composite AG (tile padding on gather dim)
         (
             [1, 1, 384, 240],
             3,
@@ -1073,6 +910,103 @@ def test_all_gather_interleaved_to_sharded(
         mem_config_ag,
         enable_trace=enable_trace,
         num_iters=num_iters,
+    )
+
+
+# Width-sharded RM L1 memory config with shard shape (shard_height, shard_width)
+# spread across num_cores cores of the 8x8 worker grid.
+def _l1_width_sharded(shard_height, shard_width, num_cores):
+    grid = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(8, 8), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)], ids=["rm_bf16"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, mem_config_input, mem_config_ag",
+    [
+        # Page-indexing code paths of the all_gather kernel's chunk iterator.
+        # Glossary (see all_gather_factory.cpp): a "chunk" = one NOC write = min(input_page, output_page).
+        #   m = output_chunks_per_page (chunks packed into one output page; m>1 == concat)
+        #   s = split_factor           (chunks an input page splits into; s>1 == split)
+        #   k = input_pages_per_stripe (input width-shards per row; k>1 == multi-shard input)
+        # Modes: matched (m=s=1) | concat (m>1) | split (s>1).
+        #
+        # matched (m=1,s=1,k=1): RM last-dim, equal in/out shard widths.
+        ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 64, 8)),
+        # concat full (m=8,s=1,k=1): sharded -> interleaved; one chunk/device packed per output row.
+        ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), ttnn.L1_MEMORY_CONFIG),
+        # concat partial (m=2,s=1,k=1): 2 device contributions per output page (multiple pages/row).
+        ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 128, 4)),
+        # split (m=1,s=2,k=1): output sharded twice as finely as input.
+        ([1, 1, 32, 512], -1, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 32, 16)),
+        # matched multi-shard (m=1,s=1,k=2): >1 input page per row, equal output shard width.
+        ([1, 1, 32, 1024], -1, _l1_width_sharded(32, 64, 2), _l1_width_sharded(32, 64, 16)),
+        # split multi-shard (m=1,s=2,k=2): split combined with multi-shard input.
+        ([1, 1, 32, 1024], -1, _l1_width_sharded(32, 64, 2), _l1_width_sharded(32, 32, 32)),
+        # multi-shard concat, no straddle (m=4,s=1,k=2): m a multiple of k; per-chunk byte offsets.
+        ([1, 1, 32, 1024], -1, _l1_width_sharded(32, 64, 2), _l1_width_sharded(32, 256, 4)),
+        # multi-shard concat WITH straddle (m=4,s=1,k=3): a device's 3 chunks cross a 4-chunk
+        #   output-page boundary (page carry mid-stripe). m | N*k: 4|24.
+        ([1, 1, 32, 1536], -1, _l1_width_sharded(32, 64, 3), _l1_width_sharded(32, 256, 6)),
+        # multi-shard concat, run spans MULTIPLE output pages (m=2,s=1,k=3, m<k): byte-offset wrap
+        #   + repeated page carry mid-stripe. m | N*k: 2|24.
+        ([1, 1, 32, 1536], -1, _l1_width_sharded(32, 64, 3), _l1_width_sharded(32, 128, 12)),
+        # RM interleaved last-dim (concat m=8,k=1, interleaved both sides): native RM-interleaved
+        #   accessor path; per-device page 64*2=128B is aligned so it stays off the composite route.
+        ([1, 1, 32, 512], -1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        # non-last-dim gather (m=1,s=1,k from extents), RM interleaved both sides: gather along height.
+        ([1, 1, 256, 64], 2, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    ],
+    ids=[
+        "matched",
+        "concat_full_to_interleaved",
+        "concat_partial",
+        "split",
+        "matched_multishard",
+        "split_multishard",
+        "multishard_concat_no_straddle",
+        "multishard_concat_straddle",
+        "multishard_concat_straddle_multipage",
+        "rm_interleaved_last_dim",
+        "non_last_dim_interleaved",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}],
+    indirect=True,
+    ids=["fabric_ring"],
+)
+def test_all_gather_page_indexing(
+    mesh_device,
+    num_links,
+    layout,
+    ag_input_dtype,
+    ag_output_shape,
+    dim,
+    mem_config_input,
+    mem_config_ag,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=1,
+        use_persistent_buffers=False,
+        allowed_pcc=1.0,
     )
 
 
@@ -1267,3 +1201,168 @@ def test_all_gather_2x4_non_flat_mesh(mesh_device, input_shape):
 
     output_placements = tt_output.tensor_topology().placements()
     assert len(output_placements) == 1, f"Expected 1 placement, got {len(output_placements)}"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True, ids=["mesh_1,8"])
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, use_barrier, use_persistent_buffers, pcc_threshold, mem_config_input, mem_config_ag",
+    [
+        (
+            [1, 1, 32, 128 * 128],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            30,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 2048),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),
+        (
+            [1, 8, 32, 2112],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            35,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7)),
+                            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 0)),
+                        }
+                    ),
+                    (32 * 8, 64),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        ),
+        (
+            [1, 1, 32, 128 * 128],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            30,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+                    (1, 128 * 128),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
+        (
+            [1, 8, 32, 2112],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            35,
+            None,
+            None,
+            1.0,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+                    (32, 288),  # (shard_height, shard_width)
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.INTERLEAVED,
+                ttnn.BufferType.L1,
+            ),
+        ),
+    ],
+    ids=["RM_sharded", "TILED_sharded", "RM_interleaved", "TILED_interleaved"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
+)
+def test_all_gather_async_broadcast(
+    mesh_device,
+    num_links,
+    ag_output_shape,
+    dim,
+    layout,
+    ag_input_dtype,
+    enable_trace,
+    num_iters,
+    use_barrier,
+    use_persistent_buffers,
+    mem_config_input,
+    mem_config_ag,
+    all_gather_topology,
+    pcc_threshold,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
+        all_gather_function=ttnn.experimental.all_gather_async,
+        allowed_pcc=pcc_threshold,
+        use_broadcast=True,
+    )
