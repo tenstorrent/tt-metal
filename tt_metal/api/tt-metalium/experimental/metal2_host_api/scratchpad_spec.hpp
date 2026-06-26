@@ -12,27 +12,27 @@
 namespace tt::tt_metal::experimental {
 
 // ============================================================================
-//  Scratchpad API
+//  ScratchpadSpec API
 // ============================================================================
 //
 // A ScratchpadSpec is a descriptor for a kernel scratchpad,
 // which is allocated on the SRAM ("L1") with the lifetime of a Program.
 //
 // INSTANCING: Like KernelSpec, a ScratchpadSpec is a *per-node template*.
-//   One independent scratchpad instance is allocated per node where its endpoint
-//   kernels run, in that node's local SRAM.
+//   One independent scratchpad instance is allocated per node where its bound
+//   kernel runs, in that node's local SRAM.
 //
-// PLACEMENT: Derived — the scratchpad's effective node set is the union of its bound
-//   kernels' WorkUnitSpec target_nodes.
+// PLACEMENT: Derived from its bound kernel's WorkUnitSpec membership.
 //
-// BINDING SCOPE: At most one kernel can bind to a given ScratchpadSpec.
+// BINDING SCOPE: At most one kernel can bind to a given ScratchpadSpec. Unlike
+//   DFBs and semaphores, a scratchpad is private to its single bound kernel.
 //
 // ============================================================================
 
-// A name identifying a ScratchPadSpec within a ProgramSpec.
-using ScratchpadSpecName = ttsl::StrongType<std::string, struct ScratchPadSpecTag>;
+// A name identifying a ScratchpadSpec within a ProgramSpec.
+using ScratchpadSpecName = ttsl::StrongType<std::string, struct ScratchpadSpecTag>;
 
-// Scratch pad is a program-scope resource allocated for a program.
+// Scratchpad is a program-scope resource allocated for a program.
 struct ScratchpadSpec {
     // Scratchpad identifier: used to reference this Scratchpad within the ProgramSpec
     ScratchpadSpecName unique_id;

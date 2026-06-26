@@ -38,18 +38,28 @@ private:
 };
 
 /**
- * @brief Kernel-side typed view over a Program-scope scratchpad.
+ * @brief Kernel-side typed span over a Program-scope scratchpad.
  *
  * A Scratchpad is the device-side counterpart to the host ScratchpadSpec: it provides indexed
  * access to the scratchpad region reserved in per-node SRAM ("L1") for the duration of a Program.
  *
- * This region is provided as-is. It is the user's responsibility to:
- * 1. Not read uninitialized data.
- * 2. Synchronize read/write to the same Scratchpad over multiple threads.
+ * Construct one from the accessor your host code declared on the kernel's scratchpad binding:
+ * @code
+ *   // Host code declares the accessor name "my_scratchpad_name" for this kernel.
+ *   // In the kernel:
+ *   Scratchpad<int32_t> my_pad(scratch::my_scratchpad_name);
+ * @endcode
  *
- * The interface of the scratchpad roughly models std::span.
+ * The region is provided as raw, uninitialized memory, with no synchronization of read/write
+ * across threads. Avoiding undefined-behavior access is the user's responsibility; typical kinds
+ * of UB access here include:
+ * 1. Reading uninitialized data.
+ * 2. Data races across threads.
+ *
+ * Indexed access via operator[] is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
  *
  * @tparam T Element type the region is viewed as.
+ * @see scratchpad_spec.hpp (host-side ScratchpadSpec)
  */
 template <typename T>
 class Scratchpad {
@@ -77,7 +87,7 @@ public:
 
     /** @brief Get the element at the given index
      *
-     * The index is bounds-checked via ASSERT (debug/watcher builds only; no check in release).
+     * The index is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
      *
      * @param index The index of the element to get
      * @return Reference to the element at the given index
@@ -90,13 +100,13 @@ public:
 
     /** @brief Get the size of this scratchpad in number of T elements
      *
-     * @return number of element T sized elements in this scratchpad.
+     * @return Number of T-sized elements in this scratchpad.
      */
     [[nodiscard]] size_type size() const noexcept { return size_type{size_in_bytes() / sizeof(T)}; }
 
     /** @brief Get the size of this scratchpad in number of bytes.
      *
-     * This reflects the configuration put in at ScratchpadSpec.
+     * Equals ScratchpadSpec::size_per_node from the host spec.
      *
      * @return size of the scratchpad in bytes.
      */
@@ -107,7 +117,8 @@ public:
     /** @brief Get the base address of the scratchpad.
      *
      * This is a facility to escape the index accessors while getting the base address directly.
-     * Indexed accessors should be preferred whenever possible as they have a bounds check enabled at debug time.
+     * Indexed accessors should be preferred whenever possible as they have a bounds check via ASSERT (see
+     * api/debug/assert.h for when it's activated).
      *
      * @return the base address of the scratchpad
      */
