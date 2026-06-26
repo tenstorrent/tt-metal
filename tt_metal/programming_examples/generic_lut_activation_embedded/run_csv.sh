@@ -772,12 +772,104 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
             )
             print(f'AFFINE COLLAPSE: y = {c0:.6g} + {c1:.6g}*x -> single SFPMAD bypass')
 
+# Clamped affine collapse: the whole fit is exactly
+# y = min(max(c0 + c1*x, low), high), with either clamp bound optional.
+# This is generic algebraic lowering from CSV coefficients, not an
+# activation-name special case.
+clamped_affine_macro = ''
+if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and num_segments >= 2:
+    cps = degree + 1
+    segs = []
+    all_affine = True
+    tol = 1.0e-5
+    for s in range(num_segments):
+        coeff = coefficients[s * cps:(s + 1) * cps]
+        if any(abs(c) > tol for c in coeff[2:]):
+            all_affine = False
+            break
+        c0 = float(coeff[0]) if len(coeff) >= 1 else 0.0
+        c1 = float(coeff[1]) if len(coeff) >= 2 else 0.0
+        segs.append((boundaries[s], boundaries[s + 1], c0, c1))
+
+    if all_affine:
+        candidates = [seg for seg in segs if abs(seg[3]) > tol]
+
+        def eval_piece(seg, x):
+            return seg[2] + seg[3] * x
+
+        for cand in candidates:
+            cand_lo, cand_hi, c0, c1 = cand
+            lo_values = []
+            hi_values = []
+            for seg in segs:
+                if abs(seg[3]) > tol:
+                    continue
+                before = seg[1] <= cand_lo + tol
+                after = seg[0] >= cand_hi - tol
+                if c1 >= 0.0:
+                    if before:
+                        lo_values.append(seg[2])
+                    elif after:
+                        hi_values.append(seg[2])
+                else:
+                    if before:
+                        hi_values.append(seg[2])
+                    elif after:
+                        lo_values.append(seg[2])
+            lo = lo_values[0] if lo_values else None
+            hi = hi_values[0] if hi_values else None
+            if lo_values and any(abs(v - lo) > tol for v in lo_values):
+                continue
+            if hi_values and any(abs(v - hi) > tol for v in hi_values):
+                continue
+
+            def clamp_affine(x):
+                y = c0 + c1 * x
+                if lo is not None:
+                    y = max(lo, y)
+                if hi is not None:
+                    y = min(hi, y)
+                return y
+
+            ok = True
+            for seg in segs:
+                for x in (seg[0], (seg[0] + seg[1]) * 0.5, seg[1]):
+                    if abs(eval_piece(seg, x) - clamp_affine(x)) > 5.0e-4:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if ok:
+                clamped_affine_macro = (
+                    '\n// eval_method: clamped_affine_collapse. fit is y = clamp(c0 + c1*x, low, high).\n'
+                    '#define EVAL_METHOD_CLAMPED_AFFINE_COLLAPSE\n'
+                    '#define CLAMPED_AFFINE_COLLAPSE\n'
+                    f'#define CLAMPED_AFFINE_C0 {clamp(c0):.10e}f\n'
+                    f'#define CLAMPED_AFFINE_C1 {clamp(c1):.10e}f\n'
+                )
+                if lo is not None:
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_LOW\n#define CLAMPED_AFFINE_LOW {clamp(lo):.10e}f\n'
+                if hi is not None:
+                    clamped_affine_macro += f'#define CLAMPED_AFFINE_HAS_HIGH\n#define CLAMPED_AFFINE_HIGH {clamp(hi):.10e}f\n'
+                low_label = '-inf' if lo is None else f'{lo:.6g}'
+                high_label = '+inf' if hi is None else f'{hi:.6g}'
+                print(
+                    f'CLAMPED AFFINE COLLAPSE: y = clamp({c0:.6g} + {c1:.6g}*x, '
+                    f'{low_label}, {high_label}) -> SFPMAD + min/max bypass'
+                )
+                break
+
 # Exactly one EVAL_METHOD_* selector. rr_macro emits EXPONENT_ALU / NEWTON_ROOT /
-# REDUCED_POLY; affine_macro emits AFFINE_COLLAPSE. Otherwise the method is the
-# default poly_cascade (parity / dual / adaptive / blend are orthogonal modifiers).
+# REDUCED_POLY; affine_macro emits AFFINE_COLLAPSE; clamped_affine_macro emits
+# CLAMPED_AFFINE_COLLAPSE. Otherwise the method is the default poly_cascade
+# (parity / dual / adaptive / blend are orthogonal modifiers).
 eval_method_macro = ''
 if not is_rational:
-    if ('EVAL_METHOD_' not in rr_macro) and ('EVAL_METHOD_' not in affine_macro):
+    if (
+        ('EVAL_METHOD_' not in rr_macro)
+        and ('EVAL_METHOD_' not in affine_macro)
+        and ('EVAL_METHOD_' not in clamped_affine_macro)
+    ):
         eval_method_macro = '\n// eval_method: poly_cascade (default piecewise polynomial cascade)\n#define EVAL_METHOD_POLY_CASCADE\n'
 else:
     # rational_cascade is the base method; reduced_poly may layer on via rr_macro.
@@ -837,7 +929,7 @@ constexpr std::array<float, LUT_SIZE_FP32> LUT_DATA_FP32 = {{{{
     constexpr auto& LUT_DATA = LUT_DATA_FP32;
     constexpr uint32_t LUT_SIZE = LUT_SIZE_FP32;
 #endif
-{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}
+{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}
 #include \"../piecewise_generic.cpp\"
 '''
 

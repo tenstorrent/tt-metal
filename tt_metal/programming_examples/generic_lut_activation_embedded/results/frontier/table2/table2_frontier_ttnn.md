@@ -5,7 +5,7 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 33. Accuracy match but slower: 17. Faster but less accurate: 1. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 36. Accuracy match but slower: 14. Faster but less accurate: 1. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -31,9 +31,9 @@ Comparable rows: 52. Win on ULP and runtime: 33. Accuracy match but slower: 17. 
 | gelu | poly:s16/d2 | 0.12 | 11.80 | 0.12 | 5.78 | 0.490 | accuracy_match_slow |
 | hardmish | poly:s3/d3 | 0.00 | 2.01 | 0.03 | 1.77 | 0.881 | accuracy_match_slow |
 | hardshrink | poly:s1/d4 | 8.00 | 1.68 | 0.00 | 1.82 | 1.083 | faster_less_accurate |
-| hardsigmoid | poly:s3/d2 | 0.50 | 1.99 | 0.50 | 1.79 | 0.899 | accuracy_match_slow |
+| hardsigmoid | poly:s3/d2 | 0.50 | 1.74 | 0.50 | 1.79 | 1.029 | win_both |
 | hardswish | poly:s3/d6 | 0.02 | 2.08 | 0.25 | 2.01 | 0.966 | accuracy_match_slow |
-| hardtanh | poly:s3/d5 | 0.00 | 1.86 | 0.00 | 1.86 | 1.000 | win_both |
+| hardtanh | poly:s3/d10 | 0.00 | 1.68 | 0.00 | 1.86 | 1.107 | win_both |
 | i0 | poly:s1/d10 | 0.25 | 2.35 | 1.00 | 3.10 | 1.319 | win_both |
 | i1 | rational:s1/d8d5 | 0.50 | 2.70 | 0.50 | 7.40 | 2.741 | win_both |
 | identity | poly:s1/d13 | 0.00 | 0.13 | 0.00 | 0.16 | 1.231 | win_both |
@@ -49,8 +49,8 @@ Comparable rows: 52. Win on ULP and runtime: 33. Accuracy match but slower: 17. 
 | multigammaln | poly:s1/d2 | 118.12 | 1.71 | 127.00 | 0.13 | 0.076 | excluded |
 | polygamma | poly:s32/d10 | 16.00 | 25.98 | -- | -- | -- | incomplete |
 | prelu | poly:s2/d13 | 0.00 | 1.78 | -- | -- | -- | incomplete |
-| relu | poly:s2/d1 | 0.00 | 1.78 | 0.00 | 1.72 | 0.966 | accuracy_match_slow |
-| relu6 | poly:s3/d6 | 0.00 | 1.89 | 0.00 | 1.84 | 0.974 | accuracy_match_slow |
+| relu | poly:s2/d1 | 0.00 | 1.68 | 0.00 | 1.72 | 1.024 | win_both |
+| relu6 | poly:s3/d6 | 0.00 | 1.71 | 0.00 | 1.84 | 1.076 | win_both |
 | relu_max | poly:s3/d1 | 0.00 | 1.89 | -- | -- | -- | incomplete |
 | relu_min | poly:s2/d1 | 0.00 | 1.78 | -- | -- | -- | incomplete |
 | rsqrt | newton_root:s16/d2 | 0.00 | 2.01 | 0.00 | 2.47 | 1.229 | win_both |

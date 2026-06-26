@@ -811,7 +811,7 @@ hardtanh_p3_s2_uniform_any_ulp.csv,hardtanh,poly,3,2,bf16,47.00,2.21,1,[-10.0,10
 hardtanh_p3_s8_uniform_any_ulp.csv,hardtanh,poly,3,8,bf16,0.00,3.11,1,[-10.0,10.0]
 hardtanh_p4_s32_uniform_any_ulp.csv,hardtanh,poly,4,32,bf16,0.00,11.18,1,[-10.0,10.0]
 hardtanh_p5_s16_uniform_any_ulp.csv,hardtanh,poly,5,16,bf16,0.00,5.88,1,[-10.0,10.0]
-hardtanh_p5_s3_uniform_any_ulp.csv,hardtanh,poly,5,3,bf16,0.00,1.86,1,[-10.0,10.0]
+hardtanh_p5_s3_uniform_any_ulp.csv,hardtanh,poly,5,3,bf16,0.00,1.69,1,[-10.0,10.0]
 hardtanh_p6_s1_uniform_any_ulp.csv,hardtanh,poly,6,1,bf16,128.00,1.70,1,[-10.0,10.0]
 hardtanh_p6_s8_uniform_any_ulp.csv,hardtanh,poly,6,8,bf16,0.00,3.10,1,[-10.0,10.0]
 hardtanh_p7_s3_uniform_any_ulp.csv,hardtanh,poly,7,3,bf16,0.00,1.87,1,[-10.0,10.0]

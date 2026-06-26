@@ -2455,6 +2455,33 @@ inline void affine_collapse_eval() {
 }
 #endif
 
+#if defined(CLAMPED_AFFINE_COLLAPSE)
+// Clamped affine collapse: y = min(max(c0 + c1*x, low), high). This is the
+// exact algebraic form of many fitted hard-piecewise CSVs, but is driven only
+// by coefficient pattern detection in run_csv.sh.
+inline void clamped_affine_collapse_eval() {
+    constexpr float C0 = CLAMPED_AFFINE_C0;
+    constexpr float C1 = CLAMPED_AFFINE_C1;
+#pragma GCC unroll 8
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat y = C1 * x + C0;
+#ifdef CLAMPED_AFFINE_HAS_LOW
+        vFloat lo = CLAMPED_AFFINE_LOW;
+        vec_min_max(lo, y);  // y = max(lo, y)
+#endif
+#ifdef CLAMPED_AFFINE_HAS_HIGH
+        vFloat hi = CLAMPED_AFFINE_HIGH;
+        vec_min_max(y, hi);  // y = min(y, hi)
+#endif
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+}
+#endif
+
 }  // namespace sfpi
 #endif
 
@@ -2571,6 +2598,10 @@ void kernel_main() {
         // Affine collapse (y = c0 + c1*x): one SFPMAD per element, no cascade.
         (void)p_lut;
         sfpi::affine_collapse_eval();
+#elif defined(CLAMPED_AFFINE_COLLAPSE)
+        // Clamped affine collapse: one SFPMAD plus optional min/max clamps.
+        (void)p_lut;
+        sfpi::clamped_affine_collapse_eval();
 #else
         sfpi::piecewise_generic_lut_dispatch<poly_degree, num_segments, lut_size>(*p_lut);
 #endif
