@@ -38,6 +38,10 @@ struct tensor_args_t {
     const Tensor& q;
     const Tensor& k;
     const Tensor& weights;
+    // Optional per-device causal chunk-start, in TILES (uint32, one tile per device). When set, the
+    // reader streams it into cb_offset so each SP chip masks against its own absolute query positions
+    // (start_pos + sp_rank*S_local); when null, the compile-time chunk_start_idx is used (single-shot).
+    std::optional<Tensor> chunk_offset;
 };
 
 using tensor_return_value_t = Tensor;

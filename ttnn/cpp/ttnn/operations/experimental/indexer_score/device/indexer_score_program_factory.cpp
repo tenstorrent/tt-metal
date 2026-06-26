@@ -27,6 +27,7 @@ namespace rt_arg {
 constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;
 constexpr uint32_t reader_w_addr = 2;
+constexpr uint32_t reader_chunk_offset_addr = 21;  // after q,k,w,flat,count (0-4) + 2x8 mcast args (5-20)
 constexpr uint32_t writer_out_addr = 0;
 }  // namespace rt_arg
 
@@ -120,7 +121,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
     const uint32_t Tt = T / tt::constants::TILE_WIDTH;
     const uint32_t Dt = D / tt::constants::TILE_WIDTH;
-    const uint32_t chunk_t = args.chunk_start_idx / tt::constants::TILE_WIDTH;
+    const auto& chunk_offset = tensors.chunk_offset;
+    const bool has_offset = chunk_offset.has_value();
+    // Single-shot causal start, baked at compile time. When a per-device chunk_offset tensor is bound,
+    // the reader streams the real (per-SP-chip) value into cb_offset at runtime, so pin this to 0 — that
+    // also drops start_pos from the program-cache key (no per-chunk recompile in chunked prefill).
+    const uint32_t chunk_t = has_offset ? 0u : (args.chunk_start_idx / tt::constants::TILE_WIDTH);
 
     // Work-unit knobs, converted from elements to tiles / heads.
     const auto& cfg = args.program_config;
@@ -230,6 +236,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const bool stream_heads = HB < Hi;
 
     // Allocate each CB by its CbArg slot; make_cb assigns the next continuous index.
+    make_cb(cb_offset_arg, 1, tt::DataFormat::UInt32, fp32_tile);  // 1 uint32 tile: per-device chunk-start
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
@@ -286,6 +293,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     reader_ct.push_back(q_send_sem);
     reader_ct.push_back(q_recv_sem);
     reader_ct.push_back(q_valid_sem);
+    // Per-device chunk-start: flag at mc_ct_base+8, then (iff bound) the chunk_offset TensorAccessor at
+    // mc_ct_base+9. The reader DRAM-reads the offset tile into cb_offset when set, else fills the constant.
+    reader_ct.push_back(has_offset ? 1u : 0u);
+    if (has_offset) {
+        tt::tt_metal::TensorAccessorArgs(*chunk_offset->buffer()).append_to(reader_ct);
+    }
 
     std::vector<uint32_t> writer_ct = common_ct;
     const uint32_t out_elem_bytes = out.element_size();  // from the output tensor's dtype (bf16 today)
@@ -371,6 +384,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
                 reader_rt.push_back(0);
             }
         }
+        if (has_offset) {
+            reader_rt.push_back(chunk_offset->buffer()->address());  // rt arg 21: per-device chunk_offset tensor
+        }
         tt::tt_metal::SetRuntimeArgs(program, reader_id, cores[i], reader_rt);
         tt::tt_metal::SetRuntimeArgs(program, compute_id, cores[i], {flat, count});
         tt::tt_metal::SetRuntimeArgs(program, writer_id, cores[i], {out.buffer()->address(), flat, count});
@@ -396,6 +412,13 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
         patch_arg(reader_rt, rt_arg::reader_k_addr, tensors.k.buffer()->address(), "reader.k_addr");
         patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
+        if (tensors.chunk_offset.has_value()) {
+            patch_arg(
+                reader_rt,
+                rt_arg::reader_chunk_offset_addr,
+                tensors.chunk_offset->buffer()->address(),
+                "reader.chunk_offset_addr");
+        }
         patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
     }
 }

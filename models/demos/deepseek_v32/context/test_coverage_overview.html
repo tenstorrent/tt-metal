@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test coverage — DeepSeek V3.2 / GLM-5.1 DSA (MLA layer)</title>
+<style>
+  :root{
+    --bg:#0b0e15; --bg2:#10141f; --panel:#151a28; --panel2:#1b2236;
+    --ink:#e8edf6; --dim:#97a3ba; --line:#283150; --line2:#384566;
+    --accent:#5ad1c8; --accent2:#7aa2ff; --gold:#ffd86b; --red:#ff6b81; --purple:#c98bff; --green:#46d39a;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{ margin:0; background:var(--bg); color:var(--ink); font-size:15.5px; line-height:1.6;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  .wrap{ max-width:1000px; margin:0 auto; padding:38px 26px 90px; }
+  a{ color:var(--accent2); }
+  code{ font-family:var(--mono); font-size:.86em; background:var(--panel2); padding:1px 6px; border-radius:5px; color:var(--accent); }
+  b.hl{ color:var(--gold); } i.b{ color:var(--accent2); font-style:normal; }
+  header{ text-align:center; margin-bottom:14px; }
+  .eyebrow{ font-family:var(--mono); text-transform:uppercase; letter-spacing:.14em; font-size:12px; color:var(--accent); }
+  h1{ font-size:28px; margin:8px 0 6px; }
+  h1 .grad{ background:linear-gradient(90deg,var(--accent),var(--accent2),var(--purple));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .tagline{ color:var(--dim); max-width:820px; margin:6px auto 0; }
+  h2{ font-size:21px; margin:30px 0 12px; padding-bottom:7px; border-bottom:1px solid var(--line); }
+  h2 .n{ font-family:var(--mono); color:var(--accent); font-size:.62em; margin-right:10px; }
+  h3{ font-size:15.5px; margin:22px 0 8px; color:var(--ink); }
+  p{ margin:10px 0; } .lede{ color:var(--dim); }
+  ul,ol{ margin:10px 0; padding-left:22px; } li{ margin:6px 0; }
+  .card{ background:var(--panel); border:1px solid var(--line2); border-radius:13px; padding:16px 20px; margin:16px 0; }
+  .callout{ border-left:3px solid var(--accent); background:var(--panel2); border-radius:0 10px 10px 0; padding:11px 16px; margin:16px 0; }
+  .callout.warn{ border-left-color:var(--gold); } .callout.key{ border-left-color:var(--green); } .callout.dec{ border-left-color:var(--purple); }
+  .who{ font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); display:block; margin-bottom:3px; }
+  .callout.warn .who{ color:var(--gold);} .callout.key .who{ color:var(--green); } .callout.dec .who{ color:var(--purple); }
+  table{ border-collapse:collapse; width:100%; margin:14px 0; font-size:13.5px; }
+  th,td{ border:1px solid var(--line2); padding:7px 10px; text-align:left; vertical-align:top; }
+  th{ background:var(--panel2); color:var(--accent); font-family:var(--mono); font-size:12px; font-weight:700; }
+  td.mono,th.mono{ font-family:var(--mono); }
+  .pill{ display:inline-block; font-family:var(--mono); font-size:11px; padding:1px 8px; border-radius:20px; border:1px solid var(--line2); white-space:nowrap; }
+  .pill.easy{ color:var(--green); border-color:var(--green); }
+  .pill.med{ color:var(--gold); border-color:var(--gold); }
+  .pill.hard{ color:var(--red); border-color:var(--red); }
+  .yes{ color:var(--green); font-weight:700; } .no{ color:var(--red); font-weight:700; } .na{ color:var(--dim); }
+  .toc{ font-size:13.5px; columns:2; column-gap:30px; } .toc a{ display:block; margin:3px 0; color:var(--dim); }
+  .toc a:hover{ color:var(--accent2); }
+  .foot{ margin-top:50px; padding-top:16px; border-top:1px solid var(--line); color:var(--dim); font-size:13px; text-align:center; }
+  /* ---- interactive single-section app ---- */
+  .nav{ display:none; }
+  body.app .nav{ display:block; position:fixed; top:0; left:0; width:256px; height:100vh; overflow:auto;
+    background:var(--bg2); border-right:1px solid var(--line); padding:22px 14px; z-index:50; }
+  body.app .nav .brand{ font-size:16px; font-weight:700; margin:0 6px 2px; }
+  body.app .nav .sub{ color:var(--dim); font-size:11px; margin:0 6px 16px; line-height:1.4; }
+  body.app .navlink{ display:block; padding:8px 11px; margin:2px 0; border-radius:9px; color:var(--dim);
+    font-size:13px; cursor:pointer; text-decoration:none; border:1px solid transparent; transition:background .12s; }
+  body.app .navlink:hover{ background:var(--panel2); color:var(--ink); }
+  body.app .navlink.active{ background:rgba(122,162,255,.14); color:var(--accent2); border-color:var(--accent2); }
+  body.app .navlink .num{ font-family:var(--mono); color:var(--accent); margin-right:9px; font-size:11px; }
+  body.app .navlink.active .num{ color:var(--accent2); }
+  body.app .wrap{ margin-left:256px; max-width:920px; padding:30px 34px 70px; }
+  body.app .docsec{ display:none; }
+  body.app .docsec.active{ display:block; animation:secfade .2s ease; }
+  body.app .docsec h2{ margin-top:6px; }
+  @keyframes secfade{ from{opacity:0; transform:translateY(5px);} to{opacity:1; transform:none;} }
+  .pager{ display:flex; justify-content:space-between; gap:12px; margin:40px 0 0; padding-top:16px; border-top:1px solid var(--line); }
+  .pager button{ background:var(--panel2); border:1px solid var(--line2); color:var(--ink); border-radius:9px;
+    padding:9px 15px; cursor:pointer; font-size:12.5px; max-width:46%; text-align:left; font-family:inherit; }
+  .pager button.nx{ text-align:right; margin-left:auto; }
+  .pager button:hover:not(:disabled){ border-color:var(--accent); }
+  .pager button:disabled{ opacity:.3; cursor:default; }
+  .pager .pk{ display:block; font-family:var(--mono); font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.07em; }
+  body.app .foot{ margin-left:256px; }
+  .kbhint{ color:var(--dim); font-size:11px; margin-top:14px; text-align:center; }
+  @media(max-width:840px){
+    body.app .nav{ position:static; width:auto; height:auto; border-right:none; border-bottom:1px solid var(--line); }
+    body.app .wrap, body.app .foot{ margin-left:0; }
+    body.app .docsec{ display:block !important; }
+    .pager{ display:none; } .toc{ columns:1; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">DeepSeek V3.2 · GLM-5.1 · DSA (sparse MLA)</div>
+  <h1>Test coverage — <span class="grad">MLA layer</span></h1>
+  <p class="tagline">Current coverage map for the DeepSeek V3.2 / GLM-5.1 sparse-MLA tests. Companion to
+  <code>migration_log.md</code> / <code>test_spec.md</code>.</p>
+</header>
+
+<div class="callout key"><span class="who">Status — MLA-layer migration DONE (2026-06-24)</span>
+V3.2 &amp; GLM-5.1 are onboarded as <code>TestVariant</code>s; the sparse-MLA tests live in v3.1
+<code>test_mla.py</code> (variant-driven, device-verified) and run in CI on Galaxy + LoudBox. After the
+G1.3 unification the V3.2/GLM MLA <i class="b">is</i> v3.1's <code>ttMLA</code> — the indexer + sparse SDPA
+activate when the weights carry indexer keys (<code>INDEXER_WEIGHT_NAMES</code>). So onboarding was
+<b class="hl">wiring, not porting</b>: make the weights (MLACPU → v3-dict) and the truth (MLACPU, not the
+dense reference) variant-driven, plus a few capability flags.</div>
+
+<h2><span class="n">1</span>Coverage</h2>
+
+<h3>v3.1 shared suite — <code>deepseek_v3_d_p/tests/</code></h3>
+<p class="lede">Driven by the variant registry (<code>model_variants.py</code>: <code>{DSV3, KIMI, DSV32, GLM51}</code>).
+Bodies branch on capabilities (<code>has_indexer</code>, <code>tp_cap</code>, <code>config_builder</code>,
+<code>cpu_model_args</code>, <code>reference_kind</code>), never on model name. Shared config in
+<code>dsa_plugin.py</code> (markers + <code>--ds-*</code>), CPU-reference substrate in <code>dsa_reference.py</code>.</p>
+<table>
+<tr><th>Test</th><th>Models</th><th>Group</th><th>Truth</th><th>Notes</th></tr>
+<tr><td class="mono">test_dsa_mla</td><td>DSV32, GLM51</td><td>accuracy, mesh</td><td>MLACPU</td><td>sparse; seq {256(dev),2k,4k} × box-adaptive SP×TP</td></tr>
+<tr><td class="mono">test_dsa_mla_determinism</td><td>DSV32, GLM51</td><td>determinism</td><td>none</td><td>seq4k × 3 runs, PCC==1.0</td></tr>
+<tr><td class="mono">test_dsa_mla_chunked</td><td>DSV32, GLM51</td><td>feature_chunking, feature_cache</td><td>MLACPU chunked</td><td>4k/chunk1k, aligned</td></tr>
+<tr><td class="mono">test_ds_mla / test_kimi_mla / test_mla_chunked_prefill</td><td>DSV3, Kimi</td><td>accuracy / chunking</td><td>CPU ref + golden trace</td><td>dense (pre-existing)</td></tr>
+</table>
+
+<h3>v3.2 bespoke suite — <code>deepseek_v32/tests/</code> (stays: trace-validated)</h3>
+<p class="lede">Validated against recorded vLLM trace bundles, which the v3.1 CPU-reference machinery can't
+produce — so they don't move onto the variant infra. Same tier/group markers.</p>
+<table>
+<tr><th>File</th><th>Models</th><th>Group / tier</th><th>Truth</th></tr>
+<tr><td class="mono">test_vs_gpu_ref.py</td><td>DSV32, GLM51</td><td>accuracy / gate</td><td>vLLM trace bundles (logits/topk/output/k_pe)</td></tr>
+<tr><td class="mono">test_indexer_chunked.py</td><td>DSV32</td><td>feature_chunking / dev</td><td>self (chunk == single-shot)</td></tr>
+<tr><td class="mono">test_mla_perf.py</td><td>DSV32</td><td>perf</td><td>none (Tracy)</td></tr>
+<tr><td class="mono">test_mla.py (CPU-ref)</td><td>DSV32</td><td>accuracy / gate</td><td>MLACPU — <span class="no">redundant</span> with v3.1 <code>test_dsa_mla*</code>; retire next</td></tr>
+</table>
+<p class="lede">The DSA ttnn kernels (<code>indexer_score</code>, <code>sparse_sdpa</code>, <code>topk_large_indices</code>)
+have their own op unit tests; the old <code>ops.py</code> wrappers + <code>test_ops_*</code> were folded away.</p>
+
+<h2><span class="n">2</span>Groups → parameters &amp; tiers</h2>
+<p class="lede">Groups are by intent (orthogonal to tier). Each sweeps <b class="hl">one</b> axis and pins a
+representative value on the others (covering-array, never full cartesian). New models add a row, not a
+cross-product. Select by <code>-m "accuracy and gate"</code> or <code>-k "&lt;variant&gt; and &lt;mesh&gt;"</code>.</p>
+<table>
+<tr><th>Group (marker)</th><th>Tests</th><th>Swept axis</th><th>Pinned</th></tr>
+<tr><td class="mono">accuracy</td><td>test_dsa_mla</td><td>seq {256,2k,4k}</td><td>1 mesh/box, random weights</td></tr>
+<tr><td class="mono">determinism</td><td>test_dsa_mla_determinism</td><td>(3 runs)</td><td>seq4k, 1 mesh</td></tr>
+<tr><td class="mono">feature_chunking / feature_cache</td><td>test_dsa_mla_chunked, test_indexer_chunked</td><td>chunk scenario</td><td>seq4k/chunk1k, 1 mesh</td></tr>
+<tr><td class="mono">mesh</td><td>test_dsa_mla</td><td>SP×TP shapes that fit the box</td><td>seq2k</td></tr>
+<tr><td class="mono">perf</td><td>test_mla_perf (bespoke)</td><td>1 scenario</td><td>fixed mesh, LB+GLX</td></tr>
+</table>
+<p><b>Mesh sparsity is hardware-driven</b> (<code>mesh_utils</code>): each box emits exactly its shapes —
+QuietBox <code>{1, 1×4, 2×2}</code>, LoudBox <code>{8×1, 4×2, 2×4}</code>, Galaxy <code>{8×4}</code>. GLM is
+capped at <b class="hl">tp≤2</b> (<code>tp_cap</code>: sparse_sdpa needs <code>n_heads/tp ≥ 32</code>), so it
+skips tp&gt;2 meshes (Galaxy 8×4 → GLM runs on the LoudBox only).</p>
+<p><b>Tiers</b> (dev ⊆ gate ⊆ nightly): <code>dev</code> = fast inner loop (test_dsa_mla seq256, determinism,
+indexer_chunked); <code>gate</code> = full correctness with cached truths (all accuracy seqs, chunked,
+test_vs_gpu_ref); <code>nightly</code> = cold-truth + full layer/mesh sweeps.</p>
+
+<h2><span class="n">3</span>CI jobs &amp; budget</h2>
+<p class="lede">The DSA tests use <b class="hl">random weights + on-the-fly MLACPU truth + R1 / hand-built GLM
+config</b> → no staged V3.2/GLM weights or traces, so the jobs <b>run</b> (not skip-gated). The
+<code>tp_cap</code> drives the hardware map.</p>
+<table>
+<tr><th>Pipeline (box)</th><th>Job</th><th>Selection</th><th>Covers</th></tr>
+<tr><td>galaxy-deepseek-prefill (8×4)</td><td class="mono">DSA MLA (V3.2)</td><td class="mono">-m gate -k "deepseek_v32 and sp8xtp4"</td><td>DSV32 accuracy + chunked (GLM auto-skips, tp=4)</td></tr>
+<tr><td>blackhole-e2e (LoudBox)</td><td class="mono">bh-lb-deepseek-dsa</td><td class="mono">glm_5_1 and sp4xtp2; deepseek_v32 and sp2xtp4</td><td>GLM (tp≤2 home); DSV32 asymmetric mesh</td></tr>
+</table>
+<p class="lede"><b>Per-test budget</b> (measured, 8× Blackhole): dense-equiv seq256/2k ~7–10 s; sparse seq4k
+~15–20 s (host fallback); chunked 4k/c1k ~13–25 s; determinism ~20 s; cold MLACPU truth +seconds (cached);
+first JIT compile +1–2 min once. A full LB job (8 tests) ran ~50 s + compile — well inside the 30–40 min
+budgets. (v3.1 context: the galaxy pipeline wall-clock is the longest parallel job ≈ 27 min — the
+transformer-determinism variants, not these MLA jobs at ~5–8 min.)</p>
+<p class="lede"><code>test_vs_gpu_ref</code> (trace bundles) is not yet CI-wired — its traces live on exabox;
+staging them is the flip-on step (it's the gold-standard official-GPU gate).</p>
+
+<h2><span class="n">4</span>What stays bespoke (v3.1 can't cover)</h2>
+<ul>
+<li><b>test_vs_gpu_ref.py</b> — official-GPU/vLLM parity needs recorded trace bundles, not a CPU-reproducible model.</li>
+<li><b>test_mla_perf.py</b> — Tracy-driven, hardcoded mesh; perf harnesses are scenario-specific.</li>
+<li><b>GLM AutoConfig</b> can't load <code>glm_moe_dsa</code> → the hand-built config travels with the variant (<code>config_builder=glm_hf_config</code>).</li>
+</ul>
+
+<h2><span class="n">5</span>Gaps &amp; follow-ups</h2>
+<div class="callout warn"><span class="who">Known correctness gaps — out of the MLA-layer (P0) scope</span>
+Confirmed by code review (PR #47832). All three sit <i class="b">outside</i> the tested regime (single-user,
+aligned chunks, first-load) that the migration claims; they gate the e2e / production-serving phase.</div>
+<table>
+<tr><th>Gap</th><th>Evidence</th><th>Priority</th></tr>
+<tr><td>Cache-only load silently disables the indexer (<code>_has_indexer = bool(idx_host)</code> from the host dict; <code>check_cache_complete</code> + offline builder omit indexer weights) → cache-only V3.2/GLM runs dense for <code>end_pos &gt; index_topk</code>, silently.</td><td class="mono">mla.py:240,386; mla.py:34-42; transformer_helpers.py:590</td><td><span class="no">highest</span> — silent; builder already incomplete</td></tr>
+<tr><td>Indexer key buffer is global, not per-user-slot (<code>_index_kbuf</code> takes no <code>cache_user_id</code>) → interleaved multi-user requests cross-contaminate.</td><td class="mono">indexer.py:277; mla.py:952,955</td><td>high before multi-user serving</td></tr>
+<tr><td>Indexer ignores <code>actual_end</code> / absolute positions (concats the full physical chunk) → partial / rotated chunks append pad rows.</td><td class="mono">indexer.py:277; mla.py:950</td><td>high before partial-chunk serving</td></tr>
+</table>
+<p class="lede"><b>Note on the cache-only fix:</b> "detect the indexer from the config, not the weights" is
+not a drop-in — DSV32 reuses R1's config (no indexer marker; dims come from getattr defaults). The fix needs
+(a) <code>INDEXER_WEIGHT_NAMES</code> in <code>check_cache_complete</code> + the offline builder, (b) a
+cache-only <code>TtIndexer</code> branch, (c) a config-level indexer signal for DSV32. Different subsystem
+(cache/runner) — do it before V3.2/GLM e2e, not in the test-migration PR.</p>
+<p class="lede"><b>Other follow-ups:</b> retire the redundant v32 <code>test_mla.py</code> CPU-ref tests; add a DSA
+block / e2e test (only the MLA layer is covered today); CI-wire <code>test_vs_gpu_ref</code> (needs exabox
+traces); promote a trimmed <code>test_mla_perf</code> off <code>@skipif(CI)</code> as a perf gate.</p>
+
+<div class="foot">DeepSeek V3.2 / GLM-5.1 DSA · MLA-layer test coverage · 2026-06-24</div>
+</div>
+</body>
+</html>

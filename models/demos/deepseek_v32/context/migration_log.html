@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migration log — v3.2 / GLM-5.1 onto v3.1 infra</title>
+<style>
+  :root{
+    --bg:#0b0e15; --bg2:#10141f; --panel:#151a28; --panel2:#1b2236;
+    --ink:#e8edf6; --dim:#97a3ba; --line:#283150; --line2:#384566;
+    --accent:#5ad1c8; --accent2:#7aa2ff; --gold:#ffd86b; --red:#ff6b81; --purple:#c98bff; --green:#46d39a;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{ margin:0; background:var(--bg); color:var(--ink); font-size:15px; line-height:1.6;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  .wrap{ max-width:1000px; margin:0 auto; padding:38px 26px 90px; }
+  a{ color:var(--accent2); }
+  code{ font-family:var(--mono); font-size:.85em; background:var(--panel2); padding:1px 6px; border-radius:5px; color:var(--accent); }
+  b.hl{ color:var(--gold); } i.b{ color:var(--accent2); font-style:normal; }
+  header{ text-align:center; margin-bottom:14px; }
+  .eyebrow{ font-family:var(--mono); text-transform:uppercase; letter-spacing:.14em; font-size:12px; color:var(--accent); }
+  h1{ font-size:27px; margin:8px 0 6px; }
+  h1 .grad{ background:linear-gradient(90deg,var(--accent),var(--accent2),var(--purple));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .tagline{ color:var(--dim); max-width:820px; margin:6px auto 0; }
+  .tagline code{ font-size:.9em; }
+  h2{ font-size:21px; margin:30px 0 12px; padding-bottom:7px; border-bottom:1px solid var(--line); }
+  h2 .n{ font-family:var(--mono); color:var(--accent); font-size:.62em; margin-right:10px; }
+  h3{ font-size:15px; margin:18px 0 7px; color:var(--ink); }
+  p{ margin:9px 0; } .lede{ color:var(--dim); }
+  ul,ol{ margin:8px 0; padding-left:22px; } li{ margin:5px 0; }
+  .entry{ background:var(--panel); border:1px solid var(--line2); border-radius:13px; padding:14px 18px; margin:16px 0; }
+  .entry > h3:first-child, .entry > .etitle:first-child{ margin-top:2px; }
+  .etitle{ font-size:15.5px; font-weight:700; color:var(--ink); display:block; margin-bottom:4px; }
+  .etitle .tag{ font-family:var(--mono); font-size:11px; color:var(--accent2); border:1px solid var(--line2);
+    border-radius:6px; padding:1px 7px; margin-right:8px; vertical-align:1px; }
+  .date{ font-family:var(--mono); font-size:11px; color:var(--dim); float:right; font-weight:400; }
+  .status{ display:inline-block; font-family:var(--mono); font-size:10.5px; padding:1px 8px; border-radius:20px;
+    border:1px solid var(--line2); margin-left:6px; vertical-align:2px; }
+  .status.done{ color:var(--green); border-color:var(--green); }
+  .status.plan{ color:var(--gold); border-color:var(--gold); }
+  .callout{ border-left:3px solid var(--accent); background:var(--panel2); border-radius:0 8px 8px 0; padding:9px 14px; margin:12px 0; font-size:13.5px; }
+  .callout.warn{ border-left-color:var(--gold); } .callout.key{ border-left-color:var(--green); }
+  .who{ font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); display:block; margin-bottom:3px; }
+  .callout.warn .who{ color:var(--gold);} .callout.key .who{ color:var(--green); }
+  .verified{ color:var(--green); font-family:var(--mono); font-size:12.5px; }
+  .toc{ font-size:13.5px; } .toc a{ display:block; margin:3px 0; color:var(--dim); } .toc a:hover{ color:var(--accent2); }
+  .toc .grp{ font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); margin:10px 0 4px; }
+  .foot{ margin-top:50px; padding-top:16px; border-top:1px solid var(--line); color:var(--dim); font-size:13px; text-align:center; }
+  /* ---- interactive single-section app ---- */
+  .nav{ display:none; }
+  body.app .nav{ display:block; position:fixed; top:0; left:0; width:260px; height:100vh; overflow:auto;
+    background:var(--bg2); border-right:1px solid var(--line); padding:22px 14px; z-index:50; }
+  body.app .nav .brand{ font-size:16px; font-weight:700; margin:0 6px 2px; }
+  body.app .nav .sub{ color:var(--dim); font-size:11px; margin:0 6px 16px; line-height:1.4; }
+  body.app .navlink{ display:block; padding:8px 11px; margin:2px 0; border-radius:9px; color:var(--dim);
+    font-size:12.5px; cursor:pointer; text-decoration:none; border:1px solid transparent; transition:background .12s; }
+  body.app .navlink:hover{ background:var(--panel2); color:var(--ink); }
+  body.app .navlink.active{ background:rgba(122,162,255,.14); color:var(--accent2); border-color:var(--accent2); }
+  body.app .navlink .num{ font-family:var(--mono); color:var(--accent); margin-right:9px; font-size:11px; }
+  body.app .navlink.active .num{ color:var(--accent2); }
+  body.app .wrap{ margin-left:260px; max-width:940px; padding:30px 36px 70px; }
+  body.app .docsec{ display:none; }
+  body.app .docsec.active{ display:block; animation:secfade .2s ease; }
+  body.app .docsec h2{ margin-top:6px; }
+  @keyframes secfade{ from{opacity:0; transform:translateY(5px);} to{opacity:1; transform:none;} }
+  .pager{ display:flex; justify-content:space-between; gap:12px; margin:40px 0 0; padding-top:16px; border-top:1px solid var(--line); }
+  .pager button{ background:var(--panel2); border:1px solid var(--line2); color:var(--ink); border-radius:9px;
+    padding:9px 15px; cursor:pointer; font-size:12.5px; max-width:46%; text-align:left; font-family:inherit; }
+  .pager button.nx{ text-align:right; margin-left:auto; }
+  .pager button:hover:not(:disabled){ border-color:var(--accent); }
+  .pager button:disabled{ opacity:.3; cursor:default; }
+  .pager .pk{ display:block; font-family:var(--mono); font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.07em; }
+  body.app .foot{ margin-left:260px; }
+  .kbhint{ color:var(--dim); font-size:11px; margin-top:14px; text-align:center; }
+  @media(max-width:840px){
+    body.app .nav{ position:static; width:auto; height:auto; border-right:none; border-bottom:1px solid var(--line); }
+    body.app .wrap, body.app .foot{ margin-left:0; }
+    body.app .docsec{ display:block !important; } .pager{ display:none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">DeepSeek V3.2 · GLM-5.1 · migration log</div>
+  <h1>Migration log — <span class="grad">v3.2 / GLM-5.1 onto v3.1</span></h1>
+  <p class="tagline">Running log of what was <b>done</b>, what was <b>learned</b>, and the
+  <b>decisions</b> made while executing <code>migration.md</code>. Branch
+  <code>mvasilijevic/dsa_w_ops</code> (committed as <code>dsa_pr</code>).</p>
+</header>
+
+<div class="card toc entry">
+  <div class="grp">Backlog (next first)</div>
+  <a href="#backlog">B1–B9 · open issues &amp; next steps</a>
+  <a href="#success">Success criteria (test_spec)</a>
+  <div class="grp">Decisions</div>
+  <a href="#d1">D1 · CCL — keep collectives inlined</a>
+  <a href="#d2">D2 · RoPE — defer freq-table unification</a>
+  <a href="#d3">D3 · G1.1-indexer plan</a>
+  <a href="#d4">D4 · G1.3 plan — unify into one ttMLA</a>
+  <a href="#d5">D5 · ops.py folded; op-tests removed</a>
+  <a href="#d6">D6 · TtIndexer decoupled (DI)</a>
+  <a href="#d7">D7 · unify dense+sparse forward</a>
+  <a href="#d8">D8 · onboard models by capability flags</a>
+  <a href="#d9">D9 · DSA test substrate + reference relocated</a>
+  <div class="grp">Learnings</div>
+  <a href="#l1">L1 · RoPE details — freq tables & mscale</a>
+  <a href="#l2">L2 · device scale assumes mscale==mscale_all_dim</a>
+  <a href="#l3">L3 · GLM-5.1 resolves the scale risk</a>
+  <a href="#lp">Pending decision → bake_mscale (implemented)</a>
+  <div class="grp">Progress (newest first)</div>
+  <a href="#p-g3">G3.1–G3.4 — coverage overview + plan</a>
+  <a href="#p-g21">G2.1 — indexer weights on-disk cache</a>
+  <a href="#p-p5">G1.3 P5 — config from HF; dep removed</a>
+  <a href="#p-p24">G1.3 P2–P4 — unify the MLA</a>
+  <a href="#p-p1">G1.3 P1 — relocate DSA ops</a>
+  <a href="#p-g11impl">G1.1-indexer implemented</a>
+  <a href="#p-diag">G1.1 / G1.2 diagnosis</a>
+</div>
+
+<!-- ============================================================ BACKLOG -->
+<h2 id="backlog"><span class="n">§B</span>Backlog — next steps (highest priority first)</h2>
+<div class="callout key"><span class="who">status</span>
+The MLA-layer test migration (P0 + P1) is <b class="hl">done and device-verified</b> (see Progress +
+Success criteria). Everything here is follow-on. B1–B3/B8 came out of the PR #47832 review
+(<code>context/pr_47832_review_findings.html</code>) + this session's verification.</div>
+<ol>
+<li><b>B1 — Triage the sparse-regime chunked-indexer divergence (NEW, cheap, possible bug).</b> Extending
+<code>test_indexer_chunked</code> from <code>seq=2048</code> (== index_topk, trivial all-select) to
+<code>seq=4096</code> (real 2048-of-N) FAILS: <code>row 2833: overlap 2025/2048</code> (~1.1% chunked-vs-
+single-shot top-k divergence, just over the 1% tolerance). The 2048 test passes only because it never enters
+the sparse regime. Check if the chunked vs single-shot indexer K-cache is bit-identical (→ tie noise, widen
+seq+tolerance) or drifts (→ real chunked indexer-cache bug). Reverted the bump to keep the suite green.</li>
+<li><b>B2 — Cache-only load silently disables the indexer (review finding 1; highest severity).</b> A
+cache-only V3.2/GLM layer (<code>ttMLA(config, {}, weight_cache_path=...)</code> via the prefill runner) gets
+<code>_has_indexer=False</code> (it's <code>bool(idx_host)</code> from the live <code>state_dict</code>) →
+silently dense for <code>end_pos &gt; index_topk</code>. <code>check_cache_complete</code> (mla.py:34) + the
+offline builder (transformer_helpers.py:590) omit <code>INDEXER_WEIGHT_NAMES</code>, so the cache reports
+complete with no indexer files. Fix = (a) indexer names in completeness + builder, (b) cache-only
+<code>TtIndexer</code> branch, (c) a config-level indexer signal (DSV32 reuses R1's config → needs a marker).
+Cache/runner subsystem — do BEFORE any e2e/serving, NOT in the test-migration PR.</li>
+<li><b>B4 — Per-user indexer slot isolation (review finding 2 + KISS-3 cache half).</b> <code>_index_kbuf</code>
+is one layer-global buffer grown by a private <code>ttnn.concat</code>; <code>write_k</code>/<code>forward</code>
+take no <code>cache_user_id</code> while the KVPE path does → interleaved multi-user requests cross-contaminate.
+Needs a per-slot key cache reusing the slot-aware machinery (the block-cyclic redesign in the indexer FOLLOW-UP
+comment) — the shared cache primitive also underlies B2/B5. Before multi-user serving.</li>
+<li><b>B5 — Honor <code>actual_end</code> / absolute positions in the indexer (review finding 3).</b>
+<code>write_k</code> concats the full physical chunk (incl. pad); routing uses physical length. Partial /
+rotated chunks append pad rows — the unresolved "how padding works". Before partial-chunk serving.</li>
+<li><b>B6 — CI-wire <code>test_vs_gpu_ref</code></b> (gold-standard official-GPU gate). Needs the trace
+bundles staged on CI runners (they live on exabox). Add a skip-gated job that flips on once staged.</li>
+<li><b>B7 — DSA block / full-model e2e parity</b> for V3.2/GLM (today only the MLA layer; v3.1 has block + e2e).</li>
+<li><b>B8 — CI perf gate for DSA</b> (promote a trimmed <code>test_mla_perf</code> off <code>@skipif(CI)</code>;
+review finding T3: the harness stubs <code>_index_kbuf</code> directly → add a real-prefix-warmed profile mode).</li>
+<li><b>B9 — Push the branch</b> to <code>origin/mvasilijevic/dsa_pr</code> (review is happening off local commits).</li>
+<li><b>B10 — Unify the CPU-reference HF shard resolver (review KISS-2; low/med, pre-existing).</b>
+<code>cpu_deepseek_v32/weights.py</code> calls <code>hf_hub_download</code> directly — a second local-vs-HF policy
+beside the test conftest resolver. Fold into one resolver that returns <i class="b">attention-only</i> per-layer
+shard paths (keep CPU weight mapping in <code>weights.py</code>). Pre-existing reference code + the existing
+resolver doesn't do attention-only loading → a real refactor, not a trivial dedup.</li>
+</ol>
+<p class="lede"><i class="b">Completed cleanups B3 (retire duplicate v32 test_mla) + B11 (stale tt/README) moved to Progress below.</i></p>
+
+<!-- ============================================================ SUCCESS -->
+<h2 id="success"><span class="n">§S</span>Success criteria (test_spec.md)</h2>
+<p>All three <b class="hl">MET</b> (the criteria are scoped to the MLA layer; the backlog is out-of-scope follow-on).</p>
+<ul>
+<li><b>P0 — onboarded; MLA-layer coverage (accuracy/determinism/feature/mesh), DSA checks bespoke.</b>
+<span class="yes">✅</span> <code>test_dsa_mla</code> / <code>_determinism</code> / <code>_chunked</code> over
+[deepseek_v32, glm_5_1], device-verified (output ~0.997–0.999, KVPE ~0.9999, determinism pcc=1.0);
+<code>test_vs_gpu_ref</code> preserved bespoke.</li>
+<li><b>P0 — new model = TestVariant + capabilities, no new per-model test code.</b> <span class="yes">✅</span>
+Bodies branch on capabilities, never on name; GLM rode in as a second <code>variant</code> entry. The
+<code>test_dsa_*</code> functions are per-<i class="b">capability</i> (shared across all DSA models), not per-model.</li>
+<li><b>P1 — coverage doc (groups, real budget, dev-vs-gate, sparsification, un-portable).</b>
+<span class="yes">✅</span> <code>test_coverage_overview.md</code> rewritten to delivered state; <code>.html</code> succinct.</li>
+</ul>
+<div class="callout warn"><span class="who">honest caveat</span>
+The criteria measure the <i class="b">MLA-layer</i> migration — fully met. They do NOT cover the
+production-serving paths the review flagged (cache-only B2, multi-user B4, partial-chunk B5) — real gaps,
+correctly outside P0. B1 also shows the chunked-equivalence coverage doesn't exercise real sparse selection;
+tests pass, but the sparse-regime coverage is thinner than "matches v3.1" implies until B1 is triaged.</div>
+
+<!-- ============================================================ DECISIONS -->
+<h2 id="dec"><span class="n">§D</span>Decisions</h2>
+
+<div class="entry" id="d1">
+<span class="etitle"><span class="tag">D1</span>CCL: keep collectives inlined, do NOT factor into helpers<span class="date">2026-06-22</span></span>
+<p>The team prefers inline collective code over helper functions, matching v3.1's style.</p>
+<ul>
+<li><b>Implication:</b> the convergence direction is <i class="b">v3.2 adopts v3.1's inline pattern</i>,
+NOT "lift v3.2's helpers into the v3.1 base class" (the originally-proposed refactor is rejected).</li>
+<li><b>Action item (G1.2):</b> inline v3.2's <code>_tp_rs_ag</code> / <code>_tp_ag_reduce</code> /
+<code>_sp_all_gather</code> at their call sites. Accept the inline duplication — it is the preferred convention.</li>
+<li>Nuance: the AG+reduce block (<code>all_gather_async</code> dim=1 + <code>fast_reduce_nc</code> dims=[1])
+must stay guarded by <code>if self.tp_factor &gt; 1:</code> (no internal tp==1 short-circuit), whereas the
+RS+AG / RS-only blocks no-op naturally at tp==1.</li>
+</ul>
+</div>
+
+<div class="entry" id="d2">
+<span class="etitle"><span class="tag">D2</span>RoPE: defer the freq-table unification as its own task<span class="date">2026-06-22</span></span>
+<p>Freq tables are unifiable (see L1), and for the current configs the scale handling is numerically
+equivalent — so the risk is lower than first thought. Still tracked as a separate G1.1 follow-up rather
+than folded into the low-risk CCL pass, because it touches a correctness-sensitive convention and needs a
+PCC re-validation + a decision on the <code>mscale != mscale_all_dim</code> case (GLM-5.1, resolved in L3).</p>
+</div>
+
+<div class="entry" id="d3">
+<span class="etitle"><span class="tag">D3</span>G1.1-indexer plan: parameterize v3.1 rope tables, keep the indexer apply<span class="date">2026-06-22</span></span>
+<p>The rope splits into a <b class="hl">shareable table/op part</b> (fold into v3.1 behind one flag) and an
+<b class="hl">indexer-specific apply part</b> (stays). mscale needs nothing — confirmed identical (L1/L3);
+it lives in <code>self.scale</code>, which the indexer already reuses.</p>
+<h3>Share — parameterize v3.1's rope helpers (small, mechanical)</h3>
+<ol>
+<li><code>get_cos_sin_matrix(hf_config, interleave=True)</code> (<code>rope.py:25</code>): <code>interleave</code>
+toggles the cos/sin arrangement — <code>stack</code>→duplicated pairs <code>[c0,c0,c1,c1,…]</code> vs
+<code>cat</code>→concatenated halves <code>[c0,…,c31,c0,…]</code>. The HF <code>DeepseekV3YarnRotaryEmbedding</code>
+already produces the rotate-half (<code>cat</code>) form internally and <code>rope.py:50-51</code> converts it
+to interleaved — so the flag just <i>skips that conversion</i>. No new math.</li>
+<li><code>RotarySetup.get_rope_tensors(…, interleave=…)</code> (<code>rope.py:78</code>): build
+<code>trans_mat</code> ONLY when <code>interleave</code>.</li>
+<li>Apply-op selection: <code>rotary_embedding_hf</code> (rotate-half, no trans_mat) vs
+<code>rotary_embedding_llama</code> (interleaved, + trans_mat). <code>rotary_embedding_hf</code> is NEW to v3.1
+but is a stock ttnn op. → these three flip <i>together</i>; that triple is exactly what
+<code>index_rope_interleave</code> gates today.</li>
+</ol>
+<h3>Keep indexer-specific — <code>_device_rope_pe</code></h3>
+<p>NOT a flag. It ropes only the first 64 of a 128-wide <code>index_head_dim</code>, on
+<code>[1, H_idx, S, D_idx]</code> index tensors, SP-mesh-partitions cos/sin for the SP-sharded queries,
+slices cos/sin to global <code>[start_pos, start_pos+glob)</code>, and concats the nope back. v3.1's MLA apply
+doesn't cover these shapes/sharding, so this wrapper stays.</p>
+<div class="callout warn"><span class="who">reference-parity constraint — why the flag is load-bearing</span>
+DS indexer must stay rotate-half (<code>rotary_embedding_hf</code>) — that is what makes the stored indexer k
+match the GPU/vLLM reference element-wise (PCC ~0.99999). Forcing v3.1's interleaved path on the DS indexer
+would store k in the interleaved frame and drop raw k_pe PCC to ~0.43 (the harmless k_pe frame artifact,
+reborn) — output stays correct (q·k is layout-invariant) but element-wise reference parity breaks. GLM uses
+interleaved, so it matches v3.1 natively.</div>
+</div>
+
+<div class="entry" id="d4">
+<span class="etitle"><span class="tag">D4</span>G1.3 plan: unify the v3.2 ttMLA into v3.1's ttMLA (single class)<span class="date">2026-06-22</span></span>
+<p>User picked <b>unify into v3.1's ttMLA</b> (eliminate the v3.2 subclass). Inventory of what the v3.2
+subclass adds (14 methods): 6 indexer (<code>_build_index_rope_tables</code> [done, shared],
+<code>_upload_indexer_weights</code>, <code>_device_rope_pe</code>, <code>_chunk_offset</code>,
+<code>_indexer_write_k</code>, <code>_indexer_topk</code>), 3 DSA forward (<code>_dsa_forward</code>,
+<code>_gather_kvpe_prefix</code>, <code>_unrotate_blockcyclic</code>), 2 overrides
+(<code>__init__</code>, <code>forward</code>), 3 CCL helpers.</p>
+<div class="callout key"><span class="who">dependency analysis — no circular import</span>
+<code>deepseek_v32/{__init__,tt/__init__}.py</code> are empty; <code>tt/ops.py</code> and
+<code>reference_cpu/model.py</code> import only torch/ttnn. So v3.1 can own the DSA ops + <code>ModelArgs</code>
+with no cycle. End-goal: v3.1 owns everything, v32 folder retired.</div>
+<h3>Phasing (each phase its own verified commit)</h3>
+<ul>
+<li><b>P1</b> — relocate <code>ops.py</code> → <code>deepseek_v3_d_p/tt/ops.py</code>. Verify: ops tests.</li>
+<li><b>P2</b> — merge methods into v3.1 ttMLA, gated by <code>_has_indexer</code>. Dense path provably untouched.</li>
+<li><b>P3</b> — forward dispatch: route to <code>_dsa_forward</code> when
+<code>_has_indexer and end_pos &gt; index_topk</code>, else the dense body. <b class="hl">Rewrites v3.1's
+production forward — highest-risk phase.</b></li>
+<li><b>P4</b> — retire the subclass: <code>deepseek_v32/tt/mla/mla.py</code> → thin re-export.</li>
+<li><b>P5</b> — config cleanup: express indexer config via HF <code>PretrainedConfig</code> instead of
+<code>ModelArgs</code>, so v3.1 no longer imports <code>reference_cpu</code>.</li>
+</ul>
+<p><b>Verify each phase:</b> <code>test_vs_gpu_ref.py</code> (DS + GLM) green + a v3.1 dense smoke test.</p>
+</div>
+
+<div class="entry" id="d5">
+<span class="etitle"><span class="tag">D5</span>DSA op wrappers folded into call sites; op-wrapper tests removed<span class="date">2026-06-23</span></span>
+<p><code>tt/ops.py</code> (<code>indexer_program_config</code> / <code>indexer_logits</code> / <code>topk_indices</code> /
+<code>sparse_mla</code>) was a thin wrapper layer. Inlined it — indexer ops into <code>TtIndexer.forward</code>
+(direct <code>ttnn.experimental.indexer_score</code> / <code>topk_large_indices</code>), <code>sparse_mla</code> into
+<code>ttMLA._sparse_mla</code>. <code>test_ops_shapes.py</code> / <code>test_ops_numerics.py</code> deleted as
+redundant (raw ttnn kernels have their own unit tests; wrappers are exercised e2e by
+<code>test_mla</code> / <code>test_vs_gpu_ref</code>). <code>ops.py</code> no longer exists;
+<code>test_vs_gpu_ref</code>'s logits-capture monkeypatch repointed to <code>ttnn.experimental.topk_large_indices</code>.</p>
+</div>
+
+<div class="entry" id="d6">
+<span class="etitle"><span class="tag">D6</span>TtIndexer decoupled from ttMLA (constructor DI + inlined collectives)<span class="date">2026-06-23</span></span>
+<p>Extracted the indexer into <code>tt/mla/indexer.py</code> as <code>TtIndexer</code>, then removed the
+<code>self.mla</code> back-reference: ttMLA injects everything it reuses through the constructor (config,
+mesh + sp/tp axes, scale, q_a stem weights + a <code>q_a_mm_kwargs</code> callable, compute configs,
+weight-cache path/layer, tt_ccl). The indexer runs its <b>own</b> inlined TP/SP collectives (consistent
+with D1). Entry renamed <code>topk</code> → <code>forward</code>; <code>write_k</code> stays public (ttMLA calls it on
+dense chunks to keep the key-cache warm).</p>
+</div>
+
+<div class="entry" id="d7">
+<span class="etitle"><span class="tag">D7</span>Unify dense + sparse MLA forward into one forward(mode)<span class="date">2026-06-23</span></span>
+<p><code>_dense_forward</code> + <code>_dsa_forward</code> collapsed into a single <code>forward</code> with shared
+helpers (<code>_q_stem</code>, <code>_kv_stem</code>, <code>_apply_wkv_b2</code>, <code>_write_kvpe</code>,
+<code>_o_proj_epilogue</code>) and an explicit 4-mode branch (<code>dense_single</code> / <code>dense_chunked</code> /
+<code>sparse_single</code> / <code>sparse_chunked</code>) + <code>else: raise</code>. Caveat resolutions in
+<code>context/mla_forward_unification.html</code>: CCL inlined into the shared stems (<code>_tp_rs_ag</code> /
+<code>_tp_ag_reduce</code> deleted), per-mode q-norm <code>memory_config</code> (TODO to converge), one
+<code>_apply_wkv_b2</code> placed per-mode, <code>kv_only</code> + <code>return_kv_intermediates</code> preserved.
+Net −125 lines in <code>mla.py</code>.</p>
+</div>
+
+<div class="entry" id="d8">
+<span class="etitle"><span class="tag">D8</span>Onboard models by capability flags on TestVariant, not by name branches<span class="date">2026-06-24</span></span>
+<p>Per the signed-off <code>context/test_spec.md</code>, a model is data on <code>TestVariant</code> and test bodies
+branch on capabilities. Kept the capability set <b>minimal</b> — only what is NOT already on the resolved config:</p>
+<ul>
+<li><code>has_indexer</code> (bool) — runs the DSA indexer + sparse SDPA. (On device the ttMLA still auto-detects the
+indexer from the weights via <code>_has_indexer</code>; this flag is for <i>test-body</i> branching.)</li>
+<li><code>tp_cap</code> (int|None) — GLM's 64 q-heads force sparse_sdpa's per-chip <code>H/tp ≥ 32</code>, i.e. tp ≤ 2. DS = None.</li>
+<li><code>config_builder</code> (callable|None) — GLM's <code>glm_moe_dsa</code> is unregistered with transformers, so
+AutoConfig can't load it; when set this overrides conftest's disk/HF config resolution. DS = None (rides AutoConfig).</li>
+<li><code>reference_kind</code> ("hf_attn"|"mlacpu") — the dense <code>run_reference_mla</code> HF path is only correct for
+<code>seq_len ≤ index_topk</code>; above that the sparse regime needs the <code>deepseek_v32.reference_cpu</code>
+<code>MLACPU</code> truth. Both DSA variants are "mlacpu".</li>
+</ul>
+<p>Index dims (<code>index_n_heads/head_dim/topk</code>, <code>index_rope_interleave</code>) are <b>read off the resolved
+config</b>, not duplicated onto the variant — single source of truth.</p>
+<p>Two structural facts (from the integration map): <b>(1) DSV32 ≠ new config class</b> — none exists and V3.2-Exp
+shares MLA dims with R1, so DSV32 resolves config from the R1 checkout (indexer getattr-defaults already match DeepSeek),
+sidestepping V3.2-Exp remote-code AutoConfig uncertainty. <b>(2) MLACPU does not fit <code>run_reference_mla</code></b>
+(different ctor / weight keys / <code>(x, start_pos, freqs_cis, mask)</code> forward / single-tensor return), so the
+sparse-regime truth is wired via an adapter behind <code>reference_kind</code>, not by forcing MLACPU through the HF
+attention interface; the dense regime can still use the config-driven <code>create_mla_reference</code>.</p>
+</div>
+
+<div class="entry" id="d9">
+<span class="etitle"><span class="tag">D9</span>DSA test substrate: shared CPU reference, shared plugin, reference relocated<span class="date">2026-06-24</span></span>
+<p>How the v3.2/GLM MLA tests reuse the v3.1 infra without per-model test code or backwards deps.</p>
+<ul>
+<li><b>Reference truth = MLACPU, not the dense reference.</b> <code>random_weights</code>/<code>pretrained</code>
+are dense (7 keys, no indexer) and <code>create_mla_reference</code>/<code>cpu_mla_reference</code> attend to
+<i>all</i> causal positions — WRONG once context exceeds <code>index_topk</code> (device attends top-k only).
+Extracted the working v32 recipe into <code>tests/dsa_reference.py</code>, variant-driven (ModelArgs via
+<code>variant.cpu_model_args</code>). Device weights and CPU truth come from the SAME MLACPU instance (remapped
+via <code>WEIGHT_NAME_MAP</code>) → PCC is meaningful. The DeepSeek-only YaRN assert is dropped (GLM sets
+max==original to disable YaRN by design).</li>
+<li><b>Shared options/markers via a plugin, not a conftest.</b> v3.1 and v3.2 <code>tests/</code> are SIBLINGS;
+loading one conftest from the other via <code>pytest_plugins</code> errors ("already registered under a different
+name") since pytest also auto-loads it under its path name. Fix: a standalone <code>tests/dsa_plugin.py</code>
+(NOT a conftest), loaded by both via <code>pytest_plugins</code> under its dotted name → registered exactly once.
+Unifies v3.1 (<code>-k</code>) and v3.2 (dev/gate/nightly) onto one scheme.</li>
+<li><b>config_builder hook.</b> <code>_resolve_config_only</code> returns <code>variant.config_builder()</code>
+first — GLM's <code>glm_moe_dsa</code> can't load via AutoConfig.</li>
+<li><b>Reference relocated (user request).</b> <code>reference_cpu/</code> moved from <code>deepseek_v32</code> to
+<code>deepseek_v3_d_p/reference/reference_cpu/</code>. Self-contained (imports neither package); the unified model
+already lives in v3_d_p, so the v3.1 test infra no longer reaches back into v32. The v3.1 <code>reference/</code>
+dir is now the single home for the family's references; v32 keeps only its bespoke trace tests.</li>
+</ul>
+</div>
+
+<!-- ============================================================ LEARNINGS -->
+<h2 id="learn"><span class="n">§L</span>Learnings</h2>
+
+<div class="entry" id="l1">
+<span class="etitle"><span class="tag">L1</span>RoPE details: freq tables unifiable; scale handling reconciled<span class="date">2026-06-22</span></span>
+<p><b>Question:</b> is the difference only in how scale (mscale) is applied? How do the v3.1 and v3.2
+<i>reference</i> implementations handle scale?</p>
+<h3>Frequencies — identical</h3>
+<p>Both compute the same YaRN-rescaled base frequencies. v3.1: <code>DeepseekV3YarnRotaryEmbedding</code>,
+<code>inv_freq = freq_inter*(1-mask) + freq_extra*mask</code>. v3.2: <code>precompute_freqs_cis</code>,
+<code>freqs = freqs/factor*(1-smooth) + freqs*smooth</code>. The ramp is the same function
+(<code>mask == smooth</code>); given equal betas/factor/original_seq_len, the frequencies match.</p>
+<h3>Amplitude / mscale — the only real difference, and it cancels for current configs</h3>
+<p><code>yarn_get_mscale(scale, mscale) = 0.1 * mscale * log(scale) + 1.0</code> (same formula both sides).</p>
+<ul>
+<li><b>v3.1 (HF convention)</b> splits mscale: cos/sin scaled by
+<code>_mscale = m(s,mscale) / m(s,mscale_all_dim)</code> (<code>modeling_deepseek.py:302-303</code>);
+<code>softmax_scale *= m(s,mscale_all_dim)**2</code>, only when <code>mscale_all_dim</code> is set.</li>
+<li><b>v3.2</b> keeps cos/sin <b>pure</b> (<code>torch.polar(ones, freqs)</code>) and folds <i>all</i> mscale
+into the softmax scale (<code>reference_cpu/model.py:354-358</code>; the indexer reuses the same scale).</li>
+</ul>
+<div class="callout"><span class="who">verified against genuine configs</span>
+HF <code>DeepseekV3</code> (<code>config.json</code>): BOTH <code>mscale</code> and <code>mscale_all_dim</code>
+(both <code>1.0</code>, factor <code>40</code>). Official v3.2 <code>reference_cpu</code> <code>ModelArgs</code>:
+NO <code>mscale_all_dim</code> field — single <code>mscale = 1.0</code>. (An earlier note grounded this on
+<code>kimi_k2_6/config.json</code> — Kimi, not DeepSeek; the genuine DeepSeek-V3 config confirms
+<code>mscale == mscale_all_dim == 1.0</code>.)</div>
+<p><b>Why they coincide:</b> with <code>mscale == mscale_all_dim == 1.0</code>, v3.1's
+<code>_mscale = m/m = 1.0</code> → cos/sin pure, full term to <code>softmax *= m**2</code> — exactly v3.2.
+<b>Where they'd diverge:</b> only if <code>mscale != mscale_all_dim</code> (resolved for GLM in L3).</p>
+<div class="callout key"><span class="who">already-deduped RoPE (not pending)</span>
+v3.2 already reuses <code>get_rot_transformation_mat</code> + <code>RotarySetup</code> from v3.1. The remaining
+v3.2 RoPE code (<code>_build_index_rope_tables</code>, <code>_device_rope_pe</code>) is the <i>indexer</i> RoPE
+— genuinely new functionality, not a v3.1 duplicate.</div>
+</div>
+
+<div class="entry" id="l2">
+<span class="etitle"><span class="tag">L2</span>v3.1's device scale already assumes mscale == mscale_all_dim<span class="date">2026-06-22</span></span>
+<p>Tracing the <i>device</i> (TT) path, not just the HF reference:</p>
+<ul>
+<li><b>Table build</b> (<code>rope.py:84</code> → <code>get_cos_sin_matrix</code> →
+<code>DeepseekV3YarnRotaryEmbedding</code>) bakes <code>_mscale = m(mscale)/m(mscale_all_dim)</code> into cos/sin.</li>
+<li><b>Softmax scale</b> (<code>mla.py:279-282</code>) sets <code>self.scale = qk_head_dim**-0.5</code>, then
+<code>*= mscale**2</code> using <code>rope_scaling["mscale"]</code> and <b>ignoring <code>mscale_all_dim</code></b>.</li>
+<li>These would double-count mscale unless <code>_mscale == 1</code>, i.e. <code>mscale == mscale_all_dim</code>
+(true for the real config). So v3.1's device path is <i>effectively</i> pure-tables + full mscale² in softmax;
+the <code>_mscale</code> baking is dead weight that equals 1 by config coincidence.</li>
+</ul>
+<p><b>Consequence:</b> switching <code>get_cos_sin_matrix</code> to pure tables is <i>more</i> self-consistent
+with the device <code>self.scale</code>, not less. The only unmerged table builder is the indexer's
+<code>_build_index_rope_tables</code>.</p>
+</div>
+
+<div class="entry" id="l3">
+<span class="etitle"><span class="tag">L3</span>GLM-5.1 config resolves the scale_handling risk; fixes the guard<span class="date">2026-06-22</span></span>
+<p>GLM-5.1 rope_scaling: <code>factor=1.0, mscale=1.0, mscale_all_dim=0.0</code>, <code>rope_theta=1e6</code>,
+<code>max_seq_len==original_seq_len</code> → <b class="hl">YaRN OFF</b>.</p>
+<ul>
+<li>GLM sets <code>mscale (1.0) != mscale_all_dim (0.0)</code> — but <code>factor=1.0</code> makes
+<code>yarn_get_mscale(1.0, ·) = 0.1·mscale·ln(1)+1 = 1.0</code> for ANY mscale. So <code>_mscale = 1</code>
+(pure cos/sin) and the softmax mscale² term is skipped on both sides → plain RoPE,
+<code>scale = qk_head_dim**-0.5</code>. <b>Mode A is correct for DS-V3, V3.2, AND GLM-5.1.</b></li>
+<li><b>Bug caught:</b> the guard must be <code>m(factor, mscale) == m(factor, mscale_all_dim)</code> (i.e.
+<code>_mscale == 1</code>), NOT <code>mscale == mscale_all_dim</code> — the naive form false-fires on GLM
+(1.0 vs 0.0).</li>
+<li>Latent inconsistency: device guards scale on <code>rope_factor &gt; 1.0</code>, HF on
+<code>if mscale_all_dim:</code>. Agree for DS + GLM; a <code>factor&gt;1 &amp; mscale_all_dim=0</code> config
+would diverge. The <code>_mscale == 1</code> assertion catches it.</li>
+<li>Other GLM specifics: <code>qk_nope/qk_rope/v = 192/64/256</code>, indexer RoPE <b>interleaved</b>
+(<code>index_rope_interleave=True</code>), <code>tp ≤ 2</code> (H=64/tp ≥ 32), hand-built config.</li>
+</ul>
+</div>
+
+<div class="entry" id="lp">
+<span class="etitle"><span class="tag">★</span>Pending decision — <code>get_cos_sin_matrix</code> mscale param<span class="status done">implemented + device-verified</span></span>
+<p>Shipped as <code>bake_mscale: bool = False</code> (local-context name: "fold mscale into cos/sin?").</p>
+<ul>
+<li><code>False</code> (default) → pure rotations; mscale applied in the attention softmax scale.</li>
+<li><code>True</code> → cos/sin × <code>_mscale = m(mscale)/m(mscale_all_dim)</code> (HF split; only needed if
+<code>mscale != mscale_all_dim</code>).</li>
+</ul>
+<p>Earlier iterations named this <code>scale_handling="softmax"/"baked"</code> then
+<code>mscale_in="softmax"/"tables"</code>; renamed to a local boolean per review — the old names referenced the
+<i>external</i> softmax, not what this function does to the tables. Default <code>False</code> forces
+<code>mscale_all_dim = mscale</code> so <code>_mscale = 1</code> — can't double-count; no assert needed.</p>
+</div>
+
+<!-- ============================================================ PROGRESS -->
+<h2 id="prog"><span class="n">§P</span>Progress (newest first)</h2>
+
+<div class="entry" id="p-0624e">
+<span class="etitle">Backlog cleanup: B3 (retire dup) + B11 (stale README)<span class="status done">done</span><span class="date">2026-06-24 (cont.)</span></span>
+<p>Low-risk removal cleanups from the PR #47832 review.</p>
+<ul>
+<li><b>B3 (KISS-1) — deleted <code>deepseek_v32/tests/test_mla.py</code> entirely.</b> Its 3 tests are subsumed
+by the variant-driven <code>test_dsa_mla*</code> in v3.1 (deepseek_v32 + glm_5_1) and its helper copies duplicated
+<code>dsa_reference.py</code>. Repointed the 3 importers (<code>test_vs_gpu_ref</code>, <code>test_indexer_chunked</code>,
+<code>test_mla_perf</code>) to <code>dsa_reference</code>, passing the <code>deepseek_v32</code> variant (identical
+default ModelArgs → behavior-preserving). The autouse <code>use_v32_mla</code> monkeypatch went with the file
+(no-op: <code>ttMLAv32 is ttMLA</code>).</li>
+<li><b>B11 (KISS-4) — rewrote <code>deepseek_v32/tt/README.md</code></b> (described a non-existent subclass + copied
+files); now a short accurate note (thin re-export overlay; bespoke trace tests here, MLA-layer tests in v3.1).</li>
+<li>Verified: all suites collect (1121 items); <code>test_indexer_chunked</code> passes on device via the repointed
+helpers. Rejected KISS-3 collective-helper item removed from the backlog.</li>
+</ul>
+</div>
+
+<div class="entry" id="p-0624d">
+<span class="etitle">Test migration COMPLETE: group markers (#3) + coverage doc (P1)<span class="status done">done</span><span class="date">2026-06-24 (cont.)</span></span>
+<p>All signed-off <code>test_spec.md</code> deliverables landed. Commits <code>afef5ba861d</code> (#3),
+<code>2ba4510719b</code> (P1).</p>
+<ul>
+<li><b>#3 group markers:</b> registered accuracy/determinism/feature_chunking/feature_cache/mesh/perf in
+<code>dsa_plugin</code> (orthogonal to dev/gate/nightly); applied to the v3.1 DSA tests + bespoke v32 suites.
+Verified selection + strict-marker collection (1136).</li>
+<li><b>P1 coverage doc:</b> rewrote <code>test_coverage_overview.md</code> to the delivered state
+(group→parameter table, tier map, live CI jobs, measured budget); pruned the stale plan. <code>.html</code> → DONE.</li>
+</ul>
+<p><b>P0 (#1–#4) + P1 all done and device-verified.</b> Open follow-ups (non-P0): retire the redundant v32
+<code>test_mla.py</code> CPU-ref tests; sparse partial-chunk padding; DSA block/e2e; CI-wire
+<code>test_vs_gpu_ref</code> (needs exabox traces); CI perf gate. Branch not yet pushed.</p>
+</div>
+
+<div class="entry" id="p-0624c">
+<span class="etitle">Test migration 2c/2d: DSA tests wired into v3.1 + CI jobs<span class="status done">done</span><span class="date">2026-06-24 (cont.)</span></span>
+<p>The actual deliverable: variant-driven DSA tests live in v3.1 <code>test_mla.py</code>, device-verified, with
+CI jobs. Commits <code>ec47ec6df7c</code> (2c), <code>c8b84233a15</code> (2d), CI yaml.</p>
+<ul>
+<li><b>2c — accuracy + determinism</b> (first TODO anchor): <code>test_dsa_mla</code> (output + KVPE vs MLACPU
+over {seq256(dev),2k,4k} × box-adaptive SP×TP) + <code>test_dsa_mla_determinism</code>, over [deepseek_v32,
+glm_5_1]. <code>mesh_utils</code> moved into v3.1 + <code>skip_if_tp_exceeds_cap</code> (GLM tp<=2). Verified on
+the 8-chip box: DS seq256 0.999 / seq4k 0.997; GLM 0.999/0.998/0.997; KVPE ~0.9999; GLM tp=4 skipped;
+determinism exact pcc=1.0.</li>
+<li><b>2d — chunked</b> (second TODO anchor): <code>test_dsa_mla_chunked</code> vs the MLACPU chunked truth.
+The 50k-production driver is NOT extended to sparse (dense refs wrong above topk; scenarios exceed the MLACPU
+window) — documented inline; sparse partial-chunk padding stays a follow-up. Verified: per-chunk 0.998→0.988
+(drop past index_topk = expected sparse signature), full 0.997, kvpe 0.9999.</li>
+<li><b>CI (deliverable #4):</b> random weights + on-the-fly MLACPU truth + R1/hand-built config → no staged
+weights/traces, so jobs RUN (not skip-gated). <code>tp_cap</code> drives the hardware map: Galaxy (8x4) runs
+deepseek_v32 (GLM skips); GLM covered on LoudBox <code>sp4xtp2</code>; DS also on <code>sp2xtp4</code>. Added
+<code>(Galaxy) DeepSeek Prefill - DSA MLA</code> + LoudBox <code>bh-lb-deepseek-dsa</code>; <code>-m gate</code>
+drops dev determinism. yaml parses; LB selections collect 4 each + pass on device.</li>
+</ul>
+<p><b>Remaining:</b> deliverable #3 (group markers) + P1 (coverage doc). Then the v32 <code>test_mla.py</code>
+CPU-reference tests are redundant with the v3.1 ones and can be retired.</p>
+</div>
+
+<div class="entry" id="p-0624b">
+<span class="etitle">Test migration increments 2a/2b + DSA reference relocation (D9)<span class="status done">done</span><span class="date">2026-06-24 (cont.)</span></span>
+<p>Substrate landed; no v3.1 DSA test bodies yet (those + on-device verify come next). Commits
+<code>1ecc830f507</code> (2a), <code>0ad375ea458</code> (2b), <code>3a3e182c0b1</code> (reference move).</p>
+<ul>
+<li><b>2a:</b> <code>tests/dsa_reference.py</code> — variant-driven MLACPU CPU-reference substrate (D9).
+<code>glm_model_args()</code> joins <code>glm_hf_config()</code>; <code>test_vs_gpu_ref.py</code> delegates to both.
+<code>TestVariant</code> gains <code>cpu_model_args</code>. CPU-verified: 5 indexer keys, correct shapes for DS
+(idx 64 heads) + GLM (32 heads, 6144/256).</li>
+<li><b>2b:</b> config_builder hook; <code>tests/dsa_plugin.py</code> shares <code>--ds-*</code> + dev/gate/nightly
+across both sibling suites. Verified: v32-only (15), both-dirs (1103), no <code>--ds-layer</code> collision,
+<code>-m dev</code> honored.</li>
+<li><b>reference move (D9):</b> <code>reference_cpu</code> → <code>deepseek_v3_d_p/reference/reference_cpu</code>,
+all importers repointed; 1113 tests collect.</li>
+</ul>
+<p><b>Next (2c):</b> vendor <code>mesh_utils.py</code>; add variant-driven DSA test functions (DS + GLM) at the
+<code>test_mla.py</code> TODO anchors; verify deepseek_v32 on the 8-chip box. Then 2d: dispatch the chunked
+<code>reference=="cpu"</code> branch to the MLACPU chunked truth for <code>has_indexer</code> variants.</p>
+</div>
+
+<div class="entry" id="p-0624">
+<span class="etitle">Test migration increment 1 — register DSV32 + GLM51 variants (D8)<span class="status done">done</span><span class="date">2026-06-24</span></span>
+<p>Signed-off <code>test_spec.md</code> P0 deliverable #1 landed (commit <code>b03fa1acdf6</code>).</p>
+<ul>
+<li><code>TestVariant</code> gains the DSA capability set (D8): <code>has_indexer</code>, <code>tp_cap</code>,
+<code>config_builder</code>, <code>reference_kind</code>.</li>
+<li>Registered <code>DSV32</code> (R1-config-backed, <code>has_indexer</code>, <code>reference_kind=mlacpu</code>) and
+<code>GLM51</code> (<code>config_builder=glm_hf_config</code>, <code>tp_cap=2</code>, <code>supports_pretrained=False</code>,
+<code>reference_kind=mlacpu</code>).</li>
+<li>DRY: <code>glm_hf_config()</code> moved to <code>reference/glm_5_1_config.py</code> (single source of truth);
+<code>test_vs_gpu_ref.py</code> now aliases it instead of carrying a copy (dropped its local <code>types</code> import).</li>
+<li>Import-verified: <code>TEST_VARIANTS</code> resolves all four; GLM builder + test_vs_gpu_ref delegation load clean.</li>
+<li><b>No behavior change yet</b> — variants are not wired into <code>test_mla.py</code>, so the DSV3/Kimi gates are untouched.</li>
+</ul>
+<p><b>Next (increment 2):</b> wire the variants into <code>test_mla.py</code> at the two TODO anchors with a
+capability-gated DSA branch + the <code>reference_kind=mlacpu</code> adapter for the sparse regime; vendor
+<code>mesh_utils.py</code> into v3.1.</p>
+</div>
+
+<div class="entry" id="p-0623b">
+<span class="etitle">Unified-forward follow-ups (perf · TODOs · q_a reuse) + step-6 plan<span class="status done">done</span><span class="date">2026-06-23 (cont.)</span></span>
+<p>Post-unification cleanup, each committed + device-verified:</p>
+<ul>
+<li><b>Perf-check (step 3):</b> the unified forward runs through the tracy harness at <b class="hl">27.2 ms
+critical-path device-kernel time / 113 op calls</b> (DSv3.2 MLA chunked, 5120-tok chunk @ 51200 cache,
+SP4×TP2) — PASSED. The unification is op-graph-identical (pure restructuring), so this matches pre-unify perf.</li>
+<li><b>q-norm memory_config (step 4a):</b> confirmed the sparse path runs fine with the dense tuned
+<code>_get_act_mem_config</code> (no L1-OOM, no PCC change) → dropped the per-mode split; tuned in all modes.</li>
+<li><b>indexer key-cache (step 4b):</b> the "reuse MLA cache ops" TODO is a layout redesign
+(replicated-natural concat → block-cyclic-SP + gather/un-rotate read), not a drop-in → reworded as a scoped follow-up.</li>
+<li><b>q_a latent shared (step 5):</b> extracted <code>ttMLA._q_a_latent</code>; <code>forward</code> computes qr once
+and threads it into both the indexer and <code>_q_stem</code>. The indexer now holds <b>zero MLA weights</b> (qr
+flows in as data). Verified: v32 test_mla 12/3 skipped, indexer_chunked 1, vs_gpu_ref indexer+mla_output 34/8
+skipped, 0 accuracy/dispatch failures.</li>
+</ul>
+<div class="callout key"><span class="who">step 6 — test-suite migration (G3.1): PLANNED, deliberately not landed</span>
+It modifies the shared DSV3/Kimi gates and needs multi-GB v3.2 weights to verify (can't satisfy
+verify-then-commit here), so per the original G3.1 note ("reviewed follow-up … shouldn't land unattended")
+it stays a plan: (1) register <code>DSV32</code>/<code>GLM51</code> <code>TestVariant</code>s in
+<code>model_variants.py</code> (config via <code>_resolve_config_only</code> / <code>GLM51Config</code>,
+reference = <code>MLACPU</code>/<code>IndexerCPU</code>, thresholds from <code>test_vs_gpu_ref</code>, GLM tp ≤ 2);
+(2) wire the two <code>test_mla.py</code> TODO spots into the shared <code>@parametrize("variant", …)</code> with a
+DSA-aware assertion branch; (3) vendor <code>mesh_utils.py</code> into v3.1. Risk: (1)–(2) touch the DSV3/Kimi
+gates → re-run them after. Prereq: pre-stage the V3.2-Exp / GLM-5.1 HF shards + CPU/GPU truths.</div>
+</div>
+
+<div class="entry" id="p-0623">
+<span class="etitle">Refactor wave + forward unification (merge → extract → decouple → fold → unify)<span class="status done">done</span><span class="date">2026-06-23</span></span>
+<p>Merged latest <code>main</code> (independently-landed DSA ops reconciled: kept <b>ours</b> for
+<code>indexer_score</code> [carries <code>chunk_offset</code>], took <b>main's</b> newer <code>sparse_sdpa</code>; fixed a
+latent no-offset <code>TensorAccessorArgs</code> out-of-range bug). Then behaviour-preserving refactors, each
+device-verified: helper relocations (<code>interleaved_to_halfsplit_perm</code> → rope.py,
+<code>blockcyclic_to_natural</code> → utils.py), indexer extraction + decouple (D6), <code>topk</code> →
+<code>forward</code>, <code>ops.py</code> fold (D5), plan-ref strip, <code>test_mla.py</code> restored to origin/main +
+TODOs, and the dense/sparse forward unification (D7).</p>
+<ul>
+<li><b>Device-verified (8× Blackhole), all four modes, 0 accuracy/dispatch regressions:</b> v32
+<code>test_mla</code> 12 passed / 3 skipped (dense_single + sparse_single + sparse_chunked vs MLACPU);
+<code>test_vs_gpu_ref</code> mla_output 17 passed / 4 skipped (e2e vs official GPU); <code>test_indexer_chunked</code>
+passed; v31 <code>test_mla</code> dense 14 passed (remaining failures are <code>fabric2d</code> topology / L1-OOM on
+the 8-chip host — env, not regressions).</li>
+<li><b>Next (in progress):</b> perf-check the unified hot path; resolve the two in-code TODOs (q-norm
+<code>memory_config</code>; indexer key-cache → MLA cache ops); reuse the q_a latent across MLA + indexer;
+then G3.1 test migration (register v3.2/GLM TestVariants + wire the test_mla TODOs).</li>
+</ul>
+</div>
+
+<div class="entry" id="p-g3">
+<span class="etitle">G3.1–G3.4 ANALYZED: test coverage overview + migration plan<span class="status plan">analysis</span><span class="date">2026-06-22</span></span>
+<p>Surveyed both test suites (two Explore passes) → <code>context/test_coverage_overview.md</code> covering all
+four G3 goals: coverage matrix + gaps (G3.4), migration onto v3.1's <code>TestVariant</code> registry (G3.1),
+bespoke set — <code>test_vs_gpu_ref</code> trace bundles + <code>test_mla_perf</code> hardcoded mesh (G3.2),
+CI time budget (G3.3), ideas.</p>
+<ul>
+<li><b>Key finding:</b> v3.1's <code>model_variants.py</code> <code>TEST_VARIANTS</code> registry +
+variant-agnostic conftest is the clean extension point; post-G1.3 the v3.2/GLM MLA tests already run against
+v3.1's unified <code>ttMLA</code>, so "migration" = register variants + extend <code>@parametrize</code>.</li>
+<li><b>Decision:</b> delivered as analysis/plan, NOT a blind code-migration — rewiring the shared
+<code>@parametrize</code> lists touches the DSV3/Kimi gates, too risky to land unattended.</li>
+<li><b>Top ideas:</b> replace the <code>sparse_mla</code> host fallback with device <code>sparse_sdpa</code> in
+the kv/output device tests (the 4–7-min runtime is the fallback, not the kernel); add GLM determinism + chunked
+tests; tier @dev/@gate/@nightly.</li>
+</ul>
+</div>
+
+<div class="entry" id="p-g21">
+<span class="etitle">G2.1 DONE: indexer weights ride the on-disk weight cache<span class="status done">done</span><span class="date">2026-06-22</span></span>
+<p><code>_upload_indexer_weights</code> switched from <code>ttnn.from_torch</code> to
+<code>ttnn.as_tensor(cache_file_name=…)</code>, using <code>weight_cache_path / layer_{idx}.mla.indexer_{name}</code>
+— same dir + naming scheme as the MLA weights. Same shardings/dtypes (bf16; wq_b col-parallel, wk/weights_proj
+contraction-sharded, k_norm/bias replicated), so numerics are unchanged; it just adds disk caching.</p>
+<ul>
+<li><b>Decision (scope):</b> kept surgical rather than folding into <code>_convert_and_cache_weights</code> — the
+cache-only LOAD path can't detect indexer presence (DS v32's HF config carries no index_* attrs). Full
+integration would need an explicit has-indexer flag through the placeholder path.</li>
+<li><b>Follow-up:</b> <code>build_ttnn_cache</code> (device=None pre-build) won't emit indexer files; they cache
+on first real load instead.</li>
+</ul>
+<p class="verified">✓ indexer device (DS + GLM) PCC unchanged; cache round-trip wrote &amp; reused 5
+<code>layer_0.mla.indexer_*</code> files; full L0 device suite 15 passed / 3 skipped.</p>
+</div>
+
+<div class="entry" id="p-p5">
+<span class="etitle">G1.3 P5 DONE: indexer config from HF config; inverted dep removed<span class="status done">done</span><span class="date">2026-06-22</span></span>
+<p><code>ttMLA.__init__</code> now reads the 4 indexer constants
+(<code>index_n_heads/head_dim/topk/rope_interleave</code>) off the HF <code>config</code> via <code>getattr</code>
+with DS defaults (64/128/2048/False), stored in a <code>SimpleNamespace</code>. Removed the <code>index_args</code>
+param and the lazy <code>ModelArgs</code> import. <b class="hl">v3.1 mla.py now has zero references to the
+deepseek_v32 package</b> — the last inverted dependency is gone; closes the <code>config: PretrainedConfig</code>
++ <code>extend mla config</code> TODOs. GLM: added index fields + <code>index_rope_interleave=True</code> to
+<code>_glm_hf_config</code>, dropped the <code>index_args</code> override.</p>
+<p class="verified">✓ <code>test_vs_gpu_ref -k "device and L0"</code> → 15 passed, 3 skipped; GLM interleaved rope
+now sourced from its config (indexer PCC 0.9995, DS 0.959, output 0.9998). <b>G1.3 complete.</b></p>
+</div>
+
+<div class="entry" id="p-p24">
+<span class="etitle">G1.3 P2–P4 DONE: unify the MLA into one v3.1 class<span class="status done">done</span><span class="date">2026-06-22</span></span>
+<p>Folded the v3.2 indexer + DSA forward into v3.1's <code>ttMLA</code>; the v3.2 subclass is gone.</p>
+<ul>
+<li><code>deepseek_v3_d_p/tt/mla/mla.py</code>: added module-level <code>INDEXER_WEIGHT_NAMES</code> +
+<code>interleaved_to_halfsplit_perm</code> (moved from v32); <code>__init__</code> pops indexer weights (absent →
+dense) and builds the indexer when present. Renamed the old <code>forward</code> → <code>_dense_forward</code>
+(byte-for-byte) and added a dispatching <code>forward</code>: indexer &amp; <code>end_pos &gt; index_topk</code>
+→ <code>_dsa_forward</code>, else <code>_dense_forward</code>. Appended the 12 indexer/DSA/CCL methods.</li>
+<li><b>Dispatch guard fix:</b> checks <code>self._has_indexer</code> FIRST, then <code>index_args.index_topk</code>
+(dense v3.1 has no <code>index_args</code>).</li>
+<li><b>P4:</b> <code>deepseek_v32/tt/mla/__init__.py</code> re-exports v3.1's <code>ttMLA</code>. Per user (v3.2 is
+new code, only tests matter) the <code>deepseek_v32/tt/{mla/mla.py,ops.py}</code> shims were <b>deleted</b>;
+the 3 ops test imports repointed to <code>deepseek_v3_d_p.tt</code>.</li>
+</ul>
+<p class="verified">✓ DSA: <code>test_vs_gpu_ref</code> indexer/kv/output, DS + GLM, all meshes (PCC DS 0.959, GLM
+0.9995). Dense: <code>test_mla_chunked_prefill</code> 2x4-line passes (KV PCC ~0.99988). 152 tests collect.</p>
+<div class="callout"><span class="who">test-only fix</span>
+the indexer test monkeypatches <code>ops.topk_indices</code>; since the unified code calls
+<code>deepseek_v3_d_p.tt.ops</code>, the test's <code>ops</code> import was repointed there so the patch hits the
+same module object.</div>
+</div>
+
+<div class="entry" id="p-p1">
+<span class="etitle">G1.3 P1 DONE: relocate DSA ops to v3.1<span class="status done">done</span><span class="date">2026-06-22</span></span>
+<p>Moved <code>deepseek_v32/tt/ops.py</code> → <code>deepseek_v3_d_p/tt/ops.py</code> verbatim (self-contained:
+torch + ttnn only). Initially left a re-export shim at the old path (later deleted in P4). v3.1 now owns the
+DSA ops; no circular import.</p>
+<p class="verified">✓ <code>test_ops_shapes</code> + <code>test_ops_numerics</code> pass; <code>test_vs_gpu_ref</code>
+indexer device (DS + GLM, L0) pass with PCC unchanged.</p>
+</div>
+
+<div class="entry" id="p-g11impl">
+<span class="etitle">G1.1-indexer IMPLEMENTED (per D3)<span class="status done">done</span><span class="date">2026-06-22</span></span>
+<p>Put the indexer RoPE table build on v3.1 infra.</p>
+<ul>
+<li><code>rope.py</code>: <code>get_cos_sin_matrix(hf_config, interleave=True, …)</code> — <code>interleave</code> →
+<code>stack</code> (duplicated pairs) vs <code>cat</code> (half-split). <code>RotarySetup.get_rope_tensors(…,
+interleave=True)</code> threads the flag, builds <code>trans_matrix</code> only when interleaved. Both default to
+prior behaviour → <b>v3.1 MLA path unchanged</b>.</li>
+<li><code>deepseek_v32/tt/mla/mla.py</code>: <code>_build_index_rope_tables</code> calls the shared builder instead
+of inline <code>precompute_freqs_cis</code> + stack/cat; <code>_device_rope_pe</code> (op selection + SP slicing +
+nope concat) kept as-is. Frequencies now from the HF <code>config</code>.</li>
+</ul>
+<div class="callout key"><span class="who">verification</span>
+CPU probe: new builder vs old path <b>cos/sin PCC 1.0000000, max|Δ|=5.96e-08</b> for both DS and GLM; MLA
+invariance (softmax vs baked) max|Δ|=0.0. Device (<code>test_vs_gpu_ref</code> L0, all meshes): all PASS — DS
+indexer 0.959 / topk 0.985, GLM indexer 0.9995 / topk 0.9954 / output 0.9998 / KV latent 0.9995.</div>
+<p><b>PCC unchanged proven:</b> ran the DS indexer test on pre-change code via <code>git stash</code> → PCC
+<code>0.9591557697114468</code>, identical to post-change. The ~0.96 is a <i>pre-existing fp8 baseline</i> (GPU
+ref runs the indexer in fp8 + Hadamard; our port is bf16). GLM's ref has no fp8 there → 0.9995 through the same
+code, confirming rope is exact and the gap is quantization, not layout.</p>
+</div>
+
+<div class="entry" id="p-diag">
+<span class="etitle">G1.1 / G1.2 diagnosis (execution-order item 1)<span class="status plan">diagnosis</span><span class="date">2026-06-22</span></span>
+<ul>
+<li>Mapped RoPE and CCL across v3.1 and v3.2 (two Explore passes), verified key claims by reading source.</li>
+<li><b>CCL (G1.2):</b> v3.2's <code>_tp_rs_ag</code> / <code>_tp_ag_reduce</code> are byte-for-byte the inline
+blocks in v3.1. Decision D1: converge by inlining v3.2 to match v3.1 (no shared helpers).</li>
+<li><b>RoPE (G1.1):</b> see L1. Frequencies unifiable; scale handling equivalent for current configs. Decision
+D2: track unification as its own task.</li>
+<li>Hardware: 8× Blackhole p150b locally → can verify on a 2×4 mesh (no CI dependency).</li>
+</ul>
+</div>
+
+<div class="foot">
+  Migration log · companion to <code>migration.md</code> / <code>test_coverage_overview.html</code> ·
+  DeepSeek V3.2 / GLM-5.1 → v3.1 (deepseek_v3_d_p)
+</div>
+</div>
+
+<script>
+// ---- non-destructive single-section app (same pattern as the other context HTML) ----
+(function(){
+  const wrap = document.querySelector('.wrap');
+  const h2s = Array.from(wrap.querySelectorAll('h2'));
+  if(h2s.length < 2) return;
+  const foot = document.querySelector('.foot');
+  const secs = [];
+  h2s.forEach((h2,i)=>{
+    const sec = document.createElement('section');
+    sec.className = 'docsec'; sec.dataset.id = h2.id || ('s'+i);
+    h2.parentNode.insertBefore(sec, h2);
+    const stop = h2s[i+1] || foot;
+    let n = h2;
+    while(n && n !== stop){ const nx = n.nextSibling; sec.appendChild(n); n = nx; }
+    secs.push(sec);
+  });
+  const titleOf = s => { const h=s.querySelector('h2'); const num=h.querySelector('.n');
+    const t = num ? num.textContent.trim() : ''; return { num:t, txt:h.textContent.replace(t,'').trim() }; };
+  const oldhdr = wrap.querySelector('header'); if(oldhdr) oldhdr.style.display='none';
+  const oldtoc = wrap.querySelector('.toc'); if(oldtoc) oldtoc.style.display='none';
+  const nav = document.createElement('nav'); nav.className='nav';
+  nav.innerHTML = '<div class="brand">Migration <span class="grad">log</span></div>'+
+                  '<div class="sub">v3.2 / GLM-5.1 onto v3.1 — decisions, learnings, progress</div>';
+  const links = secs.map((sec,i)=>{
+    const {num,txt} = titleOf(sec);
+    const a = document.createElement('a'); a.className='navlink'; a.href='#'+sec.dataset.id;
+    a.innerHTML = '<span class="num">'+(num||('§'+i))+'</span>'+txt;
+    a.addEventListener('click', e=>{ e.preventDefault(); show(i); });
+    nav.appendChild(a); return a;
+  });
+  const hint = document.createElement('div'); hint.className='kbhint'; hint.textContent='← → to navigate';
+  nav.appendChild(hint);
+  document.body.appendChild(nav);
+  document.body.classList.add('app');
+  secs.forEach((sec,i)=>{
+    const p = document.createElement('div'); p.className='pager';
+    const mk=(j,cls)=>{ const b=document.createElement('button'); b.className=cls;
+      if(j<0||j>=secs.length){ b.disabled=true; b.textContent=' '; return b; }
+      const {num,txt}=titleOf(secs[j]);
+      b.innerHTML='<span class="pk">'+(cls==='nx'?'next ›':'‹ prev')+'</span>'+num+' '+txt.slice(0,30);
+      b.onclick=()=>show(j); return b; };
+    p.appendChild(mk(i-1,'pv')); p.appendChild(mk(i+1,'nx'));
+    sec.appendChild(p);
+  });
+  let cur = -1;
+  function show(i){
+    if(i<0||i>=secs.length) return; cur=i;
+    secs.forEach((s,j)=>s.classList.toggle('active', j===i));
+    links.forEach(l=>{ const h=l.getAttribute('href'); l.classList.toggle('active', h==='#'+secs[i].dataset.id); });
+    if(history.replaceState) history.replaceState(null,'','#'+secs[i].dataset.id);
+    window.scrollTo(0,0);
+  }
+  document.addEventListener('keydown', e=>{
+    if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+    if(e.key==='ArrowRight'){ show(Math.min(cur+1,secs.length-1)); }
+    else if(e.key==='ArrowLeft'){ show(Math.max(cur-1,0)); }
+  });
+  // hash may point at an entry id (e.g. #d3) inside a section — resolve to its section
+  const h = (location.hash||'').replace('#','');
+  let idx = secs.findIndex(s=>s.dataset.id===h);
+  if(idx<0 && h){ idx = secs.findIndex(s=>s.querySelector('#'+CSS.escape(h))); }
+  show(idx>=0?idx:0);
+})();
+</script>
+</body>
+</html>

@@ -15,12 +15,13 @@ to `TEST_VARIANTS`.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention as DSv3RefAttention
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model as DSv3RefModel
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE as DSv3RefMoE
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config, glm_model_args
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Model as KimiRefModel
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3MoE as KimiRefMoE
@@ -52,6 +53,11 @@ class TestVariant:
         supports_pretrained: bool = True,
         prefill_trace_default: Optional[str] = None,
         prefill_trace_layout: str = "single_file",
+        has_indexer: bool = False,
+        tp_cap: Optional[int] = None,
+        config_builder: Optional[Callable[[], object]] = None,
+        cpu_model_args: Optional[Callable[[], object]] = None,
+        reference_kind: str = "hf_attn",
     ) -> None:
         self.name = name
         self.env_var = env_var
@@ -76,6 +82,24 @@ class TestVariant:
         # or "chunked_group_a_v1" (Kimi — each tensor a directory of row-sharded rows_<s>_<e>.safetensors,
         # hidden_states/ -> decoder_io/). The chunked trace readers in the tests dispatch on this.
         self.prefill_trace_layout = prefill_trace_layout
+        # --- DSA (Deepseek Sparse Attention) capabilities -------------------------------------------
+        # Test bodies branch on these, never on `name`, so onboarding a model is data-only.
+        # has_indexer: the model runs the lightning indexer + sparse SDPA (DeepSeek V3.2 / GLM-5.1).
+        self.has_indexer = has_indexer
+        # tp_cap: max tensor-parallel factor the model supports (GLM has 64 q-heads → sparse_sdpa
+        # needs H/tp >= 32 → tp <= 2). None = no cap beyond what the mesh provides.
+        self.tp_cap = tp_cap
+        # config_builder: returns a ready HF-attribute config when AutoConfig cannot load the model
+        # (GLM's model_type `glm_moe_dsa` is unregistered). When set, it overrides the disk/HF
+        # resolution path in conftest. None = resolve via AutoConfig as usual.
+        self.config_builder = config_builder
+        # cpu_model_args: returns the reference_cpu ModelArgs for the MLACPU/IndexerCPU truth (the
+        # "mlacpu" reference path). None = use the default ModelArgs (matches DeepSeek's R1 dims).
+        self.cpu_model_args = cpu_model_args
+        # reference_kind: which CPU truth the MLA tests compare against — "hf_attn" drives the
+        # upstream HF attention via reference_attention_cls (dense), "mlacpu" drives the V3.2
+        # reference_cpu MLACPU (indexer + sparse), required once seq_len > index_topk.
+        self.reference_kind = reference_kind
 
 
 DSV3 = TestVariant(
@@ -119,4 +143,47 @@ KIMI_V2_6 = TestVariant(
     prefill_trace_layout="chunked_group_a_v1",
 )
 
-TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6]}
+DSV32 = TestVariant(
+    name="deepseek_v32",
+    env_var="DEEPSEEK_V32_HF_MODEL",
+    # V3.2-Exp shares MLA dims with R1; we resolve config from the R1 checkout to avoid the
+    # uncertainty of loading V3.2-Exp remote code via AutoConfig. The indexer reads its index_*
+    # attrs via getattr-with-defaults that already match DeepSeek, so no extra config wiring.
+    hf_repo_id="deepseek-ai/DeepSeek-R1-0528",
+    model_config=DeepSeekV3Config,
+    default_local_path=Path("models/demos/deepseek_v3/reference"),
+    shared_path=Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528"),
+    num_layers_to_download=24,
+    # Block / full-model parity is out of P0 scope; the MLA truth comes from MLACPU, not HF attn.
+    reference_model_cls=None,
+    reference_attention_cls=None,
+    reference_moe_cls=None,
+    mla_ref_cache_env="DEEPSEEK_V32_MLA_REF_CACHE",
+    mla_pcc_threshold=0.996,
+    has_indexer=True,
+    reference_kind="mlacpu",
+)
+
+GLM51 = TestVariant(
+    name="glm_5_1",
+    env_var="GLM51_HF_MODEL",
+    hf_repo_id="zai-org/GLM-5.1",
+    model_config=GLM51Config,
+    # No HF pretrained_transformer_weights path: GLM ships per-layer shards and its MLA dims
+    # (nope=192, v=256) differ from the dequant fixture's assumptions. Config is hand-built.
+    supports_pretrained=False,
+    reference_model_cls=None,
+    reference_attention_cls=None,
+    reference_moe_cls=None,
+    mla_ref_cache_env="GLM51_MLA_REF_CACHE",
+    mla_pcc_threshold=0.995,
+    has_indexer=True,
+    # 64 q-heads: the sparse MLA forward now transposes the TP shard (heads→seq) around sparse_sdpa
+    # so per-chip H is no longer the limit; tp=4 is supported (32-indexer-heads / tp must stay integral).
+    tp_cap=4,
+    config_builder=glm_hf_config,
+    cpu_model_args=glm_model_args,
+    reference_kind="mlacpu",
+)
+
+TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6, DSV32, GLM51]}
