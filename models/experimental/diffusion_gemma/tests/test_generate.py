@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
+from models.experimental.diffusion_gemma.reference import generate as RG
 from models.experimental.diffusion_gemma.reference.generate import generate_blocks
 
 
@@ -178,3 +179,31 @@ def test_generation_is_deterministic_under_fixed_generator():
     a = generate_blocks(model, prompt, blocks, _cfg(canvas_len), vocab, generator=_gen(3))
     b = generate_blocks(model, prompt, blocks, _cfg(canvas_len), vocab, generator=_gen(3))
     assert torch.equal(a.generated, b.generated)
+
+
+def test_can_replay_fixed_initial_canvases(monkeypatch):
+    batch, canvas_len, vocab, blocks = 1, 4, 16, 2
+    prompt = torch.zeros(batch, canvas_len, dtype=torch.long)
+    model = _PrefixDependentModel(batch, canvas_len, vocab)
+    canvases = [
+        torch.full((batch, canvas_len), 7, dtype=torch.long),
+        torch.full((batch, canvas_len), 8, dtype=torch.long),
+    ]
+    calls = []
+
+    def fail_random_canvas(*args, **kwargs):
+        raise AssertionError("fixed init_canvas_fn should bypass random canvas generation")
+
+    def init_canvas_fn(block_idx, prefix_tokens):
+        calls.append((block_idx, prefix_tokens.clone()))
+        return canvases[block_idx].clone()
+
+    monkeypatch.setattr(RG.S, "random_canvas", fail_random_canvas)
+
+    out = generate_blocks(model, prompt, blocks, _cfg(canvas_len), vocab, init_canvas_fn=init_canvas_fn)
+
+    assert out.prompt_len == canvas_len
+    assert len(out.trajectories) == blocks
+    assert [call[0] for call in calls] == [0, 1]
+    assert torch.equal(calls[0][1], prompt)
+    assert torch.equal(calls[1][1], torch.cat([prompt, out.trajectories[0].committed], dim=1))

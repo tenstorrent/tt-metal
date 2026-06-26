@@ -30,6 +30,8 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 BlockModel = Callable[..., torch.Tensor]
 # per-block noise hook: (block_index) -> a denoise NoiseFn for that block
 BlockNoiseFn = Callable[[int], NoiseFn]
+# per-block canvas init hook: (block_index, prefix_tokens) -> [B, canvas_len]
+BlockCanvasFn = Callable[[int, torch.Tensor], torch.Tensor]
 
 
 class Generation(NamedTuple):
@@ -49,6 +51,7 @@ def generate_blocks(
     generator: Optional[torch.Generator] = None,
     gumbel_noise_fn: Optional[BlockNoiseFn] = None,
     noise_tokens_fn: Optional[BlockNoiseFn] = None,
+    init_canvas_fn: Optional[BlockCanvasFn] = None,
 ) -> Generation:
     """Generate ``num_blocks`` canvases autoregressively, committing each.
 
@@ -56,7 +59,9 @@ def generate_blocks(
     ``denoise_block``) the per-step regenerated sample/renoise noise, so a single
     seeded generator reproduces the whole generation. ``sampler`` selects the
     HF-faithful ``multinomial`` (default) or ``gumbel``; pass the ``*_noise_fn``
-    hooks to inject the torch run's exact noise (token-for-token, R5).
+    hooks to inject the torch run's exact noise (token-for-token, R5). Pass
+    ``init_canvas_fn`` to replay exact per-block canvases in device-vs-reference
+    acceptance tests.
     """
     batch = prompt_tokens.shape[0]
     canvas_len = diffusion_config.canvas_length
@@ -67,7 +72,11 @@ def generate_blocks(
     trajectories: List[DenoiseTrajectory] = []
 
     for block in range(num_blocks):
-        init_canvas = S.random_canvas((batch, canvas_len), vocab_size, generator=generator)
+        init_canvas = (
+            init_canvas_fn(block, prefix)
+            if init_canvas_fn is not None
+            else S.random_canvas((batch, canvas_len), vocab_size, generator=generator)
+        )
         frozen_prefix = prefix  # read-only during this block's denoise
 
         traj = denoise_block(
