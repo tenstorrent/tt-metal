@@ -1192,14 +1192,11 @@ def reset_tensix(tt_open_devices=None):
 @pytest.fixture(autouse=True)
 def ttnn_graph_report(request):
     """
-      Automatically generate graph reports when config enables it.
+    Automatically generate graph reports when config enables it.
 
-      Activates when enable_logging and report_path are set, and either
-      enable_graph_report or enable_comparison_mode is on. Skipped when a graph
-      capture is already active (e.g. a test that manages its own capture).
-
-    - enable_graph_report: full graph JSON + SQLite import (existing behavior).
-    - enable_comparison_mode only: flush comparison sidecar + SQLite rows at end.
+    Activates when enable_logging and report_path are set, and either
+    enable_graph_report or enable_comparison_mode is on. Skipped when a graph
+    capture is already active (e.g. a test that manages its own capture).
     """
     import ttnn
 
