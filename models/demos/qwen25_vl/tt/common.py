@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import math
 import os
 
@@ -122,18 +123,48 @@ def multimodal_rope_from_hf(
     )
 
     # Qwen2_5_VLForConditionalGeneration.forward:
-    position_ids, rope_deltas = reference_model.model.get_rope_index(
-        padded_inputs,
-        inputs.image_grid_thw if "image_grid_thw" in inputs else None,
-        video_grid_thw=None,
-        second_per_grid_ts=None,
-        attention_mask=padded_attention_mask,
-    )
+    image_grid_thw = inputs.image_grid_thw if "image_grid_thw" in inputs else None
+    if "mm_token_type_ids" in inspect.signature(reference_model.model.get_rope_index).parameters:
+        # transformers 5.x reordered get_rope_index to take mm_token_type_ids as the 2nd positional
+        # arg (text=0, image=1, video=2). The processor normally supplies it; build it from the padded
+        # ids so text-only inputs (mm_token_type_ids all-zeros) don't subscript a None.
+        image_token_id = getattr(model_args.hf_config, "image_token_id", None)
+        video_token_id = getattr(model_args.hf_config, "video_token_id", None)
+        mm_token_type_ids = torch.zeros_like(padded_inputs)
+        if image_token_id is not None:
+            mm_token_type_ids[padded_inputs == image_token_id] = 1
+        if video_token_id is not None:
+            mm_token_type_ids[padded_inputs == video_token_id] = 2
+        position_ids, rope_deltas = reference_model.model.get_rope_index(
+            padded_inputs,
+            mm_token_type_ids,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=None,
+            second_per_grid_ts=None,
+            attention_mask=padded_attention_mask,
+        )
+    else:
+        # transformers <5: get_rope_index(input_ids, image_grid_thw, ...)
+        position_ids, rope_deltas = reference_model.model.get_rope_index(
+            padded_inputs,
+            image_grid_thw,
+            video_grid_thw=None,
+            second_per_grid_ts=None,
+            attention_mask=padded_attention_mask,
+        )
 
     # Qwen2_5_VLModel.forward:
     cos, sin = reference_model.model.language_model.rotary_emb(input_embeds, position_ids)
     # apply_multimodal_rotary_pos_emb:
-    mrope_section = reference_model.config.rope_scaling["mrope_section"] * 2
+    # transformers 5.x normalizes the rope kwargs into `rope_parameters` on the *text* config; the
+    # top-level Qwen2_5_VLConfig.rope_scaling property delegates to a `rope_parameters` attr it does
+    # not have (-> AttributeError). Read mrope_section from the text config's rope_parameters, falling
+    # back to the top-level rope_scaling dict for transformers <5.x.
+    _text_cfg = getattr(reference_model.config, "text_config", reference_model.config)
+    _rope_params = (
+        getattr(_text_cfg, "rope_parameters", None) or getattr(reference_model.config, "rope_scaling", None) or {}
+    )
+    mrope_section = _rope_params["mrope_section"] * 2
     unsqueeze_dim = 1
     cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)

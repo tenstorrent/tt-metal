@@ -209,6 +209,16 @@ from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
 )
 
+from ttnn._ttnn.d2h_stream_service import (
+    D2HStreamService,
+)
+
+from ttnn._ttnn.d2d_stream_service import (
+    D2DStreamService,
+    D2DStreamServiceSender,
+    D2DStreamServiceReceiver,
+)
+
 from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
 )
@@ -546,6 +556,8 @@ experimental.disaggregation = disaggregation
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
+
+IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
 

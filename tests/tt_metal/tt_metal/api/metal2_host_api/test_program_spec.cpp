@@ -40,6 +40,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -91,7 +92,8 @@ static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl re
 static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
-static_assert(hashable_v<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
 
@@ -276,9 +278,13 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     spec.name = "test_program";
 
     // A kernel that both produces and consumes the same DFB may share a single
-    // accessor_name across the PRODUCER and CONSUMER bindings.
-    auto kernel = MakeMinimalDMKernel("kernel");
+    // accessor_name across the PRODUCER and CONSUMER bindings. Uses a COMPUTE kernel: a compute
+    // self-loop is the only legal self-loop (it lowers to the intra-Tensix packer->unpacker flow),
+    // so it exercises the accessor-name relaxation through a path that survives validation. (A DM
+    // self-loop is rejected — see DMKernelSelfLoopFails.)
+    auto kernel = MakeMinimalComputeKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "acc"));
     kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "acc"));
 
@@ -289,15 +295,19 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithSharedLocalAccessorNameSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
+TEST_F(ProgramSpecTestQuasar, DMKernelSelfLoopFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // A producer+consumer self-loop on one DFB may use DISTINCT accessor names ('p'/'c'): it binds
-    // one PRODUCER and one CONSUMER (different roles), which is the sanctioned multi-binding form.
-    // Only a second binding of the SAME role under a different name is forbidden.
+    // A data-movement kernel may NOT self-loop a DFB (bind it as both PRODUCER and CONSUMER). A DFB
+    // synchronizes a producer and a consumer on DISTINCT cores via per-side credit masks, and a
+    // single DM kernel's producer and consumer masks are identical — the DFB backend would reject it
+    // with an opaque "producer_risc_mask and consumer_risc_mask must not overlap". Caught up front at
+    // validation with an actionable message instead. The legal alternatives are a private L1 scratch
+    // buffer, a LocalTensorAccessor tensor view, or a two-kernel cross-bind. (Compute self-loops stay
+    // legal — see SelfLoopWithSharedLocalAccessorNameSucceeds.)
     auto kernel = MakeMinimalDMKernel("kernel");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "p"));
@@ -307,7 +317,10 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopWithDistinctAccessorNamesSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("self-looped by data-movement kernel 'kernel'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
@@ -320,7 +333,7 @@ TEST_F(ProgramSpecTestQuasar, DFBBoundTwiceInSameRoleUnderDifferentNamesFails) {
     // same DFB twice in the SAME role (here two CONSUMER bindings) under different accessor names,
     // yielding two accessors / DataflowBuffer objects for one FIFO. Forbidden — the right port is a
     // kernel-side handle alias over a single binding. (A producer+consumer self-loop is a different,
-    // legitimate multi-binding and stays legal — see SelfLoopWithDistinctAccessorNamesSucceeds.)
+    // legitimate multi-binding and stays legal — see SelfLoopWithSharedLocalAccessorNameSucceeds.)
     auto producer = MakeMinimalDMKernel("producer");
     auto consumer = MakeMinimalDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
@@ -778,11 +791,13 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     // Producer set = {self_loop_1, extra_producer}; consumer set = {self_loop_1, extra_consumer}.
     // The sets are not equal — the self-loop multi-binding rule rejects this mix.
     //
-    // All three kernels are DM (an unusual self-loop pattern but mechanically valid) so the
-    // per-role kind-uniformity check passes and the self-loop refinement check is reached.
-    auto self_loop_1 = MakeMinimalDMKernel("self_loop_1");
-    auto extra_producer = MakeMinimalDMKernel("extra_producer");
-    auto extra_consumer = MakeMinimalDMKernel("extra_consumer");
+    // All three kernels are COMPUTE so the self-loop participant (self_loop_1) is a legal compute
+    // self-loop — a DM self-loop would be rejected earlier (see DMKernelSelfLoopFails), masking the
+    // rule under test. With compute kernels the per-role kind-uniformity check passes and the
+    // self-loop set-equality refinement check is reached.
+    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
+    auto extra_producer = MakeMinimalComputeKernel("extra_producer");
+    auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -940,8 +955,8 @@ TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-// Remote DFBs are part of the API surface but not yet supported by the runtime.
-TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
+// Cross-node DFBs are part of the API surface but not yet supported by the runtime.
+TEST_F(ProgramSpecTestQuasar, CrossNodeDFBNotYetSupportedAtRuntime) {
     NodeCoord producer_node{0, 0};
     NodeCoord consumer_node{1, 0};
 
@@ -955,7 +970,7 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
-    spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
+    spec.cross_node_dataflow_buffers = {CrossNodeDataflowBufferSpec{
         .dfb_spec = MakeMinimalDFB("dfb"),
         .producer_consumer_map = {{producer_node, consumer_node}},
     }};
@@ -2216,14 +2231,21 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 //    NOTE: Our plan is to keep the simplifying assumption for now.
 //    We issue a clear message if the assumption is ever violated in the real world.
 //
-// C) KERNELS COUPLED THROUGH MULTI-DFB BINDINGS
-//    Until LLK APIs adopt DFBAccessor, we cannot specialize DFBs (multiple DFBs
-//    for a single DataflowBufferSpec). This induces additional DM solver constraints
-//    when a DFB endpoint is bound by more than one KernelSpec.
+//   C) KERNELS COUPLED THROUGH MULTI-DFB BINDINGS
+//    When a DFBSpec is bound by multiple KernelSpecs (which is legal, provided
+//    that the invariant that any given DFB instance has one one producer kernel
+//    instance and only one consumer kernel instance), the resulting cross-kernel
+//    coupling through the shared DFB binding induces additional DM solver constraints.
 //
-//    NOTE: The plan is to lift this artificial constraint once LLK support is in
-//    place. DFB IDs will then be passed as implicit RTAs rather than implicit CTAs
-//    on Quasar only.
+//    NOTE: The original plan called for lifting this artificial constraint once LLK adopted
+//    DFBAccessor using implicit RTAs. However, to realize performance gains, we're
+//    chosen instead to GUARANTEE using implicit CTAs for DFBAccessor. This
+//    constraint is therefore permanent.
+//
+//    If we were ever to start encountering serious unsolvable-Program issues as a result
+//    we might consider revisiting this decision. However, an unsolvable Program could
+//    can always be worked around by artificially dividing a KernelSpec (at the expense of
+//    dispatch overhead).
 
 // Category A: Order-Independence Test
 // This test verifies that the backtracking solver finds valid assignments,
@@ -2487,8 +2509,8 @@ static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
     "RuntimeArgSchema must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<RemoteDataflowBufferSpec>,
-    "RemoteDataflowBufferSpec must remain an aggregate to support designated initializers");
+    std::is_aggregate_v<CrossNodeDataflowBufferSpec>,
+    "CrossNodeDataflowBufferSpec must remain an aggregate to support designated initializers");
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.
@@ -2721,7 +2743,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     };
     EXPECT_EQ(gen1.processor, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
-    RemoteDataflowBufferSpec remote_dfb{
+    CrossNodeDataflowBufferSpec remote_dfb{
         .dfb_spec =
             DataflowBufferSpec{
                 .unique_id = DFBSpecName{"remote_dfb"},
@@ -3127,7 +3149,7 @@ TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
 
 TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
     // DFB / Semaphore / TensorAccessor accessor names live in separate namespaces (each gets
-    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, ta::). Reusing
+    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, tensor::). Reusing
     // the same identifier across categories within one kernel must be allowed.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -3163,7 +3185,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 // SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
-// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `ta::` namespace)
+// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
 // must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
 // validate runtime behavior — catches regressions in codegen string-formatting, token type alias
 // generation, and include-path resolution.
@@ -3176,7 +3198,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 
 TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     // DM kernel constructs a TensorAccessor from a binding token + invokes a NoC-using method.
-    // Exercises: ta:: namespace token, type alias <name>_t, the token ctor and its deduction
+    // Exercises: tensor:: namespace token, type alias <name>_t, the token ctor and its deduction
     // guide, get_common_arg_val for the implicit base address.
     NodeCoord node{0, 0};
 
@@ -3186,7 +3208,7 @@ TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    TensorAccessor accessor(ta::input_tensor);
+    TensorAccessor accessor(tensor::input_tensor);
     auto noc_addr = accessor.get_noc_addr(0);
     (void)noc_addr;
 }
@@ -3196,6 +3218,67 @@ void kernel_main() {
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor");
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ============================================================================
+// TT_KERNEL ("1st world arguments") compute-path shim — JIT compile smoke test
+// ============================================================================
+//
+// Compiles a TT_KERNEL compute kernel through genfiles + the RISC-V compiler on a MOCK Wormhole
+// device (no silicon, no dispatch) via detail::CompileProgram. This is the only no-hardware
+// coverage that the generated kernel_main() shim is emitted on the COMPUTE (TRISC) compile path
+// and actually compiles: the on-hardware compute test (TtKernelNamedArgsLoopbackCompute) skips in
+// CI, and the shim unit tests only check the generated string, not its genfiles wiring.
+//
+// (A Quasar variant would also exercise the 4th TRISC, isolate_sfpu, but mock-Quasar JIT-compile
+// isn't wired up in this checkout — the Quasar TRISC firmware objects aren't built, so the link
+// step fails. The fix is arch-correct by construction regardless: the shim is appended to the same
+// source for every TRISC, and run_kernel() calls kernel_main() on Quasar too.)
+
+// Minimal TT_KERNEL compute entry: CTAs as template params, RTA/CRTA as function params, producing
+// into a DFB. The point is solely that the kernel_main() shim is generated on the TRISC path and
+// the whole thing compiles; the body avoids any arch-specific raw-L1 pokes.
+constexpr const char* kTtKernelComputeShimSource = R"(
+#include "api/compute/common.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+template <uint32_t magic, uint32_t entry_size>                             // CTAs
+TT_KERNEL void compute_entry(uint32_t input_offset, uint32_t num_tiles) {  // RTA, CRTA
+    DataflowBuffer out(dfb::out_dfb);
+    out.reserve_back(num_tiles);
+    out.push_back(num_tiles);
+    volatile uint32_t sink = magic ^ entry_size ^ input_offset;
+    (void)sink;
+}
+)";
+
+TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
+    const NodeCoord node{0, 0};
+    constexpr uint32_t entry_size = 1024;
+
+    // Compute kernel authored in TT_KERNEL form, producing into a DFB drained by a trivial consumer.
+    auto compute = MakeMinimalComputeKernel("compute");
+    compute.source = KernelSpec::SourceCode{kTtKernelComputeShimSource};
+    compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
+    compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
+    compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
+
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);  // trivial drain kernel
+
+    auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, 4);
+    out_dfb.data_format_metadata = tt::DataFormat::Float16_b;  // required for a compute DFB endpoint
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+
+    ProgramSpec spec;
+    spec.name = "tt_kernel_compute_shim_compile";
+    spec.kernels = {compute, consumer};
+    spec.dataflow_buffers = {out_dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", node, {"compute", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
@@ -3266,9 +3349,11 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
     // the CTAs ([args_config.raw(), aligned_page_size]) are stable across shape variations.
     // The dynamic flag thus enables JIT cache reuse for tile-layout eltwise.
     //
-    // (Row-major interleaved has a shape-dependent page_size — the last-dim element count — so
-    // its CTAs do change with shape. That's a property of the page-size convention, not of the
-    // dynamic mechanism, and is a separate orthogonal concern. This test focuses on tile.)
+    // (Row-major interleaved has a shape-dependent page_size — the last-dim element count. Under
+    // dynamic_tensor_shape the resolver demotes that page size to a per-binding CRTA word, so its
+    // CTAs become shape-stable too; that path is covered by
+    // DynamicTensorShape_InterleavedRowMajorKernelHashStableAcrossWidths below. This test focuses on
+    // tile, whose page size is dtype-fixed and never rode a shape-dependent CTA in the first place.)
     auto make_spec = [](tt::tt_metal::Shape shape) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
@@ -3291,6 +3376,47 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedKernelHashStableAcross
         prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
         << "Interleaved tile + dynamic_tensor_shape: shape variations must hash equal so the "
            "same compiled kernel binary is reused.";
+}
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedRowMajorKernelHashStableAcrossWidths) {
+    // The payoff of the page-size fold. For a ROW-MAJOR interleaved TensorParameter the page size
+    // (last_dim_width * elem_size) is shape-dependent. WITHOUT the flag it rides a compile-time arg,
+    // so two different-width tensors hash differently -- distinct cache entries, and (worse) a stale
+    // page size baked into a binary that gets reused on a cache hit: the exact bug this feature
+    // fixes. WITH dynamic_tensor_shape the page size moves to a CRTA, the CTAs become width-
+    // independent, and the two widths hash identically -- one cached binary, refreshed per-dispatch.
+    auto make_spec = [](uint32_t width, bool dynamic) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+        auto memory_config =
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+        auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+        TensorParameter tp{
+            .unique_id = TensorParamName{"input_tensor"},
+            .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, width}, std::move(tensor_layout)),
+            .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic},
+        };
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+
+    // Baseline (flag off): different widths -> different page-size CTA -> different hash.
+    Program s_a = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/false));
+    Program s_b = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/false));
+    EXPECT_NE(
+        s_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        s_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Baseline: row-major page size rides a CTA, so different widths must hash differently.";
+
+    // With the flag: page size -> CRTA, CTAs width-independent -> identical hash (cache reuse).
+    Program d_a = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/true));
+    Program d_b = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/true));
+    EXPECT_EQ(
+        d_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        d_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Row-major interleaved + dynamic_tensor_shape: page size moves to a CRTA, so different "
+           "widths hash equally (program-cache reuse; prevents the stale-page-size bug).";
 }
 
 TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedKernelHashStableAcrossShapes) {
@@ -3355,12 +3481,67 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_ShardedBindingTracksShapeCRTASlot
         << "Sharded + dynamic_tensor_shape: runtime-field CRTA words should equal BDS shape rank.";
 }
 
-TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFieldCRTAs) {
-    // Interleaved + dynamic_tensor_shape: pure host-side validation loosening, no CTA→CRTA
-    // demotion, so num_runtime_field_crta_words should remain zero.
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedRowMajorBindingTracksPageSizeCRTASlot) {
+    // Row-major interleaved + dynamic_tensor_shape: the page size (= last_dim_width * elem_size) is
+    // part of the varying shape, so the resolver folds it from a compile-time arg into a single
+    // per-binding CRTA word ("A-collapse": the page-size CTA slot is dropped and the RuntimePageSize
+    // bit is set in args_config). The binding handle must advertise exactly one runtime field word,
+    // tagged as the page-size kind. MakeMinimalTensorParameter is BFLOAT16 / ROW_MAJOR / interleaved.
+    auto make_spec = [](bool dynamic) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto tp = MakeMinimalTensorParameter("input_tensor");
+        tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = dynamic};
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+
+    Program prog_dyn = MakeProgramFromSpec(*mesh_device_, make_spec(/*dynamic=*/true));
+    auto kernel = prog_dyn.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].num_runtime_field_crta_words, 1u)
+        << "Row-major interleaved + dynamic_tensor_shape: page size demotes to exactly one CRTA word.";
+    EXPECT_TRUE(handles[0].runtime_field_is_page_size)
+        << "The runtime field must be tagged as the page-size kind (not the sharded-shape kind).";
+
+    // The binding's args_config CTA word carries the RuntimePageSize bit.
+    const std::vector<uint32_t> dyn_ctas = kernel->compile_time_args();
+    ASSERT_LT(handles[0].cta_offset, dyn_ctas.size());
+    const auto dyn_cfg = tensor_accessor::ArgsConfig(
+        static_cast<tensor_accessor::ArgsConfig::Underlying>(dyn_ctas[handles[0].cta_offset]));
+    EXPECT_TRUE(dyn_cfg.test(tensor_accessor::ArgConfig::RuntimePageSize))
+        << "RuntimePageSize bit must be set in the binding's args_config word.";
+
+    // A-collapse: the dynamic binding omits the page-size CTA word that the static (bit-off) binding
+    // carries, so the whole-kernel CTA count is exactly one shorter. The two specs are identical
+    // apart from the flag, so the size delta is precisely the dropped page-size slot.
+    Program prog_static = MakeProgramFromSpec(*mesh_device_, make_spec(/*dynamic=*/false));
+    const std::vector<uint32_t> static_ctas =
+        prog_static.impl().get_kernel_by_spec_name("dm_kernel")->compile_time_args();
+    EXPECT_EQ(static_ctas.size(), dyn_ctas.size() + 1u)
+        << "Static binding keeps the page-size CTA; the dynamic binding drops it (A-collapse).";
+    const auto static_cfg = tensor_accessor::ArgsConfig(
+        static_cast<tensor_accessor::ArgsConfig::Underlying>(static_ctas[handles[0].cta_offset]));
+    EXPECT_FALSE(static_cfg.test(tensor_accessor::ArgConfig::RuntimePageSize))
+        << "Without the flag, the RuntimePageSize bit must NOT be set.";
+}
+
+TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedTileBindingHasNoRuntimeFieldCRTAs) {
+    // Interleaved + TILE layout: the page size is dtype/tile-fixed, independent of logical shape, so
+    // dynamic_tensor_shape does NOT demote it to a CRTA (the fold gates on ROW_MAJOR). The flag is a
+    // pure host-side validation loosening here; the binding carries no runtime field words. Guards
+    // the layout gate -- a regression that demoted tile page sizes would trip this.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    auto tp = MakeMinimalTensorParameter("input_tensor");
-    tp.advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true};
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    TensorParameter tp{
+        .unique_id = TensorParamName{"input_tensor"},
+        .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, std::move(tensor_layout)),
+        .advanced_options = TensorParameterAdvancedOptions{.dynamic_tensor_shape = true},
+    };
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
@@ -3369,7 +3550,8 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedBindingHasNoRuntimeFie
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 1u);
     EXPECT_EQ(handles[0].num_runtime_field_crta_words, 0u)
-        << "Interleaved dynamic_tensor_shape is host-side-only; no runtime CRTA words.";
+        << "Interleaved TILE + dynamic_tensor_shape is host-side-only; no runtime CRTA words.";
+    EXPECT_FALSE(handles[0].runtime_field_is_page_size);
 }
 
 TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {

@@ -22,44 +22,6 @@ run_t3000_ethernet_tests() {
   fi
 }
 
-run_t3000_llama3_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama3_tests"
-
-  # Llama3.2-1B
-  #llama1b=meta-llama/Llama-3.2-1B-Instruct
-  # Llama3.2-3B
-  #llama3b=meta-llama/Llama-3.2-3B-Instruct
-  # Llama3.1-8B
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
-  # Llama3.2-11B
-  #llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-
-  # Run test model for llama3 - 1B, 3B, 8B and 11B weights
-  # Removed 1B, 3B, and 11B tests for now to reduce possibility of 8B model hanging
-  for hf_model in "$llama8b"; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k full ; fail+=$?
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy" ; fail+=$?
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
-  done
-
-  # Run chunked prefill test for llama3-1B
-  #tt_cache_llama1b=$TT_CACHE_HOME/$llama1b
-  #HF_MODEL=$llama1b TT_CACHE_PATH=$tt_cache_llama1b pytest models/tt_transformers/tests/test_chunked_generation.py; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_llama3_70b_tests() {
   # Record the start time
   fail=0
@@ -77,91 +39,6 @@ run_t3000_llama3_70b_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama3_70b_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-
-run_t3000_llama3_90b_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama3_90b_tests"
-
-  # Run test_model (decode and prefill) for llama3 90B
-  llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-  tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
-  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/test_model.py -k quick ; fail+=$?
-  HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and 1layer" ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_90b_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
- fi
-}
-
-run_t3000_llama3_accuracy_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama3_accuracy_tests"
-
-  # Llama3.2-1B
-  #llama1b=meta-llama/Llama-3.2-1B-Instruct
-  # Llama3.2-3B
-  #llama3b=meta-llama/Llama-3.2-3B-Instruct
-  # Llama3.1-8B
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
-  # Llama3.2-11B
-  #llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
-
-  # Run test accuracy llama3 - 1B, 3B, 8B, and 11B weights
-  # Removed 1B, 3B, and 11B tests for now to reduce possibility of 8B model hanging
-  for hf_model in "$llama8b" ; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" ; fail+=$?
-    echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_accuracy_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_llama3_70n90b_accuracy_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama3_70n90b_accuracy_tests"
-
-  # Llama3.1-70B
-  llama70b=meta-llama/Llama-3.1-70B-Instruct
-  # Llama3.2-90B
-  #llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
-
-  # Run test accuracy llama3 - 70B and 90B weights
-  # Removed 90B tests for now to reduce possibility of 8B model hanging
-  for hf_model in "$llama70b"; do
-    tt_cache=$TT_CACHE_HOME/$hf_model
-    HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout 4200 ; fail+=$?
-    echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_70n90b_accuracy_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -218,42 +95,6 @@ run_t3000_llama3_70n90b_accuracy_tests() {
 #    exit 1
 #  fi
 # }
-
-run_t3000_llama3.2-90b-vision_freq_tests() {
-# Record the start time
- fail=0
- start_time=$(date +%s)
-
- echo "LOG_METAL: Running run_t3000_llama3.2-90b-vision_freq_tests"
-
- # Llama3.2-90B -- use repacked weights when acceptable for faster testing
- llama90b=meta-llama/Llama-3.2-90B-Vision-Instruct
- tt_cache_llama90b=$TT_CACHE_HOME/$llama90b
- HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
- HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
- HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
- HF_MODEL=$llama90b TT_CACHE_PATH=$tt_cache_llama90b pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
-
-# Record the end time
- end_time=$(date +%s)
- duration=$((end_time - start_time))
- echo "LOG_METAL: run_t3000_llama3.2-90b-vision_freq_tests $duration seconds to complete"
- if [[ $fail -ne 0 ]]; then
-   exit 1
- fi
-}
-
-
-run_t3000_mistral_tests() {
-
-  echo "LOG_METAL: Running run_t3000_mistral_frequent_tests"
-
-  hf_model=mistralai/Mistral-7B-Instruct-v0.3
-  tt_cache_path=$TT_CACHE_HOME/$hf_model
-  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model.py -k full
-  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_model_prefill.py -k "performance and not accuracy"
-
-}
 
 run_t3000_tteager_tests() {
   # Record the start time
@@ -410,30 +251,14 @@ run_t3000_tests() {
   # Run trace tests
   run_t3000_trace_stress_tests
 
-  # Run llama3 small (1B, 3B, 8B, 11B) tests
-  run_t3000_llama3_tests
-
   # Run llama3-70b tests
   run_t3000_llama3_70b_tests
-
-  # Run llama3-90b tests
-  run_t3000_llama3_90b_tests
-
-  # Run llama3 accuracy tests
-  run_t3000_llama3_accuracy_tests
-  run_t3000_llama3_70n90b_accuracy_tests
 
   # Run Llama3.2-11B Vision tests
   # run_t3000_llama3.2-11b-vision_freq_tests
 
   # Run Llama3.2-11B Vision tests on spoofed N300
   # run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
-
-  # Run Llama3.2-90B Vision tests
-  run_t3000_llama3.2-90b-vision_freq_tests
-
-  # Run mistral tests
-  run_t3000_mistral_tests
 
   # Run resnet tests
   run_t3000_resnet_tests

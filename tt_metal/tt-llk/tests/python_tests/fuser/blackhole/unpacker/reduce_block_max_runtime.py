@@ -15,6 +15,7 @@ from fuser.fuser_config import GlobalConfig
 
 class ReduceBlockMaxRuntimeUnpacker(Unpacker):
     loop: FusedLoop = LoopBlockRow()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return ["experimental/llk_unpack_AB_reduce_custom_runtime.h"]

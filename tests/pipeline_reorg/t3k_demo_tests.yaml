@@ -64,7 +64,9 @@
   model-name: qwenimage
 
 - name: t3k_wan2.2_tests
-  cmd: run_t3000_wan22_tests
+  cmd: |
+    export VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    run_t3000_wan22_tests
   skus:
     wh_llmbox_perf:
       timeout: 25

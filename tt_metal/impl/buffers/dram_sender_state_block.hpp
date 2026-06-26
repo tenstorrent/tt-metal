@@ -4,7 +4,7 @@
 
 // Per-GCB "sender state block" that lives in DRISC L1 for DRAM-sender
 // GlobalCircularBuffers. The GCB constructor pre-initializes one block per sender
-// core so the long-running DRAM-core prefetcher kernel can switch between multiple
+// core so the long-running Tensor prefetcher kernel can switch between multiple
 // GCBs across successive requests, resuming each GCB's ring-buffer write pointer
 // (fifo_wr_ptr) where the previous request to that GCB left off.
 //

@@ -6,6 +6,7 @@
 
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
@@ -34,11 +35,11 @@ void kernel_main() {
     uint32_t mm_bias_intermediate_cb_id = tt::CBIndex::c_25;
     uint32_t bias_cb_id = tt::CBIndex::c_3;
 
-#ifdef FUSE_BIAS
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id, out_cb_id);
-#endif
-
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    // compute_kernel_hw_startup must be the first compute API call. The bias broadcast-add is
+    // initialized by add_bcast_rows_init_short right before it in the loop, so the full init_bcast
+    // here is redundant and was removed.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_init(in0_cb_id, in1_cb_id);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -65,7 +66,8 @@ void kernel_main() {
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
-                        mm_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_init(in0_cb_id, in1_cb_id);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
@@ -115,7 +117,7 @@ void kernel_main() {
                         }
                         cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                         // reconfigure init for matmul
-                        mm_init_short(in0_cb_id, in1_cb_id);
+                        matmul_init(in0_cb_id, in1_cb_id);
                         // reconfigure unpacker df for src B
                         reconfig_data_format(in1_cb_id, in0_cb_id);
 #endif

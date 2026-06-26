@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include <algorithm>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -52,8 +53,28 @@ void pack_first_op_scalars(
             const auto eps = *op.get_param_if<float>(0);
             if (eps >= 0.0f) {
                 // Ensure correct clamp bounds [min(eps, 1-eps), max(eps, 1-eps)]
-                const auto lo = std::min(eps, 1.0f - eps);
-                const auto hi = std::max(eps, 1.0f - eps);
+                auto lo = std::min(eps, 1.0f - eps);
+                auto hi = std::max(eps, 1.0f - eps);
+                // Pre-round the bounds to bf16 (RNE) for bf16 input: the SFPU
+                // narrows the clamped value fp32->bf16 by truncation. Making
+                // the bound bf16-exact host-side turns that truncating write-back into
+                // a no-op.
+                // Torch's bf16 boundary:
+                //   * eps <= 0.5 (golden = torch.special.logit): torch quantizes
+                //     eps->bf16 first, then forms 1-eps in bf16, i.e. bf16(1 - bf16(eps)).
+                //   * eps > 0.5 (golden = ordered clamp on python 1-eps/eps): the
+                //     bounds are bf16(1-eps)/bf16(eps) directly.
+                if (input_dtype == DataType::BFLOAT16) {
+                    if (eps <= 0.5f) {
+                        const float eps_bf = static_cast<float>(bfloat16(eps));
+                        const float one_minus_eps_bf = 1.0f - eps_bf;
+                        lo = static_cast<float>(bfloat16(std::min(eps_bf, one_minus_eps_bf)));
+                        hi = static_cast<float>(bfloat16(std::max(eps_bf, one_minus_eps_bf)));
+                    } else {
+                        lo = static_cast<float>(bfloat16(lo));
+                        hi = static_cast<float>(bfloat16(hi));
+                    }
+                }
                 packed_scalar1 = pack_scalar_runtime_arg_impl(lo, input_dtype);
                 packed_scalar2 = pack_scalar_runtime_arg_impl(hi, input_dtype);
                 unary_defines["CLAMP"] = "clamp_tile";

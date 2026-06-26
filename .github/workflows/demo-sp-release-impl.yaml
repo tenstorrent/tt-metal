@@ -131,17 +131,14 @@ jobs:
           hang-detection-timeout: ${{ contains(matrix.test-group.name, 'PERF') && '20.0' || '5.0' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_logs
-          # tee combined stdout+stderr to a per-leg .log for ai-summary.
-          # PIPESTATUS: preserve real exit code (tee would mask it).
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
             # Store command safely using heredoc
             CMD=$(cat << 'EOF'
-          ${{ matrix.test-group.cmd }}
-          EOF
+            ${{ matrix.test-group.cmd }}
+            EOF
             )
 
             # Source T3K test scripts if needed (for run_t3000_* functions)
@@ -153,8 +150,6 @@ jobs:
 
             echo "$CMD"
             eval "$CMD"
-          } 2>&1 | tee "$LOG_FILE"
-          exit ${PIPESTATUS[0]}
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() && matrix.test-group.save-perf-data }}

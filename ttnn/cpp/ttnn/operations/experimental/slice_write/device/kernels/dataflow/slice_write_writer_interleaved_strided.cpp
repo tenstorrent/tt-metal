@@ -150,5 +150,10 @@ void kernel_main() {
         }
         noc.async_write_barrier();
         cb_in.pop_front(num_read_per_barrier);
+#ifdef LAST_DIM_STRIDED
+        // cb_out is filled, read back, and written out within this iteration; pop it (after the
+        // write barrier) so the scratch CB is balanced each iteration.
+        cb_out.pop_front(num_read_per_barrier);
+#endif
     }
 }

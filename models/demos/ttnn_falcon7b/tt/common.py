@@ -194,6 +194,35 @@ def create_attention_mask(
     return attention_mask, tt_attention_mask
 
 
+def _extract_layer_kv(layer):
+    """(key, value) tensors for a single-layer cache, or a raw (k, v) passthrough."""
+    if isinstance(layer, DynamicCache):
+        if hasattr(layer, "key_cache"):  # transformers < 5.x
+            return layer.key_cache[0], layer.value_cache[0]
+        return layer.layers[0].keys, layer.layers[0].values  # transformers >= 5.x
+    return layer
+
+
+def build_past_key_values_cache(past_key_values):
+    """Build a single transformers Cache from per-layer entries.
+
+    Accepts None, an existing DynamicCache, or an iterable of per-layer entries
+    where each entry is either a (key, value) tuple or a single-layer cache.
+    transformers 5.x removed the legacy-tuple KV-cache API (from_legacy_cache,
+    key_cache/value_cache) and requires a Cache object; the DynamicCache
+    constructor takes the per-layer (k, v) tuples directly. Falls back to
+    from_legacy_cache for transformers <5.x.
+    """
+    if past_key_values is None or isinstance(past_key_values, DynamicCache):
+        return past_key_values
+    layers = tuple(_extract_layer_kv(layer) for layer in past_key_values)
+    if len(layers) == 0:
+        return None
+    if hasattr(DynamicCache, "from_legacy_cache"):  # transformers < 5.x
+        return DynamicCache.from_legacy_cache(layers)
+    return DynamicCache(layers)  # transformers >= 5.x
+
+
 def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mesh_mapper=None):
     head_dim = config.hidden_size // config.num_attention_heads
 
@@ -212,7 +241,10 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     elif llm_mode == "decode":
         k_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
         v_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
-        layer_past = DynamicCache.from_legacy_cache(((k_cache_data, v_cache_data),))
+        # Per-layer cache (consumed directly by single-layer attention/decoder
+        # tests, or aggregated and merged via build_past_key_values_cache for the
+        # causal-LM tests). transformers 5.x dropped DynamicCache.from_legacy_cache.
+        layer_past = build_past_key_values_cache(((k_cache_data, v_cache_data),))
 
         torch_k_cache[:, :, :kv_cache_length, :] = k_cache_data
         torch_v_cache[:, :, :kv_cache_length, :] = v_cache_data

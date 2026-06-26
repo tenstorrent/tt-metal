@@ -15,6 +15,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
+#include "sparse_sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -319,6 +320,42 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("attention_sink") = nb::none());
+
+    ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip. softmax(Q@Kᵀ·scale masked)@V over the
+        top-k selected latents per query token; V = kv[..., :v_dim]. Masking is baked into `indices`
+        (0xFFFFFFFF = masked; sentinels are a contiguous tail). Inputs are ROW-MAJOR DRAM-interleaved.
+        K_DIM (the q/kv head dim) is taken from the tensors.
+
+        Args:
+            q (ttnn.Tensor):       [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)
+            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16 or fp8_e4m3 (fp8 halves the K-gather bytes; tilized to bfp8_b in-op).
+                                   When cache_batch_idx is set, [B, 1, T, K_DIM] and may be ND-sharded across DRAM banks.
+            indices (ttnn.Tensor): [1, 1, S, TOPK] uint32
+            v_dim (int):           width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
+
+        Keyword args:
+            scale (float, optional): defaults to K_DIM**-0.5.
+            k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
+                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+
+        Returns:
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
+        )doc",
+        &ttnn::transformer::sparse_sdpa,
+        nb::arg("q").noconvert(),
+        nb::arg("kv").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::arg("v_dim"),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("k_chunk_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(

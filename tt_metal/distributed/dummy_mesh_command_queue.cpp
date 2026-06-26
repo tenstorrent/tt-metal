@@ -101,7 +101,8 @@ void DummyMeshCommandQueue::reset_worker_state(
     bool /*reset_launch_msg_state*/,
     uint32_t /*num_sub_devices*/,
     const vector_aligned<uint32_t>& /*go_signal_noc_data*/,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& /*core_go_message_mapping*/) {
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& /*core_go_message_mapping*/,
+    tt::stl::Span<const uint32_t> /*workers_per_sub_device*/) {
     // No-op for inactive rank
 }
 

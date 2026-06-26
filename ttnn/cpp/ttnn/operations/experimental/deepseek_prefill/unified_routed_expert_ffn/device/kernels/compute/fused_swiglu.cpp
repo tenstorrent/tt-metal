@@ -55,6 +55,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -517,11 +518,16 @@ void kernel_main() {
     // thread). Same total compute, better pipelining.
     silu_tile_init();
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
+
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        mm_block_init(
+        // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
+        // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
+        // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
+        reconfig_data_format(cb_in1_gate, cb_in0_x);
+        matmul_block_init(
             cb_in0_x,
             cb_in1_gate,
-            cb_partials_gu,
             /*transpose=*/0,
             gu_out_subblock_w,
             gu_out_subblock_h,
@@ -558,10 +564,13 @@ void kernel_main() {
         (void)cb_up_intermed;
 
         // Phase 4: down matmul, output to cb_out.
-        mm_block_init(
+        // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);
+        // matmul_block_init does not re-program data formats, so reset the down
+        // operands here (in1 -> SrcA, in0 -> SrcB) before the matmul.
+        reconfig_data_format(cb_in1_down, cb_in0_down_full);
+        matmul_block_init(
             cb_in0_down_full,
             cb_in1_down,
-            cb_partials_d,
             /*transpose=*/0,
             d_out_subblock_w,
             d_out_subblock_h,

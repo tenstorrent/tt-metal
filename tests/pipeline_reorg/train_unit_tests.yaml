@@ -21,7 +21,7 @@
       timeout: 40
     wh_n300_civ2:
       timeout: 40
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
@@ -37,7 +37,7 @@
     # wh_n150_civ2 is used for smoke test
     wh_n300_civ2:
       timeout: 30
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 30
     bh_p150b_civ2:
       timeout: 30
@@ -51,7 +51,7 @@
       timeout: 20
     wh_n300_civ2:
       timeout: 20
-    bh_p100a_civ2_viommu:
+    bh_p100:
       timeout: 20
     bh_p150b_civ2:
       timeout: 20

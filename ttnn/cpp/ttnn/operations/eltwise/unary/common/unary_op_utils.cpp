@@ -102,6 +102,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
+        case UnaryOpType::TANHSHRINK: return "SFPU_OP_TANHSHRINK_INCLUDE";
         case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
         case UnaryOpType::MISH: return "SFPU_OP_MISH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
@@ -803,11 +804,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
-        case UnaryOpType::TANHSHRINK:
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LOGSIGMOID: return {};
         case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
         case UnaryOpType::DIGAMMA: return {"digamma_tile_init();", fmt::format("digamma_tile({});", idst)};
+        case UnaryOpType::TANHSHRINK: return {"tanhshrink_tile_init();", fmt::format("tanhshrink_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
 }
@@ -1024,7 +1025,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
                 return "lgamma_fast_kernel.cpp";
             }
             return "lgamma_kernel.cpp";
-        case UnaryOpType::TANHSHRINK: return "tanhshrink_kernel.cpp";
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
         case UnaryOpType::LOGIT: return "logit_kernel.cpp";

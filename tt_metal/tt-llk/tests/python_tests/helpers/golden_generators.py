@@ -561,6 +561,7 @@ class SrcFormatModel:
             DataFormat.Bfp2_b: SrcFormatModel._bfp8b_to_tf32,
             DataFormat.Float16_b: SrcFormatModel._fp16b_to_tf32,
             DataFormat.Float16: SrcFormatModel._fp16_to_tf32,
+            DataFormat.Tf32: SrcFormatModel._fp32_to_tf32,
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
             DataFormat.MxFp8R: SrcFormatModel._mxfp8r_to_tf32,
             DataFormat.MxFp8P: SrcFormatModel._mxfp8p_to_tf32,
@@ -1708,6 +1709,110 @@ class DataCopyGolden:
 
 
 @register_golden
+class TypecastGolden:
+    """Golden generator for the SFPU typecast operation.
+
+    Models the production typecast flow (copy_tile -> typecast_tile -> pack):
+    the input tile is loaded into Dest, the SFPU converts each datum in place
+    to the output dtype, and the packer writes it to L1. Typecast is purely
+    elementwise and the device result is read back in row-major order (same
+    unpack->Dest->pack data path as DataCopyGolden), so no tilization is
+    applied to the elementwise conversion.
+
+    Covers the full ttnn typecast matrix across float, integer, and block-float
+    (Bfp8_b / Bfp4_b) source/destination dtypes:
+      * input block-float is round-tripped through its unpack quantization
+        (``quantize_input_to_unpack_format``) to match what the SFPU sees;
+      * float/int -> integer: truncation toward zero for int32/uint32 and
+        round-to-nearest for uint16/uint8 (whole-number stimuli make both
+        exact); UInt8 keeps the low byte; others clamp to the dest range;
+      * -> plain float: value-preserving cast;
+      * -> block-float: the result is tilized into 16-element BFP blocks, run
+        through the packer's shared-exponent quantization, and untilized back
+        to row-major (mirrors DataCopyGolden's BFP output handling).
+    """
+
+    _BLOCK_FLOAT_FORMATS = (
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp2_b,
+    )
+
+    def __call__(
+        self,
+        operand,
+        input_format: DataFormat,
+        output_format: DataFormat,
+        input_dimensions: list[int] = [32, 32],
+    ):
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
+        if not isinstance(operand, torch.Tensor):
+            operand = torch.tensor(operand)
+
+        operand = operand.flatten()
+
+        if output_format.is_integer():
+            if input_format.is_integer():
+                values = operand.to(torch.int64)
+            else:
+                # int32/uint32 truncate; uint16/uint8 round. Whole-number
+                # stimuli make trunc == round, so trunc models both exactly.
+                values = torch.trunc(operand.float()).to(torch.int64)
+            result = self._to_integer(values, output_format)
+        elif output_format in self._BLOCK_FLOAT_FORMATS:
+            result = self._to_block_float(
+                operand.float(), output_format, input_dimensions
+            )
+        else:
+            result = self._to_float(operand.float(), output_format)
+
+        return _apply_ftz(result, output_format).flatten()
+
+    @staticmethod
+    def _to_integer(values: torch.Tensor, output_format: DataFormat) -> torch.Tensor:
+        out_torch = format_dict[output_format]
+        if output_format == DataFormat.UInt8:
+            # Hardware keeps the low 8 bits (two's complement wrap).
+            return (values % 256).to(out_torch)
+        if output_format == DataFormat.UInt16:
+            return torch.clamp(values, 0, 65535).to(out_torch)
+        if output_format == DataFormat.UInt32:
+            return torch.clamp(values, 0, 2**32 - 1).to(out_torch)
+        if output_format == DataFormat.Int32:
+            # +1 on the min: hardware uses sign-magnitude representation.
+            return torch.clamp(values, -(2**31 - 1), 2**31 - 1).to(out_torch)
+        return saturate_integer(values, output_format, out_torch)
+
+    @staticmethod
+    def _to_float(values: torch.Tensor, output_format: DataFormat) -> torch.Tensor:
+        return values.to(format_dict[output_format])
+
+    @staticmethod
+    def _to_block_float(
+        values: torch.Tensor,
+        output_format: DataFormat,
+        input_dimensions: list[int],
+    ) -> torch.Tensor:
+        """Quantize fp values to a block-float output, matching the packer.
+
+        The packer computes one shared exponent per 16 contiguous datums in
+        Dest (i.e. per face row), so the values are first tilized into that
+        layout, quantized to the target BFP width, then untilized back to the
+        row-major order the device result is read back in.
+        """
+        data = tilize_block(
+            values.ravel(), input_dimensions, DataFormat.Float16_b
+        ).ravel()
+        if output_format == DataFormat.Bfp4_b:
+            return _bfp4b_to_float16b(data, input_dimensions)
+        if output_format == DataFormat.Bfp2_b:
+            return _bfp2b_to_float16b(data, input_dimensions)
+        return _bfp8b_to_float16b(data, input_dimensions)
+
+
+@register_golden
 class PackGolden:
     """
     Golden generator for pack operations with optional ReLU activation.
@@ -2018,6 +2123,12 @@ class UnarySFPUGolden:
     def __init__(self):
         self.ops = {
             MathOperation.Abs: self._abs,
+            MathOperation.EqualZero: self._equal_zero,
+            MathOperation.NotEqualZero: self._not_equal_zero,
+            MathOperation.LessThanZero: self._less_than_zero,
+            MathOperation.GreaterThanZero: self._greater_than_zero,
+            MathOperation.LessThanEqualZero: self._less_than_equal_zero,
+            MathOperation.GreaterThanEqualZero: self._greater_than_equal_zero,
             MathOperation.Atanh: self._atanh,
             MathOperation.Asinh: self._asinh,
             MathOperation.Acosh: self._acosh,
@@ -2242,6 +2353,30 @@ class UnarySFPUGolden:
     # Operation methods
     def _abs(self, x):
         return abs(x)
+
+    # Comparison-to-zero ops. The Quasar kernel builds the strict comparisons from
+    # SFPSETCC sign + magnitude tests (ltz = negative AND nonzero, gtz = positive AND
+    # nonzero), so ±0.0 is excluded from ltz/gtz and the semantics reduce to plain IEEE:
+    #   eqz/nez: magnitude tests (both +0.0 and -0.0 count as zero).
+    #   ltz/gtz: strict (x < 0 / x > 0); ltz(-0.0)=gtz(+0.0)=False.
+    #   lez/gez: x <= 0 / x >= 0, inclusive of ±0.0.
+    def _equal_zero(self, x):
+        return 1.0 if x == 0.0 else 0.0
+
+    def _not_equal_zero(self, x):
+        return 1.0 if x != 0.0 else 0.0
+
+    def _less_than_zero(self, x):
+        return 1.0 if x < 0.0 else 0.0
+
+    def _greater_than_zero(self, x):
+        return 1.0 if x > 0.0 else 0.0
+
+    def _less_than_equal_zero(self, x):
+        return 1.0 if x <= 0.0 else 0.0
+
+    def _greater_than_equal_zero(self, x):
+        return 1.0 if x >= 0.0 else 0.0
 
     def _atanh(self, x):
         return self._torch_unary(x, torch.atanh)
@@ -3060,6 +3195,8 @@ class ReduceGolden:
             return _bfp8b_to_float16b(tensor.to(torch.bfloat16))
         elif data_format.is_mx_format():
             return quantize_mx_tensor_chunked(tensor.to(torch.bfloat16), data_format)
+        elif data_format.is_integer():
+            return saturate_integer(tensor, data_format, format_dict[data_format])
         else:
             return to_tensor(tensor, data_format)
 
@@ -3094,6 +3231,12 @@ class ReduceGolden:
         # Convert back to target data format at the end (same as eltwise output path)
         return self._quantize_reduce_output(accumulated, data_format)
 
+    def _make_tile_result(self, data_format, tile_shape):
+        """Create a zero-filled tile result in a dtype wide enough to avoid integer overflow."""
+        torch_format = format_dict[data_format]
+        dtype = torch.int64 if data_format.is_integer() else torch_format
+        return torch.zeros(tile_shape.total_tile_size(), dtype=dtype)
+
     def _process_tile(
         self, operand, reduce_dim, pool_type, data_format, tile_idx, tile_shape
     ):
@@ -3109,10 +3252,7 @@ class ReduceGolden:
         return self.dim_handlers[reduce_dim](faces, pool_type, data_format, tile_shape)
 
     def _reduce_column(self, faces, pool_type, data_format, tile_shape):
-        # Pool together columns: reduce along rows (dim=0) for each column
-        result = torch.zeros(
-            tile_shape.total_tile_size(), dtype=format_dict[data_format]
-        )
+        result = self._make_tile_result(data_format, tile_shape)
 
         # For each column of faces, concatenate vertically and pool along rows
         for col_idx in range(tile_shape.num_faces_c_dim):
@@ -3134,10 +3274,7 @@ class ReduceGolden:
         return result
 
     def _reduce_row(self, faces, pool_type, data_format, tile_shape):
-        # Pool together rows: reduce along columns (dim=1) for each row
-        result = torch.zeros(
-            tile_shape.total_tile_size(), dtype=format_dict[data_format]
-        )
+        result = self._make_tile_result(data_format, tile_shape)
 
         # For each row of faces, concatenate horizontally and pool along columns
         for row_idx in range(tile_shape.num_faces_r_dim):
@@ -3166,10 +3303,7 @@ class ReduceGolden:
         return result
 
     def _reduce_scalar(self, faces, pool_type, data_format, tile_shape):
-        # Pool together all faces → single scalar at [0]
-        result = torch.zeros(
-            tile_shape.total_tile_size(), dtype=format_dict[data_format]
-        )
+        result = self._make_tile_result(data_format, tile_shape)
         result[0] = self._apply_pooling(faces.flatten(), pool_type, dim=0)
         return result
 
@@ -3177,7 +3311,7 @@ class ReduceGolden:
         if pool_type == ReducePool.Max:
             return torch.max(tensor, dim=dim).values
         elif pool_type == ReducePool.Average:
-            return torch.mean(tensor, dim=dim)
+            return torch.mean(tensor.float(), dim=dim)
         elif pool_type == ReducePool.Sum:
             return torch.sum(tensor, dim=dim)
         else:

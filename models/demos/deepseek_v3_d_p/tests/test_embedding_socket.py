@@ -17,7 +17,6 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -70,7 +69,7 @@ def test_embedding_8x4_galaxy(mesh_device):
 
     # Push tokens through a persistent H2DStreamService. Worker_cores is set so
     # the service-core kernel multicasts a data-ready inc after each transfer;
-    # the h2d_socket_sync op below waits on that, copies the backing tensor
+    # the inbound_socket_service_sync op below waits on that, copies the backing tensor
     # into a fresh output, and acks the service core — replacing the host-side
     # `service.barrier()` round-trip.
     per_chip_bytes = isl_per_chip * 4  # uint32
@@ -108,7 +107,7 @@ def test_embedding_8x4_galaxy(mesh_device):
         h2d_service.forward_to_tensor_bytes(flat_tokens)
         # Device-side sync: workers wait on data_ready_sem, copy backing -> fresh
         # output, ack consumed_counter. No host barrier needed.
-        tt_tokens = h2d_socket_sync(h2d_service, worker_cores)
+        tt_tokens = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(h2d_service)[0]
         logger.info(f"tt_tokens shape (synced from H2D service): {tt_tokens.shape}")
 
         tt_output = tt_emb(tt_tokens)
