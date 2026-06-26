@@ -287,7 +287,10 @@ def test_bounded_sliding_commit_append_wraps_cache_slot(mesh_device, reset_seeds
     block_size = 32
     sliding_window = 64
     max_seq_len = sliding_window * 2
-    wrap_position = sliding_window
+    # Pick a block-aligned position that is not sliding-window-aligned: with
+    # correct wrapping it writes physical slot 32, while a broken no-wrap path
+    # would write physical slot 96.
+    wrap_position = sliding_window + block_size
     model_args, tt_state = _build_tiny_gemma4_state(vocab_size=vocab_size)
     model_args.sliding_window = sliding_window
     model_args._hf_text_config.sliding_window = sliding_window
@@ -317,8 +320,11 @@ def test_bounded_sliding_commit_append_wraps_cache_slot(mesh_device, reset_seeds
     k_cache, v_cache = model.tt_kv_cache[0]
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     expected_slot = wrap_position % sliding_window
+    no_wrap_slot = wrap_position
     k_before = _paged_cache_slot(k_cache, expected_slot, block_size=block_size, is_mesh=is_mesh)
     v_before = _paged_cache_slot(v_cache, expected_slot, block_size=block_size, is_mesh=is_mesh)
+    k_no_wrap_before = _paged_cache_slot(k_cache, no_wrap_slot, block_size=block_size, is_mesh=is_mesh)
+    v_no_wrap_before = _paged_cache_slot(v_cache, no_wrap_slot, block_size=block_size, is_mesh=is_mesh)
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
     append_tokens = torch.randint(0, vocab_size, (1, 1), dtype=torch.long)
     pos_u32 = ttnn.from_torch(
@@ -349,6 +355,12 @@ def test_bounded_sliding_commit_append_wraps_cache_slot(mesh_device, reset_seeds
 
     _assert_regions_changed(k_before, _paged_cache_slot(k_cache, expected_slot, block_size=block_size, is_mesh=is_mesh))
     _assert_regions_changed(v_before, _paged_cache_slot(v_cache, expected_slot, block_size=block_size, is_mesh=is_mesh))
+    _assert_regions_equal(
+        k_no_wrap_before, _paged_cache_slot(k_cache, no_wrap_slot, block_size=block_size, is_mesh=is_mesh)
+    )
+    _assert_regions_equal(
+        v_no_wrap_before, _paged_cache_slot(v_cache, no_wrap_slot, block_size=block_size, is_mesh=is_mesh)
+    )
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
