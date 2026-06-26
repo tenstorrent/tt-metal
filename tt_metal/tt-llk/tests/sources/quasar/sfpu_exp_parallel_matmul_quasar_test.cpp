@@ -117,6 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_srcs.h"
 #include "params.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -173,6 +174,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
+    const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
+    const int store_base_addr     = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
+
+    // One-time (untimed) setup: program the exp LOADMACRO sequence and record the per-slice
+    // instruction stream (load+exp via SFPLOADMACRO, then explicit store to the output slice).
+    _exp_init_loadmacro_(load_base_addr, store_base_addr, num_sfpu_iterations);
+    const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
+
+    // Time the full TRISC3 path: UNP_S -> SFPU exp (SFPLOADMACRO replay) -> PACK1. The end-of-window
+    // waits stop the timer on completion (per-thread busy bits), not issue.
     perf_scratch_measure(
         PerfScratchSlot::Sfpu,
         [&]()
@@ -184,23 +195,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
                 {
-                    const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;
-                    const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
-#pragma GCC unroll 8
-                    for (int d = 0; d < num_sfpu_iterations; d++)
-                    {
-                        TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
-                        TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
-                        TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
-                    }
+                    TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
+                    // Drain the LOADMACRO pipeline before clearing the SrcS valids so PACK1 reads the
+                    // exp result, not a store still in flight.
+                    TTI_SFPNOP(0, 0, 0);
+                    TTI_SFPNOP(0, 0, 1);
 
                     _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
                 }
             }
-            // End timing on completion of the full TRISC3 path (UNP_S -> SFPU -> PACK1), not
-            // issue: block until this thread's Tensix work drains.
-            tensix_sync();
+
+            wait_unpack_idle();
+            wait_sfpu_idle();
+            wait_pack_idle();
         });
 }
 
