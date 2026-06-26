@@ -5,9 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 /**
  * add a cb full of indices for the tile
  * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is
@@ -20,7 +21,7 @@
 template <bool USE_32BIT>
 FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     // TODO: investigate moving to compile time (binary size is at risk)
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     cb.reserve_back(1);
     CoreLocalMem<volatile uint32_t> ptr(cb.get_write_ptr());
     uint32_t wt_offset = wt << 5;
@@ -49,39 +50,32 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
 }
 
 void kernel_main() {
-    uint32_t values_addr = get_arg_val<uint32_t>(0);
-    uint32_t indices_addr = get_arg_val<uint32_t>(1);
-
-    constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_intermed_index = get_compile_time_arg_val(2);
-
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(6);
-    constexpr bool use_32bit_index = get_compile_time_arg_val(7) == 1;
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t input_indices_page_size = get_arg(args::final_indices_page_size);
+    constexpr bool use_32bit_index = get_arg(args::use_32bit_index) == 1;
     // Number of logical users (== number of running cores). Only this many input-index rows exist
     // and are streamed in, even though the values tile is padded to a full tile_height.
-    constexpr uint32_t num_users = get_compile_time_arg_val(8);
+    constexpr uint32_t num_users = get_arg(args::num_users);
+    constexpr uint32_t k_chunk_size = get_arg(args::k_chunk_size);
+    constexpr uint32_t p_chunk_size = get_arg(args::p_chunk_size);
 
-    constexpr auto s0_args = TensorAccessorArgs<9>();
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    constexpr auto input_values_cb_index = dfb::input_values;
+    constexpr auto cb_intermed_index = dfb::index;
+    constexpr auto input_indices_cb_index = dfb::final_indices;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = TensorAccessor(s0_args, values_addr);
-
-    const auto s1 = TensorAccessor(s1_args, indices_addr);
+    const auto s0 = TensorAccessor(tensor::input_values);
+    const auto s1 = TensorAccessor(tensor::input_indices);
 
     Noc noc;
-    CircularBuffer input_values_cb(input_values_cb_index);
-    CircularBuffer input_indices_cb(input_indices_cb_index);
+    DataflowBuffer input_values_cb(input_values_cb_index);
+    DataflowBuffer input_indices_cb(input_indices_cb_index);
     const uint32_t tile_bytes_input_values = input_values_cb.get_tile_size();
 
     uint32_t tile_id_input_values = 0;
-    uint32_t tile_id_input_indices = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
         // input values TILE
         for (uint32_t j = 0; j < Wt; ++j) {
@@ -95,12 +89,28 @@ void kernel_main() {
         }
     }
 
-    // input indices RM — push one stick per running core/user. Previously hard-coded to
-    // Ht * tile_height (== 32); now `num_users` so fewer-than-32-user configs don't over-read.
+    // input indices RM — push one stick per running core/user.
     for (uint32_t j = 0; j < num_users; ++j) {
         input_indices_cb.reserve_back(onetile);
         noc.async_read(s1, input_indices_cb, input_indices_page_size, {.page_id = j}, {.offset_bytes = 0});
         noc.async_read_barrier();
         input_indices_cb.push_back(onetile);
     }
+
+    // Relocated from the writer (cross-kernel DFB bridge): read the full k / p chunks once so the
+    // writer's k/p CBs (c_14/c_15) have a legal reader-PRODUCER -> writer-CONSUMER pairing. The
+    // writer indexes its own core_id value out of the chunk.
+    const auto s_k = TensorAccessor(tensor::k);
+    DataflowBuffer cb_k(dfb::k);
+    cb_k.reserve_back(1);
+    noc.async_read(s_k, cb_k, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_k.push_back(1);
+
+    const auto s_p = TensorAccessor(tensor::p);
+    DataflowBuffer cb_p(dfb::p);
+    cb_p.reserve_back(1);
+    noc.async_read(s_p, cb_p, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_p.push_back(1);
 }

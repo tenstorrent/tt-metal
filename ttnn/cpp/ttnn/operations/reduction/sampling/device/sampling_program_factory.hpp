@@ -11,7 +11,11 @@
 namespace ttnn::prim {
 
 struct SamplingProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Metal 2.0 (MetalV2FactoryConcept). DM-kernel sync-free CBs are handled via the cross-kernel
+    // DFB bridge: read-staging k/p (c_14/c_15) relocated reader->writer, and the writer-assembled
+    // output CB (c_13) bridged writer-PRODUCER -> compute-CONSUMER (terminal no-op) since a DM
+    // kernel cannot self-loop a DFB.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor);
 };
 
