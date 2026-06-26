@@ -1540,6 +1540,25 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_sdpa_prefill_program_config(self, seq_len: int = 1, chunk_start_idx: int = None):
         """Get the SDPA program config for prefill mode."""
+        # SDPA prefill at the 512-token bucket (q[1,8,512,128] kv[1,2,512,128], BFP8/BF16, BH
+        # P150x4) benefits from a larger k_chunk and more cores. A trace device-time sweep found
+        # grid (11,10) q_chunk=64 k_chunk=128 runs ~38.6us vs ~43.8us for the (8,8) q64/k64
+        # production config -> ~1.13x, PCC 0.9999, exact (exp_approx_mode=False; approx gives no
+        # gain here). k_chunk 64->128 is the main lever. Only the non-chunked path (chunk_start_idx
+        # in {None,0}) is overridden. See tests/perf/test_sdpa_prefill_512_trace_sweep_p150.py.
+        if (
+            is_blackhole()
+            and not self.is_galaxy
+            and self.dim == 3072
+            and seq_len == 512
+            and (chunk_start_idx is None or chunk_start_idx == 0)
+        ):
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(11, 10),
+                exp_approx_mode=False,
+                q_chunk_size=64,
+                k_chunk_size=128,
+            )
         # Sequence length and chunk start index are both required for prefill
         # Chunk values based on what works best empirically
         # We want 256 if seqlen >= 2048 else 64. BUT:
