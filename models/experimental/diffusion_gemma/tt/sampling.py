@@ -118,9 +118,24 @@ def _gumbel_from_uniform(u):
     return gumbel
 
 
+def _rand_mesh_mapper(device):
+    if hasattr(device, "shape") and device.get_num_devices() > 1:
+        return ttnn.MeshMapperConfig([ttnn.PlacementReplicate()])
+    return None
+
+
 def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
     """Generate device Gumbel(0,1) noise with a deterministic TTNN rand seed."""
-    u = ttnn.rand(shape, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, low=0.0, high=1.0, seed=seed)
+    u = ttnn.rand(
+        shape,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        low=0.0,
+        high=1.0,
+        seed=seed,
+        mesh_mapper=_rand_mesh_mapper(device),
+    )
     return _gumbel_from_uniform(u)
 
 
@@ -138,7 +153,16 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
 
     rand_shape = (shape[-1], *shape[1:-1], shape[0])
     permute_order = (len(shape) - 1, *range(1, len(shape) - 1), 0)
-    u = ttnn.rand(rand_shape, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, low=0.0, high=1.0, seed=seed)
+    u = ttnn.rand(
+        rand_shape,
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        low=0.0,
+        high=1.0,
+        seed=seed,
+        mesh_mapper=_rand_mesh_mapper(device),
+    )
     u = ttnn.permute(u, permute_order)
     return _gumbel_from_uniform(u)
 
@@ -168,6 +192,7 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
             low=0.0,
             high=1.0,
             seed=seed + offset,
+            mesh_mapper=_rand_mesh_mapper(device),
         )
         parts.append(_gumbel_from_uniform(u))
 
