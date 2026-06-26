@@ -10,5 +10,6 @@ attention, a three-phase KV-cache state machine, entropy-budget acceptance
 sampling, and self-conditioning.
 
 See ``plan.md`` for the implementation plan and ``AGENTS.md`` for working
-context. ``STATUS.md`` tracks what is implemented vs blocked-on-environment.
+context. ``DEVICE_LOOP.md`` (Part II) tracks what is implemented vs
+blocked-on-environment.
 """

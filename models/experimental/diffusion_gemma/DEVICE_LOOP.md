@@ -1,46 +1,45 @@
-# DiffusionGemma device bring-up — agent loop spec
+# DiffusionGemma device bring-up — loop spec + implementation status
 
 **Audience:** an autonomous agent running in `/loop` mode on the QB2 box `bh-qbge-06`.
 **Goal of the loop:** take the four device-integration workstreams below from ⬜ to ✅,
 in dependency order, each validated on QB2 against the pure-torch oracle in `reference/`.
 
+This file is the **single source of truth** for the branch (the former `STATUS.md` was
+folded in here). **Part I** is the agent loop spec — how the four device workstreams are
+executed and their acceptance criteria. **Part II** is the live implementation status —
+environment constraints, the workstream status table, the 2026-06-26 code review, session
+notes, and build order. **For what is done right now, jump to Part II.**
+
 This is the **Functional-core** device work. Everything it depends on (the torch
 reference/oracle, the PCC harness, the causal backbone PCC, the isolated device
-spikes for entropy/accept/SDPA/self-cond) is **already done** — see `STATUS.md`.
-Do **not** redo it. This loop turns the validated *pieces* into an *integrated*
+spikes for entropy/accept/SDPA/self-cond) is **already done** — see the Part II status
+table. Do **not** redo it. This loop turns the validated *pieces* into an *integrated*
 on-device diffusion forward.
 
 ---
 
+# Part I — Agent loop spec
+
 ## 0. Loop protocol (do this every iteration)
 
-> **Progress tracking is branch-dependent.** The `zni/diffusion-gemma-bringup` branch has a
-> `STATUS.md` / `plan.md`; the `zni/diffusion-gemma-foundation-draft` branch does **not**
-> (planning docs were stripped for the foundation PR). So: **if `STATUS.md` exists, update it;
-> otherwise maintain the `## Progress log` section at the bottom of THIS file.** Everywhere
-> below that says "update `STATUS.md`" means "update `STATUS.md` if present, else the Progress
-> log here." Confirm with the user which branch the device loop runs on before iteration 1.
->
-> **STALE-ROW WARNING:** the `bringup` `STATUS.md` still carries a row
-> `Bidirectional canvas attention (device SDPA) ⬜ not started`. That refers to the **integration**
-> (W2a here), NOT the isolated SDPA spike — the isolated spike **is done** (`test_device_bidirectional_sdpa.py`,
-> 4/4). If you run on `bringup`, fix that row first (split spike-done ✅ vs integration-not-started ⬜)
-> so you don't mis-read it as "no SDPA work exists." The Progress log below already states it correctly.
+> **Progress lives in Part II of this file** (the *Status by workstream* table). This branch
+> no longer has a separate `STATUS.md` — it was folded into Part II below. Everywhere this
+> spec says "update the status table" it means that Part II table. Confirm with the user which
+> branch the device loop runs on before iteration 1.
 
-1. **Read the progress source** (`STATUS.md` if present, else the Progress log below) → find
-   the first workstream not yet ✅ in the order W1→W2→W3→W4. Within a workstream, pick the
-   first unchecked task in its checklist.
+1. **Read the status table** (Part II) → find the first workstream not yet ✅ in the order
+   W1→W2→W3→W4. Within a workstream, pick the first unchecked task in its checklist.
 2. **Do the smallest shippable increment** of that task (one module / one device test).
 3. **Validate on device** (recipe §1). The oracle is always `reference/` — assert the
    ttnn output matches it (PCC or `torch.equal`), never assert against a fresh guess.
-4. **Update `STATUS.md`**: flip the row, note the test file + measured PCC + date.
+4. **Update the Part II status table**: flip the row, note the test file + measured PCC + date.
 5. **Commit ONLY IF commits are explicitly enabled** for this loop (user/loop config says
    so) AND the device test in step 3 passed. Never commit a half-finished increment, a
    failing test, or an environment workaround (e.g. the erisc reset, a local build). If
-   commits are not enabled, leave the work in the tree and record progress in `STATUS.md`
-   instead. When you do commit: see §2 ground rules — **NO `Co-Authored-By` trailer**.
+   commits are not enabled, leave the work in the tree and record progress in the Part II
+   table instead. When you do commit: see §2 ground rules — **NO `Co-Authored-By` trailer**.
 6. If blocked (HW fault, missing op, oracle disagreement you can't resolve in one
-   step): write the blocker into `STATUS.md` under the workstream, leave the row 🚧
+   step): write the blocker into the Part II table under the workstream, leave the row 🚧
    with a one-line reason, and move to the next *independent* task if one exists;
    otherwise stop the loop and surface the blocker.
 7. **Never mark a row ✅ without a passing device test** (or, for a deliberately
@@ -110,12 +109,12 @@ flip. For every device step, `compare_trajectories` must check, against the orac
 **accept/remask flips under bf16 (and later bfp8)** is a product-correctness call, not
 an engineering default. Until set, **record the flip count** (`#positions where device
 accept != oracle accept`, per step and summed over the block) in every trajectory test
-and in `STATUS.md`. Target hypothesis = **0 flips over the block under bf16**; treat any
+and in the Part II status table. Target hypothesis = **0 flips over the block under bf16**; treat any
 nonzero flip as a finding to report, not to suppress.
 
 ---
 
-## W1 — #47474 KV-cache phase state machine  ⬜ **(do first — prereq for W2/W3)**
+## W1 — #47474 KV-cache phase state machine  ✅ done **(was the prereq for W2/W3)** — see Part II + the 2026-06-26 review (bounded-sliding wrap is untested)
 
 **Why first:** gemma4 (re)writes KV on every forward and uses a bounded-sliding
 circular cache that would *wrap/corrupt* on a commit-append. The denoise loop reads a
@@ -151,7 +150,7 @@ not exist yet, and W2/W3 can't run correctly without it.
 
 ---
 
-## W2 — #47462 bidirectional canvas attention (integration)  ⬜
+## W2 — #47462 bidirectional canvas attention (integration)  ✅ W2a · 🔴 W2b
 
 **State:** mask geometry reference (`reference/attention_mask.py`, 8 tests) ✅ and an
 **isolated** non-causal SDPA spike (`test_device_bidirectional_sdpa.py`, 4/4) ✅ are done.
@@ -180,7 +179,7 @@ every layer type.
   op-capability test**, must **NOT** enter denoise acceptance, and must **NOT** be used as
   the denoise oracle. (Any earlier "local = symmetric 2W+1 for denoise" framing was wrong.)
 
-### W2a — non-causal masked SDPA, prompt + canvas ≤ 32768  (the real W2 deliverable)
+### W2a — non-causal masked SDPA, prompt + canvas ≤ 32768  ✅ (the real W2 deliverable)
 - Reference non-causal SDPA usage: `models/experimental/pi0/tt/ttnn_gemma.py:320`
   (`scaled_dot_product_attention(attn_mask=…, is_causal=False)`) and
   `models/tt_dit/encoders/gemma/model_gemma.py:253`.
@@ -215,7 +214,7 @@ op / a tiled-mask streaming scheme?). Functional milestone for short/medium prom
 
 ---
 
-## W3 — #47463 discrete-diffusion decode loop (device)  ⬜
+## W3 — #47463 discrete-diffusion decode loop (device)  🔴 blocked on bf16 decision bar (control-flow implemented & validated)
 
 **State:** all the *primitives* are validated in isolation — entropy/Gumbel
 (`tt/sampling.py`, `test_device_entropy_harness.py`), entropy-budget accept full chain
@@ -254,7 +253,7 @@ running on device, matching `reference/denoise_loop.py` step-for-step.
 
 ---
 
-## W4 — #47472 on-device canvas sampling  ⬜
+## W4 — #47472 on-device canvas sampling  ✅ done — see Part II + the 2026-06-26 review (`gumbel_max` leak)
 
 **State:** `tt/sampling.py` has `temperature_scale`, `token_entropy`, `gumbel_max`,
 `softmax` (all device, validated). **Net-new here = the user-facing per-position canvas
@@ -305,21 +304,150 @@ W4's *primitives* already exist, so its **sampler** can be drafted in parallel o
 loop shape is settled; its **vLLM plumbing** can land last. Everything else is strictly ordered.
 
 **When all four are ✅:** run the end-to-end block test (prefill→denoise→commit, trajectory
-PCC), update the progress source + the parent tracker #47452, and report the decision-flip
+PCC), update the Part II status table + the parent tracker #47452, and report the decision-flip
 numbers so the §3 bar can be set. Then stop the loop.
 
 ---
 
-## Progress log (use this when the branch has no `STATUS.md`)
+# Part II — Implementation status
 
-Update the status + a one-line note (test file, measured PCC / flip count, date) each iteration.
+Maps the [`plan.md`](./plan.md) workstreams to what is implemented in this
+directory. Updated as work lands so progress is trackable per commit.
 
-| Workstream | Status | Last note |
+## Environment constraints (read first)
+
+This box is **`bh-qbge-06` — a QB2 (4× Blackhole `p300c`, `/dev/tenstorrent/0..3`)**, so **device work is NOT blocked on hardware**. The remaining gates are software + data:
+
+- **Dedicated env:** `/home/zni/venvs/tt-diffusion-gemma` (Python 3.12, **transformers 5.12.1** — bumped from 5.10.2 on 2026-06-23, torch 2.11+cpu, ttnn editable from the repo) — isolated from the default `python_env` (4.53.0 for LTX). Verified at 5.12.1: `transformers.models.gemma4` imports, `transformers.models.diffusion_gemma` imports, **`ttnn` sees 4 QB2 devices**, **64 reference tests pass**. Use: `source /home/zni/venvs/tt-diffusion-gemma/bin/activate && export PYTHONPATH=/home/zni/tt-metal TT_METAL_HOME=/home/zni/tt-metal`.
+- **`diffusion_gemma` SHIPS since transformers 5.12** (absent in 5.10.2): at **5.12.1 the working env can load the real `DiffusionGemmaForBlockDiffusion` directly** — no separate transformers-main env needed (the `dg-tf-main` 5.13.0.dev0 venv remains as a cross-check). `from_pretrained` takes `dtype=` (primary since 5.12; `torch_dtype` kept for BC). The canonical source is also vendored at `/home/zni/dg_ref_src/` and used to reconcile the `reference/` layer 1:1; `reference/_upstream.py` is the bit-for-bit parity guard.
+- **Checkpoints NOW downloaded (2026-06-22, ungated — `gated=False` on HF):**
+  - `google/gemma-4-26B-A4B-it` — 51.6 GB, **Stage-1 stepping-stone only** (sanity that the reused gemma4 path runs + reproduces HF gemma4 on QB2). **NOT the #47461 target**: passing on this ckpt does not validate DiffusionGemma. Verified complete + openable.
+  - `google/diffusiongemma-26B-A4B-it` — 51.7 GB, **the #47461 target ckpt** — backbone PCC must be measured on THIS (fine-tuned weights + extra self-cond + bidirectional denoise all differ from plain gemma). Carries the stage-2 weight mapping + self-cond weight values.
+  - `google/gemma-4-12B-it` — dense, the QB2 device-flow proof (smaller, no MoE skip).
+- **QB2 is present** (4× Blackhole, this box); fitting 26B-A4B on QB2 (1×4) is itself net-new (#47487), and the in-repo gemma4 **12B** path is QB2-supported and can validate the on-device flow on this exact HW first.
+
+So work proceeds **env-independent-first**: pure-torch reference logic + config
++ tests that run on CPU, with checkpoint/transformers-gated pieces scaffolded
+and marked `TODO(env)`. **HW + env + checkpoints are no longer blockers — QB2 is local, the dedicated transformers-5.12.1 env is built, and all three checkpoints are downloaded (ungated, 2026-06-22).**
+
+## Status by workstream
+
+| Item | Plan | Status |
 |---|---|---|
-| W1 #47474 KV phase machine | ⬜ not started | — |
-| W2a #47462 non-causal masked SDPA (≤32768) | ⬜ not started | isolated SDPA spike ✅ (`test_device_bidirectional_sdpa.py` 4/4); mask ref ✅ all-attend |
-| W2b #47462 long-prompt masked chunking (>32768) | 🔴 separate risk | needs spike; likely new kernel/path; not gating Functional |
-| W3 #47463 device denoise loop | ⬜ not started | primitives ✅ (entropy/accept/self-cond/gumbel) |
-| W4 #47472 on-device canvas sampling + vLLM seam | ⬜ not started | `tt/sampling.py` primitives ✅ |
+| Module scaffolding | — | ✅ package + config |
+| `config.py` (verified hyperparams) | §2 | ✅ done |
+| Config reconciliation vs real 26B-A4B config.json (`from_hf_config`) | #47461 | ✅ done — `tests/test_config.py`, all fields confirmed in sync |
+| **Diffusion sampling primitives (reference, pure torch)** | #47463 spike / #47468 oracle | ✅ **reconciled 1:1 vs canonical source** (2026-06-22) — exclusive-prefix entropy-bound accept (`cum-e<=bound`), HF reversed-step temperature, multinomial `sample_canvas` + Gumbel-max equivalence. `reference/sampling.py` |
+| PCC trajectory harness (validates decisions) | #47468 | ✅ done — `tests/trajectory_pcc.py` |
+| **Upstream parity guard (drift oracle)** | #47468 | ✅ **NEW** — `reference/_upstream.py` (verbatim canonical extractions) + `tests/test_upstream_parity.py`; reference matches HF bit-for-bit (temperature / accept / confidence / self-cond) |
+| HF reference adapter seam | #47468 | ✅ done — `reference/hf_reference.py` (real load when transformers-main present; reconciled `reference/` is the env-independent oracle) |
+| **Config reconciliation vs generation_config** | #47468/#47463 | ✅ **NEW** — all TODO(confirm) resolved: `confidence_threshold=0.005`, `stability_threshold=1`, `t_max/t_min`, `entropy_bound`, + `intermediate_size=2112`, `num_global_key_value_heads=2`, `global_head_dim=512` |
+| Causal backbone bring-up (gemma4 reuse) — code | #47461 | ✅ **code enabled**: QB2=`MESH_DEVICE=P150x4`; gemma4 path mesh-agnostic; weight-remap keyset validated. Device PCC = the three rows below. |
+| **DiffusionGemma→gemma4 weight remap + self-cond loader** | #47461 (N4) | ✅ **NEW** — `weight_mapping.py` + `SelfConditioning.load_from_state_dict`; **validated vs real ckpts**: remapped backbone == gemma4 keyset exactly; 4 self-cond tensors load with config shapes. `tests/test_weight_mapping.py` |
+| **Self-conditioning gated MLP (reference)** | #47461/#47463 | ✅ **reconciled** — added `pre_norm` + scaleless `post_norm`; forward is `post_norm(emb+gated_mlp(pre_norm(signal)))` (was a bare delta). `reference/self_conditioning.py` |
+| **QB2 memory budget + batch ceiling** | #47487 | ✅ **NEW doc** `QB2_MEMORY_BUDGET.md`: ~32 GB/chip (8×4 GB banks); experts sharded-vs-replicated is the fit gate (code favors sharded → fits); EP is the fallback. Empirical measure pending device |
+| QB2 fit + run (no OOM; experts sharded) — **plain gemma ckpt** | **#47487** | ✅ done — `gemma-4-26B-A4B-it` ran on `P150x4` TP=4 (110 s, no OOM). **HW-enablement fact, NOT a DiffusionGemma validation.** |
+| Causal backbone PCC — **Stage-1 (gemma4 ckpt)** | #47461 (stage 1) | ✅ stepping-stone — 0.8665 vs HF (threshold 0.83). Subsumed by Stage-2; the ~0.87 ceiling is now confirmed **shared-backbone** (not ckpt-specific) — a bf16/MoE/TP=4 precision follow-up. |
+| Causal backbone PCC — **Stage-2 (DiffusionGemma ckpt)** — the real #47461 gate | #47461 (stage 2) | ✅ **measured on QB2 (2026-06-24)** — `tests/test_device_backbone_pcc.py` (`-k 1x4`, TP=4): logits PCC **0.877** (5-tok) / **0.847** (24-tok) vs the HF DiffusionGemma causal backbone (`model.model.encoder`→`lm_head`→softcap), passes the 0.83 baseline. ≈ plain-gemma 0.866 ⇒ fine-tuned weights add **no** extra error; argmax-match ~50% is the shared-backbone bf16/MoE/TP=4 ceiling (precision follow-up, not DG-specific). Bidirectional forward → #47462. |
+| KV-cache phase state machine | #47474 | ✅ done — `KVCachePhase` plumbing landed through Gemma4 model/layer/attention and Generator-compatible prefill/decode/verify wrappers; explicit `DENOISE_READONLY` skips cache writes. Validated 2026-06-25 with `tests/test_kv_phase.py` (3 passed), QB2 `test_single_layer_model[blackhole-sliding_only-1x4]` PCC **0.999936**, and QB2 `tests/test_device_kv_phase.py` (4 passed): readonly denoise leaves prompt K/V frozen-region byte-identical; `COMMIT_APPEND` decode writes the next cache position without mutating the prompt region; a 256-token canvas commit loop writes the full canvas region; 256-token commit-append canvas K/V matches one-shot re-encode by PCC. Canvas K/V scratch sizing added in `memory_budget.py`: QB2 TP=4 bf16 batch=1 ≈ **15 MiB/chip**. Page/circular-buffer mapping added in `kv_phase.py`: full-attn commit uses absolute positions; sliding commit uses `absolute_pos % sliding_window`. |
+| Canvas mask geometry (reference, pure torch) | #47462 | ✅ done — `reference/attention_mask.py`, 8 tests pass |
+| Bidirectional canvas SDPA on QB2 (device) | #47462 | ✅ **validated on QB2** — 4/4 PCC≥0.99 (full / symmetric-window / prompt-visible / GQA 16-8) on sfpi 7.60.0. ⚠️ device *teardown* re-hangs erisc 29-25 → reset between device runs. NOT a firmware issue: board fw is **19.9.0** (newer than tt-metal's tested 19.5.0); the assert's "min 18.10.0" is a hardcoded boilerplate string, not a version readout. Root cause undiagnosed (possibly fw ahead of the local UMD checkout); treat as an env quirk, work around with reset. |
+| Self-conditioning gated MLP (reference, pure torch) | #47461/#47463 | ✅ done — `reference/self_conditioning.py`, 6 tests pass |
+| Entropy-budget acceptance on QB2 (device) | #47463 (R1) | ✅ **validated on device (2026-06-22) — full chain `ttnn.sort`→`cumsum`→exclusive-prefix→`scatter` matches the oracle, 5/5 (`test_device_entropy_accept.py`).** The 2026-06-19 "device `ttnn.sort` returns garbage" conclusion was **WRONG** — it was a **degraded-board** artifact (erisc 29-25 fault), not a `ttnn.sort`-on-BH bug. On healthy HW `ttnn.sort` is correct: `test_sort_standard[…64…]` all pass; standalone repro (bf16/fp32, 2D `[64,64]`, 4D `[1,1,64,64]`, `[…,256]`) gives correct values+indices. **Host-side sort is unnecessary — the device chain works.** Two things were needed to validate: (1) a **consistent build** — the prebuilt `.so` (dev20260616) JIT-compiled source kernels (dev20260618) against its own headers → `tt_memmove` overload mismatch in the permute reader kernel; fixed by building the source tree (`build_metal.sh --disable-profiler`, run with `PYTHONPATH=$TT_METAL_HOME/ttnn:$TT_METAL_HOME` + `TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME`); (2) the device chain must use the **exclusive** prefix `(cum - sorted_vals) <= budget` to match HF `accept_canvas`, not inclusive `cum <= budget` (off-by-one at the boundary element). (Teardown still re-hangs erisc 29-25 each run — see SDPA row — so minimize device churn.) |
+| Multi-canvas generation loop (reference, pure torch) | #47464 | ✅ done — `reference/generate.py`, 3 tests (commit-append, prefix-grows) |
+| Bidirectional canvas attention (device SDPA integration, short/medium prompts) | #47462 (W2a) | ✅ **validated on QB2** — mask reference done; isolated non-causal SDPA spike is ✅ (`test_device_bidirectional_sdpa.py`, 4/4). Real Gemma4 prefill attention now accepts explicit `attn_mask` and routes to `is_causal=False` without `sliding_window_size`; rectangular denoise support lets canvas Q attend `[prompt; canvas]` K/V with canvas RoPE offset. `tt/denoise_forward.py` exposes W2 product wrappers: `denoise_attention_forward`, `denoise_logits_forward`, `denoise_logits_from_tokens`, `collect_prompt_hidden_by_layer` (legacy hidden-source shim), `collect_prompt_kv_by_layer` (projected prompt K/V), and `read_prompt_kv_cache_slice` (non-paged Gemma4 KV cache → projected prefix K/V via `ttnn.experimental.nlp_kv_cache_load_slice`). Validated with `tests/test_device_bidirectional_attention_integration.py` (4 passed): square all-attend smoke; prompt-prefix attention PCC≥0.99 for both `sliding_attention` and `full_attention`; token-driven full-canvas logits wrapper PCC≥0.98 after `PREFILL_WRITE` writes the prompt cache and denoise reads that cache slice, plus real `TtSelfConditioning` softmax→embedding→gated-MLP hook on mesh (full logits include known bf16 MoE/lm_head ceiling). `tests/test_device_self_conditioning.py` still passes 4/4 for the standalone module. |
+| Paged / long-prompt denoise cache reader + masked chunking | #47462 (W2b) | 🔴 separate high-risk blocker — not gating short/medium Functional path. Search confirmed no exposed TTNN op that reads a page-table-selected K/V prefix into a standalone tensor; paged readers exist inside SDPA kernels, while `ttnn.experimental.nlp_kv_cache_load_slice` only slices contiguous non-paged caches. Needs a new/exposed paged cache slice op or a tiled-mask streaming SDPA path for `[256, >32768]` explicit masks. |
+| Reference denoise trajectory (pure torch) | #47463/#47468 | ✅ done — `reference/denoise_loop.py`, 4 tests pass |
+| Discrete-diffusion decode loop (device) | #47463 | 🔴 **blocked on bf16 decision bar / full-logits precision** — local `ttnn` build unblocked by syncing `tt_metal/third_party/tracy` and `tt_metal/third_party/umd` to the superproject pins, then rebuilding with `./build_metal.sh --disable-profiler`. W3 control-loop implementation is in place and validated on QB2 (2026-06-25): `tests/test_device_denoise_loop.py` 3 passed, entropy/accept harnesses 12 passed, and real-W2-logits integration tests passed (`test_denoise_logits_adapter_threads_prev_logits_for_self_conditioning`, `test_denoise_controller_real_logits_records_decision_flips`). `tt/denoise_loop.py` composes Gumbel-max, logsumexp-form entropy, exclusive-prefix accept, uint32-safe renoise, multi-step carry, clean-argmax commit, and stable+confident halting against `reference/denoise_loop.py`; the synthetic trajectory smoke uses 256 canvas positions, injected zero Gumbel + renoise ids, halts after 2 steps, passes `compare_trajectories`, and records 0 accept flips. `tt/denoise_forward.py` exposes `DenoiseLogitsAdapter`, a stateful W2 callback that threads previous-step logits into real self-conditioning for the controller while keeping logits on device; it also accepts controller-shaped `[1,1,L,1]` TILE token canvases. Real W2 logits smoke (1-layer, vocab=256, 2 denoise steps) runs end-to-end and records **accept_flips=[0,0]**, but also a precision finding: **argmax_flips=[225,222]**, **canvas_flips=[1,1]**, entropy PCC≈[0.624,0.653] vs torch. Triage shows drift is already present at logits: logits PCC≈[0.985,0.969] but logits argmax agreement≈[0.121,0.133]; reference top1/top2 margin is tiny (~0.005) while TT-vs-torch logits mean|Δ| is ~1.86/2.64, so argmax is margin-limited. Hidden-vs-logits diagnostic shows final hidden PCC≈0.9887 before lm_head, so this is not isolated to softcap/lm_head; dense (MoE-disabled) diagnostic improved logits PCC (~0.995/0.984) but still had ~0.125 argmax agreement and even accept_flips=[2,2], so this is not MoE-only. W3 should not be marked ✅ until either backbone/full-logits precision drift is reduced enough for the decision bar, or the bf16 diffusion decision bar is explicitly accepted/escalated by product. Since control-flow is implemented and blocked on that decision, the loop can proceed to independent W4 sampler work. |
+| On-device canvas sampling | #47472 | ✅ done — deterministic exact path validated on QB2 (2026-06-25): `tests/test_device_canvas_sampling_exact.py` 3 passed. `tt/sampling.py` exposes `canvas_sample(logits, temperature, injected_gumbel_noise)` as the W4 released per-position draw (`argmax(logits/T + gumbel)`); tests feed the torch run's injected Gumbel noise and match sampled ids token-exact, including the params-routed seam, plus verify temperature scaling PCC≥0.9999. W4 sampling-params seam is in place: `tt/sampling_params.py` exposes `MODEL_CAPABILITIES["supports_sample_on_device"]=True`, duck-types vLLM `TTSamplingParams` fields (temperature/top_k/top_p/seed) into a per-step `CanvasSamplingConfig`, and `canvas_sample_from_params(...)` maps those params onto the device sampler; `tests/test_sampling_params.py` 5 passed. Seed-regenerated sampling now defaults to the permuted-vocab RNG path, which keeps one `ttnn.rand` draw per logits element but generates vocab as an outer axis before permuting back; explicit distributional tolerances pass on QB2 for both direct and params-routed paths (`N=4096`, max top1-frequency error≈0.0282, mean KL≈0.0129), while the slower vocab-chunk diagnostic also passes (`max top1-frequency error≈0.0324`, mean KL≈0.0035). The raw single-call `ttnn.rand[..., vocab]` path remains as a strict-xfailed diagnostic (`max top1-frequency error≈0.179`, mean KL≈0.651`) because torch consuming the same raw noise exactly reproduces the biased samples, proving the issue is RNG axis correlation rather than sampler arithmetic/argmax; this raw path is not the released params default. |
+| Functional e2e / perf / vLLM / batched / multimodal / quant / CI | #47464+ | ⬜ not started |
 
-Legend: ⬜ not started · 🚧 in progress · ✅ done · 🔴 blocked/high-risk
+Legend: ✅ done · 🚧 in progress · ⛔ blocked on environment · ⬜ not started
+
+## Code review — 2026-06-26 (multi-agent review of the 2026-06-25 branch)
+
+Adversarial multi-agent review of the 48 commits `d13c3ad0c91..HEAD` (~3834 LOC) across #47474/#47462/#47463/#47472/#47464, plus a gemma4-regression sentinel and a test-rigor pass. **27 findings confirmed, 3 dismissed as false positives** (listed at the end so they are not re-raised). Each finding was independently re-verified against the code before landing here.
+
+**Headline — no production gemma4 regression.** Every new parameter on the shared `models/demos/gemma4/tt/**` path (`kv_phase=None`, `write_kv_cache=True`, `attn_mask=None`, `kv_hidden_states=None`, `prefix_kv=None`, `q_rope_offset=0`) defaults to the pre-branch op sequence / dtype / order **bit-for-bit**: `coerce_kv_cache_phase(None)` → `PREFILL_WRITE`/`COMMIT_APPEND` → `write_kv_cache=True`; the new readonly/masked/prefix-KV branches are non-default-gated and raise on misuse; `prefill_sdpa_program_config` returns identical chunk sizes on the power-of-2 prefill buckets production actually uses. Risk is concentrated in **(a) device-loop deallocation discipline** and **(b) a few device tests that gate on nothing**.
+
+### 🔴 Must-fix
+
+- **[#47472] `gumbel_max` / `canvas_sample` leak the full `[B,L,vocab]` intermediates every call → 48-step loop OOM** — `tt/sampling.py:73-93`. `z = temperature_scale(...)` (new tensor when T≠1, i.e. the 0.8→0.4 schedule) and `perturbed = ttnn.add(z, noise)` are never deallocated; at prod vocab 262144 × 256 positions, `perturbed` is `[1,256,262144]` (~128 MB bf16) leaked per step. Same file's `token_entropy` releases all 9 intermediates — this is an oversight. Fix: `perturbed.deallocate(True)` after argmax; `z.deallocate(True)` when `z is not logits`.
+- **[#47462/#47463] `test_denoise_controller_real_logits_records_decision_flips` disables every trajectory threshold — passes even with badly-wrong device logits** — `tests/test_device_bidirectional_attention_integration.py:631-695`. All comparison floors set to `0.0`/`inf`, and `entropy_stop_threshold=-1.0` makes halt impossible, so `num_steps==2` / `not halted` / `steps_match` are config-forced regardless of device correctness. The dense (`enable_moe=False`) branch asserts **nothing** about device-vs-reference, while STATUS records argmax agreement ~0.12 on this path. Fix: rename/scope as a diagnostic (or `xfail(strict=False)`), or assert a real lower bound (e.g. `logits_pcc >= floor`) for the dense branch too.
+- **[#47463/#47464] accept decision path runs on-device `ttnn.sort`, conflicting with the "BH sort returns garbage" env fact** — `tt/denoise_loop.py:43-67`. `entropy_budget_accept` sorts entropy on device and uses `sorted_idx` to scatter the accept mask. The env fact says BH sort is unsafe; the row above argues that was a degraded-board (erisc 29-25) artifact. **Mitigation confirmed:** `test_single_denoise_step_matches_reference` element-exact (`torch.equal`) validates the sort→cumsum→exclusive-prefix→scatter chain against a torch oracle on healthy HW — so this is a load-bearing doc-vs-fact divergence that hinges on board health, not a blind trust. Fix: cross-reference the Part I §3 (decision-fidelity bar) note in the code and add a CI guard that fails loudly if device sort regresses (cheap on-device sort self-check, or assert device accept count vs host recompute in the trajectory test).
+
+### 🟡 Should-fix
+
+- **[#47463/#47464] `denoise_block` loop body never deallocates per-step intermediates or the superseded canvas** — `tt/denoise_loop.py:171-214`. `res.argmax/entropy/sampled/accept_mask` are read to host but never freed; `canvas = res.canvas` drops the prior canvas device tensor without deallocating. Leaked tensors are small today (`[1,1,256,1]`) but the pattern is the documented #1 OOM class and the 48-step cap is never tested (device tests run ≤4 steps). Fix: free the 4 decision tensors after readback, free prior canvas before reassign, add a full-`max_denoise_steps` device test asserting a stable allocator high-water mark.
+- **[#47474] `decode` + `DENOISE_READONLY` silently drops the current token's K/V from SDPA** — `models/demos/gemma4/tt/attention/decode.py:131-136, 253-286`. When `write_kv_cache=False`, freshly-computed `tt_k/tt_v` are deallocated unused and SDPA attends only the frozen cache → wrong self-attention. Currently **unreachable** (default decode is `COMMIT_APPEND`; diffusion denoise uses prefill) but accepted with no guard. Fix: raise `ValueError` for the `(is_decode=True, DENOISE_READONLY)` combination.
+- **[#47474] Bounded-sliding commit-append wrap (the documented #1 hazard) is unimplemented in the device path and untested** — `kv_phase.py:55-66`, `tests/test_device_kv_phase.py:200-260`. `KVPhaseMapping.sliding_commit_slots` (`pos % sliding_window`) is pure-Python dead code (grep: zero device callers). The real device commit (`decode.py` → `paged_update_cache`) wraps only when `config.cache_position_modulo` is set, which no device test enables (positions ≤287 ≪ window 1024). The corruption this state machine exists to prevent is neither wired in nor covered. Fix: add a `bounded_sliding_kv_cache=True` device test driving positions past the window, or document bounded-sliding as out of scope and drop the dead wrap math.
+- **[#47464] Multi-step device-loop test feeds constant logits that ignore the canvas — the canvas→backbone→renoise cycle is never exercised on device** — `tests/test_device_denoise_loop.py:137-164`. `lambda canvas, step: logits` returns the same tensor each step, so #47464's central claim (renoised canvas re-run through the real backbone yields correct next-step logits) is untested on device. Fix: thread a real `DenoiseLogitsAdapter`, or rename this to a control-flow smoke and stop letting it stand in for the e2e milestone.
+
+### 🟢 Low / hardening
+
+- **[#47474]** `attention/__init__.py:161` — three-state enum collapses to one bool (`PREFILL_WRITE`==`COMMIT_APPEND`); append-position correctness rests on caller discipline, not the phase. Add an assert that phase matches `is_decode`.
+- **[#47474]** `attention/operations.py:176-181` — `_largest_tile_divisor` can return a non-32-multiple chunk for non-tile-aligned lengths (e.g. len=100→100). Not triggered today (inputs are aligned) but violates its own contract; iterate over 32-multiples and assert alignment.
+- **[#47474]** `diffusion_gemma/kv_phase.py:1-67` — named as mirroring the gemma4 enum but fully decoupled (no import); full-attn case assumes contiguous positions while the real cache is paged. Relabel as reference/spec, or wire into the real index path.
+- **[#47462]** `attention/prefill.py:29-32, 87-102` — `_slice_rope_cache`/`q_rope_offset` lack tile-align guards; the batch>1 prefill path silently ignores `q_rope_offset`. Assert `q_rope_offset % TILE_SIZE == 0` and raise on nonzero offset in the batch>1 branch.
+- **[#47463]** `tests/trajectory_pcc.py:30-33` — `_pearson` rewritten over `comp_pcc` now returns 1.0 for constant-but-different mean-entropy sequences (old code returned 0.0); `entropy_trajectory_pcc` has no abs companion gate, so a constant mean-entropy offset would pass. Restore the constant-sequence branch or add an abs-tolerance gate.
+- **[#47463]** `tt/denoise_loop.py:48-55` — `budget_t` hardcoded fp32 vs bf16 `excl` in the real path → mixed-dtype `ttnn.le`; at `budget=0.1` a bf16 rounding diff can flip a boundary accept. Build `budget_t` with `entropy.get_dtype()`.
+- **[#47463]** `tt/denoise_forward.py:372-391` — `DenoiseLogitsAdapter` never resets `prev_logits` at block end; the last `[1,1,256,262144]` bf16 logits (~134 MB) leaks per block unless the caller calls `reset()` (the integration test does; `denoise_block` does not). Add a duck-typed `reset()` hook at block end.
+- **[#47472]** `tt/sampling_params.py:88-128` — production default `use_vocab_permuted_noise=True` workaround is validated only at toy vocab=32; the real-vocab (262144) RNG regime is different. Make regenerated-noise opt-in until validated at prod scale, or add a large-vocab distributional test.
+- **[#47472]** `tt/sampling.py:112-134` — `ttnn.rand` has no `mesh_mapper`; replicated vs sharded RNG on the QB2 1×4 mesh is undefined. Pass an explicit `MeshMapperConfig`.
+- **[#47472]** `tests/test_device_canvas_sampling_dist.py:91` — 0.05 tolerance is only ~1.6 SE over the measured 0.028; QB2 RNG drift could make it flaky. Raise N to 16384 or document the margin.
+- **[#47464]** `tests/test_device_backbone_pcc.py:268` — xfail floor 0.83 vs measured ~0.847-0.877 means a real regression into [0.83, 0.877] xfails silently. Raise floor to ~0.84 and add an upper-bound assert so a fix flips xfail→fail and forces a ratchet.
+- **[#47464]** `memory_budget.py:37-80` — the 15 MiB/chip counts only canvas K/V, not the prompt-prefix K/V the denoise SDPA concatenates (number is correct for its scope). Add a docstring note so it isn't read as the total working set.
+- **[gemma4]** `attention/prefill.py:29-32` — `_slice_rope_cache` no-op guard couples production correctness to rope caches being pre-sliced to exactly `seq_len` (holds today). Add a comment pinning the invariant.
+- **[test]** `tests/test_device_canvas_sampling_dist.py:51-63` — "consumes regenerated noise" test compares device argmax against torch over the **same** readback noise → validates arithmetic only, can't catch a noise-distribution bug (distribution is covered by the KL/freq tests). Rename to clarify.
+- **[test]** `tests/test_device_canvas_sampling_exact.py:58-75` — passes `top_k=64`/`top_p=0.95` that are silently ignored with no assertion that they are no-ops; a future top_k/top_p impl could silently change behavior. Assert `top_k_top_p_supported is False`.
+- **[test, nit]** `tests/test_device_bidirectional_attention_integration.py:424-506` — self-cond adapter test is a device-vs-device wiring equivalence, not an oracle (numerical correctness owned by the HF-golden logits test). Doc note only.
+
+### Dismissed — verified false positives (no action)
+
+- **`ttnn.sort` risk "rides on" the integration test** — refuted: the `accept_flips==0` assertion is itself a host-sort-vs-device-sort cross-check, and `test_single_denoise_step_matches_reference` validates the sort chain element-exact. (The residual doc-vs-fact divergence is captured as the Must-fix above.)
+- **Synthetic fp32 loop test is the only coverage of decision fidelity** — refuted: the real bf16 path is covered by the controller diagnostic test (which is the H2 finding's actual weakness — thresholds disabled, not absence of the test).
+- **Removing `test_full_model[blackhole-1x4]=0.83` from the shared `pcc_thresholds.json` reverts to 0.99 and would fail** — refuted: the 26B MoE `test_full_model` `pytest.skip`s at `tp<8`, so on a 1×4 mesh (tp=4) it never reaches `compare_tensors`; the removed entry was dead for that combo. The removal correctly de-pollutes the shared production gate; DiffusionGemma's PCC gap is handled in `test_device_backbone_pcc.py`.
+
+## Session 2026-06-22 — #47468 / #47461 / #47487 push (QB2-only)
+
+Goal: implement #47468 (torch ref + PCC harness), #47461 (causal backbone + self-cond loader), #47487 (QB2 fit) — **QB2 only, not Galaxy**.
+
+**Unblocked two stale blockers:** the canonical `modeling_/generation_/configuration_diffusion_gemma.py` are on transformers `main` (pulled to `/home/zni/dg_ref_src/`), and all three checkpoints are ungated + downloaded. This let the reference layer be reconciled to the **real** algorithm rather than plan-stated approximations.
+
+**#47468 — torch ref + harness (DONE, env-independent, verified):**
+- Reconciled `reference/` 1:1 vs canonical source — found & fixed real drift: self-conditioning was a bare additive delta (missing `pre_norm` + scaleless `post_norm`); entropy-bound accept used inclusive `cum<=bound` (real is **exclusive** `cum-e<=bound`); temperature used `/(N-1)` ascending (real is HF reversed-step `t_min+(t_max-t_min)·cur_step/N`); halting threshold was a 0.1 guess (real `confidence_threshold=0.005`, mean-entropy of temp-scaled logits).
+- Added `reference/_upstream.py` (verbatim canonical extractions) + `tests/test_upstream_parity.py` — reference now matches HF **bit-for-bit** (temperature/accept/confidence/self-cond). Guards against future drift.
+
+**#47461 — backbone + self-cond loader (loader DONE + validated; device PCC turnkey):**
+- `weight_mapping.py`: DiffusionGemma `model.decoder.*` ⇄ gemma4 `model.language_model.*` is a **pure prefix swap**; self-cond is the only net-new text-backbone module. **Validated vs real checkpoints**: remapped backbone keyset == gemma4 keyset exactly (no missing/renamed); the 4 self-cond tensors load with config shapes (`intermediate_size=2112`).
+- Causal backbone PCC on QB2: gemma4 path is mesh-agnostic (`MESH_DEVICE=P150x4`), test is turnkey; **gated on shared-device availability**.
+
+**#47487 — QB2 fit (`QB2_MEMORY_BUDGET.md`):** per-chip Blackhole DRAM is **~32 GB** (8×4 GB banks — corrected a prior ~4 GB misread). The real fit gate is whether MoE experts are **sharded** (code path → ~5.7 GB/chip, fits) or **replicated** (the `test_full_model` tp<8 skip's reading → ~22.8 GB/chip, needs Expert Parallelism). Static evidence favors sharded; **empirical device measurement pending**. Added `test_full_model[blackhole-1x4]=0.83` threshold.
+
+**CPU suite: 60 passed, 9 skipped** (device + a couple ckpt-gated). Remaining: the on-device PCC/memory run (turnkey; recipe in `QB2_MEMORY_BUDGET.md`), gated on the shared QB2 box freeing up.
+
+## Build order (env-independent first)
+
+1. ✅ Config + scaffolding.
+2. ✅ **Reference sampling primitives** (`reference/sampling.py`) + tests — the
+   `#47463` acceptance spike reference and the `#47468` oracle's sampling core.
+   Pure torch, CPU-testable, no checkpoint.
+3. ✅ Reference denoise loop (assembling the primitives into the per-block
+   trajectory) + tests (`reference/denoise_loop.py`).
+4. ✅ Canvas mask geometry (`reference/attention_mask.py`) + PCC trajectory
+   harness (`tests/trajectory_pcc.py`) + self-conditioning gated MLP
+   (`reference/self_conditioning.py`).
+
+**The env-independent reference layer is complete (40 CPU tests pass).** It
+pins every net-new *algorithm* — sampling/acceptance (#47463), denoise
+trajectory (#47463), multi-canvas generation (#47464), mask geometry (#47462),
+self-conditioning (#47461/#47463), the decision-level PCC harness (#47468), and
+the HF-reference adapter seam (#47468) — so the device port and the real HF
+reference both have an oracle to validate against. Remaining work is
+environment-gated:
+
+5. ⛔ Vendored HF reference wrapper — unblocks once `transformers` ships
+   `diffusion_gemma` (then plug it into the trajectory harness).
+6. ⛔ Device (`tt/`) implementation — backbone reuse (#47461), KV phase machine
+   (#47474), bidirectional SDPA (#47462), device decode loop (#47463),
+   on-device sampling (#47472) — **QB2 hardware is present (this box); env + all checkpoints are in place.** No remaining env/HW/ckpt gate — remaining work is the device implementations themselves (per the rows above).
