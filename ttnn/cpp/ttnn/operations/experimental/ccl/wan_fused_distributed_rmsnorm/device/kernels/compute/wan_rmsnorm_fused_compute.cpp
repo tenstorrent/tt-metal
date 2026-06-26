@@ -415,7 +415,7 @@ void kernel_main() {
                                             stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
                                     }
                                     // row-0 sum -> col-0, in place (fp32 DST).
-                                    transpose_wh_dest_init_short<true>();
+                                    transpose_wh_dest_init_short<true>(stats_transposed_gathered_cb);
                                     transpose_wh_dest<true>(0);
                                     binop_with_scalar_tile_init();
                                     mul_unary_tile(0, recip_h_full_bits);
