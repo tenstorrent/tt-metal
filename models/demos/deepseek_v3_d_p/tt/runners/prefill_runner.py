@@ -46,6 +46,11 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
+# NOTE: LayerCompletionConsumer (the test-only `_prefill_test` extension) is imported lazily inside
+# _CompletionCheckConsumer.__init__ — its .so is built only under WITH_PYTHON_BINDINGS and may be
+# absent in a packaged/wheel build, so a top-level import would hard-fail the runner for everyone
+# (including single-rank runs that never enable PREFILL_CHECK_COMPLETIONS).
+
 
 def _apply_manifest_env():
     """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
