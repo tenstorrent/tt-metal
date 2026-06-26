@@ -214,9 +214,7 @@ void quant_init(const uint zero_point) {
         TTI_SFPNOP;
         // fp32 -> int. LCONST_0 (LREG9) is the HW-provided 0.0 used as the zero
         // descale. For unsigned (uint8) output, round into the full [0, 255]
-        // range; otherwise clamp to signed int8 [-128, 127]. Only this rounding
-        // mode differs - the recorded body length is identical either way, so
-        // the QUANT_REPLAY_LEN accounting above is unaffected.
+        // range; otherwise clamp to signed int8 [-128, 127].
         if constexpr (IS_UNSIGNED) {
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
@@ -237,7 +235,7 @@ void quant_init(const uint zero_point) {
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false>
+template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false, bool IS_UNSIGNED = false>
 void requant_init(const uint zero_point) {
     // One-time setup for calculate_requant; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2, programs
@@ -260,14 +258,26 @@ void requant_init(const uint zero_point) {
         // SFPNOP (not TTI_NOP) so the bubble lands in the SFPU pipe and the
         // recorded body contains only SFPU-pipe opcodes.
         TTI_SFPNOP;
-        // fp32 -> int sign-magnitude. LCONST_0 (LREG9) provides the 0.0 descale.
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN,
-            0 /*imm8*/,
-            p_sfpu::LCONST_0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        // fp32 -> int. LCONST_0 (LREG9) provides the 0.0 descale. For unsigned
+        // (uint8) output, round into the full [0, 255] range; otherwise clamp to
+        // signed int8 [-128, 127].
+        if constexpr (IS_UNSIGNED) {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+        } else {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        }
     }
 }
 

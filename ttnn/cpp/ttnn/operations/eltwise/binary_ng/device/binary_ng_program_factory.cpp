@@ -443,13 +443,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
-    // as_defines() keys the SFPU init off the input dtype, but quant rounding depends on the
-    // *output* dtype: for uint8 output we need fp32->uint8 rounding (full [0,255] range) instead
-    // of the default fp32->int8 ([-128,127]). The per-tile quant_tile op is unchanged; the packer
-    // narrows the int32 SFPU result to uint8.
-    if (operation_attributes.binary_op_type == BinaryOpType::QUANT && c_dtype == DataType::UINT8) {
-        compute_kernel_defines["BINARY_SFPU_INIT"] =
-            "quant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
+    // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
+    if (c_dtype == DataType::UINT8) {
+        if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
+            compute_kernel_defines["BINARY_SFPU_INIT"] =
+                "quant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+        } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
+            compute_kernel_defines["BINARY_SFPU_INIT"] =
+                "requant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+        }
     }
 
     // Indices 3 and 4 in the compute runtime args vector are reserved for rtol and atol bits.
