@@ -44,7 +44,7 @@ FORCE_INLINE void wan_rmsnorm_generate_scalars_and_transmat(uint32_t eps_bits, c
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
         reduce_factor>();
-    generate_bcast_col_scalar(eps_cb, eps_bits);
+    generate_bcast_col_scalar(CircularBuffer(eps_cb), eps_bits);
 
     if constexpr (fuse_rope) {
         cb_reserve_back(transmat_cb, 1);
