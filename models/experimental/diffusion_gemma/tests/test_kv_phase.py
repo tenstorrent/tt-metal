@@ -1,5 +1,7 @@
 import inspect
 
+import pytest
+
 from models.demos.gemma4.tt.attention import Gemma4Attention
 from models.demos.gemma4.tt.attention.decode import decode_forward
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase, coerce_kv_cache_phase
@@ -15,6 +17,13 @@ def test_kv_phase_defaults_preserve_gemma4_write_paths():
 
 def test_kv_phase_accepts_explicit_readonly_value():
     assert coerce_kv_cache_phase("denoise_readonly", is_decode=False) == KVCachePhase.DENOISE_READONLY
+
+
+def test_kv_phase_rejects_decode_readonly_value():
+    with pytest.raises(ValueError, match="DENOISE_READONLY is a prefill-only KV phase"):
+        coerce_kv_cache_phase(KVCachePhase.DENOISE_READONLY, is_decode=True)
+    with pytest.raises(ValueError, match="DENOISE_READONLY is a prefill-only KV phase"):
+        coerce_kv_cache_phase("denoise_readonly", is_decode=True)
 
 
 def test_kv_phase_is_threaded_through_attention_call_chain():
