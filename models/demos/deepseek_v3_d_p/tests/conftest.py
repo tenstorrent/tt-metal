@@ -87,8 +87,9 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
     ),
     # FABRIC_2D_TORUS_Y on a 4x4 sub-torus (16 of the galaxy's 32 chips). Same [RING, LINE]
     # shape as the 8x4 torus but with a Ring-4 on the SP axis (dim 0). Requires carving the
-    # sub-torus at runtime via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH pointing
-    # at single_bh_galaxy_subtorus_y4_graph_descriptor.textproto (channels count: 2 → 2 links).
+    # sub-torus at runtime via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH pointing at
+    # models/demos/deepseek_v3_d_p/experimental_descriptors/single_bh_galaxy_subtorus_y4_graph_descriptor.textproto
+    # (channels count: 2 -> 2 links).
     # Per-axis topology (SP, TP) = (Ring, Linear), as for the 8x4 torus.
     pytest.param(
         (4, 4),
