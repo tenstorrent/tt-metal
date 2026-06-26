@@ -21,7 +21,7 @@ from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import detect_language_model_prefix, sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
 from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANTS, TestVariant
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
@@ -197,7 +197,16 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             / "flat_config"
             / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
         )
-        shutil.copytree(model_dir, flat_dir, symlinks=False, dirs_exist_ok=True)
+        # Flatten only the small config/code/tokenizer files. NEVER copy weight shards or the TT
+        # tensor cache that may live alongside them in the snapshot dir -- dereferencing those
+        # (symlinks=False) would duplicate hundreds of GB and fill the disk.
+        shutil.copytree(
+            model_dir,
+            flat_dir,
+            symlinks=False,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.safetensors", "tensor_cache_*", "*.tensorbin"),
+        )
 
         logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
         return flat_dir
@@ -380,17 +389,13 @@ def _unwrap_multimodal_config(cfg):
     """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
-    under `text_config`. Also stubs `quantization_config.weight_block_size` when missing
-    so that DSv3's dequant helper's eager read doesn't fail on pre-dequantized Kimi
-    checkpoints (which carry only plain `.weight` keys, no `_scale_inv`).
+    under `text_config`. Dequantization is format-aware (fp8 block-wise vs compressed-tensors
+    INT4) and reads the quantization metadata directly, so no `weight_block_size` stub is
+    needed here for either variant.
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
         cfg = cfg.text_config
-    qc = getattr(cfg, "quantization_config", None)
-    if isinstance(qc, dict) and not qc.get("weight_block_size"):
-        qc["weight_block_size"] = [128, 128]
-        logger.info("Stubbed quantization_config.weight_block_size for pre-dequantized checkpoint")
     return cfg
 
 
@@ -669,20 +674,25 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
         pytest.skip(f"{variant.name}: failed to load state dict. Check model path and weights.")
 
     num_layers = request.node.callspec.params.get("num_layers", 1)
-    first_k_dense = hf_config.first_k_dense_replace  # 3
-    n_routed = hf_config.n_routed_experts  # 256
+    first_k_dense = hf_config.first_k_dense_replace
+    n_routed = hf_config.n_routed_experts
+
+    # Kimi's raw multimodal checkpoint nests the LM under a `language_model.` prefix; the
+    # dequantized/stripped checkpoint and DeepSeek use bare `model.` keys. Detect it from the
+    # actual keys so the same variant works for either, then `sub_state_dict` strips it.
+    prefix = detect_language_model_prefix(state_dict)
 
     logger.info(f"Loading pretrained transformer weights for {num_layers} layers from: {model_path}")
 
     # Embed tokens
-    embed_sd = sub_state_dict(state_dict, "model.embed_tokens.")
+    embed_sd = sub_state_dict(state_dict, f"{prefix}model.embed_tokens.")
     embed_dequant = dequantize_state_dict(embed_sd, hf_config)
     result = {
         "embed_weight": embed_dequant["weight"].float(),
     }
 
     # Final norm
-    norm_sd = sub_state_dict(state_dict, "model.norm.")
+    norm_sd = sub_state_dict(state_dict, f"{prefix}model.norm.")
     norm_dequant = dequantize_state_dict(norm_sd, hf_config)
     result["norm_weight"] = norm_dequant["weight"]
 
@@ -690,7 +700,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     result["layers"] = []
     for i in range(num_layers):
         logger.info(f"Loading layer {i} weights...")
-        layer_sd = sub_state_dict(state_dict, f"model.layers.{i}.")
+        layer_sd = sub_state_dict(state_dict, f"{prefix}model.layers.{i}.")
         layer_dequant = dequantize_state_dict(layer_sd, hf_config)
 
         layer_dict = {

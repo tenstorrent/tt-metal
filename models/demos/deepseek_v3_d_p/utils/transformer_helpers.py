@@ -461,7 +461,7 @@ def load_and_compute_layer_by_layer(
         LayerByLayerResult(state_dict=None, ref_snapshots, ref_kvpe_list)
         Note: state_dict is always None (cache built to disk instead)
     """
-    from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+    from models.demos.deepseek_v3.utils.config_helpers import detect_language_model_prefix, sub_state_dict
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
     from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -490,6 +490,9 @@ def load_and_compute_layer_by_layer(
 
     # Create LazyStateDict
     lazy_sd = LazyStateDict(Path(model_path))
+    # Kimi's raw multimodal checkpoint nests the LM under `language_model.`; the dequantized one
+    # and DeepSeek use bare `model.` keys. Detect from the actual keys so either resolves.
+    prefix = detect_language_model_prefix(lazy_sd)
 
     # Initialize outputs
     ref_snapshots = [] if compute_reference else None
@@ -516,7 +519,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process Embeddings ---
     logger.info("Processing embeddings...")
-    embed_sd = sub_state_dict(lazy_sd, "model.embed_tokens.")
+    embed_sd = sub_state_dict(lazy_sd, f"{prefix}model.embed_tokens.")
     embed_dequant = dequantize_state_dict(embed_sd, config)
 
     if compute_reference:
@@ -557,7 +560,7 @@ def load_and_compute_layer_by_layer(
     for i in range(num_layers):
         logger.info(f"Processing layer {i}/{num_layers}...")
 
-        layer_sd = sub_state_dict(lazy_sd, f"model.layers.{i}.")
+        layer_sd = sub_state_dict(lazy_sd, f"{prefix}model.layers.{i}.")
         layer_dequant = dequantize_state_dict(layer_sd, config)
 
         if compute_reference:
@@ -660,7 +663,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process Norm ---
     logger.info("Processing norm...")
-    norm_sd = sub_state_dict(lazy_sd, "model.norm.")
+    norm_sd = sub_state_dict(lazy_sd, f"{prefix}model.norm.")
     norm_dequant = dequantize_state_dict(norm_sd, config)
 
     if compute_reference:
@@ -689,7 +692,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process LM Head ---
     logger.info("Processing lm_head...")
-    lm_head_sd = sub_state_dict(lazy_sd, "lm_head.")
+    lm_head_sd = sub_state_dict(lazy_sd, f"{prefix}lm_head.")
     lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
 
     if compute_reference:
