@@ -366,6 +366,54 @@ def test_generate_text_tokenizes_generates_and_decodes():
     assert calls[1][3]["stop_token_ids"] == 9
 
 
+def test_generate_text_can_build_logits_after_prompt_prefill():
+    calls = []
+    tokenizer = _FakeChatTokenizer()
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
+        calls.append(("prefill", tt_model, tokens.clone(), page_table, page_tables_per_layer))
+        return tokens.shape[1]
+
+    def fake_builder(tt_model, **kwargs):
+        calls.append(("builder", tt_model, kwargs))
+        return "built-logits"
+
+    def fake_blocks(tt_model, logits_fn, **kwargs):
+        calls.append(("blocks", tt_model, logits_fn, kwargs))
+        return generation
+
+    out = generate_text(
+        "model",
+        None,
+        tokenizer,
+        "hello",
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=2),
+        init_canvas_fn="init",
+        page_table="page-table",
+        page_tables_per_layer=["layer-pages"],
+        logits_fn_builder=fake_builder,
+        prefill_fn=fake_prefill,
+        blocks_fn=fake_blocks,
+    )
+
+    assert out.text == ["4 5"]
+    assert calls[0][0] == "prefill"
+    assert calls[1][0:2] == ("builder", "model")
+    builder_kwargs = calls[1][2]
+    assert torch.equal(builder_kwargs["prompt_tokens"], torch.tensor([[1, 1, 99]], dtype=torch.long))
+    assert builder_kwargs["prompt_len"] == 3
+    assert builder_kwargs["page_table"] == "page-table"
+    assert builder_kwargs["page_tables_per_layer"] == ["layer-pages"]
+    assert calls[2][0:3] == ("blocks", "model", "built-logits")
+
+
 def test_generation_sequences_appends_prompt_and_generated_tokens():
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
     generation = G.DeviceGeneration(

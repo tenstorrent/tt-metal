@@ -512,10 +512,16 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
         )
 
     logits_fn = _PositionDependentDeviceLogits(mesh_device, canvas_len=canvas_len, vocab_size=vocab_size)
+    builder_calls = []
+
+    def logits_fn_builder(tt_model, **kwargs):
+        builder_calls.append((tt_model, kwargs))
+        return logits_fn
+
     tokenizer = _FakeDeviceSmokeTokenizer(prompt_tokens)
     text_out = generate_text(
         model,
-        logits_fn,
+        None,
         tokenizer,
         "hello device",
         num_blocks=num_blocks,
@@ -535,6 +541,7 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
         noise_tokens_fn=noise_tokens_for_block,
         max_new_tokens=num_blocks * canvas_len,
         decode_kwargs={"skip_special_tokens": True},
+        logits_fn_builder=logits_fn_builder,
     )
     out = text_out.generation
 
@@ -542,6 +549,10 @@ def test_generate_blocks_runs_device_denoise_and_commit(mesh_device, reset_seeds
     _assert_regions_changed(k_prompt_before, _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh))
     _assert_regions_changed(v_prompt_before, _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh))
     assert out.next_pos == prompt_len + num_blocks * canvas_len
+    assert len(builder_calls) == 1
+    assert builder_calls[0][0] is model
+    assert torch.equal(builder_calls[0][1]["prompt_tokens"], prompt_tokens)
+    assert builder_calls[0][1]["prompt_len"] == prompt_len
     assert logits_fn.offsets == [prompt_len, prompt_len + canvas_len]
     expected = torch.cat(
         [
