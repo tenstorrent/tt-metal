@@ -163,7 +163,8 @@ def test_eltwise_unary_typecast(
     # Stimuli selection per input/output dtype:
     #  * integer -> block-float: small ints (0..15) so int->fp16b->bfp is exact
     #    (full-range ints would differ from the golden by >1 bfp ULP);
-    #  * integer -> anything else: format-aware default spec (exact int/float cmp);
+    #  * integer -> anything else: bounded range (0..255) to avoid 0xFFFF values
+    #    that pack into 0xFFFFFFFF on readback, which BH NOC treats as a timeout;
     #  * float / block-float input: whole numbers so int conversions are exact and
     #    bf16 is lossless; small range when a block-float is involved so the
     #    shared-exponent quantization is (near-)exact per 16-elem block.
