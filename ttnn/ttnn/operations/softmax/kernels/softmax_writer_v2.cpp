@@ -54,14 +54,34 @@ void kernel_main() {
 
         for (uint32_t slab = 0; slab < num_slabs; ++slab) {
             if constexpr (!chunk_along_reduce) {
-                // chunk_along_non_reduce: tiles arrive in row-major order (standard)
-                uint32_t tile_id = slab_start_tile;
-                for (uint32_t i = 0; i < Ht * Wt; ++i) {
-                    output_cb.wait_front(1);
-                    noc.async_write(output_cb, dst_accessor, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
-                    noc.async_write_barrier();
-                    output_cb.pop_front(1);
-                    tile_id++;
+                // chunk_along_non_reduce: tiles arrive chunked along the non-reduce dim
+                if constexpr (dim == -1) {
+                    // dim=-1: chunks along Ht. Each chunk: BLOCK_SIZE rows × Wt cols.
+                    // Tiles arrive in row-major order within each chunk → sequential.
+                    uint32_t tile_id = slab_start_tile;
+                    for (uint32_t i = 0; i < Ht * Wt; ++i) {
+                        output_cb.wait_front(1);
+                        noc.async_write(output_cb, dst_accessor, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+                        noc.async_write_barrier();
+                        output_cb.pop_front(1);
+                        tile_id++;
+                    }
+                } else {
+                    // dim=-2: chunks along Wt. Each chunk: Ht rows × BLOCK_SIZE cols.
+                    // Tiles arrive: (0, chunk*BS+0), (0, chunk*BS+1), ..., (1, chunk*BS+0), ...
+                    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+                        for (uint32_t ht = 0; ht < Ht; ++ht) {
+                            for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
+                                uint32_t wt = chunk * BLOCK_SIZE + i;
+                                uint32_t tile_id = slab_start_tile + ht * Wt + wt;
+                                output_cb.wait_front(1);
+                                noc.async_write(
+                                    output_cb, dst_accessor, tile_bytes, {.offset_bytes = 0}, {.page_id = tile_id});
+                                noc.async_write_barrier();
+                                output_cb.pop_front(1);
+                            }
+                        }
+                    }
                 }
             } else if constexpr (dim == -1) {
                 // chunk_along_reduce dim=-1: tiles arrive in row-major order

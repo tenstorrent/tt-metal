@@ -150,3 +150,5 @@
 {"source":"tt-probe","pid":1032446,"started_at_ms":1782438487277,"wait_ms":179,"run_ms":19024,"test_path":"softmax","exit_code":0}
 {"source":"tt-probe","pid":1033899,"started_at_ms":1782438528904,"wait_ms":179,"run_ms":58454,"test_path":"softmax","exit_code":2}
 {"source":"tt-probe","pid":1035705,"started_at_ms":1782438651913,"wait_ms":179,"run_ms":23187,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1037401,"started_at_ms":1782438732426,"wait_ms":181,"run_ms":19126,"test_path":"softmax","exit_code":0}
+{"source":"tt-probe","pid":1037835,"started_at_ms":1782438781623,"wait_ms":180,"run_ms":21766,"test_path":"softmax","exit_code":0}

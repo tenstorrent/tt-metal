@@ -169,10 +169,12 @@ void kernel_main() {
                 } else {
                     // non-reduce = Wt, reduce = Ht
                     // Each chunk: BLOCK_SIZE columns, each with Ht tiles
+                    // Push tiles in row-major order within the chunk (ht outer, wt inner)
+                    // so reduce<REDUCE_COL> with ReduceInputBlockShape::of(Ht, BLOCK_SIZE) works
                     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-                        for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
-                            uint32_t wt = chunk * BLOCK_SIZE + i;
-                            for (uint32_t ht = 0; ht < Ht; ++ht) {
+                        for (uint32_t ht = 0; ht < Ht; ++ht) {
+                            for (uint32_t i = 0; i < BLOCK_SIZE; ++i) {
+                                uint32_t wt = chunk * BLOCK_SIZE + i;
                                 uint32_t tile_id = slab_start_tile + ht * Wt + wt;
                                 input_cb.reserve_back(1);
                                 noc.async_read(
