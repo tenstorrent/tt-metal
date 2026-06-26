@@ -12,31 +12,12 @@ import csv
 from pathlib import Path
 
 
-DEFAULT_ROOT = (
-    Path(__file__).resolve().parents[1] / "results" / "frontier"
-)
+DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "results" / "frontier"
 
 
 # Audit corrections from the June 25 basis-factor runs. These are intentionally
 # small and explicit: the normal path is still manifest-driven.
 AUDIT_OVERRIDES = {
-    ("bf16", "gelu"): {
-        "role": "fastest_ttnn_ulp_match",
-        "method": "affine_even",
-        "degree": "6",
-        "segments": "1",
-        "max_ulp": "0.25",
-        "runtime_us": "3.10",
-        "ttnn_maxulp": "0.125",
-        "ttnn_us": "5.78",
-        "csv": "gelu_affine_even_p6_s1.csv",
-        "coeff_csv": "/tmp/gelu_affine_even_search/csv/gelu_affine_even_p6_s1.csv",
-        "status": "audit_override_gelu_affine_even_p6_s1",
-        "note": (
-            "overrides stale frontier gelu_p2_s16 row; measured from "
-            "/tmp/gelu_affine_even_search/device_lowcost.txt"
-        ),
-    },
     ("bf16", "multigammaln"): {
         "status": "excluded_invalid_old_target",
         "note": (
@@ -102,15 +83,10 @@ def _apply_audit(dtype, row):
     override = AUDIT_OVERRIDES.get((dtype, row.get("activation")))
     if override:
         out.update(override)
-    out["audited_result"] = (
-        "excluded" if str(out.get("status", "")).startswith("excluded_")
-        else _row_result(out)
-    )
+    out["audited_result"] = "excluded" if str(out.get("status", "")).startswith("excluded_") else _row_result(out)
     ours_us = _f(out.get("runtime_us"))
     ttnn_us = _f(out.get("ttnn_us"))
-    out["speedup_vs_ttnn"] = (
-        f"{ttnn_us / ours_us:.3f}" if ours_us and ttnn_us else ""
-    )
+    out["speedup_vs_ttnn"] = f"{ttnn_us / ours_us:.3f}" if ours_us and ttnn_us else ""
     return out
 
 
@@ -138,9 +114,7 @@ def write_csv(path, rows):
         "coeff_csv",
     ]
     with open(path, "w", newline="") as fh:
-        writer = csv.DictWriter(
-            fh, fieldnames=fields, extrasaction="ignore", lineterminator="\n"
-        )
+        writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -154,10 +128,7 @@ def write_markdown(path, rows_by_dtype):
         "",
     ]
     for dtype, rows in rows_by_dtype.items():
-        comparable = [
-            r for r in rows
-            if r["audited_result"] not in ("excluded", "incomplete")
-        ]
+        comparable = [r for r in rows if r["audited_result"] not in ("excluded", "incomplete")]
         incomplete = [r for r in rows if r["audited_result"] == "incomplete"]
         wins = [r for r in comparable if r["audited_result"] == "win_both"]
         acc = [r for r in comparable if r["audited_result"] == "accuracy_match_slow"]

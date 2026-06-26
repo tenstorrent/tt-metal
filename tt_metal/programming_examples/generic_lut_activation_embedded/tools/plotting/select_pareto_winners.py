@@ -139,9 +139,19 @@ def select_for_group(front, tus, tulp, max_configs):
     if not front:
         return []
 
+    def source_priority(row):
+        name = Path(row.get("csv") or "").stem
+        if name.endswith("_ulp"):
+            return 0
+        if name.endswith("_max"):
+            return 1
+        if name.endswith("_mae"):
+            return 2
+        return 3
+
     def by_runtime_then_ulp(point):
         us, ulp, row = point
-        return (us, ulp, row.get("csv") or "")
+        return (us, ulp, source_priority(row), row.get("csv") or "")
 
     if tulp is not None:
         ttnn_ulp_matches = [(us, ulp, row) for us, ulp, row in front if ulp <= tulp]
@@ -255,7 +265,12 @@ def main():
         compiled = [
             r
             for r in group
-            if r["_ok"] and r["_us"] is not None and r["_ulp"] is not None and r["_us"] > 0 and r["_ulp"] >= 0
+            if r["_ok"]
+            and r["_us"] is not None
+            and r["_ulp"] is not None
+            and r["_us"] > 0
+            and r["_ulp"] >= 0
+            and (r.get("csv") or "").endswith("_ulp.csv")
         ]
         compiled = dedupe_configs(compiled)
         front = pareto([(r["_us"], r["_ulp"], r) for r in compiled])
@@ -269,7 +284,7 @@ def main():
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES, lineterminator="\n")
         writer.writeheader()
         writer.writerows(selected)
 

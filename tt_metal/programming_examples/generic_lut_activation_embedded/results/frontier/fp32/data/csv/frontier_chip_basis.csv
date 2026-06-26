@@ -1,0 +1,5 @@
+csv,activation,method,degree,segments,precision,bf16_maxulp,runtime_us,compiles,range
+tanh_p6_s1_uniform_basis_ulp.csv,tanh,poly,6,1,fp32,39223.00,3.28,1,[-5.0,5.0]
+atan_p8_s1_uniform_basis_ulp.csv,atan,poly,8,1,fp32,35.00,3.37,1,[-1.5707963267948966,1.5707963267948966]
+erf_p8_s4_uniform_basis_ulp.csv,erf,poly,8,4,fp32,65.00,8.04,1,[-10.0,10.0]
+gelu_p6_s1_uniform_basis_ulp.csv,gelu,poly,6,1,fp32,5614.51,3.71,1,[-10.0,10.0]
