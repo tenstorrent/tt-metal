@@ -25,7 +25,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vInt magic_seed;
 
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * 2 * log2(e)
-    x *= 2.0f;
+    x = x + x;
     // Rounds the absolute value of j, clamped to [0, 255].
     sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
