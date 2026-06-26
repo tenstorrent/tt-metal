@@ -10,6 +10,8 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
@@ -21,8 +23,8 @@
  */
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_cb_index, const uint32_t dest_cb_index, const uint32_t total_tiles) {
-    CircularBuffer input_cb(input_cb_index);
-    CircularBuffer dest_cb(dest_cb_index);
+    DataflowBuffer input_cb(input_cb_index);
+    DataflowBuffer dest_cb(dest_cb_index);
 
     // Configure data formats for transpose operation.
     // Pack using the DESTINATION CB format: input_cb may be bf16 (higher-precision
@@ -97,7 +99,7 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_o
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
 FORCE_INLINE void cb_wait_pop_front(const uint32_t cb, const uint32_t count) {
-    CircularBuffer cb_obj(cb);
+    DataflowBuffer cb_obj(cb);
     cb_obj.wait_front(count);
     cb_obj.pop_front(count);
 }
@@ -110,40 +112,40 @@ FORCE_INLINE void cb_wait_pop_front(const uint32_t cb, const uint32_t count) {
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
 FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) {
-    CircularBuffer cb_obj(cb);
+    DataflowBuffer cb_obj(cb);
     cb_obj.reserve_back(count);
     cb_obj.push_back(count);
 }
 
 void kernel_main() {
     // Runtime arguments
-    const uint32_t work_per_core = get_arg_val<uint32_t>(0);
+    const uint32_t work_per_core = get_arg(args::work_per_core);
 
     // Compile time args
-    constexpr uint32_t input_val_cb_index = get_compile_time_arg_val(0);        // Input values circular buffer
-    constexpr uint32_t input_ind_cb_index = get_compile_time_arg_val(1);        // Input indices circular buffer
-    constexpr uint32_t transposed_val_cb_index = get_compile_time_arg_val(2);   // Transposed values buffer
-    constexpr uint32_t transposed_ind_cb_index = get_compile_time_arg_val(3);   // Transposed indices buffer
-    constexpr uint32_t result_prep_val_cb_index = get_compile_time_arg_val(4);  // Result preparation values buffer
-    constexpr uint32_t result_prep_ind_cb_index = get_compile_time_arg_val(5);  // Result preparation indices buffer
-    constexpr uint32_t output_val_cb_index = get_compile_time_arg_val(6);       // Final output values buffer
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(7);       // Final output indices buffer
-    constexpr uint32_t Ht = get_compile_time_arg_val(8);                        // Height in tiles
-    constexpr uint32_t Wt = get_compile_time_arg_val(9);                        // Width in tiles
-    constexpr uint32_t output_tiles = get_compile_time_arg_val(10);             // Number of output tiles (ceil(K/32))
-    constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
+    constexpr uint32_t input_val_cb_index = dfb::in0;                    // Input values circular buffer
+    constexpr uint32_t input_ind_cb_index = dfb::index;                  // Input indices circular buffer
+    constexpr uint32_t transposed_val_cb_index = dfb::transposed_val;    // Transposed values buffer
+    constexpr uint32_t transposed_ind_cb_index = dfb::transposed_ind;    // Transposed indices buffer
+    constexpr uint32_t result_prep_val_cb_index = dfb::result_prep_val;  // Result preparation values buffer
+    constexpr uint32_t result_prep_ind_cb_index = dfb::result_prep_ind;  // Result preparation indices buffer
+    constexpr uint32_t output_val_cb_index = dfb::output_val;            // Final output values buffer
+    constexpr uint32_t output_ind_cb_index = dfb::output_ind;            // Final output indices buffer
+    constexpr uint32_t Ht = get_arg(args::Ht);                           // Height in tiles
+    constexpr uint32_t Wt = get_arg(args::Wt);                           // Width in tiles
+    constexpr uint32_t output_tiles = get_arg(args::output_tiles);       // Number of output tiles (ceil(K/32))
+    constexpr uint32_t largest = get_arg(args::largest);                 // 1 for largest K, 0 for smallest K
 
     // Initialize kernel components
     ckernel::topk_tile_init();
     transpose_wh_init(input_val_cb_index, output_val_cb_index);
     transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
 
-    CircularBuffer input_val_cb(input_val_cb_index);
-    CircularBuffer input_ind_cb(input_ind_cb_index);
-    CircularBuffer transposed_val_cb(transposed_val_cb_index);
-    CircularBuffer transposed_ind_cb(transposed_ind_cb_index);
-    CircularBuffer result_prep_val_cb(result_prep_val_cb_index);
-    CircularBuffer result_prep_ind_cb(result_prep_ind_cb_index);
+    DataflowBuffer input_val_cb(input_val_cb_index);
+    DataflowBuffer input_ind_cb(input_ind_cb_index);
+    DataflowBuffer transposed_val_cb(transposed_val_cb_index);
+    DataflowBuffer transposed_ind_cb(transposed_ind_cb_index);
+    DataflowBuffer result_prep_val_cb(result_prep_val_cb_index);
+    DataflowBuffer result_prep_ind_cb(result_prep_ind_cb_index);
 
     constexpr uint32_t DST_VAL = 0;
     constexpr uint32_t DST_IND = 2;
@@ -303,8 +305,8 @@ void kernel_main() {
 
                 // Prepare data for merge operation
                 // Wait for required tiles to be available
-                CircularBuffer cb0_obj(cb0);
-                CircularBuffer cb1_obj(cb1);
+                DataflowBuffer cb0_obj(cb0);
+                DataflowBuffer cb1_obj(cb1);
                 cb0_obj.wait_front(in_cb_offset);  // Wait for existing sorted data
                 cb1_obj.wait_front(in_cb_offset);
                 if (transposed_offset == 0) {
