@@ -98,6 +98,8 @@ _SQLITE_TABLES_WITH_RANK = (
     "tensor_consumers",
     "tensor_producers",
     "buffer_chunks",
+    "local_tensor_comparison_records",
+    "global_tensor_comparison_records",
 )
 
 
@@ -555,12 +557,12 @@ class TestImportGraphUnit:
         conn, cursor = _import_to_db_with_comparison_sidecar(report, comparison_sidecar, tmp_path)
 
         cursor.execute("SELECT * FROM local_tensor_comparison_records")
-        assert cursor.fetchall() == [(101, 1001, 1, 0.9999, 1.0)]
+        assert cursor.fetchall() == [(101, 1001, 1, 0.9999, 1.0, 0)]
 
         cursor.execute("SELECT * FROM global_tensor_comparison_records")
-        assert cursor.fetchall() == [(101, 1002, 1, 0.9999, 1.0)]
+        assert cursor.fetchall() == [(101, 1002, 1, 0.9999, 1.0, 0)]
 
-        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id IN (1001, 1002) ORDER BY tensor_id")
+        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id IN (1001, 1002) AND rank = 0 ORDER BY tensor_id")
         assert cursor.fetchall() == [(1001,), (1002,)]
         conn.close()
 
@@ -2416,26 +2418,31 @@ class TestGraphReportImport:
         cursor = conn.cursor()
 
         cursor.execute(
-            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc FROM local_tensor_comparison_records"
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, rank "
+            "FROM local_tensor_comparison_records"
         )
         local_tensor_comparison_records = cursor.fetchall()
 
         cursor.execute(
-            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc FROM global_tensor_comparison_records"
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, rank "
+            "FROM global_tensor_comparison_records"
         )
         global_tensor_comparison_records = cursor.fetchall()
 
         assert len(local_tensor_comparison_records) > 0
         assert len(global_tensor_comparison_records) > 0
 
-        for tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc in (
+        for tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, record_rank in (
             local_tensor_comparison_records + global_tensor_comparison_records
         ):
+            assert record_rank == 0
             assert matches
             assert actual_pcc >= desired_pcc
-            cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ?", (tensor_id,))
+            cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ? AND rank = ?", (tensor_id, record_rank))
             assert cursor.fetchone() is not None
-            cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ?", (golden_tensor_id,))
+            cursor.execute(
+                "SELECT tensor_id FROM tensors WHERE tensor_id = ? AND rank = ?", (golden_tensor_id, record_rank)
+            )
             assert cursor.fetchone() is not None
 
         conn.close()

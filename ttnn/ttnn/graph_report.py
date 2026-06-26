@@ -146,7 +146,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # Bump when the visualizer schema changes; stale DBs are deleted on import (no migration path).
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
-DATABASE_SCHEMA_VERSION = "3.2"
+# 3.3 - rank on local/global_tensor_comparison_records (#45448)
+DATABASE_SCHEMA_VERSION = "3.3"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -638,7 +639,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             golden_tensor_id int,
             matches int,
             desired_pcc float,
-            actual_pcc float
+            actual_pcc float,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -650,7 +653,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             golden_tensor_id int,
             matches int,
             desired_pcc float,
-            actual_pcc float
+            actual_pcc float,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -1693,13 +1698,14 @@ def _is_sidecar_path(path: Path) -> bool:
     )
 
 
-def _comparison_record_to_row(record: dict) -> tuple:
+def _comparison_record_to_row(record: dict, rank: int = 0) -> tuple:
     return (
         int(record["tensor_id"]),
         int(record["golden_tensor_id"]),
         int(bool(record["matches"])),
         float(record["desired_pcc"]),
         float(record["actual_pcc"]),
+        int(record.get("rank", rank)),
     )
 
 
@@ -1724,21 +1730,22 @@ def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: di
 
     tensors_batch = [_tensor_record_to_row(tensor, rank) for tensor in comparison_data.get("tensors", [])]
     local_records_batch = [
-        _comparison_record_to_row(record) for record in comparison_data.get("local_tensor_comparison_records", [])
+        _comparison_record_to_row(record, rank) for record in comparison_data.get("local_tensor_comparison_records", [])
     ]
     global_records_batch = [
-        _comparison_record_to_row(record) for record in comparison_data.get("global_tensor_comparison_records", [])
+        _comparison_record_to_row(record, rank)
+        for record in comparison_data.get("global_tensor_comparison_records", [])
     ]
 
     if tensors_batch:
         cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
     if local_records_batch:
         cursor.executemany(
-            """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?)""", local_records_batch
+            """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", local_records_batch
         )
     if global_records_batch:
         cursor.executemany(
-            """INSERT INTO global_tensor_comparison_records VALUES (?, ?, ?, ?, ?)""", global_records_batch
+            """INSERT INTO global_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", global_records_batch
         )
 
     return {
