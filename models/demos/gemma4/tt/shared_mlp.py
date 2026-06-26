@@ -48,7 +48,7 @@ def _best_core_grid(n_tiles, max_x, max_y):
     return best
 
 
-def _decode_linear_1d_config(m_tiles, k_tiles, n_tiles, grid_size, is_bh):
+def _decode_linear_1d_config(m_tiles, k_tiles, n_tiles, grid_size, is_bh, return_output_memcfg=False):
     """1D (N-parallel) matmul program config for a decode-mode Linear.
 
     Decode has small M, so we use 1d splitting across N
@@ -58,6 +58,11 @@ def _decode_linear_1d_config(m_tiles, k_tiles, n_tiles, grid_size, is_bh):
       - per_core_N * num_cores == n_tiles (grid chosen to divide n_tiles)
       - out_subblock_w divides per_core_N; out_subblock_h divides per_core_M
       - out_subblock_h * out_subblock_w <= arch cap (4 Blackhole / 8 Wormhole)
+
+    When ``return_output_memcfg`` is set, also returns a WIDTH-sharded L1
+    MemoryConfig laid out on the *same* (cx, cy) grid the matmul uses, with each
+    core holding ``per_core_N`` output tiles. This lets the matmul write its
+    result straight into L1 (skipping the DRAM write).
     """
     cx, cy = _best_core_grid(n_tiles, grid_size.x, grid_size.y)
     num_cores = cx * cy
@@ -73,7 +78,7 @@ def _decode_linear_1d_config(m_tiles, k_tiles, n_tiles, grid_size, is_bh):
     out_subblock_w = find_largest_divisor(per_core_N, max_subblock)
     out_subblock_h = find_largest_divisor(per_core_M, max(1, max_subblock // out_subblock_w))
 
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
@@ -84,6 +89,18 @@ def _decode_linear_1d_config(m_tiles, k_tiles, n_tiles, grid_size, is_bh):
         fused_activation=None,
         mcast_in0=True,
     )
+
+    if not return_output_memcfg:
+        return program_config
+
+    output_memcfg = ttnn.create_sharded_memory_config(
+        shape=(per_core_M * ttnn.TILE_SIZE, per_core_N * ttnn.TILE_SIZE),
+        core_grid=ttnn.CoreGrid(x=cx, y=cy),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return program_config, output_memcfg
 
 
 class SharedMLP:
@@ -199,7 +216,7 @@ class SharedMLP:
         In decode the two matmuls use tuned 1D program configs; prefill falls
         back to the ttnn-chosen default (program_config=None).
         """
-        gate_up_pc = down_pc = None
+        gate_up_pc = down_pc = down_out_memcfg = None
         if is_decode:
             grid = self.mesh_device.compute_with_storage_grid_size()
             is_bh = is_blackhole()
@@ -207,8 +224,16 @@ class SharedMLP:
             gate_up_pc = _decode_linear_1d_config(
                 m_tiles, _tiles(self.gate_up_proj.shape[-2]), _tiles(self.gate_up_proj.shape[-1]), grid, is_bh
             )
-            down_pc = _decode_linear_1d_config(
-                m_tiles, _tiles(self.down_proj.shape[-2]), _tiles(self.down_proj.shape[-1]), grid, is_bh
+            # Request a matching L1 width-sharded output config for down_proj so
+            # the matmul writes its result into L1 instead of DRAM (saves the
+            # output DRAM write; the following allreduce/norm can read locally).
+            down_pc, down_out_memcfg = _decode_linear_1d_config(
+                m_tiles,
+                _tiles(self.down_proj.shape[-2]),
+                _tiles(self.down_proj.shape[-1]),
+                grid,
+                is_bh,
+                return_output_memcfg=True,
             )
 
         # Fused gate+up projection: one matmul produces the [gate | up] slab.
@@ -231,7 +256,7 @@ class SharedMLP:
         gate_up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = ttnn.linear(hidden, self.down_proj, program_config=down_pc)
+        output = ttnn.linear(hidden, self.down_proj, program_config=down_pc, memory_config=down_out_memcfg)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
