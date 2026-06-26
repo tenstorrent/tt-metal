@@ -326,6 +326,23 @@ def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
         )
 
 
+def test_generate_from_prompt_tokens_rejects_negative_num_blocks_before_prefill():
+    def fail_prefill(*args, **kwargs):
+        raise AssertionError("prefill should not run for invalid num_blocks")
+
+    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+        generate_from_prompt_tokens(
+            "model",
+            "logits",
+            torch.tensor([[1, 2]], dtype=torch.long),
+            num_blocks=-1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            prefill_fn=fail_prefill,
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_tokenizes_generates_and_decodes():
     calls = []
     tokenizer = _FakeChatTokenizer()
@@ -378,6 +395,24 @@ def test_generate_text_tokenizes_generates_and_decodes():
     assert calls[1][0:3] == ("blocks", "model", "logits")
     assert calls[1][3]["init_canvas_fn"] is init_canvas_fn
     assert calls[1][3]["stop_token_ids"] == 9
+
+
+def test_generate_text_rejects_negative_num_blocks_before_tokenize():
+    class _FailTokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            raise AssertionError("tokenizer should not run for invalid num_blocks")
+
+    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+        generate_text(
+            "model",
+            "logits",
+            _FailTokenizer(),
+            "hello",
+            num_blocks=-1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            blocks_fn=lambda *args, **kwargs: None,
+        )
 
 
 def test_generate_text_can_build_logits_after_prompt_prefill():

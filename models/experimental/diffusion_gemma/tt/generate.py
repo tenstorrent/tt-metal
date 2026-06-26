@@ -336,6 +336,11 @@ def _contains_stop_token(tokens: torch.Tensor, stop_token_ids) -> bool:
     return any(token_id in ids for token_id in tokens.reshape(-1).tolist())
 
 
+def _validate_num_blocks(num_blocks: int) -> None:
+    if num_blocks < 0:
+        raise ValueError("num_blocks must be non-negative")
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,
@@ -402,8 +407,7 @@ def generate_blocks(
     HF canvases; the full prompt/tokenizer path will later own default canvas
     creation. This helper owns commit-append and absolute position advancement.
     """
-    if num_blocks < 0:
-        raise ValueError("num_blocks must be non-negative")
+    _validate_num_blocks(num_blocks)
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []
     trajectories: list[DenoiseTrajectory] = []
@@ -455,6 +459,7 @@ def generate_from_prompt_tokens(
     is the reusable bridge needed by device-vs-HF replay tests, where prompt ids
     and per-step noise are injected exactly.
     """
+    _validate_num_blocks(num_blocks)
     prompt_len = prefill_fn(
         tt_model,
         prompt_tokens,
@@ -613,6 +618,7 @@ def generate_text(
     blocks_fn: Callable[..., DeviceGeneration] = generate_blocks,
 ) -> DeviceTextGeneration:
     """Tokenize a prompt, run device generation, and decode host-visible text."""
+    _validate_num_blocks(num_blocks)
     prompt_tokens = tokenize_prompt(
         tokenizer,
         prompt,
@@ -680,8 +686,7 @@ def generate_text_from_checkpoint_state(
         if max_new_tokens < 0:
             raise ValueError("max_new_tokens must be non-negative")
         num_blocks = (max_new_tokens + config.canvas_length - 1) // config.canvas_length
-    if num_blocks < 0:
-        raise ValueError("num_blocks must be non-negative")
+    _validate_num_blocks(num_blocks)
     if vocab_size is None:
         vocab_size = _infer_generation_vocab_size(tokenizer, tt_model)
     if init_canvas_fn is None:
