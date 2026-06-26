@@ -1344,12 +1344,15 @@ def _should_skip_device_profiler(config):
     (idle_erisc.elf 0x5544 > 0x5390) and wedges the erisc cores at mesh open
     (run_mailbox 0x40). FABRIC_1D CCL (mesh_dims=="1d") profiles fine -> keep it.
 
-    (conv2d is NOT skipped: its intermittent dispatch hangs are NOT profiler-caused --
-    verified on CI run 28102736204 where the profiler was gated off and conv2d still hit
-    system_memory_manager.cpp:757 on both T3K and N150, including a light 512x512 conv.
-    Those hangs are accumulated-dispatch-state stalls in the long sequential suite and
-    are handled by reset+retry in _execute_vector_with_retry; the heavy-conv profiler
-    GATHER hang is handled per-vector by conv2d's _SKIP_DEVICE_PERF.)
+    (conv2d is NOT skipped: a controlled A/B on relay T3K -- looping the 5 known-hanging
+    SDXL configs 787ff3a2/8c7a2cf1/1df14794/46992c20/f350bce3 with
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=30 -- shows the large 3x3 height-sharded
+    auto-sliced/haloed conv2d dispatch deadlock (system_memory_manager.cpp:702/757)
+    reproduces with the profiler OFF at the same onset (~10-15 cumulative executions,
+    round 3) as with it ON, so skipping the profiler does NOT avoid it. It is a genuine
+    intermittent conv2d/dispatch op-level deadlock, handled by reset+retry in
+    _execute_vector_with_retry; the heavy-conv profiler GATHER hang is handled per-vector
+    by conv2d's _SKIP_DEVICE_PERF.)
 
     Vectors of a skipped run report device-perf N/A and PASS (not
     FAIL_UNSUPPORTED_DEVICE_PERF) -- see _populate_result_from_response."""

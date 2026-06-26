@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from typing import Optional, Tuple
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -50,6 +52,30 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    """Skip the gather_in0 ring-matmul configs on Galaxy.
+
+    These are Llama3-70B / Qwen decode LM-head/MLP-w2 projections traced as
+    ttnn.matmul with gather_in0=True + a global circular buffer + dram_prefetcher
+    over the prefetcher sub-devices (num_global_cb_receivers=2). On 6u Galaxy this
+    reconstruction wedges the device: config 08671af8 TIMED OUT (15 min, no op-level
+    throw -- blocked in the gather/prefetcher fabric bring-up, not dispatch), and the
+    Galaxy could not be tt-smi-reset (3x glx_reset_auto failed -> host reboot; device
+    17 wedged). The remaining configs of this class were only --skip-on-timeout
+    collateral, so their status is unknown, but the whole class shares the signature
+    and one hang reboots the box. Notably the IDENTICAL ttnn.linear gather_in0 ring
+    configs (incl. num_global_cb_receivers=2) all PASS -- so the bug is specific to the
+    ttnn.matmul gather_in0 variant, not the ring/prefetcher concept. Guarding on
+    program_config.gather_in0 matches exactly the 8 matmul gather_in0 configs (of 33
+    matmul configs) and leaves the 25 plain matmuls and all linear configs untouched.
+    Remove once the ttnn.matmul gather_in0 Galaxy hang is fixed (conv/llama-galaxy team).
+    """
+    pc = test_vector.get("program_config")
+    if isinstance(pc, dict) and pc.get("gather_in0"):
+        return True, "gather_in0 ring matmul wedges 6u Galaxy (unrecoverable hang); see invalidate_vector docstring"
+    return False, None
 
 
 def _parse_2d_shard_dims(placement, ndim=4):
