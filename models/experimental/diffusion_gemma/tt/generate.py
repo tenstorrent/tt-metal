@@ -112,6 +112,68 @@ def make_host_canvas_init_fn(mesh_device, host_canvases):
     return init_canvas_fn
 
 
+def _check_random_token_args(batch: int, canvas_len: int, vocab_size: int) -> None:
+    if batch <= 0:
+        raise ValueError("batch must be positive")
+    if canvas_len <= 0:
+        raise ValueError("canvas_len must be positive")
+    if vocab_size <= 0:
+        raise ValueError("vocab_size must be positive")
+
+
+def make_seeded_host_canvas_init_fn(
+    mesh_device,
+    *,
+    batch: int,
+    canvas_len: int,
+    vocab_size: int,
+    seed: int,
+):
+    """Create a seeded random-token canvas init hook for runnable TT generation."""
+    _check_random_token_args(batch, canvas_len, vocab_size)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    def init_canvas_fn(block_idx: int, start_pos: int):
+        del block_idx, start_pos
+        canvas = torch.randint(0, vocab_size, (batch, canvas_len), dtype=torch.long, generator=generator)
+        return host_canvas_to_device(mesh_device, canvas)
+
+    return init_canvas_fn
+
+
+def make_seeded_host_noise_tokens_fn(
+    mesh_device,
+    *,
+    batch: int,
+    canvas_len: int,
+    vocab_size: int,
+    seed: int,
+):
+    """Create seeded random-token renoise hooks for ``generate_blocks``.
+
+    DiffusionGemma uses random token ids, not a mask token, for rejected canvas
+    positions. Until a uint32 device randint path exists, this helper keeps the
+    token-noise source explicit and reproducible while preserving the device
+    denoise loop's token layout.
+    """
+    _check_random_token_args(batch, canvas_len, vocab_size)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    def noise_tokens_for_block(block_idx: int):
+        del block_idx
+
+        def noise_tokens_for_step(step: int):
+            del step
+            tokens = torch.randint(0, vocab_size, (batch, canvas_len), dtype=torch.long, generator=generator)
+            return host_canvas_to_device(mesh_device, tokens)
+
+        return noise_tokens_for_step
+
+    return noise_tokens_for_block
+
+
 def commit_canvas_tokens(
     tt_model,
     canvas_tokens: torch.Tensor,

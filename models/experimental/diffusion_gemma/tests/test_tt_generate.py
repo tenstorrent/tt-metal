@@ -15,6 +15,8 @@ from models.experimental.diffusion_gemma.tt.generate import (
     host_canvas_to_device,
     host_tokens_to_device,
     make_host_canvas_init_fn,
+    make_seeded_host_canvas_init_fn,
+    make_seeded_host_noise_tokens_fn,
     prefill_prompt_tokens,
 )
 
@@ -318,3 +320,44 @@ def test_make_host_canvas_init_fn_replays_fixed_canvases(monkeypatch):
     assert init_fn(1, 34) == "device-6"
     assert torch.equal(calls[0][1], torch.tensor([[4, 5]]))
     assert torch.equal(calls[1][1], torch.tensor([[6, 7]]))
+
+
+def test_make_seeded_host_canvas_init_fn_generates_reproducible_tokens(monkeypatch):
+    calls = []
+
+    def fake_host_canvas_to_device(mesh_device, canvas):
+        calls.append((mesh_device, canvas.clone()))
+        return f"device-canvas-{len(calls)}"
+
+    monkeypatch.setattr(G, "host_canvas_to_device", fake_host_canvas_to_device)
+
+    init_a = make_seeded_host_canvas_init_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=11)
+    init_b = make_seeded_host_canvas_init_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=11)
+
+    assert init_a(0, 32) == "device-canvas-1"
+    assert init_a(1, 36) == "device-canvas-2"
+    assert init_b(0, 32) == "device-canvas-3"
+    assert torch.equal(calls[0][1], calls[2][1])
+    assert not torch.equal(calls[0][1], calls[1][1])
+    assert int(calls[0][1].min()) >= 0 and int(calls[0][1].max()) < 16
+
+
+def test_make_seeded_host_noise_tokens_fn_generates_step_noise(monkeypatch):
+    calls = []
+
+    def fake_host_canvas_to_device(mesh_device, canvas):
+        calls.append((mesh_device, canvas.clone()))
+        return f"device-noise-{len(calls)}"
+
+    monkeypatch.setattr(G, "host_canvas_to_device", fake_host_canvas_to_device)
+
+    noise_a = make_seeded_host_noise_tokens_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=23)
+    noise_b = make_seeded_host_noise_tokens_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=23)
+
+    block0 = noise_a(0)
+    assert block0(0) == "device-noise-1"
+    assert block0(1) == "device-noise-2"
+    assert noise_b(0)(0) == "device-noise-3"
+    assert torch.equal(calls[0][1], calls[2][1])
+    assert not torch.equal(calls[0][1], calls[1][1])
+    assert int(calls[0][1].min()) >= 0 and int(calls[0][1].max()) < 16
