@@ -42,7 +42,7 @@ FORCE_INLINE void enhanced_noc_async_read(
 }
 
 template <uint32_t max_transfer_size, bool only_reads>
-[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
 FORCE_INLINE void enhanced_noc_async_read(
     const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
     Noc noc;
@@ -66,7 +66,7 @@ FORCE_INLINE void enhanced_noc_async_write(
 }
 
 template <uint32_t max_transfer_size, bool only_writes>
-[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
 FORCE_INLINE void enhanced_noc_async_write(
     const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
     Noc noc;
@@ -146,7 +146,7 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
 }
 
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
-[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
 FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     Noc noc;
     return tt_memmove<guaranteed_16B_aligned, copy_async, use_read_datamover, max_transfer_size>(
@@ -297,7 +297,7 @@ FORCE_INLINE void noc_async_write_sharded(
 }
 
 template <typename AddrGenType>
-[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
 FORCE_INLINE void noc_async_write_sharded(
     const uint32_t l1_addr,
     const AddrGenType tensor,
@@ -342,7 +342,7 @@ FORCE_INLINE void noc_async_read_sharded(
 }
 
 template <typename AddrGenType>
-[[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
+[[deprecated("Use the overload with leading Noc parameter instead.")]]
 FORCE_INLINE void noc_async_read_sharded(
     const uint32_t l1_addr,
     const AddrGenType tensor,
