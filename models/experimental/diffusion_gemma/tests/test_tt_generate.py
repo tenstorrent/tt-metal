@@ -956,6 +956,40 @@ def test_generate_text_from_checkpoint_state_requires_length_budget():
         )
 
 
+def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_noise():
+    with pytest.raises(ValueError, match="noise_tokens_fn requires vocab_size"):
+        generate_text_from_checkpoint_state(
+            object(),
+            object(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            seed=123,
+            gumbel_noise_fn="gumbel",
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_gumbel():
+    with pytest.raises(ValueError, match="gumbel_noise_fn requires vocab_size"):
+        generate_text_from_checkpoint_state(
+            object(),
+            object(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            gumbel_seed=123,
+            noise_tokens_fn="noise",
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generation_sequences_appends_prompt_and_generated_tokens():
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
     generation = G.DeviceGeneration(

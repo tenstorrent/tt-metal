@@ -690,11 +690,9 @@ def generate_text_from_checkpoint_state(
             vocab_size=vocab_size,
             seed=seed,
         )
-    if (
-        "noise_tokens_fn" not in generate_kwargs
-        and vocab_size is not None
-        and (seed is not None or noise_seed is not None)
-    ):
+    if "noise_tokens_fn" not in generate_kwargs and (seed is not None or noise_seed is not None):
+        if vocab_size is None:
+            raise ValueError("noise_tokens_fn requires vocab_size or tokenizer/model vocab metadata")
         generate_kwargs["noise_tokens_fn"] = make_seeded_host_noise_tokens_fn(
             tt_model.mesh_device,
             batch=batch,
@@ -702,11 +700,9 @@ def generate_text_from_checkpoint_state(
             vocab_size=vocab_size,
             seed=noise_seed if noise_seed is not None else seed + 1,
         )
-    if (
-        "gumbel_noise_fn" not in generate_kwargs
-        and vocab_size is not None
-        and (seed is not None or gumbel_seed is not None)
-    ):
+    if "gumbel_noise_fn" not in generate_kwargs and (seed is not None or gumbel_seed is not None):
+        if vocab_size is None:
+            raise ValueError("gumbel_noise_fn requires vocab_size or tokenizer/model vocab metadata")
         generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
             tt_model.mesh_device,
             batch=batch,
