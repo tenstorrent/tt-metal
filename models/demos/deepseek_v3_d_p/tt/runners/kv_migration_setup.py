@@ -36,6 +36,7 @@ NOTE: per-layer LayerAck channel + scheduler-driven migration are NOT here
 import glob
 import os
 import sys
+import time
 
 from loguru import logger
 
@@ -110,7 +111,7 @@ def _attach_migration_client():
     return client, cmd_q, table_q, resp_q
 
 
-def _deliver_local_device_map(device_map) -> None:
+def _deliver_local_device_map(device_map, timeout_s=120.0) -> None:
     """Push THIS rank's local FNID->UMD device map to its co-located host migration worker(s).
 
     Direct port of tt-blaze's ``_deliver_local_device_map``. The migration endpoint spawns TWO
@@ -127,24 +128,31 @@ def _deliver_local_device_map(device_map) -> None:
     """
     mod = _import_migration_client()
 
-    trios = []
-    for side in ("a", "b"):
-        for c in sorted(glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")):
-            name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
-            trios.append(
-                (
-                    name,
-                    name.replace(f"_{side}_cmd", f"_{side}_table"),
-                    name.replace(f"_{side}_cmd", f"_{side}_resp"),
+    def _discover():
+        trios = []
+        for side in ("a", "b"):
+            for c in sorted(glob.glob(f"/dev/shm/ep_*_{side}_cmd") + glob.glob(f"/dev/shm/ep_*_{side}_cmd_r*")):
+                name = "/" + os.path.basename(c)  # "/ep_<pid>_<side>_cmd[_r<rank>]"
+                trios.append(
+                    (
+                        name,
+                        name.replace(f"_{side}_cmd", f"_{side}_table"),
+                        name.replace(f"_{side}_cmd", f"_{side}_resp"),
+                    )
                 )
-            )
+        return trios
 
-    if not trios:
-        raise RuntimeError(
-            "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
-            "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
-            "master-only control channel, NOT the device-map queues.)"
-        )
+    deadline = time.monotonic() + timeout_s
+    trios = _discover()
+    while not trios:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "[migration] no local worker queues (/dev/shm/ep_*_{a,b}_cmd*) on this host -- is the "
+                "migration_endpoint/worker for THIS host running? (The /mig_ep* outward queues are the "
+                "master-only control channel, NOT the device-map queues.)"
+            )
+        time.sleep(0.25)
+        trios = _discover()
 
     for cmd, table, resp in trios:
         try:
@@ -272,7 +280,7 @@ def publish_kv_chunk_table_and_wait_ready(
     first_layer_idx: int = 0,
     num_my_layers: int = None,
     wait_ready_timeout_ms: int = 120_000,
-) -> None:
+):
     """Full migration bring-up from the prefill runner side.
 
     Builds + serializes the KV chunk address table, attaches a
@@ -315,7 +323,7 @@ def publish_kv_chunk_table_and_wait_ready(
         return
 
     # RANK 0 ONLY: build the merged table, init the MigrationLayerClient, SET_TABLE, wait for ready.
-    _publish_table_and_wait_ready(
+    return _publish_table_and_wait_ready(
         mesh_device=mesh_device,
         kvpe_cache=kvpe_cache,
         seq_len=seq_len,
@@ -361,7 +369,7 @@ def _publish_table_and_wait_ready(
     num_my_layers,
     stage_layout,
     wait_ready_timeout_ms,
-) -> None:
+):
     """RANK 0 ONLY. Build + serialize the merged KV chunk table, init the endpoint
     ``MigrationLayerClient`` on the master cmd/table/resp queues, send SET_TABLE, and block on
     WORKER_READY (emitted once the table is applied and every rank's device map landed)."""
@@ -388,3 +396,5 @@ def _publish_table_and_wait_ready(
     client.send_kv_chunk_table(path)
     client.wait_ready(wait_ready_timeout_ms)
     logger.info(f"[migration] WORKER_READY: layers={num_layers} slots={num_users} table={path}")
+
+    return client
