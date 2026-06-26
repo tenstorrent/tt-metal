@@ -48,27 +48,6 @@ struct ReduceScatterMinimalAsyncParams {
     std::optional<uint32_t> num_buffers_per_channel;
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    // Add attributes method for reflection
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("dim", dim);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("optional_intermediate_mem_config", optional_intermediate_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("chunks_per_sync", chunks_per_sync);
-        attrs.emplace_back("num_workers_per_link", num_workers_per_link);
-        attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
-        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
-        return attrs;
-    }
-
     // Compile-time attributes drive the default program-cache reflection hash and the canonical key
     // (ttsl::hash::hash_objects_with_default_seed + ttsl::hash::canonical_key). They list exactly the
     // structure-affecting fields, mirroring the set the (now-removed) custom compute_program_hash used:
