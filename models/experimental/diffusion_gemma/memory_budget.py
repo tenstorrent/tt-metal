@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Static memory helpers for DiffusionGemma bring-up budgets."""
+"""Static memory helpers for DiffusionGemma bring-up budgets.
+
+The estimates in this module are scoped to per-step canvas K/V scratch tensors.
+They are not a total model working-set estimate: prompt-prefix K/V, weights,
+paged cache allocation, activations, and SDPA concatenation buffers are measured
+separately by the QB2 memory probes.
+"""
 
 from __future__ import annotations
 
@@ -45,6 +51,8 @@ def estimate_canvas_kv_scratch_bytes(
 
     The current Gemma4 attention path materializes separate K and V tensors even
     for full-attention layers whose weights are K=V tied, so this counts both.
+    This intentionally counts only the denoise canvas K/V side; prompt-prefix K/V
+    concatenated by denoise SDPA is outside this helper's scope.
     """
 
     if config is None:
