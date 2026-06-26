@@ -21,3 +21,6 @@ global_env:
   # Set PREFILL_MIGRATION_CLIENT_DIR to the dir containing the migration_client.so file
   PREFILL_MIGRATION_SELFTEST: "1"
   PREFILL_MIGRATION_CLIENT_DIR: "/data/nolenzhao/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"
+  PREFILL_MODEL_VARIANT: "kimi_k2_6"
+  PREFILL_PP_D2D_FIFO_BYTES: "4096"
+  PREFILL_CHECK_COMPLETIONS: "1"
