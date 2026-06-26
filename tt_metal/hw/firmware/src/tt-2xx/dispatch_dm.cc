@@ -98,7 +98,7 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DM0-FW: initialized\n");
+    DPRINT("DISPATCH DM0-FW: initialized\n");
 
     mailboxes->launch_msg_rd_ptr = 0;
     noc_index = 0;
@@ -120,7 +120,7 @@ extern "C" uint32_t _start1() {
         while (1) {
             WAYPOINT("GW");
             uint8_t go_message_signal = RUN_MSG_DONE;
-            DPRINT("DM0-FW: waiting for GO message\n");
+            DPRINT("DISPATCH DM0-FW: waiting for GO message\n");
             while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
