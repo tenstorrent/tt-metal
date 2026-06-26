@@ -545,14 +545,23 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // it fires we ALSO clamp the compile-time block to the per-core tiles — the win requires
     // M_block == M_tiles_per_core; leaving the default 8 makes the kernel reserve/pipeline 8x-too-large
     // CB blocks (~+50% slower even though runtime byte counts are clamped). Fires only when the caller
-    // didn't pin a config and there are no fused ops (mcast prototype). Disable via TT_MM_NO_AUTO_PREFETCH;
-    // TT_MM_MCAST_PREFETCH forces the dataflow on regardless (handled at the mcast-flags block below).
+    // didn't pin a config and there are no fused ops (mcast prototype).
+    //
+    // DEFAULT OFF: the mcast/prefetch lever is near-neutral on aggregate (geomean ~0.99x over an 81-shape
+    // A/B; 62/81 within +-2%, biggest win +8%) and conflicts with the (S,Pk) partition schemes, so it is
+    // disabled by default to keep it out of sweeps as a confounder. Opt the auto-gate back in with
+    // TT_MM_AUTO_PREFETCH=1; TT_MM_MCAST_PREFETCH / TT_MM_MCAST_BROADCAST still force the dataflow on
+    // regardless (handled at the mcast-flags block below). TT_MM_NO_AUTO_PREFETCH is retained as an
+    // explicit kill (wins over the opt-in) but is a no-op now that the default is off.
     const uint32_t min_tiles_per_core = std::min(M_tiles_per_core, N_tiles_per_core);
+    const char* auto_prefetch = std::getenv("TT_MM_AUTO_PREFETCH");
     const char* no_auto_prefetch = std::getenv("TT_MM_NO_AUTO_PREFETCH");
+    const bool auto_prefetch_opt_in = auto_prefetch != nullptr && std::string(auto_prefetch) != "0" &&
+                                      !(no_auto_prefetch != nullptr && std::string(no_auto_prefetch) != "0");
     // Gate is computed on the SUB-GRID per-core counts (M/N_tiles_per_core already reflect slicing),
     // so it composes with slicing: each sub-grid is squarer, min_tiles_per_core is the sub-grid value.
-    const bool prefetch_gate = !config.has_value() && !fuse_op && !fuse_srs && min_tiles_per_core <= 2 &&
-                               !(no_auto_prefetch != nullptr && std::string(no_auto_prefetch) != "0");
+    const bool prefetch_gate =
+        auto_prefetch_opt_in && !config.has_value() && !fuse_op && !fuse_srs && min_tiles_per_core <= 2;
     if (prefetch_gate) {
         M_block_tiles = std::min(M_block_tiles, M_tiles_per_core);
         N_block_tiles = std::min(N_block_tiles, N_tiles_per_core);
