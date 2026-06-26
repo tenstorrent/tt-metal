@@ -55,7 +55,10 @@ def preprocess_tt_text_encoder(
     emb_w = ttnn.from_torch(
         text_encoder.embedding.weight.detach().cpu(),
         dtype=ttnn.bfloat16,  # ttnn.embedding requires BF16 weights on device
-        layout=ttnn.TILE_LAYOUT,
+        # Store ROW_MAJOR: ttnn.embedding gathers rows in row-major, so a TILE-layout table is
+        # untilized to row-major on every forward (the 17µs UntilizeWithUnpadding before the
+        # embedding). Doing the (un)tilize once here at preprocess removes it from the hot path.
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -109,6 +112,21 @@ def preprocess_tt_text_encoder(
     fwd, rev = preprocess_tt_lstm_1layer(text_encoder.lstm, device, weights_dtype=weights_dtype)
     assert rev is not None, "TextEncoder expects a bidirectional LSTM"
     lstm_w_h_block = build_fused_recurrent_weight(text_encoder.lstm, device, weights_dtype=weights_dtype)
+
+    # Pre-stage the (constant) BiLSTM matmul weights to L1 once, here, instead of copying them
+    # DRAM->L1 on every forward inside the fused loop (the 3 large CopyDeviceOperations before the
+    # LSTM matmuls: w_h_block ~10µs + the two w_x ~4µs each). The fused path uses L1 in1 for its
+    # gate-precompute + recurrent matmuls; making the weights L1-resident gives that same speedup
+    # while removing the per-forward staging copy. tt_bilstm_nlc detects already-L1 weights and skips
+    # both the copy and the end-of-forward dealloc, so these persist for the encoder's lifetime.
+    # Footprint is small and interleaved (w_h_block [2H,8H] 2 MiB + 2× w_x [H,4H] 1 MiB = ~4 MiB
+    # spread across L1 banks, ~31 KiB/core), and during the forward they were already L1-resident
+    # (transiently) so the forward's peak L1 is unchanged — only the post-forward residency differs.
+    w_x_l1 = lambda p: TTLSTMParams(
+        w_x=ttnn.to_memory_config(p.w_x, ttnn.L1_MEMORY_CONFIG), w_h=p.w_h, b=p.b, hidden_size=p.hidden_size
+    )
+    fwd, rev = w_x_l1(fwd), w_x_l1(rev)
+    lstm_w_h_block = ttnn.to_memory_config(lstm_w_h_block, ttnn.L1_MEMORY_CONFIG)
 
     return TTTextEncoderParams(
         embedding_weight=emb_w,
@@ -230,13 +248,18 @@ class TTTextEncoderConvLNBlock:
         *,
         batch: int,
         seq: int,
+        keep_sharded: bool = False,
     ) -> ttnn.Tensor:
         """One CNN stage on batch-flattened activations ``[1, 1, batch*seq, C]`` (same shape out).
 
         The conv emits its output **block-sharded in L1**; when that layout is a valid sharded-LN input
-        the channel-LayerNorm + LeakyReLU run on it in place (no reshard either side), then the result
-        is re-interleaved to DRAM for the next conv. Falls back to a DRAM-interleaved LayerNorm when the
-        conv output isn't block-sharded (non-BH / odd shapes).
+        the channel-LayerNorm + LeakyReLU run on it in place (no reshard either side). ``ttnn.conv1d``
+        also *accepts* a block-sharded input, so with ``keep_sharded`` the LeakyReLU output is left
+        sharded and handed straight to the next stage's conv — dropping the ShardedToInterleaved (here)
+        and the InterleavedToSharded (next conv's input) that a DRAM hand-off would cost. Set it only
+        when the consumer is another CNN conv and no mask multiply intervenes; otherwise (last stage, or
+        the padded mask path) the output is re-interleaved to DRAM. Falls back to a DRAM LayerNorm when
+        the conv output isn't block-sharded (non-BH / odd shapes).
         """
         x = tt_conv1d_nlc(
             x_nlc=x_flat,
@@ -252,8 +275,7 @@ class TTTextEncoderConvLNBlock:
         )
         ln_prog = _layernorm_prog_from_sharded(x)
         if ln_prog is not None:
-            # Conv output is block-sharded L1: normalize + activate on-core (no reshard), then
-            # re-interleave to DRAM for the next conv (which does its own input resharding).
+            # Conv output is block-sharded L1: normalize + activate on-core (no reshard).
             ln_mem = x.memory_config()
             x = ttnn.layer_norm(
                 x,
@@ -265,6 +287,10 @@ class TTTextEncoderConvLNBlock:
                 program_config=ln_prog,
             )
             x = ttnn.leaky_relu(x, negative_slope=0.2, memory_config=ln_mem)
+            # Hand the sharded LeakyReLU output straight to the next conv (no mask, not the last stage).
+            if keep_sharded and mask_keep is None:
+                return x
+            # Otherwise re-interleave to DRAM for the reshape→LSTM (last stage) or the mask multiply.
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             x = _maybe_interleaved(x)
@@ -373,8 +399,12 @@ class TTTextEncoder:
         if mask_keep is not None:
             x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        for blk in self._cnn_blocks:
-            x = blk.forward(x, mask_keep, batch=B, seq=T)
+        # Chain the CNN blocks keeping activations block-sharded in L1 between stages: each conv accepts
+        # the previous LeakyReLU's sharded output directly, so only the last stage re-interleaves to DRAM
+        # for the reshape→LSTM (the masked path also re-interleaves, gated inside the block).
+        last = len(self._cnn_blocks) - 1
+        for i, blk in enumerate(self._cnn_blocks):
+            x = blk.forward(x, mask_keep, batch=B, seq=T, keep_sharded=(i != last))
 
         # Single un-flatten [1, 1, B*T, C] -> [B, T, C] for the per-batch BiLSTM recurrence.
         x = ttnn.reshape(x, [B, T, x.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)

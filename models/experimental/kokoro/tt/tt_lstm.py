@@ -483,17 +483,27 @@ def tt_bilstm_nlc(
             # (gate precompute + recurrent: ~438->343 us). The weight copies are transient (freed at
             # the end of this call), so no persistent L1 footprint leaks into the kmodel pipeline.
             gx_mc = ttnn.L1_MEMORY_CONFIG
-            w_h_block = ttnn.to_memory_config(w_h_block, ttnn.L1_MEMORY_CONFIG)
-            l1_weights.append(w_h_block)
-            fwd_wx = ttnn.to_memory_config(fwd.w_x, ttnn.L1_MEMORY_CONFIG)
-            rev_wx = ttnn.to_memory_config(rev.w_x, ttnn.L1_MEMORY_CONFIG)
-            l1_weights += [fwd_wx, rev_wx]
+
+            def _stage_l1(t: ttnn.Tensor) -> ttnn.Tensor:
+                """Place ``t`` in L1 for this forward. Constant weights pre-staged to L1 (see
+                ``preprocess_tt_text_encoder``) are used as-is — no per-forward DRAM->L1 copy and NOT
+                registered for dealloc (they outlive the call). Only DRAM tensors are copied + tracked
+                for the end-of-forward free, so no persistent L1 footprint leaks for the transients."""
+                if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                    return t
+                t_l1 = ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
+                l1_weights.append(t_l1)
+                return t_l1
+
+            w_h_block = _stage_l1(w_h_block)
+            fwd_wx = _stage_l1(fwd.w_x)
+            rev_wx = _stage_l1(rev.w_x)
             fwd = TTLSTMParams(w_x=fwd_wx, w_h=fwd.w_h, b=fwd.b, hidden_size=H)
             rev = TTLSTMParams(w_x=rev_wx, w_h=rev.w_h, b=rev.b, hidden_size=H)
             # Stage the LSTM input to L1 too so the gate-precompute (in0=x_nlc) and the reverse-input
             # reorder (in1=x_nlc) read L1 instead of DRAM — removes the last dram-interleaved matmul.
-            x_nlc = ttnn.to_memory_config(x_nlc, ttnn.L1_MEMORY_CONFIG)
-            l1_weights.append(x_nlc)
+            # (x_nlc is recomputed every forward, so it is always a transient DRAM->L1 copy.)
+            x_nlc = _stage_l1(x_nlc)
         # Output-assembly tensors (reverse-output reorder + the [B,L,2H] stack/slices) share the
         # step memory: L1 when the fused L1 path is active, else the caller's config.
         asm_mc = step_mc if step_mc.buffer_type == ttnn.BufferType.L1 else memory_config
