@@ -18,10 +18,23 @@ import os
 
 import pytest
 import torch
+from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
+from transformers.models.gemma4.modeling_gemma4 import (
+    Gemma4RMSNorm,
+    Gemma4TextDecoderLayer,
+    Gemma4TextRotaryEmbedding,
+    Gemma4TextScaledWordEmbedding,
+    apply_rotary_pos_emb,
+)
 
 import ttnn
+from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention.prefill import _slice_rope_cache
 from models.demos.gemma4.tt.attention.operations import prefill_sdpa_program_config
+from models.demos.gemma4.tt.ccl import CCLManager
+from models.demos.gemma4.tt.model import Gemma4Model
+from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [
@@ -92,6 +105,99 @@ def _torch_online_sdpa(q, k, v, *, k_chunk=ORACLE_K_CHUNK):
     return running_out / running_sum.unsqueeze(-1)
 
 
+class _TinyGemma4Text(torch.nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.embed_tokens = Gemma4TextScaledWordEmbedding(
+            config.vocab_size,
+            config.hidden_size,
+            padding_idx=config.pad_token_id,
+            embed_scale=config.hidden_size**0.5,
+        )
+        self.layers = torch.nn.ModuleList([Gemma4TextDecoderLayer(config, layer_idx=0)])
+        self.norm = Gemma4RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.lm_head = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+
+def _tiny_full_attention_config():
+    config = Gemma4TextConfig(
+        vocab_size=128,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        num_global_key_value_heads=4,
+        head_dim=32,
+        global_head_dim=32,
+        layer_types=["full_attention"],
+        max_position_embeddings=262144,
+        rms_norm_eps=1e-6,
+        hidden_activation="gelu_pytorch_tanh",
+        attention_bias=False,
+        attention_k_eq_v=False,
+        enable_moe_block=False,
+        hidden_size_per_layer_input=0,
+        final_logit_softcapping=0.0,
+        rope_parameters={
+            "full_attention": {
+                "rope_type": "default",
+                "rope_theta": 1000000.0,
+            }
+        },
+    )
+    config._attn_implementation = "eager"
+    return config
+
+
+def _to_tt_state(hf_model):
+    return {f"model.{key}": value for key, value in hf_model.state_dict().items()}
+
+
+def _replicate_mapper(device):
+    is_mesh = hasattr(device, "shape") and device.get_num_devices() > 1
+    return ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+
+
+def _to_device_hidden(device, value):
+    return ttnn.from_torch(
+        value.unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        mesh_mapper=_replicate_mapper(device),
+    )
+
+
+def _to_torch_hidden(device, value):
+    is_mesh = hasattr(device, "shape") and device.get_num_devices() > 1
+    return ttnn.to_torch(ttnn.get_device_tensors(value)[0]) if is_mesh else ttnn.to_torch(value)
+
+
+def _torch_tiny_denoise_attention_reference(hf_model, prompt_hidden, canvas_hidden):
+    config = hf_model.config
+    attn = hf_model.layers[0].self_attn
+    kv_hidden = torch.cat([prompt_hidden, canvas_hidden], dim=1)
+    total_len = kv_hidden.shape[1]
+    canvas_len = canvas_hidden.shape[1]
+    rope = Gemma4TextRotaryEmbedding(config)
+    cos, sin = rope(kv_hidden, torch.arange(total_len).unsqueeze(0), layer_type="full_attention")
+    q_cos = cos[:, -canvas_len:, :]
+    q_sin = sin[:, -canvas_len:, :]
+
+    q_shape = (*canvas_hidden.shape[:-1], config.num_attention_heads, attn.head_dim)
+    kv_shape = (*kv_hidden.shape[:-1], config.num_global_key_value_heads, attn.head_dim)
+    query = attn.q_norm(attn.q_proj(canvas_hidden).view(q_shape))
+    query = apply_rotary_pos_emb(query, q_cos, q_sin, unsqueeze_dim=2).transpose(1, 2)
+    key = attn.k_norm(attn.k_proj(kv_hidden).view(kv_shape))
+    key = apply_rotary_pos_emb(key, cos, sin, unsqueeze_dim=2).transpose(1, 2)
+    value = attn.v_norm(attn.v_proj(kv_hidden).view(kv_shape)).transpose(1, 2)
+    out = torch.nn.functional.scaled_dot_product_attention(query, key, value, is_causal=False, scale=1.0)
+    out = out.transpose(1, 2).reshape(canvas_hidden.shape[0], canvas_len, config.hidden_size)
+    return attn.o_proj(out)
+
+
 def _run_long_noncausal_sdpa(device, *, sk, head_dim, masked, pcc=0.99):
     torch.manual_seed(47462 + sk + head_dim + int(masked))
     q = torch.randn(1, 1, CANVAS_LEN, head_dim)
@@ -160,3 +266,55 @@ def test_w2b_rope_slice_reaches_256k(device):
     with pytest.raises(ValueError, match="exceeds cache length"):
         _slice_rope_cache(cache, cache_len, 32)
     cache.deallocate(True)
+
+
+@pytest.mark.parametrize(
+    "prompt_len",
+    [
+        pytest.param(33024, id="sk33280"),
+        pytest.param(261888, marks=_requires_full_sweep(), id="sk262144"),
+    ],
+)
+def test_w2b_integrated_long_prompt_denoise_attention(device, prompt_len):
+    torch.manual_seed(47462)
+    canvas_len = CANVAS_LEN
+    total_len = prompt_len + canvas_len
+    config = _tiny_full_attention_config()
+    hf_model = _TinyGemma4Text(config).eval()
+    model_args = Gemma4ModelArgs.from_hf_config(config)
+    model_args._hf_text_config = config
+    tp = device.shape[1] if hasattr(device, "shape") else 1
+    mesh_config = MeshConfig(device.shape, decode=ModeConfig(tp=tp))
+    tt_model = Gemma4Model(
+        mesh_device=device,
+        hf_config=model_args,
+        state_dict=_to_tt_state(hf_model),
+        ccl_manager=CCLManager(device, num_links=1) if tp > 1 else None,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=total_len,
+        max_local_batch_size=1,
+        num_layers=1,
+        create_kv_cache=False,
+    )
+
+    prompt_hidden = torch.randn(1, prompt_len, config.hidden_size)
+    canvas_hidden = torch.randn(1, canvas_len, config.hidden_size)
+    with torch.no_grad():
+        golden = _torch_tiny_denoise_attention_reference(hf_model, prompt_hidden, canvas_hidden)
+
+    tt_prompt_hidden = _to_device_hidden(device, prompt_hidden)
+    tt_canvas_hidden = _to_device_hidden(device, canvas_hidden)
+    tt_out = denoise_attention_forward(
+        tt_model,
+        layer_idx=0,
+        prompt_hidden=tt_prompt_hidden,
+        canvas_hidden=tt_canvas_hidden,
+    )
+    out = _to_torch_hidden(device, tt_out).squeeze(0)
+    assert_with_pcc(golden, out, 0.99)
+
+    tt_prompt_hidden.deallocate(True)
+    tt_canvas_hidden.deallocate(True)
+    tt_out.deallocate(True)
