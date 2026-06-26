@@ -1019,6 +1019,24 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceIncrementTraceCount() kernel_profiler::increment_trace_count();
 
+// Accumulate mode keeps only the zone-scope family (DeviceZoneScoped*N) and
+// DeviceRecordEvent. The other profiler features pull device code into the
+// size-constrained accumulate firmware, so compile them out -- their device
+// functions then go unreferenced and drop. Sync is unaffected: its kernels use
+// DeviceZoneScopedN + raw control-buffer access, neither touched here.
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_ACCUMULATE) && !defined(DISPATCH_KERNEL)
+#undef DeviceTimestampedData
+#define DeviceTimestampedData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
+#undef DeviceZoneScopedSumN1
+#define DeviceZoneScopedSumN1(name) (void(name))
+#undef DeviceZoneScopedSumN2
+#define DeviceZoneScopedSumN2(name) (void(name))
+#undef DeviceZoneSetCounter
+#define DeviceZoneSetCounter(counter) (void(sizeof(counter)))
+#undef DeviceValidateProfiler
+#define DeviceValidateProfiler(condition) (void(sizeof(condition)))
+#endif
+
 #else
 
 // The void(sizeof(FOO)) idiom (a) ensures FOO is syntactically and
