@@ -72,9 +72,9 @@ TEST(LayerCompletionRoutingMPI, AllRanksRouteToMasterInOrder) {
         }
     }
 
+    const uint64_t expected = static_cast<uint64_t>(world) * kLayersPerRank;
+    uint64_t got = 0;
     if (rank == kMaster) {
-        const uint64_t expected = static_cast<uint64_t>(world) * kLayersPerRank;
-        uint64_t got = 0;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         while (got < expected && std::chrono::steady_clock::now() < deadline) {
             got += consumer->try_consume_all();
@@ -83,14 +83,17 @@ TEST(LayerCompletionRoutingMPI, AllRanksRouteToMasterInOrder) {
         EXPECT_EQ(got, expected) << "master did not receive all completions";
     }
 
-    // Subordinates must stop (drain their rings + finish sends) before the
-    // master tears down its receives.
-    if (rank != kMaster) {
-        router->stop();
-    }
+    // Coordinated teardown: with end-of-stream sentinels the master waits for one sentinel per
+    // subordinate, so stop() neither hangs nor drops the tail regardless of who stops first. Every
+    // rank stops after a single barrier — no subordinate-before-master sequencing (which the old
+    // cancel-based teardown required). A hang here would fail the test by timeout.
     ctx->barrier();
+    router->stop();
     if (rank == kMaster) {
-        router->stop();
+        // Sweep once more for anything injected during the master's final ring-drain inside stop();
+        // coordinated teardown must not have lost a completion.
+        got += consumer->try_consume_all();
+        EXPECT_EQ(got, expected) << "master lost completions across coordinated teardown";
         consumer->shutdown();
     }
     producer->shutdown();
