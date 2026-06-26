@@ -57,7 +57,6 @@ using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
-using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
 using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
