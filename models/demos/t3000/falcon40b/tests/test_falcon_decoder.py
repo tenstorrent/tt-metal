@@ -271,34 +271,6 @@ def run_test_FalconDecoder_inference(
         ).flatten(0, 1),
     )
 
-    # === FALCON-DIAG (transformers 5.x NaN investigation, #47924) — temporary, remove after diagnosis ===
-    def _falcon_diag(name, t):
-        t = t.detach().float()
-        nan = int(torch.isnan(t).sum())
-        tot = int(t.numel())
-        finite = t[torch.isfinite(t)]
-        logger.info(
-            f"FALCON-DIAG {name}: shape={tuple(t.shape)} nan={nan}/{tot} all_nan={nan == tot} "
-            f"finite_min={finite.min().item() if finite.numel() else 'NA'} "
-            f"finite_max={finite.max().item() if finite.numel() else 'NA'}"
-        )
-
-    logger.info(
-        "FALCON-DIAG config: "
-        f"new_decoder_architecture={getattr(configuration, 'new_decoder_architecture', None)} "
-        f"parallel_attn={getattr(configuration, 'parallel_attn', None)} "
-        f"multi_query={getattr(configuration, 'multi_query', None)} "
-        f"num_kv_heads={getattr(configuration, 'num_kv_heads', None)} "
-        f"num_attention_heads={getattr(configuration, 'num_attention_heads', None)} "
-        f"hidden_size={getattr(configuration, 'hidden_size', None)} "
-        f"rope_theta={getattr(configuration, 'rope_theta', None)} "
-        f"bias={getattr(configuration, 'bias', None)} "
-        f"attn_impl={getattr(configuration, '_attn_implementation', None)}"
-    )
-    _falcon_diag("pytorch_out(ref)", pytorch_out)
-    _falcon_diag("tt_out_tensor", tt_out_tensor)
-    # === end FALCON-DIAG ===
-
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out_tensor, out_pcc)
     logger.info(f"Output: {output_pcc}")
