@@ -11,9 +11,20 @@ Gemma4's decode path in ``COMMIT_APPEND`` phase.
 
 from __future__ import annotations
 
+from typing import Callable, NamedTuple
+
 import torch
 
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
+from models.experimental.diffusion_gemma.config import DiffusionConfig
+from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
+from models.experimental.diffusion_gemma.tt.denoise_loop import denoise_block as tt_denoise_block
+
+
+class GeneratedBlock(NamedTuple):
+    committed: torch.Tensor
+    next_pos: int
+    trajectory: DenoiseTrajectory
 
 
 def _deallocate_decode_inputs(device_inputs) -> None:
@@ -61,3 +72,52 @@ def commit_canvas_tokens(
         )
         logits.deallocate(True)
         _deallocate_decode_inputs(device_inputs)
+
+
+def _set_q_rope_offset(logits_fn, q_rope_offset: int) -> None:
+    if hasattr(logits_fn, "q_rope_offset"):
+        logits_fn.q_rope_offset = q_rope_offset
+
+
+def denoise_and_commit_block(
+    tt_model,
+    logits_fn,
+    init_canvas,
+    config: DiffusionConfig,
+    *,
+    start_pos: int,
+    gumbel_noise_fn=None,
+    noise_tokens_fn=None,
+    page_table=None,
+    page_tables_per_layer=None,
+    denoise_block_fn: Callable[..., DenoiseTrajectory] = tt_denoise_block,
+    commit_fn: Callable[..., None] = commit_canvas_tokens,
+) -> GeneratedBlock:
+    """Denoise one canvas, commit the clean argmax, and advance position.
+
+    ``start_pos`` is the absolute canvas start for this block. When ``logits_fn``
+    is a ``DenoiseLogitsAdapter`` this helper updates its ``q_rope_offset`` so
+    canvas RoPE positions advance with each committed block.
+    """
+    _set_q_rope_offset(logits_fn, start_pos)
+    trajectory = denoise_block_fn(
+        logits_fn,
+        init_canvas,
+        config,
+        gumbel_noise_fn=gumbel_noise_fn,
+        noise_tokens_fn=noise_tokens_fn,
+    )
+    if trajectory.committed is None:
+        raise RuntimeError("denoise trajectory did not produce committed canvas tokens")
+    commit_fn(
+        tt_model,
+        trajectory.committed,
+        start_pos=start_pos,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+    )
+    return GeneratedBlock(
+        committed=trajectory.committed,
+        next_pos=start_pos + trajectory.committed.shape[1],
+        trajectory=trajectory,
+    )
