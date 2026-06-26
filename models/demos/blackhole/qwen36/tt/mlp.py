@@ -15,9 +15,9 @@ import ttnn
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj  [in, out] (TP: bfloat8_b default; single-device 9B: bfloat4_b)
+    w1: ttnn.Tensor  # gate_proj  [in, out], bfloat4_b
     w2: ttnn.Tensor  # down_proj  [in, out], bfloat8_b
-    w3: ttnn.Tensor  # up_proj    [in, out] (TP: bfloat8_b default; single-device 9B: bfloat4_b)
+    w3: ttnn.Tensor  # up_proj    [in, out], bfloat4_b
 
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None) -> MLPWeights:
@@ -36,21 +36,6 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
         # each device's shard INTERLEAVED in DRAM so a regular ttnn.linear serves
         # both decode (M=1) and prefill (M=seq_len). DRAM-width-sharding the
         # weights for a faster decode matmul is a later optimization.
-        # MLP gate/up weight precision — default bfloat8_b. The prior bfloat4_b (4-bit) gate/up
-        # weights lose too much accuracy over the 27B's 64 layers: combined with the GDN
-        # chunk-kernel diagonal bug they shifted the logits enough to flip thin-margin
-        # structural/format tokens at prefill (wrong <think>/tool dialect, so the stock vLLM
-        # parsers couldn't parse). Measured vs a faithful HF/torch reference on 4xBlackhole:
-        # prefill-logits PCC went 0.71 (bf4 + diag bug) -> 0.95 with the diag fix + bf8 here, and
-        # the prefill argmax now matches the reference. down_proj stays bf8 (already on the
-        # accuracy path). Override with QWEN_TP_MLP_PREC=bf4|bf8|bf16.
-        _mlp_prec = os.environ.get("QWEN_TP_MLP_PREC", "bf8")
-        if _mlp_prec == "bf16":
-            _w13_dt, _w2_dt = ttnn.bfloat16, ttnn.bfloat16
-        elif _mlp_prec == "bf4":
-            _w13_dt, _w2_dt = ttnn.bfloat4_b, ttnn.bfloat8_b
-        else:  # bf8 (default)
-            _w13_dt, _w2_dt = ttnn.bfloat8_b, ttnn.bfloat8_b
         return MLPWeights(
             w1=tpc.shard_w(
                 state_dict["gate_proj.weight"],
@@ -58,7 +43,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("gate_proj"),
-                dtype=_w13_dt,
+                dtype=ttnn.bfloat4_b,
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
@@ -66,7 +51,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("up_proj"),
-                dtype=_w13_dt,
+                dtype=ttnn.bfloat4_b,
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -74,7 +59,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("down_proj"),
-                dtype=_w2_dt,
+                dtype=ttnn.bfloat8_b,
             ),
         )
 
@@ -107,13 +92,11 @@ class Qwen36MLP:
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
         self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
-        # A/B lever (default OFF → byte-unchanged): HiFi4 matmul fidelity instead of LoFi.
-        _fid = ttnn.MathFidelity.HiFi4 if os.environ.get("QWEN_TP_HIFI") == "1" else ttnn.MathFidelity.LoFi
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=_fid, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=_fid, fp32_dest_acc_en=True, packer_l1_acc=True
+            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
     def forward(self, x):
