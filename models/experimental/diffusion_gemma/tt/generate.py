@@ -157,6 +157,31 @@ def prefill_prompt_tokens(tt_model, prompt_tokens: torch.Tensor, *, page_table=N
     return prompt_tokens.shape[1]
 
 
+def _resolve_generation_logits_fn(
+    tt_model,
+    logits_fn,
+    logits_fn_builder,
+    *,
+    prompt_tokens: torch.Tensor,
+    prompt_len: int,
+    page_table=None,
+    page_tables_per_layer=None,
+):
+    if logits_fn is not None:
+        if logits_fn_builder is not None:
+            raise ValueError("pass either logits_fn or logits_fn_builder, not both")
+        return logits_fn
+    if logits_fn_builder is None:
+        raise ValueError("logits_fn or logits_fn_builder is required")
+    return logits_fn_builder(
+        tt_model,
+        prompt_tokens=prompt_tokens,
+        prompt_len=prompt_len,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+    )
+
+
 def make_host_canvas_init_fn(mesh_device, host_canvases):
     """Create a ``generate_blocks`` init hook from fixed host canvas tensors."""
     canvases = list(host_canvases)
@@ -389,6 +414,7 @@ def generate_from_prompt_tokens(
     page_table=None,
     page_tables_per_layer=None,
     stop_token_ids=None,
+    logits_fn_builder=None,
     prefill_fn: Callable[..., int] = prefill_prompt_tokens,
     blocks_fn: Callable[..., DeviceGeneration] = generate_blocks,
 ) -> DeviceGeneration:
@@ -402,6 +428,15 @@ def generate_from_prompt_tokens(
     prompt_len = prefill_fn(
         tt_model,
         prompt_tokens,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+    )
+    logits_fn = _resolve_generation_logits_fn(
+        tt_model,
+        logits_fn,
+        logits_fn_builder,
+        prompt_tokens=prompt_tokens,
+        prompt_len=prompt_len,
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
@@ -528,6 +563,7 @@ def generate_text(
     stop_token_ids=None,
     skip_prompt: bool = True,
     decode_kwargs: dict | None = None,
+    logits_fn_builder=None,
     prefill_fn: Callable[..., int] = prefill_prompt_tokens,
     blocks_fn: Callable[..., DeviceGeneration] = generate_blocks,
 ) -> DeviceTextGeneration:
@@ -550,6 +586,7 @@ def generate_text(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
         stop_token_ids=stop_token_ids if stop_token_ids is not None else eos_token_id,
+        logits_fn_builder=logits_fn_builder,
         prefill_fn=prefill_fn,
         blocks_fn=blocks_fn,
     )

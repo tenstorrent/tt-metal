@@ -250,6 +250,68 @@ def test_generate_from_prompt_tokens_prefills_then_runs_blocks():
     assert kwargs["stop_token_ids"] is None
 
 
+def test_generate_from_prompt_tokens_can_build_logits_after_prefill():
+    calls = []
+    prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[7, 8]], dtype=torch.long),
+        prompt_len=4,
+        next_pos=6,
+        trajectories=[],
+    )
+
+    def fake_prefill(tt_model, tokens, *, page_table=None, page_tables_per_layer=None):
+        calls.append(("prefill", tt_model, tokens.clone(), page_table, page_tables_per_layer))
+        return tokens.shape[1]
+
+    def fake_builder(tt_model, **kwargs):
+        calls.append(("builder", tt_model, kwargs))
+        return "built-logits"
+
+    def fake_blocks(tt_model, logits_fn, **kwargs):
+        calls.append(("blocks", tt_model, logits_fn, kwargs))
+        return generation
+
+    out = generate_from_prompt_tokens(
+        "model",
+        None,
+        prompt_tokens,
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=2),
+        init_canvas_fn="init",
+        page_table="page-table",
+        page_tables_per_layer=["layer-pages"],
+        logits_fn_builder=fake_builder,
+        prefill_fn=fake_prefill,
+        blocks_fn=fake_blocks,
+    )
+
+    assert out is generation
+    assert calls[0][0] == "prefill"
+    assert calls[1][0:2] == ("builder", "model")
+    builder_kwargs = calls[1][2]
+    assert builder_kwargs["prompt_tokens"] is prompt_tokens
+    assert builder_kwargs["prompt_len"] == prompt_tokens.shape[1]
+    assert builder_kwargs["page_table"] == "page-table"
+    assert builder_kwargs["page_tables_per_layer"] == ["layer-pages"]
+    assert calls[2][0:3] == ("blocks", "model", "built-logits")
+
+
+def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
+    with pytest.raises(ValueError, match="either logits_fn or logits_fn_builder"):
+        generate_from_prompt_tokens(
+            "model",
+            "logits",
+            torch.tensor([[1, 2]], dtype=torch.long),
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            logits_fn_builder=lambda *args, **kwargs: "built",
+            prefill_fn=lambda *args, **kwargs: 2,
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_tokenizes_generates_and_decodes():
     calls = []
     tokenizer = _FakeChatTokenizer()
