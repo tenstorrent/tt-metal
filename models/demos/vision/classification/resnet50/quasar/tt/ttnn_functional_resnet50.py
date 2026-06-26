@@ -195,7 +195,7 @@ class resnet50Bottleneck:
             # Mirror the large variant: free the residual input and defragment the
             # downsample output so the following convs have contiguous L1.
             ttnn.deallocate(x)
-            ds_out = ttnn.reallocate(ds_out)
+            ds_out = ttnn.experimental.quasar.reallocate(ds_out)
         else:
             ds_out = x
         return ds_out
@@ -277,9 +277,9 @@ class resnet50Bottleneck:
         if run_downsample_before_conv2:
             if ds_input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
                 # Defragment L1 before the projection conv so it fits alongside conv2.
-                x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x_rm = ttnn.experimental.quasar.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 ttnn.deallocate(x)
-                x = ttnn.reallocate(x_rm)
+                x = ttnn.experimental.quasar.reallocate(x_rm)
             ds_out = self.run_downsample_if_req(
                 x,
                 device,
@@ -498,8 +498,8 @@ class resnet50:
         fc_gx, fc_gy, self.fc_num_cores, fc_per_core_N, fc_in0_block_w = fit_fc_grid(device, n_tiles=32, k_tiles=64)
         self.fc_matmul_grid = (fc_gx, fc_gy)
         self.fc = ResnetLinear(
-            weight=ttnn.to_device(parameters.fc.weight, device),
-            bias=ttnn.to_device(parameters.fc.bias, device),
+            weight=ttnn.experimental.quasar.to_device(parameters.fc.weight, device),
+            bias=ttnn.experimental.quasar.to_device(parameters.fc.bias, device),
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             model_config=model_config,
             compute_kernel_config=compute_kernel_config,
@@ -707,7 +707,7 @@ class resnet50:
             override_memory_config=self.override_fold_mem_config,
         )
         n, c, h, w = fold_output_tensor.shape
-        fold_output_tensor = ttnn.reshape(fold_output_tensor, (1, 1, n * c * h, w))
+        fold_output_tensor = ttnn.experimental.quasar.reshape(fold_output_tensor, (1, 1, n * c * h, w))
 
         ttnn.deallocate(input_tensor)
 
@@ -1022,7 +1022,7 @@ class resnet50:
             output_tensor_end=(desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
             memory_config=self.final_output_mem_config,
         )
-        x = ttnn.reshape(
+        x = ttnn.experimental.quasar.reshape(
             x,
             (
                 self.batch_size,
