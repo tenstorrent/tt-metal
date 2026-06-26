@@ -154,7 +154,7 @@ struct KernelSpec {
     Group<TensorBinding> tensor_bindings;
 
     // Scratchpad bindings
-    // Declares that this kernel access a scratchpad resource (declared at the ProgramSpec level)
+    // Declares that this kernel accesses a scratchpad resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via Scratchpad(scratch::<accessor_name>)
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec

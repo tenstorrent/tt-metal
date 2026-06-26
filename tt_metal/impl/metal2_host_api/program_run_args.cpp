@@ -679,14 +679,15 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             }
         }
 
-        // Assemble the kernel's per-enqueue CRTA buffer in three structurally-separate sections:
+        // Assemble the kernel's per-enqueue CRTA buffer in four structurally-separate sections:
         //   1. User-named CRTAs, in schema order, sourced from common_runtime_arg_values.
         //   2. TensorBinding section, in binding-handle order, sourced from TensorArgument via the
         //      tensor_by_param lookup. Each binding occupies (1 + num_runtime_field_crta_words)
         //      words: [address, optional shape...]. The handle's addr_crta_offset lines up with
         //      the address slot position chosen here.
         //   3. Scratchpad section, in binding-handle order, one word each (program-sourced base
-        //      address). 4. Common runtime varargs, in caller-supplied order.
+        //      address).
+        //   4. Common runtime varargs, in caller-supplied order.
         const auto& binding_handles = kernel->tensor_binding_handles();
         const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
         std::size_t tensor_binding_section_words = 0;
