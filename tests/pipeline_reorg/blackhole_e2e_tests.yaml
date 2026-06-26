@@ -199,6 +199,30 @@
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
+- id: bh-lb-deepseek-dsa
+  name: bh_lb_DeepSeek_DSA
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+    export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
+    # `line` is the verified-portable fabric on the LoudBox (ring/fabric2d fail to train on a partial-Galaxy
+    # box). The suite auto-pins one fabric (priority default fabric2d), so DS_SPARSE_FABRIC=line forces the
+    # collected fabric id back to `line` — which the -k filter below then selects.
+    export DS_SPARSE_FABRIC=line
+    # Sparse MLA (V3.2 + GLM-5.1) vs MLACPU. Random weights + on-the-fly CPU truth -> no staged weights.
+    # GLM (tp<=2) gets its primary coverage on the 4x2 full-box mesh; DeepSeek-V3.2 covers the asymmetric
+    # 2x4 mesh (its 8x4 coverage is on Galaxy). The sparse suite carries no tier markers (the determinism
+    # test is pinned to each variant's anchor mesh, not selected here), so there is no -m gate.
+    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 4x2 and line" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 2x4 and line" -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_loudbox:
+      timeout: 40
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
 - id: bh-lb-deepseek-prefill-op-tests
   name: bh_lb_DeepSeek_PREFILL_OP_TESTS
   model-name: deepseek_prefill
