@@ -491,64 +491,6 @@ if(WITH_PYTHON_BINDINGS)
             COMPONENT
             tt_pybinds
     )
-
-    # ── Pipelined-prefill `_layer_completion` extension ───────────────────────
-    # A standalone nanobind module for the deepseek_v3_d_p pipelined-prefill layer-completion feature
-    # (host-local ring + reorder buffer + MPI router + the test-only consumer). Deliberately NOT linked
-    # into _ttnn and NOT on the ttnn API — it is exclusive to that runner, links only TT::Metalium, and
-    # is imported via models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill. Built here (the only
-    # scope with nanobind tooling + TT::Metalium); sources live next to the runner. Like _ttnn, the .so
-    # is emitted into the BUILD tree and symlinked into the source package dir (covered by the repo-root
-    # `*.so` gitignore). Links TT::Nanobind (carries the nanobind + Python3 include dirs) and needs
-    # tt_metal/distributed on the include path for named_shm.hpp (a distributed-internal header).
-    set(LAYER_COMPLETION_DIR ${PROJECT_SOURCE_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill)
-    add_library(layer_completion_ext SHARED)
-    target_sources(
-        layer_completion_ext
-        PRIVATE
-            ${LAYER_COMPLETION_DIR}/layer_completion_bindings.cpp
-            ${LAYER_COMPLETION_DIR}/layer_completion_queue.cpp
-            ${LAYER_COMPLETION_DIR}/layer_completion_reorder_buffer.cpp
-            ${LAYER_COMPLETION_DIR}/layer_completion_router.cpp
-            ${LAYER_COMPLETION_DIR}/layer_completion_consumer.cpp
-    )
-    target_link_libraries(
-        layer_completion_ext
-        PRIVATE
-            TT::Nanobind
-            TT::Metalium
-    )
-    target_include_directories(layer_completion_ext PRIVATE ${PROJECT_SOURCE_DIR}/tt_metal/distributed)
-    nanobind_compile_options(layer_completion_ext)
-    nanobind_link_options(layer_completion_ext)
-    set_target_properties(
-        layer_completion_ext
-        PROPERTIES
-            OUTPUT_NAME
-                layer_completion
-            PREFIX
-                "_"
-            CXX_VISIBILITY_PRESET
-                "default"
-            LIBRARY_OUTPUT_DIRECTORY
-                "${PROJECT_BINARY_DIR}/models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill"
-            BUILD_RPATH
-                "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            # No INSTALL_RPATH: not installed (no install(TARGETS) rule); loaded from the build tree via
-            # the source-dir symlink. Add an $ORIGIN-based RPATH (like _ttnn) only if an install rule lands.
-            ADDITIONAL_CLEAN_FILES
-                "${LAYER_COMPLETION_DIR}/_layer_completion.so"
-    )
-    # Symlink the build-tree .so into the source package dir so it imports as
-    # ...pipelined_prefill._layer_completion (mirrors ttnn/ttnn/_ttnn.so -> build).
-    add_custom_command(
-        TARGET layer_completion_ext
-        POST_BUILD
-        COMMAND
-            ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE:layer_completion_ext>"
-            "${LAYER_COMPLETION_DIR}/_layer_completion.so"
-        VERBATIM
-    )
 endif()
 if(TT_INSTALL)
     install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
