@@ -423,6 +423,7 @@ def test_denoise_logits_forward_returns_full_canvas_logits(mesh_device, reset_se
 
 @parametrize_mesh_with_fabric([(1, 4)])
 def test_denoise_logits_adapter_threads_prev_logits_for_self_conditioning(mesh_device, reset_seeds):
+    """Device-vs-device wiring equivalence; HF-golden logits tests own numerical correctness."""
     torch.manual_seed(7)
     prompt_len = 64
     canvas_len = 256

@@ -400,7 +400,7 @@ Adversarial multi-agent review of the 48 commits `d13c3ad0c91..HEAD` (~3834 LOC)
 - ✅ **Fixed 2026-06-26 [gemma4]** `attention/prefill.py:29-32` — `_slice_rope_cache` now documents that the no-op fast path is correct only when callers pre-slice RoPE caches to the active `seq_len`.
 - ✅ **Fixed 2026-06-26 [test]** `tests/test_device_canvas_sampling_dist.py:51-63` — renamed the readback-noise arithmetic test to `test_canvas_sample_matches_torch_argmax_with_readback_device_noise`, clarifying that RNG distribution is owned by the KL/frequency tests.
 - ✅ **Fixed 2026-06-26 [test]** `tests/test_device_canvas_sampling_exact.py:58-75` — exact params test now asserts parsed `top_k`/`top_p` values are carried while `top_k_top_p_supported is False`, locking current no-op behavior until those filters are implemented.
-- **[test, nit]** `tests/test_device_bidirectional_attention_integration.py:424-506` — self-cond adapter test is a device-vs-device wiring equivalence, not an oracle (numerical correctness owned by the HF-golden logits test). Doc note only.
+- ✅ **Fixed 2026-06-26 [test, nit]** `tests/test_device_bidirectional_attention_integration.py:424-506` — self-conditioning adapter test now documents that it is a device-vs-device wiring equivalence; HF-golden logits tests own numerical correctness.
 
 ### Dismissed — verified false positives (no action)
 
