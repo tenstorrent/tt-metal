@@ -41,6 +41,11 @@ def temperature_scale(logits, temperature: float):
     return ttnn.multiply(logits, 1.0 / float(temperature))
 
 
+def _deallocate_scaled_if_temporary(scaled, logits) -> None:
+    if scaled is not logits:
+        scaled.deallocate(True)
+
+
 def token_entropy(logits, temperature: float = 1.0):
     """Per-position Shannon entropy ``H = −Σ p·log p`` of ``softmax(logits / T)``.
 
@@ -67,6 +72,7 @@ def token_entropy(logits, temperature: float = 1.0):
     probs.deallocate(True)
     expected_terms.deallocate(True)
     expected_z.deallocate(True)
+    _deallocate_scaled_if_temporary(z, logits)
     return entropy  # H = logsumexp(z) - Σ softmax(z)·z
 
 
@@ -80,7 +86,10 @@ def gumbel_max(logits, temperature: float, noise):
     """
     z = temperature_scale(logits, temperature)
     perturbed = ttnn.add(z, noise)
-    return ttnn.argmax(perturbed, dim=-1, keepdim=True)
+    sampled = ttnn.argmax(perturbed, dim=-1, keepdim=True)
+    perturbed.deallocate(True)
+    _deallocate_scaled_if_temporary(z, logits)
+    return sampled
 
 
 def canvas_sample(logits, temperature: float, gumbel_noise):
@@ -171,5 +180,8 @@ def softmax(logits, temperature: float = 1.0, *, compute_kernel_config: Optional
     """``softmax(logits / T)`` over the vocab axis (the self-conditioning soft-embed prob)."""
     z = temperature_scale(logits, temperature)
     if compute_kernel_config is not None:
-        return ttnn.softmax(z, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config)
-    return ttnn.softmax(z, dim=-1)
+        probs = ttnn.softmax(z, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config)
+    else:
+        probs = ttnn.softmax(z, dim=-1)
+    _deallocate_scaled_if_temporary(z, logits)
+    return probs
