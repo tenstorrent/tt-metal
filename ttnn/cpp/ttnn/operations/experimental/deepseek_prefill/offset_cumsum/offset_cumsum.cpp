@@ -26,9 +26,9 @@ std::array<ttnn::Tensor, 3> offset_cumsum(
     auto gathered = ttnn::all_gather(
         reshaped,
         /*dim=*/0,
+        /*cluster_axis=*/cluster_axis,
         /*memory_config=*/memory_config,
         /*persistent_output_tensor=*/std::nullopt,
-        /*cluster_axis=*/cluster_axis,
         /*subdevice_id=*/std::nullopt,
         /*sub_core_grid=*/std::nullopt,
         /*num_links=*/num_links,

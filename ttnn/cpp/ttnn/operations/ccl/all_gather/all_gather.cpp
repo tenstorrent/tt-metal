@@ -54,9 +54,9 @@ std::pair<bool, std::string> use_composite_all_gather(
 ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
+    std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
-    std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
     // The following args are deprecated and will be removed in a future update
