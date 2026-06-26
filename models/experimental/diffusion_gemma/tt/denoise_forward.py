@@ -507,3 +507,32 @@ def make_denoise_logits_adapter_from_remapped_state(
         embedding_weight=backbone_state[embedding_key],
         **kwargs,
     )
+
+
+def make_generation_logits_fn_builder_from_remapped_state(
+    *,
+    backbone_state,
+    self_conditioning_state,
+    adapter_builder=make_denoise_logits_adapter_from_remapped_state,
+    **adapter_kwargs,
+):
+    """Return a ``tt.generate`` post-prefill builder for remapped checkpoint state."""
+
+    def logits_fn_builder(
+        tt_model,
+        *,
+        prompt_tokens=None,
+        prompt_len: int,
+        page_table=None,
+        page_tables_per_layer=None,
+    ):
+        del prompt_tokens, page_table, page_tables_per_layer
+        return adapter_builder(
+            tt_model,
+            prompt_len=prompt_len,
+            backbone_state=backbone_state,
+            self_conditioning_state=self_conditioning_state,
+            **adapter_kwargs,
+        )
+
+    return logits_fn_builder

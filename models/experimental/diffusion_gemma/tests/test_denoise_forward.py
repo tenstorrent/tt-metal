@@ -10,6 +10,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
     make_denoise_logits_adapter_from_kv_cache,
     make_denoise_logits_adapter_from_checkpoint_state,
     make_denoise_logits_adapter_from_remapped_state,
+    make_generation_logits_fn_builder_from_remapped_state,
     read_prompt_kv_cache_by_layer,
 )
 
@@ -280,3 +281,41 @@ def test_make_denoise_logits_adapter_from_remapped_state_rejects_missing_embeddi
             backbone_state={},
             self_conditioning_state={},
         )
+
+
+def test_make_generation_logits_fn_builder_from_remapped_state_matches_generate_hook():
+    calls = {}
+    backbone_state = {"model.language_model.embed_tokens.weight": "embedding-weight"}
+    self_conditioning_state = {"self": "conditioning"}
+
+    def fake_adapter_builder(tt_model, **kwargs):
+        calls["adapter"] = (tt_model, kwargs)
+        return "adapter"
+
+    builder = make_generation_logits_fn_builder_from_remapped_state(
+        backbone_state=backbone_state,
+        self_conditioning_state=self_conditioning_state,
+        config="config",
+        seq_len_start=32,
+        adapter_builder=fake_adapter_builder,
+    )
+
+    out = builder(
+        "model",
+        prompt_tokens="prompt-tokens",
+        prompt_len=64,
+        page_table="page-table",
+        page_tables_per_layer=["layer-pages"],
+    )
+
+    assert out == "adapter"
+    assert calls["adapter"] == (
+        "model",
+        {
+            "prompt_len": 64,
+            "backbone_state": backbone_state,
+            "self_conditioning_state": self_conditioning_state,
+            "config": "config",
+            "seq_len_start": 32,
+        },
+    )
