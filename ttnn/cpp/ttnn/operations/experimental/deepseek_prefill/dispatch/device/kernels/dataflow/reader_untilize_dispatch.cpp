@@ -229,11 +229,32 @@ void kernel_main() {
 
     // ===== Per-batch loop — this core handles batches core_id, core_id+total_workers, ... =====
     for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
-        uint32_t tile_base_page = batch_idx * tiles_per_row;
         uint32_t batch_start = batch_idx * read_batch_size;
         uint32_t batch_end =
             (batch_start + read_batch_size < token_end_idx) ? batch_start + read_batch_size : token_end_idx;
         uint32_t batch_count = batch_end - batch_start;
+
+#ifdef ROW_MAJOR_INPUT
+        // Row-major: there is no untilize compute. Read this batch's input rows straight into the
+        // payload CB (cb_input_id is the SAME CB the writer drains as cb_untilize). We reserve/push
+        // read_batch_size slots so the writer's wait_front/pop_front(read_batch_size) matches the tile
+        // path exactly; only batch_count rows are real (the plan only emits token_t < batch_count, so
+        // the trailing slots are never referenced). Reads are 8-at-a-time (read_batch_size) and overlap
+        // with the writer draining the previous batch via the double-buffered CB on the other RISC.
+        cb_reserve_back(cb_input_id, read_batch_size);
+        uint32_t payload_base = get_write_ptr(cb_input_id);
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, input_addr_gen, payload_base + t * aligned_input_page_size);
+        }
+        // Read this batch's indices and weights pages alongside the payload (single barrier covers all).
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+            noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_input_id, read_batch_size);
+#else
+        uint32_t tile_base_page = batch_idx * tiles_per_row;
 
         // 1. Signal compute to start untilizing this batch
         cb_reserve_back(cb_signal_id, 1);
@@ -260,6 +281,7 @@ void kernel_main() {
             noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
         }
         noc_async_read_barrier();
+#endif
 
         // 4. Build per-batch route plan into c_14.
         DPRINT_DISPATCH(
@@ -384,12 +406,15 @@ void kernel_main() {
     // Teardown: all batches done — push the two end-of-stream sentinels this core's
     // consumers wait on.
     DPRINT_DISPATCH("[R s={} c={}] loop DONE -> pushing sentinels\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id);
-    // (1) Sentinel value to compute so it breaks out of its untilize loop.
+#ifndef ROW_MAJOR_INPUT
+    // (1) Sentinel value to compute so it breaks out of its untilize loop. Row-major has no compute
+    //     kernel, so this signal is skipped entirely.
     cb_reserve_back(cb_signal_id, 1);
     volatile tt_l1_ptr uint32_t* signal_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
     signal_ptr[0] = ROUTE_INFO_SENTINEL;
     cb_push_back(cb_signal_id, 1);
+#endif
 
     // (2) Zero-entry end-of-plan page to the writer (entry_count == 0, entries[0].flags ==
     //     PLAN_FLAG_END) so it stops draining and forwards ROUTE_INFO_SENTINEL to the sender.
