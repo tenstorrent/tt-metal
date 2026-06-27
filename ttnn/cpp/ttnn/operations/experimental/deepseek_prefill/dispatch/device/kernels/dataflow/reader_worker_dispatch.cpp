@@ -3,14 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Reader kernel for the untilize cores in the tile-layout dispatch path.
-// Runs on the reader RISC of each untilize core, paired with
-// writer_untilize_dispatch.cpp on the other data-movement RISC: this kernel
-// streams tiled input for compute to untilize and builds the per-batch route
-// plan, while the writer drains the previous batch's plan and issues the NOC
-// writes.
+// Reader kernel for the worker cores — the unified dispatch reader for both
+// TILE and ROW_MAJOR input, selected by the ROW_MAJOR_INPUT define. Runs on the
+// reader RISC of each worker core, paired with writer_worker_dispatch.cpp on
+// the other data-movement RISC: this kernel prepares the token payload and builds
+// the per-batch route plan, while the writer drains the previous batch's plan and
+// issues the NOC writes.
+//   - TILE: streams tiled input into cb_input_id for the compute kernel to untilize.
+//   - ROW_MAJOR (ROW_MAJOR_INPUT): reads input rows straight into the payload CB;
+//     there is no compute kernel on this path — no untilize happens.
 //
-// Token batches are distributed round-robin across total_workers untilize cores:
+// Token batches are distributed round-robin across total_workers worker cores:
 // core i processes batches i, i+total_workers, …
 //
 // Shared state — offsets[] (per-expert DRAM page allocators) is a single counter
@@ -21,18 +24,18 @@
 // core keeps its own copy.
 //
 // For each assigned batch:
-//   1. Signal compute to start untilizing this batch (cb_signal_id).
-//   2. Stream the tiled input stripe from DRAM → cb_input_id, block_ct_dim tiles
-//      at a time, for compute to untilize.
-//   3. Read this batch's indices pages from DRAM.
-//   4. Take the baton, then build the route plan into cb_plan_id: for each
+//   1. Stage the payload: TILE signals compute (cb_signal_id) and streams the
+//      tiled input stripe from DRAM → cb_input_id, block_ct_dim tiles at a time;
+//      ROW_MAJOR reads input rows straight into the payload CB instead.
+//   2. Read this batch's indices and weights pages from DRAM.
+//   3. Take the baton, then build the route plan into cb_plan_id: for each
 //      (token, top-k) routed to this dispatch core, allocate a DRAM page from
 //      offsets[expert] (drop if the dispatch buffer is full), classify it local
 //      vs cross-device (computing route/distance for the latter), and append a
 //      PlanEntry.  Write offsets[] back and release the baton.
 //
 // After the last batch: push an end-of-plan sentinel — ROUTE_INFO_SENTINEL to
-// compute (cb_signal_id) and a zero-entry sentinel plan page to the writer.
+// compute (cb_signal_id, TILE only) and a zero-entry sentinel plan page to the writer.
 
 #include "tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
@@ -113,6 +116,20 @@ void kernel_main() {
         get_compile_time_arg_val(padding_cfg_args.next_compile_time_args_offset());
 #endif
 
+#ifdef FP8_SCALED
+    // Per-token fp8 scales accessor + CB id + aligned page size, appended AFTER padding_config so the
+    // chained compile-arg offsets stay consistent. Only set on the fp8 row-major path.
+#ifdef HAS_PADDING_CONFIG
+    constexpr uint32_t scales_args_offset = padding_cfg_args.next_compile_time_args_offset() + 1;
+#else
+    constexpr uint32_t scales_args_offset = dispatch_table_args.next_compile_time_args_offset();
+#endif
+    constexpr auto scales_args = TensorAccessorArgs<scales_args_offset>();
+    constexpr uint32_t cb_scales_id = get_compile_time_arg_val(scales_args.next_compile_time_args_offset());
+    constexpr uint32_t aligned_scales_page_size =
+        get_compile_time_arg_val(scales_args.next_compile_time_args_offset() + 1);
+#endif
+
     constexpr uint32_t tiles_per_row = hidden_size / 32;
     constexpr uint32_t num_tile_blocks = tiles_per_row / block_ct_dim;
 
@@ -148,8 +165,15 @@ void kernel_main() {
     // padding_config base address appended after the 12 base runtime args.
     uint32_t padding_config_address = get_arg_val<uint32_t>(rt_idx++);
 #endif
+#ifdef FP8_SCALED
+    // scales base address appended after padding_config.
+    uint32_t scales_tensor_address = get_arg_val<uint32_t>(rt_idx++);
+#endif
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
+#ifdef FP8_SCALED
+    const auto scales_addr_gen = TensorAccessor(scales_args, scales_tensor_address, aligned_scales_page_size);
+#endif
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address);
     const auto dispatch_table_addr_gen = TensorAccessor(dispatch_table_args, dispatch_table_tensor_address);
@@ -227,11 +251,47 @@ void kernel_main() {
 
     // ===== Per-batch loop — this core handles batches core_id, core_id+total_workers, ... =====
     for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
-        uint32_t tile_base_page = batch_idx * tiles_per_row;
         uint32_t batch_start = batch_idx * read_batch_size;
         uint32_t batch_end =
             (batch_start + read_batch_size < token_end_idx) ? batch_start + read_batch_size : token_end_idx;
         uint32_t batch_count = batch_end - batch_start;
+
+#ifdef ROW_MAJOR_INPUT
+        // Row-major: there is no untilize compute. Read this batch's input rows straight into the
+        // payload CB (cb_input_id is the SAME CB the writer drains as cb_untilize). We reserve/push
+        // read_batch_size slots so the writer's wait_front/pop_front(read_batch_size) matches the tile
+        // path exactly; only batch_count rows are real (the plan only emits token_t < batch_count, so
+        // the trailing slots are never referenced). Reads are 8-at-a-time (read_batch_size) and overlap
+        // with the writer draining the previous batch via the double-buffered CB on the other RISC.
+        cb_reserve_back(cb_input_id, read_batch_size);
+        uint32_t payload_base = get_write_ptr(cb_input_id);
+        {
+            for (uint32_t t = 0; t < batch_count; t++) {
+                noc_async_read_page(batch_start + t, input_addr_gen, payload_base + t * aligned_input_page_size);
+            }
+            // Read this batch's indices and weights pages alongside the payload (single barrier covers all).
+            for (uint32_t t = 0; t < batch_count; t++) {
+                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+                noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
+            }
+#ifdef FP8_SCALED
+            // Read this batch's per-token fp8 scale rows into the scales CB, indexed by token_t parallel
+            // to the payload, so the writer can copy them into the metadata tail. Same batch granularity
+            // and double-buffering as c_0 so reader/writer stay in lockstep.
+            cb_reserve_back(cb_scales_id, read_batch_size);
+            uint32_t scales_base = get_write_ptr(cb_scales_id);
+            for (uint32_t t = 0; t < batch_count; t++) {
+                noc_async_read_page(batch_start + t, scales_addr_gen, scales_base + t * aligned_scales_page_size);
+            }
+#endif
+            noc_async_read_barrier();
+        }
+        cb_push_back(cb_input_id, read_batch_size);
+#ifdef FP8_SCALED
+        cb_push_back(cb_scales_id, read_batch_size);
+#endif
+#else
+        uint32_t tile_base_page = batch_idx * tiles_per_row;
 
         // 1. Signal compute to start untilizing this batch
         cb_reserve_back(cb_signal_id, 1);
@@ -260,6 +320,8 @@ void kernel_main() {
             }
             noc_async_read_barrier();
         }
+        
+#endif
 
         // 4. Build per-batch route plan into c_14.
         DPRINT_DISPATCH(
@@ -294,67 +356,72 @@ void kernel_main() {
             noc_async_read_barrier();
         }
 
-        for (uint32_t t = 0; t < batch_count; t++) {
-            tt_l1_ptr uint16_t* indices_t =
-                reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
-            uint32_t token_idx = batch_start + t;
+        {
+            for (uint32_t t = 0; t < batch_count; t++) {
+                tt_l1_ptr uint16_t* indices_t =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
+                tt_l1_ptr uint16_t* weights_t =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
+                uint32_t token_idx = batch_start + t;
 
-            // Walk this token's top-k experts; emit a plan entry for each one routed to this
-            // dispatch core (after the ownership / mapping / capacity filters below).
-            for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                int32_t routed_expert = indices_t[k];
-                // Skip experts not owned by this dispatch core (low bits of the expert id
-                // select the dispatch core), and experts the table maps nowhere (-1).
-                if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
-                    continue;
-                }
-                int32_t expert_chip_og = expert_dispatch_table[routed_expert];
-                if (expert_chip_og == -1) {
-                    continue;
-                }
+                // Walk this token's top-k experts; emit a plan entry for each one routed to this
+                // dispatch core (after the ownership / mapping / capacity filters below).
+                for (uint32_t k = 0; k < num_experts_per_tok; k++) {
+                    int32_t routed_expert = indices_t[k];
+                    // Skip experts not owned by this dispatch core (low bits of the expert id
+                    // select the dispatch core), and experts the table maps nowhere (-1).
+                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                        continue;
+                    }
+                    int32_t expert_chip_og = expert_dispatch_table[routed_expert];
+                    if (expert_chip_og == -1) {
+                        continue;
+                    }
 
-                // Allocate this token's destination DRAM page from the expert's counter.
-                // Single shared counter; all cores grow it left-to-right from offsets[e].
-                // If the dispatch buffer for this expert is full, still bump the counter
-                // (so capacity accounting stays consistent) but drop the token — no entry.
-                uint32_t& offset = offsets[routed_expert];
-                if (offset >= max_dispatch_buffer_token_size) {
-                    offset++;
-                    continue;
-                }
-                uint32_t page_idx = offset++;
+                    // Allocate this token's destination DRAM page from the expert's counter.
+                    // Single shared counter; all cores grow it left-to-right from offsets[e].
+                    // If the dispatch buffer for this expert is full, still bump the counter
+                    // (so capacity accounting stays consistent) but drop the token — no entry.
+                    uint32_t& offset = offsets[routed_expert];
+                    if (offset >= max_dispatch_buffer_token_size) {
+                        offset++;
+                        continue;
+                    }
+                    uint32_t page_idx = offset++;
 
-                uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
-                bool is_local = (expert_chip == linearized_mesh_coord);
+                    uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
+                    bool is_local = (expert_chip == linearized_mesh_coord);
 
-                volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
-                entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
-                entry->token_t = t;
-                entry->routed_expert = (uint32_t)routed_expert;
-                entry->page_idx = page_idx;
-                entry->token_idx = token_idx;
-                // Single aligned 32-bit store: baby-RISC sub-word L1 stores are unreliable on BH.
-                entry->weight_k = pack_weight_k(0, (uint16_t)k);
-                // Linearized destination device index. Under 1D it is unused by the fabric writer
-                // (route/distance drive the send); under 2D it is the only routing input — the
-                // writer recomputes the EDM direction and (mesh,chip) header from it.
-                entry->dst_chip = expert_chip;
+                    volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
+                    entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
+                    entry->token_t = t;
+                    entry->routed_expert = (uint32_t)routed_expert;
+                    entry->page_idx = page_idx;
+                    entry->token_idx = token_idx;
+                    // Single aligned 32-bit store: baby-RISC sub-word L1 stores are unreliable on BH.
+                    entry->weight_k = pack_weight_k(0, (uint16_t)k);
+                    // Linearized destination device index. Under 1D it is unused by the fabric writer
+                    // (route/distance drive the send); under 2D it is the only routing input — the
+                    // writer recomputes the EDM direction and (mesh,chip) header from it.
+                    entry->dst_chip = expert_chip;
 
-                if (!is_local) {
-                    if constexpr (is_1d_topology<topology>()) {
-                        entry->route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                        entry->distance =
-                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                    if (!is_local) {
+                        if constexpr (is_1d_topology<topology>()) {
+                            entry->route =
+                                get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                            entry->distance =
+                                manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        } else {
+                            entry->route = 0;
+                            entry->distance = 0;
+                        }
                     } else {
                         entry->route = 0;
                         entry->distance = 0;
                     }
-                } else {
-                    entry->route = 0;
-                    entry->distance = 0;
-                }
 
-                entry_count++;
+                    entry_count++;
+                }
             }
         }
 
@@ -391,12 +458,15 @@ void kernel_main() {
     // Teardown: all batches done — push the two end-of-stream sentinels this core's
     // consumers wait on.
     DPRINT_DISPATCH("[R s={} c={}] loop DONE -> pushing sentinels\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id);
-    // (1) Sentinel value to compute so it breaks out of its untilize loop.
+#ifndef ROW_MAJOR_INPUT
+    // (1) Sentinel value to compute so it breaks out of its untilize loop. Row-major has no compute
+    //     kernel, so this signal is skipped entirely.
     cb_reserve_back(cb_signal_id, 1);
     volatile tt_l1_ptr uint32_t* signal_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
     signal_ptr[0] = ROUTE_INFO_SENTINEL;
     cb_push_back(cb_signal_id, 1);
+#endif
 
     // (2) Zero-entry end-of-plan page to the writer (entry_count == 0, entries[0].flags ==
     //     PLAN_FLAG_END) so it stops draining and forwards ROUTE_INFO_SENTINEL to the sender.
