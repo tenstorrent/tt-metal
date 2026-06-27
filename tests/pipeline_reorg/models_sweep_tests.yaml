@@ -12,17 +12,7 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Llama 3.3-70B prefix-caching benchmark
-  cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
-    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
-  model: llama3.3-70b
-  skus:
-    wh_galaxy:
-      timeout: 30
-      tier: 1
-  owner_id: U09LTAPEU2U # Viktor Pus
-  team: models
+# Entries are grouped by model.
 
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
@@ -36,6 +26,18 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Llama 3.3-70B prefix-caching benchmark
+  cmd: |
+    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
+    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
+  model: llama3.3-70b
+  skus:
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models
+
 - name: Llama 3.3-70B seqlen sweep (Galaxy)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct MESH_DEVICE=TG
@@ -43,30 +45,6 @@
   model: llama3.3-70b
   skus:
     wh_galaxy_perf:
-      timeout: 60
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-- name: Qwen3-32B seqlen sweep
-  cmd: |
-    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
-  model: qwen3-32b
-  skus:
-    wh_galaxy_perf:
-      timeout: 60
-      tier: 1
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-
-- name: GPT-OSS 120B seqlen sweep
-  cmd: |
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2 MESH_DEVICE=TG
-    pytest --timeout 3600 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
-  model: gpt-oss-120b
-  skus:
-    wh_galaxy:
       timeout: 60
       tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -84,6 +62,18 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Qwen3-32B seqlen sweep
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B MESH_DEVICE=TG
+    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+  model: qwen3-32b
+  skus:
+    wh_galaxy_perf:
+      timeout: 60
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Qwen3-32B seqlen sweep (LoudBox)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
@@ -96,15 +86,15 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Gemma-3-4B seqlen sweep
+- name: GPT-OSS 120B seqlen sweep
   cmd: |
-    export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
-    pytest --timeout 1800 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep"
-  model: gemma-3-4b
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2 MESH_DEVICE=TG
+    pytest --timeout 3600 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
+  model: gpt-oss-120b
   skus:
-    wh_n150:
-      timeout: 30
-      tier: 2
+    wh_galaxy:
+      timeout: 60
+      tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -115,6 +105,18 @@
   model: gpt-oss-20b
   skus:
     wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-3-4B seqlen sweep
+  cmd: |
+    export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
+    pytest --timeout 1800 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep"
+  model: gemma-3-4b
+  skus:
+    wh_n150:
       timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
