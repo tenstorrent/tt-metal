@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -24,9 +25,9 @@ void kernel_main() {
     constexpr uint32_t pad_cb = get_compile_time_arg_val(2);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_pad(pad_cb);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_pad(pad_cb);
 
     cb_in0.reserve_back(num_input_rows);
     cb_in1.reserve_back(num_padded_tiles_per_batch);

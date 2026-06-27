@@ -5,6 +5,7 @@
 #pragma once
 
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
@@ -107,7 +108,7 @@ rm_compute_w_chunk_bytes(uint32_t wt_base, uint32_t wt_in_chunk, uint32_t valid_
 template <typename ClearTemplateSrc>
 RM_DF_ALWI void rm_fill_page_with_clear_template(
     Noc& noc,
-    experimental::CB& cb_rm,
+    DataflowBuffer& cb_rm,
     uint32_t region_bytes,
     const ClearTemplateSrc& clear_template_src,
     uint32_t clear_template_bytes) {

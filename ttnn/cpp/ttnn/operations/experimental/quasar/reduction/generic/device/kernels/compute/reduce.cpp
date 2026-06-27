@@ -7,6 +7,7 @@
 // FPU/GMPOOL. MIN on Int32 is dispatched separately via reduce_{h,w}_neg.
 
 #include <cstdint>
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
@@ -44,5 +45,5 @@ void kernel_main() {
 
     // The reduce helper waits on the scaler CB but never pops it (the single scaler tile is
     // reused for the whole reduction). Pop it here so the CB is left balanced.
-    CircularBuffer(tt::CBIndex::c_2).pop_front(1);
+    DataflowBuffer(tt::CBIndex::c_2).pop_front(1);
 }

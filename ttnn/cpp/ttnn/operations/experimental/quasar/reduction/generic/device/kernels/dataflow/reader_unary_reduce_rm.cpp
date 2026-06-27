@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -57,8 +58,8 @@ void reduce_rm_reader() {
     constexpr uint32_t cb_id_clear_value = tt::CBIndex::c_4;
     constexpr uint32_t onepage = 1;
 
-    experimental::CB cb_rm(cb_id_rm);
-    experimental::CB cb_clear_value(cb_id_clear_value);
+    DataflowBuffer cb_rm(cb_id_rm);
+    DataflowBuffer cb_clear_value(cb_id_clear_value);
     Noc noc;
 
     // Scaler tile — pushed once, used by every compute reduce() call.

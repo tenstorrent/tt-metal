@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/device/hostdevcommon/common.hpp"
@@ -30,9 +31,9 @@ void kernel_main() {
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
     Noc noc;
-    CircularBuffer mapping_cb(cb_id_mapping);
-    CircularBuffer input_cb(cb_id_input);
-    CircularBuffer working_cb(cb_id_working);
+    DataflowBuffer mapping_cb(cb_id_mapping);
+    DataflowBuffer input_cb(cb_id_input);
+    DataflowBuffer working_cb(cb_id_working);
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
     working_cb.reserve_back(1);

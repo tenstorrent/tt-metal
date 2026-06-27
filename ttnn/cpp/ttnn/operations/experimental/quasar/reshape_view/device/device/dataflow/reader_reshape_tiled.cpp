@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/device/hostdevcommon/common.hpp"
@@ -37,8 +38,8 @@ void kernel_main() {
     const auto map_addr_gen = TensorAccessor(map_args, map_addr);
 
     Noc noc;
-    CircularBuffer mapping_cb(mapping_cb_id);
-    CircularBuffer input_cb(input_cb_id);
+    DataflowBuffer mapping_cb(mapping_cb_id);
+    DataflowBuffer input_cb(input_cb_id);
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
         mapping_cb.reserve_back(One_Tile_Reserve);

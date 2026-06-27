@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -32,7 +33,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer cb_out(cb_id_out0);
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
         cb_out.wait_front(num_tiles_per_input_block);

@@ -30,6 +30,7 @@ Runtime arguments
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
@@ -66,8 +67,8 @@ void kernel_main() {
     const auto d = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in1(cb_id_in1);
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;
     uint32_t readable = 0;

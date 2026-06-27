@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
@@ -43,9 +44,9 @@ void kernel_main() {
         constexpr uint32_t acc_dst = 0;
         constexpr uint32_t work_dst = 1;
 
-        CircularBuffer cb_input_obj(cb_input);
-        CircularBuffer cb_scaler_obj(cb_scaler);
-        CircularBuffer cb_output_obj(cb_output);
+        DataflowBuffer cb_input_obj(cb_input);
+        DataflowBuffer cb_scaler_obj(cb_scaler);
+        DataflowBuffer cb_output_obj(cb_output);
 
         init_sfpu(cb_input, cb_output);
         copy_tile_to_dst_init_short(cb_input);
@@ -105,18 +106,18 @@ void kernel_main() {
         PACK((llk_pack_reduce_mask_clear()));
         // The scaler tile is waited once and reused for the whole reduction; pop it at the
         // end so the CB is left balanced.
-        CircularBuffer(cb_scaler).pop_front(onetile);
+        DataflowBuffer(cb_scaler).pop_front(onetile);
         return;
     }
 
     constexpr uint32_t cb_acc = tt::CBIndex::c_4;
     constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
 
-    CircularBuffer cb_input_obj(cb_input);
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_output_obj(cb_output);
-    CircularBuffer cb_acc_obj(cb_acc);
-    CircularBuffer cb_ineg_obj(cb_ineg);
+    DataflowBuffer cb_input_obj(cb_input);
+    DataflowBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer cb_output_obj(cb_output);
+    DataflowBuffer cb_acc_obj(cb_acc);
+    DataflowBuffer cb_ineg_obj(cb_ineg);
 
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
 

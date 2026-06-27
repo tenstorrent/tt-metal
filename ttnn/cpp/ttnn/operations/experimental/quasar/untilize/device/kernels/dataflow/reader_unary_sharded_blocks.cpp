@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
@@ -53,7 +54,7 @@ void kernel_main() {
     const auto accessor_src = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_in(cb_id_in0);
+    DataflowBuffer cb_in(cb_id_in0);
     auto shard_pages = accessor_src.shard_pages(start_shard_id);
     auto page_iter = shard_pages.begin();
     for (uint32_t b = 0; b < num_blocks; ++b) {
