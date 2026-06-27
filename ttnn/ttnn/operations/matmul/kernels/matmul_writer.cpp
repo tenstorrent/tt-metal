@@ -7,6 +7,13 @@
 //
 // SubblockMajor read order matches matmul_block's pack order:
 //   for sb_m: for sb_n: for r: for c   (r,c row-major within a subblock).
+//
+// NON-TILE-ALIGNED M / N (Refinement 2): the `m_tile < Mt && n_tile < Nt` guard
+// below skips PHANTOM WHOLE tiles (a grid block overrunning the ceil_div tile
+// count). The in-bounds partial last M/N tile IS written in full — its M/N
+// padding region carries the matmul of zero-padded activation rows / weight
+// columns, i.e. exactly 0, and is sliced off by the output's logical shape on
+// to_torch. No sub-tile writer masking is needed (changelog Refinement 2).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

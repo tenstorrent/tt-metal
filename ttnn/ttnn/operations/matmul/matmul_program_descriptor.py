@@ -161,6 +161,12 @@ def create_program_descriptor(input_tensor, weight, output_tensor, compute_kerne
     B_shape = list(weight.shape)
     M, K = A_shape[-2], A_shape[-1]
     N = B_shape[-1]
+    # ceil_div tile counts handle non-tile-aligned M/K/N (Refinement 2): the
+    # partial last tile along each dim is a real tile the kernels process in
+    # full. ttnn zero-fills its out-of-logical-shape padding at from_torch time
+    # (all dtypes incl. bf8b), so the K dot-product over the pad is 0*0=0 and
+    # the M/N output pad (also 0) is sliced off by the output's logical shape.
+    # No in-kernel masking required — see the reader/writer head comments.
     Mt = _ceil_div(M, 32)
     Kt = _ceil_div(K, 32)
     Nt = _ceil_div(N, 32)

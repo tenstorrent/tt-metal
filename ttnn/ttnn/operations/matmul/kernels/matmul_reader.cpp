@@ -10,6 +10,18 @@
 // rows, in1 to columns). Pipes are constructed per-transfer (proven safe — see
 // pipe_rotating.cpp): the ReceiverPipe ctor's INVALID always precedes the
 // sender's VALID because the sender's mcast is gated behind the receiver's ack.
+//
+// NON-TILE-ALIGNED M / K / N (Refinement 2) — NO sub-tile masking here, by
+// design. Mt/Kt/Nt are ceil_div tile counts, so the partial last tile along any
+// of M/K/N is a real tile this reader gathers in full. ttnn's TILE_LAYOUT
+// representation zero-fills the invalid (out-of-logical-shape) region of that
+// partial tile at from_torch time — for fp32, bf16 AND bf8b (the host bf8b
+// tilize zeros the pad BEFORE the shared-face-exponent is computed, so no
+// block-format exponent corruption). Hence the K dot-product over the padded
+// K-region is 0*0=0 automatically; no reader-side zeroing is needed. The
+// `gm>=Mt` / `gn>=Nt` skips below are PHANTOM WHOLE tiles (a grid block that
+// overruns the tensor), a separate concern from the in-bounds partial tile.
+// Verified empirically across all dtypes (changelog Refinement 2, probes 015-016).
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

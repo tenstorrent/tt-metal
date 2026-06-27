@@ -60,18 +60,32 @@ INPUT_TAGGERS = {"alignment": tag_alignment, "weight_batch": tag_weight_batch}
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Refinement 1: numerical configurability)
+# 2. SUPPORTED (Refinement 1: numerical configurability;
+#                Refinement 2: non-tile-aligned M / K / N)
 # ---------------------------------------------------------------------------
 # dtype (activation) and weight_dtype are INDEPENDENT axes — the cartesian
 # covers all 9 (act, weight) pairs, including the bf16-act × fp32-weight mixed
 # path. fp32_dest_acc_en spans both the maxed (True) and 16-bit-DEST (False)
 # accumulator. The {fp32, acc=False} corner is refused via EXCLUSIONS.
+#
+# Refinement 2 — alignment spans all four values (M, K, N each non-aligned, plus
+# multi-non-aligned which the K>N>M tagger precedence folds into one of the
+# three). matmul needs NO host-side pad/slice and NO in-kernel masking for this:
+# ttnn's TILE_LAYOUT representation zero-fills the partial-tile padding at
+# from_torch time (verified empirically for fp32/bf16/bf8b — see
+# changelog.md / probes 015-016), the descriptor already counts tiles with
+# ceil_div (so the partial last M/K/N tile IS processed), and the K dot-product
+# over the zero pad is 0*0=0. M/N output-padding is sliced off by the output's
+# logical shape on to_torch. The invariant is ALSO preserved compositionally:
+# this op's own output zero-fills its M/N pad (output pad rows/cols derive from
+# zero input pad), so a non-aligned matmul output fed as the next matmul's K is
+# still zero-padded. See the kernel-head + descriptor comments.
 SUPPORTED = {
     "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "weight_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True, False],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "k_non_aligned", "n_non_aligned", "m_non_aligned"],
     "weight_batch": ["single"],
 }
 
