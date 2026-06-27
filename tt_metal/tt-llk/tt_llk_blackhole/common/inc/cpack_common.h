@@ -706,6 +706,15 @@ inline void program_packer_destination(std::uint32_t addr)
 
 // RT: If multiple contexts are used, for issue #https://github.com/tenstorrent/tt-llk-bh/issues/20
 // then this function needs to be re-written
+//
+// Intentionally a no-op on Blackhole. The Wormhole twin hands each of its four packers
+// (NUM_PACKERS == 4) its own L1 destination address (THCON_SEC0/SEC1 REG1/REG8) so the four packers
+// write interleaved strided rows of the untilized output. Blackhole has a single packer
+// (NUM_PACKERS == 1), so there is no per-packer address to program here: _llk_pack_untilize_ instead
+// sets the single base address via program_packer_destination and advances it one row at a time using
+// DST_ACCESS_STRIDED_MODE plus the replay-buffer CFGSHIFTMASK (see llk_pack_untilize.h). The
+// Wormhole-style body is retained below, commented out, to document the multi-packer approach that
+// does not apply to Blackhole.
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool diagonal = false>
 inline void program_packer_untilized_destination(const std::uint32_t addr, const std::uint32_t pack_dst_format)
 {

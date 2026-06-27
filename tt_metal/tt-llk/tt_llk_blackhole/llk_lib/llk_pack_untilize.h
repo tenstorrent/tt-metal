@@ -296,7 +296,13 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     For input widths greater than 8 tiles, input is split into blocks of equal sizes,
     each block the size of block_ct_dim. This function is called for each block.
     */
-    // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
+    // Arch divergence: unlike Wormhole, Blackhole does not call program_packer_untilized_destination
+    // here. Wormhole has four packers (NUM_PACKERS == 4) and gives each its own L1 destination address
+    // (THCON_SEC0/SEC1 REG1/REG8) so the four packers write interleaved strided rows in a single PACR.
+    // Blackhole has a single packer (NUM_PACKERS == 1) and instead untilizes via DST_ACCESS_STRIDED_MODE
+    // in the MOP PACR (see _llk_pack_untilize_mop_config_), advancing the single L1 destination address
+    // one row at a time through the replay-buffer CFGSHIFTMASK programmed in _llk_pack_untilize_init_.
+    // The untilized-destination addressing is therefore fully covered; only the base address is set here.
     program_packer_destination(address);
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
 
