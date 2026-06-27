@@ -18,9 +18,14 @@
 //   - In-place: CbA == CbOut == cb_scores
 //   - The mul helper with init_mode=Short reconfigures from matmul to eltwise
 //
-// DPRINT: cb_scores tile 0, first 4×4 elements — Q @ K^T * scale (post-scale).
-// Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front of CB
-// (between cb_wait_front and cb_pop_front).
+// Stage 3 (mask): Passthrough copy cb_scores → cb_scores_masked (no mask for
+//   the pinned shape). The copy helper (CopyTile → PackTile) streams 16 tiles
+//   from cb_scores (Streaming — wait+pop per tile) into cb_scores_masked.
+//   When an attn_mask is present, this phase becomes an eltwise add instead.
+//
+// DPRINT: cb_scores_masked tile 0, first 4×4 elements — passthrough copy of
+// scaled scores. Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front
+// of CB (between cb_wait_front and cb_pop_front).
 
 #include <cstdint>
 
@@ -38,6 +43,7 @@ void kernel_main() {
     constexpr uint32_t cb_k = tt::CBIndex::c_1;
     constexpr uint32_t cb_scale_factor = 5;
     constexpr uint32_t cb_scores = 24;
+    constexpr uint32_t cb_scores_masked = 25;
 
     // Compile-time args: [B_q_t, B_kv_t, D_t]
     constexpr uint32_t B_q_t = get_compile_time_arg_val(0);   // 4
@@ -94,19 +100,26 @@ void kernel_main() {
         /*ALife=*/InputLifecycle::Streaming,
         /*BLife=*/InputLifecycle::HeldBulk>(num_score_tiles);
 
-    // --- Stage 2 DPRINT: cb_scores tile 0, first 4×4 ---
-    // Printed from the unpacker (TRISC0) — the only TRISC that can
-    // cb_wait_front/cb_pop_front in a compute kernel. The mul helper has
-    // completed and pushed all 16 scaled score tiles to cb_scores (in-place
-    // means it popped the old tiles and pushed the new ones).
-    // We wait_front tile 0, print it, then pop_front to keep the CB
-    // balanced for later stages.
+    // --- Stage 3: Mask add (if attn_mask) or passthrough copy (no mask) ---
+    // For the pinned shape (no attn_mask), this is a passthrough: copy all 16
+    // score tiles from cb_scores to cb_scores_masked.
+    //   CbIn  = cb_scores (Streaming — per-tile wait+pop)
+    //   CbOut = cb_scores_masked (Streaming — per-tile reserve+push)
+    // The copy helper (CopyTile → PackTile) handles the full 16-tile block.
+    // When attn_mask is present, this becomes: add<cb_scores, cb_mask, cb_scores_masked>(num_score_tiles).
+    copy<cb_scores, cb_scores_masked>(num_score_tiles);
+
+    // --- Stage 3 DPRINT: cb_scores_masked tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0). After the copy completes, all 16
+    // tiles are in cb_scores_masked. We wait_front tile 0 (the first tile
+    // pushed by the copy's PackTile), print it, then pop_front 1 tile.
+    // The pop keeps the CB advancing for later stages (phase 4 row-max will
+    // wait_front the remaining tiles with WaitUpfrontNoPop).
 #ifdef TRISC_UNPACK
     {
-        cb_wait_front(cb_scores, 1);
+        cb_wait_front(cb_scores_masked, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
-        DPRINT("stage_2 scale:\n{}\n", TileSlice(cb_scores, 0, sr, true, true));
-        cb_pop_front(cb_scores, 1);
+        DPRINT("stage_3 mask:\n{}\n", TileSlice(cb_scores_masked, 0, sr, true, true));
     }
 #endif
 }

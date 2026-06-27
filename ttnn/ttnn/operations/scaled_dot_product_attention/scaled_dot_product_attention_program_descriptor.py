@@ -85,6 +85,7 @@ def create_program_descriptor(
     CB_SCALE_FACTOR = 5
     CB_O = 16
     CB_SCORES = 24
+    CB_SCORES_MASKED = 25
     CB_MAX_OLD = 27
     CB_SUM_OLD = 30
 
@@ -135,6 +136,16 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_SCORES, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_scores_masked: scores after mask-add (or passthrough copy when no
+        # mask). 16 tiles. Produced by compute (copy/add eltwise), consumed by
+        # compute (row-max reduce, subtract, exp).
+        ttnn.CBDescriptor(
+            total_size=num_score_tiles * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_SCORES_MASKED, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_max_old: running max m_i, B_q_t tiles. Initialized to -inf in Stage 0.
