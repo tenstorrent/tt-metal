@@ -100,7 +100,6 @@ dispatch_local() {
   fi
 
   echo "frontier_sweep dispatch: ${n} local worktrees, precision=${PRECISION}, filter='${FILTER:-all}'" >&2
-  pids=()
   for ((chip=0; chip<n; chip++)); do
     wt="${WORKTREE_PREFIX}${chip}"
     if [[ ! -e "$wt/.git" ]]; then
@@ -126,6 +125,12 @@ dispatch_local() {
         exit 1
       }
     fi
+  done
+
+  pids=()
+  for ((chip=0; chip<n; chip++)); do
+    wt="${WORKTREE_PREFIX}${chip}"
+    script="$wt/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_sweep.sh"
     if [[ -n "$RUN_DIR" ]]; then
       out="$RUN_DIR/data/csv/frontier_chip${chip}.csv"
     else
