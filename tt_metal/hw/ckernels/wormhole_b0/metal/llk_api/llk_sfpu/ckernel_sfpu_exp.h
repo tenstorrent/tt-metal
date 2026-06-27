@@ -203,7 +203,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     // interleaved with first coefficient of polynomial
     j = 1.442695f * a;
     r = 1.37805939e-3f;
-    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+    sfpi::vSMag16 i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
@@ -220,30 +220,34 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i_2c = sfpi::convert<sfpi::vInt>(i_smag);
     r = y * f + 1.0f;
 
-    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i_2c;
-    if constexpr (unsafe) {
-        // y = 2**i * r
-        y = sfpi::setexp(r, e);
-    } else {
-        // overflow: y = infinity or NaN
-        y *= std::numeric_limits<float>::infinity();
-
-        // if e < 255
-        v_block {
-            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-
+    sfpi::vFloat abs_a = sfpi::abs(a);
+    v_if(abs_a >= 0.0f) {
+        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i_2c;
+        if constexpr (unsafe) {
             // y = 2**i * r
             y = sfpi::setexp(r, e);
+        } else {
+            // overflow: y = infinity or NaN
+            y *= std::numeric_limits<float>::infinity();
 
-            // if e < 1
-            v_if(e_lt_255 < -254) {
-                // underflow, including subnormals
-                y = 0.0f;
+            // if e < 255
+            v_block {
+                sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
+
+                // y = 2**i * r
+                y = sfpi::setexp(r, e);
+
+                // if e < 1
+                v_if(e_lt_255 < -254) {
+                    // underflow, including subnormals
+                    y = 0.0f;
+                }
+                v_endif;
             }
-            v_endif;
+            v_endblock;
         }
-        v_endblock;
     }
+    v_endif;
 
     return y;
 }
