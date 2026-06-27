@@ -36,6 +36,13 @@ void kernel_main() {
     compute_kernel_hw_startup(CB_IN0_ACT, CB_IN1_WEIGHT, CB_OUT);
     mm_block_init(CB_IN0_ACT, CB_IN1_WEIGHT, CB_OUT, 0 /*transpose*/, out_subblock_w, out_subblock_h, in0_block_w);
 
+    // All per-core output blocks are identical work (same subblock shape, same
+    // K-blocking) with NO per-block compute phase in between, so pass the block
+    // count as the helper's `batch`: matmul_block inits once and loops the full
+    // K-pipeline `total_blocks` times internally (one output block pushed per
+    // iteration, in lock-step with the reader/writer). This is the helper's
+    // documented matmul-only pattern — strictly fewer mm_block_init_short MMIO
+    // re-issues than an external per-block loop, identical CB push/pop counts.
     const auto shape = MatmulBlockShape::of(
         in0_num_subblocks,
         in1_num_subblocks,
@@ -43,9 +50,7 @@ void kernel_main() {
         out_subblock_w,
         in0_block_w,
         num_k_blocks,
-        1 /*batch — outer loop is here*/);
+        total_blocks /*batch — every per-core block shares shape + init*/);
 
-    for (uint32_t i = 0; i < total_blocks; i++) {
-        matmul_block<>(in0_buf, in1_buf, out_buf, interm_buf, shape);
-    }
+    matmul_block<>(in0_buf, in1_buf, out_buf, interm_buf, shape);
 }

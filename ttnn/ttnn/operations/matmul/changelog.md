@@ -63,3 +63,38 @@ maxed accumulator).
 mixed/low precision (`dtype`/`weight_dtype` ∈ {bfloat16, bfloat8_b}),
 `fp32_dest_acc_en=False`, non-tile-aligned M/K/N (`alignment` masking paths),
 batched weight (`weight_batch=batched`).
+
+## Phase 0 — 2026-06-27 — verification (incremental-verifier)
+
+- **What was done**: Code review, golden-suite + `eval.verify_supported` run,
+  precision baseline, refinement queue. One helper-usage fix applied (below).
+- **Code-review fix**: `kernels/matmul_compute.cpp` — replaced the external
+  `for (i < total_blocks) matmul_block<>(... batch=1 ...)` loop with a single
+  `matmul_block<>(... batch=total_blocks ...)` call. This is the helper's
+  documented matmul-only pattern (init once, internal batch loop) — strictly fewer
+  `mm_block_init_short` re-issues, byte-identical CB push/pop counts (multicast
+  lock-step unchanged). Verified numerically identical and no regression on the
+  multi-block large/wide-K golden shapes (where `total_blocks > 1`).
+- **SUPPORTED at Phase 0** (unchanged — verification only): dtype=[float32],
+  weight_dtype=[float32], layout=[TILE], fp32_dest_acc_en=[True],
+  alignment=[tile_aligned], weight_batch=[single].
+- **Accuracy achieved** (test_matmul_precision_baseline.py, 4 shapes):
+  PCC ≥ 0.99999 (min 0.99999414 at 512×4096×4096); max_abs_err 0.037→63.9
+  (tracks deep-K magnitude); mean_abs_err 0.0075→0.37; relative RMS 0.0012→0.0073
+  (all ≤ the golden 0.02 band).
+- **Golden suite at Phase 0** (`eval/eval_test_runner.sh --no-precompile
+  --no-jit-server`, cold, current kernels): registry-driven `test_golden.py`
+  = **20 / 20 supported pass, 646 xfail_expected, 0 loud signals**
+  (supported_fail / xpass_drift / xfail_wrong_mode all 0). The 3 loud signals in
+  the raw whole-directory verifier output are all `test_translated.py` artifacts
+  (LoFi-fidelity precision; a K-mismatch rejection-expecting test; a batched-weight
+  refusal on a non-xfail test) — none are registry drift or kernel bugs; see
+  `verification_report.md`.
+- **Issues encountered**: Kernel binary cache staleness — `ttnn.generic_op` keys
+  the JIT cache on kernel source PATH (not content), so kernel `.cpp` edits silently
+  reuse the stale binary. Proven via a deliberate-compile-error probe; worked around
+  by `rm -rf`-ing the `matmul_{compute,reader,writer}` cache dirs + `--no-precompile`.
+  Documented at the top of `op_requirements.md` for refinement implementers.
+- **Tests added**: `tests/.../matmul/test_matmul_precision_baseline.py` (4 shapes,
+  PCC + abs/RMS). Acceptance `test_matmul.py` unchanged (immutable spec), 16/16 pass.
+- **Artifacts**: `verification_report.md`, `op_requirements.md`, `verifier_report.json`.
