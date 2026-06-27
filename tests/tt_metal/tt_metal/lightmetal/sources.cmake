@@ -4,4 +4,5 @@
 set(UNIT_TESTS_LIGHTMETAL_SRC
     test_lightmetal.cpp
     test_program_types_flatbuffer.cpp
+    test_program_types_vector_flatbuffer.cpp
 )
