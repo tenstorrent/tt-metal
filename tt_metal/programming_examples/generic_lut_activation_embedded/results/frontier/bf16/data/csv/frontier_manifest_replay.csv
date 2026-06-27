@@ -36,7 +36,7 @@ log2_p3_s8_uniform_any_ulp.csv,log2,exponent_alu_log2,3,8,bf16,1.00,2.11,1,contr
 logit_n4d4_s1_uniform_rational_ulp.csv,logit,rational,4d4,1,bf16,1.00,3.04,1,controlled_replay
 logsigmoid_n5d5_s2_uniform_rational_ulp.csv,logsigmoid,rational,5d5,2,bf16,0.00,5.47,1,controlled_replay
 mish_p9_s2_uniform_any_ulp.csv,mish,poly,9,2,bf16,0.25,3.27,1,controlled_replay
-multigammaln_p3_s1_uniform_any_ulp.csv,multigammaln,poly,3,1,bf16,118.12,1.72,1,controlled_replay
+multigammaln_p4_p1_s1_uniform_any_ulp.csv,multigammaln,poly,1,1,bf16,93.75,1.73,1,controlled_replay_p4_regen_affine
 polygamma_p10_s32_uniform_any_ulp.csv,polygamma,poly,10,32,bf16,16.00,25.98,1,controlled_replay
 prelu_p2_s2_uniform_any_ulp.csv,prelu,poly,2,2,bf16,0.00,1.78,1,controlled_replay
 relu_p1_s2_uniform_any_ulp.csv,relu,clamped_affine,1,2,bf16,0.00,1.66,1,controlled_replay
