@@ -334,6 +334,9 @@ void process_go_signal_mcast_cmd() {
         invalidate_l1_cache();
         // Update dispatch_d with the latest num_workers
         update_worker_completion_count_on_dispatch_d();
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        device_print_dispatcher.execute();
+#endif
     }
     mcasts_sent++;  // Go signal sent -> update counter
 
