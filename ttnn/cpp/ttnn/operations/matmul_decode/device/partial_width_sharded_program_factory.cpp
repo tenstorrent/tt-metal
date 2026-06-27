@@ -412,38 +412,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         return reader_kernel_desc;
     };
 
-    const size_t num_noc0_senders = sender_cores.size() / 2;
-    const std::vector<CoreCoord> noc0_sender_cores(sender_cores.begin(), sender_cores.begin() + num_noc0_senders);
-    const std::vector<CoreCoord> noc1_sender_cores(sender_cores.begin() + num_noc0_senders, sender_cores.end());
-    std::vector<CoreCoord> default_noc_cores;
-    default_noc_cores.reserve(all_reader_cores.size());
-    for (const auto& core : all_reader_cores) {
-        if (sender_id_by_core.find(core) == sender_id_by_core.end()) {
-            default_noc_cores.push_back(core);
-        }
-    }
-    if (!noc0_sender_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(noc0_sender_cores, NOC::NOC_0));
-    }
-    if (!noc1_sender_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(noc1_sender_cores, NOC::NOC_1));
-    }
-    if (!default_noc_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(default_noc_cores, NOC::RISCV_1_default));
-    }
-
-    // Record the NOC each core's reader (RISCV_1) uses so the writer (RISCV_0) on the same
-    // core can be assigned the opposite NOC -- two RISC cores can't share a NOC.
-    std::map<CoreCoord, NOC> reader_noc_by_core;
-    for (const auto& core : noc0_sender_cores) {
-        reader_noc_by_core[core] = NOC::NOC_0;
-    }
-    for (const auto& core : noc1_sender_cores) {
-        reader_noc_by_core[core] = NOC::NOC_1;
-    }
-    for (const auto& core : default_noc_cores) {
-        reader_noc_by_core[core] = NOC::RISCV_1_default;
-    }
+    // Single reader instance over all cores on NOC_0; the writer below runs on NOC_1 so the reader
+    // (RISCV_1) and writer (RISCV_0) on each core use opposite NOCs.
+    desc.kernels.push_back(build_reader_kernel(all_reader_cores, NOC::NOC_0));
 
     // ---- Writer kernel (cross-core K-reduction) ----
     //
@@ -522,31 +493,12 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         return writer_kernel_desc;
     };
 
-    // Assign each writer (RISCV_0) the NOC opposite to its core's reader (RISCV_1).
-    // NOC_0 == RISCV_0_default == 0 and NOC_1 == RISCV_1_default == 1, so a reader on
-    // NOC_0 pairs with a writer on NOC_1 and vice versa. Cores with no recorded reader
-    // NOC fall back to RISCV_1_default (NOC_1) readers, i.e. writers on NOC_0.
-    std::vector<uint32_t> writer_noc0_indices;
-    std::vector<uint32_t> writer_noc1_indices;
+    // Single writer instance over all b_cores on NOC_1 (opposite NOC to the reader).
+    std::vector<uint32_t> all_writer_indices(b_cores.size());
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
-        NOC reader_noc = NOC::RISCV_1_default;
-        const auto it = reader_noc_by_core.find(b_cores[idx]);
-        if (it != reader_noc_by_core.end()) {
-            reader_noc = it->second;
-        }
-        log_trace(tt::LogOp, "core {}, idx: {}, reader_noc: {}", b_cores[idx], idx, reader_noc);
-        if (reader_noc == NOC::NOC_0) {
-            writer_noc1_indices.push_back(idx);
-        } else {
-            writer_noc0_indices.push_back(idx);
-        }
+        all_writer_indices[idx] = idx;
     }
-    if (!writer_noc0_indices.empty()) {
-        desc.kernels.push_back(build_writer_kernel(writer_noc0_indices, NOC::NOC_0));
-    }
-    if (!writer_noc1_indices.empty()) {
-        desc.kernels.push_back(build_writer_kernel(writer_noc1_indices, NOC::NOC_1));
-    }
+    desc.kernels.push_back(build_writer_kernel(all_writer_indices, NOC::NOC_1));
 
     // ---- Compute kernel (partial matmul + base-core reduction) ----
     KernelDescriptor compute_kernel_desc;
