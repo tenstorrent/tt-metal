@@ -133,6 +133,7 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
     cb_wait_front(cb_input, onetile);
 
     tile_regs_acquire();
+    reconfig_data_format_srca(cb_input);
     transpose_init(cb_input);
     transpose_tile(cb_input, /* tile idx */ 0, /* reg idx */ 0);
     tile_regs_commit();
