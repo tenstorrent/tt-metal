@@ -42,7 +42,15 @@
 //   - Output: cb_alpha (4 tiles, Streaming)
 //   - Chain: BinaryFpu<Sub> → Exp → PackTile<cb_alpha>
 //
-// DPRINT: cb_alpha tile 0, first 4×4 elements — exp(m_old - m_new) values.
+// Stage 6 (rescale_o): Rescale O by alpha via eltwise mul (Col broadcast).
+//   O_i = alpha * O_i → cb_o (in-place, 4×D_t = 16 tiles)
+//   - CbA  = cb_o (Streaming — per-tile wait+pop, OperandKind::Scalar)
+//   - CbB  = cb_alpha (HeldBulk — retained for phase 7, OperandKind::Col)
+//   - CbOut = cb_o (in-place: CbA == CbOut)
+//   - BroadcastDim::Col: alpha tile[ht] broadcasts across all D_t column tiles
+//   - Shape: EltwiseShape::grid(B_q_t, D_t) — 2D for Col broadcast
+//
+// DPRINT: cb_o tile 0, first 4×4 elements — O rescaled by alpha.
 // Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front of CB (between
 // cb_wait_front and cb_pop_front).
 
@@ -65,10 +73,12 @@ void kernel_main() {
     constexpr uint32_t cb_scaler_reduce = 4;
     constexpr uint32_t cb_scale_factor = 5;
     constexpr uint32_t cb_alpha = 8;
+    constexpr uint32_t cb_o = tt::CBIndex::c_16;
     constexpr uint32_t cb_scores = 24;
     constexpr uint32_t cb_scores_masked = 25;
     constexpr uint32_t cb_max_new = 26;
     constexpr uint32_t cb_max_old = 27;
+    constexpr uint32_t cb_sum_old = 30;
 
     // Compile-time args: [B_q_t, B_kv_t, D_t]
     constexpr uint32_t B_q_t = get_compile_time_arg_val(0);   // 4
@@ -214,6 +224,48 @@ void kernel_main() {
         cb_wait_front(cb_alpha, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
         DPRINT("stage_5 alpha:\n{}\n", TileSlice(cb_alpha, 0, sr, true, true));
+    }
+#endif
+
+    // --- Stage 6: Rescale O by alpha ---
+    // O_i = alpha * O_i (broadcast Col: alpha is per-row, O is 2D [B_q_t, D_t])
+    //   CbA  = cb_o     (B_q_t * D_t tiles = 16 for D=128, Streaming — per-tile wait+pop)
+    //   CbB  = cb_alpha (B_q_t = 4 tiles, HeldBulk — wait upfront, no pop; retained
+    //     for phase 7 rescale_l which also needs alpha)
+    //   CbOut = cb_o    (in-place: CbA == CbOut)
+    //   BroadcastDim::Col: alpha tile[ht] broadcasts across all D_t column tiles
+    //   OperandKind::Scalar for A (front-relative streaming, reads tile 0 per iter)
+    //   OperandKind::Col   for B (reads tile ht per row, window = Ht = B_q_t)
+    //   Shape: EltwiseShape::grid(B_q_t, D_t) — 2D for Col broadcast
+    //
+    // BinaryDataFormatReconfig::Input (default): reconfigures unpacker from
+    // eltwise_chain (alpha phase) to eltwise binary format on both srcA and srcB.
+    // PackTileReconfig::Output (default): reconfigures packer from cb_alpha
+    // to cb_o format.
+    mul<
+        /*CbA=*/cb_o,
+        /*CbB=*/cb_alpha,
+        /*CbOut=*/cb_o,
+        /*Bcast=*/BroadcastDim::Col,
+        /*ALife=*/InputLifecycle::Streaming,
+        /*BLife=*/InputLifecycle::HeldBulk,
+        /*OutLife=*/OutputLifecycle::Streaming,
+        /*Reconfig=*/BinaryDataFormatReconfig::Input,
+        /*OutReconfig=*/PackTileReconfig::Output,
+        /*AIdx=*/OperandKind::Scalar,
+        /*BIdx=*/OperandKind::Col>(EltwiseShape::grid(B_q_t, D_t));
+
+    // --- Stage 6 DPRINT: cb_o tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the in-place mul completes, cb_o holds the rescaled
+    // O values. We wait_front tile 0, print it, then leave it (no pop — cb_o is
+    // a persistent running state CB, consumed by later stages 7, 12).
+    // On the first KV-block: O_old=0 and alpha=exp(-inf - finite)=0, so O stays 0.
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_o, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_6 rescale_o:\n{}\n", TileSlice(cb_o, 0, sr, true, true));
     }
 #endif
 }
