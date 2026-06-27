@@ -411,8 +411,10 @@ inline vFloat exp_hw_eval(vFloat x) {
     // conversion below cannot wrap (TTNN does this in its non-unsafe path).
     vFloat thr_lo = 0.0f;
     vFloat thr_hi = 255.0f;
+#if !defined(EXP_HW_SKIP_INPUT_CLAMP)
     vec_min_max(thr_lo, xlog2);  // xlog2 = max(0, xlog2)
     vec_min_max(xlog2, thr_hi);  // xlog2 = min(xlog2, 255)
+#endif
 
     // Branch-free float->int: shift mantissa left by (exp - bias) bits.
     vInt e = exexp(xlog2);
@@ -544,8 +546,10 @@ inline vFloat exp_hw_eval_preloaded(
     // swaps because the compiler can't hide the mask ops in SFPMAD windows the
     // way TTNN's hand-recorded TTI replay buffer does. The two swaps stay.
     vFloat thr_lo = 0.0f;
+#if !defined(EXP_HW_SKIP_INPUT_CLAMP)
     vec_min_max(thr_lo, xlog2);        // xlog2 = max(0, xlog2)
     vec_min_max(xlog2, thr_hi_hoist);  // xlog2 = min(xlog2, 255)
+#endif
 
     // Branch-free float->int: shift mantissa left by (exp - bias) bits.
     vInt e = exexp(xlog2);

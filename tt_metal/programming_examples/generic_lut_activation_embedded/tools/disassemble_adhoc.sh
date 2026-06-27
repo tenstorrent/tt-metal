@@ -39,12 +39,25 @@ if [[ -n "$CACHE" && -d "$CACHE" ]]; then
 fi
 SEARCH_ROOTS+=("$BUILD_DIR")
 
+# The embedded activation math body is the adhoc TRISC1 ELF. Prefer it over
+# arbitrary newest ELF files: XIP dumps, pack/unpack kernels, or unrelated
+# cached kernels can otherwise win the timestamp race and produce misleading
+# disassembly.
 artifact="$(
-    find "${SEARCH_ROOTS[@]}" \( -name 'trisc*.elf' -o -name 'trisc*.o' -o -name '*.elf' \) -printf '%T@ %p\n' 2>/dev/null \
+    find "${SEARCH_ROOTS[@]}" -path '*/kernels/adhoc/*/trisc1/trisc1.elf' -printf '%T@ %p\n' 2>/dev/null \
         | sort -n \
         | tail -1 \
         | cut -d' ' -f2-
 )"
+
+if [[ -z "$artifact" ]]; then
+    artifact="$(
+        find "${SEARCH_ROOTS[@]}" \( -name 'trisc*.elf' -o -name 'trisc*.o' -o -name '*.elf' \) -printf '%T@ %p\n' 2>/dev/null \
+            | sort -n \
+            | tail -1 \
+            | cut -d' ' -f2-
+    )"
+fi
 
 if [[ -z "$artifact" || ! -f "$artifact" ]]; then
     echo "ERROR: no TRISC ELF/object found under: ${SEARCH_ROOTS[*]}" >&2

@@ -492,9 +492,14 @@ elif has_affine_even_basis:
 elif basis_kind_norm not in plain_basis_kinds:
     raise ValueError(f'unsupported basis_kind={basis_kind!r}; refusing to generate a normal polynomial kernel')
 
-# Detect parity from coefficient values
+# Detect parity from coefficient values. Exact zero always wins. For BF16-only
+# reporting rows, allow tiny fit residue to collapse to the mathematically
+# dominant parity when the dropped contribution is safely below BF16 noise over
+# the declared input range.
 poly_parity_macro = ''
 threshold = 1e-30
+parity_drop_tolerance = 0.25 if '$PRECISION' == 'bf16' else 0.0
+parity_drop_relative_tolerance = 1.0 / 256.0 if '$PRECISION' == 'bf16' else 0.0
 if has_abs_sign_basis or has_affine_even_basis:
     # Do not infer parity: abs/sign basis coefficients are dense in abs(x),
     # not expanded odd/even coefficients in x.
@@ -526,19 +531,46 @@ elif not is_rational and degree >= 2:
 
     even_all_zero = True
     odd_all_zero = True
+    domain_radius = max(abs(float(input_min)), abs(float(input_max)))
+    even_drop_bound = 0.0
+    odd_drop_bound = 0.0
+    even_bound = 0.0
+    odd_bound = 0.0
     for seg in seg_coeffs_list:
         for i in range(degree + 1):
+            contribution_bound = abs(seg[i]) * (domain_radius ** i)
             if i % 2 == 0 and abs(seg[i]) > threshold:
                 even_all_zero = False
+                even_drop_bound += contribution_bound
+                even_bound += contribution_bound
             if i % 2 == 1 and abs(seg[i]) > threshold:
                 odd_all_zero = False
+                odd_drop_bound += contribution_bound
+                odd_bound += contribution_bound
+
+    if (
+        not even_all_zero
+        and 0.0 < parity_drop_tolerance
+        and even_drop_bound <= parity_drop_tolerance
+        and even_drop_bound <= parity_drop_relative_tolerance * max(odd_bound, threshold)
+    ):
+        even_all_zero = True
+    if (
+        not odd_all_zero
+        and 0.0 < parity_drop_tolerance
+        and odd_drop_bound <= parity_drop_tolerance
+        and odd_drop_bound <= parity_drop_relative_tolerance * max(even_bound, threshold)
+    ):
+        odd_all_zero = True
 
     if even_all_zero:
         poly_parity_macro = '\n// Polynomial parity: odd function (c0=c2=c4=...=0) -> x^2-Horner\n#define POLY_PARITY_ODD\n'
-        print(f'Polynomial parity: ODD (c0=c2=c4=...=0) -> x^2-Horner enabled')
+        tolerance_note = f', dropped even <= {even_drop_bound:.3g}' if even_drop_bound > 0.0 else ''
+        print(f'Polynomial parity: ODD (c0=c2=c4=...=0{tolerance_note}) -> x^2-Horner enabled')
     elif odd_all_zero:
         poly_parity_macro = '\n// Polynomial parity: even function (c1=c3=c5=...=0) -> x^2-Horner\n#define POLY_PARITY_EVEN\n'
-        print(f'Polynomial parity: EVEN (c1=c3=c5=...=0) -> x^2-Horner enabled')
+        tolerance_note = f', dropped odd <= {odd_drop_bound:.3g}' if odd_drop_bound > 0.0 else ''
+        print(f'Polynomial parity: EVEN (c1=c3=c5=...=0{tolerance_note}) -> x^2-Horner enabled')
 
 # Check for range reduction
 rr_macro = ''
@@ -630,8 +662,12 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         scaled_topv = abs(c_topv) * (2.0 ** (-23.0 * degree))
         fused_safe = scaled_topv == 0.0 or scaled_topv >= 1e-37
         bare_safe = c0v >= 1.0
+        exp_hw_min = min(float(input_min) * float(mult) + 127.0, float(input_max) * float(mult) + 127.0)
+        exp_hw_max = max(float(input_min) * float(mult) + 127.0, float(input_max) * float(mult) + 127.0)
+        skip_clamp_safe = 0.0 <= exp_hw_min and exp_hw_max <= 255.0
         fused_macro = '#define EXP_HW_FUSED\n' if fused_safe else ''
         bare_macro = '#define EXP_HW_BARE_SETEXP\n' if bare_safe else ''
+        skip_clamp_macro = '#define EXP_HW_SKIP_INPUT_CLAMP\n' if skip_clamp_safe else ''
         rr_macro = (
             '\n// eval_method: exponent_alu / exp2 (exman/exexp/setexp), natural [0,1) coeffs. STANDALONE\n'
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_EXPONENT_ALU\n'
@@ -641,11 +677,12 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             f'{compose_macro}'
             f'{fused_macro}'
             f'{bare_macro}'
+            f'{skip_clamp_macro}'
             f'{hw_preload_macro}'
             f'constexpr uint32_t EXP_HW_DEGREE = {degree};\n'
             f'constexpr float EXP_HW_COEFFS[] = {{{coeff_str}}};\n'
         )
-        print(f'Range reduction: HW exponent-ALU exp2 (degree {degree}, mult {mult}, compose {compose or \"none\"}, fused {\"ON\" if fused_safe else \"off\"}, bare_setexp {\"ON\" if bare_safe else \"off\"})')
+        print(f'Range reduction: HW exponent-ALU exp2 (degree {degree}, mult {mult}, compose {compose or \"none\"}, fused {\"ON\" if fused_safe else \"off\"}, bare_setexp {\"ON\" if bare_safe else \"off\"}, input_clamp {\"skipped\" if skip_clamp_safe else \"ON\"})')
     elif kind == 'log2':
         scale = metadata.get('expalu_log_scale', metadata.get('log_scale', '1.0'))
         basis = metadata.get('expalu_log2_basis', 'natural')
