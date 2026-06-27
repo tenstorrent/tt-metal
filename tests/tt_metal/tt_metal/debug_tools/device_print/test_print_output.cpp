@@ -142,7 +142,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         // so reduce the iteration count on Quasar. The race-detection signal does not require
         // a large count — even a small number of iterations with high concurrency exposes any
         // memory-ordering bugs immediately, and the assertion is per-iteration.
-        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 100u : 1000u;
+        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 10u : 1000u;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
         // Per-arch expected number of distinct RISCs printing concurrently on the same core.

@@ -151,16 +151,16 @@ jobs:
       basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
 
   # =============================================================================
-  # No Team determined
+  # Shield team
   # =============================================================================
-  tt-metal-l2-tests:
+  shield-sdxl-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
         github.event_name == 'schedule' || inputs.additional_test_categories != ''
       )
     secrets: inherit
-    uses: ./.github/workflows/tt-metal-l2-impl.yaml
+    uses: ./.github/workflows/shield-sdxl-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

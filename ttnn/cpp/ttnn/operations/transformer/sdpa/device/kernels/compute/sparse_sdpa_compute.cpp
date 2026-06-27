@@ -94,7 +94,7 @@ void kernel_main() {
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
     compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-    mm_init(cb_q_in, cb_k_in, cb_out_im);  // one-time full matmul init; the no_mop matmuls reinit off this
+    matmul_init(cb_q_in, cb_k_in);  // one-time matmul init; the no_mop matmuls reinit off this
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
 
@@ -176,7 +176,6 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/DHt,
                             /*matmul_stride=*/DHt,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
                     // Publish the band to UNPACK while holding wr_ptr (for the in-place mask/sub_exp).
@@ -262,7 +261,6 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/Skt,
                             /*matmul_stride=*/KT_stride,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
                     pack_to_unpack_sync();                // flush PV's HELD out_cur packs (push_back deferred to

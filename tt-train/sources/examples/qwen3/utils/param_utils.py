@@ -99,15 +99,15 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
     mapping = {}
     transforms = {}
 
-    if tie_word_embeddings:
-        mapping["model.embed_tokens.weight"] = f"{root_prefix}/fc/weight"
-    else:
-        mapping["model.embed_tokens.weight"] = f"{root_prefix}/tok_emb/weight"
-        mapping["lm_head.weight"] = f"{root_prefix}/fc/weight"
+    # Embedding is a raw Parameter (no "/weight" suffix). When tying, the same
+    # tensor serves as the LM head, so HF's lm_head.weight is not loaded.
+    mapping["model.embed_tokens.weight"] = f"{root_prefix}/model/embed_tokens"
+    if not tie_word_embeddings:
+        mapping["lm_head.weight"] = f"{root_prefix}/lm_head_weight"
 
     for i in range(config.num_hidden_layers):
         hp = f"model.layers.{i}"
-        tp = f"{root_prefix}/blocks/{i}"
+        tp = f"{root_prefix}/model/layers/{i}"
 
         mapping[f"{hp}.self_attn.q_proj.weight"] = f"{tp}/self_attn/q_proj/weight"
         transforms[f"{hp}.self_attn.q_proj.weight"] = (
@@ -147,7 +147,7 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
         mapping[f"{hp}.mlp.up_proj.weight"] = f"{tp}/mlp/up_proj/weight"
         mapping[f"{hp}.mlp.down_proj.weight"] = f"{tp}/mlp/down_proj/weight"
 
-    mapping["model.norm.weight"] = f"{root_prefix}/ln_fc/weight"
+    mapping["model.norm.weight"] = f"{root_prefix}/model/norm/weight"
     return mapping, transforms
 
 

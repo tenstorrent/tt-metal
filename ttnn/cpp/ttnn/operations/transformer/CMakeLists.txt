@@ -32,6 +32,7 @@ target_sources(
             concatenate_heads/concatenate_heads.hpp
             sdpa/sdpa.hpp
             sdpa/sparse_sdpa.hpp
+            sdpa/sparse_sdpa_msa.hpp
             sdpa_decode/sdpa_decode.hpp
             sdpa_windowed/sdpa_windowed.hpp
             split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
