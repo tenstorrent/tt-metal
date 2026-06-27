@@ -43,3 +43,7 @@
 {"source":"tt-probe","pid":2613678,"started_at_ms":1782578157273,"wait_ms":181,"run_ms":18664,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"tt-probe","pid":2615389,"started_at_ms":1782578441019,"wait_ms":212,"run_ms":18704,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"tt-probe","pid":2615698,"started_at_ms":1782578485941,"wait_ms":181,"run_ms":18569,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"event": "phase", "phase": "drafter_stage_4", "state": "end", "at_ms": 1782578530584}
+{"event": "phase", "phase": "drafter_stage_5", "state": "start", "at_ms": 1782578530594}
+{"source":"run_safe_pytest","pid":2621321,"started_at_ms":1782579161370,"wait_ms":1,"run_ms":15679,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2621787,"started_at_ms":1782579196500,"wait_ms":2,"run_ms":10449,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}

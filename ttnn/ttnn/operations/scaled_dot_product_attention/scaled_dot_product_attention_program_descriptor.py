@@ -92,6 +92,7 @@ def create_program_descriptor(
     CB_K = 1
     CB_SCALER_REDUCE = 4
     CB_SCALE_FACTOR = 5
+    CB_ALPHA = 8
     CB_O = 16
     CB_SCORES = 24
     CB_SCORES_MASKED = 25
@@ -140,6 +141,16 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_SCALE_FACTOR, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_alpha: alpha = exp(m_old - m_new) per Q-block row. B_q_t tiles.
+        # Produced by compute (eltwise_chain: BinaryFpu Sub + Exp + PackTile),
+        # consumed by compute (rescale O and l via eltwise mul with Col broadcast).
+        ttnn.CBDescriptor(
+            total_size=B_Q_T * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_ALPHA, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_o: running output, B_q_t * D_t tiles. Initialized to 0 in Stage 0.

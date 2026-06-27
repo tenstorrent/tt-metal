@@ -35,9 +35,16 @@
 //   - ReduceInputBlockShape::of(B_q_t, B_kv_t, 1) = of(4, 4, 1)
 //   - WaitUpfrontNoPop: waits for all 16 input tiles, pops 0, pushes 4 output
 //
-// DPRINT: cb_max_new tile 0, first 4×4 elements — per-row max of first score
-// rows. Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front of CB
-// (between cb_wait_front and cb_pop_front).
+// Stage 5 (alpha): Compute alpha = exp(m_old - m_new) via eltwise_chain.
+//   alpha = exp(cb_max_old - cb_max_new) → cb_alpha (4 tiles)
+//   - Input A: cb_max_old (4 tiles, Bulk — consumed)
+//   - Input B: cb_max_new (4 tiles, HeldBulk — retained for phase 8 + 13)
+//   - Output: cb_alpha (4 tiles, Streaming)
+//   - Chain: BinaryFpu<Sub> → Exp → PackTile<cb_alpha>
+//
+// DPRINT: cb_alpha tile 0, first 4×4 elements — exp(m_old - m_new) values.
+// Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front of CB (between
+// cb_wait_front and cb_pop_front).
 
 #include <cstdint>
 
@@ -46,6 +53,7 @@
 #include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 using namespace compute_kernel_lib;
@@ -56,9 +64,11 @@ void kernel_main() {
     constexpr uint32_t cb_k = tt::CBIndex::c_1;
     constexpr uint32_t cb_scaler_reduce = 4;
     constexpr uint32_t cb_scale_factor = 5;
+    constexpr uint32_t cb_alpha = 8;
     constexpr uint32_t cb_scores = 24;
     constexpr uint32_t cb_scores_masked = 25;
     constexpr uint32_t cb_max_new = 26;
+    constexpr uint32_t cb_max_old = 27;
 
     // Compile-time args: [B_q_t, B_kv_t, D_t]
     constexpr uint32_t B_q_t = get_compile_time_arg_val(0);   // 4
@@ -157,6 +167,53 @@ void kernel_main() {
         cb_wait_front(cb_max_new, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
         DPRINT("stage_4 rowmax:\n{}\n", TileSlice(cb_max_new, 0, sr, true, true));
+    }
+#endif
+
+    // --- Stage 5: Compute alpha = exp(m_old - m_new) ---
+    // alpha = exp(m_i_old - m_blk) per Q-block row → cb_alpha (B_q_t tiles)
+    //   Input A: cb_max_old (4 tiles, Bulk — wait upfront + pop at end; consumed)
+    //   Input B: cb_max_new (4 tiles, HeldBulk — wait upfront, no pop; retained
+    //     for phase 8 subtract_max and phase 13 update_m)
+    //   Output:  cb_alpha (4 tiles, Streaming — per-tile reserve+push)
+    //
+    // Fused chain: BinaryFpu<Sub> writes m_old - m_new to Dst::D0, then Exp<>
+    // transforms D0 in-place, then PackTile packs D0 into cb_alpha.
+    //
+    // OperandKind::Block for both inputs: each of the B_q_t tiles is distinct
+    // (per-row running max). The chain iterates over all tiles, reading tile i
+    // from each CB. BroadcastDim::None (both CBs have the same shape: B_q_t tiles).
+    //
+    // BinaryDataFormatReconfig::Input (default): reconfigures unpacker from
+    // reduce format to eltwise binary format on both srcA and srcB.
+    // PackTileReconfig::Output (default): reconfigures packer from cb_max_new
+    // (reduce output) to cb_alpha format.
+    eltwise_chain(
+        B_q_t,
+        BinaryFpu<
+            /*CbA=*/cb_max_old,
+            /*CbB=*/cb_max_new,
+            /*Op=*/BinaryFpuOp::Sub,
+            /*Bcast=*/BroadcastDim::None,
+            /*APolicy=*/InputLifecycle::Bulk,
+            /*BPolicy=*/InputLifecycle::HeldBulk,
+            /*Reconfig=*/BinaryDataFormatReconfig::Input,
+            /*DstSlot=*/Dst::D0,
+            /*AIndex=*/OperandKind::Block,
+            /*BIndex=*/OperandKind::Block>{},
+        Exp<>{},
+        PackTile<cb_alpha, OutputLifecycle::Streaming>{});
+
+    // --- Stage 5 DPRINT: cb_alpha tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the chain completes, all 4 tiles are in cb_alpha.
+    // The read pointer is at tile 0 (nobody has popped). We wait_front tile 0,
+    // print it, then leave it (no pop — cb_alpha is consumed by later stages 6, 7).
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_alpha, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_5 alpha:\n{}\n", TileSlice(cb_alpha, 0, sr, true, true));
     }
 #endif
 }
