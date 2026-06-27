@@ -32,6 +32,24 @@ AUDIT_OVERRIDES = {
             "fixed to the true p=4 target; rerun p=4 sweep before claiming"
         ),
     },
+    ("bf16", "gelu"): {
+        "role": "fastest_waived_ulp",
+        "method": "basis",
+        "degree": "6",
+        "segments": "1",
+        "max_ulp": "0.25",
+        "runtime_us": "3.15",
+        "csv": "gelu_p6_s1_uniform_basis_ulp.csv",
+        "coeff_csv": (
+            "/home/ttuser/tt-polynomial-fitter/data/coefficients/"
+            "gelu_p6_s1_uniform_basis_ulp.csv"
+        ),
+        "status": "waived_gelu_0p25ulp_fast",
+        "note": (
+            "explicit GELU waiver: accept the 0.25 ULP basis-factor candidate "
+            "because it is substantially faster than TTNN"
+        ),
+    },
 }
 
 
@@ -83,7 +101,13 @@ def _apply_audit(dtype, row):
     override = AUDIT_OVERRIDES.get((dtype, row.get("activation")))
     if override:
         out.update(override)
-    out["audited_result"] = "excluded" if str(out.get("status", "")).startswith("excluded_") else _row_result(out)
+    status = str(out.get("status", ""))
+    if status.startswith("excluded_"):
+        out["audited_result"] = "excluded"
+    elif status.startswith("waived_"):
+        out["audited_result"] = "waived_fast"
+    else:
+        out["audited_result"] = _row_result(out)
     ours_us = _f(out.get("runtime_us"))
     ttnn_us = _f(out.get("ttnn_us"))
     out["speedup_vs_ttnn"] = f"{ttnn_us / ours_us:.3f}" if ours_us and ttnn_us else ""
@@ -131,6 +155,7 @@ def write_markdown(path, rows_by_dtype):
         comparable = [r for r in rows if r["audited_result"] not in ("excluded", "incomplete")]
         incomplete = [r for r in rows if r["audited_result"] == "incomplete"]
         wins = [r for r in comparable if r["audited_result"] == "win_both"]
+        waived = [r for r in comparable if r["audited_result"] == "waived_fast"]
         acc = [r for r in comparable if r["audited_result"] == "accuracy_match_slow"]
         faster = [r for r in comparable if r["audited_result"] == "faster_less_accurate"]
         excluded = [r for r in rows if r["audited_result"] == "excluded"]
@@ -139,9 +164,9 @@ def write_markdown(path, rows_by_dtype):
             "",
             (
                 f"Comparable rows: {len(comparable)}. Win on ULP and runtime: {len(wins)}. "
-                f"Accuracy match but slower: {len(acc)}. Faster but less accurate: "
-                f"{len(faster)}. Incomplete TTNN refs: {len(incomplete)}. "
-                f"Excluded: {len(excluded)}."
+                f"Waived faster exceptions: {len(waived)}. Accuracy match but slower: "
+                f"{len(acc)}. Faster but less accurate: {len(faster)}. "
+                f"Incomplete TTNN refs: {len(incomplete)}. Excluded: {len(excluded)}."
             ),
             "",
             "| activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |",
@@ -164,6 +189,10 @@ def write_markdown(path, rows_by_dtype):
         if excluded:
             lines += ["", "Excluded rows:"]
             for r in excluded:
+                lines.append(f"- {r.get('activation')}: {r.get('note', r.get('status'))}")
+        if waived:
+            lines += ["", "Waived rows:"]
+            for r in waived:
                 lines.append(f"- {r.get('activation')}: {r.get('note', r.get('status'))}")
         lines.append("")
     path.write_text("\n".join(lines).rstrip() + "\n")

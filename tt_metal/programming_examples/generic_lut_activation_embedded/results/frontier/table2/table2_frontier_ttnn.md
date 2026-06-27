@@ -5,7 +5,7 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 40. Waived faster exceptions: 1. Accuracy match but slower: 10. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -28,7 +28,7 @@ Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. 
 | exp | exponent_alu_exp2:s1/d2 | 1.00 | 1.94 | 1.00 | 1.90 | 0.979 | accuracy_match_slow |
 | exp2 | exponent_alu_exp2:s3/d2 | 0.50 | 1.94 | 0.50 | 2.52 | 1.299 | win_both |
 | expm1 | poly:s1/d7 | 0.00 | 2.01 | 0.00 | 2.92 | 1.453 | win_both |
-| gelu | poly:s16/d2 | 0.12 | 11.80 | 0.12 | 5.78 | 0.490 | accuracy_match_slow |
+| gelu | basis:s1/d6 | 0.25 | 3.15 | 0.12 | 5.78 | 1.835 | waived_fast |
 | hardmish | gated_affine_product:s3/d3 | 0.00 | 1.72 | 0.03 | 1.77 | 1.029 | win_both |
 | hardshrink | threshold_identity:s3/d2 | 0.00 | 1.74 | 0.00 | 1.82 | 1.046 | win_both |
 | hardsigmoid | poly:s3/d3 | 0.50 | 1.99 | 0.50 | 1.79 | 0.899 | accuracy_match_slow |
@@ -73,9 +73,12 @@ Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. 
 Excluded rows:
 - multigammaln: frontier/native rows were generated before multigammaln.json was fixed to the true p=4 target; rerun p=4 sweep before claiming
 
+Waived rows:
+- gelu: explicit GELU waiver: accept the 0.25 ULP basis-factor candidate because it is substantially faster than TTNN
+
 ## fp32
 
-Comparable rows: 52. Win on ULP and runtime: 21. Accuracy match but slower: 4. Faster but less accurate: 15. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 21. Waived faster exceptions: 0. Accuracy match but slower: 4. Faster but less accurate: 15. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
