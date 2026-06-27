@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.rope import RotarySetup
@@ -707,6 +707,19 @@ def test_decoder(
         pytest.skip(
             f"Skipping batch={batch_size} seq_len={seq_len} on Blackhole {tuple(mesh_device.shape)}: "
             "this configuration uses throughput experts which are not supported on Blackhole."
+        )
+
+    if (
+        is_wormhole_b0()
+        and tuple(mesh_device.shape) == (4, 8)
+        and not paged
+        and seq_len == 1
+        and batch_size == 1
+        and layer_idx == 0
+    ):
+        pytest.skip(
+            "Skipping test_decoder[wormhole_b0-unpaged-layer_0-decode_low_latency-4x8]: "
+            "device timeout / hang on Wormhole Galaxy 4x8 mesh, refs #47405"
         )
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
