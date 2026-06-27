@@ -1,0 +1,2 @@
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find matmul_block kernel callers","ts":"2026-06-27T11:04:17+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find mcast_pipe kernel + host callers","ts":"2026-06-27T11:04:17+00:00"}

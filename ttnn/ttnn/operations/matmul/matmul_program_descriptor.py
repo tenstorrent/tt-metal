@@ -1,0 +1,321 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""ProgramDescriptor for the 2D dual-multicast matmul.
+
+Maps the output tile-grid (Mt x Nt) onto a GR x GC Tensix grid (rows own
+M-blocks, cols own N-blocks). The first column (X==0) reads its activation
+row-block and multicasts it across the row; the first row (Y==0) reads its
+weight column-block and multicasts it down the column. K is streamed in
+K-blocks of `in0_block_w`, so per-core L1 stays bounded for arbitrary K.
+M/N blocks are bounded by an L1 budget; when a core's region exceeds one
+block the grid iterates per-core blocks in lock-step.
+"""
+
+from pathlib import Path
+import math
+
+import ttnn
+
+
+KERNEL_DIR = Path(__file__).parent / "kernels"
+
+# --- CB indices (semantic names in the kernels) ---
+CB_IN0_ACT = 0  # activation row-block (in0)
+CB_IN1_WEIGHT = 1  # weight column-block (in1)
+CB_OUT = 16  # finished output block
+CB_INTERM = 24  # K spill/reload (internal to matmul_block)
+
+# --- semaphore IDs (must match the kernel CT args) ---
+SEM_IN0_DATA_READY = 0
+SEM_IN0_CONSUMER_READY = 1
+SEM_IN1_DATA_READY = 2
+SEM_IN1_CONSUMER_READY = 3
+
+# Usable L1 budget for the 4 matmul CBs (bytes). Conservative; blocks shrink to fit.
+L1_MM_BUDGET = 1_000_000
+
+
+def _ceil_div(a, b):
+    return (a + b - 1) // b
+
+
+def _find_max_divisor(value, max_div):
+    """Largest divisor of `value` that is <= max_div (>= 1)."""
+    for d in range(min(max_div, value), 0, -1):
+        if value % d == 0:
+            return d
+    return 1
+
+
+def _choose_subblock(bM, bN, dest_limit):
+    """Largest (h, w) with h | bM, w | bN, h*w <= dest_limit (by tile count)."""
+    best_h, best_w, best_area = 1, 1, 1
+    for h in range(1, bM + 1):
+        if bM % h:
+            continue
+        for w in range(1, bN + 1):
+            if bN % w:
+                continue
+            area = h * w
+            if area <= dest_limit and area >= best_area:
+                best_h, best_w, best_area = h, w, area
+    return best_h, best_w
+
+
+def _dest_limit(fp32_acc, full_sync):
+    if full_sync:
+        return 8 if fp32_acc else 16
+    return 4 if fp32_acc else 8
+
+
+def _distribute(Mt, Nt, Kt, gx, gy, dest_limit, tile_bytes):
+    """Choose K-blocking, output block size, grid extent, and per-core loop counts."""
+    in0_block_w = _find_max_divisor(Kt, 4)
+    num_k_blocks = Kt // in0_block_w
+
+    # Start by covering the grid with one block per core, then shrink to fit L1.
+    bM = max(1, _ceil_div(Mt, gy))
+    bN = max(1, _ceil_div(Nt, gx))
+
+    def footprint(bm, bn):
+        in0 = bm * in0_block_w * 2
+        in1 = in0_block_w * bn * 2
+        out = bm * bn * 2
+        interm = bm * bn
+        return (in0 + in1 + out + interm) * tile_bytes
+
+    while footprint(bM, bN) > L1_MM_BUDGET and (bM > 1 or bN > 1):
+        if bM >= bN and bM > 1:
+            bM = max(1, bM // 2)
+        elif bN > 1:
+            bN = max(1, bN // 2)
+        else:
+            break
+
+    sb_h, sb_w = _choose_subblock(bM, bN, dest_limit)
+    in0_num_subblocks = bM // sb_h
+    in1_num_subblocks = bN // sb_w
+
+    num_m_blocks = _ceil_div(Mt, bM)
+    num_n_blocks = _ceil_div(Nt, bN)
+    GR = min(gy, num_m_blocks)
+    GC = min(gx, num_n_blocks)
+    per_core_M_blocks = _ceil_div(num_m_blocks, GR)
+    per_core_N_blocks = _ceil_div(num_n_blocks, GC)
+
+    return {
+        "in0_block_w": in0_block_w,
+        "num_k_blocks": num_k_blocks,
+        "block_M_tiles": bM,
+        "block_N_tiles": bN,
+        "out_subblock_h": sb_h,
+        "out_subblock_w": sb_w,
+        "in0_num_subblocks": in0_num_subblocks,
+        "in1_num_subblocks": in1_num_subblocks,
+        "GR": GR,
+        "GC": GC,
+        "per_core_M_blocks": per_core_M_blocks,
+        "per_core_N_blocks": per_core_N_blocks,
+    }
+
+
+def create_program_descriptor(input_tensor, weight, output_tensor, compute_kernel_config):
+    device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = grid.x, grid.y
+
+    A_shape = list(input_tensor.shape)
+    B_shape = list(weight.shape)
+    M, K = A_shape[-2], A_shape[-1]
+    N = B_shape[-1]
+    Mt = _ceil_div(M, 32)
+    Kt = _ceil_div(K, 32)
+    Nt = _ceil_div(N, 32)
+    batch = 1
+    for d in A_shape[:-2]:
+        batch *= d
+
+    tileA_bytes = input_tensor.buffer_page_size()
+    tileB_bytes = weight.buffer_page_size()
+    tileC_bytes = output_tensor.buffer_page_size()
+    interm_bytes = ttnn.tile_size(ttnn.float32)
+    interm_format = ttnn.float32
+
+    fp32_acc = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
+    full_sync = bool(getattr(compute_kernel_config, "dst_full_sync_en", False))
+    dest_limit = _dest_limit(fp32_acc, full_sync)
+
+    d = _distribute(Mt, Nt, Kt, gx, gy, dest_limit, tileA_bytes)
+    in0_block_w = d["in0_block_w"]
+    num_k_blocks = d["num_k_blocks"]
+    block_M_tiles = d["block_M_tiles"]
+    block_N_tiles = d["block_N_tiles"]
+    out_subblock_h = d["out_subblock_h"]
+    out_subblock_w = d["out_subblock_w"]
+    in0_num_subblocks = d["in0_num_subblocks"]
+    in1_num_subblocks = d["in1_num_subblocks"]
+    GR = d["GR"]
+    GC = d["GC"]
+    per_core_M_blocks = d["per_core_M_blocks"]
+    per_core_N_blocks = d["per_core_N_blocks"]
+
+    in0_mcast = 1 if GC > 1 else 0
+    in1_mcast = 1 if GR > 1 else 0
+
+    # ===== core grid =====
+    grid_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GC - 1, GR - 1))
+    core_grid = ttnn.CoreRangeSet([grid_range])
+
+    # ===== circular buffers (identical on all grid cores) =====
+    def make_cb(index, page_size, num_pages, data_format):
+        return ttnn.CBDescriptor(
+            total_size=num_pages * page_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=index,
+                    data_format=data_format,
+                    page_size=page_size,
+                )
+            ],
+        )
+
+    in0_block_tiles = block_M_tiles * in0_block_w
+    in1_block_tiles = in0_block_w * block_N_tiles
+    out_block_tiles = block_M_tiles * block_N_tiles
+
+    cb_in0 = make_cb(CB_IN0_ACT, tileA_bytes, in0_block_tiles * 2, input_tensor.dtype)
+    cb_in1 = make_cb(CB_IN1_WEIGHT, tileB_bytes, in1_block_tiles * 2, weight.dtype)
+    cb_out = make_cb(CB_OUT, tileC_bytes, out_block_tiles * 2, output_tensor.dtype)
+    cb_interm = make_cb(CB_INTERM, interm_bytes, out_block_tiles, interm_format)
+
+    # ===== semaphores (union of grid cores; consumer-ready MUST init to 0) =====
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=SEM_IN0_DATA_READY, core_ranges=core_grid, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_IN0_CONSUMER_READY, core_ranges=core_grid, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_IN1_DATA_READY, core_ranges=core_grid, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_IN1_CONSUMER_READY, core_ranges=core_grid, initial_value=0),
+    ]
+
+    def virt(lx, ly):
+        c = device.worker_core_from_logical_core(ttnn.CoreCoord(lx, ly))
+        return c.x, c.y
+
+    # ===== reader kernel =====
+    reader_ct = [
+        Mt,
+        Nt,
+        Kt,
+        batch,
+        block_M_tiles,
+        block_N_tiles,
+        in0_block_w,
+        num_k_blocks,
+        per_core_M_blocks,
+        per_core_N_blocks,
+        in0_mcast,
+        in1_mcast,
+        SEM_IN0_DATA_READY,
+        SEM_IN0_CONSUMER_READY,
+        SEM_IN1_DATA_READY,
+        SEM_IN1_CONSUMER_READY,
+        tileA_bytes,
+        tileB_bytes,
+    ]
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
+
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+
+    A_addr = input_tensor.buffer_address()
+    B_addr = weight.buffer_address()
+    C_addr = output_tensor.buffer_address()
+
+    for Y in range(GR):
+        for X in range(GC):
+            # --- in0 (activation, across row Y) ---
+            if X == 0:
+                if in0_mcast:
+                    rx0, ry0 = virt(1, Y)
+                    rx1, ry1 = virt(GC - 1, Y)
+                    in0_coords = [rx0, ry0, rx1, ry1]
+                else:
+                    in0_coords = [0, 0, 0, 0]
+            else:
+                sx, sy = virt(0, Y)
+                in0_coords = [sx, sy, 0, 0]
+
+            # --- in1 (weight, down column X) ---
+            if Y == 0:
+                if in1_mcast:
+                    rx0, ry0 = virt(X, 1)
+                    rx1, ry1 = virt(X, GR - 1)
+                    in1_coords = [rx0, ry0, rx1, ry1]
+                else:
+                    in1_coords = [0, 0, 0, 0]
+            else:
+                sx, sy = virt(X, 0)
+                in1_coords = [sx, sy, 0, 0]
+
+            reader_rt[X][Y] = [A_addr, B_addr, Y, X] + in0_coords + in1_coords
+            writer_rt[X][Y] = [C_addr, Y, X]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "matmul_reader.cpp"),
+        core_ranges=core_grid,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ===== compute kernel =====
+    total_blocks_per_core = batch * per_core_M_blocks * per_core_N_blocks
+    compute_ct = [
+        in0_num_subblocks,
+        in1_num_subblocks,
+        out_subblock_h,
+        out_subblock_w,
+        in0_block_w,
+        num_k_blocks,
+        total_blocks_per_core,
+    ]
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "matmul_compute.cpp"),
+        core_ranges=core_grid,
+        compile_time_args=compute_ct,
+        runtime_args=[],
+        config=compute_kernel_config,
+    )
+
+    # ===== writer kernel =====
+    writer_ct = [
+        Mt,
+        Nt,
+        batch,
+        block_M_tiles,
+        block_N_tiles,
+        in0_num_subblocks,
+        in1_num_subblocks,
+        out_subblock_h,
+        out_subblock_w,
+        per_core_M_blocks,
+        per_core_N_blocks,
+        tileC_bytes,
+    ]
+    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "matmul_writer.cpp"),
+        core_ranges=core_grid,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    return ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, compute_kernel, writer_kernel],
+        semaphores=semaphores,
+        cbs=[cb_in0, cb_in1, cb_out, cb_interm],
+    )
