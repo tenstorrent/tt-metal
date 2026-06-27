@@ -16,10 +16,7 @@
 namespace tt::tt_metal {
 namespace {
 
-// Regression test for from_flatbuffer(std::vector<CoreCoord>): the deserializer
-// size-constructed the output vector (N default-initialized {0,0} entries) and then
-// emplace_back'd the real values on top, returning a vector of size 2N with junk at the
-// front. Before the fix this test fails (size is 2N, not N).
+// #48258: a CoreCoord vector round-trips to size N with the right values (not 2N with leading {0,0}s).
 TEST(ProgramTypesFromFlatbuffer, CoreCoordVectorRoundtrip) {
     const std::vector<CoreCoord> original = {CoreCoord{1, 2}, CoreCoord{3, 4}, CoreCoord{5, 6}};
 
@@ -48,9 +45,7 @@ TEST(ProgramTypesFromFlatbuffer, CoreCoordVectorEmptyRoundtrip) {
     EXPECT_TRUE(from_flatbuffer(fb).empty());
 }
 
-// Regression test for from_flatbuffer(std::vector<std::vector<uint32_t>>): same bug class as
-// above - the output was size-constructed (N empty sub-vectors) and then push_back'd onto,
-// returning size 2N with empty sub-vectors at the front. Before the fix this test fails.
+// #48259: a vector-of-vectors round-trips to size N with the right values (not 2N with leading empties).
 TEST(ProgramTypesFromFlatbuffer, UInt32VecOfVecRoundtrip) {
     const std::vector<std::vector<uint32_t>> original = {{1, 2, 3}, {4, 5}, {6}};
 

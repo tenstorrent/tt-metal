@@ -17,16 +17,7 @@
 namespace tt::tt_metal {
 namespace {
 
-// Regression test for the from_flatbuffer(SubDeviceId vector) loop bug (PR #48181).
-//
-// The original loop iterated over the destination vector's size:
-//     sub_device_ids.reserve(fb_sub_device_ids->size());
-//     for (size_t i = 0; i < sub_device_ids.size(); ++i) { ... }   // size() is still 0!
-// reserve() only changes capacity, not size(), so the loop body never executed and
-// deserialization always returned an empty vector regardless of the input. The fix
-// iterates over fb_sub_device_ids->size() instead.
-//
-// Before the fix this test fails at the ASSERT_EQ below (0 != 3).
+// #48180: a SubDeviceId vector round-trips with all its elements (not an empty vector).
 TEST(ProgramTypesFromFlatbuffer, SubDeviceIdVectorRoundtrip) {
     const std::vector<SubDeviceId> original = {SubDeviceId{0}, SubDeviceId{2}, SubDeviceId{5}};
 
