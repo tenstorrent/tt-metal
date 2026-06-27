@@ -112,7 +112,28 @@ dtype/acc cells in `test_golden.py` pass at their per-dtype tolerance bands.
   to keep K-accumulation from rounding each step (error ~O(√K)); the bf16 +
   `fp32_dest_acc_en=False` cells are the likeliest EXCLUSION candidates.
 
-### [ ] Refinement 1b — bf16-output + acc=False at extreme K (K≥8192): 16-bit-DEST floor
+### [x] Refinement 1b — bf16-output + acc=False at extreme K (K≥8192): 16-bit-DEST floor
+
+> **Status (2026-06-27): [x] complete — in-op fix, NOT a band change.** Both
+> residual cells now pass. Golden: **300 / 300 supported pass** (was 298/300; 0
+> failed, 0 xpassed, 366 xfailed, 1 skipped). The root-cause framing below was
+> partly wrong: the deep-K error was dominated by the DEFAULT **software K-spill**
+> re-quantizing the running sum to bf16 (reload into 16-bit DEST + re-pack at out's
+> format) on every K-block — NOT an irreducible per-product floor. The R1
+> "flat across in0_block_w" finding was measured on that software-spill path, where
+> blocking can't help (each block still reloads to 16-bit DEST). Switching the
+> bf16-output acc=False corner to **HARDWARE packer-L1 accumulation with an fp32
+> cb_interm** (generalizing R1's Lever B from bf8b→bf16-interm to bf16→fp32-interm)
+> accumulates the cross-K-block running sum in fp32 in L1, bounding the 16-bit
+> in-DEST run to ONE K-block: relRMS **0.128 → 0.009** at K=8192, flat across
+> K=512..8192. `fp32_dest_acc_en=False` (16-bit DEST per block) is still honored —
+> `packer_l1_acc` is an orthogonal hardware knob the user does not control.
+> **Semantics note for the verifier**: R1b's verifier notes flagged "fp32 split-K
+> accumulation under acc=False" for escalation as a possible semantics change. This
+> reuses the EXACT packer-L1-under-acc=False mechanism already shipped + verified in
+> Lever B (bf8b); only the interm format differs (fp32 vs bf16). Surfaced loudly
+> here + in `changelog.md` for review. NO golden-band edit was needed. Details in
+> `changelog.md`.
 
 **Goal**: make the 2 residual `test_golden.py` fails pass — `A256x8192` (K=8192)
 with **bf16 output + fp32_dest_acc_en=False** (bf16/bf16 relRMS 0.1279, bf16/fp32

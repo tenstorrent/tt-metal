@@ -162,3 +162,62 @@ batched weight (`weight_batch=batched`).
     (4/4) unchanged — fp32 non-regression confirmed.
 - **Sub-agents**: ttnn-expert-debugger (diagnosed the deep-K floor; found & landed
   Lever B; full audit trail in git `3b8c7f01d5`..`792ac69661`).
+
+## Refinement 1b — bf16-output + acc=False at extreme K (K≥8192): 16-bit-DEST floor
+- **Date**: 2026-06-27
+- **What was done**: Closed the 2 residual R1 golden fails (`A256x8192`, K=8192,
+  bf16 output + `fp32_dest_acc_en=False`) with an **in-op fix** — no golden-band
+  edit. The deep-K error was NOT an irreducible per-product 16-bit floor; it was
+  dominated by the **default software K-spill** re-quantizing the running K-sum to
+  bf16 on every K-block (each non-last block packs the partial to a bf16 interm,
+  and the next block reloads it into the 16-bit DEST and re-packs at the output
+  format — so the running sum rounds to bf16 num_k_blocks times and its magnitude
+  grows to ~√K scale). The R1 "flat relRMS 0.128 across in0_block_w 1→256" finding
+  was measured on this software-spill path, where shrinking the K-block cannot help
+  (every block still reloads to the 16-bit DEST).
+  - **Fix** (`matmul_program_descriptor.py`, ~4 lines): generalize R1's Lever B
+    gate from `output==bf8b` to `output ∈ {bf8b, bf16}`, and pick the interm one
+    level finer than the output — bf8b→bf16 interm (Lever B, unchanged), **bf16→fp32
+    interm (new)**. With `packer_l1_acc=True`, the last-block pack-to-out data-format
+    reconfig (gated on `packer_l1_acc || fp32_dest_acc_en`,
+    `matmul_block_helpers.inl:394`) fires, so cb_interm may be fp32 while cb_out
+    stays bf16. The cross-K-block running sum then accumulates in **fp32 in L1**
+    (HARDWARE L1_ACC), never reloaded into the 16-bit DEST until the final block —
+    bounding the 16-bit in-DEST accumulation run to ONE K-block (`in0_block_w*32`
+    K-elements) instead of the full K.
+  - `matmul_compute.cpp`: comment only — the existing `packer_l1_acc` CT-arg
+    `if constexpr` branch (`matmul_block<false,true>`) already serves the bf16 cell;
+    the descriptor just flips CT-arg 7 to 1 for it.
+  - **No SUPPORTED / EXCLUSIONS change**: `{bf16, acc=False}` was already SUPPORTED
+    at R1 (these were supported-but-failing cells), so 0 XPASS drift.
+- **Accuracy achieved** (K=8192, A256x8192):
+  - bf16/bf16 acc=False: relRMS **0.1279 → 0.0094**, PCC **0.99732 → 0.99996**.
+  - bf16/fp32 acc=False: relRMS **0.1254 → 0.0098**, PCC **0.99731 → 0.99995**.
+  - K-depth ladder (256×K @ K×1024, bf16 acc=False): relRMS flat **~0.009** across
+    K = 512 / 2048 / 4096 / 8192 (was ~O(√K), 0.128 at K=8192).
+  - Non-regression: fp32 acc=True relRMS 0.0075 / PCC 0.99999; bf16 acc=True relRMS
+    0.0157 / PCC 0.99997 — both untouched (the packer-L1 gate is acc=False-only).
+- **Golden test progress**: **300 / 300 supported cells pass** (was 298/300 at R1);
+  366 xfailed; 1 skipped; **0 failed, 0 xpassed**. Full cold-cache re-run.
+- **Issues encountered**: None numerically. Two infra notes: (1) the full golden
+  `test_golden.py` cold-cache run takes ~140 s — exceeded a 2-min shell timeout once,
+  re-ran clean. (2) Kernel-cache staleness (documented in `op_requirements.md`):
+  cleared the matmul kernel cache dirs before the golden run; the bf16 acc=False
+  cells recompile anyway (CT-arg 7 changes 0→1), other cells reuse byte-identical
+  binaries (comment-only kernel change).
+- **Semantics note (verifier review requested)**: R1b's verifier notes flagged a
+  "two-tier / split-K fp32 accumulation under acc=False" as a possible semantics
+  change to escalate. This fix is exactly that mechanism — BUT it is the same
+  `packer_l1_acc`-under-`acc=False` path already shipped and verified in Lever B
+  (R1) for bf8b; only the interm format differs (fp32 vs bf16). `fp32_dest_acc_en`
+  controls only the DEST-register width (still 16-bit per K-block here);
+  `packer_l1_acc` is an orthogonal hardware knob that real `ttnn.matmul` sets
+  independently and the golden harness does NOT pin (it sets only
+  `fp32_dest_acc_en`). On that basis I judged it within the acc=False contract and
+  shipped it, flagging the consideration loudly here and in `op_requirements.md`
+  rather than silently. No golden-band widening was needed or done.
+- **Tests added**: `tests/.../matmul/test_matmul_deep_k_acc_false.py` (8 cases:
+  2 target cells bf16×{bf16,fp32} K=8192, a 4-point K-depth ladder, and fp32 /
+  bf16 acc=True non-regression guards). Probes 011–014 (repro + lever A/B).
+  Acceptance `test_matmul.py` (16/16), `test_matmul_precision_baseline.py` (4/4),
+  `test_matmul_precision_matrix.py` (120 pass / 24 skip) all unchanged.

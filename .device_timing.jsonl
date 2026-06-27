@@ -53,3 +53,7 @@
 {"source":"tt-probe","pid":667902,"started_at_ms":1782565066216,"wait_ms":192,"run_ms":16460,"test_path":"matmul","exit_code":0}
 {"source":"tt-probe","pid":668310,"started_at_ms":1782565114243,"wait_ms":143,"run_ms":17389,"test_path":"matmul","exit_code":0}
 {"source":"run_safe_pytest","pid":669402,"started_at_ms":1782565319219,"wait_ms":2,"run_ms":15112,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_deep_k_acc_false.py","exit_code":0}
+{"source":"run_safe_pytest","pid":671008,"started_at_ms":1782565379522,"wait_ms":2,"run_ms":11482,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":671500,"started_at_ms":1782565394620,"wait_ms":2,"run_ms":21534,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_precision_matrix.py","exit_code":0}
+{"source":"run_safe_pytest","pid":672694,"started_at_ms":1782565444112,"wait_ms":2,"run_ms":119916,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":143}
+{"source":"run_safe_pytest","pid":676309,"started_at_ms":1782565580028,"wait_ms":2,"run_ms":176310,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":0}
