@@ -161,6 +161,30 @@ inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_form
     return data_format & DATA_FORMAT_CONFIG_MASK;
 }
 
+/**
+ * @brief Whether a single operand's data format should enable the INT8 math path (ALU_ACC_CTRL_INT8_math_enabled).
+ *
+ * When INT8 math is enabled, the FPU forces the SrcA "style" to INT8 and reads BOTH operands through the 8-bit
+ * integer datapath into an INT32 Dest, regardless of the programmed ALU source format. It must therefore be
+ * enabled only for 8-bit integer operands (Int8/UInt8) and for Int32 (existing, behavior-preserving), and must
+ * NOT be enabled for any wider format.
+ *
+ * Int8/UInt8 are detected on the masked (4-bit) format field because that is how they are programmed into the
+ * HW ALU source format register. Int32 is matched on the full (unmasked) value: UInt32 (=24) and Int32 (=8)
+ * share the same low nibble (24 & 0xF == 8), so a masked Int32 compare would wrongly enable INT8 math for
+ * UInt32; comparing the full value keeps UInt32 (a 32-bit format) out of the INT8 path.
+ *
+ * @param data_format Operand data format (DataFormat enum underlying value).
+ * @return true if this operand's format must enable INT8 math.
+ *
+ * @note ISA (paths are in the tt-isa-documentation repo): WormholeB0/BlackholeA0/TensixTile/TensixCoprocessor/
+ *       ELWADD.md and ELWMUL.md ("if (ALU_ACC_CTRL_INT8_math_enabled) SrcAStyle = INT8" branch).
+ */
+inline constexpr static bool enables_int8_math(std::uint32_t data_format)
+{
+    return (masked_data_format(data_format) == to_underlying(DataFormat::Int8)) || (data_format == to_underlying(DataFormat::Int32));
+}
+
 constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
 {
     switch (masked_data_format(format))
