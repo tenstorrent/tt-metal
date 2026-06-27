@@ -44,7 +44,18 @@ inline void piecewise_generic_lut_hw_reduce(const std::array<float, LUT_SIZE>& /
 #pragma GCC unroll 16
     for (int d = 0; d < 32; d++) {
         vFloat x = dst_reg[d];
-        vFloat y = trig_residual_cosine_pi2_odd_eval<TRIG_RESIDUAL_DEGREE>(x);
+        vFloat y = trig_residual_odd_eval<TRIG_RESIDUAL_DEGREE>(x);
+#ifdef USE_BF16
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
+#endif
+        dst_reg[d] = y;
+    }
+    return;
+#elif defined(EVAL_METHOD_TAN_STANDALONE)
+#pragma GCC unroll 16
+    for (int d = 0; d < 32; d++) {
+        vFloat x = dst_reg[d];
+        vFloat y = tan_standalone_eval<TAN_STANDALONE_DEGREE>(x);
 #ifdef USE_BF16
         y = convert<vFloat16b>(y, RoundMode::Nearest);
 #endif

@@ -130,7 +130,8 @@ inline vFloat trig_expand(vFloat poly_result, vInt q_int) {
 
 #if defined(EVAL_METHOD_TRIG_RESIDUAL)
 template <uint32_t DEGREE>
-inline vFloat trig_residual_cosine_pi2_odd_eval(vFloat x) {
+inline vFloat trig_residual_odd_eval(vFloat x) {
+#if defined(TRIG_RESIDUAL_PHASE_COSINE_PI2_ODD)
     vFloat half = sFloat16b(0.5f);
     vFloat inv_pi = vConstFloatPrgm2;
     vFloat z = __builtin_rvtt_sfpmad(x.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
@@ -147,6 +148,22 @@ inline vFloat trig_residual_cosine_pi2_odd_eval(vFloat x) {
     constexpr float NEG_PI_2_P1 = -0x1.fbp-12f;
     vFloat a = j * NEG_PI_2_P0 + x;
     a = j * NEG_PI_2_P1 + a;
+#elif defined(TRIG_RESIDUAL_PHASE_SINE_PI_ODD)
+    vFloat inv_pi = vConstFloatPrgm2;
+    vFloat z = x * inv_pi;
+
+    const vFloat c231 = ckernel::sfpu::Converter::as_float(0x4B400000U);
+    vFloat tmp = z + c231;
+    vFloat j = tmp - c231;
+    vInt q_int = reinterpret<vInt>(tmp) - reinterpret<vInt>(c231);
+
+    constexpr float NEG_PI_P0 = -0x1.92p+1f;
+    constexpr float NEG_PI_P1 = -0x1.fbp-11f;
+    vFloat a = j * NEG_PI_P0 + x;
+    a = j * NEG_PI_P1 + a;
+#else
+#error "EVAL_METHOD_TRIG_RESIDUAL requires a supported TRIG_RESIDUAL_PHASE_*"
+#endif
     a = j * vConstFloatPrgm0 + a;
     a = j * vConstFloatPrgm1 + a;
 
@@ -217,6 +234,42 @@ inline vFloat tan_expand(vFloat poly_result, vInt j_int) {
     }
     v_endif;
     return poly_result;
+}
+#endif
+
+#if defined(EVAL_METHOD_TAN_STANDALONE)
+template <uint32_t DEGREE>
+inline vFloat tan_standalone_eval(vFloat x) {
+    vFloat inv_pio2 = vConstFloatPrgm2;
+    vFloat rounding_bias = sFloat16b(0x1.8p23f);
+    vFloat j = __builtin_rvtt_sfpmad(x.get(), inv_pio2.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
+    vInt i = reinterpret<vInt>(j);
+    j += -rounding_bias;
+    i <<= 31;
+
+    constexpr float NEG_PI_2_P0 = -0x1.92p+0f;
+    constexpr float NEG_PI_2_P1 = -0x1.fbp-12f;
+    vFloat a = x + j * NEG_PI_2_P0;
+    a = a + j * NEG_PI_2_P1;
+    a = a + j * vConstFloatPrgm0;
+    a = a + j * vConstFloatPrgm1;
+
+    vFloat s = a * a;
+    constexpr int TOP = (DEGREE % 2 == 1) ? DEGREE : DEGREE - 1;
+    vFloat r = TAN_STANDALONE_COEFFS[TOP];
+#pragma GCC unroll 8
+    for (int k = 1; k <= (TOP - 1) / 2; k++) {
+        r = r * s + TAN_STANDALONE_COEFFS[TOP - 2 * k];
+    }
+    r = r * a;
+
+    v_if(i < 0) {
+        vFloat t = approx_recip(r);
+        vFloat e = -r * t + vConst1;
+        r = -t * e - t;
+    }
+    v_endif;
+    return r;
 }
 #endif
 
@@ -2748,11 +2801,22 @@ void kernel_main() {
 #endif
 
 #if defined(EVAL_METHOD_TRIG_RESIDUAL) && defined(TRISC_MATH)
-    // Four-part Cody-Waite -PI/2 tail constants and 1/PI multiplier for the
-    // standalone trig residual evaluator.
+    // Four-part Cody-Waite tail constants and 1/PI multiplier for the standalone
+    // trig residual evaluator.
+#if defined(TRIG_RESIDUAL_PHASE_SINE_PI_ODD)
+    sfpi::vConstFloatPrgm0 = -0x1.51p-21f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-33f;
+#else
     sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+#endif
     sfpi::vConstFloatPrgm2 = 0.31830987334251404f;
+#endif
+
+#if defined(EVAL_METHOD_TAN_STANDALONE) && defined(TRISC_MATH)
+    sfpi::vConstFloatPrgm0 = -0x1.51p-22f;
+    sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
+    sfpi::vConstFloatPrgm2 = 0.63661974668502808f;
 #endif
 
 #if defined(RANGE_REDUCTION_TAN) && defined(TRISC_MATH)

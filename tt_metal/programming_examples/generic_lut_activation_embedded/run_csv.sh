@@ -268,8 +268,15 @@ with open(csv_path) as f:
         dominant_factors.append(dom_factor)
 
 num_segments = len(boundaries) - 1
-input_min = float(range_min_override) if range_min_override else boundaries[0]
-input_max = float(range_max_override) if range_max_override else boundaries[-1]
+rr_enabled = str(metadata.get('range_reduction_enabled', '')).strip().lower() in ('true', '1', 'yes')
+rr_has_original_domain = (
+    metadata.get('range_reduction_original_min', '') != '' and
+    metadata.get('range_reduction_original_max', '') != ''
+)
+default_input_min = float(metadata['range_reduction_original_min']) if rr_enabled and rr_has_original_domain else boundaries[0]
+default_input_max = float(metadata['range_reduction_original_max']) if rr_enabled and rr_has_original_domain else boundaries[-1]
+input_min = float(range_min_override) if range_min_override else default_input_min
+input_max = float(range_max_override) if range_max_override else default_input_max
 
 print(f'Segments: {num_segments}')
 print(f'Range: [{input_min}, {input_max}]')
@@ -729,19 +736,22 @@ elif rr_method in ('trig_residual', 'trig_standalone'):
     if num_segments != 1:
         raise ValueError('trig_residual standalone evaluator currently requires one segment')
     trig_phase = _meta_norm('trig_phase', 'trig_reduction_phase', 'range_reduction_phase')
-    if trig_phase not in ('cosine_pi2_odd', 'cos_pi2_odd', 'cosine_shifted_sine', 'cos_shifted_sine'):
+    cosine_phases = ('cosine_pi2_odd', 'cos_pi2_odd', 'cosine_shifted_sine', 'cos_shifted_sine')
+    sine_phases = ('sine_pi_odd', 'sin_pi_odd')
+    if trig_phase not in cosine_phases + sine_phases:
         raise ValueError(f'trig_residual requires supported trig_phase, got {trig_phase!r}')
     cps = degree + 1
     seg0 = coefficients[0:cps]
     coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
     c1_is_one_macro = '#define TRIG_RESIDUAL_C1_IS_ONE\n' if len(seg0) > 1 and abs(float(seg0[1]) - 1.0) < 1e-12 else ''
+    trig_phase_macro = 'TRIG_RESIDUAL_PHASE_COSINE_PI2_ODD' if trig_phase in cosine_phases else 'TRIG_RESIDUAL_PHASE_SINE_PI_ODD'
     degree_macros = ''
     poly_parity_macro = ''
     rr_macro = (
         '\n// eval_method: trig_residual standalone, odd residual polynomial. STANDALONE\n'
         '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_TRIG_RESIDUAL\n'
         '#define EVAL_METHOD_TRIG_RESIDUAL\n'
-        '#define TRIG_RESIDUAL_PHASE_COSINE_PI2_ODD\n'
+        f'#define {trig_phase_macro}\n'
         f'{c1_is_one_macro}'
         f'constexpr uint32_t TRIG_RESIDUAL_DEGREE = {degree};\n'
         f'constexpr float TRIG_RESIDUAL_COEFFS[] = {{{coeff_str}}};\n'
@@ -753,8 +763,23 @@ elif rr_method == 'log':
                 f'#define REDUCE_LOG\n#define LOG_EXPAND_CONSTANT {expand_const}f\n')
     print(f'Range reduction: log (expand_const={expand_const})')
 elif rr_method == 'tan':
-    rr_macro = '\n// eval_method: reduced_poly / tan\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TAN\n'
-    print(f'Range reduction: tan')
+    if not is_rational and num_segments == 1:
+        cps = degree + 1
+        seg0 = coefficients[0:cps]
+        coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+        degree_macros = ''
+        poly_parity_macro = ''
+        rr_macro = (
+            '\n// eval_method: tan standalone, reduced odd polynomial plus quadrant reciprocal. STANDALONE\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_TAN_STANDALONE\n'
+            '#define EVAL_METHOD_TAN_STANDALONE\n'
+            f'constexpr uint32_t TAN_STANDALONE_DEGREE = {degree};\n'
+            f'constexpr float TAN_STANDALONE_COEFFS[] = {{{coeff_str}}};\n'
+        )
+        print(f'Range reduction: tan standalone (degree {degree})')
+    else:
+        rr_macro = '\n// eval_method: reduced_poly / tan\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_TAN\n'
+        print(f'Range reduction: tan')
 elif rr_method == 'cbrt':
     rr_macro = '\n// eval_method: reduced_poly / cbrt\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n#define REDUCE_CBRT\n'
     print(f'Range reduction: cbrt')
