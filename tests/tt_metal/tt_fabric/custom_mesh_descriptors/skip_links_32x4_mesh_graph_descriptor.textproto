@@ -10,5 +10,6 @@ mesh_descriptors {
   host_topology   { dims: [4, 1] }
   channels { count: 2 policy: RELAXED }
   skip_links { axis: ROW  pattern { start: 2  step: 4 } }
+  skip_links { axis: ROW  pattern { start: 0  step: 8 } }
 }
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
