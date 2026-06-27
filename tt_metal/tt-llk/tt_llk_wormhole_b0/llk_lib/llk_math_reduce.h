@@ -35,6 +35,12 @@ inline void reduce_configure_mop();
 template <bool enforce_fp32_accumulation, bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
+    // The MOVB2D/MOVD2B/ELWADD/MOVA2D below read the Src zero-substitution flag (FlushDenormals = !flag).
+    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
+    // corrupting the sum. Disable the flag (via the math state tracker) around the whole transpose+add,
+    // then return it to the operand-driven baseline. This must wrap both the fp32 and the plain
+    // bf16/fp16 ELWADD paths, matching BH (Issue #449).
+    math::_configure_mov_ops_zero_flag_state_();
     if constexpr (enforce_fp32_accumulation)
     {
         // Transpose 32-bit data in dest by splitting into hi16 and lo16.
@@ -42,11 +48,8 @@ inline void reduce_row_perform_transpose()
         // SrcA_val=Tf32 addresses hi16 (DEST_NORM), SrcA_val=Float32 addresses lo16 (DEST_32B_LOW).
         // Writing hi16 via MOVB2D(Tf32) clobbers lo16, so we cache lo16 in SrcA first.
 
-        // Enable SrcA format override to control MOVB2D hi16/lo16 addressing, and disable the Src
-        // zero-substitution flag (via the math state tracker) to prevent mantissa flushing during
-        // the MOV operations.
+        // Enable SrcA format override to control MOVB2D hi16/lo16 addressing.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-        math::_configure_mov_ops_zero_flag_state_();
 
         // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
         // DEST_32B_LOW reads the lo16 half of 32-bit dest.
@@ -83,10 +86,8 @@ inline void reduce_row_perform_transpose()
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
 
-        // Restore: disable SrcA format override and return the Src zero-substitution flag to the
-        // operand-driven baseline for the currently-configured formats.
+        // Restore: disable SrcA format override.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
     }
     else
     {
@@ -133,6 +134,8 @@ inline void reduce_row_perform_transpose()
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
     }
+    // Return the Src zero-substitution flag to the operand-driven baseline for the currently-configured formats.
+    math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
 }
 
 /**
