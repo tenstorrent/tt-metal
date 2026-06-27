@@ -221,3 +221,67 @@ batched weight (`weight_batch=batched`).
   bf16 acc=True non-regression guards). Probes 011–014 (repro + lever A/B).
   Acceptance `test_matmul.py` (16/16), `test_matmul_precision_baseline.py` (4/4),
   `test_matmul_precision_matrix.py` (120 pass / 24 skip) all unchanged.
+
+## Refinement 2 — Non-tile-aligned M / K / N (in-kernel edge masking)
+- **Date**: 2026-06-27
+- **What was done**: Added `k_non_aligned`, `n_non_aligned`, `m_non_aligned` to
+  `SUPPORTED["alignment"]` (now all four values). The refinement title says
+  "in-kernel edge masking", but the verifier's "probe before writing masking
+  code" note proved decisive: **no masking is needed**, and none was added.
+  - **Empirical finding (probes 015–016)**: bypassing `validate()` via a direct
+    `create_program_descriptor` + `generic_op` call, ran non-aligned K/N/M/multi
+    shapes across **fp32, bf16, bf8b and mixed bf16/fp32**, both `fp32_dest_acc_en`
+    settings. ALL produced correct numerics inside the golden bands:
+    - fp32: PCC 1.000000, relRMS 0.0012 (identical to the aligned baseline).
+    - bf16 acc=True/False: PCC ≥ 0.99998, relRMS ≤ 0.0062.
+    - bf8b acc=True/False: PCC ≥ 0.99990, relRMS ≤ 0.0164.
+    - mixed bf16/fp32 acc=True: PCC 0.999994, relRMS 0.0049.
+  - **Why it just works**: ttnn's TILE_LAYOUT representation zero-fills the
+    out-of-logical-shape padding of a partial tile at `from_torch` time — for
+    fp32/bf16 AND bf8b. The host bf8b tilize zeros the pad BEFORE computing the
+    per-face shared exponent, so the /memory-layouts §5 block-format-exponent
+    corruption (which only afflicts the *in-kernel* RM→tiled tilize path) does NOT
+    apply to host-tilized TILE inputs. The descriptor already counts tiles with
+    `ceil_div`, so the partial last M/K/N tile is a real tile the kernels process
+    in full; the K dot-product over the zero K-pad is `0*0 = 0` (correct
+    contraction), and the M/N output pad (also 0, from zero-padded inputs) is
+    sliced off by the output's logical shape on `to_torch`.
+  - **Compositional safety**: this op's own output zero-fills its M/N pad (output
+    pad rows/cols are the matmul of zero input-pad rows/cols, i.e. 0), so a
+    non-aligned matmul output fed as the *next* matmul's K is still zero-padded —
+    the invariant survives matmul chaining, not just `from_torch`.
+  - **Files changed**: `matmul.py` (SUPPORTED[alignment] = all four values + doc
+    comment — the only functional change); reader/writer kernels + program
+    descriptor (doc comments only, no logic change, documenting the no-masking
+    design and the phantom-whole-tile vs partial-tile distinction).
+- **Accuracy achieved** (alignment matrix, all within golden bands):
+  - fp32/fp32 acc=True: PCC ≥ 0.999999, relRMS ≤ 0.0012 (band 0.999 / 0.02).
+  - bf16/bf16 acc=True: PCC ≥ 0.999994, relRMS ≤ 0.0044 (band 0.997 / 0.04).
+  - bf16/bf16 acc=False: PCC ≥ 0.99998, relRMS ≤ 0.0062 (band 0.99 / 0.10).
+  - bf8b/bf8b acc=True: PCC ≥ 0.99991, relRMS ≤ 0.0136 (band 0.98 / 0.12).
+  - bf8b/bf8b acc=False: PCC ≥ 0.99990, relRMS ≤ 0.0164 (band 0.98 / 0.15).
+  - bf16/fp32 mixed acc=True: PCC ≥ 0.999994, relRMS ≤ 0.0053.
+  - Large multi-block non-aligned `(544,272)@(272,544)` (K=272 → Kt=9): passes at
+    every dtype. Golden's `(16400,256)@(256,4096)` (M), `(4096,256)@(256,16400)`
+    (N), `(8192,272)@(272,8192)` (K) — grid-overflow + per-core block loop on top
+    of a partial tile — all pass.
+- **Golden test progress**: **510 / 510 supported cells pass** (was 300/300 at
+  R1b; +210 non-aligned cells flipped xfail→pass = 14 non-aligned INPUT shapes ×
+  15 supported dtype×weight_dtype×acc cells, minus the {fp32, acc=False}
+  EXCLUSION). 156 xfailed, 1 skipped, **0 failed, 0 xpassed** (no drift). Full
+  cold-cache run (255 s).
+- **Issues encountered**: None numerically. Infra: the cold-cache golden run
+  exceeds the 2-min shell timeout (~255 s) — documented previously in R1b; re-ran
+  with a 9-min timeout. Cleared the matmul kernel cache before the run (the
+  kernel `.cpp` edits are comment-only, so binaries are byte-identical, but the
+  cache keys on path not content — cleared per the staleness protocol).
+- **No SUPPORTED-vs-behavior drift, no new EXCLUSIONS**: every cell added to
+  SUPPORTED passes; nothing deferred.
+- **Tests added**: `tests/.../matmul/test_matmul_alignment_matrix.py` — 54 cases
+  (9 non-aligned shapes isolating K/N/M/multi + a 544×272 multi-block shape × 6
+  dtype/acc configs), asserting BOTH PCC and relRMS at the golden bands and that
+  the output keeps the unpadded logical shape (proving the M/N pad was sliced).
+  **All 54 pass.** Probes 015–017 (raw-descriptor non-aligned characterization
+  across dtypes). Acceptance `test_matmul.py` (16/16), `test_matmul_precision_
+  baseline.py` (4/4), `test_matmul_precision_matrix.py` (120 pass / 24 skip),
+  `test_matmul_deep_k_acc_false.py` (8/8) all unchanged — full non-regression.

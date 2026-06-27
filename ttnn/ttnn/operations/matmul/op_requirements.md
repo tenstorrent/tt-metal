@@ -164,7 +164,26 @@ descriptor/kernel lever** within the acc=False contract.
   shallow/medium-K bf16 acc=False cells that pass today (the failure is K-depth,
   not an axis value).
 
-### [ ] Refinement 2 — Non-tile-aligned M / K / N (in-kernel edge masking)
+### [x] Refinement 2 — Non-tile-aligned M / K / N (in-kernel edge masking)
+
+> **Status (2026-06-27): [x] complete.** All three named axis values landed in
+> `SUPPORTED["alignment"]` (now all four values). Golden: **510 / 510 supported
+> pass** (was 300/300 at R1b; +210 non-aligned cells flipped xfail→pass), 156
+> xfailed, 1 skipped, **0 failed, 0 xpassed**. The "in-kernel edge masking" in the
+> title turned out **unnecessary** — the verifier's probe-first note was right.
+> Empirically (probes 015–016, raw-descriptor bypass of validate, across
+> fp32/bf16/bf8b × acc T/F): ttnn **zero-fills TILE_LAYOUT partial-tile padding at
+> from_torch time**, including bf8b (the host bf8b tilize zeros the pad BEFORE the
+> shared-face exponent is computed, so the /memory-layouts §5 block-format-exponent
+> corruption — which applies only to the *in-kernel* RM→tiled tilize path — does
+> NOT apply here). The kernels already count tiles with `ceil_div`, so the partial
+> last M/K/N tile is processed in full; the K dot-product over the zero pad is
+> 0*0=0, and the M/N output pad (also 0) is sliced off by the output's logical
+> shape on to_torch. The zero-pad invariant is also preserved **compositionally**
+> (this op's own output zero-fills its M/N pad, so a non-aligned matmul output fed
+> as the next matmul's K stays zero-padded). Net change: lift the alignment gate +
+> doc comments + a 54-case alignment test matrix. NO kernel logic changed (kernel
+> edits are comment-only). Details in `changelog.md`.
 
 **Goal**: add `k_non_aligned`, `n_non_aligned`, `m_non_aligned` to
 `SUPPORTED["alignment"]` via **in-kernel** masking at the data-access boundary — no
