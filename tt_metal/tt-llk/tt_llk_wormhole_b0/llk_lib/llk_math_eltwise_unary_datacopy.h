@@ -57,6 +57,14 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
+        // @note Unlike the Blackhole twin, this path intentionally has no per-face ZEROACC zero-flag
+        // re-clear after unpack-to-dest. That re-clear works around budabackend#2730, a Blackhole-Tensix
+        // erratum where a DEST-zero-flag-clearing event (unpack-to-dest) and a packer ZEROACC in the same
+        // cycle drop the clear. #2730 is referenced only in the Blackhole sources and is described there as
+        // a "bug in Blackhole Tensix"; it does not apply to Wormhole B0, so no re-clear is added here.
+        // Confidence: high (Low/needs-confirm in the audit), based on the BH-only #2730 references and the
+        // ISA docs' caveat that WH/BH behavior does not transfer automatically.
+
         // Tile base row in Dst32b space: each 32x32 tile is 4 faces × 16 rows = 64 rows.
         const std::uint32_t tile_base = dst_index * 64;
 
