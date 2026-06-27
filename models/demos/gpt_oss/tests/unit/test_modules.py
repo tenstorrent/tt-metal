@@ -261,7 +261,7 @@ def run_throughput_experts_component(
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
     reference_output = reference_experts(
-        hidden_states, router_indices=router_indices.squeeze(), routing_weights=routing_weights.squeeze()
+        hidden_states, router_indices=router_indices.squeeze(), routing_weights=topk_weights_dense.squeeze()
     )
 
     # Convert to TTNN tensors
@@ -455,6 +455,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
 
     router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
     routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+    topk_routing_weights = torch.zeros(batch_size * seq_len, config.num_experts_per_tok)
 
     for b, s in itertools.product(range(batch_size), range(seq_len)):
         active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
@@ -462,10 +463,13 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         weights = torch.rand(config.num_experts_per_tok)
         weights = weights / weights.sum()  # Normalize
         routing_weights[b * seq_len + s, active_experts] = weights
+        topk_routing_weights[b * seq_len + s, :] = weights
 
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
+    reference_output = reference_experts(
+        hidden_states, router_indices=router_indices, routing_weights=topk_routing_weights
+    )
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(

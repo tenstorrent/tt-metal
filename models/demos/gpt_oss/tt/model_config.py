@@ -37,7 +37,9 @@ class ModelArgs:
         cache_hf=False,
     ):
         self.mesh_device = mesh_device
-        self.dummy_weights = dummy_weights
+        import os
+
+        self.dummy_weights = dummy_weights or os.getenv("DUMMY_WEIGHTS", "0") == "1"
         self.max_batch_size = max_batch_size
         if self.max_batch_size > 32:
             assert (
@@ -79,19 +81,14 @@ class ModelArgs:
             f"{' (dummy weights — no checkpoint load)' if self.dummy_weights else ''}"
         )
 
-        if self.dummy_weights:
-            # Skip loading HF config for testing - use default values
-            logger.info("Using dummy weights mode - skipping HuggingFace config loading")
-
-        else:
-            # Load HF config to get model parameters
-            self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-            # Set key attributes that tt_transformers expects
-            self.vocab_size = self.hf_config.vocab_size
-            self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
-            self.head_dim = self.hf_config.hidden_size // self.hf_config.num_attention_heads
-            self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
-            self.rope_scaling = None  # Keep simple like original GPT-OSS
+        # Load HF config to get model parameters
+        self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        # Set key attributes that tt_transformers expects
+        self.vocab_size = self.hf_config.vocab_size
+        self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
+        self.head_dim = self.hf_config.hidden_size // self.hf_config.num_attention_heads
+        self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
+        self.rope_scaling = None  # Keep simple like original GPT-OSS
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
@@ -102,14 +99,9 @@ class ModelArgs:
         ], f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Make sure you're using standard huggingface naming convention for your model checkpoint e.g openai/gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
-        if self.dummy_weights:
-            # Skip tokenizer loading for testing
-            self.tokenizer = None
-            self.processor = None
-        else:
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
-            self.processor = None  # GPT-OSS doesn't use vision processor
+        # Load tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
+        self.processor = None  # GPT-OSS doesn't use vision processor
 
         self.disable_batched_prefill = True
         self.capped_warmup_seq_len = 2048
@@ -183,7 +175,7 @@ class ModelArgs:
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
-            }
+            },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
@@ -212,10 +204,16 @@ class ModelArgs:
                 chat.append({"role": "system", "content": system_prompt_text})
             if prompt_text:
                 chat.append({"role": "user", "content": prompt_text})
-            return self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+            res = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
         else:
             # prompt_text is already a list of chat messages
-            return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+            res = self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+
+        if hasattr(res, "input_ids"):
+            return res.input_ids
+        elif isinstance(res, dict) and "input_ids" in res:
+            return res["input_ids"]
+        return res
 
     @staticmethod
     def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
@@ -235,7 +233,7 @@ class ModelArgs:
             # Check if we have a cached torch_state_dict.pt file
             model = AutoModelForCausalLM.from_pretrained(
                 weights_path,
-                torch_dtype="auto"
+                torch_dtype="auto",
                 # Note that the default setting is torch.dtype.float32, but model weights are
                 # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                 # unnecessary cast.
