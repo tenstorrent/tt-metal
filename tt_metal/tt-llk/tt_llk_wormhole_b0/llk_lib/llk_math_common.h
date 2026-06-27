@@ -10,6 +10,7 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "sanitizer/api.h"
 
 using namespace ckernel::math;
@@ -48,6 +49,14 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     std::uint32_t int8_math_enabled = (masked_data_format(srca_data_format) == to_underlying(DataFormat::Int8)) ||
                                       (masked_data_format(srcb_data_format) == to_underlying(DataFormat::Int8)) ||
                                       (srca_data_format == to_underlying(DataFormat::Int32)) || (srcb_data_format == to_underlying(DataFormat::Int32));
+    // int8/int32 math writes 32-bit (INT32) results to DEST: ELWADD/MVMUL force UseDst32b whenever
+    // ALU_ACC_CTRL_INT8_math_enabled is set, independent of ALU_ACC_CTRL_Fp32_enabled (see
+    // WormholeB0/TensixTile/TensixCoprocessor/ELWADD.md, MVMUL.md). The int8 op itself therefore doesn't depend
+    // on the Fp32_enabled bit -- but the kernel's DEST must still be in 32-bit mode (is_fp32_dest_acc_en) so tile
+    // geometry / addressing / packer config match those 32-bit writes. A caller that passes int8 formats with
+    // is_fp32_dest_acc_en=false silently runs 32-bit-dest math under a 16-bit-dest layout. Mirrors the
+    // static_assert in _llk_math_reconfig_data_format_*; here int8 is derived at runtime, so it's a runtime assert.
+    LLK_ASSERT(!int8_math_enabled || is_fp32_dest_acc_en, "Configuring math for Int8/Int32 formats requires FP32 Dest mode enabled");
     std::uint32_t config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
                                 (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
