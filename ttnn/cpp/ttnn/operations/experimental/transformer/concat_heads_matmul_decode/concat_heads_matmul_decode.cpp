@@ -58,21 +58,13 @@ ttnn::Tensor concat_heads_matmul_decode(
     ttnn::Shape in0_shape({1, 1, seq, K});
     Tensor viewed = tt::tt_metal::view(attn, in0_shape, in0_shape);
 
-    // --- Reshard the viewed activation to WIDTH_SHARDED input-A over reshard_cores cores.
-    // matmul_decode(partial_width_sharded=true) HARD-REQUIRES a width-sharded input A
-    // (matmul_decode_device_operation.cpp validate). Shard shape is [seq, K/reshard_cores],
-    // ROW_MAJOR, L1 -- equivalent to the test's `o_in_mc`.
-    CoreRangeSet a_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
-        reshard_cores, attn.device()->compute_with_storage_grid_size(), /*row_wise=*/true);
-    std::array<uint32_t, 2> a_shard_shape = {seq, shard_w};
-    ShardSpec a_shard_spec(a_core_range_set, a_shard_shape, ShardOrientation::ROW_MAJOR);
-    MemoryConfig a_width_sharded(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, a_shard_spec);
-
-    Tensor in0 = ttnn::to_memory_config(viewed, a_width_sharded);
-
-    // --- O-projection via matmul_decode: partial-width-sharded resident-L1 B, interleaved L1 out.
+    // --- O-projection via matmul_decode with READER-SIDE input reshard. Pass the INTERLEAVED view
+    // directly; matmul_decode (reshard_input=true) reshards it to WIDTH_SHARDED input-A over
+    // reshard_cores cores inside its reader (overlapped with the matmul), so there is NO standalone
+    // interleaved->sharded reshard op. The `shard_w` tile-alignment check above still applies
+    // (reshard_input requires K/reshard_cores to be tile-aligned). Interleaved L1 out.
     Tensor out = ttnn::prim::matmul_decode(
-        in0,
+        viewed,
         weight,
         /*partial_width_sharded=*/true,
         output_dtype.has_value() ? std::optional<const tt::tt_metal::DataType>(*output_dtype)
@@ -80,9 +72,10 @@ ttnn::Tensor concat_heads_matmul_decode(
         compute_kernel_config,
         /*fused_gelu=*/false,
         /*interleaved_output=*/true,
-        /*fused_gelu_approx=*/false);
+        /*fused_gelu_approx=*/false,
+        /*reshard_input=*/true,
+        /*reshard_cores=*/reshard_cores);
 
-    in0.deallocate();
     return out;
 }
 
