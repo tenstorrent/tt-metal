@@ -10,7 +10,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -34,7 +34,7 @@ template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out>
 ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
     uint32_t tile_idx = 0;
 
-    transpose_wh_init_short(cb_tilize);
+    transpose_init(cb_tilize);
     constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_col(Ht);
     constexpr uint32_t block_ct_dim = Ht / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = Ht;
@@ -44,7 +44,7 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_ou
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
             tile_regs_acquire();
             for (uint32_t h = 0; h < block_ct_dim; ++h) {
-                transpose_wh_tile(cb_tilize, tile_idx, h);
+                transpose_tile(cb_tilize, tile_idx, h);
                 tile_idx += Wt;
             }
             tile_regs_commit();
