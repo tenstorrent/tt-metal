@@ -102,6 +102,13 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
                                       (masked_data_format(srcb_data_format) == ckernel::to_underlying(DataFormat::Int8)) ||
                                       (srca_data_format == ckernel::to_underlying(DataFormat::Int32)) ||
                                       (srcb_data_format == ckernel::to_underlying(DataFormat::Int32));
+    // Cross-thread note: the INT8 math-enable bit lives in ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, a config word the
+    // UNPACK thread also programs (SrcA/SrcBUnsigned and rounding mode in configure_unpack_AB, which takes
+    // mutex::REG_RMW). The math thread does NOT take that mutex here. This is safe because cfg_reg_rmw_tensix
+    // lowers to per-byte RMWCIB, and each RMWCIB is a HW-atomic masked read-modify-write of one config byte (see
+    // BlackholeA0/TensixTile/TensixCoprocessor/RMWCIB.md), so disjoint-mask writes from different threads cannot
+    // lose each other's bits. Logical ordering between unpack- and math-programmed fields relies on the
+    // unpack->math dataflow semaphore (and sequenced init), not on holding mutex::REG_RMW.
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
