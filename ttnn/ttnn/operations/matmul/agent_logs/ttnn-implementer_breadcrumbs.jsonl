@@ -1,3 +1,4 @@
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find matmul_block kernel callers","ts":"2026-06-27T11:04:17+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find mcast_pipe kernel + host callers","ts":"2026-06-27T11:04:17+00:00"}
 {"event":"test_run","result":"pass","classification":"acceptance","details":"all 16 acceptance tests pass in --dev and non-dev; dual-mcast handshake clean under both timings","ts":"2026-06-27T11:23:43+00:00"}
+{"event":"test_run","result":"pass","classification":"golden","details":"golden harness 20 passed / 1 skipped / 646 xfailed, no XPASS-strict drift; measured PCC=1.0 relRMS~0.0015","ts":"2026-06-27T11:27:25+00:00"}
