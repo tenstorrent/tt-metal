@@ -1,6 +1,6 @@
 ---
 description: 'PR review rules for LLK compute kernels and ckernels'
-applyTo: 'tt_metal/hw/ckernels/**,tt_metal/tt-llk/**,tt_metal/hw/inc/api/**'
+applyTo: 'tt_metal/hw/ckernels/**,tt_metal/tt-llk/**,tt_metal/hw/inc/api/compute/**'
 excludeAgent: "cloud-agent"
 ---
 
@@ -8,11 +8,14 @@ excludeAgent: "cloud-agent"
 
 ## 🔴 CRITICAL
 
-- **No duplicated LLK functions**: do not re-implement `_llk_math_eltwise_unary_sfpu_init_`, `_llk_math_eltwise_unary_sfpu_params_`, or other existing LLK primitives in new kernel files. Use the shared implementations from common SFPU headers.
+- **No duplicated LLK functions**: do not re-implement `_llk_math_eltwise_unary_sfpu_init_`, `_llk_math_eltwise_unary_sfpu_params_`, or other existing LLK primitives in new kernel files. Use the shared implementations from common SFPU headers. Before flagging a new `_llk_*` definition, check whether it already exists under `tt_llk_{arch}/llk_lib/` or the common SFPU headers.
 - **Architecture-consistent API signatures**: the **Compute API** (`tt_metal/hw/inc/api/compute/`) is the layer that must have a single signature across all architectures (WH/BH/Quasar). Use `[[maybe_unused]]` parameters and runtime asserts (`LLK_ASSERT`) on unsupported features rather than `#ifdef`-guarded signature changes. Minimize `#ifdef` count in Compute API. Note: per-arch `llk_api` and `llk_lib` files are **expected** to differ between architectures — do NOT flag legitimate per-arch divergence in those files as a violation. The arch-consistency requirement applies only to the Compute API layer.
-- **Layer placement**: `TTI_*` instructions belong only inside `tt-llk`. The Compute API (`tt_metal/hw/inc/api/compute/`) must be device-agnostic — no per-arch branches, no direct `ckernel::math` calls. Per-arch divergence belongs in `llk_api/` (inside `tt-llk`), not in the Compute API.
+- **Layer placement**: `TTI_*` instructions belong only inside `tt-llk`. The Compute API (`tt_metal/hw/inc/api/compute/`) must be device-agnostic — no per-arch branches, no direct `ckernel::math` calls. Per-arch divergence belongs in the per-arch `llk_api` layer at `tt_metal/hw/ckernels/{wormhole_b0,blackhole,quasar}/metal/llk_api/` (outside `tt-llk`) or in the per-arch `llk_lib` inside `tt-llk` at `tt_llk_{arch}/llk_lib/`, not in the Compute API.
 - **Loop/face iteration correctness**: when generalizing unpack/math loops for non-standard tile shapes, verify that outer-loop counts are consistent with sibling branches (e.g., SCALAR, ROW, COL paths must all agree on `num_faces_r_dim` vs `num_faces`). A mismatch silently produces wrong results.
 - **Dead code removal**: untested dead code (unused sort modes, alternative algorithms, unreachable paths) must be removed, not left commented out. It accumulates and misleads future readers. Bare `// TODO:` comments with no linked issue are not acceptable — link to a GitHub issue or resolve inline.
+- **Reconfig escapes**: a change that reconfigures unpack/pack/DEST state must restore or fully re-set it. Leaked format or DEST-mode state corrupts the *next* kernel while the current test still passes — flag any reconfig path that does not round-trip its state.
+- **CFG register read-after-write ordering**: reading a config register that may have in-flight tensix/MMIO writes needs explicit ordering — drain/sync the prior write before the read, otherwise the read races the write and silently returns a stale value. The exact placement (NOPs, temp register, sync) depends on the register and who writes it, so flag a CFG read with no visible ordering against a recent write and ask the author to confirm.
+- **Comments must match the code they describe**: a comment, doc tag (`@brief`/`@param`/`@note`), or inline note must describe what the adjacent code *actually does*, not a copied-in or AI-generated guess at what it should do.
 
 ## 🟡 IMPORTANT
 
@@ -38,13 +41,37 @@ excludeAgent: "cloud-agent"
 
 ## Review Checklist
 
-- [ ] No duplicated LLK primitives — uses shared common implementations
-- [ ] Compute API signature consistent across WH/BH/Quasar
-- [ ] Loop iteration counts match sibling branches for the same tile dimension
-- [ ] Dead/unreachable code removed (not commented out)
+This checklist is the source of truth and mirrors every rule above (🔴 CRITICAL, 🟡 IMPORTANT, 🟢 SUGGESTION). Keep it in sync when rules change.
+
+### 🔴 CRITICAL
+
+- [ ] No duplicated LLK primitives — uses shared common implementations; checked `tt_llk_{arch}/llk_lib/` and common SFPU headers before flagging a new `_llk_*`
+- [ ] Compute API signature consistent across WH/BH/Quasar (`[[maybe_unused]]` + `LLK_ASSERT`, minimal `#ifdef`); legitimate per-arch `llk_api`/`llk_lib` divergence not flagged
+- [ ] Layer placement correct — `TTI_*` only inside `tt-llk`; Compute API device-agnostic; per-arch divergence in `ckernels/{arch}/metal/llk_api/` or `tt_llk_{arch}/llk_lib/`
+- [ ] Loop iteration counts match sibling branches for the same tile dimension (`num_faces_r_dim` vs `num_faces`)
+- [ ] Dead/unreachable code removed (not commented out); no bare `// TODO:` without a linked issue
+- [ ] Reconfig paths round-trip unpack/pack/DEST state — no leaked format/DEST-mode state
+- [ ] CFG register reads are ordered against in-flight writes (drain/sync/NOPs) — no stale-value races
+- [ ] Comments and doc tags describe what the code actually does (no copied-in / AI-generated guesses)
+
+### 🟡 IMPORTANT
+
 - [ ] Nested conditionals collapsed where only one parameter differs
 - [ ] Magic numbers replaced with named constants or documented
 - [ ] Non-obvious HW config changes have explanatory comments
-- [ ] Init ordering correct (hw_configure before math_init)
+- [ ] Replay buffer / SFPCONFIG NOPs are documented (request a comment rather than removal)
+- [ ] Code size considered — template/`constexpr` over runtime if-else; duplicated logic extracted to helpers
+- [ ] Init ordering correct (hw_configure before math_init); `_init` calls at start of LLK function
 - [ ] No redundant TRISC ifdef guards around UNPACK/MATH macros
-- [ ] Code size considered — no unnecessary runtime branches on RISC
+- [ ] No `@pre`/`@post` in doc comments — use imperative `@note`
+- [ ] Auto-generated coverage tables/manifests have their generator script checked into the repo (not `/tmp`)
+
+### 🟢 SUGGESTION
+
+- [ ] Named SFPI constants (`sfpi::vConst1`) used instead of raw hex/float literals
+- [ ] Removed LLK API overloads checked for cross-arch parity; tracking issue referenced
+- [ ] `switch`-case preferred over chained if/else for runtime enum dispatch (not for `if constexpr`)
+- [ ] Code duplication reduced by templating on the differing parameter
+- [ ] `struct name_t {` used instead of `typedef struct { } name_t;` for new code
+- [ ] FSM/sanitizer state machines document all valid transitions
+- [ ] Randomized/format-swept inputs preferred; existing tile-size helpers reused over raw dimensions
