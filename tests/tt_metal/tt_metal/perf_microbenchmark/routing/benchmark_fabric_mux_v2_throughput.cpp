@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <umd/device/types/arch.hpp>
 
 #include "context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -29,8 +30,17 @@ std::string benchmark_name_for_case(const MuxV2ThroughputCase& benchmark_case) {
 }
 
 std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
+    struct ForwarderNocConfig {
+        const char* name = "";
+        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
+    };
+
     constexpr uint8_t kDefaultBufferCount = 8;
     constexpr uint32_t kTuningSenderCount = 8;
+    constexpr std::array<ForwarderNocConfig, 2> kForwarderNocSweep = {{
+        ForwarderNocConfig{.name = "r0", .noc = tt::tt_metal::NOC::RISCV_0_default},
+        ForwarderNocConfig{.name = "r1", .noc = tt::tt_metal::NOC::RISCV_1_default},
+    }};
     constexpr std::array<uint8_t, 5> kBufferSweep = {1, 2, 4, 8, 16};
     constexpr std::array<uint32_t, 5> kPayloadSweep = {64, 1024, 2048, 4096, 0};
     constexpr std::array<uint32_t, 5> kSenderSweep = {1, 2, 4, 8, 16};
@@ -39,49 +49,60 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
 
     std::vector<MuxV2ThroughputCase> cases;
     cases.reserve(
-        kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() + kTridSweep.size() +
-        kServiceBurstSweep.size());
+        kForwarderNocSweep.size() * (kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() +
+                                     kTridSweep.size() + kServiceBurstSweep.size()));
 
-    for (const auto buffer_count : kBufferSweep) {
-        cases.push_back(MuxV2ThroughputCase{
-            .name_suffix = "buffer_sweep_1s_max_buf" + std::to_string(buffer_count) + "_r0_sb8_trid8",
-            .num_buffers_per_channel = buffer_count,
-        });
-    }
+    for (const auto& noc_config : kForwarderNocSweep) {
+        for (const auto buffer_count : kBufferSweep) {
+            cases.push_back(MuxV2ThroughputCase{
+                .name_suffix =
+                    "buffer_sweep_1s_max_buf" + std::to_string(buffer_count) + "_" + noc_config.name + "_sb8_trid8",
+                .num_buffers_per_channel = buffer_count,
+                .forwarder_noc = noc_config.noc,
+            });
+        }
 
-    for (const auto payload_bytes : kPayloadSweep) {
-        const auto payload_name = payload_bytes == 0 ? std::string("max") : std::to_string(payload_bytes) + "B";
-        cases.push_back(MuxV2ThroughputCase{
-            .name_suffix = "payload_sweep_1s_" + payload_name + "_buf8_r0_sb8_trid8",
-            .packet_payload_size_bytes = payload_bytes,
-            .num_buffers_per_channel = kDefaultBufferCount,
-        });
-    }
+        for (const auto payload_bytes : kPayloadSweep) {
+            const auto payload_name = payload_bytes == 0 ? std::string("max") : std::to_string(payload_bytes) + "B";
+            cases.push_back(MuxV2ThroughputCase{
+                .name_suffix = "payload_sweep_1s_" + payload_name + "_buf8_" + noc_config.name + "_sb8_trid8",
+                .packet_payload_size_bytes = payload_bytes,
+                .num_buffers_per_channel = kDefaultBufferCount,
+                .forwarder_noc = noc_config.noc,
+            });
+        }
 
-    for (const auto sender_count : kSenderSweep) {
-        cases.push_back(MuxV2ThroughputCase{
-            .name_suffix = "sender_sweep_" + std::to_string(sender_count) + "s_max_buf8_r0_sb8_trid8",
-            .num_senders = sender_count,
-            .num_buffers_per_channel = kDefaultBufferCount,
-        });
-    }
+        for (const auto sender_count : kSenderSweep) {
+            cases.push_back(MuxV2ThroughputCase{
+                .name_suffix =
+                    "sender_sweep_" + std::to_string(sender_count) + "s_max_buf8_" + noc_config.name + "_sb8_trid8",
+                .num_senders = sender_count,
+                .num_buffers_per_channel = kDefaultBufferCount,
+                .forwarder_noc = noc_config.noc,
+            });
+        }
 
-    for (const auto max_in_flight_trids : kTridSweep) {
-        cases.push_back(MuxV2ThroughputCase{
-            .name_suffix = "trid_sweep_8s_max_buf8_r0_sb8_trid" + std::to_string(max_in_flight_trids),
-            .num_senders = kTuningSenderCount,
-            .num_buffers_per_channel = kDefaultBufferCount,
-            .max_in_flight_trids = max_in_flight_trids,
-        });
-    }
+        for (const auto max_in_flight_trids : kTridSweep) {
+            cases.push_back(MuxV2ThroughputCase{
+                .name_suffix = "trid_sweep_8s_max_buf8_" + std::string(noc_config.name) + "_sb8_trid" +
+                               std::to_string(max_in_flight_trids),
+                .num_senders = kTuningSenderCount,
+                .num_buffers_per_channel = kDefaultBufferCount,
+                .forwarder_noc = noc_config.noc,
+                .max_in_flight_trids = max_in_flight_trids,
+            });
+        }
 
-    for (const auto service_burst_size : kServiceBurstSweep) {
-        cases.push_back(MuxV2ThroughputCase{
-            .name_suffix = "service_sweep_8s_max_buf8_r0_sb" + std::to_string(service_burst_size) + "_trid8",
-            .num_senders = kTuningSenderCount,
-            .num_buffers_per_channel = kDefaultBufferCount,
-            .service_burst_size = service_burst_size,
-        });
+        for (const auto service_burst_size : kServiceBurstSweep) {
+            cases.push_back(MuxV2ThroughputCase{
+                .name_suffix = "service_sweep_8s_max_buf8_" + std::string(noc_config.name) + "_sb" +
+                               std::to_string(service_burst_size) + "_trid8",
+                .num_senders = kTuningSenderCount,
+                .num_buffers_per_channel = kDefaultBufferCount,
+                .forwarder_noc = noc_config.noc,
+                .service_burst_size = service_burst_size,
+            });
+        }
     }
 
     return cases;
@@ -220,6 +241,7 @@ int main(int argc, char** argv) {
 
     tt::tt_fabric::bench::FabricMuxV2BenchmarkContext context;
     context.initialize();
+    benchmark::AddCustomContext("arch", tt::arch_to_str(tt::tt_metal::MetalContext::instance().get_cluster().arch()));
 
     auto benchmark_cases = tt::tt_fabric::bench::get_standalone_mux_v2_throughput_cases();
     std::size_t registered_case_count = 0;

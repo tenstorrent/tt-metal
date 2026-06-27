@@ -12,6 +12,14 @@ from pathlib import Path
 
 BENCHMARK_REL_TOLERANCE = 0.05
 BENCHMARK_FILTER = "mux_v2/standalone_mux_throughput/.*"
+NOC_SORT_ORDER = {"RISCV_0_default": 0, "RISCV_1_default": 1}
+FAMILY_SORT_ORDER = {
+    "buffer_sweep": 0,
+    "payload_sweep": 1,
+    "sender_sweep": 2,
+    "trid_sweep": 3,
+    "service_sweep": 4,
+}
 
 SUMMARY_HEADERS = [
     "Case name",
@@ -44,13 +52,18 @@ GOLDEN_HEADERS = [
     "Max in-flight TRIDs",
     "Target payload bytes",
     "Bytes per cycle",
+    "Throughput GB/s",
 ]
 
-GOLDEN_KEY_FIELDS = GOLDEN_HEADERS[:-1]
+GOLDEN_KEY_FIELDS = GOLDEN_HEADERS[:-2]
 
 
 def get_tt_metal_home() -> Path:
     return Path(os.environ.get("TT_METAL_HOME", Path.cwd())).resolve()
+
+
+def sanitize_name(value: str) -> str:
+    return "".join(character.lower() if character.isalnum() else "_" for character in value).strip("_") or "unknown"
 
 
 def get_benchmark_binary(tt_metal_home: Path) -> Path:
@@ -67,11 +80,13 @@ def get_output_dir(tt_metal_home: Path) -> Path:
     return tt_metal_home / "generated/fabric_mux_v2_throughput"
 
 
-def get_golden_path(tt_metal_home: Path) -> Path:
+def get_golden_path(tt_metal_home: Path, arch_name: str) -> Path:
     override = os.environ.get("FABRIC_MUX_V2_THROUGHPUT_GOLDEN")
     if override:
         return Path(override).resolve()
-    return tt_metal_home / "tests/tt_metal/microbenchmarks/ethernet/fabric_mux_v2_throughput_golden.csv"
+    return (
+        tt_metal_home / "tests/tt_metal/microbenchmarks/ethernet" / f"fabric_mux_v2_throughput_golden_{arch_name}.csv"
+    )
 
 
 def should_update_golden() -> bool:
@@ -126,10 +141,50 @@ def normalize_benchmark_row(benchmark: dict) -> dict:
     }
 
 
-def parse_benchmark_results(results_path: Path) -> list[dict]:
-    with results_path.open() as results_file:
-        results = json.load(results_file)
+def get_arch_name_from_results(results: dict, results_path: Path) -> str:
+    arch_name = results.get("context", {}).get("arch")
+    if not arch_name:
+        raise AssertionError(f"Benchmark JSON did not include context.arch: {results_path}")
+    return sanitize_name(arch_name)
 
+
+def get_family_sort_order(case_name: str) -> int:
+    for family_prefix, sort_order in FAMILY_SORT_ORDER.items():
+        if case_name.startswith(family_prefix):
+            return sort_order
+    return len(FAMILY_SORT_ORDER)
+
+
+def get_family_axis_sort_value(row: dict) -> int:
+    case_name = row["Case name"]
+    if case_name.startswith("buffer_sweep"):
+        return row["Buffers per channel"]
+    if case_name.startswith("payload_sweep"):
+        return row["Payload bytes"]
+    if case_name.startswith("sender_sweep"):
+        return row["Senders"]
+    if case_name.startswith("trid_sweep"):
+        return row["Max in-flight TRIDs"]
+    if case_name.startswith("service_sweep"):
+        return row["Service burst size"]
+    return 0
+
+
+def sort_key(row: dict) -> tuple[int, int, int, str]:
+    return (
+        NOC_SORT_ORDER.get(row["Forwarder NOC"], len(NOC_SORT_ORDER)),
+        get_family_sort_order(row["Case name"]),
+        get_family_axis_sort_value(row),
+        row["Case name"],
+    )
+
+
+def read_benchmark_results(results_path: Path) -> dict:
+    with results_path.open() as results_file:
+        return json.load(results_file)
+
+
+def parse_benchmark_results(results: dict, results_path: Path) -> list[dict]:
     rows = []
     for benchmark in results.get("benchmarks", []):
         if benchmark.get("run_type") != "iteration":
@@ -140,7 +195,7 @@ def parse_benchmark_results(results_path: Path) -> list[dict]:
 
     if not rows:
         raise AssertionError(f"No mux-v2 throughput benchmark rows found in {results_path}")
-    return rows
+    return sorted(rows, key=sort_key)
 
 
 def read_golden_rows(golden_path: Path) -> dict[str, dict]:
@@ -214,6 +269,8 @@ def write_golden_rows(golden_path: Path, rows: list[dict]) -> None:
 
 def format_golden_field(row: dict, field: str):
     if field == "Bytes per cycle":
+        return f"{row[field]:.12f}"
+    if field == "Throughput GB/s":
         return f"{row[field]:.12f}"
     return row[field]
 
@@ -309,13 +366,16 @@ def test_fabric_mux_v2_throughput():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     raw_json_path = output_dir / "results.json"
-    summary_csv_path = output_dir / "summary.csv"
-    summary_txt_path = output_dir / "summary.txt"
 
     run_benchmark(get_benchmark_binary(tt_metal_home), raw_json_path, tt_metal_home)
 
-    rows = parse_benchmark_results(raw_json_path)
-    golden_path = get_golden_path(tt_metal_home)
+    benchmark_results = read_benchmark_results(raw_json_path)
+    arch_name = get_arch_name_from_results(benchmark_results, raw_json_path)
+    summary_csv_path = output_dir / f"summary_{arch_name}.csv"
+    summary_txt_path = output_dir / f"summary_{arch_name}.txt"
+
+    rows = parse_benchmark_results(benchmark_results, raw_json_path)
+    golden_path = get_golden_path(tt_metal_home, arch_name)
     if should_update_golden():
         for row in rows:
             row["Speedup vs golden"] = 1.0
