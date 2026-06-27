@@ -645,6 +645,29 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
             "padding_config_writer");
     }
 
+    // ==================== Per-token fp8 scales CB (untilize cores) ====================
+    // True producer→consumer CB shared across the untilize core's two RISCs: the reader fills one
+    // scale row per token (parallel to the c_0 row-major payload), the writer drains it and copies
+    // each token's scales into the metadata tail. Double-buffered at batch granularity like c_0.
+    // c_12 is free on untilize cores (the sender writer set lives on sender cores; padding uses c_16/c_17).
+    // Gated by the explicit fp8_scaled_input flag (validation guarantees scales_tensor is present).
+    const bool fp8_scaled_input = operation_attributes.fp8_scaled_input;
+    constexpr auto cb_scales = tt::CBIndex::c_12;
+    uint32_t num_scale_words = 0;
+    uint32_t aligned_scales_page_size = 0;
+    if (fp8_scaled_input) {
+        const auto& scales_tensor = tensor_args.scales_tensor.value();
+        num_scale_words = scales_tensor.logical_shape()[-1];
+        aligned_scales_page_size = detail::get_aligned_page_size(scales_tensor);
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            scales_tensor,
+            /*buffering_factor=*/2 * read_batch_size,
+            cb_scales,
+            "rowmajor_scales_scratch");
+    }
+
     // ==================== Untilize core kernels ====================
     // Reader (RISCV_1): routing decisions, DRAM reads for input/indices/weights/offsets/dispatch_table,
     //                   publishes per-batch route plan to writer via c_14.
@@ -708,6 +731,14 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                 .append_to(untilize_reader_compile_args);
             untilize_reader_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_reader));
         }
+        if (fp8_scaled_input) {
+            // scales accessor + CB id + aligned page size appended after padding_config so the
+            // kernel's chained TensorAccessorArgs offsets stay consistent (padding before scales).
+            tt::tt_metal::TensorAccessorArgs(tensor_args.scales_tensor.value().buffer())
+                .append_to(untilize_reader_compile_args);
+            untilize_reader_compile_args.push_back(static_cast<uint32_t>(cb_scales));
+            untilize_reader_compile_args.push_back(aligned_scales_page_size);
+        }
 
         // ===== Writer compile args =====
         std::vector<uint32_t> untilize_writer_compile_args = {
@@ -735,12 +766,23 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                 .append_to(untilize_writer_compile_args);
             untilize_writer_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_writer));
         }
+        if (fp8_scaled_input) {
+            // The writer reads scales from the CB (no DRAM accessor needed): CB id + aligned page
+            // size (to index by token_t) + number of fp32 scale words to copy into the metadata tail.
+            untilize_writer_compile_args.push_back(static_cast<uint32_t>(cb_scales));
+            untilize_writer_compile_args.push_back(aligned_scales_page_size);
+            untilize_writer_compile_args.push_back(num_scale_words);
+        }
 
         auto untilize_kernel_defines = fabric_defines;  // carries AXIS define if set
         auto untilize_writer_defines = fabric_defines;
         if (has_padding_config) {
             untilize_kernel_defines["HAS_PADDING_CONFIG"] = "1";
             untilize_writer_defines["HAS_PADDING_CONFIG"] = "1";
+        }
+        if (fp8_scaled_input) {
+            untilize_kernel_defines["FP8_SCALED"] = "1";
+            untilize_writer_defines["FP8_SCALED"] = "1";
         }
         // Reader-only: row-major reads rows straight into c_0 and skips the compute signal/streaming.
         // The writer kernel is layout-agnostic (it just drains cb_untilize), so it needs no define.
@@ -976,6 +1018,10 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         // padding_config base address appended last (as Buffer* so it refreshes on cache hit).
         if (has_padding_config) {
             untilize_reader_rt_args.push_back(tensor_args.padding_config.value().buffer());
+        }
+        // scales base address appended after padding_config (as Buffer* so it refreshes on cache hit).
+        if (fp8_scaled_input) {
+            untilize_reader_rt_args.push_back(tensor_args.scales_tensor.value().buffer());
         }
         desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
             all_untilize_cores[j], untilize_reader_rt_args);

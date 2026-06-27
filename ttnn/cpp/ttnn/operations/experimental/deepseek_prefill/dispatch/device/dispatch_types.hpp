@@ -34,6 +34,11 @@ struct DispatchParams {
     // padding-aware (HAS_PADDING_CONFIG) and full-range programs are guaranteed to hash to distinct
     // program-cache entries.
     bool has_padding_config = false;
+    // Whether the fp8-scaled-input path is active. When set, the input is fp8 and each dispatched
+    // token carries its per-128-block fp32 scales as the metadata tail (FP8_SCALED). Explicit
+    // attribute so the scaled and unscaled programs hash to distinct program-cache entries; the
+    // scales tensor itself is provided via DispatchInputs::scales_tensor.
+    bool fp8_scaled_input = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -50,7 +55,8 @@ struct DispatchParams {
         "use_l1_small_for_semaphores",
         "fp8_output",
         "num_untilizers_per_sender",
-        "has_padding_config");
+        "has_padding_config",
+        "fp8_scaled_input");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -68,7 +74,8 @@ struct DispatchParams {
             use_l1_small_for_semaphores,
             fp8_output,
             num_untilizers_per_sender,
-            has_padding_config);
+            has_padding_config,
+            fp8_scaled_input);
     };
 };
 
@@ -83,6 +90,11 @@ struct DispatchInputs {
     // (unpadded) tokens. Its presence is reflected via DispatchParams::has_padding_config so the
     // padding-aware and full-range programs are cached separately.
     std::optional<Tensor> padding_config = std::nullopt;
+    // Optional per-token fp8 scales (FLOAT32, ROW_MAJOR, last dim emb_dim/128), produced by
+    // per_token_cast_to_fp8 alongside the fp8 input. When present, the dispatch kernels copy each
+    // token's scales into the metadata tail (fields 5..metadata_len-1) so the routed buffer can be
+    // dequantized downstream. Activated by DispatchParams::fp8_scaled_input (provided together).
+    std::optional<Tensor> scales_tensor = std::nullopt;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch

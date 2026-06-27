@@ -108,6 +108,7 @@ def run_dispatch(
     input_layout,
     input_dtype,
     output_dtype,
+    fp8_scaled_input,
     verbose,
     run_pcc_check,
     is_ci_env,
@@ -182,6 +183,8 @@ def run_dispatch(
         num_devices,
         dispatch_group_size,
         dispatch_buffer_capacity_factor,
+        emb_dim=emb_dim,
+        fp8_scaled_input=fp8_scaled_input,
     )
     logger.debug(
         f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
@@ -239,6 +242,21 @@ def run_dispatch(
     else:
         tt_x = ttnn.from_torch(
             x, mesh_mapper=mesh_mapper_replicated, layout=input_layout, device=mesh_device, dtype=input_dtype
+        )
+
+    # Per-token fp8 scales: arbitrary fp32 values (dispatch only byte-copies them into the metadata
+    # tail), one row of emb_dim/128 per token, sharded/replicated exactly like x.
+    scales = None
+    tt_scales = None
+    if fp8_scaled_input:
+        num_scale_blocks = emb_dim // 128
+        scales = torch.randn(dispatch_group_size, seq_len_per_chip, num_scale_blocks, dtype=torch.float32)
+        tt_scales = ttnn.from_torch(
+            scales,
+            mesh_mapper=mesh_mapper_replicated,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.float32,
         )
 
     tt_weights = ttnn.from_torch(
@@ -317,7 +335,7 @@ def run_dispatch(
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
 
     tt_dispatched, tt_metadata = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
+        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table, scales=tt_scales
     )
 
     if not run_pcc_check:
@@ -326,7 +344,7 @@ def run_dispatch(
         return
 
     # Run torch reference for all EP ranks at once
-    torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
+    torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets, scales=scales)
 
     # Convert TTNN outputs to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
@@ -408,6 +426,22 @@ def run_dispatch(
     assert (
         buffer_result.passed and metadata_result.passed
     ), f"Some slots did not match! buffer={buffer_result.passed} metadata={metadata_result.passed} Check logs for details."
+
+    # validate_dispatch_metadata only checks the 5 routing fields; the fp8 scale tail (fields 5..)
+    # is dispatched as a pure int32 bit-copy, so it must match the reference exactly. Compare only
+    # the slots the reference actually filled (torch initializes metadata to -1; field 1 = token_idx
+    # is >= 0 only for real dispatched tokens), since unfilled device slots are uninitialized.
+    if fp8_scaled_input:
+        filled = torch_metadata[..., 1] >= 0
+        mask = filled.unsqueeze(-1).expand_as(torch_metadata[..., 5:])
+        ref_tail = torch_metadata[..., 5:][mask]
+        out_tail = tt_out_metadata[..., 5:].to(torch.int32)[mask]
+        assert torch.equal(ref_tail, out_tail), (
+            "fp8 per-token scales in the metadata tail (fields 5..) do not match the reference "
+            "(dispatch must byte-copy each token's scales unchanged)."
+        )
+        logger.debug("✅ fp8 per-token scales match in the metadata tail!")
+
     logger.debug("✅ TTNN dispatch operation matches torch reference!")
 
 
@@ -475,7 +509,18 @@ def dispatch_shape_params():
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16_in", "fp8_in"])
+# input_dtype folds the fp8-scaled flavor into the input axis: bf16, plain fp8, and fp8 + per-token
+# fp32 scales dispatched in the metadata tail. There is no bf16+scaled combo — scales only apply to
+# fp8 input — so it lives here rather than as a separate axis that would need skipping for bf16.
+@pytest.mark.parametrize(
+    "input_dtype, fp8_scaled_input",
+    [
+        (ttnn.bfloat16, False),
+        (ttnn.fp8_e4m3, False),
+        (ttnn.fp8_e4m3, True),
+    ],
+    ids=["bf16_in", "fp8_in", "fp8_scaled_in"],
+)
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
@@ -491,6 +536,7 @@ def test_ttnn_dispatch(
     input_layout,
     input_dtype,
     output_dtype,
+    fp8_scaled_input,
     verbose,
     run_pcc_check,
     is_ci_env,
@@ -509,6 +555,7 @@ def test_ttnn_dispatch(
         input_layout,
         input_dtype,
         output_dtype,
+        fp8_scaled_input,
         verbose,
         run_pcc_check,
         is_ci_env,

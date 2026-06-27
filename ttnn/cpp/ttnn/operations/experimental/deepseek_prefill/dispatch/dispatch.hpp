@@ -26,6 +26,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
     const std::optional<ttnn::Tensor>& padding_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& scales_tensor = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = 0,
@@ -33,6 +34,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool use_l1_small_for_semaphores = false,
     bool fp8_output = false,
+    bool fp8_scaled_input = false,
     uint32_t num_untilizers_per_sender = 2);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch
