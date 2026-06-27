@@ -104,11 +104,15 @@ struct KernelAdvancedOptions {
     // Multi-threaded self-loop DFBs on compute kernels
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Self-loop DFBs on compute kernels (niche use case).
+    // Self-loop DFBs on compute kernels (niche multi-threaded use case).
     // This applies only to compute kernels that bind BOTH the producer and consumer
     // endpoints of the same DFB (self-loop).
     //
-    // The compute kernel threads can communicate via the DFB in two topologies:
+    // This is ONLY pertinent to multi-threaded compute kernels on Gen2 architectures.
+    // These settings have absolutely no effect on single-threaded kernels.
+    // (A Gen1 compute kernel is always single-threaded.)
+    //
+    // A compute kernel's threads can communicate via the DFB in two topologies:
     //
     //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
     //         (no cross-thread communication). This is the common case.
