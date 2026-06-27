@@ -4,12 +4,15 @@
 
 #include <benchmark/benchmark.h>
 
+#include <array>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "context/metal_context.hpp"
@@ -26,69 +29,88 @@ std::string benchmark_name_for_case(const MuxV2ThroughputCase& benchmark_case) {
 }
 
 std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
-    return {
-        MuxV2ThroughputCase{
-            .name_suffix = "baseline_1s_max_buf1_r0",
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "payload_1s_256B_buf1_r0",
-            .packet_payload_size_bytes = 256,
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "payload_1s_64B_buf1_r0",
-            .packet_payload_size_bytes = 64,
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "buffers_1s_max_buf4_r0",
-            .num_buffers_per_channel = 4,
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "noc_1s_max_buf4_r1",
-            .num_buffers_per_channel = 4,
-            .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "scale_4s_max_buf4_r0",
-            .num_senders = 4,
-            .num_buffers_per_channel = 4,
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "scale_16s_64B_buf4_r0",
-            .num_senders = 16,
-            .packet_payload_size_bytes = 64,
-            .num_buffers_per_channel = 4,
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "tune_4s_256B_buf4_sb1_trid1",
-            .num_senders = 4,
-            .packet_payload_size_bytes = 256,
-            .num_buffers_per_channel = 4,
-            .service_burst_size = 1,
-            .max_in_flight_trids = 1,
-        },
-        MuxV2ThroughputCase{
-            .name_suffix = "tune_4s_256B_buf4_sb8_trid8",
-            .num_senders = 4,
-            .packet_payload_size_bytes = 256,
-            .num_buffers_per_channel = 4,
-        },
-    };
+    constexpr uint8_t kDefaultBufferCount = 8;
+    constexpr uint32_t kTuningSenderCount = 8;
+    constexpr std::array<uint8_t, 5> kBufferSweep = {1, 2, 4, 8, 16};
+    constexpr std::array<uint32_t, 5> kPayloadSweep = {64, 1024, 2048, 4096, 0};
+    constexpr std::array<uint32_t, 5> kSenderSweep = {1, 2, 4, 8, 16};
+    constexpr std::array<uint32_t, 4> kTridSweep = {1, 2, 4, 8};
+    constexpr std::array<uint32_t, 5> kServiceBurstSweep = {1, 2, 4, 8, 16};
+
+    std::vector<MuxV2ThroughputCase> cases;
+    cases.reserve(
+        kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() + kTridSweep.size() +
+        kServiceBurstSweep.size());
+
+    for (const auto buffer_count : kBufferSweep) {
+        cases.push_back(MuxV2ThroughputCase{
+            .name_suffix = "buffer_sweep_1s_max_buf" + std::to_string(buffer_count) + "_r0_sb8_trid8",
+            .num_buffers_per_channel = buffer_count,
+        });
+    }
+
+    for (const auto payload_bytes : kPayloadSweep) {
+        const auto payload_name = payload_bytes == 0 ? std::string("max") : std::to_string(payload_bytes) + "B";
+        cases.push_back(MuxV2ThroughputCase{
+            .name_suffix = "payload_sweep_1s_" + payload_name + "_buf8_r0_sb8_trid8",
+            .packet_payload_size_bytes = payload_bytes,
+            .num_buffers_per_channel = kDefaultBufferCount,
+        });
+    }
+
+    for (const auto sender_count : kSenderSweep) {
+        cases.push_back(MuxV2ThroughputCase{
+            .name_suffix = "sender_sweep_" + std::to_string(sender_count) + "s_max_buf8_r0_sb8_trid8",
+            .num_senders = sender_count,
+            .num_buffers_per_channel = kDefaultBufferCount,
+        });
+    }
+
+    for (const auto max_in_flight_trids : kTridSweep) {
+        cases.push_back(MuxV2ThroughputCase{
+            .name_suffix = "trid_sweep_8s_max_buf8_r0_sb8_trid" + std::to_string(max_in_flight_trids),
+            .num_senders = kTuningSenderCount,
+            .num_buffers_per_channel = kDefaultBufferCount,
+            .max_in_flight_trids = max_in_flight_trids,
+        });
+    }
+
+    for (const auto service_burst_size : kServiceBurstSweep) {
+        cases.push_back(MuxV2ThroughputCase{
+            .name_suffix = "service_sweep_8s_max_buf8_r0_sb" + std::to_string(service_burst_size) + "_trid8",
+            .num_senders = kTuningSenderCount,
+            .num_buffers_per_channel = kDefaultBufferCount,
+            .service_burst_size = service_burst_size,
+        });
+    }
+
+    return cases;
 }
 
 }  // namespace
 
 void FabricMuxV2BenchmarkContext::initialize() {
+    shutdown();
+
+    tt::tt_fabric::SetFabricConfig(
+        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
     auto available_device_ids = tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids();
     TT_FATAL(available_device_ids.contains(0), "Device 0 not available for mux-v2 standalone benchmark");
 
-    auto unit_mesh_devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes({0});
-    TT_FATAL(unit_mesh_devices.size() == 1, "Expected exactly one unit mesh device for device 0");
+    const auto system_mesh_shape = tt::tt_metal::MetalContext::instance().get_system_mesh().shape();
+    mesh_device_ =
+        tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(system_mesh_shape));
+    TT_FATAL(mesh_device_ != nullptr, "Failed to create full mesh device for mux-v2 standalone benchmark");
 
-    mesh_device_ = unit_mesh_devices.begin()->second;
-    TT_FATAL(mesh_device_ != nullptr, "Failed to create unit mesh device for device 0");
-
-    device_ = mesh_device_->get_devices()[0];
-    TT_FATAL(device_ != nullptr, "Unit mesh device did not expose an underlying device handle");
+    device_ = nullptr;
+    for (auto* device : mesh_device_->get_devices()) {
+        if (device != nullptr && device->id() == 0) {
+            device_ = device;
+            break;
+        }
+    }
+    TT_FATAL(device_ != nullptr, "Full mesh device did not expose device 0");
 
     worker_cores_ = enumerate_worker_cores(mesh_device_);
     TT_FATAL(
@@ -103,6 +125,7 @@ void FabricMuxV2BenchmarkContext::shutdown() {
     mesh_device_.reset();
     device_ = nullptr;
     worker_cores_.clear();
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 }
 
 bool FabricMuxV2BenchmarkContext::can_support_case(

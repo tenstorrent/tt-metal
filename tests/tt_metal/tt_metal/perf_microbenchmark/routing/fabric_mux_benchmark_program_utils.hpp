@@ -58,6 +58,8 @@ void create_data_movement_kernel(
     const std::vector<uint32_t>& runtime_args,
     tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default);
 
+void enqueue_single_device_mesh_program(
+    const MeshDevicePtr& mesh_device, ChipId physical_device_id, tt::tt_metal::Program&& program);
 void enqueue_single_device_mesh_program(const MeshDevicePtr& mesh_device, tt::tt_metal::Program&& program);
 
 SenderResultSummary read_and_validate_sender_results(

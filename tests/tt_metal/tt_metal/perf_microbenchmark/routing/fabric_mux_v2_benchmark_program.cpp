@@ -415,7 +415,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
 
     initialize_drainer_state(device, drainer_logical_core, drainer_layout);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    enqueue_single_device_mesh_program(mesh_device, std::move(program));
+    enqueue_single_device_mesh_program(mesh_device, device->id(), std::move(program));
 
     std::vector<uint32_t> drainer_status;
     tt::tt_metal::detail::ReadFromDeviceL1(

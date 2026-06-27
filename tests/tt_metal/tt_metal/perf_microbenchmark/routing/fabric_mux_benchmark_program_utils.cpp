@@ -135,6 +135,18 @@ void create_data_movement_kernel(
     tt::tt_metal::SetRuntimeArgs(program, kernel_handle, logical_core, runtime_args);
 }
 
+void enqueue_single_device_mesh_program(
+    const MeshDevicePtr& mesh_device, ChipId physical_device_id, tt::tt_metal::Program&& program) {
+    const auto target_coordinate = mesh_device->get_view().find_device(physical_device_id);
+    const auto device_range = tt::tt_metal::distributed::MeshCoordinateRange(target_coordinate, target_coordinate);
+    tt::tt_metal::distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+
+    auto& command_queue = mesh_device->mesh_command_queue();
+    tt::tt_metal::distributed::EnqueueMeshWorkload(command_queue, workload, false);
+    tt::tt_metal::distributed::Finish(command_queue);
+}
+
 void enqueue_single_device_mesh_program(const MeshDevicePtr& mesh_device, tt::tt_metal::Program&& program) {
     const auto zero_coordinate =
         tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());

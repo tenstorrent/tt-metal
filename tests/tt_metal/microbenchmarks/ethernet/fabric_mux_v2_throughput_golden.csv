@@ -1,0 +1,25 @@
+Case name,Senders,Payload bytes,Num packets,Buffers per channel,Forwarder NOC,Service burst size,Max in-flight TRIDs,Target payload bytes,Bytes per cycle
+buffer_sweep_1s_max_buf1_r0_sb8_trid8,1,4352,61681,1,RISCV_0_default,8,8,268435456,5.862417238770
+buffer_sweep_1s_max_buf2_r0_sb8_trid8,1,4352,61681,2,RISCV_0_default,8,8,268435456,12.289280475948
+buffer_sweep_1s_max_buf4_r0_sb8_trid8,1,4352,61681,4,RISCV_0_default,8,8,268435456,23.507575849792
+buffer_sweep_1s_max_buf8_r0_sb8_trid8,1,4352,61681,8,RISCV_0_default,8,8,268435456,31.199882934644
+buffer_sweep_1s_max_buf16_r0_sb8_trid8,1,4352,61681,16,RISCV_0_default,8,8,268435456,31.177477524773
+payload_sweep_1s_64B_buf8_r0_sb8_trid8,1,64,4194304,8,RISCV_0_default,8,8,268435456,0.454926934132
+payload_sweep_1s_1024B_buf8_r0_sb8_trid8,1,1024,262144,8,RISCV_0_default,8,8,268435456,7.328363899231
+payload_sweep_1s_2048B_buf8_r0_sb8_trid8,1,2048,131072,8,RISCV_0_default,8,8,268435456,14.695909634940
+payload_sweep_1s_4096B_buf8_r0_sb8_trid8,1,4096,65536,8,RISCV_0_default,8,8,268435456,29.362610975791
+payload_sweep_1s_max_buf8_r0_sb8_trid8,1,4352,61681,8,RISCV_0_default,8,8,268435456,31.166972605739
+sender_sweep_1s_max_buf8_r0_sb8_trid8,1,4352,61681,8,RISCV_0_default,8,8,268435456,31.148958429911
+sender_sweep_2s_max_buf8_r0_sb8_trid8,2,4352,30841,8,RISCV_0_default,8,8,268435456,27.805152673495
+sender_sweep_4s_max_buf8_r0_sb8_trid8,4,4352,15421,8,RISCV_0_default,8,8,268435456,32.133913266645
+sender_sweep_8s_max_buf8_r0_sb8_trid8,8,4352,7711,8,RISCV_0_default,8,8,268435456,33.879560340600
+sender_sweep_16s_max_buf8_r0_sb8_trid8,16,4352,3856,8,RISCV_0_default,8,8,268435456,29.700323406014
+trid_sweep_8s_max_buf8_r0_sb8_trid1,8,4352,7711,8,RISCV_0_default,8,1,268435456,10.284086311402
+trid_sweep_8s_max_buf8_r0_sb8_trid2,8,4352,7711,8,RISCV_0_default,8,2,268435456,17.173264568505
+trid_sweep_8s_max_buf8_r0_sb8_trid4,8,4352,7711,8,RISCV_0_default,8,4,268435456,26.782350671329
+trid_sweep_8s_max_buf8_r0_sb8_trid8,8,4352,7711,8,RISCV_0_default,8,8,268435456,33.874832307917
+service_sweep_8s_max_buf8_r0_sb1_trid8,8,4352,7711,8,RISCV_0_default,1,8,268435456,32.626305657191
+service_sweep_8s_max_buf8_r0_sb2_trid8,8,4352,7711,8,RISCV_0_default,2,8,268435456,33.161371830899
+service_sweep_8s_max_buf8_r0_sb4_trid8,8,4352,7711,8,RISCV_0_default,4,8,268435456,33.453879170050
+service_sweep_8s_max_buf8_r0_sb8_trid8,8,4352,7711,8,RISCV_0_default,8,8,268435456,33.910971537216
+service_sweep_8s_max_buf8_r0_sb16_trid8,8,4352,7711,8,RISCV_0_default,16,8,268435456,33.893418596436

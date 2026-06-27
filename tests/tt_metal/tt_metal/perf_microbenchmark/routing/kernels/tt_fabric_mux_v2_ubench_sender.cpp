@@ -4,8 +4,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -30,10 +28,10 @@ void kernel_main() {
     const uint32_t num_packets = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packet_header_buffer_address = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const uint32_t payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dummy_target_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dummy_receiver_noc_xy_encoding = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t seed = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const uint32_t seed = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_delay_cycles = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t drainer_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
     const uint8_t drainer_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
@@ -89,30 +87,37 @@ void kernel_main() {
     while (!reached_start_cycle(start_cycle)) {
     }
 
-    uint64_t bytes_sent = 0;
-    uint64_t start_timestamp = get_timestamp();
     sender.open();
 
-    auto payload_start_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(payload_buffer_address);
     const uint64_t dummy_noc_dest_address = get_noc_addr_helper(dummy_receiver_noc_xy_encoding, dummy_target_address);
     const auto dummy_command_header = tt::tt_fabric::NocUnicastCommandHeader{dummy_noc_dest_address};
     constexpr uint8_t num_hops = 0;
+    packet_header->to_chip_unicast(num_hops);
+    packet_header->to_noc_unicast_write(dummy_command_header, packet_payload_size_bytes);
+    sender.setup_stateful_send_cmd_bufs</*posted=*/false>();
+
+    uint64_t start_timestamp = get_timestamp();
+    uint32_t cached_free_write_slots = 0;
 
     for (uint32_t packet_idx = 0; packet_idx < num_packets; ++packet_idx) {
-        seed = prng_next(seed);
-        fill_packet_data(payload_start_ptr, packet_payload_size_bytes / 16, seed);
-        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
-            &sender, packet_header, payload_buffer_address, packet_payload_size_bytes, dummy_command_header, num_hops);
-        bytes_sent += packet_payload_size_bytes;
+        while (cached_free_write_slots == 0) {
+            cached_free_write_slots = sender.get_num_free_write_slots();
+        }
+
+        sender.send_current_slot_stateful_non_blocking_from_address</*posted=*/false>(
+            packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
+        cached_free_write_slots--;
     }
 
-    noc_async_write_barrier();
     sender.close();
     const uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
+    const uint64_t bytes_sent = static_cast<uint64_t>(num_packets) * packet_payload_size_bytes;
 
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = static_cast<uint32_t>(bytes_sent);
     test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = static_cast<uint32_t>(bytes_sent >> 32);
     test_results[TT_FABRIC_CYCLES_INDEX] = static_cast<uint32_t>(cycles_elapsed);
     test_results[TT_FABRIC_CYCLES_INDEX + 1] = static_cast<uint32_t>(cycles_elapsed >> 32);
+
+    noc_async_full_barrier();
 }

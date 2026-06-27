@@ -26,8 +26,10 @@ using DrainerStatus = EDMStatus;
 
 void kernel_main() {
     size_t rt_args_idx = 0;
-    const uint64_t expected_total_packets = static_cast<uint64_t>(get_arg_val<uint32_t>(rt_args_idx++)) |
-                                            (static_cast<uint64_t>(get_arg_val<uint32_t>(rt_args_idx++)) << 32);
+    const uint32_t expected_total_packets_low = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t expected_total_packets_high = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint64_t expected_total_packets =
+        static_cast<uint64_t>(expected_total_packets_low) | (static_cast<uint64_t>(expected_total_packets_high) << 32);
 
     auto status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(status_address);
     status_ptr[0] = tt::tt_fabric::DrainerStatus::STARTED;
