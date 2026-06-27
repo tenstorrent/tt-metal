@@ -43,6 +43,12 @@
  *                                  algorithm sub-tags select sqrt, rsqrt, or a
  *                                  native-style cbrt magic-root body without
  *                                  activation-name dispatch.
+ *   EVAL_METHOD_ASIN_ACOS        - inverse-trig range reducer: evaluate a
+ *                                  CSV-supplied polynomial for asin(z)/z in
+ *                                  z^2, with the sqrt endpoint transform used
+ *                                  by asin/acos. STANDALONE: bypasses the
+ *                                  cascade; operation selected by an
+ *                                  ASIN_ACOS_OP_* sub-tag.
  *   Whole-function algebraic lowerings:
  *     identity                    - y = x, no SFPU body.
  *     affine                      - y = a*x + b.
@@ -100,6 +106,7 @@
 #define TT_ACT_EVAL_NEWTON_ROOT 5
 #define TT_ACT_EVAL_TRIG_RESIDUAL 6
 #define TT_ACT_EVAL_TAN_STANDALONE 7
+#define TT_ACT_EVAL_ASIN_ACOS 8
 #define TT_ACT_EVAL_IDENTITY 10
 #define TT_ACT_EVAL_AFFINE 11
 #define TT_ACT_EVAL_CLAMPED_AFFINE 12
@@ -165,7 +172,7 @@
 
 // Standalone evaluators own the whole approximation and bypass the cascade.
 #if defined(EVAL_METHOD_EXPONENT_ALU) || defined(EVAL_METHOD_NEWTON_ROOT) || defined(EVAL_METHOD_TRIG_RESIDUAL) || \
-    defined(EVAL_METHOD_TAN_STANDALONE)
+    defined(EVAL_METHOD_TAN_STANDALONE) || defined(EVAL_METHOD_ASIN_ACOS)
 #define EVAL_METHOD_IS_STANDALONE 1
 #else
 #define EVAL_METHOD_IS_STANDALONE 0
@@ -174,7 +181,7 @@
 // Any method that needs the range-reduction / exponent-decompose helpers
 // (reduce_*, exp_hw_eval, log_hw_eval, pow_hw_eval, newton_root_eval) pulled in.
 #if defined(EVAL_METHOD_REDUCED_POLY) || defined(EVAL_METHOD_EXPONENT_ALU) || defined(EVAL_METHOD_NEWTON_ROOT) || \
-    defined(EVAL_METHOD_TRIG_RESIDUAL) || defined(EVAL_METHOD_TAN_STANDALONE)
+    defined(EVAL_METHOD_TRIG_RESIDUAL) || defined(EVAL_METHOD_TAN_STANDALONE) || defined(EVAL_METHOD_ASIN_ACOS)
 #define EVAL_METHOD_NEEDS_REDUCTION_HELPERS 1
 #else
 #define EVAL_METHOD_NEEDS_REDUCTION_HELPERS 0

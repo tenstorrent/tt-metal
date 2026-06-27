@@ -781,6 +781,33 @@ elif rr_method in ('trig_residual', 'trig_standalone'):
         f'constexpr float TRIG_RESIDUAL_COEFFS[] = {{{coeff_str}}};\n'
     )
     print(f'Range reduction: trig_residual standalone (phase {trig_phase}, degree {degree})')
+elif rr_method in ('asin_acos', 'inverse_trig', 'inverse_trig_asin_acos'):
+    if is_rational:
+        raise ValueError('asin_acos standalone evaluator requires polynomial coefficients')
+    if num_segments != 1:
+        raise ValueError('asin_acos standalone evaluator currently requires one segment')
+    inverse_op = _meta_norm('inverse_trig_op', 'asin_acos_op', 'trig_inverse_op', 'activation')
+    if inverse_op not in ('asin', 'acos'):
+        raise ValueError(f'asin_acos requires inverse_trig_op asin/acos, got {inverse_op!r}')
+    cps = degree + 1
+    seg0 = coefficients[0:cps]
+    coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
+    op_macro = 'ASIN_ACOS_OP_ACOS' if inverse_op == 'acos' else 'ASIN_ACOS_OP_ASIN'
+    threshold = metadata.get('asin_acos_direct_threshold', metadata.get('inverse_trig_direct_threshold', '0.625'))
+    pi_2 = metadata.get('asin_acos_pi_2', '1.5707963267948966')
+    degree_macros = ''
+    poly_parity_macro = ''
+    rr_macro = (
+        '\n// eval_method: asin_acos standalone, inverse-trig sqrt range reducer. STANDALONE\n'
+        '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_ASIN_ACOS\n'
+        '#define EVAL_METHOD_ASIN_ACOS\n'
+        f'#define {op_macro}\n'
+        f'constexpr uint32_t ASIN_ACOS_DEGREE = {degree};\n'
+        f'constexpr float ASIN_ACOS_COEFFS[] = {{{coeff_str}}};\n'
+        f'constexpr float ASIN_ACOS_DIRECT_THRESHOLD = {float(threshold):.10e}f;\n'
+        f'constexpr float ASIN_ACOS_PI_2 = {float(pi_2):.10e}f;\n'
+    )
+    print(f'Range reduction: asin_acos standalone (op {inverse_op}, degree {degree}, threshold {threshold})')
 elif rr_method == 'log':
     expand_const = metadata.get('log_ln2_constant', '0.6931471805599453')
     rr_macro = (f'\n// eval_method: reduced_poly / log\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_REDUCED_POLY\n#define EVAL_METHOD_REDUCED_POLY\n'

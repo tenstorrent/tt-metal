@@ -1,6 +1,6 @@
 activation,dtype,role,method,degree,segments,max_ulp,runtime_us,ttnn_maxulp,ttnn_us,speedup_vs_ttnn,status,audited_result,note,csv,coeff_csv
 abs,bf16,fastest_ttnn_ulp_match,abs_value,2,2,0.0,1.71,0.0,1.71,1.000,ttnn_ulp_match,win_both,,abs_p2_s2_uniform_any_ulp.csv,/home/ttuser/tt-polynomial-fitter/data/coefficients/abs_p2_s2_uniform_any_ulp.csv
-acos,bf16,fastest_min_ulp,rational,10d3,2,0.06,6.46,0.0,5.74,0.889,fallback_min_ulp,loss,,acos_n10d3_s2_uniform_rational_ulp.csv,/home/ttuser/tt-polynomial-fitter/data/coefficients/acos_n10d3_s2_uniform_rational_ulp.csv
+acos,bf16,fastest_ttnn_ulp_match,asin_acos,3,1,0.0,5.29,0.0,5.74,1.085,ttnn_ulp_match,win_both,,acos_p3_s1_asin_acos_ulp.csv,/home/ttuser/tt-polynomial-fitter/data/coefficients/acos_p3_s1_asin_acos_ulp.csv
 acosh,bf16,fastest_ttnn_ulp_match,rational,4d3,1,1.0,2.93,1.0,4.73,1.614,ttnn_ulp_match,win_both,,acosh_n4d3_s1_uniform_rational_ulp.csv,/home/ttuser/tt-polynomial-fitter/data/coefficients/acosh_n4d3_s1_uniform_rational_ulp.csv
 asin,bf16,fastest_ttnn_ulp_match,rational,8d8,1,0.0,3.04,1.504632769052528e-36,5.7,1.875,ttnn_ulp_match,win_both,,asin_n8d8_s1_uniform_rational_ulp.csv,/home/ttuser/tt-polynomial-fitter/data/coefficients/asin_n8d8_s1_uniform_rational_ulp.csv
 asinh,bf16,fastest_ttnn_ulp_match,rational,5d5,1,1.0,2.54,1.0,4.12,1.622,ttnn_ulp_match,win_both,,asinh_n5d5_s1_uniform_rational_ulp.csv,/home/ttuser/tt-polynomial-fitter/data/coefficients/asinh_n5d5_s1_uniform_rational_ulp.csv

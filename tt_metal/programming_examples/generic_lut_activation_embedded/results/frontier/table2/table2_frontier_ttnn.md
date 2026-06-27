@@ -5,12 +5,12 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 40. Waived faster exceptions: 1. Accuracy match but slower: 10. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 41. Waived faster exceptions: 1. Accuracy match but slower: 10. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
 | abs | abs_value:s2/d2 | 0.00 | 1.71 | 0.00 | 1.71 | 1.000 | win_both |
-| acos | rational:s2/d10d3 | 0.06 | 6.46 | 0.00 | 5.74 | 0.889 | loss |
+| acos | asin_acos:s1/d3 | 0.00 | 5.29 | 0.00 | 5.74 | 1.085 | win_both |
 | acosh | rational:s1/d4d3 | 1.00 | 2.93 | 1.00 | 4.73 | 1.614 | win_both |
 | asin | rational:s1/d8d8 | 0.00 | 3.04 | 0.00 | 5.70 | 1.875 | win_both |
 | asinh | rational:s1/d5d5 | 1.00 | 2.54 | 1.00 | 4.12 | 1.622 | win_both |

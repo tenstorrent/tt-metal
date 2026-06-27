@@ -916,6 +916,54 @@ inline vFloat newton_root_eval(vFloat x) {
 }
 #endif
 
+#if defined(EVAL_METHOD_ASIN_ACOS)
+inline vFloat asin_acos_sqrt(vFloat x) {
+    vInt i = reinterpret<vInt>(reinterpret<vUInt>(x) >> 1);
+    vFloat y = reinterpret<vFloat>(0x5f1110a0 - i);
+
+    vFloat xy = x * y;
+    vFloat c = -y * xy;
+    y = y * (2.2825186f + c * (2.2533049f + c));
+    xy = x * y;
+    vFloat one_minus_xyy = vConst1 + (-y * xy);
+    vFloat half_xy = addexp(xy, -1);
+    vFloat infinity = sFloat16b(std::numeric_limits<float>::infinity());
+    v_if(reinterpret<vInt>(x) < reinterpret<vInt>(infinity)) { y = one_minus_xyy * half_xy + xy; }
+    v_endif;
+    return y;
+}
+
+inline vFloat asin_acos_ratio_poly(vFloat z) {
+    vFloat u = z * z;
+    vFloat ratio = ASIN_ACOS_COEFFS[ASIN_ACOS_DEGREE];
+#pragma GCC unroll 8
+    for (int k = ASIN_ACOS_DEGREE - 1; k >= 0; --k) {
+        ratio = ratio * u + ASIN_ACOS_COEFFS[k];
+    }
+    return z * ratio;
+}
+
+inline vFloat asin_acos_eval(vFloat x) {
+    vFloat ax = setsgn(x, 0);
+    vFloat asin_abs = ASIN_ACOS_PI_2;
+
+    v_if(ax <= ASIN_ACOS_DIRECT_THRESHOLD) { asin_abs = asin_acos_ratio_poly(ax); }
+    v_else {
+        vFloat t = (vConst1 - ax) * 0.5f;
+        vFloat root = asin_acos_sqrt(t);
+        asin_abs = ASIN_ACOS_PI_2 - 2.0f * asin_acos_ratio_poly(root);
+    }
+    v_endif;
+
+    vFloat asin_signed = copysgn(asin_abs, x);
+#if defined(ASIN_ACOS_OP_ACOS)
+    return ASIN_ACOS_PI_2 - asin_signed;
+#else
+    return asin_signed;
+#endif
+}
+#endif
+
 #if defined(EXPONENT_ALU_POW)
 // pow path for sqrt/rsqrt/cbrt. For root order N (POW_HW_ROOT_N) and x = 2^e * m
 // with m in [1,2): root_N(x) = 2^(e/N) * root_N(2^r) * root_N(m), where
@@ -2627,7 +2675,9 @@ inline void piecewise_generic_lut_dual(const std::array<float, LUT_SIZE>& lut) {
 
 // Include specialized implementations for common segment counts
 // These use manual unrolling to work around Wormhole SFPU compiler bug
+#if !EVAL_METHOD_IS_STANDALONE
 #include "piecewise_generic_specialized.cpp"
+#endif
 
 #if defined(AFFINE_COLLAPSE) && !defined(AFFINE_IDENTITY)
 // Affine collapse: the whole fit is y = c0 + c1*x. One SFPMAD per element,
@@ -2913,6 +2963,15 @@ void kernel_main() {
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_GATED_AFFINE_PRODUCT || defined(GATED_AFFINE_PRODUCT) || defined(GATED_QUADRATIC_COLLAPSE)
         (void)p_lut;
         sfpi::gated_affine_product_eval();
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_ASIN_ACOS || defined(EVAL_METHOD_ASIN_ACOS)
+        (void)p_lut;
+        for (int d = 0; d < 32; d++) {
+            sfpi::vFloat y = sfpi::asin_acos_eval(sfpi::dst_reg[d]);
+#ifdef USE_BF16
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+#endif
+            sfpi::dst_reg[d] = y;
+        }
 #else
         sfpi::piecewise_generic_lut_dispatch<poly_degree, num_segments, lut_size>(*p_lut);
 #endif
