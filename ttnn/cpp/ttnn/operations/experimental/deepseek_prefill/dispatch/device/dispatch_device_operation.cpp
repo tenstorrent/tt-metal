@@ -27,10 +27,13 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         tensor_args.expert_dispatch_table_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Expert dispatch table tensor must be ROW_MAJOR layout");
 
-    // Validate input tensor dtypes
+    // Validate input tensor dtypes. The input may be BFLOAT16 or FP8_E4M3: the tile path can
+    // convert any input dtype to the output dtype via the compute packer, while the row-major path
+    // is a pure byte copy (see the dtype-match check below).
     TT_FATAL(
-        tensor_args.input_tensor.dtype() == DataType::BFLOAT16,
-        "Input tensor must be BFLOAT16, got {}",
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 ||
+            tensor_args.input_tensor.dtype() == DataType::FP8_E4M3,
+        "Input tensor must be BFLOAT16 or FP8_E4M3, got {}",
         tensor_args.input_tensor.dtype());
     TT_FATAL(
         tensor_args.weights_tensor.dtype() == DataType::BFLOAT16,
@@ -50,14 +53,24 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Expert dispatch table tensor must be INT32, got {}",
         tensor_args.expert_dispatch_table_tensor.dtype());
 
-    // FP8 output requires tiled input (untilize+typecast is fused in compute; row-major path has no compute kernel)
-    if (operation_attributes.use_fp8_dispatch) {
+    // FP8 (input or output) is Blackhole-only.
+    if (operation_attributes.fp8_output) {
         TT_FATAL(
             tensor_args.input_tensor.device()->arch() != tt::ARCH::WORMHOLE_B0,
             "FP8 dispatch is not supported on Wormhole_B0; use Blackhole or set fp8_output=False");
+    }
+
+    // Row-major dispatch is a pure byte copy (no compute kernel), so it cannot convert dtypes:
+    // the input dtype must equal the output dtype. fp8 output therefore requires fp8 input, and
+    // bf16 output requires bf16 input. The tile path has a compute packer and converts freely.
+    if (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        const DataType output_dtype = operation_attributes.fp8_output ? DataType::FP8_E4M3 : DataType::BFLOAT16;
         TT_FATAL(
-            tensor_args.input_tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR,
-            "FP8 output is not supported with ROW_MAJOR input layout; use TILE layout when fp8_output=True");
+            tensor_args.input_tensor.dtype() == output_dtype,
+            "Row-major dispatch is a byte copy: input dtype ({}) must match output dtype ({}). "
+            "Use fp8 input for fp8 output, bf16 input for bf16 output, or TILE layout to convert.",
+            tensor_args.input_tensor.dtype(),
+            output_dtype);
     }
 
     // Validate output memory config is DRAM interleaved (not sharded)
@@ -113,7 +126,7 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     // FP8 dispatch emits Fp8_e4m3 (1 byte/element); DataType::FP8_E4M3 maps directly to
     // tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter, so downstream CBs created
     // with detail::create_tensor_cb(output_tensor, ...) pick up the right dtype/page-size.
-    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::FP8_E4M3 : DataType::BFLOAT16;
+    auto dispatch_buffer_dtype = operation_attributes.fp8_output ? DataType::FP8_E4M3 : DataType::BFLOAT16;
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
@@ -174,7 +187,7 @@ prefill_dispatch(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_dispatch,
+    bool fp8_output,
     uint32_t num_untilizers_per_sender) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -191,7 +204,7 @@ prefill_dispatch(
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
-            .use_fp8_dispatch = use_fp8_dispatch,
+            .fp8_output = fp8_output,
             .num_untilizers_per_sender = num_untilizers_per_sender,
             .has_padding_config = padding_config.has_value()},
         OperationType::tensor_args_t{

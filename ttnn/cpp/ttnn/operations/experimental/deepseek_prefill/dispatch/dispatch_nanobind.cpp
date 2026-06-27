@@ -37,7 +37,10 @@ void bind_dispatch(nb::module_& mod) {
         at a TILE_HEIGHT-aligned token index.
 
         Args:
-            input_tensor (ttnn.Tensor): Input token embeddings.
+            input_tensor (ttnn.Tensor): Input token embeddings. Dtype may be BFLOAT16 or
+                FP8_E4M3 (FP8_E4M3 is Blackhole-only). TILE layout converts to the output
+                dtype via the compute packer; ROW_MAJOR layout is a byte copy and requires
+                the input dtype to match the output dtype.
                 Shape per device: (1, seq_len_per_chip, hidden_dim).
             weights_tensor (ttnn.Tensor): Router weights for each token's top-k experts.
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
@@ -77,9 +80,10 @@ void bind_dispatch(nb::module_& mod) {
                 Defaults to Linear.
             use_l1_small_for_semaphores (bool, optional): Allocate the workload's
                 GlobalSemaphores in L1_SMALL instead of L1. Defaults to False.
-            use_fp8_dispatch (bool, optional): Pack the dispatched buffer as Fp8_e4m3
-                (DataType::FP8_E4M3). Requires TILE input layout, not supported on
-                Wormhole_B0. Defaults to False.
+            fp8_output (bool, optional): Pack the dispatched buffer as Fp8_e4m3
+                (DataType::FP8_E4M3). Blackhole-only (not supported on Wormhole_B0). With
+                TILE input the packer converts any input dtype; with ROW_MAJOR input (a byte
+                copy) fp8 output requires fp8 input. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
                 sender on the tile-layout path.
 
@@ -112,7 +116,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_dispatch") = false,
+        nb::arg("fp8_output") = false,
         nb::arg("num_untilizers_per_sender") = 2);
 }
 

@@ -106,6 +106,7 @@ def run_dispatch(
     topology,
     use_predictable_data,
     input_layout,
+    input_dtype,
     use_fp8_output,
     verbose,
     run_pcc_check,
@@ -119,17 +120,26 @@ def run_dispatch(
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
 
+    fp8_input = input_dtype == ttnn.fp8_e4m3
+
     # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
     # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
-    # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
-    if use_fp8_output and use_predictable_data:
+    # Only exercise the fp8 path (input or output) with random (N(0,1)) data that fits in range.
+    if (use_fp8_output or fp8_input) and use_predictable_data:
         pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
 
-    if use_fp8_output and is_wormhole_b0():
-        pytest.skip("fp8 output not supported on Wormhole hardware")
+    if (use_fp8_output or fp8_input) and is_wormhole_b0():
+        pytest.skip("fp8 (input or output) not supported on Wormhole hardware")
 
-    if use_fp8_output and input_layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("fp8 output not supported with row_major input layout")
+    # FP8_E4M3 is a ROW_MAJOR-only tensor spec (no tiled fp8 layout exists), so an fp8 input
+    # tensor can only be ROW_MAJOR. The tile path's input is therefore always bf16.
+    if fp8_input and input_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("FP8_E4M3 input is ROW_MAJOR-only; no tiled fp8 input tensor exists")
+
+    # Row-major dispatch is a pure byte copy (no compute), so it cannot convert dtypes: the input
+    # dtype must equal the output dtype. The tile path has a compute packer and converts freely.
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT and fp8_input != use_fp8_output:
+        pytest.skip("row_major dispatch requires input dtype == output dtype")
 
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
     if (is_ci_env or is_ci_v2_env) and not run_pcc_check and input_layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -199,18 +209,31 @@ def run_dispatch(
     # Clamp inputs to fp8_e4m3fn's finite range so any future scale/seed change can't push
     # values into the overflow→NaN region. randn(0,1) is already well inside ±448, so this
     # is a no-op for the current data and a guardrail for later.
-    if use_fp8_output:
+    if use_fp8_output or fp8_input:
         fp8_info = torch.finfo(torch.float8_e4m3fn)
         x = x.clamp(min=fp8_info.min, max=fp8_info.max)
+
+    # For fp8 input the device quantizes the input tensor to fp8, so quantize the reference input
+    # too — otherwise bf16-output combos would compare fp8-rounded device values against
+    # full-precision reference values.
+    if fp8_input:
+        x = x.to(torch.float8_e4m3fn).to(torch.float32)
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
     # x and indices: sharded across SP axis, replicated across EP ranks
     mesh_mapper_replicated = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
-    tt_x = ttnn.from_torch(
-        x, mesh_mapper=mesh_mapper_replicated, layout=input_layout, device=mesh_device, dtype=ttnn.bfloat16
-    )
+    if fp8_input:
+        # FP8_E4M3 is ROW_MAJOR-only, and the on-device float32->fp8 conversion path would build an
+        # illegal FP8_E4M3 TILE intermediate (typecast requires TILE). Construct on host instead
+        # (host does float32->fp8 directly with no tile round-trip), then move to device.
+        tt_x = ttnn.from_torch(x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.fp8_e4m3)
+        tt_x = ttnn.to_device(tt_x, mesh_device)
+    else:
+        tt_x = ttnn.from_torch(
+            x, mesh_mapper=mesh_mapper_replicated, layout=input_layout, device=mesh_device, dtype=input_dtype
+        )
 
     tt_weights = ttnn.from_torch(
         weights,
@@ -418,7 +441,7 @@ def dispatch_shape_params():
         )
         params.append(
             pytest.param(
-                640,
+                3200,
                 config.EMB_SIZE,
                 config.NUM_ROUTED_EXPERTS // 4,
                 2,
@@ -446,7 +469,8 @@ def dispatch_shape_params():
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
-@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16_input", "fp8_input"])
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_output", "fp8_output"])
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
@@ -459,6 +483,7 @@ def test_ttnn_dispatch(
     topology,
     use_predictable_data,
     input_layout,
+    input_dtype,
     use_fp8_output,
     verbose,
     run_pcc_check,
@@ -476,6 +501,7 @@ def test_ttnn_dispatch(
         topology,
         use_predictable_data,
         input_layout,
+        input_dtype,
         use_fp8_output,
         verbose,
         run_pcc_check,
