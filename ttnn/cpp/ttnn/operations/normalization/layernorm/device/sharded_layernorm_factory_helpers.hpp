@@ -34,10 +34,10 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
 
 std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
 get_cb_data_formats(
-    const Tensor& output,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& stats,
+    const MeshTensor& output,
+    ttsl::optional_reference<const MeshTensor> gamma,
+    ttsl::optional_reference<const MeshTensor> beta,
+    ttsl::optional_reference<const MeshTensor> stats,
     bool fp32_dest_acc_en);
 
 //////////////////////////////////////////////////////////////////////////////
@@ -55,7 +55,7 @@ struct GridParams {
     bool use_mcast = false;
     bool use_two_stage_reduce = false;
 
-    static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
+    static GridParams compute(const MeshTensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
 };
 
 // Struct to hold worker distribution parameters
@@ -224,9 +224,9 @@ struct CompileTimeArgsContext {
     tt::DataFormat gamma_cb_data_format = tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = tt::DataFormat::Float16_b;
 
-    // Tensor buffers for TensorAccessorArgs
-    Buffer* gamma_buffer = nullptr;
-    Buffer* beta_buffer = nullptr;
+    // Tensors for TensorAccessorArgs
+    ttsl::optional_reference<const MeshTensor> gamma_tensor;
+    ttsl::optional_reference<const MeshTensor> beta_tensor;
 
     // For row-major gamma/beta
     bool gamma_is_row_major = false;
@@ -286,8 +286,8 @@ struct KernelConfig {
     KernelDescriptor::RuntimeArgs reader_sender_rt_args;
     KernelDescriptor::RuntimeArgs reader_receiver_all_to_all_rt_args;
     KernelDescriptor::RuntimeArgs reader_receiver_rt_args;
-    KernelDescriptor::RuntimeArgs writer_sender_rt_args;
-    KernelDescriptor::RuntimeArgs writer_receiver_rt_args;
+    std::vector<std::pair<CoreCoord, KernelDescriptor::RTArgList>> writer_sender_rt_args;
+    std::vector<std::pair<CoreCoord, KernelDescriptor::RTArgList>> writer_receiver_rt_args;
     KernelDescriptor::RuntimeArgs compute_all_to_all_rt_args;
     KernelDescriptor::RuntimeArgs compute_not_all_to_all_rt_args;
 
@@ -346,15 +346,15 @@ struct CBConfig {
     uint32_t stats_single_tile_size = 0;
     uint32_t bfloat16_tile_size = 0;
 
-    // Buffers
-    Buffer* a_buffer = nullptr;
-    Buffer* b_buffer = nullptr;
-    Buffer* gamma_buffer = nullptr;
-    Buffer* beta_buffer = nullptr;
-    Buffer* stats_buffer = nullptr;
-    Buffer* recip_buffer = nullptr;
-    Buffer* output_buffer = nullptr;          // CB 16 output buffer
-    Buffer* output_reshard_buffer = nullptr;  // CB 17 resharded output buffer
+    // Tensors
+    const MeshTensor& a_tensor;
+    ttsl::optional_reference<const MeshTensor> b_tensor;
+    ttsl::optional_reference<const MeshTensor> gamma_tensor;
+    ttsl::optional_reference<const MeshTensor> beta_tensor;
+    ttsl::optional_reference<const MeshTensor> stats_tensor;
+    ttsl::optional_reference<const MeshTensor> recip_tensor;
+    ttsl::optional_reference<const MeshTensor> output_tensor;          // CB 16 output tensor
+    ttsl::optional_reference<const MeshTensor> output_reshard_tensor;  // CB 17 resharded output tensor
 
     // Flags
     bool has_b = false;
@@ -408,9 +408,9 @@ struct RuntimeArgsContext {
     uint32_t packed_winv_value = 0;
     uint32_t eps_u = 0;
 
-    // Addresses
-    uint32_t gamma_dram_addr = 0;
-    uint32_t beta_dram_addr = 0;
+    // Optional tensor bindings (resolved to Buffer* at emplace_runtime_args time)
+    ttsl::optional_reference<const MeshTensor> gamma_tensor;
+    ttsl::optional_reference<const MeshTensor> beta_tensor;
 
     // Tile and block info
     uint32_t single_tile_size = 0;
@@ -452,8 +452,8 @@ struct RuntimeArgsResult {
     KernelDescriptor::RuntimeArgs reader_sender;
     KernelDescriptor::RuntimeArgs reader_receiver_all_to_all;
     KernelDescriptor::RuntimeArgs reader_receiver;
-    KernelDescriptor::RuntimeArgs writer_sender;
-    KernelDescriptor::RuntimeArgs writer_receiver;
+    std::vector<std::pair<CoreCoord, KernelDescriptor::RTArgList>> writer_sender;
+    std::vector<std::pair<CoreCoord, KernelDescriptor::RTArgList>> writer_receiver;
     KernelDescriptor::RuntimeArgs compute_all_to_all;
     KernelDescriptor::RuntimeArgs compute_not_all_to_all;
 

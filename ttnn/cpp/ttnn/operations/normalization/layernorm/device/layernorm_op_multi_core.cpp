@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
@@ -69,6 +70,11 @@ bool CB_can_fit_in_L1(
     return sum < l1_size * 0.95;
 }
 
+uint32_t get_buffer_aligned_size_per_bank(const MeshTensor& t) {
+    return static_cast<uint32_t>(
+        t.mesh_buffer().get_reference_buffer()->aligned_size_per_bank());  // aligned_size_per_bank() -> DeviceAddr
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -80,11 +86,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
-    const auto& a = tensor_args.input;
-    const auto& b = tensor_args.residual_input_tensor;
-    const auto& gamma = tensor_args.weight;
-    const auto& beta = tensor_args.bias;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.input.mesh_tensor();
+    const auto b = as_optional_mesh_tensor(tensor_args.residual_input_tensor);
+    const auto gamma = as_optional_mesh_tensor(tensor_args.weight);
+    const auto beta = as_optional_mesh_tensor(tensor_args.bias);
+    const auto& output = tensor_return_value.mesh_tensor();
     bool rms_norm = operation_attributes.norm_type == LayerNormType::RMSNORM;
     float eps = operation_attributes.eps;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -127,8 +133,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    IDevice* device = a.device();
-    auto dst_addr = output.buffer()->address();
+    IDevice* device = &a.mutable_device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
@@ -184,11 +189,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         inb_single_tile_size = tt::tile_size(inb_data_format);
     }
 
-    auto a_addr = a.buffer()->address();
-    auto b_dram_addr = b ? b.value().buffer()->address() : 0;
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-
     uint32_t num_tile_rows = NC * Ht;
 
     CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
@@ -203,12 +203,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
          num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
 
     // Use passed-in reciprocal LUT tensor if using Welford
-    std::optional<Tensor> recip_tensor = std::nullopt;
+    const auto recip = as_optional_mesh_tensor(tensor_args.recip_tensor);
     uint32_t reciprocal_CB_size_bytes = 0;
     if (use_welford) {
-        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
-        recip_tensor = tensor_args.recip_tensor;
-        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        TT_FATAL(recip.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+        reciprocal_CB_size_bytes = get_buffer_aligned_size_per_bank(*recip);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -283,7 +282,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         im2_t * single_tile_size,
         reciprocal_CB_size_bytes,
         in_rm_size + out_rm_size,
-        a.device()->l1_size_per_core());
+        a.device().l1_size_per_core());
     // For input_is_row_major we also allow large_tensor_needed (same L1 logic applies).
     // use_row_major_kernel (row-major gamma/beta) still skips large_tensor check as before.
     if (!use_row_major_kernel || input_is_row_major) {
@@ -355,27 +354,27 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
     reader_compile_time_args.push_back(W);
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta).append_to(reader_compile_time_args);
 
     if (input_is_row_major) {
         // For rm_input readers: element size of input tensor for address stride calculations
         reader_compile_time_args.push_back(static_cast<uint32_t>(a.element_size()));
     } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        reader_compile_time_args.push_back(gamma_stick_size);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(gamma_stick_size));
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        reader_compile_time_args.push_back(beta_stick_size);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(beta_stick_size));
     } else {
         reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
     }
 
     // Build compile time args for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(writer_compile_time_args);
     if (input_is_row_major) {
         // RM writer needs elem_size to compute per-row NOC write sizes
         writer_compile_time_args.push_back(static_cast<uint32_t>(output.element_size()));
@@ -548,18 +547,49 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
                    ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp");
 
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source = reader_kernel_path;
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = reader_compile_time_args;
+    reader_kernel_desc.named_compile_time_args = cb_named_args;
+    reader_kernel_desc.defines = reader_defines;
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source = input_is_row_major
+                                           ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "writer_unary_interleaved_start_id_blocked_rm_output.cpp"
+                                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                             "writer_unary_interleaved_start_id_blocked.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = all_cores;
+    writer_kernel_desc.compile_time_args = writer_compile_time_args;
+    writer_kernel_desc.named_compile_time_args = cb_named_args;
+    writer_kernel_desc.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source = compute_kernel_path;
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.compile_time_args = compute_args;
+    compute_kernel_desc.named_compile_time_args = cb_named_args;
+    compute_kernel_desc.defines = compute_defines;
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode};
+
+    reader_kernel_desc.runtime_args.reserve(num_cores);
+    writer_kernel_desc.runtime_args.reserve(num_cores);
+    compute_kernel_desc.runtime_args.reserve(num_cores);
+
     // Build per-core runtime args
     uint32_t curr_row = 0;
     auto bfloat_one_value = bfloat16(1);
     uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
-
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
-
-    reader_runtime_args.reserve(num_cores);
-    writer_runtime_args.reserve(num_cores);
-    compute_runtime_args.reserve(num_cores);
 
     // Iterate over active cores
     auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
@@ -583,30 +613,47 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
         const uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
 
-        std::vector<uint32_t> reader_args = {
-            a_addr,
-            num_tile_rows_per_core,
-            Wt,
-            reader_start,
-            packed_one_value,
-            std::bit_cast<uint32_t>(eps),
-            gamma_dram_addr,
-            beta_dram_addr,
-            b_dram_addr};
-        if (input_is_row_major) {
-            reader_args.push_back(H_logical);
+        // Reader: optional gamma/beta/b pass a MeshTensor ref when present, 0u sentinel when absent
+        // (the kernel reads slot==0 as "no tensor"). The variant in RTArgList accepts uint32_t and
+        // MeshTensor refs interchangeably.
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(a);                             // slot 0: src DRAM addr
+        reader_args.push_back(num_tile_rows_per_core);        // slot 1
+        reader_args.push_back(Wt);                            // slot 2
+        reader_args.push_back(reader_start);                  // slot 3
+        reader_args.push_back(packed_one_value);              // slot 4
+        reader_args.push_back(std::bit_cast<uint32_t>(eps));  // slot 5
+        if (gamma.has_value()) {
+            reader_args.push_back(*gamma);  // slot 6: gamma addr
+        } else {
+            reader_args.push_back(0u);
         }
+        if (beta.has_value()) {
+            reader_args.push_back(*beta);  // slot 7: beta addr
+        } else {
+            reader_args.push_back(0u);
+        }
+        if (b.has_value()) {
+            reader_args.push_back(*b);  // slot 8: b addr
+        } else {
+            reader_args.push_back(0u);
+        }
+        if (input_is_row_major) {
+            reader_args.push_back(H_logical);  // slot 9 (RM only)
+        }
+        reader_kernel_desc.emplace_runtime_args(core, reader_args);
 
-        reader_runtime_args.emplace_back(core, std::move(reader_args));
         // For the RM output writer arg[3] is start_tile_row (starting tile-row index for this core),
         // not the flat tile offset, because the RM writer computes row addresses directly.
         const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
-        std::vector<uint32_t> writer_args = {dst_addr, Wt, num_tile_rows_per_core, writer_start};
         if (input_is_row_major) {
-            writer_args.push_back(H_logical);  // arg[4]
+            writer_kernel_desc.emplace_runtime_args(
+                core, {output, Wt, num_tile_rows_per_core, writer_start, H_logical});
+        } else {
+            writer_kernel_desc.emplace_runtime_args(core, {output, Wt, num_tile_rows_per_core, writer_start});
         }
-        writer_runtime_args.emplace_back(core, std::move(writer_args));
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
+
+        compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
 
         curr_row += num_tile_rows_per_core;
     }
@@ -615,49 +662,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //                      Build ProgramDescriptor
     ////////////////////////////////////////////////////////////////////////////
     ProgramDescriptor program_descriptor;
-
-    // Build KernelDescriptor for reader kernel
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source = reader_kernel_path;
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = reader_compile_time_args;
-    reader_kernel_desc.named_compile_time_args = cb_named_args;
-    reader_kernel_desc.defines = reader_defines;
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
-
-    // Build KernelDescriptor for writer kernel
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source = input_is_row_major
-                                           ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                             "writer_unary_interleaved_start_id_blocked_rm_output.cpp"
-                                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                             "writer_unary_interleaved_start_id_blocked.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = writer_compile_time_args;
-    writer_kernel_desc.named_compile_time_args = cb_named_args;
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
-
-    // Build KernelDescriptor for compute kernel
-    KernelDescriptor compute_kernel_desc;
-    compute_kernel_desc.kernel_source = compute_kernel_path;
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = compute_args;
-    compute_kernel_desc.named_compile_time_args = cb_named_args;
-    compute_kernel_desc.defines = compute_defines;
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-        .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
     ////////////////////////////////////////////////////////////////////////////
@@ -829,7 +835,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             .buffer_index = tt::CBIndex::c_25,
             .data_format = reciprocal_cb_data_format,
             .page_size = reciprocal_CB_size_bytes});
-        recip_cb_desc.buffer = recip_tensor.value().buffer();
+        recip_cb_desc.buffer = recip->mesh_buffer().get_reference_buffer();
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }
     return program_descriptor;
