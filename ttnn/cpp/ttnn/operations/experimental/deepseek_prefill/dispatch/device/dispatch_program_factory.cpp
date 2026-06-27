@@ -83,9 +83,11 @@ void create_tensor_cb(
 
 namespace {
 
-// Tile-layout path: TILE inputs, fused untilize across N untilize cores per sender
-// (num_untilizers_per_sender, u1..uN); sender is fabric-only.
-tt::tt_metal::ProgramDescriptor create_at_tile_layout(
+// Unified dispatch path for both TILE and ROW_MAJOR inputs: routing/offsets live on N untilize
+// cores per sender (num_untilizers_per_sender, u1..uN) under a baton ring; the sender is fabric-only.
+// Tile-layout untilizes tiled input via a compute kernel; row-major reads input rows straight into
+// the payload CB and skips compute entirely. Selected internally via is_row_major.
+tt::tt_metal::ProgramDescriptor create_dispatch_program(
     const DispatchParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
     const DispatchInputs& tensor_args,
@@ -103,6 +105,12 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
+
+    // Row-major and tile-layout share this whole untilizer architecture (baton-ring offsets,
+    // plan-based reader/writer, fabric-only sender). The only differences: row-major reads input
+    // rows straight into the payload CB instead of untilizing tiled input, so it skips the compute
+    // kernel + its signal/output CBs and uses a smaller read batch.
+    const bool is_row_major = input_tensor.layout() != tt::tt_metal::Layout::TILE;
 
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
@@ -216,7 +224,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         num_untilize_cores,
         tokens_per_device);
 
-    constexpr uint32_t read_batch_size = 32;
+    // Tile-layout untilizes 32-token batches; row-major reads rows straight into the payload CB
+    // 8-at-a-time (read_batch_size==8), double-buffered against the writer drain to keep overlap.
+    const uint32_t read_batch_size = is_row_major ? 8u : 32u;
 
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     uint32_t total_batches = (tokens_per_device + read_batch_size - 1) / read_batch_size;
@@ -233,7 +243,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // Per-entry credit, each kept on the consumer's L1 (producer NOC-incs):
     //   data_avail  (sender L1, init=0):                untilize → sender, "entry ready".
     //   space_avail (untilize L1, init=writer_cb_size): sender → untilize, "slot freed".
-    constexpr uint32_t writer_cb_size = read_batch_size;  // 32 slots — one batch deep
+    const uint32_t writer_cb_size = read_batch_size;  // one batch deep (32 tile / 8 row-major)
     uint32_t next_sema_id = 0;
     auto add_sema = [&](const CoreRangeSet& crs, uint32_t init_val = 0) -> uint32_t {
         uint32_t id = next_sema_id++;
@@ -253,17 +263,37 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     // ==================== Circular Buffers for untilize cores ====================
     // Routing decisions and offsets[] live on the untilize core — sender is fabric-only.
-    // c_0: tiled input stripe (reader → compute)
-    // buffering_factor MUST be a multiple of block_ct_dim_dispatch (the reader's per-chunk push
-    // size) so untilize blocks never straddle the CB ring wrap.  2 * block_ct_dim gives double
-    // buffering (=16 for the common block_ct_dim=8 case, unchanged).
-    detail::create_tensor_cb(
-        desc,
-        untilize_core_grid,
-        input_tensor,
-        /*buffering_factor=*/2 * block_ct_dim_dispatch,
-        /*cb_id=*/tt::CBIndex::c_0,
-        "untilize_input_scratch");
+    // c_0:
+    //   tile-layout: tiled input stripe (reader → compute). buffering_factor MUST be a multiple of
+    //     block_ct_dim_dispatch (the reader's per-chunk push size) so untilize blocks never straddle
+    //     the CB ring wrap.  2 * block_ct_dim gives double buffering (=16 for the common block_ct_dim=8).
+    //   row-major: payload CB the reader fills with input rows and the writer drains (as cb_untilize).
+    //     Double-buffered at batch granularity (2 * read_batch_size) so the reader can fetch the next
+    //     batch while the writer drains the current one.
+    if (is_row_major) {
+        // The reader writes input rows here; the writer strides by aligned_output_page_size, so the
+        // two page sizes must agree (they always do for the bf16 row-major in == bf16 out).
+        TT_FATAL(
+            detail::get_aligned_page_size(input_tensor) == detail::get_aligned_page_size(output_tensor),
+            "Row-major dispatch requires matching input/output aligned page sizes ({} vs {}).",
+            detail::get_aligned_page_size(input_tensor),
+            detail::get_aligned_page_size(output_tensor));
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            output_tensor,
+            /*buffering_factor=*/2 * read_batch_size,
+            /*cb_id=*/tt::CBIndex::c_0,
+            "rowmajor_payload_scratch");
+    } else {
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            input_tensor,
+            /*buffering_factor=*/2 * block_ct_dim_dispatch,
+            /*cb_id=*/tt::CBIndex::c_0,
+            "untilize_input_scratch");
+    }
     // c_1: indices scratch (untilize reader does per-batch DRAM reads)
     detail::create_tensor_cb(
         desc,
@@ -299,30 +329,35 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*buffering_factor=*/detail::get_num_pages(dispatch_table_tensor),
         /*cb_id=*/tt::CBIndex::c_9,
         "untilize_dispatch_table_tensor");
-    // c_10: signal CB (reader → compute)
-    {
-        uint32_t signal_page_size = l1_alignment;
-        constexpr uint32_t signal_buffering = 2;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = signal_buffering * signal_page_size,
-            .core_ranges = untilize_core_grid,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
-                .data_format = tt::DataFormat::UInt32,
-                .page_size = signal_page_size,
-            }}},
-        });
+    // c_10 (signal, reader → compute) and c_11 (untilize output, compute → writer) only exist on the
+    // tile-layout path. Row-major has no compute kernel — the reader fills c_0 directly and the writer
+    // drains it as cb_untilize, so neither CB is allocated.
+    if (!is_row_major) {
+        // c_10: signal CB (reader → compute)
+        {
+            uint32_t signal_page_size = l1_alignment;
+            constexpr uint32_t signal_buffering = 2;
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = signal_buffering * signal_page_size,
+                .core_ranges = untilize_core_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_10),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = signal_page_size,
+                }}},
+            });
+        }
+        // c_11: untilize output (compute → writer)
+        // Double-buffered at batch granularity: two slots of read_batch_size tokens so compute can
+        // pack the next batch while the writer is still draining the previous one.
+        detail::create_tensor_cb(
+            desc,
+            untilize_core_grid,
+            output_tensor,
+            /*buffering_factor=*/2 * read_batch_size,
+            /*cb_id=*/tt::CBIndex::c_11,
+            "untilize_untilize_output");
     }
-    // c_11: untilize output (compute → writer)
-    // Double-buffered at batch granularity: two slots of read_batch_size tokens so compute can
-    // pack the next batch while the writer is still draining the previous one.
-    detail::create_tensor_cb(
-        desc,
-        untilize_core_grid,
-        output_tensor,
-        /*buffering_factor=*/2 * read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_11,
-        "untilize_untilize_output");
     // c_13: metadata scratch (untilize writer builds metadata here before NOC-writing).
     detail::create_tensor_cb(
         desc,
@@ -563,10 +598,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     }
 
     // ==================== Sender writer kernel ====================
-    // Tile-layout: no sender reader RISC.
-    // Writes tokens and metadata via fabric to destination.
+    // Drains the untilizer baton-ring CBs and writes tokens and metadata via fabric
+    // to their destination chips.
     auto writer_defines = fabric_defines;
-    writer_defines["IS_TILE_LAYOUT"] = "1";
 
     std::vector<uint32_t> writer_compile_time_args = compile_time_args;
     writer_compile_time_args.push_back(writer_cb_size);  // sender writer CB depth
@@ -677,13 +711,15 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
         // ===== Writer compile args =====
         std::vector<uint32_t> untilize_writer_compile_args = {
-            static_cast<uint32_t>(tt::CBIndex::c_11),                    // 0: cb_untilize_id
-            read_batch_size,                                             // 1
-            detail::get_aligned_page_size(output_tensor),                // 2: aligned_output_page_size
-            total_batches,                                               // 3
-            local_core_id,                                               // 4
-            total_workers,                                               // 5
-            static_cast<uint32_t>(tt::CBIndex::c_13),                    // 6: cb_metadata_scratch_id
+            // Payload CB the writer drains: compute output (c_11) on tile-layout, or the reader-filled
+            // row CB (c_0) on row-major. The writer logic is identical either way.
+            static_cast<uint32_t>(is_row_major ? tt::CBIndex::c_0 : tt::CBIndex::c_11),  // 0: cb_untilize_id
+            read_batch_size,                                                             // 1
+            detail::get_aligned_page_size(output_tensor),                                // 2: aligned_output_page_size
+            total_batches,                                                               // 3
+            local_core_id,                                                               // 4
+            total_workers,                                                               // 5
+            static_cast<uint32_t>(tt::CBIndex::c_13),                                    // 6: cb_metadata_scratch_id
             detail::get_aligned_page_size(metadata_tensor),              // 7: aligned_metadata_page_size
             static_cast<uint32_t>(tt::CBIndex::c_14),                    // 8: cb_plan_id
             linearized_mesh_coord,                                       // 9
@@ -705,6 +741,13 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         if (has_padding_config) {
             untilize_kernel_defines["HAS_PADDING_CONFIG"] = "1";
             untilize_writer_defines["HAS_PADDING_CONFIG"] = "1";
+        }
+        // Reader-only: row-major reads rows straight into c_0 and skips the compute signal/streaming.
+        // The writer kernel is layout-agnostic (it just drains cb_untilize), so it needs no define.
+        // NOTE: do NOT name this "ROW_MAJOR" — that collides with ShardOrientation::ROW_MAJOR in
+        // buffer_types.hpp (pulled in via dataflow_api.h) and breaks the enum at preprocess time.
+        if (is_row_major) {
+            untilize_kernel_defines["ROW_MAJOR_INPUT"] = "1";
         }
 
         CoreRangeSet single_untilize_core({CoreRange(all_untilize_cores[j])});
@@ -739,8 +782,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         desc.kernels.push_back(std::move(untilize_writer_kd));
     }
 
-    // Compute kernel on untilize cores
-    {
+    // Compute kernel on untilize cores — tile-layout only. Row-major performs no pack_untilize:
+    // the reader fills the payload CB directly, so no compute kernel is created.
+    if (!is_row_major) {
         // block_ct_dim_dispatch is derived once above (shared with the reader kernel).
         tt::tt_metal::KernelDescriptor untilize_compute_kd;
         untilize_compute_kd.kernel_source =
@@ -958,477 +1002,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     return desc;
 }
 
-// Row-major path: ROW_MAJOR inputs, single reader kernel per sender, no untilize cores.
-tt::tt_metal::ProgramDescriptor create_at_row_major(
-    const DispatchParams& operation_attributes,
-    const MeshCoordinate& mesh_coordinate,
-    const DispatchInputs& tensor_args,
-    DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
-    const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& exit_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
-    tt::tt_metal::ProgramDescriptor desc;
-
-    auto input_tensor = tensor_args.input_tensor;
-    auto indices_tensor = tensor_args.indices_tensor;
-    auto weights_tensor = tensor_args.weights_tensor;
-    auto offsets_tensor = tensor_args.expert_offsets_tensor;
-    auto dispatch_table_tensor = tensor_args.expert_dispatch_table_tensor;
-
-    const auto& output_tensor = tensor_return_value.at(0);
-    const auto& metadata_tensor = tensor_return_value.at(1);
-
-    auto num_links = operation_attributes.num_links;
-    auto topology = operation_attributes.topology;
-    log_debug(
-        tt::LogOp,
-        "Creating prefill dispatch program (row-major) for mesh coordinate: ({}, {}) with topology: {} num_links: {}",
-        mesh_coordinate[0],
-        mesh_coordinate[1],
-        topology,
-        num_links);
-
-    auto* mesh_device = input_tensor.device();
-    const auto& mesh_view = mesh_device->get_view();
-
-    auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-    uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
-    uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
-    uint32_t linearized_mesh_coord = ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
-
-    log_debug(
-        tt::LogOp,
-        "\nCreating all to all dispatch program for mesh coordinate: ({}, {}) with mesh id: {} "
-        "chip id: {} linearized mesh coord: {}",
-        mesh_coordinate[0],
-        mesh_coordinate[1],
-        src_mesh_id,
-        src_chip_id,
-        linearized_mesh_coord);
-
-    auto worker_core_range_set = operation_attributes.worker_core_range_set;
-
-    auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    constexpr uint32_t MAX_WORKER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
-    TT_FATAL(
-        subdevice_cores.size() >= effective_num_links,
-        "Not enough cores {} for {} links",
-        subdevice_cores.size(),
-        effective_num_links);
-
-    auto logical_volume = input_tensor.logical_shape().volume();
-    auto hidden_size = input_tensor.logical_shape()[-1];
-    auto tokens_per_device = logical_volume / hidden_size;
-
-    uint32_t num_cores = effective_num_links;
-    log_debug(
-        tt::LogOp,
-        "num_links: {}, effective_num_links: {}, tokens_per_device: {}, num_cores: {}",
-        num_links,
-        effective_num_links,
-        tokens_per_device,
-        num_cores);
-    auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
-    std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
-    log_debug(
-        tt::LogOp,
-        "Selected sender cores for mesh coordinate ({}, {}): {}",
-        mesh_coordinate[0],
-        mesh_coordinate[1],
-        sender_cores);
-
-    constexpr uint32_t read_batch_size = 8;  // matches BH DRAM bank count for full bandwidth utilization
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-
-    // c_0: input scratch (reader-only, batched DRAM reads)
-    detail::create_tensor_cb(
-        desc,
-        sender_core_grid,
-        input_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_0,
-        "input_scratch");
-    // c_1: indices scratch (reader-only)
-    detail::create_tensor_cb(
-        desc,
-        sender_core_grid,
-        indices_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_1,
-        "indices_scratch");
-    // c_2: weights scratch (reader-only)
-    detail::create_tensor_cb(
-        desc,
-        sender_core_grid,
-        weights_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_2,
-        "weights_scratch");
-    // c_3: offsets (reader-only, full tensor)
-    detail::create_tensor_cb(
-        desc,
-        sender_core_grid,
-        offsets_tensor,
-        /*buffering_factor=*/detail::get_num_pages(offsets_tensor),
-        /*cb_id=*/tt::CBIndex::c_3,
-        "offsets_tensor");
-
-    // c_4, c_5, c_6: reader→writer CBs for (route_info, payload, metadata) per remote entry.
-    // The reader pushes all three per entry in lockstep, so small buffering (2) suffices
-    // for the writer to drain concurrently. No large buffering needed.
-    {
-        constexpr uint32_t rw_buffering = 2;
-
-        uint32_t route_info_page_size = l1_alignment;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = rw_buffering * route_info_page_size,
-            .core_ranges = sender_core_grid,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = tt::DataFormat::UInt32,
-                .page_size = route_info_page_size,
-            }}},
-        });
-
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            input_tensor,
-            /*buffering_factor=*/rw_buffering,
-            /*cb_id=*/tt::CBIndex::c_5,
-            "payload_for_writer");
-
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            metadata_tensor,
-            /*buffering_factor=*/rw_buffering,
-            /*cb_id=*/tt::CBIndex::c_6,
-            "metadata_for_writer");
-    }
-
-    // c_7: metadata_temp (reader-only, for constructing metadata locally)
-    detail::create_tensor_cb(
-        desc,
-        sender_core_grid,
-        metadata_tensor,
-        /*buffering_factor=*/1,
-        /*cb_id=*/tt::CBIndex::c_7,
-        "metadata_temp_buffer");
-
-    const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
-
-    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
-    // multicast handshake) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
-    // per-direction array connection. INVARIANT: this is_2d_fabric gate (derived from GetFabricConfig())
-    // must agree with the kernel's FABRIC_2D #ifdef, which append_routing_plane_connection_manager_rt_args
-    // injects based on the control plane's is_2D_routing_enabled(). If the two ever diverge, the host
-    // pushes 2D-shaped args while the kernel compiles the 1D #else branch (or vice-versa) and arg
-    // parsing corrupts.
-    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
-
-    // c_8: packet header CB for fabric sends (writer-only)
-    if (operation_attributes.num_links > 0) {
-        constexpr uint32_t num_packet_headers = 2;
-        auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-        uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
-
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = packet_header_cb_size,
-            .core_ranges = sender_core_grid,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
-                .data_format = tt::DataFormat::UInt8,
-                .page_size = packet_header_size_bytes,
-            }}},
-        });
-    }
-
-    // c_9: dispatch_table (reader-only, full tensor)
-    detail::create_tensor_cb(
-        desc,
-        sender_core_grid,
-        dispatch_table_tensor,
-        /*buffering_factor=*/detail::get_num_pages(dispatch_table_tensor),
-        /*cb_id=*/tt::CBIndex::c_9,
-        "dispatch_table_tensor");
-
-    // Iterate over every coordinate in the mesh (full coord range derived from
-    // the mesh shape) — replaces the legacy `tensor_coords` parameter.
-    std::vector<uint32_t> dest_mesh_id, dest_chip_id;
-    for (const auto& coord : ttnn::MeshCoordinateRange(mesh_view.shape())) {
-        auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
-        dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
-    }
-    log_debug(tt::LogOp, "dest_chip_id: {}", ccl::common::stringify(dest_chip_id));
-    log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
-    log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
-
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    log_debug(
-        tt::LogOp, "Fabric max packet size: {} bytes, L1 alignment: {} bytes", fabric_max_packet_size, l1_alignment);
-
-    // Compile-time args shared by reader and writer
-    std::vector<uint32_t> compile_time_args = {
-        // CB IDs (10)
-        static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_input_id
-        static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_indices_id
-        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_weights_id
-        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_offsets_id
-        static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_route_info_id
-        static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_payload_for_writer_id
-        static_cast<uint32_t>(tt::CBIndex::c_6),  // cb_metadata_for_writer_id
-        static_cast<uint32_t>(tt::CBIndex::c_7),  // cb_metadata_temp_id
-        static_cast<uint32_t>(tt::CBIndex::c_8),  // cb_packet_header_id
-        static_cast<uint32_t>(tt::CBIndex::c_9),  // cb_dispatch_table_id
-
-        // Page counts (7)
-        detail::get_num_pages(input_tensor),
-        detail::get_num_pages(indices_tensor),
-        detail::get_num_pages(weights_tensor),
-        detail::get_num_pages(offsets_tensor),
-        detail::get_num_pages(output_tensor),
-        detail::get_num_pages(metadata_tensor),
-        detail::get_num_pages(dispatch_table_tensor),
-
-        // Page sizes (7)
-        detail::get_page_size(input_tensor),
-        detail::get_page_size(indices_tensor),
-        detail::get_page_size(weights_tensor),
-        detail::get_page_size(offsets_tensor),
-        detail::get_page_size(output_tensor),
-        detail::get_page_size(metadata_tensor),
-        detail::get_page_size(dispatch_table_tensor),
-
-        // Operation parameters (7)
-        mesh_view.num_devices(),  // num_devices
-        (uint32_t)hidden_size,
-        operation_attributes.experts_per_chip,
-        operation_attributes.num_routed_experts,
-        operation_attributes.num_experts_per_tok,
-        operation_attributes.metadata_len,
-        (uint32_t)tokens_per_device,
-
-        // Mesh information (5)
-        src_mesh_id,
-        src_chip_id,
-        mesh_view.num_rows(),
-        mesh_view.num_cols(),
-        linearized_mesh_coord,
-
-        // Aligned page sizes (7)
-        detail::get_aligned_page_size(input_tensor),
-        detail::get_aligned_page_size(indices_tensor),
-        detail::get_aligned_page_size(weights_tensor),
-        detail::get_aligned_page_size(offsets_tensor),
-        detail::get_aligned_page_size(output_tensor),
-        detail::get_aligned_page_size(metadata_tensor),
-        detail::get_aligned_page_size(dispatch_table_tensor),
-
-        // Fabric configuration (4)
-        (uint32_t)fabric_max_packet_size,
-        l1_alignment,
-        static_cast<uint32_t>(operation_attributes.num_links),
-        static_cast<uint32_t>(topology),
-
-        // Batch configuration (1)
-        read_batch_size,
-
-        // Dispatch buffer total token capacity (1) — used by the reader's
-        // in-kernel bounds check.
-        operation_attributes.max_dispatch_buffer_token_size,
-    };
-
-    // Append TensorAccessorArgs for all 7 tensors
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(compile_time_args);
-
-    // Both reader and writer get fabric defines so the reader can compute routes
-    std::map<std::string, std::string> fabric_defines;
-    if (operation_attributes.num_links > 0) {
-        fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
-        fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
-        fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
-    }
-    if (operation_attributes.axis.has_value()) {
-        fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
-    }
-
-    // Padding-config support: only the reader reads the config, so it gets a dedicated copy of the
-    // compile args (config TensorAccessorArgs + scratch CB id appended last) and the
-    // HAS_PADDING_CONFIG define. The writer keeps the shared compile args.
-    const bool has_padding_config = tensor_args.padding_config.has_value();
-    constexpr auto cb_padding_config_sender = tt::CBIndex::c_14;
-    auto reader_compile_args = compile_time_args;
-    auto reader_defines = fabric_defines;
-    if (has_padding_config) {
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            tensor_args.padding_config.value(),
-            /*buffering_factor=*/1,
-            cb_padding_config_sender,
-            "padding_config");
-        tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer()).append_to(reader_compile_args);
-        reader_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_sender));
-        reader_defines["HAS_PADDING_CONFIG"] = "1";
-    }
-
-    // Single reader kernel shared across all senders.  (Legacy code stored one
-    // handle per sender for uniform override_runtime_arguments iteration; the
-    // descriptor framework uses BufferBindings on cache hit so the duplication
-    // is no longer needed.)
-    tt::tt_metal::KernelDescriptor reader_kd;
-    reader_kd.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/"
-        "reader_dispatch.cpp";
-    reader_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    reader_kd.core_ranges = sender_core_grid;
-    reader_kd.compile_time_args = reader_compile_args;
-    reader_kd.defines = {reader_defines.begin(), reader_defines.end()};
-    reader_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
-    };
-    tt::tt_metal::KernelHandle reader_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
-    desc.kernels.push_back(std::move(reader_kd));
-
-    tt::tt_metal::KernelDescriptor writer_kd;
-    writer_kd.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/"
-        "writer_dispatch.cpp";
-    writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-    writer_kd.core_ranges = sender_core_grid;
-    writer_kd.compile_time_args = compile_time_args;
-    writer_kd.defines = {fabric_defines.begin(), fabric_defines.end()};
-    writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
-    };
-    tt::tt_metal::KernelHandle writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
-    desc.kernels.push_back(std::move(writer_kd));
-
-    // Runtime args: all cores process all tokens, experts split round-robin.
-    // Build as a flat uint32_t vector so the fabric helper can extend it, then
-    // promote to an RTArgList with Buffer* in the first seven slots.
-    std::vector<uint32_t> base_runtime_args = {
-        input_tensor.buffer()->address(),
-        indices_tensor.buffer()->address(),
-        weights_tensor.buffer()->address(),
-        offsets_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        dispatch_table_tensor.buffer()->address(),
-        (uint32_t)cross_device_semaphore.address(),
-        (uint32_t)init_semaphore.address(),
-        0,                            // token_start_idx (all tokens)
-        (uint32_t)tokens_per_device,  // token_end_idx (all tokens)
-        0,                            // dispatch_core_idx (set per core)
-        num_cores,                    // num_dispatch_cores
-    };
-
-    // Reader-only: padding_config base address sits at fixed index 13 and is promoted to a Buffer*
-    // so its BufferBinding refreshes on cache hit. The writer's index 13 is its exit_semaphore
-    // (stable GlobalSemaphore address) and must stay a plain uint32_t.
-    auto promote_rt_args_with_buffer_bindings = [&](const std::vector<uint32_t>& raw_args, bool is_reader) {
-        tt::tt_metal::KernelDescriptor::RTArgList args;
-        args.reserve(raw_args.size());
-        args.push_back(input_tensor.buffer());
-        args.push_back(indices_tensor.buffer());
-        args.push_back(weights_tensor.buffer());
-        args.push_back(offsets_tensor.buffer());
-        args.push_back(output_tensor.buffer());
-        args.push_back(metadata_tensor.buffer());
-        args.push_back(dispatch_table_tensor.buffer());
-        for (size_t i = 7; i < raw_args.size(); ++i) {
-            if (is_reader && has_padding_config && i == 13) {
-                args.push_back(tensor_args.padding_config.value().buffer());
-            } else {
-                args.push_back(raw_args[i]);
-            }
-        }
-        return args;
-    };
-
-    uint32_t core_idx = 0;
-    for (const auto& sender_core : sender_cores) {
-        std::vector<uint32_t> reader_runtime_args = base_runtime_args;
-        std::vector<uint32_t> writer_runtime_args = base_runtime_args;
-
-        reader_runtime_args[11] = core_idx;
-        writer_runtime_args[11] = core_idx;
-
-        // Reader-only: padding_config address at index 13 (right after the 13 base args). The
-        // promote helper rebinds it to a Buffer* so it refreshes on cache hit.
-        if (has_padding_config) {
-            reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value().buffer()->address());
-        }
-
-        // Writer-only: exit semaphore address (separate from init_semaphore to avoid
-        // init/exit reuse race; mirrors the combine fix).
-        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
-
-        if (operation_attributes.num_links > 0) {
-            // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
-            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
-            for (const auto& neighbor_coordinate : neighbors) {
-                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
-                    continue;
-                }
-                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
-            }
-            const uint32_t core_link = core_idx % num_links;
-            if (is_2d_fabric) {
-                // Portable RoutingPlaneConnectionManager path: one connection per dispatch-axis neighbor
-                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
-                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
-                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
-                writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
-                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                    src_fabric_node_id,
-                    dst_nodes,
-                    {core_link},
-                    desc,
-                    writer_kernel_id,
-                    sender_core,
-                    writer_runtime_args);
-                log_debug(
-                    tt::LogOp,
-                    "FABRIC_2D dispatch writer (row-major): src={} num_connections={} core_link={}",
-                    src_fabric_node_id,
-                    dst_nodes.size(),
-                    core_link);
-            } else {
-                // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
-                for (const auto& dst_node : dst_nodes) {
-                    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args);
-                }
-            }
-        }
-
-        desc.kernels[reader_kernel_id].emplace_runtime_args(
-            sender_core, promote_rt_args_with_buffer_bindings(reader_runtime_args, /*is_reader=*/true));
-        desc.kernels[writer_kernel_id].emplace_runtime_args(
-            sender_core, promote_rt_args_with_buffer_bindings(writer_runtime_args, /*is_reader=*/false));
-        core_idx++;
-    }
-
-    return desc;
-}
-
 }  // namespace
 
 tt::tt_metal::WorkloadDescriptor DispatchProgramFactory::create_workload_descriptor(
@@ -1466,24 +1039,17 @@ tt::tt_metal::WorkloadDescriptor DispatchProgramFactory::create_workload_descrip
     // Dispatch is mesh-coord-dependent (fabric routing + linearized mesh
     // coordinate are baked into kernel compile-time args), so we cannot
     // replicate one ProgramDescriptor across the whole mesh — every coord
-    // gets its own build.
+    // gets its own build. Both layouts share create_dispatch_program; it detects
+    // row-major vs tile internally (row-major skips the untilize compute kernel).
     for (const auto& coord : tensor_coords.coords()) {
-        tt::tt_metal::ProgramDescriptor desc = is_tile_layout ? create_at_tile_layout(
-                                                                    operation_attributes,
-                                                                    coord,
-                                                                    tensor_args,
-                                                                    tensor_return_value,
-                                                                    init_barrier_semaphore,
-                                                                    exit_barrier_semaphore,
-                                                                    final_barrier_semaphore)
-                                                              : create_at_row_major(
-                                                                    operation_attributes,
-                                                                    coord,
-                                                                    tensor_args,
-                                                                    tensor_return_value,
-                                                                    init_barrier_semaphore,
-                                                                    exit_barrier_semaphore,
-                                                                    final_barrier_semaphore);
+        tt::tt_metal::ProgramDescriptor desc = create_dispatch_program(
+            operation_attributes,
+            coord,
+            tensor_args,
+            tensor_return_value,
+            init_barrier_semaphore,
+            exit_barrier_semaphore,
+            final_barrier_semaphore);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;
