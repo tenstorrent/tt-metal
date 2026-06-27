@@ -69,8 +69,40 @@ def _dest_limit(fp32_acc, full_sync):
     return 4 if fp32_acc else 8
 
 
-def _distribute(Mt, Nt, Kt, gx, gy, dest_limit, tile_bytes):
-    """Choose K-blocking, output block size, grid extent, and per-core loop counts."""
+def _effective_compute_config(user_cfg, fp32_acc, eff_low_precision):
+    """Build the ComputeConfigDescriptor actually attached to the compute kernel.
+
+    Copies the caller's config verbatim EXCEPT for one hardware-correctness
+    workaround: on Wormhole B0, HiFi4 + fp32_dest_acc_en with bf16/bf8b inputs
+    silently corrupts the matmul K-accumulator (issue #38306; warned in
+    matmul_block_helpers.hpp). bf16/bf8b carry <=7 mantissa bits, which fit
+    entirely in HiFi2, so HiFi4 buys them no precision — clamp HiFi4 -> HiFi2
+    for low-precision inputs to dodge the corruption with zero precision cost.
+    fp32 inputs keep HiFi4 (their only correct fidelity).
+    """
+    fidelity = getattr(user_cfg, "math_fidelity", ttnn.MathFidelity.HiFi4)
+    approx = bool(getattr(user_cfg, "math_approx_mode", False))
+    full_sync = bool(getattr(user_cfg, "dst_full_sync_en", False))
+    precise = bool(getattr(user_cfg, "bfp8_pack_precise", False))
+    if eff_low_precision and fidelity == ttnn.MathFidelity.HiFi4:
+        fidelity = ttnn.MathFidelity.HiFi2
+    return ttnn.ComputeConfigDescriptor(
+        math_fidelity=fidelity,
+        math_approx_mode=approx,
+        fp32_dest_acc_en=fp32_acc,
+        dst_full_sync_en=full_sync,
+        bfp8_pack_precise=precise,
+    )
+
+
+def _distribute(Mt, Nt, Kt, gx, gy, dest_limit, tileA_bytes, tileB_bytes, tileC_bytes, interm_bytes):
+    """Choose K-blocking, output block size, grid extent, and per-core loop counts.
+
+    The L1 footprint is dtype-aware: in0/in1/out each carry their own tile-byte
+    size (bf16 = 2 KiB, fp32 = 4 KiB, bf8b ~1 KiB) and the interm accumulator its
+    own (fp32 = 4 KiB under fp32_dest_acc_en, else the output dtype). Phase 0 used
+    a single fp32 tile size for every CB — fine only when all inputs were fp32.
+    """
     in0_block_w = _find_max_divisor(Kt, 4)
     num_k_blocks = Kt // in0_block_w
 
@@ -79,11 +111,11 @@ def _distribute(Mt, Nt, Kt, gx, gy, dest_limit, tile_bytes):
     bN = max(1, _ceil_div(Nt, gx))
 
     def footprint(bm, bn):
-        in0 = bm * in0_block_w * 2
-        in1 = in0_block_w * bn * 2
-        out = bm * bn * 2
-        interm = bm * bn
-        return (in0 + in1 + out + interm) * tile_bytes
+        in0 = bm * in0_block_w * 2 * tileA_bytes
+        in1 = in0_block_w * bn * 2 * tileB_bytes
+        out = bm * bn * 2 * tileC_bytes
+        interm = bm * bn * interm_bytes
+        return in0 + in1 + out + interm
 
     while footprint(bM, bN) > L1_MM_BUDGET and (bM > 1 or bN > 1):
         if bM >= bN and bM > 1:
@@ -139,14 +171,25 @@ def create_program_descriptor(input_tensor, weight, output_tensor, compute_kerne
     tileA_bytes = input_tensor.buffer_page_size()
     tileB_bytes = weight.buffer_page_size()
     tileC_bytes = output_tensor.buffer_page_size()
-    interm_bytes = ttnn.tile_size(ttnn.float32)
-    interm_format = ttnn.float32
 
     fp32_acc = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
     full_sync = bool(getattr(compute_kernel_config, "dst_full_sync_en", False))
     dest_limit = _dest_limit(fp32_acc, full_sync)
 
-    d = _distribute(Mt, Nt, Kt, gx, gy, dest_limit, tileA_bytes)
+    # ----- intermediate (K-spill/reload) CB format -----
+    # matmul_block's last-K-block "pack to out" data-format reconfig is gated on
+    # (packer_l1_acc || fp32_dest_acc_en) (matmul_block_helpers.inl:394). We use
+    # neither packer_l1_acc nor — when acc=False — that gate, so:
+    #   * fp32_dest_acc_en=True  -> interm = Float32: the fp32 accumulator is
+    #     preserved across K-blocks; the gated reconfig swaps the packer to the
+    #     output format for the final pack, so out may be any dtype.
+    #   * fp32_dest_acc_en=False -> interm MUST equal the output format: no
+    #     reconfig fires before the final pack, so the packer stays at interm's
+    #     format when it writes out. A mismatch would silently corrupt output.
+    interm_format = ttnn.float32 if fp32_acc else output_tensor.dtype
+    interm_bytes = ttnn.tile_size(interm_format)
+
+    d = _distribute(Mt, Nt, Kt, gx, gy, dest_limit, tileA_bytes, tileB_bytes, tileC_bytes, interm_bytes)
     in0_block_w = d["in0_block_w"]
     num_k_blocks = d["num_k_blocks"]
     block_M_tiles = d["block_M_tiles"]
@@ -281,12 +324,17 @@ def create_program_descriptor(input_tensor, weight, output_tensor, compute_kerne
         num_k_blocks,
         total_blocks_per_core,
     ]
+    # Effective config = caller's, with the #38306 HiFi4->HiFi2 clamp for
+    # bf16/bf8b inputs (effective dtype = coarser of activation/weight).
+    eff_low_precision = (input_tensor.dtype != ttnn.float32) or (weight.dtype != ttnn.float32)
+    effective_compute_config = _effective_compute_config(compute_kernel_config, fp32_acc, eff_low_precision)
+
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "matmul_compute.cpp"),
         core_ranges=core_grid,
         compile_time_args=compute_ct,
         runtime_args=[],
-        config=compute_kernel_config,
+        config=effective_compute_config,
     )
 
     # ===== writer kernel =====

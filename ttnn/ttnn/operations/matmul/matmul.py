@@ -60,13 +60,17 @@ INPUT_TAGGERS = {"alignment": tag_alignment, "weight_batch": tag_weight_batch}
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0)
+# 2. SUPPORTED (Refinement 1: numerical configurability)
 # ---------------------------------------------------------------------------
+# dtype (activation) and weight_dtype are INDEPENDENT axes — the cartesian
+# covers all 9 (act, weight) pairs, including the bf16-act × fp32-weight mixed
+# path. fp32_dest_acc_en spans both the maxed (True) and 16-bit-DEST (False)
+# accumulator. The {fp32, acc=False} corner is refused via EXCLUSIONS.
 SUPPORTED = {
-    "dtype": [ttnn.float32],
-    "weight_dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "weight_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "fp32_dest_acc_en": [True],
+    "fp32_dest_acc_en": [True, False],
     "alignment": ["tile_aligned"],
     "weight_batch": ["single"],
 }
@@ -76,7 +80,9 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 EXCLUSIONS = [
-    # Maxed input demands a maxed accumulator (precision convention).
+    # Maxed (fp32) activation demands a maxed (fp32) accumulator: fp32 input
+    # with a 16-bit DEST accumulator is legal-but-lossy and refused by the
+    # precision convention (refinement candidate, not structurally impossible).
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
 ]
 
