@@ -919,7 +919,7 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    is_seqlen_sweep = isinstance(input_prompts, list) and len(input_prompts) > 1 and isinstance(input_prompts[0], str)
+    is_seqlen_sweep = "seqlen-sweep" in test_id
     if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step in repeat_batch_prompts
         seqlen_sweep_files = input_prompts
         logger.info(
