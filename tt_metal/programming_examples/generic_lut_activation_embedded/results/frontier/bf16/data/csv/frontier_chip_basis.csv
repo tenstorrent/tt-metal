@@ -1,5 +1,5 @@
-csv,activation,method,degree,segments,precision,bf16_maxulp,runtime_us,compiles,range
-tanh_p6_s1_uniform_basis_ulp.csv,tanh,poly,6,1,bf16,0.50,2.48,1,[-5.0,5.0]
-atan_p8_s1_uniform_basis_ulp.csv,atan,poly,8,1,bf16,0.00,2.65,1,[-1.5707963267948966,1.5707963267948966]
-erf_p8_s4_uniform_basis_ulp.csv,erf,poly,8,4,bf16,0.00,7.55,1,[-10.0,10.0]
-gelu_p6_s1_uniform_basis_ulp.csv,gelu,poly,6,1,bf16,0.25,3.09,1,[-10.0,10.0]
+csv,activation,method,degree,segments,metric,precision,bf16_maxulp,runtime_us,compiles,range
+tanh_p6_s1_uniform_basis_ulp.csv,tanh,poly,6,1,ulp,bf16,0.50,2.48,1,"[-5.0,5.0]"
+atan_p8_s1_uniform_basis_ulp.csv,atan,poly,8,1,ulp,bf16,0.00,2.65,1,"[-1.5707963267948966,1.5707963267948966]"
+erf_p8_s4_uniform_basis_ulp.csv,erf,poly,8,4,ulp,bf16,0.00,7.55,1,"[-10.0,10.0]"
+gelu_p6_s1_uniform_basis_ulp.csv,gelu,poly,6,1,ulp,bf16,0.25,3.09,1,"[-10.0,10.0]"

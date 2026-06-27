@@ -193,65 +193,68 @@ FILTER="${FILTER//,/ }"
 [[ -x "$RUN_CSV" ]] || { echo "ERROR: run_csv.sh not found at $RUN_CSV (set TT_METAL_HOME)" >&2; exit 1; }
 [[ -d "$COEFFS" ]] || { echo "ERROR: corpus not found at $COEFFS (set TT_POLY_FIT_DIR)" >&2; exit 1; }
 
-export TT_METAL_CACHE="$CACHE"   # per-worker JIT cache (isolation)
-mkdir -p "$(dirname "$OUT")"
-if [[ "$FRESH" -eq 1 || ! -f "$OUT" ]]; then
-  echo "csv,activation,method,degree,segments,precision,bf16_maxulp,runtime_us,compiles,range" > "$OUT"
-fi
-
-csv_field_of() {
-  local f="$1" field="$2"
-  PYTHONPATH="$FIT_DIR${PYTHONPATH:+:$PYTHONPATH}" /usr/bin/python3 - "$f" "$field" <<'PY'
+build_worklist() {
+  PYTHONPATH="$FIT_DIR${PYTHONPATH:+:$PYTHONPATH}" /usr/bin/python3 - "$COEFFS" "$FILTER" <<'PY'
 import sys
-from ttpoly.spec.csv_io import parse_csv_filename
+from pathlib import Path
 
-parsed = parse_csv_filename(sys.argv[1])
-if not parsed:
-    raise SystemExit(1)
-value = parsed.get(sys.argv[2], "")
-if sys.argv[2] == "degree":
-    value = str(value).replace("/", "d")
-print(value)
+try:
+    from ttpoly.spec.csv_io import parse_csv_artifact
+except ImportError as exc:
+    raise SystemExit(
+        "ERROR: tt-polynomial-fitter must expose ttpoly.spec.csv_io.parse_csv_artifact(path)"
+    ) from exc
+
+coeffs = Path(sys.argv[1])
+filters = {token for token in sys.argv[2].split() if token}
+required = ("activation", "eval_method", "degree", "depth", "metric")
+
+for path in sorted(coeffs.glob("*.csv")):
+    identity = parse_csv_artifact(path)
+    missing = [key for key in required if identity.get(key) in (None, "")]
+    if missing:
+        raise SystemExit(
+            "ERROR: ttpoly parse_csv_artifact(path) must return structured artifact "
+            f"identity field(s) {', '.join(missing)} for {path}"
+        )
+
+    activation = str(identity["activation"])
+    if filters and activation not in filters:
+        continue
+
+    degree = str(identity["degree"]).replace("/", "d")
+    print("\t".join([
+        str(path),
+        activation,
+        str(identity["eval_method"]),
+        degree,
+        str(identity["depth"]),
+        str(identity["metric"]),
+    ]))
 PY
 }
 
-act_of() { csv_field_of "$1" activation; }
-# method = canonical eval_method when present, else range_reduction_method, else poly/rational.
-method_of() {
-  local em rr
-  em="$(grep -aE '^METADATA,eval_method,' "$1" 2>/dev/null | head -1 | cut -d, -f3)"
-  rr="$(grep -aE '^METADATA,range_reduction_method,' "$1" 2>/dev/null | head -1 | cut -d, -f3)"
-  case "$em" in
-    identity|affine|affine_collapse|clamped_affine|clamped_affine_collapse|abs_value|threshold_identity|threshold_identity_select|threshold_softshift|softshrink_select|gated_affine_product|gated_quadratic_collapse|abs_denominator_rational|basis)
-      echo "$em"; return ;;
-  esac
-  if [[ -n "$rr" && "$rr" != "none" ]]; then echo "$rr"
-  elif [[ -n "$em" && "$em" != "poly_cascade" && "$em" != "rational_cascade" ]]; then echo "$em"
-  elif grep -qaE '^(METADATA|segment_id)?,?.*[,]n0[,]' "$1" 2>/dev/null || basename "$1" | grep -q 'rational'; then echo rational
-  else echo poly; fi
-}
-deg_of()  { csv_field_of "$1" degree; }
-segs_of() { csv_field_of "$1" depth; }
-
 # build the work list (filtered + sharded + deterministic order)
-mapfile -t ALL < <(ls "$COEFFS"/*.csv 2>/dev/null | sort)
-WORK=()
-for f in "${ALL[@]}"; do
-  if [[ -n "$FILTER" ]]; then a="$(act_of "$f")"; [[ " $FILTER " == *" $a "* ]] || continue; fi
-  WORK+=("$f")
-done
+mapfile -t WORK < <(build_worklist)
+
+export TT_METAL_CACHE="$CACHE"   # per-worker JIT cache (isolation)
+mkdir -p "$(dirname "$OUT")"
+if [[ "$FRESH" -eq 1 || ! -f "$OUT" ]]; then
+  echo "csv,activation,method,degree,segments,metric,precision,bf16_maxulp,runtime_us,compiles,range" > "$OUT"
+fi
+
 echo "frontier_sweep: shard $SHARD/$NUM_SHARDS, $(( ${#WORK[@]} )) candidate configs (precision=$PRECISION, filter='${FILTER:-all}'), chip TT_VISIBLE_DEVICES=${TT_VISIBLE_DEVICES:-unset}, cache=$CACHE, out=$OUT" >&2
 
 i=-1; done_n=0; new_n=0
-for f in "${WORK[@]}"; do
+for work_item in "${WORK[@]}"; do
   i=$((i+1)); [[ $(( i % NUM_SHARDS )) -eq "$SHARD" ]] || continue
+  IFS=$'\t' read -r f act method deg segs metric <<< "$work_item"
   base="$(basename "$f")"
-  act="$(act_of "$f")"; method="$(method_of "$f")"; deg="$(deg_of "$f")"; segs="$(segs_of "$f")"
   # JSON deployment domain (the harness's source of truth)
   read -r lo hi < <(/usr/bin/python3 -c "import json,sys; d=(json.load(open('$ACTS/$act.json')).get('domain') or {}); print(d.get('min',''), d.get('max',''))" 2>/dev/null)
   RA=(); [[ "$lo" =~ ^-?[0-9] && "$hi" =~ ^-?[0-9] ]] && RA=(--range-min "$lo" --range-max "$hi")
   for prec in "${PRECISIONS[@]}"; do
-    grep -q "^${base},[^,]*,[^,]*,[^,]*,[^,]*,${prec}," "$OUT" 2>/dev/null && { done_n=$((done_n+1)); continue; }   # resume: skip done
+    grep -q "^${base},[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,${prec}," "$OUT" 2>/dev/null && { done_n=$((done_n+1)); continue; }   # resume: skip done
     out=$(timeout "$PER_CFG_TIMEOUT" bash "$RUN_CSV" "$f" --activation "$act" --precision "$prec" --tiles 256 "${RA[@]}" 2>&1)
     row=$(echo "$out" | grep -aE '^(256_tiles|custom_256t)' | tail -1)
     if [[ -n "$row" ]]; then
@@ -267,7 +270,7 @@ for f in "${WORK[@]}"; do
       mkdir -p "$fail_dir"
       printf '%s\n' "$out" > "$fail_dir/${prec}_${base}.log"
     fi
-    echo "${base},${act},${method},${deg},${segs},${prec},${ulp},${us},${ok},[${lo},${hi}]" >> "$OUT"
+    echo "${base},${act},${method},${deg},${segs},${metric},${prec},${ulp},${us},${ok},\"[${lo},${hi}]\"" >> "$OUT"
     new_n=$((new_n+1))
     [[ $(( new_n % 25 )) -eq 0 ]] && echo "  [shard $SHARD] $new_n new (${done_n} resumed-skip) — last: $act $base precision=$prec ulp=$ulp us=$us ok=$ok" >&2
   done

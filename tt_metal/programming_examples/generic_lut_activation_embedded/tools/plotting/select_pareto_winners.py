@@ -141,14 +141,14 @@ def select_for_group(front, tus, tulp, max_configs):
         return []
 
     def source_priority(row):
-        name = Path(row.get("csv") or "").stem
-        if name.endswith("_ulp"):
+        metric = (row.get("metric") or row.get("source_metric") or "").strip()
+        if metric == "ulp":
             return 0
-        if name.endswith("_max"):
+        if metric == "max":
             return 1
-        if name.endswith("_mae"):
+        if metric == "mae":
             return 2
-        return 3
+        return 0
 
     def by_runtime_then_ulp(point):
         us, ulp, row = point
@@ -271,7 +271,7 @@ def main():
             and r["_ulp"] is not None
             and r["_us"] > 0
             and r["_ulp"] >= 0
-            and (r.get("csv") or "").endswith("_ulp.csv")
+            and (r.get("metric") in (None, "", "ulp"))
         ]
         compiled = dedupe_configs(compiled)
         front = pareto([(r["_us"], r["_ulp"], r) for r in compiled])
