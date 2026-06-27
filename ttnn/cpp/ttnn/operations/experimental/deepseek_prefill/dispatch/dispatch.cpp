@@ -25,6 +25,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
     const std::optional<ttnn::Tensor>& padding_config,
+    const std::optional<ttnn::Tensor>& scales_tensor,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     std::optional<uint32_t> cluster_axis,
@@ -32,6 +33,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<tt::tt_fabric::Topology> topology,
     bool use_l1_small_for_semaphores,
     bool fp8_output,
+    bool fp8_scaled_input,
     uint32_t num_untilizers_per_sender) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -72,6 +74,7 @@ std::array<ttnn::Tensor, 2> dispatch(
         metadata_len,
         max_dispatch_buffer_token_size,
         padding_config,
+        scales_tensor,
         axis,
         num_links_,
         usable_topology,
@@ -79,6 +82,7 @@ std::array<ttnn::Tensor, 2> dispatch(
         subdevice_core_range_set,
         use_l1_small_for_semaphores,
         fp8_output,
+        fp8_scaled_input,
         num_untilizers_per_sender);
 }
 

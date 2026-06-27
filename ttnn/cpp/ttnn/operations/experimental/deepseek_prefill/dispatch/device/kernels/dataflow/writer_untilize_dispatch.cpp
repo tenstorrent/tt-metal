@@ -94,6 +94,20 @@ void kernel_main() {
         get_compile_time_arg_val(padding_cfg_args.next_compile_time_args_offset());
 #endif
 
+#ifdef FP8_SCALED
+    // Per-token fp8 scales CB id + aligned page size + word count, appended AFTER padding_config.
+    // The writer reads scales straight from the CB (the reader filled it), so no DRAM accessor.
+#ifdef HAS_PADDING_CONFIG
+    constexpr uint32_t scales_args_offset = padding_cfg_args.next_compile_time_args_offset() + 1;
+#else
+    constexpr uint32_t scales_args_offset = metadata_args.next_compile_time_args_offset();
+#endif
+    constexpr uint32_t cb_scales_id = get_compile_time_arg_val(scales_args_offset);
+    CircularBuffer cb_scales(cb_scales_id);
+    constexpr uint32_t aligned_scales_page_size = get_compile_time_arg_val(scales_args_offset + 1);
+    constexpr uint32_t num_scale_words = get_compile_time_arg_val(scales_args_offset + 2);
+#endif
+
     // ===== Runtime args =====
     uint32_t rt_idx = 0;
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_idx++);
@@ -191,6 +205,12 @@ void kernel_main() {
 
         uint32_t untilize_read_ptr = cb_untilize.get_read_ptr();
 
+#ifdef FP8_SCALED
+        // Wait for the reader to publish this batch's per-token scale rows (lockstep with c_0).
+        cb_scales.wait_front(read_batch_size);
+        uint32_t scales_read_ptr = cb_scales.get_read_ptr();
+#endif
+
         // Wait for reader to publish the per-batch route plan
         cb_plan.wait_front(1);
         uint32_t plan_addr = cb_plan.get_read_ptr();
@@ -246,6 +266,17 @@ void kernel_main() {
                     meta[2] = (int32_t)k;
                     meta[3] = (int32_t)routed_expert;
                     meta[4] = (int32_t)weight;
+#ifdef FP8_SCALED
+                    // Copy this token's fp32 scale words (bit-for-bit) into the metadata tail so the
+                    // routed buffer can be dequantized downstream. token_t indexes the scales CB.
+                    {
+                        tt_l1_ptr uint32_t* src_scales =
+                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        for (uint32_t w = 0; w < num_scale_words; w++) {
+                            meta[5 + w] = (int32_t)src_scales[w];
+                        }
+                    }
+#endif
                     noc.async_write(
                         cb_metadata_scratch,
                         metadata_addr_gen,
@@ -307,6 +338,17 @@ void kernel_main() {
                     meta[2] = (int32_t)k;
                     meta[3] = (int32_t)routed_expert;
                     meta[4] = (int32_t)weight;
+#ifdef FP8_SCALED
+                    // Same scale-tail copy as the local path; the full aligned_metadata_page_size
+                    // (which already accounts for the scale fields) is sent to the sender's c_6 slot.
+                    {
+                        tt_l1_ptr uint32_t* src_scales =
+                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        for (uint32_t w = 0; w < num_scale_words; w++) {
+                            meta[5 + w] = (int32_t)src_scales[w];
+                        }
+                    }
+#endif
                     uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
                     noc_async_write_one_packet_with_trid(
                         xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
@@ -329,6 +371,9 @@ void kernel_main() {
 
         cb_plan.pop_front(1);
         cb_untilize.pop_front(read_batch_size);
+#ifdef FP8_SCALED
+        cb_scales.pop_front(read_batch_size);
+#endif
     }
 
     // Teardown: the reader pushes one extra end-of-plan sentinel page after the last batch.

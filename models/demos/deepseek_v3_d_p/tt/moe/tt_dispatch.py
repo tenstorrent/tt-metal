@@ -203,6 +203,7 @@ class TtDispatchModule(LightweightModule):
         tt_expert_offsets: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
         padding_config: ttnn.Tensor = None,
+        scales: ttnn.Tensor = None,
     ):
         """
         Route input tokens to destination device dispatch buffers based on top-k expert indices.
@@ -232,6 +233,11 @@ class TtDispatchModule(LightweightModule):
                 ROW_MAJOR). When provided, the dispatch kernels bound their token loop to the
                 real (unpadded) tokens. Must match the tensor the gate used to sentinel-mark
                 padded tokens. None means process the full token range.
+            scales: Optional per-token fp8 scales (FLOAT32, ROW_MAJOR, shape
+                (1, seq_len_per_chip, emb_dim/128)) produced by per_token_cast_to_fp8 alongside
+                the fp8 input x. When provided, each token's scales are copied into the metadata
+                tail (fields 5..) so the routed buffer can be dequantized downstream. Requires
+                metadata_len == 5 + emb_dim/128 and fp8 ROW_MAJOR input. None for the bf16 path.
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.
@@ -268,6 +274,8 @@ class TtDispatchModule(LightweightModule):
             expert_offsets_tensor=tt_expert_offsets,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
             padding_config=padding_config,
+            scales_tensor=scales,
+            fp8_scaled_input=scales is not None,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_routed_experts=self.num_routed_experts,

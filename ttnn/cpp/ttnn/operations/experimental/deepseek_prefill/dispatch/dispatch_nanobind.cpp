@@ -59,8 +59,10 @@ void bind_dispatch(nb::module_& mod) {
             experts_per_chip (int): Number of experts hosted on each destination device.
             num_routed_experts (int): Total number of routed experts across all devices.
             num_experts_per_tok (int): Number of experts each token is routed to (top-k).
-            metadata_len (int): Number of fields per token in the metadata buffer (5:
-                linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight).
+            metadata_len (int): Number of fields per token in the metadata buffer. The first 5 are
+                routing fields (linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight).
+                When scales_tensor is provided, metadata_len must be 5 + (emb_dim/128): each token's
+                fp32 per-128-block scales are appended as fields 5.. (stored as int32 bit-patterns).
             max_dispatch_buffer_token_size (int): Total token capacity of the flat dispatch
                 buffer per chip (shared across all local experts via dynamic offsets).
                 Used as the in-kernel bounds check ceiling.
@@ -70,6 +72,12 @@ void bind_dispatch(nb::module_& mod) {
                 (unpadded) tokens instead of the full seq_len_per_chip. Must be the same
                 tensor the gate used to sentinel-mark padded tokens. Defaults to None
                 (process the full token range).
+            scales_tensor (ttnn.Tensor, optional): Per-token fp8 scales (FLOAT32, ROW_MAJOR,
+                shape (1, seq_len_per_chip, emb_dim/128) per device) produced by
+                per_token_cast_to_fp8 alongside the fp8 input. When provided (fp8 ROW_MAJOR
+                input only), each token's scales are copied into the metadata tail so the
+                routed buffer can be dequantized downstream. Requires metadata_len ==
+                5 + emb_dim/128. Defaults to None. Blackhole-only.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
             subdevice_id (ttnn.SubDeviceId, optional): Subdevice ID for core allocation.
             cluster_axis (int, optional): Mesh axis along which dispatch communicates
@@ -84,6 +92,10 @@ void bind_dispatch(nb::module_& mod) {
                 (DataType::FP8_E4M3). Blackhole-only (not supported on Wormhole_B0). With
                 TILE input the packer converts any input dtype; with ROW_MAJOR input (a byte
                 copy) fp8 output requires fp8 input. Defaults to False.
+            fp8_scaled_input (bool, optional): Enable the fp8-scaled-input path. When True, the
+                input must be fp8 (FP8_E4M3) ROW_MAJOR and scales_tensor must be provided; each
+                token's fp32 per-128-block scales are copied into the metadata tail (fields 5..),
+                requiring metadata_len == 5 + emb_dim/128. Blackhole-only. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
                 sender on the tile-layout path.
 
@@ -110,6 +122,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("metadata_len"),
         nb::arg("max_dispatch_buffer_token_size"),
         nb::arg("padding_config") = nb::none(),
+        nb::arg("scales_tensor") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("cluster_axis") = nb::none(),
@@ -117,6 +130,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
         nb::arg("fp8_output") = false,
+        nb::arg("fp8_scaled_input") = false,
         nb::arg("num_untilizers_per_sender") = 2);
 }
 

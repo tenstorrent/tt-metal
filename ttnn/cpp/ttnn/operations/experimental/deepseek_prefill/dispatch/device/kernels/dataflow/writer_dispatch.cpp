@@ -362,30 +362,33 @@ void kernel_main() {
 #else
                     auto& payload_sender = fabric_connections[fabric_route];
 #endif
-                    // Send payload
-                    ccl_routing_utils::fabric_set_line_unicast_route(
-                        pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        output_addr_gen,
-                        payload_sender,
-                        unicast_packet_header,
-                        payload_addr,
-                        page_idx,
-                        (int)aligned_output_page_size,
-                        l1_alignment);
+                    {
+                        DeviceZoneScopedN("FABRIC-send-flush");
+                        // Send payload
+                        ccl_routing_utils::fabric_set_line_unicast_route(
+                            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+                        fabric_send_noc_unicast<fabric_max_packet_size>(
+                            output_addr_gen,
+                            payload_sender,
+                            unicast_packet_header,
+                            payload_addr,
+                            page_idx,
+                            (int)aligned_output_page_size,
+                            l1_alignment);
 
-                    // Send metadata
-                    ccl_routing_utils::fabric_set_line_unicast_route(
-                        pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
-                    fabric_send_noc_unicast<fabric_max_packet_size>(
-                        metadata_addr_gen,
-                        payload_sender,
-                        unicast_packet_header,
-                        metadata_addr,
-                        page_idx,
-                        (int)aligned_metadata_page_size,
-                        l1_alignment);
-                    noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
+                        // Send metadata
+                        ccl_routing_utils::fabric_set_line_unicast_route(
+                            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+                        fabric_send_noc_unicast<fabric_max_packet_size>(
+                            metadata_addr_gen,
+                            payload_sender,
+                            unicast_packet_header,
+                            metadata_addr,
+                            page_idx,
+                            (int)aligned_metadata_page_size,
+                            l1_alignment);
+                        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
+                    }
 #endif
                     noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);
                     consumed[s]++;
