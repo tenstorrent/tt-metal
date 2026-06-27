@@ -76,3 +76,12 @@ class TestCompPccConstantTensor:
         passing, pcc_val = comp_pcc(golden, calculated, pcc=0.99)
         assert isinstance(pcc_val, float), f"Expected float, got {type(pcc_val)}: {pcc_val}"
         assert not math.isnan(pcc_val), "pcc_val should not be NaN"
+
+    def test_large_magnitude_float32_tensors_use_float64_correlation(self):
+        """ldexp-scale outputs overflow float32 sum-of-squares; PCC must not fall back to allclose."""
+        torch.manual_seed(0)
+        golden = torch.randn(64, 128, dtype=torch.float32) * 1e19
+        calculated = golden + torch.randn(64, 128, dtype=torch.float32) * 1e15
+        passing, pcc_val = comp_pcc(golden, calculated, pcc=0.99)
+        assert passing, f"Expected high-PCC large-magnitude tensors to pass, got pcc={pcc_val}"
+        assert pcc_val > 0.99, f"Expected pcc > 0.99, got {pcc_val}"

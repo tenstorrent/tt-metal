@@ -542,7 +542,16 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     g_centered = golden - (golden.sum(dtype=torch.float64) / n).to(golden.dtype)
     c_centered = calculated - (calculated.sum(dtype=torch.float64) / n).to(calculated.dtype)
     cov = (g_centered * c_centered).sum(dtype=torch.float64)
-    denom = torch.sqrt(g_centered.pow(2).sum(dtype=torch.float64) * c_centered.pow(2).sum(dtype=torch.float64))
+    g_sq_sum = g_centered.pow(2).sum(dtype=torch.float64)
+    c_sq_sum = c_centered.pow(2).sum(dtype=torch.float64)
+    denom = torch.sqrt(g_sq_sum * c_sq_sum)
+    # pow/sum stay in float32 before the reduction; large-magnitude tensors (e.g. ldexp)
+    # can overflow to inf here even though float64 accumulation would be finite.
+    if not math.isfinite(denom.item()) or not math.isfinite(cov.item()):
+        g_centered64 = g_centered.to(torch.float64)
+        c_centered64 = c_centered.to(torch.float64)
+        cov = (g_centered64 * c_centered64).sum()
+        denom = torch.sqrt(g_centered64.pow(2).sum() * c_centered64.pow(2).sum())
     cal_pcc = (cov / denom).item()
 
     # Zero variance -> denom == 0 -> cal_pcc is nan: PCC is undefined for constant tensors.
