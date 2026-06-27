@@ -749,6 +749,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
                 metadata.get('newton_root_lowering', metadata.get('lowering', ''))
             )
         ).strip().lower()
+        backend = str(metadata.get('newton_root_backend', metadata.get('root_backend', ''))).strip().lower()
         cbrt_magic_aliases = (
             'cbrt_magic', 'magic_cbrt', 'native_cbrt', 'moroz_cbrt', 'cube_root_native',
             'cbrt_magic_root', 'magic_root_cbrt', 'cbrt-magic-root', 'magic-root-cbrt'
@@ -766,6 +767,10 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             c2 = parse_float_literal(metadata.get('newton_root_c2', '2.2533049'))
         recip_macro = '#define NEWTON_ROOT_RECIPROCAL\n' if recip else ''
         algorithm_macro = '#define NEWTON_ROOT_ALGORITHM_CBRT_MAGIC\n' if use_cbrt_magic else ''
+        backend_macro = (
+            '#define NEWTON_ROOT_BACKEND_NATIVE_SFPU_TILE\n'
+            if backend in ('native_sfpu_tile', 'native_tile', 'llk_native') else ''
+        )
         rr_macro = (
             '\n// eval_method: newton_root (metadata-declared magic-root, NO poly fit). FIRST-CLASS standalone.\n'
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_NEWTON_ROOT\n'
@@ -778,6 +783,7 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             f'#define NEWTON_ROOT_ITERS {iters}\n'
             f'{recip_macro}'
             f'{algorithm_macro}'
+            f'{backend_macro}'
             # POLY_DEGREE template arg is unused on this path but the kernel
             # signature still takes it; the LUT/coeffs are ignored.
         )

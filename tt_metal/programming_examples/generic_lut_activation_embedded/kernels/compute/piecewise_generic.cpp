@@ -6,6 +6,9 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#if defined(NEWTON_ROOT_BACKEND_NATIVE_SFPU_TILE)
+#include "api/compute/eltwise_unary/cbrt.h"
+#endif
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 // Canonical eval_method taxonomy. Translates the single EVAL_METHOD_* selector
@@ -2913,6 +2916,9 @@ void kernel_main() {
     sfpi::vConstFloatPrgm0 = NEWTON_ROOT_C0;
     sfpi::vConstFloatPrgm1 = NEWTON_ROOT_C1;
     sfpi::vConstFloatPrgm2 = NEWTON_ROOT_C2;
+#if defined(NEWTON_ROOT_BACKEND_NATIVE_SFPU_TILE)
+    ckernel::cbrt_tile_init();
+#endif
 #elif (NEWTON_ROOT_N != 3)
     sfpi::vConstIntPrgm0 = NEWTON_ROOT_MAGIC;
     sfpi::vConstFloatPrgm1 = NEWTON_ROOT_C1;  // sqrt: C1; rsqrt: 1.5 step constant
@@ -2997,6 +3003,9 @@ void kernel_main() {
         }
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_NEWTON_ROOT || defined(EVAL_METHOD_NEWTON_ROOT)
         (void)p_lut;
+#if (NEWTON_ROOT_N == 3) && defined(NEWTON_ROOT_ALGORITHM_CBRT_MAGIC) && defined(NEWTON_ROOT_BACKEND_NATIVE_SFPU_TILE)
+        ckernel::cbrt_tile(0);
+#else
         for (int d = 0; d < 32; d++) {
             sfpi::vFloat y = sfpi::newton_root_eval<0>(sfpi::dst_reg[d]);
 #ifdef USE_BF16
@@ -3004,6 +3013,7 @@ void kernel_main() {
 #endif
             sfpi::dst_reg[d] = y;
         }
+#endif
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_TRIG_RESIDUAL || defined(EVAL_METHOD_TRIG_RESIDUAL)
         (void)p_lut;
         for (int d = 0; d < 32; d++) {
