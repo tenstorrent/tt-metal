@@ -26,11 +26,14 @@ void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(4);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(5);
     constexpr uint32_t total_blocks = get_compile_time_arg_val(6);
-    // Refinement 1 (Lever B): when 1, use hardware packer L1 accumulation so the
+    // Refinements 1 (Lever B) + 1b: when 1, use hardware packer L1 accumulation so the
     // last-K-block pack-to-out data-format reconfig (gated on packer_l1_acc ||
     // fp32_dest_acc_en) fires even with fp32_dest_acc_en=False. That lets cb_interm
-    // carry a HIGHER-precision format (bf16) than a bf8b cb_out: the running
-    // K-sum stays bf16 across K-blocks instead of re-quantizing to bf8b each spill.
+    // carry a format FINER than a low-precision cb_out, so the running K-sum
+    // accumulates in L1 in that finer format across all K-blocks instead of
+    // re-quantizing to the output format each spill: bf8b out -> bf16 interm
+    // (Lever B), bf16 out -> fp32 interm (Refinement 1b). The 16-bit DEST is still
+    // honored per K-block; only the cross-K-block L1 accumulation is finer.
     constexpr uint32_t packer_l1_acc = get_compile_time_arg_val(7);
 
     CircularBuffer in0_buf(CB_IN0_ACT);

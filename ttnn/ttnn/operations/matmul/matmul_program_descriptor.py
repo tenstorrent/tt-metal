@@ -186,20 +186,36 @@ def create_program_descriptor(input_tensor, weight, output_tensor, compute_kerne
     #     interm MUST equal the output format — no reconfig fires before the final
     #     pack, so the packer stays at interm's format. A mismatch corrupts output.
     #
-    # Refinement 1 (Lever B): for a bf8b OUTPUT with acc=False, the forced bf8b
-    # interm re-quantizes the running K-sum to bf8b on EVERY K-block spill, which
-    # dominates the deep-K error (RMS ~0.39 @ K=8192). Opt that corner into
-    # HARDWARE packer L1 accumulation: with packer_l1_acc=True the gated reconfig
-    # fires, so interm can be the higher-precision Float16_b while out stays bf8b —
-    # the K-sum accumulates in L1 in bf16, then the final pack reconfigs to bf8b.
-    # Only bf8b out benefits (bf16 out already keeps a bf16 interm); fp32 acc keeps
-    # its fp32 accumulator. #28800 (l1_acc breaks fp32_dest_acc_en) does not apply:
-    # this branch is acc=False only.
-    use_packer_l1_acc = (not fp32_acc) and (output_tensor.dtype == ttnn.bfloat8_b)
+    # Refinements 1 (Lever B) + 1b: for a LOW-PRECISION output with acc=False the
+    # default software spill re-quantizes the running K-sum to the OUTPUT format on
+    # EVERY K-block reload (the partial is reloaded into the 16-bit DEST and re-packed
+    # at out's format each block), which dominates the deep-K error. Opt these corners
+    # into HARDWARE packer-L1 accumulation: with packer_l1_acc=True the last-block
+    # pack-to-out data-format reconfig (gated on packer_l1_acc || fp32_dest_acc_en,
+    # matmul_block_helpers.inl:394) fires, so cb_interm can carry a format FINER than
+    # the output. The running K-sum then accumulates in L1 in that finer format across
+    # all K-blocks (never reloading to the 16-bit DEST until the final block), and the
+    # final pack reconfigs down to the output format. The 16-bit DEST is still honored
+    # per-K-block — packer_l1_acc is an orthogonal hardware knob (the user controls
+    # only DEST width via fp32_dest_acc_en; L1-accumulation strategy is the op's).
+    #
+    #   * bf8b out (Refinement 1, Lever B): interm = Float16_b (bf16). K-sum stays bf16
+    #     instead of re-quantizing to bf8b each spill (deep-K relRMS 0.39 -> 0.022).
+    #   * bf16 out (Refinement 1b): interm = Float32. The cross-K-block running sum
+    #     accumulates in fp32 instead of re-quantizing to bf16 each spill, bounding the
+    #     in-DEST 16-bit accumulation run to ONE K-block (in0_block_w*32 K-elements)
+    #     rather than the full K. Drops the deep-K (K=8192) relRMS 0.128 -> 0.009 while
+    #     leaving fp32_dest_acc_en=False (16-bit DEST per block) intact.
+    #
+    # fp32 acc (acc=True) keeps its native fp32 DEST accumulator + Float32 interm.
+    # #28800 (l1_acc breaks fp32_dest_acc_en) does not apply: these branches are
+    # acc=False only, where packer-L1 and the 16-bit DEST do not conflict.
+    use_packer_l1_acc = (not fp32_acc) and (output_tensor.dtype in (ttnn.bfloat8_b, ttnn.bfloat16))
     if fp32_acc:
         interm_format = ttnn.float32
     elif use_packer_l1_acc:
-        interm_format = ttnn.bfloat16  # decoupled from bf8b out via packer_l1_acc reconfig
+        # interm one level finer than output: bf8b out -> bf16 interm; bf16 out -> fp32.
+        interm_format = ttnn.bfloat16 if output_tensor.dtype == ttnn.bfloat8_b else ttnn.float32
     else:
         interm_format = output_tensor.dtype
     interm_bytes = ttnn.tile_size(interm_format)

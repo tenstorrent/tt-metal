@@ -1,0 +1,55 @@
+{"event": "phase", "phase": "planner", "state": "start", "at_ms": 1782556623007}
+{"event": "phase", "phase": "planner", "state": "end", "at_ms": 1782557991708}
+{"event": "phase", "phase": "implementer", "state": "start", "at_ms": 1782557992216}
+{"source":"run_safe_pytest","pid":601174,"started_at_ms":1782559321817,"wait_ms":4,"run_ms":19684,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":601669,"started_at_ms":1782559348539,"wait_ms":2,"run_ms":13462,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":602002,"started_at_ms":1782559372500,"wait_ms":2,"run_ms":14304,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":602387,"started_at_ms":1782559393744,"wait_ms":1,"run_ms":19075,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":603282,"started_at_ms":1782559439483,"wait_ms":2,"run_ms":92047,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":0}
+{"source":"tt-probe","pid":604115,"started_at_ms":1782559571174,"wait_ms":239,"run_ms":15512,"test_path":"matmul","exit_code":1}
+{"source":"tt-probe","pid":604305,"started_at_ms":1782559594759,"wait_ms":169,"run_ms":16121,"test_path":"matmul","exit_code":0}
+{"event": "phase", "phase": "implementer", "state": "end", "at_ms": 1782559680444}
+{"event": "phase", "phase": "verifier", "state": "start", "at_ms": 1782559680444}
+{"source":"run_safe_pytest","pid":606598,"started_at_ms":1782559822445,"wait_ms":2,"run_ms":10018,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul[single_tile]","exit_code":0}
+{"source":"run_safe_pytest","pid":606857,"started_at_ms":1782559837178,"wait_ms":2,"run_ms":9788,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"eval_test_runner","pid":607466,"started_at_ms":1782559957929,"wait_ms":2931,"run_ms":145579,"test_path":"eval/golden_tests/matmul/","exit_code":0}
+{"source":"run_safe_pytest","pid":610482,"started_at_ms":1782560474535,"wait_ms":2,"run_ms":13951,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":611002,"started_at_ms":1782560555655,"wait_ms":2,"run_ms":10171,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul[single_tile]","exit_code":0}
+{"source":"run_safe_pytest","pid":611488,"started_at_ms":1782560630321,"wait_ms":2,"run_ms":4581,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul[single_tile]","exit_code":0}
+{"source":"run_safe_pytest","pid":611831,"started_at_ms":1782560686740,"wait_ms":5,"run_ms":4956,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul[single_tile]","exit_code":1}
+{"source":"run_safe_pytest","pid":612094,"started_at_ms":1782560709722,"wait_ms":2,"run_ms":8400,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"eval_test_runner","pid":612939,"started_at_ms":1782560743659,"wait_ms":2759,"run_ms":120257,"test_path":"eval/golden_tests/matmul/","exit_code":0}
+{"source":"run_safe_pytest","pid":616690,"started_at_ms":1782560942555,"wait_ms":1,"run_ms":6833,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_precision_baseline.py","exit_code":0}
+{"event": "phase", "phase": "verifier", "state": "end", "at_ms": 1782561219780}
+{"event": "phase", "phase": "phase0_golden", "state": "start", "at_ms": 1782561226419}
+{"source":"eval_test_runner","pid":619232,"started_at_ms":1782561226422,"wait_ms":2740,"run_ms":133690,"test_path":"eval/golden_tests/matmul/","exit_code":0}
+{"event": "phase", "phase": "phase0_golden", "state": "end", "at_ms": 1782561362855}
+{"event": "phase", "phase": "refinement_1", "state": "start", "at_ms": 1782561366019}
+{"source":"tt-probe","pid":622405,"started_at_ms":1782561817867,"wait_ms":196,"run_ms":15273,"test_path":"matmul","exit_code":1}
+{"source":"tt-probe","pid":622716,"started_at_ms":1782561859224,"wait_ms":139,"run_ms":19176,"test_path":"matmul","exit_code":0}
+{"source":"run_safe_pytest","pid":624846,"started_at_ms":1782561965398,"wait_ms":2,"run_ms":11254,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":625414,"started_at_ms":1782562018597,"wait_ms":2,"run_ms":14942,"test_path":"eval/golden_tests/matmul/test_golden.py::test_op","exit_code":0}
+{"source":"run_safe_pytest","pid":625990,"started_at_ms":1782562048127,"wait_ms":2,"run_ms":120005,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":143}
+{"source":"run_safe_pytest","pid":629626,"started_at_ms":1782562184062,"wait_ms":2,"run_ms":176511,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":1}
+{"source":"tt-probe","pid":631471,"started_at_ms":1782562610227,"wait_ms":197,"run_ms":18318,"test_path":"matmul","exit_code":0}
+{"source":"tt-probe","pid":633925,"started_at_ms":1782562839472,"wait_ms":192,"run_ms":20915,"test_path":"matmul","exit_code":0}
+{"source":"tt-probe","pid":634949,"started_at_ms":1782562912190,"wait_ms":163,"run_ms":25572,"test_path":"matmul","exit_code":0}
+{"source":"tt-probe","pid":635996,"started_at_ms":1782562973111,"wait_ms":152,"run_ms":24427,"test_path":"matmul","exit_code":0}
+{"source":"tt-probe","pid":638208,"started_at_ms":1782563142965,"wait_ms":167,"run_ms":23487,"test_path":"matmul","exit_code":0}
+{"source":"tt-probe","pid":639859,"started_at_ms":1782563231466,"wait_ms":141,"run_ms":21700,"test_path":"matmul","exit_code":0}
+{"source":"tt-probe","pid":640929,"started_at_ms":1782563337006,"wait_ms":191,"run_ms":21423,"test_path":"matmul","exit_code":1}
+{"source":"tt-probe","pid":641610,"started_at_ms":1782563374716,"wait_ms":132,"run_ms":68667,"test_path":"matmul","exit_code":0}
+{"source":"run_safe_pytest","pid":645470,"started_at_ms":1782563472959,"wait_ms":1,"run_ms":13823,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":646064,"started_at_ms":1782563517628,"wait_ms":3,"run_ms":28991,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":646450,"started_at_ms":1782563557175,"wait_ms":2,"run_ms":182775,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":650639,"started_at_ms":1782563921573,"wait_ms":2,"run_ms":187333,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":655007,"started_at_ms":1782564220319,"wait_ms":2,"run_ms":21575,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_precision_matrix.py","exit_code":0}
+{"source":"run_safe_pytest","pid":656221,"started_at_ms":1782564368737,"wait_ms":1,"run_ms":11338,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"event": "phase", "phase": "refinement_1", "state": "end", "at_ms": 1782564456213}
+{"event": "phase", "phase": "refinement_1_golden", "state": "start", "at_ms": 1782564456723}
+{"source":"eval_test_runner","pid":657855,"started_at_ms":1782564456725,"wait_ms":2821,"run_ms":254600,"test_path":"eval/golden_tests/matmul/","exit_code":0}
+{"event": "phase", "phase": "refinement_1_golden", "state": "end", "at_ms": 1782564714148}
+{"event": "phase", "phase": "refinement_1b", "state": "start", "at_ms": 1782564717262}
+{"source":"tt-probe","pid":667902,"started_at_ms":1782565066216,"wait_ms":192,"run_ms":16460,"test_path":"matmul","exit_code":0}
+{"source":"tt-probe","pid":668310,"started_at_ms":1782565114243,"wait_ms":143,"run_ms":17389,"test_path":"matmul","exit_code":0}
+{"source":"run_safe_pytest","pid":669402,"started_at_ms":1782565319219,"wait_ms":2,"run_ms":15112,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_deep_k_acc_false.py","exit_code":0}
