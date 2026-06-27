@@ -493,7 +493,6 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
         host_out[0],
         rot_mats_global=host_out[1],
         rot_mats_local=host_out[2],
-        page_table=host_out[3],
         kv_cache=None,
         batch_size=1,
         get_last_token=-1,

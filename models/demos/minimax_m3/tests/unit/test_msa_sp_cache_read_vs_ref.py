@@ -3,7 +3,7 @@
 
 """MSA chunked CACHE-READ at TP=4 × SP=8 — current chunk attends the BLOCK-CYCLIC cached prefix.
 
-The multi-chunk MSA read path (`msa_sp_attention_cache_read`): the accumulated K/V/index_k live in the
+The multi-chunk MSA read path (`msa_sp_attention`): the accumulated K/V/index_k live in the
 SP cache in DeepSeek block-cyclic order (chip r holds [chunk0_r, chunk1_r, ...]); the op AllGathers them
 to full block-cyclic context, REORDERS to natural token order (transpose of the chip/chunk axes), then
 runs the indexer (per-device chunk_offset) + sparse_sdpa for the current chunk's queries.
@@ -11,7 +11,7 @@ runs the indexer (per-device chunk_offset) + sparse_sdpa for the current chunk's
 This is the cache-fed sibling of test_msa_sp_chunked_vs_ref (which fed CONTIGUOUS context directly). The
 ONLY new element vs that validated test is the block-cyclic → natural reorder, so this isolates it:
 identical inputs, but K/V/index_k are arranged block-cyclic (as the cache stores them) and read via
-`msa_sp_attention_cache_read`; compared to the same gather-everything golden (`msa_sp_attention`).
+`msa_sp_attention`; compared to the same gather-everything golden (`msa_sp_attention_gather_all`).
 """
 
 import pytest
@@ -21,10 +21,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig, ModeConfig
-from models.demos.minimax_m3.tt.attention.msa import msa_sp_attention, msa_sp_attention_cache_read
+from models.demos.minimax_m3.tt.attention.msa import msa_sp_attention
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
+from ..msa_golden import msa_sp_attention_gather_all
 from ..test_factory import parametrize_mesh_with_fabric
 
 NQ, NKV, NIDX, HEAD_DIM = 64, 4, 4, 128
@@ -84,14 +85,14 @@ def test_msa_sp_cache_read(mesh_device, device_params, chunk_local, n_prior, res
     common = dict(mesh_config=mesh_config, ccl_manager=ccl, cached_len=cached_len, scale=scale, num_groups=1)
 
     # golden: gather-everything over CONTIGUOUS natural context (validated in test_msa_sp_vs_ref).
-    out_a = msa_sp_attention(
+    out_a = msa_sp_attention_gather_all(
         shard(q, True), shard(k, True), shard(v, True), shard(iq, True), shard(ik, False), **common
     )
     dts_a = ttnn.get_device_tensors(out_a)
     ref = torch.cat([ttnn.to_torch(dts_a[c]).float()[:, :G] for c in range(cols)], dim=1)  # [1, NQ, chunk, HD]
 
     # cache-read: current chunk query (contiguous), accumulated K/V/index_k BLOCK-CYCLIC (cache layout).
-    out_b = msa_sp_attention_cache_read(
+    out_b = msa_sp_attention(
         shard(q, True),
         shard_bc(k, True),
         shard_bc(v, True),

@@ -22,10 +22,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig, ModeConfig
-from models.demos.minimax_m3.tt.attention.msa import msa_indexer_sparse, msa_sp_attention
+from models.demos.minimax_m3.tt.attention.msa import msa_indexer_sparse
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
+from ..msa_golden import msa_sp_attention_gather_all
 from ..test_factory import parametrize_mesh_with_fabric
 
 NQ, NKV, NIDX, HEAD_DIM = 64, 4, 4, 128
@@ -57,13 +58,24 @@ def test_msa_sp(mesh_device, device_params, chunk_local, reset_seeds):
         dims[sp_axis] = 2
         dims[tp_axis] = 1 if split_heads else None
         return ttnn.from_torch(
-            t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            t,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=dims),
         )
 
-    out = msa_sp_attention(
-        shard(q, True), shard(k, True), shard(v, True), shard(iq, True), shard(ik, False),
-        mesh_config=mesh_config, ccl_manager=ccl, cached_len=0, scale=scale, num_groups=1,
+    out = msa_sp_attention_gather_all(
+        shard(q, True),
+        shard(k, True),
+        shard(v, True),
+        shard(iq, True),
+        shard(ik, False),
+        mesh_config=mesh_config,
+        ccl_manager=ccl,
+        cached_len=0,
+        scale=scale,
+        num_groups=1,
     )
     # Per device [1, G, S, HD] = that column's group, replicated across SP rows (q was gathered). Take
     # row 0; concat the 4 columns -> [1, NQ, S, HD] in natural head order (col c = group c).
@@ -74,16 +86,25 @@ def test_msa_sp(mesh_device, device_params, chunk_local, reset_seeds):
     # mesh (every device computes the identical full-context result; read device 0). ---
     def full_tile(t):
         return ttnn.from_torch(
-            t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+            t,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
     refs = []
     for g in range(NKV):
         out_ref_g = msa_indexer_sparse(
-            full_tile(iq[:, g : g + 1]), full_tile(ik),
-            full_tile(q[:, g * G : (g + 1) * G]), full_tile(k[:, g : g + 1]), full_tile(v[:, g : g + 1]),
-            chunk_start_idx=0, scale=scale, num_groups=1, device=mesh_device,
+            full_tile(iq[:, g : g + 1]),
+            full_tile(ik),
+            full_tile(q[:, g * G : (g + 1) * G]),
+            full_tile(k[:, g : g + 1]),
+            full_tile(v[:, g : g + 1]),
+            chunk_start_idx=0,
+            scale=scale,
+            num_groups=1,
+            device=mesh_device,
         )
         refs.append(ttnn.to_torch(ttnn.get_device_tensors(out_ref_g)[0]).float()[:, :G])
     out_ref = torch.cat(refs, dim=1)  # [1, NQ, S, HD]

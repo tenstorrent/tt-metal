@@ -6,7 +6,7 @@ import ttnn
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
 from .kv_cache import write_index_k_chunk, write_kv_chunk
-from .msa import index_branch_forward, msa_sp_attention_cache_read, msa_sp_attention_sharded
+from .msa import index_branch_forward, msa_sp_attention, msa_sp_attention_nocache
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -33,7 +33,6 @@ def prefill_forward(
     program_config: ProgramConfig,
     transformation_mat,
     position_idx,
-    page_table,
     ccl_manager,
     user_id=0,
     batch_size=1,
@@ -54,7 +53,6 @@ def prefill_forward(
         program_config: Model-specific program configs
         transformation_mat: Transformation matrix for RoPE
         position_idx: Position indices (unused in prefill)
-        page_table: Page table for paged attention (optional)
         ccl_manager: Communication manager
         user_id: cache slot index for the per-layer cache write
         layer_idx: this layer's index, for the per-layer cache write
@@ -137,7 +135,7 @@ def prefill_forward(
 
     # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
     #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
-    #     (msa_sp_attention_sharded): AllGather K/V/index_k across SP, keep q/index_q SP-sharded
+    #     (msa_sp_attention_nocache): AllGather K/V/index_k across SP, keep q/index_q SP-sharded
     #     (S/sp rows/device), per-device causal chunk_offset (cached_len + rank*S_local) -> SP-sharded
     #     output. num_groups = local KV heads (1 GQA group/KV head; 1 at TP=4). Degenerates to the
     #     full-context path at sp=1. cached_len is 0 for the first chunk (multi-chunk cache: TODO).
@@ -170,7 +168,7 @@ def prefill_forward(
             k_acc = ttnn.slice(kv_cache.k, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
             v_acc = ttnn.slice(kv_cache.v, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
             ik_acc = ttnn.slice(kv_cache.index_k, (slot, 0, 0, 0), (slot + 1, 1, n_rows, config.head_dim))
-            tt_sdpa_out = msa_sp_attention_cache_read(
+            tt_sdpa_out = msa_sp_attention(
                 tt_q,
                 k_acc,
                 v_acc,
@@ -186,7 +184,7 @@ def prefill_forward(
                 num_groups=num_local_kv_heads,
             )
         else:
-            tt_sdpa_out = msa_sp_attention_sharded(
+            tt_sdpa_out = msa_sp_attention_nocache(
                 tt_q,
                 tt_k,
                 tt_v,

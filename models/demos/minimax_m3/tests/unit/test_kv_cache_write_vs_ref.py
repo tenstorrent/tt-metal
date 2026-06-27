@@ -228,7 +228,7 @@ def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, 
     # Externally-owned packed cache (one layer, one user) sized to the prompt -> block-cyclic == identity.
     kv_cache = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=seq_len, sp_axis=sp_axis, num_users=1)
 
-    attn(x_tt, rope_mats=rope_sp, position_idx=None, page_table=None, kv_cache=kv_cache, user_id=0)
+    attn(x_tt, rope_mats=rope_sp, position_idx=None, kv_cache=kv_cache, user_id=0)
     ttnn.synchronize_device(mesh_device)
 
     # --- readback. Per chip the cache is [1, 1, s_local, HD]; heads on cols, seq on rows, batch slot 0.

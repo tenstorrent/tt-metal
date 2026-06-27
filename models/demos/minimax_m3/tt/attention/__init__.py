@@ -82,7 +82,6 @@ class Attention:
         hidden_states,
         rope_mats,
         position_idx=None,
-        page_table=None,
         kv_cache=None,
         user_id=0,
         batch_size=1,
@@ -94,9 +93,8 @@ class Attention:
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
             rope_mats: Tuple of (cos, sin) matrices for RoPE
-            page_table: Page table for paged attention (optional)
-            kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k). STEP 1: threaded in
-                but not yet written/read — ``user_id`` is the cache slot, ``self.layer_idx`` the layer.
+            kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k). ``user_id`` is the
+                cache slot, ``self.layer_idx`` the layer, ``cached_len`` the prior-prefix length.
             user_id: User/batch index; also the cache slot index (default: 0).
 
         Returns:
@@ -116,7 +114,6 @@ class Attention:
             program_config=self.program_config,
             transformation_mat=transformation_mat,
             position_idx=position_idx,
-            page_table=page_table,
             ccl_manager=self.ccl_manager,
             batch_size=batch_size,
             layer_idx=self.layer_idx,

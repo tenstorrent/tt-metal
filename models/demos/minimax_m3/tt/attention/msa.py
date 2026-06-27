@@ -53,7 +53,7 @@ def index_branch_forward(hidden_states, weights, rope_mats, transformation_mat, 
 
     proj -> split heads -> per-head RMSNorm -> RoPE. index_q_proj is column-parallel (4 index heads ->
     1/TP col); index_k_proj is replicated (shared head). Per device this yields index_q [1, n_idx_local,
-    S, INDEX_DIM] (n_idx_local=1 at TP=4) and index_k [1, 1, S, INDEX_DIM] -> msa_sp_attention's indexer.
+    S, INDEX_DIM] (n_idx_local=1 at TP=4) and index_k [1, 1, S, INDEX_DIM] -> the MSA indexer.
 
     TODO(REVISIT) — confidence on the norm+rope here is uneven:
       * norm: HIGH — index_q_norm/index_k_norm weights ship in the checkpoint, so they are applied.
@@ -131,43 +131,6 @@ def msa_indexer_sparse(
     return (out, block_ids) if return_block_ids else out
 
 
-def msa_sp_attention(q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cached_len, scale, num_groups=1):
-    """MSA sparse attention under SP: AllGather K/V/index_k across the SP axis, then indexer + sparse.
-
-    Inputs are per-device CONTIGUOUS sequence shards on the mesh:
-      q        [1, Hq_local, S_local, head_dim]    (TP slices heads; SP slices the query seq)
-      k, v     [1, n_kv_local, S_local, head_dim]  (this device's KV-cache sequence shard, TILE)
-      index_q  [1, num_groups, S_local, INDEX_DIM]
-      index_k  [1, 1, S_local, INDEX_DIM]          (the single shared index-k head, SP-sharded, TILE)
-
-    The AllGather assembles the full context [.., T, ..] (T = S_local * SP) on every device from the
-    other SP devices' shards — that gather is how a query reaches cached / other-device tokens.
-    """
-    sp_axis = mesh_config.sp_axis
-    device = ccl_manager.mesh_device
-
-    # AllGather the KEYS across SP (seq dim=2): each device now holds the full context locally.
-    k_full = mesh_config.allgather(k, ccl_manager, axis=sp_axis, dim=2)
-    v_full = mesh_config.allgather(v, ccl_manager, axis=sp_axis, dim=2)
-    index_k_full = mesh_config.allgather(index_k, ccl_manager, axis=sp_axis, dim=2)
-    # Gather index-q + q too so the (lightweight) indexer scores the whole chunk under one uniform
-    # chunk_start; the local-shard sparse decomposition is applied in the prefill wiring step.
-    index_q_full = mesh_config.allgather(index_q, ccl_manager, axis=sp_axis, dim=2)
-    q_full = mesh_config.allgather(q, ccl_manager, axis=sp_axis, dim=2)
-
-    return msa_indexer_sparse(
-        index_q_full,
-        index_k_full,
-        q_full,
-        k_full,
-        v_full,
-        chunk_start_idx=cached_len,
-        scale=scale,
-        num_groups=num_groups,
-        device=device,
-    )
-
-
 def _per_device_chunk_offset(cached_len, s_local, mesh_config, device):
     """Per-device causal chunk-start tile (uint32, one 32x32 tile/device) for the sharded-query path.
 
@@ -193,7 +156,7 @@ def _per_device_chunk_offset(cached_len, s_local, mesh_config, device):
     )
 
 
-def msa_sp_attention_sharded(
+def msa_sp_attention_nocache(
     q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cached_len, s_local, scale, num_groups=1
 ):
     """Sharded-query MSA under SP: AllGather only the KEYS; q/index_q stay sharded (S/sp rows/device).
@@ -201,7 +164,7 @@ def msa_sp_attention_sharded(
     Each device scores ONLY its own S/sp query rows against the gathered full context, with a per-device
     causal `chunk_offset` (cached_len + rank*s_local). Output stays SP-sharded [1, Hq, s_local, head_dim]
     — no replication, no reshard — which is what the SP residual stream needs. This is the deployed path
-    (vs msa_sp_attention which gathers the query too). index_q is the device's group's index head; q is
+    (vs the gather-everything golden, which gathers the query too). index_q is the device's group's index head; q is
     its TP head-slice.
     """
     sp_axis = mesh_config.sp_axis
@@ -241,7 +204,7 @@ def _blockcyclic_to_natural(t, sp, n_chunks, chunk_local):
     return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
 
 
-def msa_sp_attention_cache_read(
+def msa_sp_attention(
     q,
     k_acc,
     v_acc,
@@ -258,7 +221,7 @@ def msa_sp_attention_cache_read(
     num_groups=1,
 ):
     """Cross-chunk MSA: the CURRENT chunk's queries attend the ACCUMULATED context read from the
-    block-cyclic SP cache (the multi-chunk read path; ``msa_sp_attention_sharded`` is its single-chunk,
+    block-cyclic SP cache (the multi-chunk read path; ``msa_sp_attention_nocache`` is its single-chunk,
     contiguous-context sibling).
 
     Args (per device, on the (sp, tp) mesh):

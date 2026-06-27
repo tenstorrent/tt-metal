@@ -79,12 +79,11 @@ def main():
         del state_dict
         print("[ft-ep] model built (DP-attn + EP=32); running prefill ...", flush=True)
 
-        host_out = model.prepare_inputs_prefill(toks, page_table=None, batched_prefill=True)
+        host_out = model.prepare_inputs_prefill(toks, batched_prefill=True)
         logits = model.ttnn_prefill_forward(
             host_out[0],
             rot_mats_global=host_out[1],
             rot_mats_local=host_out[2],
-            page_table=host_out[3],
             kv_cache=None,
             batch_size=1,
             get_last_token=-1,
