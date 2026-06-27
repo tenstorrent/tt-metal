@@ -98,6 +98,7 @@ def create_program_descriptor(
     CB_SCORES_MASKED = 25
     CB_MAX_NEW = 26
     CB_MAX_OLD = 27
+    CB_EXP_SCORES = 28
     CB_SUM_OLD = 30
 
     num_q_tiles = B_Q_T * D_t  # 16 for D=128
@@ -195,6 +196,15 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_MAX_OLD, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_exp_scores: exp(S - m_new), B_q_t * B_kv_t tiles (16). Produced by
+        # compute (unary<Exp> eltwise), consumed by compute (row-sum reduce, PV matmul).
+        ttnn.CBDescriptor(
+            total_size=num_score_tiles * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_EXP_SCORES, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_sum_old: running sum l_i, B_q_t tiles. Initialized to 0 in Stage 0.

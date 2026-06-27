@@ -87,6 +87,7 @@ void kernel_main() {
     constexpr uint32_t cb_scores_masked = 25;
     constexpr uint32_t cb_max_new = 26;
     constexpr uint32_t cb_max_old = 27;
+    constexpr uint32_t cb_exp_scores = 28;
     constexpr uint32_t cb_sum_old = 30;
 
     // Compile-time args: [B_q_t, B_kv_t, D_t]
@@ -354,6 +355,37 @@ void kernel_main() {
         cb_wait_front(cb_scores_masked, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
         DPRINT("stage_8 subtract_max:\n{}\n", TileSlice(cb_scores_masked, 0, sr, true, true));
+    }
+#endif
+
+    // --- Stage 9: Exp of rescaled scores ---
+    // P = exp(S - m_new) → cb_exp_scores (B_q_t * B_kv_t = 16 tiles)
+    //   CbIn  = cb_scores_masked (16 tiles, Streaming — per-tile wait+pop; phase 8
+    //     sub left all 16 tiles at the front via in-place Streaming write)
+    //   CbOut = cb_exp_scores (16 tiles, Streaming — per-tile reserve+push)
+    //   Chain: CopyTile(D0) → Exp(D0) → PackTile(cb_exp_scores)
+    //   Exp<> defaults: Approx::Exact (matches math_approx_mode=False), Dst::D0
+    //   Shape: num_score_tiles (16) — 1D streaming walk, no broadcast needed
+    //
+    // CopyTileReconfig::Input (default): reconfigures unpacker from eltwise binary
+    // sub format to eltwise unary format.
+    // PackTileReconfig::Output (default): reconfigures packer from cb_scores_masked
+    // to cb_exp_scores format.
+    unary<
+        /*SfpuOp=*/Exp<>,
+        /*CbIn=*/cb_scores_masked,
+        /*CbOut=*/cb_exp_scores>(num_score_tiles);
+
+    // --- Stage 9 DPRINT: cb_exp_scores tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the unary exp completes, cb_exp_scores holds the
+    // exp of rescaled scores (P = exp(S - m_new)). We wait_front tile 0, print
+    // it, then leave it (no pop — cb_exp_scores is consumed by later stages 10, 12).
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_exp_scores, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_9 exp:\n{}\n", TileSlice(cb_exp_scores, 0, sr, true, true));
     }
 #endif
 }
