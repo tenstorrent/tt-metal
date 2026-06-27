@@ -10,12 +10,13 @@
 // Collector: continues from worker → merge 4 workers' logit tiles via
 //            insertion-sort topk → softmax → pack final output
 
+#include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/compute/bcast.h"
@@ -188,28 +189,28 @@ void kernel_main() {
     ckernel::topk_tile_init();
     tile_regs_acquire();
 
-    transpose_wh_init_short(cb_gathered_val_id);
+    transpose_init(cb_gathered_val_id);
 
     // Load tiles 0,1 (values → DST[0,1], indices → DST[2,3])
-    transpose_wh_tile(cb_gathered_val_id, 0, 0);
-    transpose_wh_tile(cb_gathered_val_id, 1, 1);
-    transpose_wh_tile(cb_gathered_ind_id, 0, 2);
-    transpose_wh_tile(cb_gathered_ind_id, 1, 3);
+    transpose_tile(cb_gathered_val_id, 0, 0);
+    transpose_tile(cb_gathered_val_id, 1, 1);
+    transpose_tile(cb_gathered_ind_id, 0, 2);
+    transpose_tile(cb_gathered_ind_id, 1, 3);
 
     // Sort first pair + merge → top-32 from 64 elements in DST[0,2]
     ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
     ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
 
     // Insert tile 2
-    transpose_wh_tile(cb_gathered_val_id, 2, 1);
-    transpose_wh_tile(cb_gathered_ind_id, 2, 3);
+    transpose_tile(cb_gathered_val_id, 2, 1);
+    transpose_tile(cb_gathered_ind_id, 2, 3);
 
     ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
     ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
 
     // Insert tile 3
-    transpose_wh_tile(cb_gathered_val_id, 3, 1);
-    transpose_wh_tile(cb_gathered_ind_id, 3, 3);
+    transpose_tile(cb_gathered_val_id, 3, 1);
+    transpose_tile(cb_gathered_ind_id, 3, 3);
 
     ckernel::topk_local_sort(0, /*idir=*/0, /*i_end_phase=*/4);
     ckernel::topk_merge(0, /*idir=*/0, /*k=*/32);
@@ -239,16 +240,16 @@ void kernel_main() {
     cb_bcast_scaler.wait_front(1);
 
     tile_regs_acquire();
-    transpose_wh_init_short(cb_intermed_val_id);
-    transpose_wh_tile(cb_intermed_val_id, 0, 0);
+    transpose_init(cb_intermed_val_id);
+    transpose_tile(cb_intermed_val_id, 0, 0);
 
     binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_softmax_mask_id);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_softmax_mask_id, 0, 0);
 
-    transpose_wh_init_short(cb_intermed_ind_id);
-    transpose_wh_tile(cb_intermed_ind_id, 0, 1);
+    transpose_init(cb_intermed_ind_id);
+    transpose_tile(cb_intermed_ind_id, 0, 1);
     tile_regs_commit();
 
     cb_intermed_val.pop_front(1);
