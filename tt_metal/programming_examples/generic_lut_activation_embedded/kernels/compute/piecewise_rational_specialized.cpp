@@ -135,7 +135,7 @@ inline void piecewise_rational_lut_N(const std::array<float, LUT_SIZE>& lut) {
         );
 
         // ONE reciprocal for all segments — saves ~10 instructions per eliminated recip
-        vFloat result = numer * ckernel::sfpu::sfpu_reciprocal<false>(denom);
+        vFloat result = numer * rational_reciprocal(denom);
 
 #if defined(RANGE_REDUCTION_EXP)
         v_if(x_orig > EXP_OVERFLOW) { result = std::numeric_limits<float>::infinity(); }

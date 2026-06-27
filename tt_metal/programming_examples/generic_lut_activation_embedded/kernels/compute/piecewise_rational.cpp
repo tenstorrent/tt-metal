@@ -59,6 +59,14 @@ inline vFloat apply_output_postcompose(vFloat y) {
     return y;
 }
 
+inline vFloat rational_reciprocal(vFloat denom) {
+#if defined(RATIONAL_RECIPROCAL_ONE_ITER)
+    return ckernel::sfpu::sfpu_reciprocal_iter<1>(denom);
+#else
+    return ckernel::sfpu::sfpu_reciprocal_iter<2>(denom);
+#endif
+}
+
 #ifdef RANGE_REDUCTION_EXP
 // Cody-Waite range reduction: x → (s, k_int) where exp(x) = 2^k * exp(s)
 // s ∈ [-ln(2)/2, ln(2)/2] ≈ [-0.347, 0.347]
@@ -254,7 +262,7 @@ inline vFloat eval_rational_interleaved(const float* num_coeffs, const float* de
     }
 
     // Reciprocal + final multiply
-    vFloat recip = ckernel::sfpu::sfpu_reciprocal<false>(denom);
+    vFloat recip = rational_reciprocal(denom);
     return numer * recip;
 }
 
@@ -345,7 +353,7 @@ inline vFloat eval_rational_parity(const float* num_coeffs, const float* den_coe
     // Apply odd parity: P(x) = x * Horner_result
     numer = numer * x;
 
-    vFloat recip = ckernel::sfpu::sfpu_reciprocal<false>(denom);
+    vFloat recip = rational_reciprocal(denom);
     return numer * recip;
 }
 
@@ -417,7 +425,7 @@ inline vFloat eval_rational_jit(const float* num_coeffs, const float* den_coeffs
     }
 
     // Compute reciprocal (denom_result dies after this)
-    vFloat recip = ckernel::sfpu::sfpu_reciprocal<false>(denom_result);
+    vFloat recip = rational_reciprocal(denom_result);
 
     // === PHASE 2: Evaluate numerator with JIT loading ===
     // Reuse the same 'coeff' register for numerator coefficients
@@ -465,7 +473,7 @@ inline vFloat eval_rational(const float* num_coeffs, const float* den_coeffs, vF
     } else {
         vFloat numerator = eval_poly<NUM_DEGREE>(num_coeffs, x);
         vFloat denominator = eval_poly<DEN_DEGREE>(den_coeffs, x);
-        vFloat recip = ckernel::sfpu::sfpu_reciprocal<false>(denominator);
+        vFloat recip = rational_reciprocal(denominator);
         return numerator * recip;
     }
 #endif
@@ -479,7 +487,7 @@ inline void abs_denominator_rational_eval() {
     for (int d = 0; d < 32; d++) {
         vFloat x = dst_reg[d];
         vFloat den = setsgn(x, 0) + 1.0f;
-        vFloat y = x * ckernel::sfpu::sfpu_reciprocal<false>(den);
+        vFloat y = x * rational_reciprocal(den);
         y = apply_output_postcompose(y);
 #ifdef USE_BF16
         y = convert<vFloat16b>(y, RoundMode::Nearest);

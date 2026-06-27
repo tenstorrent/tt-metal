@@ -1230,7 +1230,24 @@ if not is_rational:
 else:
     # rational_cascade is the base method; reduced_poly may layer on via rr_macro.
     if not has_codegen_eval_method:
-        eval_method_macro = '\n// eval_method: rational_cascade (piecewise P(x)/Q(x))\n#define TT_ACT_EVAL_KIND TT_ACT_EVAL_RATIONAL_CASCADE\n#define EVAL_METHOD_RATIONAL_CASCADE\n'
+        rational_reciprocal_mode = metadata.get('rational_reciprocal_mode', metadata.get('reciprocal_mode', '')).strip().lower()
+        rational_reciprocal_iters = metadata.get('rational_reciprocal_iters', metadata.get('reciprocal_iters', '')).strip()
+        rational_one_iter = (
+            '$PRECISION' == 'bf16'
+            and (
+                rational_reciprocal_mode in ('bf16_one_iter', 'one_iter', 'one_iteration')
+                or rational_reciprocal_iters == '1'
+            )
+        )
+        if (rational_reciprocal_mode or rational_reciprocal_iters) and not rational_one_iter:
+            raise ValueError('rational reciprocal override is only supported for --precision bf16 with one_iter/iters=1')
+        rational_recip_macro = '#define RATIONAL_RECIPROCAL_ONE_ITER\n' if rational_one_iter else ''
+        eval_method_macro = (
+            '\n// eval_method: rational_cascade (piecewise P(x)/Q(x))\n'
+            '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_RATIONAL_CASCADE\n'
+            '#define EVAL_METHOD_RATIONAL_CASCADE\n'
+            f'{rational_recip_macro}'
+        )
 
 # Write kernel .cpp
 if is_rational:
