@@ -149,7 +149,7 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
 
         mixes = self.fn(flat)  # [1,1,T,H]
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(mixes, self.scale), self.base)), self.eps)
-
+        _profile(self.device)
         hs = ttnn.reshape(hidden_streams, [1, t, hc, d])
         pre_col = ttnn.reshape(pre, [1, t, hc, 1])
         out = ttnn.sum(ttnn.multiply(hs, pre_col), dim=-2, keepdim=True)  # [1,T,1,D]
