@@ -217,11 +217,18 @@ class ModelArgs:
             # prompt_text is already a list of chat messages
             encoded = self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
-        # Depending on the tokenizer, apply_chat_template(tokenize=True) may return a
-        # tokenizers.Encoding (fast-tokenizer path) rather than a plain List[int].
-        # Normalize to a list of token ids so downstream torch.tensor(...) can infer a dtype.
-        if hasattr(encoded, "ids"):
-            encoded = encoded.ids
+        # Depending on the tokenizer/transformers version, apply_chat_template(tokenize=True)
+        # may return a plain List[int], a single tokenizers.Encoding, or a list of
+        # tokenizers.Encoding objects (observed with the GPT-OSS fast tokenizer, which
+        # otherwise yields `torch.tensor(...)` "Could not infer dtype of tokenizers.Encoding"
+        # downstream). Normalize to a flat List[int] of token ids.
+        if hasattr(encoded, "ids"):  # single tokenizers.Encoding
+            encoded = list(encoded.ids)
+        elif isinstance(encoded, (list, tuple)) and any(hasattr(e, "ids") for e in encoded):
+            flat = []
+            for e in encoded:
+                flat.extend(e.ids if hasattr(e, "ids") else ([e] if isinstance(e, int) else list(e)))
+            encoded = flat
         return encoded
 
     @staticmethod
