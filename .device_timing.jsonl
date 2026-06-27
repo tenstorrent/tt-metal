@@ -31,3 +31,15 @@
 {"event": "phase", "phase": "drafter_stage_3", "state": "start", "at_ms": 1782576977696}
 {"source":"run_safe_pytest","pid":2603882,"started_at_ms":1782577095434,"wait_ms":2,"run_ms":14840,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
 {"source":"run_safe_pytest","pid":2604209,"started_at_ms":1782577115253,"wait_ms":1,"run_ms":10477,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"event": "phase", "phase": "drafter_stage_3", "state": "end", "at_ms": 1782577171723}
+{"event": "phase", "phase": "drafter_stage_4", "state": "start", "at_ms": 1782577171733}
+{"source":"run_safe_pytest","pid":2610296,"started_at_ms":1782577836482,"wait_ms":1,"run_ms":15239,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2610691,"started_at_ms":1782577857628,"wait_ms":1,"run_ms":10486,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"event": "phase", "phase": "drafter_stage_4", "state": "end", "at_ms": 1782577901693}
+{"event": "phase", "phase": "drafter_stage_4", "state": "start", "at_ms": 1782577901698}
+{"source":"run_safe_pytest","pid":2612416,"started_at_ms":1782578047157,"wait_ms":1,"run_ms":11539,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2612747,"started_at_ms":1782578063766,"wait_ms":2,"run_ms":11434,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2613140,"started_at_ms":1782578097954,"wait_ms":2,"run_ms":13236,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"tt-probe","pid":2613678,"started_at_ms":1782578157273,"wait_ms":181,"run_ms":18664,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"tt-probe","pid":2615389,"started_at_ms":1782578441019,"wait_ms":212,"run_ms":18704,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"tt-probe","pid":2615698,"started_at_ms":1782578485941,"wait_ms":181,"run_ms":18569,"test_path":"scaled_dot_product_attention","exit_code":0}

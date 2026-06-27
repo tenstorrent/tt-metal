@@ -12,6 +12,9 @@
 //   - in1 = cb_k (B_kv_t * D_t tiles, consumed via WaitAndPopPerKBlock)
 //   - out = cb_scores (B_q_t * B_kv_t = 16 tiles)
 //   - MatmulBlockShape::of(2, 2, 2, 2, D_t, 1)
+//   - tile_order=TileRowMajor: output tiles in row-major order (tile(r,c) at
+//     index r*B_kv_t + c), required by the reduce helper which expects
+//     row-major tile layout in the CB.
 //
 // Stage 2 (scale): Scale scores by 1/sqrt(D) via eltwise mul (scalar broadcast).
 //   cb_scores *= cb_scale_factor (1 tile, HeldBulk, BroadcastDim::Scalar)
@@ -23,9 +26,18 @@
 //   from cb_scores (Streaming — wait+pop per tile) into cb_scores_masked.
 //   When an attn_mask is present, this phase becomes an eltwise add instead.
 //
-// DPRINT: cb_scores_masked tile 0, first 4×4 elements — passthrough copy of
-// scaled scores. Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front
-// of CB (between cb_wait_front and cb_pop_front).
+// Stage 4 (rowmax): Row-max reduce via reduce<MAX, REDUCE_ROW, WaitUpfrontNoPop>.
+//   m_blk = max(cb_scores_masked, dim=-1) → cb_max_new (4 tiles)
+//   - Input: cb_scores_masked (16 tiles, WaitUpfrontNoPop — NOT popped, left
+//     for reuse in phase 8 subtract_max)
+//   - Scaler: cb_scaler_reduce (1 tile, prepared by reader)
+//   - Output: cb_max_new (B_q_t = 4 tiles, per-row max)
+//   - ReduceInputBlockShape::of(B_q_t, B_kv_t, 1) = of(4, 4, 1)
+//   - WaitUpfrontNoPop: waits for all 16 input tiles, pops 0, pushes 4 output
+//
+// DPRINT: cb_max_new tile 0, first 4×4 elements — per-row max of first score
+// rows. Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front of CB
+// (between cb_wait_front and cb_pop_front).
 
 #include <cstdint>
 
@@ -34,6 +46,7 @@
 #include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 using namespace compute_kernel_lib;
 
@@ -41,9 +54,11 @@ void kernel_main() {
     // CB indices (match op_design.md CB layout).
     constexpr uint32_t cb_q = tt::CBIndex::c_0;
     constexpr uint32_t cb_k = tt::CBIndex::c_1;
+    constexpr uint32_t cb_scaler_reduce = 4;
     constexpr uint32_t cb_scale_factor = 5;
     constexpr uint32_t cb_scores = 24;
     constexpr uint32_t cb_scores_masked = 25;
+    constexpr uint32_t cb_max_new = 26;
 
     // Compile-time args: [B_q_t, B_kv_t, D_t]
     constexpr uint32_t B_q_t = get_compile_time_arg_val(0);   // 4
@@ -72,13 +87,14 @@ void kernel_main() {
     constexpr auto qkt_shape = MatmulBlockShape::of(2, 2, 2, 2, D_t, 1);
 
     // transpose=true (K^T), packer_l1_acc=false, init_mode=Short (default),
+    // tile_order=TileRowMajor (row-major CB order for reduce compatibility),
     // in0_policy=WaitAndRetainOnLastBlock (retain Q),
     // in1_policy=WaitAndPopPerKBlock (consume K per KV-block).
     matmul_block<
         /*transpose=*/true,
         /*packer_l1_acc=*/false,
         /*last_block_target=*/LastBlockTarget::Out,
-        /*tile_order=*/OutputCBLayout::SubblockMajor,
+        /*tile_order=*/OutputCBLayout::TileRowMajor,
         /*init_mode=*/matmul_config::InitMode::Short,
         /*in0_policy=*/InputPolicy::WaitAndRetainOnLastBlock,
         /*in1_policy=*/InputPolicy::WaitAndPopPerKBlock>(q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
@@ -109,17 +125,38 @@ void kernel_main() {
     // When attn_mask is present, this becomes: add<cb_scores, cb_mask, cb_scores_masked>(num_score_tiles).
     copy<cb_scores, cb_scores_masked>(num_score_tiles);
 
-    // --- Stage 3 DPRINT: cb_scores_masked tile 0, first 4×4 ---
-    // Printed from the unpacker (TRISC0). After the copy completes, all 16
-    // tiles are in cb_scores_masked. We wait_front tile 0 (the first tile
-    // pushed by the copy's PackTile), print it, then pop_front 1 tile.
-    // The pop keeps the CB advancing for later stages (phase 4 row-max will
-    // wait_front the remaining tiles with WaitUpfrontNoPop).
+    // --- Stage 4: Row-max reduce ---
+    // m_blk = max(cb_scores_masked, dim=-1) → cb_max_new (B_q_t tiles)
+    //   Input: cb_scores_masked (16 tiles, WaitUpfrontNoPop — NOT popped)
+    //   Scaler: cb_scaler_reduce (1 tile, prepared by reader)
+    //   Output: cb_max_new (B_q_t = 4 tiles, per-row max)
+    //   ReduceInputBlockShape::of(B_q_t, B_kv_t, 1) = of(4, 4, 1)
+    //
+    // WaitUpfrontNoPop: waits for all 16 input tiles upfront, processes them
+    // with indexed access, pops 0, and pushes all 4 output tiles at the end.
+    // This leaves cb_scores_masked intact for phase 8 (subtract m_new).
+    //
+    // reconfig_mode=INPUT_AND_OUTPUT (default): reconfigures unpacker from
+    // eltwise copy format to reduce format, and packer from cb_scores_masked
+    // to cb_max_new format.
+    reduce<
+        /*reduce_type=*/PoolType::MAX,
+        /*reduce_dim=*/ReduceDim::REDUCE_ROW,
+        /*input_dfb_id=*/cb_scores_masked,
+        /*scaler_dfb_id=*/cb_scaler_reduce,
+        /*output_dfb_id=*/cb_max_new,
+        /*input_policy=*/ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+
+    // --- Stage 4 DPRINT: cb_max_new tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0). After the reduce completes, all 4
+    // tiles are in cb_max_new. We wait_front tile 0, print it, then pop_front
+    // 1 tile to keep the CB balanced for later stages (phase 5 alpha will
+    // consume cb_max_new tiles).
 #ifdef TRISC_UNPACK
     {
-        cb_wait_front(cb_scores_masked, 1);
+        cb_wait_front(cb_max_new, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
-        DPRINT("stage_3 mask:\n{}\n", TileSlice(cb_scores_masked, 0, sr, true, true));
+        DPRINT("stage_4 rowmax:\n{}\n", TileSlice(cb_max_new, 0, sr, true, true));
     }
 #endif
 }

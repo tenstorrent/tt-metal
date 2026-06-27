@@ -1,0 +1,1 @@
+{"event":"file_read","details":"Read reduce_helpers_compute.inl/.hpp and toy_variance/toy_reduce_partial compute kernels to explain WaitUpfrontNoPop + REDUCE_ROW MAX mechanism","ts":"2026-06-27T16:21:57+00:00"}

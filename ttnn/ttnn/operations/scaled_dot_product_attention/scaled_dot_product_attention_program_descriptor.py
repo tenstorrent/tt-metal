@@ -7,14 +7,22 @@ Stage 1 (qkt_matmul): The reader streams Q-block and K-block tiles from DRAM
 into L1 CBs. The compute kernel boots the matmul pipeline and calls
 matmul_block (transpose=true) to produce cb_scores = Q @ K^T.
 
+Stage 4 (rowmax): The reader prepares the reduce scaler tile (1.0 for MAX) in
+cb_scaler_reduce. The compute kernel calls reduce<MAX, REDUCE_ROW, WaitUpfrontNoPop>
+to produce cb_max_new = per-row max of cb_scores_masked.
+
 CB layout (from op_design.md, with corrected sizing — see CB sizing note below):
 
-  cb_q          (0)  — Q-block tiles, B_q_t * D_t pages (16 for D=128)
-  cb_k          (1)  — K-block tiles, B_kv_t * D_t pages (16 for D=128)
-  cb_o          (16) — running output, B_q_t * D_t tiles
-  cb_scores     (24) — Q@K^T score matmul out, B_q_t * B_kv_t tiles (16)
-  cb_max_old    (27) — running max m_i, B_q_t tiles
-  cb_sum_old    (30) — running sum l_i, B_q_t tiles
+  cb_q             (0)  — Q-block tiles, B_q_t * D_t pages (16 for D=128)
+  cb_k             (1)  — K-block tiles, B_kv_t * D_t pages (16 for D=128)
+  cb_scaler_reduce (4)  — reduce scaler tile (1.0 for MAX), 1 page
+  cb_scale_factor  (5)  — scale value tile, 1 page
+  cb_o             (16) — running output, B_q_t * D_t tiles
+  cb_scores        (24) — Q@K^T score matmul out, B_q_t * B_kv_t tiles (16)
+  cb_scores_masked (25) — scores after mask/scale, 16 tiles
+  cb_max_new       (26) — per-row max of scores, B_q_t tiles
+  cb_max_old       (27) — running max m_i, B_q_t tiles
+  cb_sum_old       (30) — running sum l_i, B_q_t tiles
 
 CB sizing note: The design specifies cb_q with B_q_t=4 pages, but matmul_block
 with k=D_t and num_k=1 requires all M*K = B_q_t*D_t Q-tiles resident in one
@@ -82,10 +90,12 @@ def create_program_descriptor(
     # --- Circular Buffers ---
     CB_Q = 0
     CB_K = 1
+    CB_SCALER_REDUCE = 4
     CB_SCALE_FACTOR = 5
     CB_O = 16
     CB_SCORES = 24
     CB_SCORES_MASKED = 25
+    CB_MAX_NEW = 26
     CB_MAX_OLD = 27
     CB_SUM_OLD = 30
 
@@ -111,6 +121,16 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_scaler_reduce: single tile holding the reduce scaler (1.0 for MAX).
+        # Prepared by reader via calculate_and_prepare_reduce_scaler; consumed
+        # by compute's reduce<MAX, REDUCE_ROW>.
+        ttnn.CBDescriptor(
+            total_size=1 * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_SCALER_REDUCE, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_scale_factor: single tile holding the scale value (1/sqrt(D) or
@@ -146,6 +166,16 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_SCORES_MASKED, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_max_new: per-row max of scores (B_q_t tiles). Produced by compute
+        # (reduce MAX REDUCE_ROW, WaitUpfrontNoPop), consumed by compute
+        # (alpha computation, update m_i, subtract max).
+        ttnn.CBDescriptor(
+            total_size=B_Q_T * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_MAX_NEW, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_max_old: running max m_i, B_q_t tiles. Initialized to -inf in Stage 0.

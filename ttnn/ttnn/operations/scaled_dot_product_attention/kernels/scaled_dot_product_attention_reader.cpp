@@ -17,6 +17,10 @@
 //   in runtime args; the reader converts to bf16 and fills the tile.
 //   cb_scale_factor is HeldBulk by the compute eltwise mul (never popped).
 //
+// Stage 4 (rowmax): Prepares the reduce scaler tile in cb_scaler_reduce (1 tile)
+//   via calculate_and_prepare_reduce_scaler<MAX, REDUCE_ROW>. Scaler = 1.0 for MAX.
+//   The reduce helper waits for this tile and never pops it (caller pops).
+//
 // The Q tiles are loaded in standard tile-row-major order:
 //   tile(r, d) at DRAM page r * D_t + d  (row r, head-dim-tile d)
 //   pushed to cb_q in the same order: [0,1,2,...,B_q_t*D_t-1]
@@ -38,10 +42,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 // CB indices (match op_design.md CB layout).
 constexpr uint32_t cb_q = tt::CBIndex::c_0;
 constexpr uint32_t cb_k = tt::CBIndex::c_1;
+constexpr uint32_t cb_scaler_reduce = 4;
 constexpr uint32_t cb_scale_factor = 5;
 constexpr uint32_t cb_o = tt::CBIndex::c_16;
 constexpr uint32_t cb_max_old = 27;
@@ -132,6 +138,13 @@ void kernel_main() {
         fill_bf16_tile_with_scalar_fp32(cb_scale_factor, scale_bits);
         cb_push_back(cb_scale_factor, 1);
     }
+
+    // --- Stage 4: prepare reduce scaler for MAX REDUCE_ROW ---
+    // Scaler = 1.0 for MAX. The pool-type-aware helper selects the correct
+    // layout (row-0 fill for MAX reduce_tile path). The reduce helper waits
+    // for this tile and never pops it (caller pops after reduce completes).
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
 
     // --- Stage 1: stream Q and K tiles from DRAM ---
 
