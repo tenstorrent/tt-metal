@@ -26,6 +26,12 @@ void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(4);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(5);
     constexpr uint32_t total_blocks = get_compile_time_arg_val(6);
+    // Refinement 1 (Lever B): when 1, use hardware packer L1 accumulation so the
+    // last-K-block pack-to-out data-format reconfig (gated on packer_l1_acc ||
+    // fp32_dest_acc_en) fires even with fp32_dest_acc_en=False. That lets cb_interm
+    // carry a HIGHER-precision format (bf16) than a bf8b cb_out: the running
+    // K-sum stays bf16 across K-blocks instead of re-quantizing to bf8b each spill.
+    constexpr uint32_t packer_l1_acc = get_compile_time_arg_val(7);
 
     CircularBuffer in0_buf(CB_IN0_ACT);
     CircularBuffer in1_buf(CB_IN1_WEIGHT);
@@ -52,5 +58,12 @@ void kernel_main() {
         num_k_blocks,
         total_blocks /*batch — every per-core block shares shape + init*/);
 
-    matmul_block<>(in0_buf, in1_buf, out_buf, interm_buf, shape);
+    // Template param 2 is packer_l1_acc. Branch at compile time so the default
+    // (software spill/reload) path is unchanged for every cell except the bf8b
+    // acc=False deep-K corner the descriptor opts into L1-acc for.
+    if constexpr (packer_l1_acc != 0) {
+        matmul_block<false /*transpose*/, true /*packer_l1_acc*/>(in0_buf, in1_buf, out_buf, interm_buf, shape);
+    } else {
+        matmul_block<>(in0_buf, in1_buf, out_buf, interm_buf, shape);
+    }
 }
