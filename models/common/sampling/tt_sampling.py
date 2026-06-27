@@ -630,15 +630,11 @@ class TTSampling(LightweightModule):
         self._dbg_true_tok = None
         if _os.environ.get("TT_QWEN_SAMPLING_DEBUG") == "1" and getattr(self, "_dbg_step", 0) < 12:
             try:
-                _ca = None if 1 in self.cluster_shape else 0
-                _xg = ttnn.all_gather(
-                    x_bf16, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    cluster_axis=_ca, topology=ttnn.Topology.Linear,
-                )
-                _xf = ttnn.to_torch(ttnn.get_device_tensors(_xg)[0]).float()
-                _xf = _xf.reshape(-1, _xf.shape[-1])
+                # NON-PERTURBING: read each device's vocab shard directly (no CCL/all_gather, so
+                # this does not alter the decode's own CCL behaviour), concat on host -> full logits.
+                _parts = [ttnn.to_torch(_s).float() for _s in ttnn.get_device_tensors(x_bf16)]
+                _xf = torch.cat([p.reshape(p.shape[-2], p.shape[-1]) for p in _parts], dim=-1)  # [B, V]
                 self._dbg_true_tok = _xf.argmax(dim=-1)  # [B] true full-logits argmax per user
-                ttnn.deallocate(_xg)
             except Exception as _e:
                 logger.warning(f"[SAMPLING_DEBUG] true-argmax capture failed: {_e}")
 
@@ -804,7 +800,7 @@ class TTSampling(LightweightModule):
                     _samp_vs_true = int((_tok[:_B] != _tt).sum().item())
                     _msg += f" cand-vs-true={_cand_vs_true}/{_B} sampled-vs-true={_samp_vs_true}/{_B}"
                     # show a couple of concrete divergences for the first step
-                    if _samp_vs_true and self._dbg_step < 2:
+                    if _samp_vs_true and self._dbg_step < 5:
                         _bad = (_tok[:_B] != _tt).nonzero().flatten()[:3].tolist()
                         for _b in _bad:
                             _msg += f" | u{_b}: sampled={int(_tok[_b])} cand={int(_cand_tok[_b])} true={int(_tt[_b])}"
