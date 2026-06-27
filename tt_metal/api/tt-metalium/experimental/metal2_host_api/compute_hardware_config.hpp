@@ -31,6 +31,11 @@ namespace tt::tt_metal::experimental {
 //
 // The ComputeHardwareConfig fields configure this pipeline.
 //
+// NOTE: The Unpack, Math, and Pack stages are hardware pipeline stages internal
+//       to a single kernel thread, not to be confused with KernelSpec::num_threads!
+//       Each thread of a multi-threaded compute kernel runs its own independent
+//       Unpack/Math/Pack pipeline.
+//
 // ============================================================================
 
 struct ComputeHardwareConfig {
