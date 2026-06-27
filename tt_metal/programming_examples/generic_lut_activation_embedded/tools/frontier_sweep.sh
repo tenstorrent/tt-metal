@@ -119,7 +119,8 @@ dispatch_local() {
           --without-python-bindings \
           --disable-warnings-as-errors \
           --disable-unity-builds \
-          --enable-ccache
+          --enable-ccache \
+          --cpm-source-cache "$repo_root/.cpmcache"
       ) >"$log_dir/configure_chip${chip}.log" 2>&1 || {
         echo "ERROR: failed to configure ${wt}/build_Release; see $log_dir/configure_chip${chip}.log" >&2
         exit 1
