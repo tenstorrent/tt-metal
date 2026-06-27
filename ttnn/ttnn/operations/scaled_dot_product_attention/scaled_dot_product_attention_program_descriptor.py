@@ -3,23 +3,28 @@
 
 """Program descriptor for scaled_dot_product_attention (Flash Attention).
 
-Stage 0 (init): allocates the running-state CBs and launches kernels that
-initialize them. The reader fills:
-  cb_max_old (27) ← -inf  (B_q_t tiles, running max m_i)
-  cb_sum_old (30) ← 0.0   (B_q_t tiles, running sum l_i)
-  cb_o       (16) ← 0.0   (B_q_t * D_t tiles, running output O_i)
-The compute kernel boots the Tensix pipeline; the writer is a stub.
+Stage 1 (qkt_matmul): The reader streams Q-block and K-block tiles from DRAM
+into L1 CBs. The compute kernel boots the matmul pipeline and calls
+matmul_block (transpose=true) to produce cb_scores = Q @ K^T.
 
-CB layout (from op_design.md). Only the CBs touched by Stage 0 are
-allocated here; later stages add cb_k, cb_v, cb_mask, cb_scaler_reduce,
-cb_scale_factor, cb_scores_masked, cb_max_new, cb_exp_scores, cb_sum_new,
-cb_o_accum, cb_alpha as the recurrence is built up.
+CB layout (from op_design.md, with corrected sizing — see CB sizing note below):
 
-  cb_q          (0)  — Q-block tiles (allocated, filled by later stages)
+  cb_q          (0)  — Q-block tiles, B_q_t * D_t pages (16 for D=128)
+  cb_k          (1)  — K-block tiles, B_kv_t * D_t pages (16 for D=128)
   cb_o          (16) — running output, B_q_t * D_t tiles
-  cb_scores     (24) — score matmul out (referenced by hw_startup, filled later)
+  cb_scores     (24) — Q@K^T score matmul out, B_q_t * B_kv_t tiles (16)
   cb_max_old    (27) — running max m_i, B_q_t tiles
   cb_sum_old    (30) — running sum l_i, B_q_t tiles
+
+CB sizing note: The design specifies cb_q with B_q_t=4 pages, but matmul_block
+with k=D_t and num_k=1 requires all M*K = B_q_t*D_t Q-tiles resident in one
+call (in0_block_num_tiles = out_subblock_h * in0_block_k * in0_num_subblocks
+= 2*4*2 = 16). Similarly cb_k needs B_kv_t*D_t = 16 pages. The design's
+in0_sb=1,in1_sb=1 only produces 4 output tiles (a 2×2 subblock); we use
+in0_sb=2,in1_sb=2 to produce all 16 score tiles in one call.
+
+The design's in0_policy=NoWaitNoPop is impossible (static_assert forbids it
+for in0). We use WaitAndRetainOnLastBlock, which retains Q when num_k_blocks=1.
 
 Tile block sizing (from op_design.md):
   B_q_t = 4  (128 rows per Q-block)
@@ -52,11 +57,11 @@ def create_program_descriptor(
     fp32_dest_acc_en: bool = True,
     math_approx_mode: bool = False,
 ) -> ttnn.ProgramDescriptor:
-    """Build the Stage-0 program descriptor.
+    """Build the Stage-1 program descriptor.
 
-    Args mirror the op entry point's resolved parameters. Stage 0 only uses
-    the shapes (to size CBs) and the compute config; attn_mask / is_causal /
-    scale are accepted for forward-compatibility and ignored here.
+    Args mirror the op entry point's resolved parameters. Stage 1 streams
+    Q and K tiles from DRAM, runs the QK^T matmul, and DPRINTs the score
+    block for TDD verification against reference_phase_qkt.
     """
     q_shape = list(query.shape)
     D = q_shape[-1]
@@ -67,24 +72,36 @@ def create_program_descriptor(
     core = ttnn.CoreCoord(0, 0)
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
-    # --- Circular Buffers (Stage 0 subset) ---
+    # --- Circular Buffers ---
     CB_Q = 0
+    CB_K = 1
     CB_O = 16
     CB_SCORES = 24
     CB_MAX_OLD = 27
     CB_SUM_OLD = 30
 
+    num_q_tiles = B_Q_T * D_t  # 16 for D=128
+    num_k_tiles = B_KV_T * D_t  # 16 for D=128
     num_o_tiles = B_Q_T * D_t
+    num_score_tiles = B_Q_T * B_KV_T  # 16
 
     cbs = [
-        # cb_q: one Q-block (4 tiles). Filled by reader in later stages;
-        # allocated now so compute_kernel_hw_startup(cb_q, cb_scores) has a
-        # valid CB to reference.
+        # cb_q: one Q-block (B_q_t * D_t tiles). Filled by reader; retained
+        # across KV-blocks by compute (WaitAndRetainOnLastBlock).
         ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
+            total_size=num_q_tiles * tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_Q, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_k: one KV-block of K (B_kv_t * D_t tiles). Streamed by reader;
+        # consumed per KV-block by compute (WaitAndPopPerKBlock).
+        ttnn.CBDescriptor(
+            total_size=num_k_tiles * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_o: running output, B_q_t * D_t tiles. Initialized to 0 in Stage 0.
@@ -95,10 +112,9 @@ def create_program_descriptor(
                 ttnn.CBFormatDescriptor(buffer_index=CB_O, data_format=query.dtype, page_size=tile_size)
             ],
         ),
-        # cb_scores: score matmul output (16 tiles). Referenced by hw_startup;
-        # filled by matmul in Stage 1. Allocated so the compute kernel can boot.
+        # cb_scores: Q@K^T score matmul output (16 tiles).
         ttnn.CBDescriptor(
-            total_size=B_Q_T * B_KV_T * tile_size,
+            total_size=num_score_tiles * tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_SCORES, data_format=query.dtype, page_size=tile_size)
@@ -123,10 +139,17 @@ def create_program_descriptor(
     ]
 
     # --- Reader ---
-    # CT args: [B_q_t, D_t, tile_bytes]
-    reader_ct_args = [B_Q_T, D_t, tile_size]
+    # CT args: [B_q_t, D_t, B_kv_t, ...TensorAccessorArgs(Q), ...TensorAccessorArgs(K)]
+    reader_ct_args = [B_Q_T, D_t, B_KV_T]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
+
+    # RT args: [q_addr, k_addr]
     reader_rt_args = ttnn.RuntimeArgs()
-    reader_rt_args[core.x][core.y] = []
+    reader_rt_args[core.x][core.y] = [
+        query.buffer_address(),
+        key.buffer_address(),
+    ]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
@@ -150,7 +173,7 @@ def create_program_descriptor(
     )
 
     # --- Compute ---
-    # CT args: [B_q_t, B_kv_t, D_t] (used by later stages; Stage 0 only boots).
+    # CT args: [B_q_t, B_kv_t, D_t]
     compute_ct_args = [B_Q_T, B_KV_T, D_t]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),

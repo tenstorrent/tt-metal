@@ -1,4 +1,20 @@
 #!/bin/bash
+# Auto-generated wrapper: wait for build before running tests
+while [ ! -f "/localdev/dnijemcevic/2026_06_27/1500_nuke-sdpa-0623/clones/flash_attention_run1/tt-metal/.build_complete" ]; do
+    if [ -f "/localdev/dnijemcevic/2026_06_27/1500_nuke-sdpa-0623/clones/flash_attention_run1/tt-metal/.infra_failed" ]; then
+        echo "NOTE: Background build failed. Proceeding (agent may rebuild)." >&2
+        break
+    fi
+    sleep 5
+done
+while [ ! -f "/localdev/dnijemcevic/2026_06_27/1500_nuke-sdpa-0623/clones/flash_attention_run1/tt-metal/.venv_complete" ]; do
+    if [ -f "/localdev/dnijemcevic/2026_06_27/1500_nuke-sdpa-0623/clones/flash_attention_run1/tt-metal/.infra_failed" ]; then
+        echo "NOTE: Background venv failed. Proceeding (agent may recreate)." >&2
+        break
+    fi
+    sleep 5
+done
+# --- Original scripts/run_safe_pytest.sh below ---
 # run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.
