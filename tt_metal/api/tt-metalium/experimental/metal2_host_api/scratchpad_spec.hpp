@@ -20,7 +20,7 @@ namespace tt::tt_metal::experimental {
 //
 // INSTANCING: Like KernelSpec, a ScratchpadSpec is a *per-node template*.
 //   One independent scratchpad instance is allocated per node where its bound
-//   kernel runs, in that node's local SRAM.
+//   kernel runs, in that node's local SRAM. Scratchpad is available for both data movement and compute kernels.
 //
 // PLACEMENT: Derived from its bound kernel's WorkUnitSpec membership.
 //

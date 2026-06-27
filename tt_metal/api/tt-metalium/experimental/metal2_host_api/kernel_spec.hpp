@@ -163,7 +163,6 @@ struct KernelSpec {
     Group<ScratchpadBinding> scratchpad_bindings;
 
     // Additional resource binding types:
-    //  - Scratchpad bindings (Program-local memory resource)
     //  - Buffer bindings (User-managed memory resource)
     //  - GlobalSemaphore bindings (User-managed resource)
     //  - GlobalDataflowBuffer bindings (User-managed resource)
