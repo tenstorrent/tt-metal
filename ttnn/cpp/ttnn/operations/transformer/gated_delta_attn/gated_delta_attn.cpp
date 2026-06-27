@@ -25,9 +25,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> gated_delta_attn_seq(
         L_unit.device()->arch(),
         compute_kernel_config,
         MathFidelity::HiFi2,
-        /*approx=*/false,
-        /*fp32_acc=*/true,
-        /*packer_l1=*/false);
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
 
     auto results = ttnn::prim::gated_delta_attn_seq(
         L_unit, v_beta_sc, k_bd_sc, intra_attn, q_decay, k_decay_t, dl_exp, L_inv, initial_state, mc, kc);

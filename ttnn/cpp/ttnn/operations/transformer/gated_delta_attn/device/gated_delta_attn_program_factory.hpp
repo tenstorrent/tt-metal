@@ -23,15 +23,13 @@ struct GatedDeltaAttnSeqProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const GatedDeltaAttnSeqParams& op_attrs,
-        const GatedDeltaAttnSeqInputs& tensor_args,
-        std::vector<Tensor>& output_tensors);
+        const GatedDeltaAttnSeqParams& attrs, const GatedDeltaAttnSeqInputs& in, std::vector<Tensor>& outputs);
 
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const GatedDeltaAttnSeqParams& op_attrs,
-        const GatedDeltaAttnSeqInputs& tensor_args,
-        std::vector<Tensor>& output_tensors);
+        cached_program_t& cached,
+        const GatedDeltaAttnSeqParams& attrs,
+        const GatedDeltaAttnSeqInputs& in,
+        std::vector<Tensor>& outputs);
 };
 
 }  // namespace ttnn::prim
