@@ -12,6 +12,11 @@
 //   cb_q  (0) ← Q tiles (B_q_t * D_t tiles, loaded once, retained)
 //   cb_k  (1) ← K tiles (B_kv_t * D_t tiles, streamed per KV-block)
 //
+// Stage 2 (scale): Fills cb_scale_factor (1 tile) with the scale value
+//   (1/sqrt(D) or explicit). The scale arrives as fp32 bits (uint32_t)
+//   in runtime args; the reader converts to bf16 and fills the tile.
+//   cb_scale_factor is HeldBulk by the compute eltwise mul (never popped).
+//
 // The Q tiles are loaded in standard tile-row-major order:
 //   tile(r, d) at DRAM page r * D_t + d  (row r, head-dim-tile d)
 //   pushed to cb_q in the same order: [0,1,2,...,B_q_t*D_t-1]
@@ -37,6 +42,7 @@
 // CB indices (match op_design.md CB layout).
 constexpr uint32_t cb_q = tt::CBIndex::c_0;
 constexpr uint32_t cb_k = tt::CBIndex::c_1;
+constexpr uint32_t cb_scale_factor = 5;
 constexpr uint32_t cb_o = tt::CBIndex::c_16;
 constexpr uint32_t cb_max_old = 27;
 constexpr uint32_t cb_sum_old = 30;
@@ -60,6 +66,26 @@ inline void fill_bf16_tile_zero(uint32_t cb_id) {
     auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
     for (uint32_t i = 0; i < 1024; ++i) {
         ptr[i] = 0;
+    }
+}
+
+// Convert fp32 bits → bf16 bits (round-to-nearest-even, truncating low 16 bits).
+inline uint16_t fp32_bits_to_bf16_bits(uint32_t fp32_bits) {
+    // Round-to-nearest-even: add bias 0x7FFF + (sticky bit) before truncation.
+    uint16_t lsw = static_cast<uint16_t>(fp32_bits & 0xFFFF);
+    uint16_t bias = 0x7FFFu + (lsw >> 15);
+    uint32_t rounded = fp32_bits + bias;
+    return static_cast<uint16_t>(rounded >> 16);
+}
+
+// Fill an entire CB tile (bf16, 32x32 = 1024 elements) with a scalar value
+// given as fp32 bits. Converts to bf16 and broadcasts across all elements.
+inline void fill_bf16_tile_with_scalar_fp32(uint32_t cb_id, uint32_t fp32_bits) {
+    uint16_t bf16_bits = fp32_bits_to_bf16_bits(fp32_bits);
+    uint32_t write_addr = get_write_ptr(cb_id);
+    auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
+    for (uint32_t i = 0; i < 1024; ++i) {
+        ptr[i] = bf16_bits;
     }
 }
 
@@ -95,11 +121,24 @@ void kernel_main() {
         cb_push_back(cb_o, 1);
     }
 
+    // --- Stage 2: fill cb_scale_factor with scale value ---
+    // The scale (1/sqrt(D) or explicit) is passed as fp32 bits in runtime args.
+    // The reader converts to bf16 and fills a single tile. The compute kernel
+    // uses this as a HeldBulk scalar broadcast for the eltwise mul.
+    {
+        uint32_t rt_arg_idx = 2;  // scale_bits is runtime arg index 2
+        uint32_t scale_bits = get_arg_val<uint32_t>(rt_arg_idx);
+        cb_reserve_back(cb_scale_factor, 1);
+        fill_bf16_tile_with_scalar_fp32(cb_scale_factor, scale_bits);
+        cb_push_back(cb_scale_factor, 1);
+    }
+
     // --- Stage 1: stream Q and K tiles from DRAM ---
 
-    // Runtime args: [q_addr, k_addr]
+    // Runtime args: [q_addr, k_addr, scale_bits (fp32 bits)]
     uint32_t q_addr = get_arg_val<uint32_t>(0);
     uint32_t k_addr = get_arg_val<uint32_t>(1);
+    uint32_t scale_bits = get_arg_val<uint32_t>(2);  // scale as fp32 bit representation
 
     // Reconstruct TensorAccessor layout from compile-time args.
     // CT args layout: [B_q_t(0), D_t(1), B_kv_t(2), ...Q_accessor(3+), ...K_accessor(after Q)]

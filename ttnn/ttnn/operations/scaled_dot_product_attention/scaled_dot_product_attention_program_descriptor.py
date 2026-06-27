@@ -33,6 +33,8 @@ Tile block sizing (from op_design.md):
 """
 
 from pathlib import Path
+import math
+import struct
 
 import ttnn
 
@@ -72,9 +74,15 @@ def create_program_descriptor(
     core = ttnn.CoreCoord(0, 0)
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
+    # Resolve scale: explicit value or 1/sqrt(D).
+    resolved_scale = scale if scale is not None else (1.0 / math.sqrt(D))
+    # Pack as fp32 bits for the reader (converts to bf16 in-kernel).
+    scale_bits = struct.unpack("I", struct.pack("f", resolved_scale))[0]
+
     # --- Circular Buffers ---
     CB_Q = 0
     CB_K = 1
+    CB_SCALE_FACTOR = 5
     CB_O = 16
     CB_SCORES = 24
     CB_MAX_OLD = 27
@@ -102,6 +110,15 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_scale_factor: single tile holding the scale value (1/sqrt(D) or
+        # explicit). Filled by reader; held as HeldBulk by compute's eltwise mul.
+        ttnn.CBDescriptor(
+            total_size=1 * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_SCALE_FACTOR, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_o: running output, B_q_t * D_t tiles. Initialized to 0 in Stage 0.
@@ -144,11 +161,12 @@ def create_program_descriptor(
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
 
-    # RT args: [q_addr, k_addr]
+    # RT args: [q_addr, k_addr, scale_bits (fp32 bits)]
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [
         query.buffer_address(),
         key.buffer_address(),
+        scale_bits,
     ]
 
     reader_kernel = ttnn.KernelDescriptor(
