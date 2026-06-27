@@ -5140,7 +5140,6 @@ namespace m2 = tt::tt_metal::experimental;
 
 const m2::DFBSpecName RO_IN0_DFB{"cb_in0"};
 const m2::DFBSpecName RO_IN1_DFB{"cb_in1"};
-const m2::DFBSpecName RO_IN0_SHARDED_DFB{"cb_in0_sharded"};
 const m2::DFBSpecName RO_BIAS_DFB{"cb_bias"};
 const m2::DFBSpecName RO_OUT_DFB{"cb_out"};
 const m2::DFBSpecName RO_INTERM0_DFB{"cb_intermed0"};
@@ -5403,7 +5402,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
-    uint32_t in2_CB_tiles = in2_block_tiles;
+    [[maybe_unused]] uint32_t in2_CB_tiles = in2_block_tiles;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
@@ -5670,16 +5669,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         }
         dataflow_buffers.push_back(std::move(in1_dfb));
     }
-    if (in0_is_sharded) {
-        dataflow_buffers.push_back(m2::DataflowBufferSpec{
-            .unique_id = RO_IN0_SHARDED_DFB,
-            .entry_size = in0_single_tile_size,
-            .num_entries = in2_CB_tiles,
-            .data_format_metadata = in0_data_format,
-            .tile_format_metadata = in0_tile,
-            .borrowed_from = RO_IN0_TENSOR,
-        });
-    }
+    // Block/height-sharded in0: the resident shard is read by L1 base address from a local
+    // TensorAccessor over the in0 tensor in the sender kernel (no borrowed self-loop CB, which
+    // Metal 2.0 forbids on DM kernels), so no DataflowBuffer is needed here.
 
     // out / intermed0: separate or aliased (shared memory) — predicate matches the legacy CB-sharing.
     const bool separate_out_interm = do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
@@ -5834,19 +5826,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::CONSUMER});
         }
-        if (in0_is_sharded) {
-            // cb_in0_sharded is the borrowed resident in0 shard; the sender reads it
-            // (get_read_ptr). There is no real producer (the data is resident), so self-loop
-            // PRODUCER+CONSUMER on this single kernel to satisfy SPSC completeness.
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_IN0_SHARDED_DFB,
-                .accessor_name = "cb_in0_sharded",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_IN0_SHARDED_DFB,
-                .accessor_name = "cb_in0_sharded",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        }
+        // in0 sharded reads its resident shard via tensor::in0 in the sender kernel, so it needs no
+        // extra DFB bindings here (only cb_in0 above, the mcast staging buffer).
         return b;
     };
 
@@ -6492,7 +6473,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             extract_shard_sub_blocks = true;
         }
     }
-    uint32_t in2_CB_tiles = in0_block_tiles;
+    [[maybe_unused]] uint32_t in2_CB_tiles = in0_block_tiles;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
@@ -6680,16 +6661,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .tile_format_metadata = in0_tile,
         });
     }
-    if (in0_is_sharded && extract_shard_sub_blocks) {
-        dataflow_buffers.push_back(m2::DataflowBufferSpec{
-            .unique_id = RO_IN0_SHARDED_DFB,
-            .entry_size = in0_single_tile_size,
-            .num_entries = in2_CB_tiles,
-            .data_format_metadata = in0_data_format,
-            .tile_format_metadata = in0_tile,
-            .borrowed_from = RO_IN0_TENSOR,
-        });
-    }
+    // in0 sharded + extract_shard_sub_blocks: the resident shard is read by L1 base address from a
+    // local TensorAccessor over the in0 tensor in the sender kernel (no borrowed self-loop CB), so no
+    // DataflowBuffer is needed here.
     {
         m2::DataflowBufferSpec in1_dfb{
             .unique_id = RO_IN1_DFB,
@@ -6797,19 +6771,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::CONSUMER});
         }
-        if (in0_is_sharded && extract_shard_sub_blocks) {
-            // cb_in0_sharded is the borrowed resident in0 shard; the sender reads it
-            // (get_read_ptr). There is no real producer (the data is resident), so self-loop
-            // PRODUCER+CONSUMER on this single kernel to satisfy SPSC completeness.
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_IN0_SHARDED_DFB,
-                .accessor_name = "cb_in0_sharded",
-                .endpoint_type = m2::DFBEndpointType::PRODUCER});
-            b.push_back(m2::DFBBinding{
-                .dfb_spec_name = RO_IN0_SHARDED_DFB,
-                .accessor_name = "cb_in0_sharded",
-                .endpoint_type = m2::DFBEndpointType::CONSUMER});
-        }
+        // in0 sharded + extract reads its resident shard via tensor::in0 in the sender kernel, so it
+        // needs no extra DFB bindings here (only cb_in0 above, the mcast staging buffer).
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_IN0_SENDER_KERNEL,
             .source = std::filesystem::path(IN0_SENDER_PADDING_KERNEL_PATH),

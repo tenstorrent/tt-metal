@@ -135,15 +135,10 @@ void kernel_main() {
         in0_tensor_next_h_dim_block_stride * in0_single_tile_size_bytes;
 
     uint32_t noc_shard_read_start_addr = 0;
-    // dfb::cb_in0_sharded is bound only when the factory extracts shard sub-blocks. kernel_main is
-    // non-template, so an `if constexpr` discarded branch still does name lookup on the token — it
-    // must be gated out with #ifdef (not if constexpr) on paths where the DFB is not bound.
 #ifdef EXTRACT_SHARD_SUB_BLOCKS
-    {
-        constexpr uint32_t cb_id_in2 = dfb::cb_in0_sharded;  // in0 sharded cb if extract_shard_sub_blocks
-        DataflowBuffer cb_in2(cb_id_in2);
-        noc_shard_read_start_addr = cb_in2.get_read_ptr();
-    }
+    // The resident in0 shard is reached by L1 base address from a local TensorAccessor over the in0
+    // tensor (no borrowed self-loop CB, which Metal 2.0 forbids on DM kernels).
+    noc_shard_read_start_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::in0).get_noc_addr(0));
 #endif
 
 #else
