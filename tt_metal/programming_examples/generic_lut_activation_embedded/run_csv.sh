@@ -649,9 +649,6 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             compose_macro = '#define EXP_HW_COMPOSE_SIGMOID_PRODUCT\n'
         elif compose == 'minus_one':
             compose_macro = '#define EXP_HW_COMPOSE_MINUS_ONE\n'
-        if compose in ('sigmoid', 'sigmoid_product', 'silu', 'swish') and hw_preload_macro:
-            print('// HW_PRELOAD disabled for sigmoid compose: reciprocal temporaries exceed SFPI reload budget')
-            hw_preload_macro = ''
         # TTNN exp_21f instruction-count cuts (see piecewise_generic.cpp):
         #   EXP_HW_FUSED       : fold 2^-23 normalize into coeffs (removes 1 SFPMUL).
         #                        Safe unless a scaled coeff c[DEG]*2^-23*DEG underflows fp32.
