@@ -274,6 +274,27 @@ Useful for correctly rounded libraries; awkward for tt-metal kernels. Keep as of
 
 ## Suggested Execution Order
 
+Status note, 2026-06-27 overnight:
+
+- Landed the constant-placement idea for active standalone exponent-ALU paths:
+  `exp2` was already fixed, and `log/log1p/log2/log10` now call the preloaded
+  log evaluator when emitted metadata enables `HW_PRELOAD`.
+- Added a metadata-gated log-domain cut: when the generated CSV range proves
+  the decomposed log input is strictly positive (`input + offset > 0`), the
+  kernel skips negative/zero special-case branches. This is a range-reduction
+  domain property, not an activation-name exception.
+- Landed first-class coefficient hoisting for standalone trig residual kernels.
+  The residual basis and Cody-Waite reduction are unchanged; the polynomial
+  coefficients are materialized once outside the per-element replay body.
+- Controlled BF16 replay now shows 49/60 activations beating TTNN on both ULP
+  and runtime where TTNN refs exist. New flips from this pass: log, log1p, log2,
+  log10, sin, and cos. Remaining TTNN-ref misses are tiny exp/sigmoid runtime
+  margins, GELU's explicit 0.25-ULP waiver, and multigammaln's native-op floor.
+- Still-open high-value items below remain valid: post-quantized scoring as a
+  normal pipeline stage, true ULP-weighted fitting, centered segment residuals,
+  richer segment-kind lowering, denominator-safety metadata, and eval-scheme
+  selection beyond the current hand-shaped fast paths.
+
 1. Add post-quantized scoring and coefficient-format metadata.
 2. Add ULP-weighted fitting mode.
 3. Add centered segment residual metadata and kernel lowering.
