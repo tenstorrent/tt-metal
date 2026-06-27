@@ -237,8 +237,9 @@ def run_falcon_demo_kv(
 
     # transformers 5.x silently fails to populate the vendored Falcon via from_pretrained (the TT
     # model then gets unloaded weights and the demo hangs on device); load the raw checkpoint in
-    # its native layout instead. See issue #47924.
-    hugging_face_reference_model = load_falcon_reference_model(model_version)
+    # its native layout instead. bfloat16 matches the checkpoint dtype and keeps the full-model
+    # load within the demo's step timeout. See issue #47924.
+    hugging_face_reference_model = load_falcon_reference_model(model_version, dtype=torch.bfloat16)
     state_dict = hugging_face_reference_model.state_dict()
 
     profiler.end("loading_weights")

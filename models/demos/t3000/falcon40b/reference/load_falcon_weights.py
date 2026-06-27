@@ -14,11 +14,24 @@ import gc
 import json
 import os
 import re
+from contextlib import nullcontext
 from functools import lru_cache
 
 import torch
 from safetensors import safe_open
 from transformers.utils import cached_file
+
+# Skip the (expensive) random weight init at construction — every parameter is overwritten by the
+# checkpoint load below, and for the full 60-layer model the init alone is minutes of wasted work
+# (it pushed the e2e demo over its step timeout). Location varies across transformers 5.x; degrade
+# to a no-op context if unavailable (correct, just slower).
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:  # pragma: no cover - layout differs across transformers versions
+    try:
+        from transformers.modeling_utils import no_init_weights
+    except ImportError:  # pragma: no cover
+        no_init_weights = nullcontext
 
 from models.demos.t3000.falcon40b.reference.hf_configuration_falcon import FalconConfig
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
@@ -102,8 +115,8 @@ def _native_falcon_state_dict(model_version, num_hidden_layers):
 
 
 @lru_cache(maxsize=1)
-def load_falcon_reference_model(model_version, num_hidden_layers=None):
-    """Load the vendored Falcon CPU reference with weights correctly populated, as float32.
+def load_falcon_reference_model(model_version, num_hidden_layers=None, dtype=torch.float32):
+    """Load the vendored Falcon CPU reference with weights correctly populated.
 
     Weights are read straight from the checkpoint in their native layout (see
     ``_native_falcon_state_dict`` and #47924) and copied into a freshly constructed vendored
@@ -111,8 +124,12 @@ def load_falcon_reference_model(model_version, num_hidden_layers=None):
     populate the vendored model and the upstream model rewrites the Q/K rotary layout.
 
     ``tie_weights`` restores ``lm_head`` if the checkpoint ties it to the input embeddings; it is
-    a no-op for the (untied) falcon-40b checkpoint. The final ``.to(torch.float32)`` matches the
-    float32 test/demo inputs (avoids "mixed dtype (CPU)" LayerNorm errors).
+    a no-op for the (untied) falcon-40b checkpoint.
+
+    ``dtype`` defaults to float32, which the PCC tests need (they feed float32 inputs to a decoder
+    layer, and a bf16 model would raise "mixed dtype (CPU)" in LayerNorm). The demo passes bfloat16
+    — it only feeds token ids (no dtype mismatch) and runs the full 60-layer model, where float32
+    would double host memory and the conversion is slow enough to exceed the demo's step timeout.
 
     Cached (the reference is used read-only): constructing the model re-initialises the large
     embedding/lm_head tensors, so rebuilding it for every parametrization made the decoder sweep
@@ -124,14 +141,15 @@ def load_falcon_reference_model(model_version, num_hidden_layers=None):
         config_kwargs["num_hidden_layers"] = num_hidden_layers
     config = FalconConfig.from_pretrained(model_version, **config_kwargs)
 
-    hugging_face_reference_model = FalconForCausalLM(config)
+    with no_init_weights():
+        hugging_face_reference_model = FalconForCausalLM(config)
     # strict=False: lm_head may be absent from the checkpoint when tied to the input embeddings.
     hugging_face_reference_model.load_state_dict(
         _native_falcon_state_dict(model_version, num_hidden_layers), strict=False
     )
     hugging_face_reference_model.tie_weights()
 
-    hugging_face_reference_model = hugging_face_reference_model.to(torch.float32)
+    hugging_face_reference_model = hugging_face_reference_model.to(dtype)
     hugging_face_reference_model.eval()
     gc.collect()
     return hugging_face_reference_model
