@@ -138,6 +138,10 @@ inline void _llk_unpack_configure_stoch_rnd_()
  * @param tile_size: New tile size of operand A stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ *
+ * @note Unlike Blackhole, Wormhole B0 has no Fp8_e4m3 (E4M3) data format and no
+ *       THCON_SEC0_REG1_Unp_LF8_4b_exp config bit, so there is intentionally no FP8 exponent-mode
+ *       RMW to clear/set here. Reconfig leaks no stale FP8 state on this arch.
  */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
@@ -211,6 +215,10 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  * @param tile_size: New tile size of operand B stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ *
+ * @note Unlike Blackhole, Wormhole B0 has no Fp8_e4m3 (E4M3) data format and no
+ *       THCON_SEC1_REG1_Unp_LF8_4b_exp config bit, so there is intentionally no FP8 exponent-mode
+ *       RMW to clear/set here. Reconfig leaks no stale FP8 state on this arch.
  */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
@@ -265,7 +273,6 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
     }
 }
-
 
 /**
  * @brief Enable Int8 math on the FPU.
