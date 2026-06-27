@@ -10,7 +10,7 @@ excludeAgent: "cloud-agent"
 
 - **Use `TT_FATAL` not `throw`**: error handling in TTNN core must use `TT_FATAL` with clear messages, not raw C++ exceptions. This ensures consistent error reporting and debuggability.
 - **Program cache hash correctness**: any change to op attributes, sub-device config, or runtime state that affects program behavior must be included in the program cache hash. Missing hash inputs cause cache collisions where the wrong cached program is reused silently.
-- **Ops must use `get_compute_cores()` not grid size**: operations must migrate from `compute_with_storage_grid_size()` to `get_compute_cores()` which automatically respects the active sub-device. Relying on full grid size ignores sub-device partitioning.
+- **Align sharded tensor data cores with compute cores**: operations that work with sharded tensors must ensure the cores used for compute (obtained from `compute_with_storage_grid_size()`) are aligned with the cores over which the tensor data is sharded. Simply selecting a compute grid is not sufficient — for sharded specs the data cores and compute cores must match, otherwise an op reads/writes shards on cores it never computes on. Verify the shard spec's core ranges are covered by the compute grid.
 - **Buffer lifetime in descriptors**: objects holding buffer pointers or references (WorkloadDescriptor, ProgramDescriptor) must not outlive the buffers they reference. Verify lifetime semantics when storing buffers in cached/reusable structures.
 
 ## 🟡 IMPORTANT
@@ -36,7 +36,7 @@ excludeAgent: "cloud-agent"
 
 - [ ] Uses `TT_FATAL` for error handling, not raw `throw`
 - [ ] Program cache hash includes all inputs that affect program behavior
-- [ ] Uses `get_compute_cores()`, not `compute_with_storage_grid_size()`
+- [ ] Sharded tensor data cores aligned with compute cores (`compute_with_storage_grid_size()` covers the shard spec's core ranges)
 - [ ] Buffer lifetimes valid — no dangling references in cached descriptors
 - [ ] No unnecessary heap allocations in runtime arg patching or dispatch
 - [ ] RAII guards marked `[[nodiscard]]`
