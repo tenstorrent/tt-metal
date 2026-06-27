@@ -3,13 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Writer kernel for the untilize cores in the tile-layout dispatch path.
-// Runs on RISCV_0 (data movement) of each untilize core, opposite the reader
+// Writer kernel for the worker cores — the unified dispatch writer for both
+// TILE and ROW_MAJOR input. Layout-agnostic: it drains cb_untilize_id (the compute
+// output c_11 on TILE, or the reader-filled row CB c_0 on ROW_MAJOR) identically.
+// Runs on RISCV_0 (data movement) of each worker core, opposite the reader
 // RISC on the same core: the reader builds the next batch's route plan while
 // this kernel drains the current one and performs the NOC writes.
 //
-// Token batches are distributed round-robin across total_workers untilize cores:
-// core i processes batches i, i+total_workers, …  Each untilize core is bound to
+// Token batches are distributed round-robin across total_workers worker cores:
+// core i processes batches i, i+total_workers, …  Each worker core is bound to
 // ONE sender core (fabric-only) that forwards its cross-device tokens.
 //
 // Startup handshake:
@@ -18,8 +20,8 @@
 //   mailbox.  c_4 = route_info slots, c_5 = payload slots, c_6 = metadata slots.
 //
 // For each assigned batch:
-//   1. Wait for compute to finish untilizing this batch (cb_wait_front on
-//      cb_untilize_id).
+//   1. Wait for this batch's payload to be ready (cb_wait_front on cb_untilize_id):
+//      compute output on TILE, reader-filled rows on ROW_MAJOR.
 //   2. Wait for the reader RISC to publish this batch's route plan (cb_wait_front
 //      on cb_plan_id), then read it as PlanHeader + PlanEntry[] (layout shared
 //      with the reader via dispatch_plan.hpp).
@@ -94,6 +96,20 @@ void kernel_main() {
         get_compile_time_arg_val(padding_cfg_args.next_compile_time_args_offset());
 #endif
 
+#ifdef FP8_SCALED
+    // Per-token fp8 scales CB id + aligned page size + word count, appended AFTER padding_config.
+    // The writer reads scales straight from the CB (the reader filled it), so no DRAM accessor.
+#ifdef HAS_PADDING_CONFIG
+    constexpr uint32_t scales_args_offset = padding_cfg_args.next_compile_time_args_offset() + 1;
+#else
+    constexpr uint32_t scales_args_offset = metadata_args.next_compile_time_args_offset();
+#endif
+    constexpr uint32_t cb_scales_id = get_compile_time_arg_val(scales_args_offset);
+    CircularBuffer cb_scales(cb_scales_id);
+    constexpr uint32_t aligned_scales_page_size = get_compile_time_arg_val(scales_args_offset + 1);
+    constexpr uint32_t num_scale_words = get_compile_time_arg_val(scales_args_offset + 2);
+#endif
+
     // ===== Runtime args =====
     uint32_t rt_idx = 0;
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_idx++);
@@ -113,7 +129,7 @@ void kernel_main() {
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     // ===== Startup handshake: receive the owning sender's receive-buffer base addresses =====
-    // The sender owns three L1 receive buffers this untilizer fabric-feeds — c_4 (route_info),
+    // The sender owns three L1 receive buffers this worker fabric-feeds — c_4 (route_info),
     // c_5 (payload), c_6 (metadata) — whose L1 base addresses are only known at runtime.  The
     // sender packs all three into our cross_addr mailbox slot, then increments addr_ready.  The
     // sender barriers those address writes before the inc, so once addr_ready fires the packed
@@ -160,7 +176,7 @@ void kernel_main() {
     uint32_t local_count = 0;
 
     DPRINT_DISPATCH(
-        "Writer untilize: handshake done c4={} c5={} c6={}\n", sender_c4_l1_addr, sender_c5_l1_addr, sender_c6_l1_addr);
+        "Writer worker: handshake done c4={} c5={} c6={}\n", sender_c4_l1_addr, sender_c5_l1_addr, sender_c6_l1_addr);
 
     // Mirror the reader's right-padding loop reduction so reader and writer agree on how many batches
     // are produced/consumed (the end-of-plan sentinel handshake below is independent of batch count).
@@ -190,6 +206,12 @@ void kernel_main() {
         cb_untilize.wait_front(read_batch_size);
 
         uint32_t untilize_read_ptr = cb_untilize.get_read_ptr();
+
+#ifdef FP8_SCALED
+        // Wait for the reader to publish this batch's per-token scale rows (lockstep with c_0).
+        cb_scales.wait_front(read_batch_size);
+        uint32_t scales_read_ptr = cb_scales.get_read_ptr();
+#endif
 
         // Wait for reader to publish the per-batch route plan
         cb_plan.wait_front(1);
@@ -241,6 +263,17 @@ void kernel_main() {
                     meta[0] = (int32_t)linearized_mesh_coord;
                     meta[1] = (int32_t)token_idx;
                     meta[2] = (int32_t)k;
+#ifdef FP8_SCALED
+                    // Copy this token's fp32 scale words (bit-for-bit) into the metadata tail so the
+                    // routed buffer can be dequantized downstream. token_t indexes the scales CB.
+                    {
+                        tt_l1_ptr uint32_t* src_scales =
+                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        for (uint32_t w = 0; w < num_scale_words; w++) {
+                            meta[3 + w] = (int32_t)src_scales[w];
+                        }
+                    }
+#endif
                     noc.async_write(
                         cb_metadata_scratch,
                         metadata_addr_gen,
@@ -300,6 +333,17 @@ void kernel_main() {
                     meta[0] = (int32_t)linearized_mesh_coord;
                     meta[1] = (int32_t)token_idx;
                     meta[2] = (int32_t)k;
+#ifdef FP8_SCALED
+                    // Same scale-tail copy as the local path; the full aligned_metadata_page_size
+                    // (which already accounts for the scale fields) is sent to the sender's c_6 slot.
+                    {
+                        tt_l1_ptr uint32_t* src_scales =
+                            reinterpret_cast<tt_l1_ptr uint32_t*>(scales_read_ptr + token_t * aligned_scales_page_size);
+                        for (uint32_t w = 0; w < num_scale_words; w++) {
+                            meta[3 + w] = (int32_t)src_scales[w];
+                        }
+                    }
+#endif
                     uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
                     noc_async_write_one_packet_with_trid(
                         xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
@@ -322,6 +366,9 @@ void kernel_main() {
 
         cb_plan.pop_front(1);
         cb_untilize.pop_front(read_batch_size);
+#ifdef FP8_SCALED
+        cb_scales.pop_front(read_batch_size);
+#endif
     }
 
     // Teardown: the reader pushes one extra end-of-plan sentinel page after the last batch.
@@ -331,7 +378,7 @@ void kernel_main() {
 
     // Then send ROUTE_INFO_SENTINEL as one final route_info entry into the next sender slot.
     // It takes a real slot, so wait for a space_avail credit just like any data entry; the
-    // sender treats this sentinel as "no more tokens from this untilizer" and stops forwarding.
+    // sender treats this sentinel as "no more tokens from this worker" and stops forwarding.
 
     DPRINT_DISPATCH(
         "[W c={}] loop DONE; WAIT space_avail>={} (have={}) to send SENTINEL\n",
