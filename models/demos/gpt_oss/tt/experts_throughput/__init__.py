@@ -152,7 +152,7 @@ class ThroughputExperts:
 
         # Create all_to_all configurations (used by dense flow)
         _axis = dispatch_cluster_axis if dispatch_cluster_axis is not None else 0
-        _num_links = ccl_manager.num_links
+        _num_links = ccl_manager.num_links if ccl_manager is not None else 4
         self.dispatch_config_decode = AllToAllDispatchConfig(
             memory_config=decode_memory_config,
             cluster_axis=_axis,
@@ -190,6 +190,7 @@ class ThroughputExperts:
             num_devices=config.num_devices,
             num_experts_global=config.num_experts,
             mesh_device=mesh_device,
+            new_format=True,
         )
 
         # Create remap mask (rows is dispatch dimension)

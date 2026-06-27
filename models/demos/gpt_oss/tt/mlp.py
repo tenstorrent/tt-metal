@@ -72,7 +72,7 @@ class MLP:
                     config=throughput_expert_config,
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
-                    num_links=ccl_manager.num_links,
+                    num_links=ccl_manager.num_links if ccl_manager is not None else 4,
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 )
 
@@ -103,7 +103,7 @@ class MLP:
                     num_dispatch_groups=mesh_device.shape[1],
                     capacity_factor=2.0,
                     seq_len_per_chip=seq_len_per_chip,
-                    num_links=ccl_manager.num_links,
+                    num_links=ccl_manager.num_links if ccl_manager is not None else 4,
                 )
                 # Permute expert state_dict to GROUP-BASED ordering before loading
                 perm = _compute_weight_permutation(

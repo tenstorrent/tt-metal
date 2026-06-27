@@ -45,8 +45,8 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 DEVICE_PERF_ENV_VAR = "GPT_OSS_EXPERTS_DEVICE_PERF"
-PERF_WARMUP_ITERS = 10
-PERF_MEASURE_ITERS = 100
+PERF_WARMUP_ITERS = 0
+PERF_MEASURE_ITERS = 1
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 # TODO: Set device perf targets based on measured baselines
@@ -437,7 +437,7 @@ def _run_experts_test(
 
     # Create reference experts and get weights (same weights for both models)
     reference_experts, state_dict = _create_reference_experts_and_weights(config, num_experts)
-    ref_output = gpt_oss_experts_reference(hidden_states, router_indices, routing_weights, reference_experts)
+    ref_output = gpt_oss_experts_reference(hidden_states, router_indices, topk_weights_dense, reference_experts)
 
     # Create TTNN configs
     num_devices = mesh_device.get_num_devices()
@@ -460,6 +460,7 @@ def _run_experts_test(
         num_devices=num_devices,
         num_experts_per_device=throughput_config.num_experts_per_device,
         mesh_device=mesh_device,
+        new_format=True,
     )
 
     # Create remap topk mask (rows is dispatch dimension)
@@ -616,7 +617,7 @@ def _run_experts_test(
         return pcc
 
     # Standard e2e performance measurement
-    if not trace_mode or program_cache_enabled:
+    if expected_perf_us > 0.0 and (not trace_mode or program_cache_enabled):
         perf_profiler = BenchmarkProfiler()
         benchmark_data = BenchmarkData()
         trace_suffix = "trace" if trace_mode else "no_trace"

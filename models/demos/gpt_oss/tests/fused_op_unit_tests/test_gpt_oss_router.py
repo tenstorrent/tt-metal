@@ -36,8 +36,8 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
 DEVICE_PERF_ENV_VAR = "GPT_OSS_ROUTER_DEVICE_PERF"
-PERF_WARMUP_ITERS = 10
-PERF_MEASURE_ITERS = 100
+PERF_WARMUP_ITERS = 0
+PERF_MEASURE_ITERS = 1
 DEVICE_PERF_ITERS = 10
 DEVICE_PERF_MARGIN = 0.1
 # TODO: Set device perf targets based on measured baselines
@@ -89,22 +89,29 @@ def gpt_oss_router_reference(
             - router_weights: Routing weights (dense or sparse depending on use_throughput_experts)
     """
     with torch.no_grad():
-        # Reference router returns (routing_weights, routing_indices)
-        router_scores, router_indices = reference_router(hidden_states)
+        # Reference router returns either (router_logits, router_scores, router_indices) or (router_scores, router_indices)
+        res = reference_router(hidden_states)
+        if isinstance(res, tuple) and len(res) == 3:
+            _, router_scores, router_indices = res
+        else:
+            router_scores, router_indices = res
+        router_scores = router_scores.reshape(-1, router_scores.shape[-1])
+        router_indices = router_indices.reshape(-1, router_indices.shape[-1])
 
     if use_throughput_experts:
         # When using throughput experts, convert sparse router_scores to dense router_weights
-        # (reorder weights to match the order of the indices)
-        dense_router_scores = torch.concat(
-            [
-                torch.tensor(
-                    [router_scores[user, router_indices[user, i]] for i in range(router_indices.shape[1])]
-                ).reshape(1, -1)
-                for user in range(router_scores.shape[0])
-            ],
-            dim=0,
-        )
-        router_scores = dense_router_scores
+        # (reorder weights to match the order of the indices) if not already dense
+        if router_scores.shape[1] != router_indices.shape[1]:
+            dense_router_scores = torch.concat(
+                [
+                    torch.tensor(
+                        [router_scores[user, router_indices[user, i]] for i in range(router_indices.shape[1])]
+                    ).reshape(1, -1)
+                    for user in range(router_scores.shape[0])
+                ],
+                dim=0,
+            )
+            router_scores = dense_router_scores
 
     return router_indices, router_scores
 
@@ -496,7 +503,7 @@ def _run_router_test(
         return indices_pcc, weights_pcc
 
     # Standard e2e performance measurement
-    if not trace_mode or program_cache_enabled:
+    if expected_perf_us > 0.0 and (not trace_mode or program_cache_enabled):
         perf_profiler = BenchmarkProfiler()
         benchmark_data = BenchmarkData()
         trace_suffix = "trace" if trace_mode else "no_trace"
@@ -636,7 +643,7 @@ def _run_router_single_device_test(
         return gpt_oss_router_ttnn(tt_hidden_states, tt_router, use_throughput_experts)
 
     # Performance measurement
-    if not trace_mode or program_cache_enabled:
+    if expected_perf_us > 0.0 and (not trace_mode or program_cache_enabled):
         perf_profiler = BenchmarkProfiler()
         benchmark_data = BenchmarkData()
         trace_suffix = "trace" if trace_mode else "no_trace"

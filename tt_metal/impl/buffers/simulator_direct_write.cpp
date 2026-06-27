@@ -74,8 +74,7 @@ const char* direct_write_candidate_reject_reason(
     if (!has_direct_write_runtime_requirements(guard, src, region)) {
         return "runtime_requirements";
     }
-    if (shard_view.buffer_type() != BufferType::DRAM &&
-        !(shard_view.buffer_type() == BufferType::L1 && is_sharded(shard_view.buffer_layout()))) {
+    if (shard_view.buffer_type() != BufferType::DRAM) {
         return "unsupported_buffer";
     }
     return nullptr;
@@ -120,13 +119,11 @@ bool try_direct_write(
         trace_direct_write_decision(reject_reason, guard, &shard_view, region);
         return false;
     }
-    auto buffer_type = shard_view.buffer_type();
-    bool is_l1_sharded_upload = buffer_type == BufferType::L1 && is_sharded(shard_view.buffer_layout());
     // Sharded L1 full-buffer uploads are TTNN input-staging writes in the
     // DeepSeek decode path. Allow them to bypass unrelated pending FD work in
     // simulator debug mode; keep DRAM ordered because queued kernels can observe
     // tensor and metadata uploads.
-    if (!guard.cq_idle && !is_l1_sharded_upload) {
+    if (!guard.cq_idle) {
         trace_direct_write_decision("pending_ordered_work", guard, &shard_view, region);
         return false;
     }
