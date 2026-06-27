@@ -35,6 +35,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -1288,7 +1289,9 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_AttachWritesTensorAddressToDFB) {
     };
     SetProgramRunArgs(program, params);
 
-    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor.address()))
+    EXPECT_EQ(
+        PeekBorrowedDFBAddress(program, "dfb"),
+        static_cast<uint32_t>(tensor.mesh_buffer().get_reference_buffer()->address()))
         << "DFB base addr should match the borrowed MeshTensor's address after attach";
 }
 
@@ -1306,18 +1309,24 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         {TensorParamName{"borrowed_tensor"}, TensorArgument{tensor1}},
     };
     SetProgramRunArgs(program, params);
-    ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor1.address()));
+    ASSERT_EQ(
+        PeekBorrowedDFBAddress(program, "dfb"),
+        static_cast<uint32_t>(tensor1.mesh_buffer().get_reference_buffer()->address()));
 
     MeshTensor tensor2 =
         MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
-    ASSERT_NE(tensor1.address(), tensor2.address())
+    ASSERT_NE(
+        tensor1.mesh_buffer().get_reference_buffer()->address(),
+        tensor2.mesh_buffer().get_reference_buffer()->address())
         << "Test pre-condition: two separate allocations should yield distinct addresses";
 
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"borrowed_tensor"}, TensorArgument{tensor2}},
     };
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
-    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor2.address()))
+    EXPECT_EQ(
+        PeekBorrowedDFBAddress(program, "dfb"),
+        static_cast<uint32_t>(tensor2.mesh_buffer().get_reference_buffer()->address()))
         << "DFB base addr should refresh to the new MeshTensor's address after UpdateTensorArgs";
 }
 
@@ -1349,7 +1358,8 @@ TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsSucceeds) {
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     ASSERT_FALSE(kernel->common_runtime_args().empty())
         << "binding-only kernel's CRTA buffer should have been allocated by SetProgramRunArgs";
-    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.address()))
+    EXPECT_EQ(
+        kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.mesh_buffer().get_reference_buffer()->address()))
         << "binding base address should be written even though the kernel was omitted from kernel_run_args";
 }
 
@@ -1375,14 +1385,18 @@ TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsReSetSucceed
     // address must update in place.
     MeshTensor tensor2 =
         MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
-    ASSERT_NE(tensor1.address(), tensor2.address())
+    ASSERT_NE(
+        tensor1.mesh_buffer().get_reference_buffer()->address(),
+        tensor2.mesh_buffer().get_reference_buffer()->address())
         << "test pre-condition: two live allocations should have distinct addresses";
     ProgramRunArgs params2;
     params2.tensor_args = {{TensorParamName{tensor_param}, TensorArgument{tensor2}}};
     EXPECT_NO_THROW(SetProgramRunArgs(program, params2));
 
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
-    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor2.address()))
+    EXPECT_EQ(
+        kernel->common_runtime_args()[0],
+        static_cast<uint32_t>(tensor2.mesh_buffer().get_reference_buffer()->address()))
         << "second SetProgramRunArgs should patch the binding address in place to the new tensor";
 }
 
@@ -1775,11 +1789,14 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesBindingAddress) {
     };
     SetProgramRunArgs(program, params);
     ASSERT_EQ(
-        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor1.address()));
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"),
+        static_cast<uint32_t>(tensor1.mesh_buffer().get_reference_buffer()->address()));
 
     // Second enqueue: partial update to tensor T2.
     MeshTensor tensor2 = AllocateTensorForBinding(*mesh_device_, binding);
-    ASSERT_NE(tensor1.address(), tensor2.address())
+    ASSERT_NE(
+        tensor1.mesh_buffer().get_reference_buffer()->address(),
+        tensor2.mesh_buffer().get_reference_buffer()->address())
         << "Test pre-condition: two separate allocations should yield distinct addresses";
 
     Table<TensorParamName, TensorArgument> tensor_args{
@@ -1788,7 +1805,8 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesBindingAddress) {
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
 
     EXPECT_EQ(
-        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor2.address()));
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"),
+        static_cast<uint32_t>(tensor2.mesh_buffer().get_reference_buffer()->address()));
 }
 
 TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
@@ -1831,7 +1849,8 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     const auto* crta_data_after = dm_kernel->common_runtime_args_data().data();
     EXPECT_EQ(crta_data_after[0], kNamedCRTAValue) << "named CRTA must be untouched by UpdateTensorArgs";
     EXPECT_EQ(
-        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor2.address()));
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"),
+        static_cast<uint32_t>(tensor2.mesh_buffer().get_reference_buffer()->address()));
 }
 
 TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTensor) {
@@ -1862,10 +1881,11 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTens
     UpdateTensorArgs(program, tensor_args);
 
     EXPECT_EQ(
-        ReadBindingAddressFromCRTA(program, "dm_kernel", "shared_tensor"), static_cast<uint32_t>(tensor2.address()));
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "shared_tensor"),
+        static_cast<uint32_t>(tensor2.mesh_buffer().get_reference_buffer()->address()));
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "compute_kernel", "shared_tensor"),
-        static_cast<uint32_t>(tensor2.address()));
+        static_cast<uint32_t>(tensor2.mesh_buffer().get_reference_buffer()->address()));
 }
 
 // ============================================================================
@@ -2053,7 +2073,8 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
 
     EXPECT_EQ(
-        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor2.address()));
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"),
+        static_cast<uint32_t>(tensor2.mesh_buffer().get_reference_buffer()->address()));
     EXPECT_EQ(
         ReadBindingShapeFromCRTA(program, "dm_kernel", "input_tensor"), ExpectedShapeInPagesFromSpec(smaller_spec));
 }
@@ -2187,7 +2208,9 @@ TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelOmittedFromRunArgsSucceeds
     };
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
-    EXPECT_EQ(ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor.address()))
+    EXPECT_EQ(
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"),
+        static_cast<uint32_t>(tensor.mesh_buffer().get_reference_buffer()->address()))
         << "binding address should be written even though the kernel was omitted from kernel_run_args";
 }
 

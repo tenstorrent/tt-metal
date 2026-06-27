@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 // Exports symbols
@@ -88,7 +89,7 @@ inline uint32_t get_cb_address(const CBDescriptor& desc) {
         return desc.buffer->address() + addr_offset;
     }
     if (desc.tensor != nullptr) {
-        return desc.tensor->address() + addr_offset;
+        return desc.tensor->mesh_buffer().get_reference_buffer()->address() + addr_offset;
     }
     return addr_offset;
 }

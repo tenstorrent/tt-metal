@@ -12,6 +12,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -32,6 +33,14 @@ using tt::tt_metal::ComputeConfigDescriptor;
 using tt::tt_metal::DataMovementConfigDescriptor;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::ProgramDescriptor;
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+tt::tt_metal::DeviceAddr get_buffer_address(const tt::tt_metal::MeshTensor& tensor) {
+    return tensor.mesh_buffer().get_reference_buffer()->address();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace ttnn::prim {
 namespace reuse_dram_sharded_optimized_helpers {
@@ -760,8 +769,10 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         bool is_worker_core = true;
         std::vector<uint32_t> mm_in1_sender_writer_args;
         mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
-        mm_in1_sender_writer_args.push_back(in1_tensor.address());  // [1]: will be replaced by Buffer*
-        mm_in1_sender_writer_args.push_back(bias.has_value() ? bias->address() : 0u);  // [2]: may be replaced
+        mm_in1_sender_writer_args.push_back(
+            CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in1_tensor));  // [1]: will be replaced by Buffer*
+        mm_in1_sender_writer_args.push_back(
+            bias.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_buffer_address(*bias) : 0u);  // [2]: may be replaced
 
         uint32_t vc = bank_id & 0x3;
         bank_ids.push_back(bank_id);

@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
@@ -34,6 +35,14 @@ using tt::tt_metal::DataMovementConfigDescriptor;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::ProgramDescriptor;
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+tt::tt_metal::DeviceAddr get_buffer_address(const tt::tt_metal::MeshTensor& tensor) {
+    return tensor.mesh_buffer().get_reference_buffer()->address();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace ttnn::prim {
 
@@ -972,7 +981,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         else if (core == start_core) {
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in0_tensor),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -1011,7 +1020,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
-                (std::uint32_t)in1_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in1_tensor),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
@@ -1024,7 +1033,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(out_tensor),
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
@@ -1057,7 +1066,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(*bias_tensor) : 0);
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -1796,7 +1806,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
-                (std::uint32_t)in1_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in1_tensor),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)start_core_noc.x,  // in1_mcast_dest_noc_start_x
@@ -1809,7 +1819,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(out_tensor),
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * N),  // out_tensor_start_tile_id
 
@@ -1826,7 +1836,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 (std::uint32_t)0};
 
             if (bias_tensor.has_value()) {
-                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());
+                mm_in1_sender_writer_args.push_back(
+                    (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(*bias_tensor));
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
             } else {
@@ -1850,7 +1861,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_tensor.address(),  // out_tensor_addr
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(out_tensor),  // out_tensor_addr
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
@@ -1896,7 +1907,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         }
         std::vector<uint32_t> mm_in0_sender_args = {
             // in0 tensor args
-            (std::uint32_t)in0_tensor.address(),
+            (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in0_tensor),
             (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
             // in0 mcast args
             (std::uint32_t)0,  // in0_mcast_dest_noc_start_x
@@ -2538,8 +2549,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         /* in1 */
         std::vector<uint32_t> mm_in1_args = {
             (std::uint32_t)core_type,
-            in1_tensor.address(),  // in1_tensor_addr
-            i,                     // ring_idx
+            CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in1_tensor),  // in1_tensor_addr
+            i,                                                       // ring_idx
         };
         if (in1_is_dram_sharded) {
             // Look up bank_id based on core.y and which column group core.x belongs to
@@ -2709,15 +2720,15 @@ inline void override_mcast_in1_program_parameters(
         // in0 sender
         auto& reader_runtime_args =
             reader_runtime_args_by_core[override_variables.start_core.x][override_variables.start_core.y];
-        reader_runtime_args[0] = src_a_tensor.address();
+        reader_runtime_args[0] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(src_a_tensor);
 
         // in1 sender
         auto& sender_writer_runtime_args =
             GetRuntimeArgs(program, override_variables.kernels.at(1), override_variables.start_core);
-        sender_writer_runtime_args[0] = src_b_tensor.address();
-        sender_writer_runtime_args[7] = dst_tensor.address();
+        sender_writer_runtime_args[0] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(src_b_tensor);
+        sender_writer_runtime_args[7] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(dst_tensor);
         if (bias_tensor.has_value()) {
-            sender_writer_runtime_args[18] = bias_mesh_tensor->address();
+            sender_writer_runtime_args[18] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(*bias_mesh_tensor);
         }
     }
 
@@ -2731,9 +2742,9 @@ inline void override_mcast_in1_program_parameters(
         auto& writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
 
         // in0 sender
-        reader_runtime_args[0] = src_a_tensor.address();
+        reader_runtime_args[0] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(src_a_tensor);
         // in1 receiver
-        writer_runtime_args[2] = dst_tensor.address();
+        writer_runtime_args[2] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(dst_tensor);
     }
 
     if (src0_sharded) {
@@ -2788,7 +2799,7 @@ static void override_mcast_in0_program_parameters(
         // in0 sender
         auto& reader_sender_runtime_args =
             GetRuntimeArgs(program, override_variables.kernels.at(0), override_variables.start_core);
-        reader_sender_runtime_args[0] = src_a_tensor.address();
+        reader_sender_runtime_args[0] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(src_a_tensor);
     }
 
     if (src1_sharded) {
@@ -2807,10 +2818,10 @@ static void override_mcast_in0_program_parameters(
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
         // in1 sender
-        writer_runtime_args[0] = src_b_tensor.address();
-        writer_runtime_args[7] = dst_tensor.address();
+        writer_runtime_args[0] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(src_b_tensor);
+        writer_runtime_args[7] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(dst_tensor);
         if (bias_tensor.has_value()) {
-            writer_runtime_args[18] = bias_mesh_tensor->address();
+            writer_runtime_args[18] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(*bias_mesh_tensor);
         }
     }
 
@@ -2861,7 +2872,7 @@ inline void override_gather_in0_program_parameters(
         auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
 
         /* in1 */
-        writer_runtime_args[1] = src_b_tensor.address();
+        writer_runtime_args[1] = CMAKE_UNIQUE_NAMESPACE::get_buffer_address(src_b_tensor);
     }
 }
 
@@ -3771,7 +3782,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         else if (core == start_core) {
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in0_tensor),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -3810,7 +3821,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
-                (std::uint32_t)in1_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(in1_tensor),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
@@ -3823,7 +3834,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_tensor.address(),
+                (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(out_tensor),
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
@@ -3856,7 +3867,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
+            mm_in1_sender_writer_args.push_back(
+                bias_tensor.has_value() ? (std::uint32_t)CMAKE_UNIQUE_NAMESPACE::get_buffer_address(*bias_tensor) : 0);
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {

@@ -22,6 +22,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
@@ -271,7 +272,7 @@ void run_borrowed_memory_dfb_program(
     // stays PINNED across a size override (no reallocation).
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor.address()));
+        static_cast<uint32_t>(ring_tensor.mesh_buffer().get_reference_buffer()->address()));
 
     if (cfg.num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *cfg.num_entries_override)
@@ -376,7 +377,9 @@ void run_update_address_test(
     // Two distinct L1 ring tensors - swapped between runs.
     MeshTensor ring_tensor_a = MeshTensor::allocate_on_device(*mesh_device, ring_spec, TensorTopology{});
     MeshTensor ring_tensor_b = MeshTensor::allocate_on_device(*mesh_device, ring_spec, TensorTopology{});
-    ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
+    ASSERT_NE(
+        ring_tensor_a.mesh_buffer().get_reference_buffer()->address(),
+        ring_tensor_b.mesh_buffer().get_reference_buffer()->address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
     using NodeRuntimeArgs = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values)::value_type;
@@ -408,7 +411,7 @@ void run_update_address_test(
 
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_a.address()));
+        static_cast<uint32_t>(ring_tensor_a.mesh_buffer().get_reference_buffer()->address()));
     {
         std::vector<uint32_t> output;
         detail::ReadFromBuffer(*dst_tensor.mesh_buffer().get_reference_buffer(), output);
@@ -454,7 +457,7 @@ void run_update_address_test(
 
     EXPECT_EQ(
         program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_b.address()));
+        static_cast<uint32_t>(ring_tensor_b.mesh_buffer().get_reference_buffer()->address()));
     if (reentry_num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *reentry_num_entries_override)
             << "combined re-bind + resize: num_entries override was not applied";

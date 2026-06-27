@@ -5,6 +5,7 @@
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
@@ -16,6 +17,14 @@
 #include <string>
 
 using namespace tt::tt_metal;
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+tt::tt_metal::DeviceAddr get_buffer_address(const tt::tt_metal::MeshTensor& tensor) {
+    return tensor.mesh_buffer().get_reference_buffer()->address();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace ttnn::prim {
 
@@ -502,8 +511,9 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
                 0u,                                    // Height offset (no height parallelism currently)
                 core_id * Wt_local,                    // Width offset for this core's chunk
                 static_cast<uint32_t>(is32_bit_data),  // Flag indicating if data is 32-bit
-                input_indices_tensor.has_value() ? static_cast<uint32_t>(input_indices_tensor->address())
-                                                 : 0u,  // DRAM address of input indices tensor (if provided)
+                input_indices_tensor.has_value()
+                    ? static_cast<uint32_t>(CMAKE_UNIQUE_NAMESPACE::get_buffer_address(*input_indices_tensor))
+                    : 0u,  // DRAM address of input indices tensor (if provided)
             });
 
         // Local writer
