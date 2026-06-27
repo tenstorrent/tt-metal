@@ -86,7 +86,14 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True, False],
     "alignment": ["tile_aligned", "k_non_aligned", "n_non_aligned", "m_non_aligned"],
-    "weight_batch": ["single"],
+    # Refinement 3 — true batched matmul. "batched" = a weight (..., K, N) whose
+    # leading dims match the activation's, one matrix per batch. The structural
+    # shape-contract check in validate() already requires matching batched leading
+    # dims; the kernel path is the SAME as the shared-weight path except the
+    # reader's in1 (weight) tile-id gains a per-batch b*Kt*Nt offset (the batch
+    # loop already exists — shared weight re-reads the same block per batch, batched
+    # weight reads block b). Activation read / writer / multicast topology unchanged.
+    "weight_batch": ["single", "batched"],
 }
 
 

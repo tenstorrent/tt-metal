@@ -11,6 +11,14 @@
 // pipe_rotating.cpp): the ReceiverPipe ctor's INVALID always precedes the
 // sender's VALID because the sender's mcast is gated behind the receiver's ack.
 //
+// BATCHED WEIGHT (Refinement 3 — true batched matmul). The outer `for b` loop
+// already exists for batched activation. For a SHARED 2D weight every batch
+// re-reads the same (K, N) block (weight_batch_stride == 0). For a BATCHED
+// weight (..., K, N) whose leading dims match the activation's, the in1 tile-id
+// gains a per-batch `b * weight_batch_stride` (= b*Kt*Nt) offset so batch b
+// reads weight matrix b. Nothing else changes — same multicast topology, same
+// lock-step ordering, activation read unchanged.
+//
 // NON-TILE-ALIGNED M / K / N (Refinement 2) — NO sub-tile masking here, by
 // design. Mt/Kt/Nt are ceil_div tile counts, so the partial last tile along any
 // of M/K/N is a real tile this reader gathers in full. ttnn's TILE_LAYOUT
@@ -58,7 +66,11 @@ void kernel_main() {
     constexpr uint32_t IN1_CONSUMER_READY = get_compile_time_arg_val(15);
     constexpr uint32_t tileA_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t tileB_bytes = get_compile_time_arg_val(17);
-    constexpr auto a_args = TensorAccessorArgs<18>();
+    // Refinement 3 — true batched matmul. Per-batch tile offset for the in1
+    // (weight) read: Kt*Nt for a batched weight (..., K, N), 0 for a shared 2D
+    // weight (every batch re-reads the same block — Phase-0 behavior).
+    constexpr uint32_t weight_batch_stride = get_compile_time_arg_val(18);
+    constexpr auto a_args = TensorAccessorArgs<19>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
 
     // ---- runtime args (per core) ----
@@ -141,7 +153,10 @@ void kernel_main() {
                                     continue;  // phantom column
                                 }
                                 const uint32_t idx = k * block_N_tiles + n;
-                                const uint32_t tid = gk * Nt + gn;  // shared 2D weight
+                                // Refinement 3: b*weight_batch_stride is 0 for a
+                                // shared 2D weight, Kt*Nt for a batched weight (so
+                                // batch b reads weight matrix b).
+                                const uint32_t tid = b * weight_batch_stride + gk * Nt + gn;
                                 noc.async_read(
                                     b_acc, cb_in1, tileB_bytes, {.page_id = tid}, {.offset_bytes = idx * tileB_bytes});
                             }

@@ -174,6 +174,20 @@ def create_program_descriptor(input_tensor, weight, output_tensor, compute_kerne
     for d in A_shape[:-2]:
         batch *= d
 
+    # Refinement 3 — true batched matmul. The reader's in1 (weight) tile-id is
+    # b * weight_batch_stride + gk * Nt + gn. For a SHARED 2D weight the stride is
+    # 0 (every batch re-reads the same (K, N) block — the Phase-0 behavior). For a
+    # BATCHED weight (..., K, N) whose leading dims match the activation's, the
+    # stride is Kt * Nt so batch b reads weight matrix b. The flattened batch index
+    # `b` in the kernel loop maps identically over A's and B's leading dims (both
+    # row-major over the same leading shape), so b indexes the matching weight.
+    # The activation read, writer, and dual-multicast topology are unchanged: the
+    # in1 sender (grid row Y=0) reads weight block b for its N-column and multicasts
+    # it down the column to all cores working on batch b in lock-step.
+    B_lead = B_shape[:-2]
+    weight_batched = len(B_lead) > 0 and not all(d == 1 for d in B_lead)
+    weight_batch_stride = (Kt * Nt) if weight_batched else 0
+
     tileA_bytes = input_tensor.buffer_page_size()
     tileB_bytes = weight.buffer_page_size()
     tileC_bytes = output_tensor.buffer_page_size()
@@ -302,6 +316,7 @@ def create_program_descriptor(input_tensor, weight, output_tensor, compute_kerne
         SEM_IN1_CONSUMER_READY,
         tileA_bytes,
         tileB_bytes,
+        weight_batch_stride,  # Refinement 3: in1 per-batch tile offset (0 if shared)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
