@@ -212,10 +212,17 @@ class ModelArgs:
                 chat.append({"role": "system", "content": system_prompt_text})
             if prompt_text:
                 chat.append({"role": "user", "content": prompt_text})
-            return self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
         else:
             # prompt_text is already a list of chat messages
-            return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+
+        # Depending on the tokenizer, apply_chat_template(tokenize=True) may return a
+        # tokenizers.Encoding (fast-tokenizer path) rather than a plain List[int].
+        # Normalize to a list of token ids so downstream torch.tensor(...) can infer a dtype.
+        if hasattr(encoded, "ids"):
+            encoded = encoded.ids
+        return encoded
 
     @staticmethod
     def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
