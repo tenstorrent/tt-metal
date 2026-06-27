@@ -9,19 +9,17 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/quasar/reallocate/reallocate.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::quasar::detail {
 
 void bind_reallocate(nb::module_& mod) {
-    mod.def(
-        "reallocate",
-        [](ttnn::Tensor& input_tensor, const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-            return ttnn::operations::experimental::quasar::reallocate(input_tensor, memory_config);
-        },
-        nb::arg("tensor"),
-        nb::arg("memory_config") = nb::none(),
+    // Bind as a proper ttnn operation object (callable wrapper with the __ttnn_operation__ marker),
+    // matching the matmul/linear form in this op group, rather than a plain mod.def() free function.
+    ttnn::bind_function<"reallocate", "ttnn.experimental.quasar.">(
+        mod,
         R"doc(
             Deallocates device tensor and returns a reallocated tensor.
 
@@ -31,7 +29,11 @@ void bind_reallocate(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the reallocated tensor.
-        )doc");
+        )doc",
+        ttnn::overload_t(
+            &ttnn::operations::experimental::quasar::reallocate,
+            nb::arg("tensor"),
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::quasar::detail
