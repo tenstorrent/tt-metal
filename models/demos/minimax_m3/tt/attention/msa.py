@@ -156,8 +156,15 @@ def msa_sp_attention(q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cac
     q_full = mesh_config.allgather(q, ccl_manager, axis=sp_axis, dim=2)
 
     return msa_indexer_sparse(
-        index_q_full, index_k_full, q_full, k_full, v_full,
-        chunk_start_idx=cached_len, scale=scale, num_groups=num_groups, device=device,
+        index_q_full,
+        index_k_full,
+        q_full,
+        k_full,
+        v_full,
+        chunk_start_idx=cached_len,
+        scale=scale,
+        num_groups=num_groups,
+        device=device,
     )
 
 
@@ -178,7 +185,10 @@ def _per_device_chunk_offset(cached_len, s_local, mesh_config, device):
     for r in range(sp):
         vals[r, 0, 0, 0] = (cached_len + r * s_local) // ts
     return ttnn.from_torch(
-        vals, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device,
+        vals,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
         mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=(rows, cols), dims=[0, None]),
     )
 
@@ -201,6 +211,98 @@ def msa_sp_attention_sharded(
     index_k_full = mesh_config.allgather(index_k, ccl_manager, axis=sp_axis, dim=2)
     chunk_offset = _per_device_chunk_offset(cached_len, s_local, mesh_config, device)
     return msa_indexer_sparse(
-        index_q, index_k_full, q, k_full, v_full,
-        chunk_start_idx=0, scale=scale, num_groups=num_groups, device=device, chunk_offset=chunk_offset,
+        index_q,
+        index_k_full,
+        q,
+        k_full,
+        v_full,
+        chunk_start_idx=0,
+        scale=scale,
+        num_groups=num_groups,
+        device=device,
+        chunk_offset=chunk_offset,
+    )
+
+
+def _blockcyclic_to_natural(t, sp, n_chunks, chunk_local):
+    """Reorder an AllGathered block-cyclic context [1, H, T, hd] to natural token order.
+
+    ``update_padded_kv_cache`` stores chip r's slice as ``[chunk0_r, chunk1_r, ...]`` (chunk_local tokens
+    each), so AllGather over the SP axis yields chip-major order — index ``(chip, chunk, c)``. Natural
+    order is ``(chunk, chip, c)``. At chunk-aligned offsets that is exactly a transpose of the (chip, chunk)
+    axes: reshape T -> [sp, n_chunks, chunk_local*hd], swap dims, reshape back. (Row-major for the middle
+    transpose; the indexer/sparse re-tilize.)
+    """
+    H, T, hd = t.shape[1], t.shape[2], t.shape[3]
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    t = ttnn.reshape(t, [H, sp, n_chunks, chunk_local * hd])
+    t = ttnn.transpose(t, 1, 2)  # (chip, chunk) -> (chunk, chip)
+    t = ttnn.reshape(t, [1, H, T, hd])
+    return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+
+
+def msa_sp_attention_cache_read(
+    q,
+    k_acc,
+    v_acc,
+    index_q,
+    index_k_acc,
+    *,
+    mesh_config,
+    ccl_manager,
+    cached_len,
+    s_local,
+    n_chunks,
+    chunk_local,
+    scale,
+    num_groups=1,
+):
+    """Cross-chunk MSA: the CURRENT chunk's queries attend the ACCUMULATED context read from the
+    block-cyclic SP cache (the multi-chunk read path; ``msa_sp_attention_sharded`` is its single-chunk,
+    contiguous-context sibling).
+
+    Args (per device, on the (sp, tp) mesh):
+        q, index_q          CURRENT chunk's CONTIGUOUS SP shards: q [1, Hq_local, s_local, hd],
+                            index_q [1, num_groups, s_local, hd]  (chip r owns chunk positions
+                            [cached_len + r*s_local : ...]).
+        k_acc, v_acc        ACCUMULATED context's BLOCK-CYCLIC SP shards (as the cache stores them):
+                            [1, n_kv_local, n_chunks*chunk_local, hd].
+        index_k_acc         accumulated index_k block-cyclic shard [1, 1, n_chunks*chunk_local, hd].
+        cached_len          valid prefix length BEFORE the current chunk (= (n_chunks-1)*chunk_local*sp).
+        n_chunks            total chunks now in the cache (incl. current); chunk_local = tokens/chip/chunk.
+
+    AllGather K/V/index_k across SP -> full block-cyclic context -> reorder to NATURAL token order (so the
+    indexer's block-pool + causal offset see true positions) -> indexer (per-device chunk_offset) ->
+    sparse_sdpa. Returns the current chunk's SP-sharded attention out [1, Hq_local, s_local, hd].
+    """
+    sp_axis = mesh_config.sp_axis
+    device = ccl_manager.mesh_device
+    sp = device.shape[sp_axis]
+
+    def gather_natural(t):
+        # Cache slices come out ND_SHARDED (the persistent cache's DRAM NdShard layout), which AllGather
+        # rejects — convert to interleaved DRAM first. No-op for already-interleaved op-test inputs.
+        t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
+        full_bc = mesh_config.allgather(t, ccl_manager, axis=sp_axis, dim=2)
+        # The persistent cache is bf8 (a tile-only block format); the reorder needs ROW_MAJOR, so cast to
+        # bf16 first. No-op for the bf16 op-test inputs; required for the bf8 cache slices from the model.
+        if full_bc.dtype != ttnn.bfloat16:
+            full_bc = ttnn.typecast(full_bc, ttnn.bfloat16)
+        return _blockcyclic_to_natural(full_bc, sp, n_chunks, chunk_local)
+
+    k_full = gather_natural(k_acc)
+    v_full = gather_natural(v_acc)
+    index_k_full = gather_natural(index_k_acc)
+    chunk_offset = _per_device_chunk_offset(cached_len, s_local, mesh_config, device)
+    return msa_indexer_sparse(
+        index_q,
+        index_k_full,
+        q,
+        k_full,
+        v_full,
+        chunk_start_idx=0,
+        scale=scale,
+        num_groups=num_groups,
+        device=device,
+        chunk_offset=chunk_offset,
     )

@@ -336,6 +336,7 @@ class Model:
         page_tables_per_layer=None,
         on_layer_complete=None,
         kv_cache=None,
+        cached_len=0,
     ):
         """
         Prefill forward pass through decoder layers and final projection.
@@ -382,6 +383,7 @@ class Model:
                 kv_cache=kv_cache,
                 user_id=user_id,
                 batch_size=batch_size,
+                cached_len=cached_len,
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
@@ -505,6 +507,7 @@ class Model:
         skip_lm_head=False,
         page_tables_per_layer=None,
         on_layer_complete=None,
+        cached_len=0,
     ):
         if page_tables_per_layer is None:
             # vLLM hybrid mode stashes per-layer page tables on the model since the
@@ -536,6 +539,7 @@ class Model:
             skip_lm_head=skip_lm_head,
             page_tables_per_layer=page_tables_per_layer,
             on_layer_complete=on_layer_complete,
+            cached_len=cached_len,
         )
 
         return logits

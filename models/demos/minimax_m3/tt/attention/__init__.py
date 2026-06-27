@@ -86,6 +86,7 @@ class Attention:
         kv_cache=None,
         user_id=0,
         batch_size=1,
+        cached_len=0,
     ):
         """
         Prefill attention forward.
@@ -119,4 +120,5 @@ class Attention:
             ccl_manager=self.ccl_manager,
             batch_size=batch_size,
             layer_idx=self.layer_idx,
+            cached_len=cached_len,
         )

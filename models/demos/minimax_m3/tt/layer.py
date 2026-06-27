@@ -134,6 +134,7 @@ class DecoderLayer:
         kv_cache=None,
         user_id=0,
         batch_size=1,
+        cached_len=0,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -155,6 +156,7 @@ class DecoderLayer:
             kv_cache=kv_cache,
             user_id=user_id,
             batch_size=batch_size,
+            cached_len=cached_len,
         )
         hidden_states_post_norm.deallocate(True)
 
