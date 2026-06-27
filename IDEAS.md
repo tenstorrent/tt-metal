@@ -28,6 +28,16 @@ Implementation hook:
 - Fall back to sampled weighted fitting / local search when Sollya cannot represent the ULP staircase cleanly.
 - Persist `weight_mode`, `target_ulp`, and measured `max_ulp` in CSV metadata.
 
+Status note, 2026-06-27:
+
+- A generic post-fit coefficient-neighbor search now lives in the fitter repo as
+  `scripts/local_coeff_nudge.py`. It keeps the existing CSV shape and kernel
+  schedule, tries nearby float32 coefficient encodings, and ranks candidates with
+  the canonical `ttpoly.stages.s40_eval` max-ULP metric.
+- A bounded GELU P6/S1 affine-even test did not reduce max ULP below 0.25, so no
+  GELU coefficient churn was promoted. This supports using the tool as a gate:
+  only commit changed coefficients when the headline max-ULP metric improves.
+
 ### 2. Fit the emitted coefficients, not ideal coefficients
 
 Reference anchors: Handbook Ch. 10.3.3 and ASA Ch. 18.1.5 / Algorithm 18.1.
@@ -272,4 +282,3 @@ Useful for correctly rounded libraries; awkward for tt-metal kernels. Keep as of
 6. Add `eval_scheme` metadata and benchmark `x2_horner` / Estrin with disassembly.
 7. Prototype table-assisted range reduction for one log/exp-family loser.
 8. Add monotonicity, alternation, and range-reduction audit reports.
-
