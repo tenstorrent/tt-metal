@@ -691,6 +691,9 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         # log1p decomposes (x + 1) before log2 -> expalu_input_offset = 1.0.
         offset = float(metadata.get('expalu_input_offset', '0.0') or '0.0')
         offset_macro = f'#define LOG_HW_INPUT_OFFSET {clamp(offset):.10e}f\n' if offset != 0.0 else ''
+        decompose_min = min(float(input_min) + offset, float(input_max) + offset)
+        skip_specials_macro = '#define LOG_HW_SKIP_SPECIALS\n' if decompose_min > 0.0 else ''
+        specials_status = 'skipped' if decompose_min > 0.0 else 'ON'
         rr_macro = (
             '\n// eval_method: exponent_alu / log2 (exexp -> e, exman -> m), natural coeffs. STANDALONE\n'
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_EXPONENT_ALU\n'
@@ -698,12 +701,13 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             '#define EXPONENT_ALU_LOG2\n'
             f'{log_basis_macro}'
             f'{offset_macro}'
+            f'{skip_specials_macro}'
             f'{hw_preload_macro}'
             f'constexpr uint32_t LOG_HW_DEGREE = {degree};\n'
             f'constexpr float LOG_HW_COEFFS[] = {{{coeff_str}}};\n'
             f'#define LOG_HW_SCALE {scale}f\n'
         )
-        print(f'Range reduction: HW exponent-ALU log2 (degree {degree}, scale {scale}, basis {basis}, offset {offset})')
+        print(f'Range reduction: HW exponent-ALU log2 (degree {degree}, scale {scale}, basis {basis}, offset {offset}, specials {specials_status})')
     elif kind == 'pow':
         coeff_str = ', '.join(f'{clamp(v):.10e}f' for v in seg0)
         # root order N, optional final reciprocal (rsqrt), per-r scale constants.

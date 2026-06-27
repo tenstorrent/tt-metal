@@ -669,10 +669,13 @@ inline vFloat log_hw_eval(vFloat x) {
     vFloat result = (e_float + h) * LOG_HW_SCALE;
 
     // Special cases on the DECOMPOSE input (x + offset): log(0) = -inf, log(neg) = NaN.
-    // For log1p this is the (x + 1) singularity at x = -1.
+    // For log1p this is the (x + 1) singularity at x = -1. Range-controlled
+    // sweeps can opt out when metadata proves the decompose input is positive.
+#ifndef LOG_HW_SKIP_SPECIALS
     v_if(xd < 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_elseif(xd == 0.0f) { result = -std::numeric_limits<float>::infinity(); }
     v_endif;
+#endif
     (void)x_in;
     return result;
 }
@@ -712,9 +715,11 @@ inline vFloat log_hw_eval_preloaded(vFloat x, const vFloat* cvspill) {
     vFloat e_float = int32_to_float(e_int, RoundMode::Nearest);
     vFloat result = (e_float + h) * vConstFloatPrgm0;  // * LOG_HW_SCALE
 
+#ifndef LOG_HW_SKIP_SPECIALS
     v_if(xd < 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_elseif(xd == 0.0f) { result = -std::numeric_limits<float>::infinity(); }
     v_endif;
+#endif
     return result;
 }
 #endif  // HW_PRELOAD
@@ -3021,9 +3026,24 @@ void kernel_main() {
 #endif
             sfpi::dst_reg[d] = y;
         }
+#elif defined(EXPONENT_ALU_LOG2)
+        sfpi::vFloat log_cvspill[(LOG_HW_DEGREE >= 2) ? (LOG_HW_DEGREE - 1) : 1];
+        if constexpr (LOG_HW_DEGREE >= 2) {
+#pragma GCC unroll 16
+            for (int k = 0; k < (int)LOG_HW_DEGREE - 1; k++) {
+                log_cvspill[k] = LOG_HW_COEFFS[(int)LOG_HW_DEGREE - 2 - k];
+            }
+        }
+        for (int d = 0; d < 32; d++) {
+            sfpi::vFloat y = sfpi::log_hw_eval_preloaded<LOG_HW_DEGREE>(sfpi::dst_reg[d], log_cvspill);
+#ifdef USE_BF16
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+#endif
+            sfpi::dst_reg[d] = y;
+        }
 #endif
 #endif
-#if !defined(HW_PRELOAD) || !defined(EXPONENT_ALU_EXP2)
+#if !defined(HW_PRELOAD) || (!defined(EXPONENT_ALU_EXP2) && !defined(EXPONENT_ALU_LOG2))
         for (int d = 0; d < 32; d++) {
 #if defined(EXPONENT_ALU_EXP2)
             sfpi::vFloat y = sfpi::exp_hw_eval<EXP_HW_DEGREE>(sfpi::dst_reg[d]);

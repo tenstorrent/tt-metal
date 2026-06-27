@@ -29,10 +29,10 @@ i1_n7d4_s1_uniform_rational_ulp.csv,i1,rational,7d4,1,bf16,0.50,2.71,1,controlle
 identity_p13_s1_uniform_any_ulp.csv,identity,poly,13,1,bf16,0.00,0.13,1,controlled_replay
 leaky_relu_p1_s2_uniform_any_ulp.csv,leaky_relu,poly,1,2,bf16,0.00,1.80,1,controlled_replay
 lgamma_n5d5_s1_uniform_rational_ulp.csv,lgamma,rational,5d5,1,bf16,1.00,3.42,1,controlled_replay
-log_p2_s3_uniform_any_ulp.csv,log,exponent_alu_log2,2,3,bf16,1.00,2.65,1,controlled_replay
-log10_p3_s16_uniform_any_ulp.csv,log10,exponent_alu_log2,3,16,bf16,0.50,2.81,1,controlled_replay
-log1p_p2_s16_uniform_any_ulp.csv,log1p,exponent_alu_log2,2,16,bf16,1.00,2.70,1,controlled_replay
-log2_p3_s8_uniform_any_ulp.csv,log2,exponent_alu_log2,3,8,bf16,1.00,2.70,1,controlled_replay
+log_p2_s3_uniform_any_ulp.csv,log,exponent_alu_log2,2,3,bf16,1.00,2.01,1,controlled_replay_log_preload_skip_specials
+log10_p3_s16_uniform_any_ulp.csv,log10,exponent_alu_log2,3,16,bf16,0.50,2.11,1,controlled_replay_log_preload_skip_specials
+log1p_p2_s16_uniform_any_ulp.csv,log1p,exponent_alu_log2,2,16,bf16,1.00,2.11,1,controlled_replay_log_preload_skip_specials
+log2_p3_s8_uniform_any_ulp.csv,log2,exponent_alu_log2,3,8,bf16,1.00,2.11,1,controlled_replay_log_preload_skip_specials
 logit_n4d4_s1_uniform_rational_ulp.csv,logit,rational,4d4,1,bf16,1.00,3.04,1,controlled_replay
 logsigmoid_n5d5_s2_uniform_rational_ulp.csv,logsigmoid,rational,5d5,2,bf16,0.00,5.47,1,controlled_replay
 mish_p9_s2_uniform_any_ulp.csv,mish,poly,9,2,bf16,0.25,3.27,1,controlled_replay
