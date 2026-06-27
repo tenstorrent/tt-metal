@@ -5,9 +5,9 @@
 // Metal 2.0 port of the height-only sharded pad writer (private to PadRmShardedHeightOnlyProgramFactory).
 // Self-loop DFBs are no longer permitted on data-movement kernels, so cb_pad is now a CROSS-KERNEL DFB:
 // the reader PRODUCES the pad-value stick (the fill logic moved there); this writer CONSUMES it (wait_front
-// -> read its address -> broadcast pad sticks -> pop_front). c_16 output shard -> dfb::cb_out0
-// (borrowed-from-output; reader PRODUCER, writer CONSUMER). start_dim_offset is read by constant indices so
-// it is three named scalar RTAs.
+// -> read its address -> broadcast pad sticks -> pop_front). The c_16 output shard is written in place
+// via tensor::output (NOC_LOCAL_ADDR_OFFSET(get_noc_addr(0))) — no borrowed co-write DFB. start_dim_offset
+// is read by constant indices so it is three named scalar RTAs.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -15,6 +15,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -36,14 +37,16 @@ void kernel_main() {
     const uint32_t start_dim_n = get_arg(args::start_dim_n);
 
     DataflowBuffer cb_pad(dfb::cb_pad);
-    DataflowBuffer cb_out0(dfb::cb_out0);
     Noc noc;
 
     // The pad-value stick is produced by the reader (cross-kernel DFB); wait for it and use its address.
     cb_pad.wait_front(1);
     const uint32_t pad_val_addr = cb_pad.get_read_ptr();
 
-    uint32_t l1_write_addr = cb_out0.get_write_ptr();
+    // Output shard base from the resident output TensorAccessor (written in place; no borrowed
+    // co-write DFB — the reader writes the gathered sticks, this writer writes the pad sticks).
+    const auto s_out = TensorAccessor(tensor::output);
+    uint32_t l1_write_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0));
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_c, curr_h = start_dim_h, curr_n = start_dim_n;

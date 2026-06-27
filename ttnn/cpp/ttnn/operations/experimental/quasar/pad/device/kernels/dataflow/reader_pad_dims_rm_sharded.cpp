@@ -10,7 +10,8 @@
 //     for the remote NoC reads against neighbouring shards. (No more cb_in0 borrowed fake-CB self-loop.)
 //   - cb_pad is now a CROSS-KERNEL DFB: this reader PRODUCES the pad-value stick once (fill moved here
 //     from the writer); the writer CONSUMES it. (No more writer self-loop.)
-//   - c_16 output shard -> dfb::cb_out0 (borrowed-from-output; reader PRODUCER, writer CONSUMER).
+//   - c_16 output shard is written in place via tensor::output (NOC_LOCAL_ADDR_OFFSET(get_noc_addr(0)));
+//     the reader writes the gathered real sticks, the writer writes the pad sticks (no borrowed DFB).
 //   - The legacy variable-length arg tail (read_noc_x/y, num_stick_chunks, chunk lists) is runtime varargs.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -58,7 +59,7 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_zero(
 
 void kernel_main() {
     constexpr uint32_t stick_size_bytes = get_arg(args::stick_size_bytes);
-    constexpr uint32_t num_sticks_padded = get_arg(args::num_sticks_padded);
+    [[maybe_unused]] constexpr uint32_t num_sticks_padded = get_arg(args::num_sticks_padded);
 
     // Pad-value fill CTAs (moved here from the writer).
     constexpr uint32_t num_zero_pad_sticks_read = get_arg(args::num_zero_pad_sticks_read);
@@ -83,7 +84,6 @@ void kernel_main() {
     const uint32_t chunk_base = num_cores_read * 3;
 
     DataflowBuffer cb_pad(dfb::cb_pad);
-    DataflowBuffer cb_out0(dfb::cb_out0);
     Noc noc;
 
     // Produce the pad-value stick for the writer (cross-kernel DFB).
@@ -100,8 +100,10 @@ void kernel_main() {
     const auto s = TensorAccessor(tensor::input);
     uint32_t l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0));
 
-    cb_out0.reserve_back(num_sticks_padded);
-    uint32_t l1_write_addr = cb_out0.get_write_ptr();
+    // Output shard base from the resident output TensorAccessor (written in place; no borrowed
+    // co-write DFB — both reader and writer address the output shard directly).
+    const auto s_out = TensorAccessor(tensor::output);
+    uint32_t l1_write_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0));
 
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;
@@ -137,5 +139,4 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    cb_out0.push_back(num_sticks_padded);
 }

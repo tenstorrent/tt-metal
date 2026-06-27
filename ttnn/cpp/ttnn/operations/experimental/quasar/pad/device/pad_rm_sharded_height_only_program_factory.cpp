@@ -198,8 +198,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
-    const DFBSpecName CB_OUT0{"cb_out0"};  // legacy c_16: output shard (borrowed; reader+writer co-write)
-    const DFBSpecName CB_PAD{"cb_pad"};    // legacy c_1: pad-value stick — reader PRODUCER, writer CONSUMER
+    const DFBSpecName CB_PAD{"cb_pad"};  // legacy c_1: pad-value stick — reader PRODUCER, writer CONSUMER
 
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName OUTPUT_TENSOR{"output"};
@@ -280,20 +279,21 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     // ------------------------------------------------------------------------
     // DataflowBufferSpecs.
-    //   cb_out0 (borrowed output): the output shard, co-written by the reader (gathered real sticks)
-    //                              and the writer (pad sticks). Bound reader=PRODUCER / writer=CONSUMER.
-    //   cb_pad  (fresh L1):        pad-value stick — produced by the reader, consumed by the writer
-    //                              (cross-kernel DFB; replaces the old writer self-loop).
-    // The input shard is read via the tensor::input TensorAccessor in the reader (no borrowed fake-CB),
-    // so there is no cb_in0 DFB anymore.
+    //   cb_pad (fresh L1): pad-value stick — produced by the reader, consumed by the writer
+    //                      (cross-kernel DFB; replaces the old writer self-loop).
+    // The input AND output shards are read/written in place via tensor::input / tensor::output
+    // TensorAccessors (no borrowed fake-CB DFBs), so cb_in0 and cb_out0 are both gone — see the note
+    // at cb_pad_spec below for why the cb_out0 co-write DFB was dropped.
     // ------------------------------------------------------------------------
-    DataflowBufferSpec cb_out0_spec{
-        .unique_id = CB_OUT0,
-        .entry_size = static_cast<uint32_t>(stick_size_padded),
-        .num_entries = shard_height_padded,
-        .data_format_metadata = dst_cb_data_format,
-        .borrowed_from = OUTPUT_TENSOR,
-    };
+    // cb_out0 (the borrowed output shard) was ADDRESS-ONLY: the reader writes the gathered real sticks
+    // and the writer writes the pad sticks to disjoint regions of the resident output shard — neither
+    // CONSUMES it. Modeling it as reader-PRODUCER / writer-CONSUMER was a fiction to satisfy the DFB
+    // validator (the "consumer" writer called get_write_ptr, never wait_front/pop). On the Quasar
+    // simulator that consumer-bound get_write_ptr yields a bad base, so the writer's pad-broadcast NoC
+    // reads target invalid L1 and never drain (NARW hang). Drop the DFB and read the output shard base
+    // from tensor::output in both kernels (Pattern 1, as in slice); the resident shard is written in
+    // place and readiness is the program barrier, not a FIFO. (dst_cb_data_format is now unused.)
+    (void)dst_cb_data_format;
     DataflowBufferSpec cb_pad_spec{
         .unique_id = CB_PAD,
         .entry_size = static_cast<uint32_t>(stick_size_padded),
@@ -312,8 +312,10 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     KernelSpec reader_spec{
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path{READER_PATH},
-        .dfb_bindings = {ProducerOf(CB_PAD, "cb_pad"), ProducerOf(CB_OUT0, "cb_out0")},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"}},
+        .dfb_bindings = {ProducerOf(CB_PAD, "cb_pad")},
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "input"},
+             TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
         .compile_time_args =
             {{"stick_size_bytes", static_cast<uint32_t>(stick_size_padded)},
              {"num_sticks_padded", shard_height_padded},
@@ -334,7 +336,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     KernelSpec writer_spec{
         .unique_id = WRITER_KERNEL,
         .source = std::filesystem::path{WRITER_PATH},
-        .dfb_bindings = {ConsumerOf(CB_PAD, "cb_pad"), ConsumerOf(CB_OUT0, "cb_out0")},
+        .dfb_bindings = {ConsumerOf(CB_PAD, "cb_pad")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
         .compile_time_args =
             {{"N", static_cast<uint32_t>(N + front_pad[-4])},
              {"H", static_cast<uint32_t>(H + front_pad[-2])},
@@ -424,7 +427,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     ProgramSpec spec{
         .name = "pad_rm_sharded_height_only",
         .kernels = {reader_spec, writer_spec},
-        .dataflow_buffers = {cb_out0_spec, cb_pad_spec},
+        .dataflow_buffers = {cb_pad_spec},
         .tensor_parameters = {input_param, output_param},
         .work_units = {wu},
     };
