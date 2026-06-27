@@ -132,8 +132,7 @@ inline vFloat trig_expand(vFloat poly_result, vInt q_int) {
 #endif
 
 #if defined(EVAL_METHOD_TRIG_RESIDUAL)
-template <uint32_t DEGREE>
-inline vFloat trig_residual_odd_eval(vFloat x) {
+inline vFloat trig_residual_reduce(vFloat x, vFloat& s) {
 #if defined(TRIG_RESIDUAL_PHASE_COSINE_PI2_ODD)
     vFloat half = sFloat16b(0.5f);
     vFloat inv_pi = vConstFloatPrgm2;
@@ -173,7 +172,14 @@ inline vFloat trig_residual_odd_eval(vFloat x) {
     q_int <<= 31;
     a = reinterpret<vFloat>(reinterpret<vInt>(a) ^ q_int);
 
-    vFloat s = a * a;
+    s = a * a;
+    return a;
+}
+
+template <uint32_t DEGREE>
+inline vFloat trig_residual_odd_eval(vFloat x) {
+    vFloat s;
+    vFloat a = trig_residual_reduce(x, s);
     if constexpr (DEGREE == 7) {
         vFloat r = TRIG_RESIDUAL_COEFFS[7] * s + TRIG_RESIDUAL_COEFFS[5];
         vFloat c = a * s;
@@ -198,6 +204,39 @@ inline vFloat trig_residual_odd_eval(vFloat x) {
 #pragma GCC unroll 8
         for (int k = 1; k <= STEPS; k++) {
             r = r * s + TRIG_RESIDUAL_COEFFS[TOP - 2 * k];
+        }
+        return r * a;
+    }
+}
+
+template <uint32_t DEGREE>
+inline vFloat trig_residual_odd_eval_preloaded(vFloat x, const vFloat* coeffs) {
+    vFloat s;
+    vFloat a = trig_residual_reduce(x, s);
+    if constexpr (DEGREE == 7) {
+        vFloat r = coeffs[0] * s + coeffs[1];
+        vFloat c = a * s;
+        r = r * s + coeffs[2];
+#ifdef TRIG_RESIDUAL_C1_IS_ONE
+        return r * c + a;
+#else
+        return r * c + coeffs[3] * a;
+#endif
+    } else if constexpr (DEGREE == 5) {
+        vFloat r = coeffs[0] * s + coeffs[1];
+        vFloat c = a * s;
+#ifdef TRIG_RESIDUAL_C1_IS_ONE
+        return r * c + a;
+#else
+        return r * c + coeffs[2] * a;
+#endif
+    } else {
+        constexpr int TOP = (DEGREE % 2 == 1) ? DEGREE : DEGREE - 1;
+        constexpr int STEPS = (TOP - 1) / 2;
+        vFloat r = coeffs[0];
+#pragma GCC unroll 8
+        for (int k = 1; k <= STEPS; k++) {
+            r = r * s + coeffs[k];
         }
         return r * a;
     }
@@ -3075,8 +3114,15 @@ void kernel_main() {
 #endif
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_TRIG_RESIDUAL || defined(EVAL_METHOD_TRIG_RESIDUAL)
         (void)p_lut;
+        constexpr int trig_top = (TRIG_RESIDUAL_DEGREE % 2 == 1) ? TRIG_RESIDUAL_DEGREE : TRIG_RESIDUAL_DEGREE - 1;
+        constexpr int trig_steps = (trig_top - 1) / 2;
+        sfpi::vFloat trig_coeffs[trig_steps + 1];
+#pragma GCC unroll 8
+        for (int k = 0; k <= trig_steps; k++) {
+            trig_coeffs[k] = TRIG_RESIDUAL_COEFFS[trig_top - 2 * k];
+        }
         for (int d = 0; d < 32; d++) {
-            sfpi::vFloat y = sfpi::trig_residual_odd_eval<TRIG_RESIDUAL_DEGREE>(sfpi::dst_reg[d]);
+            sfpi::vFloat y = sfpi::trig_residual_odd_eval_preloaded<TRIG_RESIDUAL_DEGREE>(sfpi::dst_reg[d], trig_coeffs);
 #ifdef USE_BF16
             y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
 #endif

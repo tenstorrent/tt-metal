@@ -8,7 +8,7 @@ atan_p7_s1_uniform_any_ulp.csv,atan,poly,7,1,bf16,0.50,1.98,1,controlled_replay
 atanh_n5d5_s1_uniform_rational_ulp.csv,atanh,rational,5d5,1,bf16,1.00,2.54,1,controlled_replay
 cbrt_p1_s1_newton_root_ulp.csv,cbrt,newton_root,1,1,bf16,1.00,2.07,1,controlled_replay
 celu_p13_s2_uniform_any_ulp.csv,celu,poly,13,2,bf16,0.00,2.75,1,controlled_replay
-cos_p7_s1_uniform_fpminimax_ulp.csv,cos,trig_residual,7,1,bf16,0.00,2.75,1,controlled_replay
+cos_p7_s1_uniform_fpminimax_ulp.csv,cos,trig_residual,7,1,bf16,0.00,2.48,1,controlled_replay_trig_coeff_hoist
 cosh_p16_s1_uniform_any_ulp.csv,cosh,poly,16,1,bf16,0.00,2.70,1,controlled_replay
 digamma_n4d3_s1_uniform_rational_ulp.csv,digamma,rational,4d3,1,bf16,1.00,2.93,1,controlled_replay
 elu_p11_s2_uniform_any_ulp.csv,elu,poly,11,2,bf16,0.00,2.74,1,controlled_replay
@@ -48,7 +48,7 @@ selu_p14_s2_uniform_any_ulp.csv,selu,poly,14,2,bf16,0.00,2.80,1,controlled_repla
 sigmoid_p2_s1_uniform_fpminimax_ulp.csv,sigmoid,exponent_alu_exp2,2,1,bf16,0.50,2.91,1,controlled_replay
 sigmoid_accurate_p2_s1_uniform_fpminimax_ulp.csv,sigmoid_accurate,exponent_alu_exp2,2,1,bf16,0.50,2.92,1,controlled_replay
 silu_p3_s1_uniform_any_ulp.csv,silu,exponent_alu_exp2,3,1,bf16,0.03,3.19,1,controlled_replay
-sin_p7_s1_uniform_fpminimax_ulp.csv,sin,trig_residual,7,1,bf16,0.00,2.59,1,controlled_replay
+sin_p7_s1_uniform_fpminimax_ulp.csv,sin,trig_residual,7,1,bf16,0.00,2.33,1,controlled_replay_trig_coeff_hoist
 sinh_n13d2_s1_uniform_rational_ulp.csv,sinh,rational,13d2,1,bf16,0.00,3.04,1,controlled_replay
 softplus_p10_s2_uniform_any_ulp.csv,softplus,poly,10,2,bf16,0.12,3.30,1,controlled_replay
 softshrink_p2_s3_uniform_any_ulp.csv,softshrink,threshold_softshift,2,3,bf16,0.00,1.77,1,controlled_replay
