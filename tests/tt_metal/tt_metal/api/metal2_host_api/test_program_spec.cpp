@@ -3554,26 +3554,28 @@ TEST_F(ProgramSpecTestGen1, DynamicTensorShape_InterleavedTileBindingHasNoRuntim
     EXPECT_FALSE(handles[0].runtime_field_is_page_size);
 }
 
-TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
+TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllFourSectionsConsistent) {
     // The Kernel's stored KernelCrtaLayout must equal what a fresh walk of (named CRTAs +
-    // binding handles) would compute. This test exercises a Program in which ALL THREE
-    // sections of the CRTA buffer are non-empty:
+    // tensor binding handles + scratchpad binding handles) would compute. This test exercises a
+    // Program in which ALL FOUR sections of the CRTA buffer are non-empty:
     //   - section 1: named CRTAs           (declared in runtime_arg_schema)
     //   - section 2: TensorBinding section (variable-size: a plain interleaved binding +
     //                                       a sharded-with-dynamic_tensor_shape binding)
-    //   - section 3: varargs               (declared via num_common_runtime_varargs)
+    //   - section 3: Scratchpad section    (one address word per scratchpad binding)
+    //   - section 4: varargs               (declared via num_common_runtime_varargs)
     //
     // The headergen bakes vararg_section_offset into the kernel's `get_common_vararg(idx)`
-    // macro, so a wrong offset here would silently route vararg reads into the binding
-    // section. The walk-based reference value is exactly what genfiles used to compute on
-    // its own; the refactor moves that computation into ResolveTensorBindingsForKernel and
-    // threads it through. This test guards against the threading silently producing a
-    // different value than the walk would.
+    // macro, so a wrong offset here would silently route vararg reads into an earlier section.
+    // The walk-based reference value is exactly what genfiles used to compute on its own; the
+    // refactor moves that computation into the spec-resolution pass and threads it through. This
+    // test guards against the threading silently producing a different value than the walk would,
+    // and in particular that the scratchpad section is accounted for in the vararg offset (the
+    // A1 partial-update bug class).
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     // Section 1: named CRTAs on the DM kernel.
     spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"foo", "bar"};
-    // Section 3: vararg CRTAs on the DM kernel.
+    // Section 4: vararg CRTAs on the DM kernel.
     spec.kernels[0].advanced_options.num_common_runtime_varargs = 3;
 
     // Section 2: two bindings — one plain (1 word), one sharded+dynamic_tensor_shape
@@ -3586,6 +3588,11 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
     BindTensorParameterToKernel(spec.kernels[0], "dyn_tensor", "dyn_ta");
 
+    // Section 3: a scratchpad binding on the DM kernel (one address word).
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const KernelCrtaLayout layout = kernel->get_crta_layout();
@@ -3596,11 +3603,14 @@ TEST_F(ProgramSpecTestGen1, KernelCrtaLayout_AllThreeSectionsConsistent) {
     for (const auto& handle : kernel->tensor_binding_handles()) {
         expected_binding_words += 1u + handle.num_runtime_field_crta_words;
     }
-    const uint32_t expected_vararg_offset = expected_named_words + expected_binding_words;
+    const uint32_t expected_scratchpad_words =
+        static_cast<uint32_t>(kernel->scratchpad_binding_handles().size());  // one word each
+    const uint32_t expected_vararg_offset = expected_named_words + expected_binding_words + expected_scratchpad_words;
 
     EXPECT_EQ(layout.num_named_words, expected_named_words);
     EXPECT_EQ(layout.tensor_binding_section_words, expected_binding_words);
-    EXPECT_EQ(layout.scratchpad_section_words, 0u);  // no scratchpad bindings in this kernel
+    EXPECT_EQ(layout.scratchpad_section_words, expected_scratchpad_words);
+    EXPECT_EQ(layout.scratchpad_section_words, 1u) << "exactly one scratchpad binding, one word.";
     EXPECT_EQ(layout.vararg_section_offset, expected_vararg_offset)
         << "vararg_section_offset must equal num_named_words + tensor_binding_section_words + "
            "scratchpad_section_words; this is the value baked into get_common_vararg(idx) by the "
@@ -3820,81 +3830,15 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
 }
 
 // ============================================================================
-// SECTION: Scratchpad (Program-scope L1 resource)
+// SECTION: Scratchpad Validation Tests (Gen1 / WH)
 // ============================================================================
 //
-// A ScratchpadSpec (scratchpad_spec.hpp) declares a Program-scope SRAM ("L1") region,
-// allocated per node with the lifetime of the Program. Kernels access it on the device
-// side through the ScratchPad accessor (hw/inc/api/scratchpad.h).
+// A ScratchpadSpec (scratchpad_spec.hpp) declares a Program-scope SRAM ("L1") region, allocated per
+// node with the lifetime of the Program. Kernels access it on the device side through the Scratchpad
+// accessor (hw/inc/api/scratchpad.h). These are the structural/validation tests run by
+// CollectSpecData (mirrors SECTION 9 for TensorParameter): every binding rule has a negative test,
+// plus the positive bound cases.
 using ScratchpadSpecTest = ProgramSpecTestGen1;
-
-// TODO: this test should not exist
-TEST_F(ScratchpadSpecTest, ScratchpadConfiguredEmptyKernelCompiles) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "scratchpad_smoke";
-
-    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
-    dm_kernel.source = KernelSpec::SourceCode{R"(
-        #include "api/scratchpad.h"
-
-        // No-op
-        void kernel_main() {}
-    )"};
-
-    // A scratchpad must be bound by exactly one kernel (CollectSpecData enforces must-be-bound).
-    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
-
-    spec.kernels = {dm_kernel};
-    spec.scratchpads = {ScratchpadSpec{
-        .unique_id = ScratchpadSpecName{"scratch"},
-        .size_per_node = 1024,
-    }};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
-}
-
-// DM kernel constructs a Scratchpad from its binding token (scratch::<name>) and reads the
-// CRTA-injected base address. Exercises: scratch:: namespace emission, ScratchpadAccessor, the
-// device-side Scratchpad(ScratchpadAccessor) ctor, and get_common_arg_val for the base address.
-// Compile-only on the mock device (mirrors TensorAccessorBindingJITSmokeDMKernel). The DPRINT lets
-// you eyeball the base address on real hardware — get_scratchpad_address currently returns the
-// sentinel 0xCAFE0000, so a hardware run should print "scratch base: cafe0000".
-TEST_F(ScratchpadSpecTest, ScratchpadAccessorJITSmokeDMKernel) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "scratch_smoke_dm";
-
-    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
-    dm_kernel.source = KernelSpec::SourceCode{R"(
-#include "api/debug/dprint.h"
-void kernel_main() {
-    Scratchpad<int32_t> pad(scratch::scratch);
-    DPRINT("scratch base: {:x}\n", pad.get_base_addr().get_address());
-    (void)pad;
-}
-)"};
-    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
-
-    spec.kernels = {dm_kernel};
-    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
-}
-
-// ----------------------------------------------------------------------------
-// Step 1a (CollectSpecData) structural tests for Scratchpad
-// ----------------------------------------------------------------------------
 
 TEST_F(ScratchpadSpecTest, ScratchpadBoundToKernelSucceeds) {
     NodeCoord node{0, 0};
@@ -4082,9 +4026,54 @@ TEST_F(ScratchpadSpecTest, UnboundScratchpadFails) {
             ::testing::HasSubstr("ScratchpadSpec 'scratch' is defined but not bound by any kernel")));
 }
 
-// ----------------------------------------------------------------------------
-// Kernel hash sensitivity to Scratchpad bindings
-// ----------------------------------------------------------------------------
+// ============================================================================
+// SECTION: Scratchpad JIT Smoke Test (Gen1 / WH)
+// ============================================================================
+//
+// Codegen-path smoke test for the Metal 2.0 Scratchpad binding feature (mirrors SECTION 10 for
+// TensorParameter). Ends in CompileProgram, so the auto-generated kernel_bindings_generated.h (with
+// its `scratch::` namespace and auto-included api/scratchpad.h) must be syntactically valid and
+// compose with the rest of the kernel build.
+//
+// COMPILE-ONLY: on the mock device the kernel is never dispatched, so this does NOT verify the
+// CRTA-injected base address at runtime — that path is covered on hardware by
+// ProgramSpecHWTest.ScratchpadAccessorDispatch / ScratchpadCommonVarargPartialUpdate. It guards
+// regressions in codegen string-formatting, the ScratchpadAccessor token emission, and the
+// device-side Scratchpad<T> ctor + get_common_arg_val wiring.
+
+TEST_F(ScratchpadSpecTest, ScratchpadAccessorBindingJITSmokeDMKernel) {
+    // DM kernel constructs a Scratchpad from its binding token (scratch::<name>) and reads the
+    // CRTA-injected base address. Exercises: scratch:: namespace emission, the ScratchpadAccessor
+    // token, the device-side Scratchpad(ScratchpadAccessor) ctor, and get_common_arg_val for the
+    // base address.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratch_smoke_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    volatile uint32_t base = pad.get_base_addr().get_address();
+    (void)base;
+}
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ============================================================================
+// SECTION: Kernel hash sensitivity to Scratchpad bindings
+// ============================================================================
 //
 // The kernel's JIT cache key is its compute_hash(); two kernels that hash equal share a cached
 // binary. A scratchpad binding flows into the device-side codegen (the scratch:: namespace and the
