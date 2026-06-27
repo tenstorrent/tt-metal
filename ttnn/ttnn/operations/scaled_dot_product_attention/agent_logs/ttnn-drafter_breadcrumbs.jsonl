@@ -1,0 +1,1 @@
+{"event":"stage_checkpoint","stage":0,"name":"init","status":"match","attempt":1,"details":"cb_max_old tile 0 first 4x4 = all -inf, matches reference_phase_init m_i(init). Kernel DPRINT shows -inf -inf -inf -inf (4 rows). l_i (cb_sum_old) and O_i (cb_o) also initialized to 0.","ts":"2026-06-27T15:34:04+00:00"}
