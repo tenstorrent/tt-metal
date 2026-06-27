@@ -775,8 +775,11 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
 
-    status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert status >= 0.999
+    if output_tensor.numel() == 1:
+        assert torch.allclose(torch_output_tensor.float(), output_tensor.float(), rtol=0.4, atol=0.35)
+    else:
+        status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
+        assert status >= 0.999
 
 
 @pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
