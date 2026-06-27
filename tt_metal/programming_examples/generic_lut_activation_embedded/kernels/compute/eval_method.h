@@ -35,10 +35,14 @@
  *                                  bypasses the segment cascade. The kind is
  *                                  carried by the EXPONENT_ALU_* sub-tag
  *                                  (EXP2 / LOG2 / POW).
- *   EVAL_METHOD_NEWTON_ROOT      - magic-seed + Newton recurrence, NO polynomial
- *                                  fit. FIRST-CLASS method (formerly nested as an
- *                                  "exponent_alu kind"), STANDALONE: bypasses the
- *                                  cascade and ignores the LUT entirely.
+ *   EVAL_METHOD_NEWTON_ROOT      - metadata-declared magic-root recurrence, NO
+ *                                  polynomial fit. FIRST-CLASS method (formerly
+ *                                  nested as an "exponent_alu kind"),
+ *                                  STANDALONE: bypasses the cascade and ignores
+ *                                  the LUT entirely. Root order / reciprocal /
+ *                                  algorithm sub-tags select sqrt, rsqrt, or a
+ *                                  native-style cbrt magic-root body without
+ *                                  activation-name dispatch.
  *   Whole-function algebraic lowerings:
  *     identity                    - y = x, no SFPU body.
  *     affine                      - y = a*x + b.
@@ -125,7 +129,9 @@
 #endif
 
 // ----------------------------------------------------------------------------
-// NEWTON_ROOT: first-class standalone method -> legacy feature macro
+// NEWTON_ROOT: first-class standalone method -> legacy feature macro. Algorithm
+// details are payload macros (NEWTON_ROOT_N, NEWTON_ROOT_RECIPROCAL,
+// NEWTON_ROOT_ALGORITHM_*), not activation-name branches.
 // ----------------------------------------------------------------------------
 #if defined(EVAL_METHOD_NEWTON_ROOT)
 #define RANGE_REDUCTION_NEWTON_ROOT

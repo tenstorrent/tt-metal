@@ -584,9 +584,11 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
             for k in range(degree, -1, -1):
                 pool.append((f'c{k}', 50 + k))
         elif kind == 'newton_root':
-            # Newton path: 3 loop-invariants (seed magic + 2 Newton coeffs), all
-            # in prgm const regs. No polynomial coeffs touched on this path.
+            # Newton path: loop-invariant seed/correction constants in prgm const
+            # regs where the selected algorithm uses them. No polynomial coeffs
+            # are touched on this path.
             pool.append(('NEWTON_MAGIC', 100))
+            pool.append(('NEWTON_C0', 95))
             pool.append(('NEWTON_C1', 90))
             pool.append(('NEWTON_C2', 80))
         pool.sort(key=lambda t: -t[1])
@@ -689,39 +691,61 @@ if rr_method.startswith('exponent_alu_') or rr_method == 'newton_root':
         )
         print(f'Range reduction: HW exponent-ALU pow (degree {degree}, root_n {root_n}, reciprocal {recip})')
     elif kind == 'newton_root':
-        # Newton-Raphson magic-seed integer root. Mirrors TTNN native sqrt:
-        # y0 = bits(MAGIC - (bits(x)>>1)); Newton steps. The seed magic + Newton
-        # coeffs are loop-invariant -> preloaded into prgm const registers.
-        # No exexp/setexp/parity cascade -> ~18 SFPU body instrs (vs ~39 for pow).
-        # The fitter owns all constants (metadata-driven, no per-op hardcoding):
-        #   sqrt : root_n=2, magic 0x5f1110a0, SQRT_23-bit double-Newton.
-        #   rsqrt: root_n=2 + reciprocal, inverse-sqrt magic 0x5f3759df, the seed
-        #          IS 1/sqrt(x) (no final reciprocal op), Newton y=y*(c1-0.5*x*y*y).
-        #   cbrt : root_n=3, cube magic 0x2a4f5e2b, seed bits/3+magic on |x|,
-        #          Newton y=(2y+|x|/y^2)/3, sign restored (odd function).
-        magic = metadata.get('newton_root_magic', '0x5f1110a0')
-        c1 = float(metadata.get('newton_root_c1', '2.2825186'))
-        c2 = float(metadata.get('newton_root_c2', '2.2533049'))
+        # Metadata-declared magic-root integer root. The fitter owns all
+        # constants and the algorithm subtag; the kernel does not dispatch by
+        # activation name.
+        def parse_float_literal(value):
+            text = str(value).strip()
+            try:
+                return float.fromhex(text)
+            except ValueError:
+                return float(text)
+
         root_n = int(float(metadata.get('newton_root_n', metadata.get('expalu_root_n', '2')) or '2'))
         recip = str(metadata.get('newton_root_reciprocal',
                                  metadata.get('expalu_reciprocal', 'False'))).strip().lower() in ('true', '1')
         iters = int(float(metadata.get('newton_root_iters', '3') or '3'))
+        algorithm = metadata.get(
+            'newton_root_algorithm',
+            metadata.get(
+                'magic_root_algorithm',
+                metadata.get('newton_root_lowering', metadata.get('lowering', ''))
+            )
+        ).strip().lower()
+        cbrt_magic_aliases = (
+            'cbrt_magic', 'magic_cbrt', 'native_cbrt', 'moroz_cbrt', 'cube_root_native',
+            'cbrt_magic_root', 'magic_root_cbrt', 'cbrt-magic-root', 'magic-root-cbrt'
+        )
+        use_cbrt_magic = root_n == 3 and algorithm in cbrt_magic_aliases
+        if use_cbrt_magic:
+            magic = metadata.get('newton_root_magic', '0x548c2b4b')
+            c0 = parse_float_literal(metadata.get('newton_root_c0', '0x1.c09806p0'))
+            c1 = parse_float_literal(metadata.get('newton_root_c1', '-0x1.403e6cp0'))
+            c2 = parse_float_literal(metadata.get('newton_root_c2', '0x1.04cdb2p-1'))
+        else:
+            magic = metadata.get('newton_root_magic', '0x5f1110a0')
+            c0 = parse_float_literal(metadata.get('newton_root_c0', '0.0'))
+            c1 = parse_float_literal(metadata.get('newton_root_c1', '2.2825186'))
+            c2 = parse_float_literal(metadata.get('newton_root_c2', '2.2533049'))
         recip_macro = '#define NEWTON_ROOT_RECIPROCAL\n' if recip else ''
+        algorithm_macro = '#define NEWTON_ROOT_ALGORITHM_CBRT_MAGIC\n' if use_cbrt_magic else ''
         rr_macro = (
-            '\n// eval_method: newton_root (magic-seed + Newton, NO poly fit). FIRST-CLASS standalone.\n'
+            '\n// eval_method: newton_root (metadata-declared magic-root, NO poly fit). FIRST-CLASS standalone.\n'
             '#define TT_ACT_EVAL_KIND TT_ACT_EVAL_NEWTON_ROOT\n'
             '#define EVAL_METHOD_NEWTON_ROOT\n'
             f'#define NEWTON_ROOT_MAGIC {magic}\n'
+            f'#define NEWTON_ROOT_C0 {c0:.10e}f\n'
             f'#define NEWTON_ROOT_C1 {c1:.10e}f\n'
             f'#define NEWTON_ROOT_C2 {c2:.10e}f\n'
             f'#define NEWTON_ROOT_N {root_n}\n'
             f'#define NEWTON_ROOT_ITERS {iters}\n'
             f'{recip_macro}'
+            f'{algorithm_macro}'
             # POLY_DEGREE template arg is unused on this path but the kernel
             # signature still takes it; the LUT/coeffs are ignored.
         )
-        print(f'Range reduction: Newton-Raphson magic-seed root (magic {magic}, c1 {c1}, c2 {c2}, '
-              f'root_n {root_n}, reciprocal {recip}, iters {iters})')
+        print(f'Range reduction: metadata magic-root (algorithm {algorithm or \"default\"}, magic {magic}, '
+              f'c0 {c0}, c1 {c1}, c2 {c2}, root_n {root_n}, reciprocal {recip}, iters {iters})')
     else:
         print(f'WARNING: unknown exponent_alu kind {kind}')
 elif rr_method == 'exp':

@@ -746,6 +746,9 @@ inline vFloat log_hw_eval_preloaded(vFloat x, const vFloat* cvspill) {
 #ifndef NEWTON_ROOT_C2
 #define NEWTON_ROOT_C2 2.2533049f
 #endif
+#ifndef NEWTON_ROOT_C0
+#define NEWTON_ROOT_C0 0x1.c09806p0f
+#endif
 // Root order N (2 = sqrt/rsqrt, 3 = cbrt) and the rsqrt/inverse flavour are
 // metadata-driven (newton_root_n / newton_root_reciprocal). Defaults keep the
 // path byte-identical to native sqrt when no extra tags are emitted.
@@ -803,6 +806,51 @@ inline vFloat newton_root_rsqrt(vFloat x) {
 #endif  // rsqrt variant
 
 #if (NEWTON_ROOT_N == 3)
+#if defined(NEWTON_ROOT_ALGORITHM_CBRT_MAGIC)
+// --- cbrt: native-style Moroz magic seed + correction ----------------------
+//
+// Metadata declares this algorithm through NEWTON_ROOT_ALGORITHM_CBRT_MAGIC.
+// The body mirrors ckernel_sfpu_cbrt.h generically enough for any lowering that
+// supplies the same payload: root_n=3, seed magic, seed scale, and correction
+// coefficients. It does not inspect the activation name.
+#ifndef NEWTON_ROOT_MAGIC_SCALE
+#define NEWTON_ROOT_MAGIC_SCALE 256.0f
+#endif
+#ifndef NEWTON_ROOT_MAGIC_BIAS
+#define NEWTON_ROOT_MAGIC_BIAS 8388608.0f
+#endif
+#ifndef NEWTON_ROOT_NEG_INV_N_SCALED
+#define NEWTON_ROOT_NEG_INV_N_SCALED -0x1.555556p-10f
+#endif
+inline vFloat newton_root_cbrt_magic(vFloat x) {
+    vFloat ax = setsgn(x, 0);
+
+    vFloat f = convert<vFloat>(as<vSMag>(ax), RoundMode::Nearest);
+    vFloat magic = ((float)NEWTON_ROOT_MAGIC) / NEWTON_ROOT_MAGIC_SCALE + NEWTON_ROOT_MAGIC_BIAS;
+    f = f * NEWTON_ROOT_NEG_INV_N_SCALED + magic;
+
+    vFloat y = as<vFloat>(as<vInt>(f) << 8);
+
+#ifdef USE_BF16
+    vFloat d = ax * (y * y);
+    vFloat c = d * y;
+    vFloat t = c * (vConstFloatPrgm2 * c + vConstFloatPrgm1) + vConstFloatPrgm0;
+    d = copysgn(d, x);
+    y = d * (t * t);
+#else
+    vFloat c = (ax * y) * (y * y);
+    y = y * (c * (vConstFloatPrgm2 * c + vConstFloatPrgm1) + vConstFloatPrgm0);
+
+    vFloat d = ax * (y * y);
+    c = d * y + vConstNeg1;
+    vFloat negative_third = addexp(vFloat(NEWTON_ROOT_NEG_INV_N_SCALED), 8);
+    vFloat t = c * negative_third + vConst1;
+    d = copysgn(d, x);
+    y = d * (t * t);
+#endif
+    return y;
+}
+#else
 // --- cbrt: minimal exponent seed + DIVISION-FREE cubic Householder ---------
 // Odd function: work on |x|, restore sign. The SFPU has no 32-bit float->int (so
 // the classic bits/3+magic seed isn't expressible) AND its reciprocal LLK is
@@ -848,13 +896,18 @@ inline vFloat newton_root_cbrt(vFloat x) {
     v_endif;
     return y;
 }
+#endif
 #endif  // cbrt variant
 
 template <uint32_t DEG>
 inline vFloat newton_root_eval(vFloat x) {
     (void)DEG;  // degree is irrelevant for the Newton path (kept for caller symmetry)
 #if (NEWTON_ROOT_N == 3)
+#if defined(NEWTON_ROOT_ALGORITHM_CBRT_MAGIC)
+    return newton_root_cbrt_magic(x);
+#else
     return newton_root_cbrt(x);
+#endif
 #elif defined(NEWTON_ROOT_RECIPROCAL)
     return newton_root_rsqrt(x);
 #else
@@ -2790,10 +2843,12 @@ void kernel_main() {
     // reloads none of them (mirrors native sqrt_init).
     //   sqrt : prgm0=magic, prgm1=C1, prgm2=C2 (SQRT_23-bit double-Newton).
     //   rsqrt: prgm0=inverse-sqrt magic, prgm1=C1 (=1.5 step constant).
-    //   cbrt : prgm0=cube magic; reciprocal-of-y^2 needs sfpu_reciprocal_init.
-#if (NEWTON_ROOT_N != 3)
-    // sqrt/rsqrt: magic seed + Newton coeffs in prgm regs. cbrt is division-free
-    // (no reciprocal LLK) and reads its magic/constants as in-body literals.
+    //   cbrt : native-style magic-root uses prgm0/1/2 as correction coeffs.
+#if (NEWTON_ROOT_N == 3) && defined(NEWTON_ROOT_ALGORITHM_CBRT_MAGIC)
+    sfpi::vConstFloatPrgm0 = NEWTON_ROOT_C0;
+    sfpi::vConstFloatPrgm1 = NEWTON_ROOT_C1;
+    sfpi::vConstFloatPrgm2 = NEWTON_ROOT_C2;
+#elif (NEWTON_ROOT_N != 3)
     sfpi::vConstIntPrgm0 = NEWTON_ROOT_MAGIC;
     sfpi::vConstFloatPrgm1 = NEWTON_ROOT_C1;  // sqrt: C1; rsqrt: 1.5 step constant
     sfpi::vConstFloatPrgm2 = NEWTON_ROOT_C2;  // sqrt: C2; rsqrt: unused

@@ -16,7 +16,7 @@ Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. 
 | asinh | rational:s1/d5d5 | 1.00 | 2.54 | 1.00 | 4.12 | 1.622 | win_both |
 | atan | poly:s1/d7 | 0.50 | 1.99 | 0.50 | 3.91 | 1.965 | win_both |
 | atanh | rational:s1/d5d5 | 1.00 | 2.54 | 1.00 | 4.26 | 1.677 | win_both |
-| cbrt | exponent_alu_pow:s16/d1 | 1.00 | 4.41 | 1.00 | 2.14 | 0.485 | accuracy_match_slow |
+| cbrt | newton_root:s1/d1 | 1.00 | 2.24 | 1.00 | 2.14 | 0.955 | accuracy_match_slow |
 | celu | poly:s2/d13 | 0.00 | 2.75 | 0.00 | 3.61 | 1.313 | win_both |
 | cos | trig_residual:s1/d7 | 0.00 | 2.55 | 0.00 | 2.56 | 1.004 | win_both |
 | cosh | poly:s1/d16 | 0.00 | 3.01 | 0.00 | 2.97 | 0.987 | accuracy_match_slow |
