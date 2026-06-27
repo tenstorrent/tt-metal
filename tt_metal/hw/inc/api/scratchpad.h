@@ -8,8 +8,8 @@
 #include <type_traits>
 
 #include "api/core_local_mem.h"
-#include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
+#include "experimental/kernel_args.h"
 
 // Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.

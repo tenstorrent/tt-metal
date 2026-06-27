@@ -4071,6 +4071,36 @@ void kernel_main() {
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
+// Compute-kernel counterpart to ScratchpadAccessorBindingJITSmokeDMKernel. Unlike tensor bindings
+// (TensorBindingOnComputeKernelTemporarilyUnsupportedFails) and semaphore bindings
+// (SemaphoreBoundToComputeKernelFailsOnGen1), scratchpad bindings work on compute kernels: scratchpad.h
+// sources get_common_arg_val thread-agnostically (via experimental/kernel_args.h, which pulls in
+// api/compute/common.h on TRISC), so the device-side Scratchpad<T> ctor composes on the compute
+// (TRISC) build path as well as DM. Compile-only on the mock device, as above.
+TEST_F(ScratchpadSpecTest, ScratchpadAccessorBindingJITSmokeComputeKernel) {
+    // MakeMinimalGen1ValidProgramSpec wires a DM producer (kernels[0]) into a compute consumer
+    // (kernels[1]) through a DFB; bind the scratchpad to the compute kernel and have it construct a
+    // Scratchpad from its binding token.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    volatile uint32_t base = pad.get_base_addr().get_address();
+    (void)base;
+}
+)"};
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
 // ============================================================================
 // SECTION: Kernel hash sensitivity to Scratchpad bindings
 // ============================================================================
