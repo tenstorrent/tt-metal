@@ -98,3 +98,67 @@ batched weight (`weight_batch=batched`).
 - **Tests added**: `tests/.../matmul/test_matmul_precision_baseline.py` (4 shapes,
   PCC + abs/RMS). Acceptance `test_matmul.py` unchanged (immutable spec), 16/16 pass.
 - **Artifacts**: `verification_report.md`, `op_requirements.md`, `verifier_report.json`.
+
+## Refinement 1 — Numerical configurability (dtypes + fp32_dest_acc_en) — 2026-06-27 — **[~] partial**
+
+- **What was done**:
+  - **SUPPORTED widened** (`matmul.py`): `dtype` and `weight_dtype` (independent
+    axes) → `{float32, bfloat16, bfloat8_b}`; `fp32_dest_acc_en` → `{True, False}`.
+    Kept the mandated `{dtype=float32, fp32_dest_acc_en=False}` EXCLUSION. No new
+    EXCLUSIONS added (see "deferred" below — the residual misses are precision
+    near-misses, deliberately left failing per protocol, not silenced).
+  - **Program descriptor dtype-awareness** (`matmul_program_descriptor.py`):
+    - `cb_interm` format is now dtype-aware. The matmul_block last-K-block
+      "pack-to-out" data-format reconfig is gated on
+      `(packer_l1_acc || fp32_dest_acc_en)` (`matmul_block_helpers.inl:394`), so:
+      `fp32_acc=True` → interm = **Float32** (fp32 K-accumulator; the gated
+      reconfig swaps the packer to the output format for the final pack, so out
+      may be any dtype); `fp32_acc=False` (software spill) → interm **must equal**
+      the output format (no reconfig fires before the final pack).
+    - **L1 footprint estimate is per-CB dtype-aware** (each of in0/in1/out/interm
+      carries its own tile-byte size; Phase 0 used a single fp32 size).
+    - **Effective compute config** clamps **HiFi4→HiFi2 for bf16/bf8b inputs**
+      (issue #38306 on Wormhole B0: HiFi4+fp32_dest_acc_en+bf16 silently corrupts
+      the K-accumulator; bf16's ≤7 mantissa bits gain nothing from HiFi4, so the
+      clamp costs zero precision — verified A/B in probe_004). fp32 keeps HiFi4.
+  - **Lever B (compute-kernel change, narrowly scoped)** (`matmul_compute.cpp` +
+    descriptor): for **bf8b output + acc=False** only, opt into hardware packer-L1
+    K-accumulation (`matmul_block<false,true>`). This makes the gated reconfig fire
+    so `cb_interm` can be **Float16_b** while `cb_out` stays bf8b — the running
+    K-sum accumulates in bf16 instead of re-quantizing to bf8b on every K-block
+    spill. Drops deep-K bf8b acc=False relRMS **0.385 → 0.022**. Every other path
+    (fp32 / bf16 / any-dtype acc=True / bf8b acc=True) keeps the proven software
+    spill/reload (`matmul_block<>` unchanged). #28800 (packer-L1 vs fp32_acc) does
+    not apply — this branch is acc=False only.
+- **Accuracy achieved** (golden tolerance bands, all PASS unless noted):
+  - bf16 (eff): acc=True PCC ≥ 0.99998 relRMS ≤ 0.012; acc=False PCC ≥ 0.999
+    relRMS ≤ 0.07 up to K=4096.
+  - bf8b (eff): acc=True PCC ≥ 0.99990 relRMS ≤ 0.014; acc=False (Lever B) PCC
+    ≥ 0.9998 relRMS ≤ 0.022 even at K=8192.
+  - fp32: unchanged (PCC ≥ 0.99999, relRMS ≤ 0.0073) — byte-identical path.
+- **Golden test progress**: **298 / 300 supported cells pass** (was 20/20 at
+  Phase 0); 366 xfail_expected; 1 skipped; **0 XPASS / 0 supported-vs-excluded
+  drift**. (Full fresh-cache re-run after the kernel edit.)
+- **Issues encountered / deferred** (the 2 residual golden fails):
+  - `A256x8192` (K=8192) with **bf16 OUTPUT + acc=False** (bf16/bf16 relRMS
+    0.1279, bf16/fp32 relRMS 0.1254 vs golden band 0.10; PCC 0.997). This is the
+    fundamental **16-bit-DEST accumulation floor** (~O(√K)) — the expert-debugger
+    confirmed it is K-block-independent and Lever-B-immune (bf16 interm is already
+    bf16; the error is the in-DEST FMA rounding, not the spill). The **only** fix
+    is `fp32_dest_acc_en=True`, which these cells deliberately disable. NOT added
+    to EXCLUSIONS: it is shape-dependent (deep-K only; shallow/medium-K bf16
+    acc=False all pass) and cannot be expressed as an axis-cell without
+    over-refusing ~100 working cells. Left failing per the precision-near-miss
+    protocol; filed as **Refinement 1b**.
+  - bfp8_pack_precise was probed (probe_005) and had **zero** effect — confirming
+    the dominant deep-K acc=False error is DEST accumulation, not bf8b packing.
+- **Tests added**:
+  - `tests/.../matmul/test_matmul_precision_matrix.py` — dtype × weight_dtype ×
+    fp32_acc × {HiFi4,HiFi2} × 4 shapes (PCC-asserted, all metrics printed):
+    **120 passed, 24 skipped** (EXCLUSION).
+  - `tests/.../matmul/precision_matrix_results.md` — characterization table.
+  - probes 003–005 (A/B clamp, #38306, bfp8_pack_precise lever).
+  - Acceptance `test_matmul.py` (16/16) + `test_matmul_precision_baseline.py`
+    (4/4) unchanged — fp32 non-regression confirmed.
+- **Sub-agents**: ttnn-expert-debugger (diagnosed the deep-K floor; found & landed
+  Lever B; full audit trail in git `3b8c7f01d5`..`792ac69661`).

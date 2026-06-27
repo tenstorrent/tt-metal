@@ -69,7 +69,18 @@ No gap is covered by INVALID (`INVALID = []`, correctly). All gaps are bundled b
 
 ---
 
-### [ ] Refinement 1 — Numerical configurability (dtypes + fp32_dest_acc_en)
+### [~] Refinement 1 — Numerical configurability (dtypes + fp32_dest_acc_en)
+
+> **Status (2026-06-27): [~] partial.** All named axis values landed in SUPPORTED
+> — `dtype`/`weight_dtype` ∈ {float32, bfloat16, bfloat8_b}, `fp32_dest_acc_en` ∈
+> {True, False}. Golden: **298 / 300 supported cells pass** (0 XPASS drift). interm
+> format + L1 footprint are dtype-aware; HiFi4→HiFi2 clamp guards #38306; bf8b-out +
+> acc=False uses packer-L1 accumulation (Lever B) to keep a bf16 interm (deep-K
+> relRMS 0.385→0.022). The **2 residual fails** (bf16-OUTPUT + acc=False at K=8192,
+> relRMS 0.125–0.128 vs band 0.10) are the fundamental 16-bit-DEST floor, fixable
+> only by acc=True — left failing per the precision-near-miss protocol, NOT excluded
+> (shape-dependent; an axis-cell EXCLUSION would over-refuse ~100 working cells).
+> See **Refinement 1b**. Details in `changelog.md`.
 
 **Goal**: add `ttnn.bfloat16` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` **and**
 `SUPPORTED["weight_dtype"]` (the two are independent axes — also unlocks the mixed
@@ -100,6 +111,37 @@ dtype/acc cells in `test_golden.py` pass at their per-dtype tolerance bands.
 - Per the matmul_block header, bf16 inputs with Kt>1 need `fp32_dest_acc_en=True`
   to keep K-accumulation from rounding each step (error ~O(√K)); the bf16 +
   `fp32_dest_acc_en=False` cells are the likeliest EXCLUSION candidates.
+
+### [ ] Refinement 1b — bf16-output + acc=False at extreme K (K≥8192): 16-bit-DEST floor
+
+**Goal**: make the 2 residual `test_golden.py` fails pass — `A256x8192` (K=8192)
+with **bf16 output + fp32_dest_acc_en=False** (bf16/bf16 relRMS 0.1279, bf16/fp32
+relRMS 0.1254; golden band 0.10; PCC already 0.997). These are the *only*
+SUPPORTED-but-failing cells after Refinement 1.
+
+**Root cause (confirmed by ttnn-expert-debugger, R1)**: pure in-DEST 16-bit FMA
+accumulation rounding, error ~O(√K). It is K-block-size-independent (flat relRMS
+0.128 across `in0_block_w` 1→256) and immune to Lever B (the bf16 interm is
+already bf16; the error is not the spill). The only in-op fix is
+`fp32_dest_acc_en=True`, which these cells deliberately disable — so there is **no
+descriptor/kernel lever** within the acc=False contract.
+
+**Verifier notes / levers for the next implementer (in priority order)**:
+- **This is most likely a `/golden-tests` band question, not a kernel fix.** The
+  golden `(bfloat16, False)` band is `(0.99 PCC, 0.10 relRMS)`. relRMS 0.125 at
+  K=8192 is the physical √K floor of a 16-bit accumulator; the band does not
+  account for extreme-K acc=False. Mirrors the Phase-0 verifier's "if the only fix
+  is harness fidelity, it's /golden-tests territory — flag it, don't fight it".
+  Decide: widen the band for extreme-K acc=False (helpers.py `TOLERANCES`, golden
+  territory — do NOT silently edit), OR accept as a documented known-limit.
+- If an in-op fix is insisted on: the only avenue is a **two-tier / split-K
+  accumulation in fp32** even when the user asks acc=False (accumulate sub-K
+  partials in an fp32 interm, reload, sum) — but that contradicts the acc=False
+  contract (the user asked for the 16-bit path) and would be a semantics change;
+  escalate before attempting.
+- Do NOT EXCLUSION `{dtype:bf16, fp32_dest_acc_en:False}`: it would refuse the ~100
+  shallow/medium-K bf16 acc=False cells that pass today (the failure is K-depth,
+  not an axis value).
 
 ### [ ] Refinement 2 — Non-tile-aligned M / K / N (in-kernel edge masking)
 
