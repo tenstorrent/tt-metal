@@ -621,6 +621,27 @@ class TTSampling(LightweightModule):
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
+        # DEBUG(#48222): capture the TRUE per-user argmax token from the full (unpadded, pre-topk)
+        # logits, by gathering x_bf16 across devices (same pattern the heavy path uses for topk
+        # values). Compared after sampling to localize: candidate/index reconstruction vs the op.
+        # Bounded to the first steps; robust + env-gated; never affects the decode.
+        import os as _os
+
+        self._dbg_true_tok = None
+        if _os.environ.get("TT_QWEN_SAMPLING_DEBUG") == "1" and getattr(self, "_dbg_step", 0) < 12:
+            try:
+                _ca = None if 1 in self.cluster_shape else 0
+                _xg = ttnn.all_gather(
+                    x_bf16, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cluster_axis=_ca, topology=ttnn.Topology.Linear,
+                )
+                _xf = ttnn.to_torch(ttnn.get_device_tensors(_xg)[0]).float()
+                _xf = _xf.reshape(-1, _xf.shape[-1])
+                self._dbg_true_tok = _xf.argmax(dim=-1)  # [B] true full-logits argmax per user
+                ttnn.deallocate(_xg)
+            except Exception as _e:
+                logger.warning(f"[SAMPLING_DEBUG] true-argmax capture failed: {_e}")
+
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
             indices_tensor_list = ttnn.split(self.tt_indices_tensor, self.tt_indices_tensor.shape[-1] // 2, dim=3)
@@ -775,9 +796,19 @@ class TTSampling(LightweightModule):
                 _cand_slot = _v[:_B].argmax(dim=-1)
                 _cand_tok = _i[:_B][torch.arange(_B), _cand_slot]
                 _mis = int((_tok[:_B] != _cand_tok).sum().item())
-                logger.info(
-                    f"[SAMPLING_DEBUG] step={self._dbg_step} B={_B} sampled-vs-candidate-argmax mismatches={_mis}/{_B}"
-                )
+                _msg = f"[SAMPLING_DEBUG] step={self._dbg_step} B={_B} sampled-vs-candidate-argmax={_mis}/{_B}"
+                _tt = getattr(self, "_dbg_true_tok", None)
+                if _tt is not None:
+                    _tt = _tt[:_B]
+                    _cand_vs_true = int((_cand_tok != _tt).sum().item())
+                    _samp_vs_true = int((_tok[:_B] != _tt).sum().item())
+                    _msg += f" cand-vs-true={_cand_vs_true}/{_B} sampled-vs-true={_samp_vs_true}/{_B}"
+                    # show a couple of concrete divergences for the first step
+                    if _samp_vs_true and self._dbg_step < 2:
+                        _bad = (_tok[:_B] != _tt).nonzero().flatten()[:3].tolist()
+                        for _b in _bad:
+                            _msg += f" | u{_b}: sampled={int(_tok[_b])} cand={int(_cand_tok[_b])} true={int(_tt[_b])}"
+                logger.info(_msg)
                 self._dbg_step += 1
             except Exception as _e:
                 logger.warning(f"[SAMPLING_DEBUG] instrumentation failed: {_e}")
