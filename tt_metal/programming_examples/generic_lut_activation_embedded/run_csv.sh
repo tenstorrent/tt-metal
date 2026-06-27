@@ -929,8 +929,17 @@ if any(asymptotic_flags):
 # More granular segment_kind lowering belongs inside the cascade family later;
 # these collapses bypass the segment selector only when the whole CSV proves the
 # simpler algebra exactly.
+declared_eval_method = _meta_norm('eval_method')
+want_affine = declared_eval_method in ('identity', 'affine', 'affine_collapse')
+want_clamped_affine = declared_eval_method in ('clamped_affine', 'clamped_affine_collapse')
+want_threshold_identity = declared_eval_method in ('threshold_identity', 'threshold_identity_select')
+want_abs_value = declared_eval_method == 'abs_value'
+want_threshold_softshift = declared_eval_method in ('threshold_softshift', 'softshrink_select')
+want_gated_affine_product = declared_eval_method in ('gated_affine_product', 'gated_quadratic_collapse')
+want_abs_denominator_rational = declared_eval_method == 'abs_denominator_rational'
+
 affine_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and num_segments == 1:
+if want_affine and (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and num_segments == 1:
     seg0_coeffs = coefficients[0:degree + 1]
     higher_zero = all(c == 0.0 for c in seg0_coeffs[2:])
     if higher_zero:
@@ -956,7 +965,7 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
 # either clamp bound optional. Constant regions before/after the affine region
 # become lower/upper clamps based on coefficient slope and segment order.
 clamped_affine_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and num_segments >= 2:
+if want_clamped_affine and (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and num_segments >= 2:
     cps = degree + 1
     segs = []
     all_affine = True
@@ -1047,7 +1056,7 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
 # This is the algebraic shape behind shrink/threshold-style functions. The
 # threshold owns equality, so x == +/-threshold returns zero instead of identity.
 threshold_select_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and num_segments == 3:
+if want_threshold_identity and (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and num_segments == 3:
     cps = degree + 1
     tol = 1.0e-5
     segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
@@ -1070,7 +1079,7 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
 
 # Absolute-value collapse: y = abs(x), recognized from two affine pieces.
 abs_value_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and num_segments == 2:
+if want_abs_value and (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and num_segments == 2:
     cps = degree + 1
     tol = 1.0e-5
     segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
@@ -1089,7 +1098,7 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
 
 # Soft-threshold collapse: y=sign(x)*(abs(x)-lambda) outside |x|<=lambda.
 threshold_softshift_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and not abs_value_macro and num_segments == 3:
+if want_threshold_softshift and (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and not abs_value_macro and num_segments == 3:
     cps = degree + 1
     tol = 1.0e-5
     segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
@@ -1116,7 +1125,7 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
 # This captures hardmish/hardswish-like exact piecewise polynomials without
 # naming the op.
 gated_affine_product_macro = ''
-if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and not abs_value_macro and not threshold_softshift_macro and num_segments == 3:
+if want_gated_affine_product and (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis) and rr_method in ('', 'none') and not affine_macro and not clamped_affine_macro and not threshold_select_macro and not abs_value_macro and not threshold_softshift_macro and num_segments == 3:
     cps = degree + 1
     tol = 1.0e-5
     segs = [coefficients[s * cps:(s + 1) * cps] for s in range(num_segments)]
@@ -1147,7 +1156,7 @@ if (not is_rational) and (not has_abs_sign_basis) and (not has_affine_even_basis
 # Abs-denominator rational collapse: y = x / (1 + abs(x)). Recognized from the
 # exact two-segment rational coefficient pattern, not from activation name.
 abs_den_rational_macro = ''
-if is_rational and rr_method in ('', 'none') and num_segments == 2 and num_degree == 1 and den_degree == 1:
+if want_abs_denominator_rational and is_rational and rr_method in ('', 'none') and num_segments == 2 and num_degree == 1 and den_degree == 1:
     tol = 1.0e-5
     n_cps = num_degree + 1
     d_cps = den_degree + 1
@@ -1223,7 +1232,6 @@ else:
 # Explicit algebraic eval methods are metadata requests. Coefficient-pattern
 # recognizers above are the proof gate: an explicit request that does not prove
 # out is a hard error, not a silent cascade fallback.
-declared_eval_method = _meta_norm('eval_method')
 declared_to_macro = {
     'identity': affine_macro if '#define AFFINE_IDENTITY' in affine_macro else '',
     'affine': affine_macro,
@@ -1244,6 +1252,7 @@ if declared_eval_method in declared_to_macro and not declared_to_macro[declared_
         f'eval_method={declared_eval_method!r} requested an algebraic lowering, '
         'but CSV coefficients/boundaries did not prove that lowering'
     )
+declared_algebraic_macro = declared_to_macro.get(declared_eval_method, '')
 
 # Exactly one evaluator selector. Metadata-driven methods (rr_macro) and
 # whole-function collapses emit TT_ACT_EVAL_KIND; otherwise default to cascade.
@@ -1252,13 +1261,7 @@ eval_method_macro = ''
 has_codegen_eval_method = any(
     'TT_ACT_EVAL_KIND' in macro for macro in (
         rr_macro,
-        affine_macro,
-        clamped_affine_macro,
-        abs_value_macro,
-        threshold_select_macro,
-        threshold_softshift_macro,
-        gated_affine_product_macro,
-        abs_den_rational_macro,
+        declared_algebraic_macro,
     )
 )
 rational_recip_macro = ''
@@ -1316,7 +1319,7 @@ constexpr uint32_t LUT_SIZE = {lut_size};
 constexpr std::array<float, LUT_SIZE> LUT_DATA = {{{{
     {lut_str}
 }}}};
-{eval_method_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{abs_den_rational_macro}{precompose_macro}{postcompose_macro}
+{eval_method_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{declared_algebraic_macro}{precompose_macro}{postcompose_macro}
 #include \"../piecewise_rational.cpp\"
 '''
     # Override degree-related output variables for rational
@@ -1351,7 +1354,7 @@ constexpr std::array<float, LUT_SIZE_FP32> LUT_DATA_FP32 = {{{{
     constexpr auto& LUT_DATA = LUT_DATA_FP32;
     constexpr uint32_t LUT_SIZE = LUT_SIZE_FP32;
 #endif
-{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{affine_macro}{clamped_affine_macro}{abs_value_macro}{threshold_select_macro}{threshold_softshift_macro}{gated_affine_product_macro}{postcompose_macro}
+{eval_method_macro}{degree_macros}{eval_basis_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{declared_algebraic_macro}{postcompose_macro}
 #include \"../piecewise_generic.cpp\"
 '''
 

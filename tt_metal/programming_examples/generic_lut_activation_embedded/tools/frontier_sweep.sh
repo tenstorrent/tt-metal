@@ -82,8 +82,23 @@ export TT_METAL_CACHE="$CACHE"   # per-worker JIT cache (isolation)
 mkdir -p "$(dirname "$OUT")"
 [[ -f "$OUT" ]] || echo "csv,activation,method,degree,segments,precision,bf16_maxulp,runtime_us,compiles,range" > "$OUT"
 
-# activation name = filename up to the first _p<digit> / _n<digit> config token.
-act_of() { basename "$1" .csv | sed -E 's/_[pn][0-9].*$//'; }
+csv_field_of() {
+  local f="$1" field="$2"
+  PYTHONPATH="$FIT_DIR${PYTHONPATH:+:$PYTHONPATH}" /usr/bin/python3 - "$f" "$field" <<'PY'
+import sys
+from ttpoly.spec.csv_io import parse_csv_filename
+
+parsed = parse_csv_filename(sys.argv[1])
+if not parsed:
+    raise SystemExit(1)
+value = parsed.get(sys.argv[2], "")
+if sys.argv[2] == "degree":
+    value = str(value).replace("/", "d")
+print(value)
+PY
+}
+
+act_of() { csv_field_of "$1" activation; }
 # method = canonical eval_method when present, else range_reduction_method, else poly/rational.
 method_of() {
   local em rr
@@ -98,8 +113,8 @@ method_of() {
   elif grep -qaE '^(METADATA|segment_id)?,?.*[,]n0[,]' "$1" 2>/dev/null || basename "$1" | grep -q 'rational'; then echo rational
   else echo poly; fi
 }
-deg_of()  { basename "$1" .csv | grep -oE '_[pn][0-9]+(d[0-9]+)?' | head -1 | sed -E 's/^_[pn]//'; }
-segs_of() { basename "$1" .csv | grep -oE '_s[0-9]+' | head -1 | sed 's/_s//'; }
+deg_of()  { csv_field_of "$1" degree; }
+segs_of() { csv_field_of "$1" depth; }
 
 # build the work list (filtered + sharded + deterministic order)
 mapfile -t ALL < <(ls "$COEFFS"/*.csv 2>/dev/null | sort)

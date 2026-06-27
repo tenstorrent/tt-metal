@@ -5,7 +5,7 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 44. Waived faster exceptions: 1. Accuracy match but slower: 7. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 53. Win on ULP and runtime: 44. Waived faster exceptions: 1. Accuracy match but slower: 8. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 0.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -46,7 +46,7 @@ Comparable rows: 52. Win on ULP and runtime: 44. Waived faster exceptions: 1. Ac
 | logit | rational:s1/d4d4 | 1.00 | 3.04 | 1.00 | 5.40 | 1.776 | win_both |
 | logsigmoid | rational:s2/d5d5 | 0.00 | 5.47 | -- | -- | -- | incomplete |
 | mish | poly:s2/d9 | 0.25 | 3.27 | 0.25 | 4.31 | 1.318 | win_both |
-| multigammaln | poly:s1/d3 | 118.12 | 1.72 | 127.00 | 0.13 | 0.076 | excluded |
+| multigammaln | poly:s1/d1 | 93.75 | 1.79 | 127.00 | 0.13 | 0.073 | accuracy_match_slow |
 | polygamma | poly:s32/d10 | 16.00 | 25.98 | -- | -- | -- | incomplete |
 | prelu | poly:s2/d2 | 0.00 | 1.79 | -- | -- | -- | incomplete |
 | relu | clamped_affine:s2/d1 | 0.00 | 1.67 | 0.00 | 1.72 | 1.030 | win_both |
@@ -69,9 +69,6 @@ Comparable rows: 52. Win on ULP and runtime: 44. Waived faster exceptions: 1. Ac
 | tanh | rational:s1/d5d3 | 0.50 | 2.38 | 0.50 | 2.29 | 0.962 | accuracy_match_slow |
 | tanhshrink | rational:s1/d12d3 | 0.12 | 2.86 | 0.12 | 3.17 | 1.108 | win_both |
 | threshold | poly:s2/d2 | 0.00 | 1.79 | -- | -- | -- | incomplete |
-
-Excluded rows:
-- multigammaln: frontier/native rows were generated before multigammaln.json was fixed to the true p=4 target; rerun p=4 sweep before claiming
 
 Waived rows:
 - gelu: explicit GELU waiver: accept the 0.25 ULP basis-factor candidate because it is substantially faster than TTNN
@@ -144,4 +141,4 @@ Comparable rows: 52. Win on ULP and runtime: 21. Waived faster exceptions: 0. Ac
 | threshold | poly:s2/d2 | 0.00 | 2.87 | -- | -- | -- | incomplete |
 
 Excluded rows:
-- multigammaln: frontier/native rows were generated before multigammaln.json was fixed to the true p=4 target; rerun p=4 sweep before claiming
+- multigammaln: frontier/native rows were generated before multigammaln fixed-target metadata was introduced; rerun controlled p=4 FP32 before claiming

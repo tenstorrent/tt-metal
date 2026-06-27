@@ -81,22 +81,25 @@ for act in acts:
     seen.add(act)
     jpath = os.path.join(fit, "activations", f"{act}.json")
     if not os.path.exists(jpath):
-        print(f"{act},,", file=sys.stderr)
+        print(f"{act},,,,", file=sys.stderr)
         continue
-    domain = (json.load(open(jpath)).get("domain") or {})
+    cfg = json.load(open(jpath))
+    domain = (cfg.get("domain") or {})
     lo, hi = domain.get("min"), domain.get("max")
     if lo is None or hi is None:
-        print(f"{act},,", file=sys.stderr)
+        print(f"{act},,,,", file=sys.stderr)
         continue
-    print(f"{act},{lo},{hi}")
+    op_name = cfg.get("op_name") or act
+    p = (cfg.get("target_parameters") or {}).get("p", "")
+    print(f"{act},{op_name},{p},{lo},{hi}")
 PY
 
 cat > "$NATIVE_PY" <<'PY'
 import sys, torch, ttnn, numpy as np
-act, prec, lo, hi, out_csv, out_npz, tiles = sys.argv[1], sys.argv[2], float(sys.argv[3]), float(sys.argv[4]), sys.argv[5], sys.argv[6], int(sys.argv[7])
+act, op_name, prec, lo, hi, out_csv, out_npz, tiles = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), float(sys.argv[5]), sys.argv[6], sys.argv[7], int(sys.argv[8])
 dev = ttnn.open_device(device_id=0)
 try:
-    fn = getattr(ttnn, act)
+    fn = getattr(ttnn, op_name)
     is_bf16 = prec == "bf16"
     dt_tt = ttnn.bfloat16 if is_bf16 else ttnn.float32
     dt_t = torch.bfloat16 if is_bf16 else torch.float32
@@ -139,7 +142,7 @@ PY
 total="$(grep -c . "$WL")"
 echo "=== ttnn-ref sweep precision=$PRECISION shard=$SHARD/$NUM_SHARDS total=$total chip=${TT_VISIBLE_DEVICES:-unset} ==="
 n=0
-while IFS=, read -r act lo hi; do
+while IFS=, read -r act op_name target_p lo hi; do
   [[ -z "$act" ]] && continue
   idx="$n"; n=$((n + 1))
   [[ $(( idx % NUM_SHARDS )) -eq "$SHARD" ]] || continue
@@ -148,6 +151,11 @@ while IFS=, read -r act lo hi; do
   fi
   if [[ -z "$lo" || -z "$hi" ]]; then
     printf '%s,%s,,,,,,%s,%s,%s,%s\n' "$act" "$PRECISION" "$lo" "$hi" "$TILES" "no_domain" >> "$OUT"
+    continue
+  fi
+  if [[ "$op_name" == "multigammaln" && -n "$target_p" && "$target_p" != "4" ]]; then
+    printf '%s,%s,,,,,,%s,%s,%s,no_ttnn_ref_p_%s\n' "$act" "$PRECISION" "$lo" "$hi" "$TILES" "$target_p" >> "$OUT"
+    echo "$act $PRECISION no_ttnn_ref_p_$target_p" >&2
     continue
   fi
   if [[ -n "$RUN_DIR" ]]; then
@@ -163,7 +171,7 @@ while IFS=, read -r act lo hi; do
   rm -rf "$prof_dir"; mkdir -p "$prof_dir"
   set +e
   ( source "$VENV"; TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR="$prof_dir" \
-      python3 "$NATIVE_PY" "$act" "$PRECISION" "$lo" "$hi" "$acc_dump" "$([[ -n "$RUN_DIR" ]] && echo "$dump")" "$TILES" >/dev/null 2>&1 )
+      python3 "$NATIVE_PY" "$act" "$op_name" "$PRECISION" "$lo" "$hi" "$acc_dump" "$([[ -n "$RUN_DIR" ]] && echo "$dump")" "$TILES" >/dev/null 2>&1 )
   rc=$?
   set +e
   if [[ "$rc" -ne 0 || ! -s "$dump" ]]; then

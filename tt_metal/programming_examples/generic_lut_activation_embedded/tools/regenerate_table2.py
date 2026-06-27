@@ -18,18 +18,11 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "results" / "frontier"
 # Audit corrections from the June 25 basis-factor runs. These are intentionally
 # small and explicit: the normal path is still manifest-driven.
 AUDIT_OVERRIDES = {
-    ("bf16", "multigammaln"): {
-        "status": "excluded_invalid_old_target",
-        "note": (
-            "frontier/native rows were generated before multigammaln.json was "
-            "fixed to the true p=4 target; rerun p=4 sweep before claiming"
-        ),
-    },
     ("fp32", "multigammaln"): {
         "status": "excluded_invalid_old_target",
         "note": (
-            "frontier/native rows were generated before multigammaln.json was "
-            "fixed to the true p=4 target; rerun p=4 sweep before claiming"
+            "frontier/native rows were generated before multigammaln fixed-target "
+            "metadata was introduced; rerun controlled p=4 FP32 before claiming"
         ),
     },
     ("bf16", "gelu"): {
