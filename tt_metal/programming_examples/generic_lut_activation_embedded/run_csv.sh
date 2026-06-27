@@ -1166,6 +1166,26 @@ if is_rational and rr_method in ('', 'none') and num_segments == 2 and num_degre
         )
         print('ABS DENOMINATOR RATIONAL: y = x / (1 + abs(x)) -> abs+reciprocal bypass')
 
+# Optional input precompose hook. This is explicit CSV metadata for fitting a core
+# on an affine-reduced argument, e.g. core(0.5*x), without changing the core
+# coefficients. It is generic and operates before segment selection.
+precompose_macro = ''
+precompose = _meta_norm('precompose', 'pre_compose', 'input_transform')
+if precompose in ('input_affine', 'affine_input', 'affine_x'):
+    pre_a = float(metadata.get('precompose_a', metadata.get('input_affine_a', '1.0')) or '1.0')
+    pre_b = float(metadata.get('precompose_b', metadata.get('input_affine_b', '0.0')) or '0.0')
+    precompose_macro = (
+        '\n// precompose: x_eval = a*x + b\n'
+        '#define PRECOMPOSE_INPUT_AFFINE\n'
+        f'#define PRECOMPOSE_INPUT_A {clamp(pre_a):.10e}f\n'
+        f'#define PRECOMPOSE_INPUT_B {clamp(pre_b):.10e}f\n'
+    )
+    print(f'Precompose: x_eval = {pre_a:.6g}*x + {pre_b:.6g}')
+elif precompose in ('', 'none', 'identity'):
+    pass
+else:
+    raise ValueError(f'unsupported precompose={precompose!r}')
+
 # Optional postcompose hook. This is explicit CSV metadata for algebraic wrappers
 # such as acos(x) = pi/2 - asin(x). It is generic affine-in-output composition.
 postcompose_macro = ''
@@ -1178,6 +1198,16 @@ if postcompose in ('pi_over_2_minus_y', 'half_pi_minus_y'):
         '#define POSTCOMPOSE_B -1.0000000000e+00f\n'
     )
     print('Postcompose: y = pi/2 - y')
+elif postcompose in ('affine_y_times_input', 'input_times_affine_y', 'mul_input_affine_y'):
+    post_a = float(metadata.get('postcompose_a', metadata.get('output_affine_a', '0.0')) or '0.0')
+    post_b = float(metadata.get('postcompose_b', metadata.get('output_affine_b', '1.0')) or '1.0')
+    postcompose_macro = (
+        '\n// postcompose: y = x_orig * (a + b*y)\n'
+        '#define POSTCOMPOSE_AFFINE_Y_TIMES_INPUT\n'
+        f'#define POSTCOMPOSE_A {clamp(post_a):.10e}f\n'
+        f'#define POSTCOMPOSE_B {clamp(post_b):.10e}f\n'
+    )
+    print(f'Postcompose: y = x_orig * ({post_a:.6g} + {post_b:.6g}*y)')
 elif postcompose in ('', 'none', 'identity'):
     pass
 else:
@@ -1279,7 +1309,7 @@ constexpr uint32_t LUT_SIZE = {lut_size};
 constexpr std::array<float, LUT_SIZE> LUT_DATA = {{{{
     {lut_str}
 }}}};
-{eval_method_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{abs_den_rational_macro}{postcompose_macro}
+{eval_method_macro}{poly_parity_macro}{rr_macro}{asymptotic_macro}{abs_den_rational_macro}{precompose_macro}{postcompose_macro}
 #include \"../piecewise_rational.cpp\"
 '''
     # Override degree-related output variables for rational

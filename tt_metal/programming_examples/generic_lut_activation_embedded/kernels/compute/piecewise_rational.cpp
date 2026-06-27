@@ -52,9 +52,12 @@ namespace kutil = norm::kernel_util;
 
 namespace sfpi {
 
-inline vFloat apply_output_postcompose(vFloat y) {
+inline vFloat apply_output_postcompose(vFloat y, vFloat x_orig) {
 #if defined(POSTCOMPOSE_AFFINE_Y)
     y = POSTCOMPOSE_B * y + POSTCOMPOSE_A;
+#endif
+#if defined(POSTCOMPOSE_AFFINE_Y_TIMES_INPUT)
+    y = x_orig * (POSTCOMPOSE_B * y + POSTCOMPOSE_A);
 #endif
     return y;
 }
@@ -488,7 +491,7 @@ inline void abs_denominator_rational_eval() {
         vFloat x = dst_reg[d];
         vFloat den = setsgn(x, 0) + 1.0f;
         vFloat y = x * rational_reciprocal(den);
-        y = apply_output_postcompose(y);
+        y = apply_output_postcompose(y, x);
 #ifdef USE_BF16
         y = convert<vFloat16b>(y, RoundMode::Nearest);
 #endif

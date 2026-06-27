@@ -97,6 +97,9 @@ inline void piecewise_rational_lut_N(const std::array<float, LUT_SIZE>& lut) {
 #else
         vFloat x = x_orig;
 #endif
+#if defined(PRECOMPOSE_INPUT_AFFINE)
+        x = PRECOMPOSE_INPUT_A * x + PRECOMPOSE_INPUT_B;
+#endif
 
         // Clamping unnecessary: segment cascade v_if(x >= boundary) naturally selects
         // the edge segment for out-of-range inputs. Removing saves SFPU registers.
@@ -151,7 +154,7 @@ inline void piecewise_rational_lut_N(const std::array<float, LUT_SIZE>& lut) {
         v_endif;
 #endif
 
-        result = apply_output_postcompose(result);
+        result = apply_output_postcompose(result, x_orig);
 
         // bf16 dst: RNE-round before the store. SFPSTORE narrows fp32->bf16 by
         // truncation (RTZ) in hardware; rounding here (sfpstochrnd RND_EVEN)
