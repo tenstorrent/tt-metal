@@ -608,6 +608,23 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         y = ttnn.reshape(y, [b, s, 1, self.o_groups * self.o_lora_rank])
         return self.o_b_proj(y)
 
+    def _attend(
+        self, q: ttnn.Tensor, kv: ttnn.Tensor, mask: ttnn.Tensor, cos: ttnn.Tensor, neg_sin: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """Fused SDPA-decode + output RoPE + grouped output projection.
+
+        Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` ``[B,H,1,Dh]``,
+        the shared K==V ``kv`` ``[B,1,Skv,Dh]`` and the additive ``mask``
+        ``[1,1,1,Skv]`` -> the block's hidden output ``[B,1,1,D]``. The only
+        per-path difference is how ``kv`` / ``mask`` are assembled (concat-grown
+        cache + implicit-zero mask for eager vs. fixed in-place cache + device mask
+        for the traced path); the attention compute itself is identical.
+        """
+        attn = self._sdpa_decode(q, kv, mask)  # [B, H, 1, Dh]
+        attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
+        attn = ttnn.transpose(attn, 1, 2)  # [B, 1, H, Dh]
+        return self._grouped_output(attn)
+
     def _qkv(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Project + RoPE the query and (shared) K=V for ``hidden`` ``[B, S, 1, D]``.
 
@@ -665,11 +682,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         _profile(self.device)
 
         mask = ttnn.zeros([1, 1, s, kv.shape[2]], ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device)
-        attn = self._sdpa_decode(q, kv, mask)  # [B, H, 1, Dh]
-
-        attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
-        attn = ttnn.transpose(attn, 1, 2)  # [B, 1, H, Dh]
-        return self._grouped_output(attn)
+        return self._attend(q, kv, mask, cos, neg_sin)
 
     def decode_static(
         self,
@@ -704,7 +717,4 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             )
             kv = ttnn.concat([kv, compressed], dim=2)  # [1, 1, window + n_win, Dh]
 
-        attn = self._sdpa_decode(q, kv, mask)  # [1, H, 1, Dh]
-        attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
-        attn = ttnn.transpose(attn, 1, 2)  # [1, 1, H, Dh]
-        return self._grouped_output(attn)
+        return self._attend(q, kv, mask, cos, neg_sin)
