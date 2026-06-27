@@ -321,7 +321,7 @@ models:
     wh_galaxy_perf: 150
   sweep_tier2:
     wh_n150: 60
-    wh_llmbox_perf: 180
+    wh_llmbox_perf: 210
 umd:
   unit:
     wh_galaxy_perf: 35

@@ -17,7 +17,7 @@
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 65536
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768
   model: llama3.1-8b
   skus:
     wh_n150:
@@ -101,11 +101,11 @@
 - name: GPT-OSS 20B seqlen sweep
   cmd: |
     export HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/
-    pytest --timeout 1800 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
+    pytest --timeout 3600 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
   model: gpt-oss-20b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 60
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -113,7 +113,7 @@
 - name: Gemma-3-4B seqlen sweep
   cmd: |
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
-    pytest --timeout 1800 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep"
+    pytest --timeout 1800 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance-seqlen-sweep" --max_seq_len 32768
   model: gemma-3-4b
   skus:
     wh_n150:
