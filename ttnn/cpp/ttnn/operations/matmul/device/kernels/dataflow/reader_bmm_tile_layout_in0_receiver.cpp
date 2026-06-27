@@ -11,6 +11,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+
 void kernel_main() {
     // in0 mcast args
     const uint32_t in0_mcast_sender_noc_x = get_arg_val<uint32_t>(0);
@@ -40,6 +42,13 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
+
+    // mcast_pipe: receiver side of the in0 block channel. The dest rect is a degenerate 1x1
+    // pointing back at the sender (the target of the R->S consumed ack). data_ready=receiver_sem,
+    // consumed=sender_sem. receive() = ack (up) + wait(VALID) + clear (set INVALID), clear-before-ack
+    // across iterations (H11); the receiver's flag cell starts at 0 so the first iter is safe.
+    dataflow_kernel_lib::ReceiverPipe<get_compile_time_arg_val(5), /*PRE_HANDSHAKE=*/true, get_compile_time_arg_val(4)>
+        in0_pipe(noc);  // data_ready=receiver_sem (CTA 5), consumed=sender_sem (CTA 4); sender coords -> receive()
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
@@ -73,14 +82,9 @@ void kernel_main() {
                     // Operand 0
                     cb_in0.reserve_back(in0_block_num_tiles);
 
-                    // Set in0 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 1);
-
-                    // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
+                    // mcast_pipe: ack the sender (consumed) + wait for the in0 block VALID flag +
+                    // clear it for the next round.
+                    in0_pipe.receive(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y);
 
                     cb_in0.push_back(in0_block_num_tiles);
                 }

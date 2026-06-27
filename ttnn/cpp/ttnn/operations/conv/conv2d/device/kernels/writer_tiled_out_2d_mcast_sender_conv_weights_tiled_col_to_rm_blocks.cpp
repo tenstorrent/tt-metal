@@ -4,6 +4,7 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -75,6 +76,14 @@ void kernel_main() {
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
+    // mcast_pipe Round 4: weights mcast sem ids + recipient count are now compile-time template params,
+    // appended by the conv factory at the END of writer_compile_time_args (after both TensorAccessorArgs).
+    // Layout: [sender_sem_id, receiver_sem_id, num_active_receiver_cores].
+    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
+    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(mcast_sem_args_base);
+    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(mcast_sem_args_base + 1);
+    constexpr uint32_t weights_mcast_num_dests_ct = get_compile_time_arg_val(mcast_sem_args_base + 2);
+
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
     // Bias arg. Unused if bias fusion is not enabled.
@@ -90,8 +99,9 @@ void kernel_main() {
 
     // Experimental API objects
     Noc noc;
-    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    // Sem ids are now compile-time template params (above); the runtime sem-id args are left in place
+    // by the host, so advance `i` past them without constructing Semaphore<> objects.
+    i += 2;
     MulticastEndpoint mcast_ep;
     experimental::CB cb_weight_obj(cb_id_weight);
     experimental::CB cb_bias_obj(bias_cb_id);
@@ -141,10 +151,26 @@ void kernel_main() {
     const uint32_t act_l1_read_addr = split_reader_enabled ? cb_sharded_act_obj.get_read_ptr() : 0;
 
 #ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    weights_mcast_receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
+    // mcast_pipe v8: the weights (and bias) block data-mcast + handshake is driven by a SenderPipe.
+    //   DATA_READY_SEM_ID = receiver_sem_id (S->R level flag VALID/INVALID),
+    //   CONSUMER_READY_SEM_ID = sender_sem_id (R->S counter). Flag + PRE_HANDSHAKE=true (defaults)
+    //   match the old Pipe<>. The ctor sets the local data-ready cell VALID once (folds in the dropped
+    //   pre-loop `weights_mcast_receiver_sem.set(VALID)`).
+    //   DENSE site: the 2D block-sharded weights mcast rect is the strip of receiver cores (logical
+    //   rows/cols 1..N-1) and the sender (row/col 0) is OUTSIDE it, so the rect area() == the old
+    //   `weights_mcast_num_dests_ct` (num_cores_y-1 / num_cores_x-1) == the EXCLUDE fan-out == the ack
+    //   count. The dropped 3rd template arg is therefore a pure deletion: the default
+    //   consumer_ack_count (ACK_EQUALS_FANOUT) reproduces it exactly. The McastRect (per-core virtual
+    //   coords) stays the only runtime ctor arg.
+    dataflow_kernel_lib::SenderPipe<
+        noc_index,
+        weights_mcast_receiver_sem_id,
+        /*PRE_HANDSHAKE=*/true,
+        weights_mcast_sender_sem_id>
+        weights_pipe(
+            noc,
+            dataflow_kernel_lib::McastRect<>{
+                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
 #endif
 
     // read in bias if enabled (done only once for all batches)
@@ -248,36 +274,12 @@ void kernel_main() {
                     noc.async_read_barrier();
 
 #ifndef SKIP_MCAST
-                    // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
-                    // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
-                    // zero for the next block
-                    weights_mcast_sender_sem.wait(weights_mcast_num_dests);
-                    weights_mcast_sender_sem.set(0);
-
-                    // Now we have the block in the CB address, we can mcast to dests!
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    mcast_dst.addr = cb_weight_obj.get_write_ptr();
-                    noc.async_write_multicast(
-                        use<experimental::CB::AddrSelector::WRITE_PTR>(cb_weight_obj),
-                        mcast_ep,
-                        weights_block_size_bytes,
-                        weights_mcast_num_cores,
-                        {},
-                        mcast_dst,
-                        true);
-
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
-                    // We should also multicast the flag to destinations
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    weights_mcast_receiver_sem.set_multicast(
-                        noc,
-                        mcast_rect.noc_x_start,
-                        mcast_rect.noc_y_start,
-                        mcast_rect.noc_x_end,
-                        mcast_rect.noc_y_end,
-                        weights_mcast_num_cores);
+                    // mcast_pipe: R->S consumed wait + reset, weights block data mcast (linked),
+                    // flush, then VALID data-ready flag mcast. src == dst == the weights CB write_ptr.
+                    {
+                        const uint32_t weights_addr = cb_weight_obj.get_write_ptr();
+                        weights_pipe.send(weights_addr, weights_addr, weights_block_size_bytes);
+                    }
 #endif
                     cb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
@@ -314,36 +316,11 @@ void kernel_main() {
 
 // MCAST BIAS (shares some mcast args with weights)
 #ifndef SKIP_MCAST
-                    // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
-                    // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
-                    // zero for the next block
-                    weights_mcast_sender_sem.wait(weights_mcast_num_dests);
-                    weights_mcast_sender_sem.set(0);
-
-                    // Now we have the block in the CB address, we can mcast to dests!
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    mcast_dst.addr = cb_bias_obj.get_write_ptr();
-                    noc.async_write_multicast(
-                        use<experimental::CB::AddrSelector::WRITE_PTR>(cb_bias_obj),
-                        mcast_ep,
-                        bias_block_size_bytes,
-                        weights_mcast_num_cores,
-                        {},
-                        mcast_dst,
-                        true);
-
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
-                    // We should also multicast the flag to destinations
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    weights_mcast_receiver_sem.set_multicast(
-                        noc,
-                        mcast_rect.noc_x_start,
-                        mcast_rect.noc_y_start,
-                        mcast_rect.noc_x_end,
-                        mcast_rect.noc_y_end,
-                        weights_mcast_num_cores);
+                    // mcast_pipe: same channel as weights, now carrying the bias block.
+                    {
+                        const uint32_t bias_addr = cb_bias_obj.get_write_ptr();
+                        weights_pipe.send(bias_addr, bias_addr, bias_block_size_bytes);
+                    }
 #endif
 
                     cb_bias_obj.push_back(bias_ntiles);

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -64,6 +65,16 @@ void kernel_main() {
         (split_reader_cb_shared) ? cb_act_second_obj.get_write_ptr() + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
+    // mcast_pipe Round 4: weights mcast sem ids are compile-time template params, appended by the conv
+    // factory at the END of writer_compile_time_args (after both weights/bias TensorAccessorArgs blocks,
+    // which start at index 36 in the block-sharded path). Walk the accessor chain to find the offset.
+    constexpr uint32_t weights_accessor_base = 36;
+    constexpr auto s_weight_args = TensorAccessorArgs<weights_accessor_base>();
+    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
+    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
+    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(mcast_sem_args_base);
+    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(mcast_sem_args_base + 1);
+
     // mcast args
     uint32_t i = 0;
     const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
@@ -71,12 +82,20 @@ void kernel_main() {
 
     // Experimental API objects
     Noc noc;
-    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    // Sem ids are compile-time template params (above); the runtime sem-id args are left in place by
+    // the host, so advance `i` past them without constructing Semaphore<> objects.
+    i += 2;
     experimental::CB cb_weight_obj(cb_id_weight);
     experimental::CB cb_bias_obj(bias_cb_id);
     experimental::CB cb_reader_indices_obj(cb_reader_indices);
     experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+
+    // mcast_pipe Round 4: receiver side of the weights (and bias) block channel. A ReceiverPipe carries
+    // no rect/count; the sender's coords (consumed-ack target) are passed to receive().
+    // data_ready=receiver_sem, consumed=sender_sem (verbatim from the old Pipe<> 3rd/4th ctor args).
+    dataflow_kernel_lib::
+        ReceiverPipe<weights_mcast_receiver_sem_id, /*PRE_HANDSHAKE=*/true, weights_mcast_sender_sem_id>
+            weights_pipe(noc);
 
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
 
@@ -174,14 +193,8 @@ void kernel_main() {
                     // read weight slice - 1 block of weights in width dim and full weight matrix height
                     // read slice only once for all activation blocks
                     cb_weight_obj.reserve_back(weight_block_num_tiles);
-                    // Set weights semaphore value to INVALID
-                    weights_mcast_receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    weights_mcast_receiver_sem.wait(VALID);
+                    // mcast_pipe: ack sender (consumed) + wait weights VALID flag + clear for next round.
+                    weights_pipe.receive(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y);
 
                     cb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
@@ -198,14 +211,8 @@ void kernel_main() {
                 if (load_bias) {
                     cb_bias_obj.reserve_back(bias_ntiles);
 
-                    // Set weights semaphore value to INVALID
-                    weights_mcast_receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    weights_mcast_receiver_sem.wait(VALID);
+                    // mcast_pipe: same channel, now waiting on the bias block.
+                    weights_pipe.receive(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y);
 
                     cb_bias_obj.push_back(bias_ntiles);
                     load_bias = false;

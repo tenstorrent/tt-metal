@@ -11,6 +11,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -104,6 +106,11 @@ void kernel_main() {
     CircularBuffer cb_in3(cb_id_in3);
 #endif
 
+    // mcast_pipe: receiver side of the in1 (and bias in3) block channel. Degenerate 1x1 rect points
+    // back at the sender (consumed-ack target). data_ready=receiver_sem, consumed=sender_sem.
+    dataflow_kernel_lib::ReceiverPipe<get_compile_time_arg_val(5), /*PRE_HANDSHAKE=*/true, get_compile_time_arg_val(4)>
+        in1_pipe(noc);  // data_ready=receiver_sem (CTA 5), consumed=sender_sem (CTA 4); sender coords -> receive()
+
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
 
@@ -116,14 +123,8 @@ void kernel_main() {
                     // Operand 1
                     cb_in1.reserve_back(in1_block_num_tiles);
 
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
+                    // mcast_pipe: ack sender (consumed) + wait in1 VALID flag + clear for next round.
+                    in1_pipe.receive(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y);
 
                     cb_in1.push_back(in1_block_num_tiles);
                 }
@@ -134,14 +135,8 @@ void kernel_main() {
                     // Operand 2
                     cb_in3.reserve_back(in3_block_w);
 
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
+                    // mcast_pipe: same channel, now waiting on the bias (in3) block.
+                    in1_pipe.receive(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y);
 
                     cb_in3.push_back(in3_block_w);
                 }

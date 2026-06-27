@@ -8,6 +8,7 @@
 #include "layernorm_dataflow_utils.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 namespace df = norm::layernorm::device::kernels::dataflow;
 
@@ -84,6 +85,20 @@ void kernel_main() {
     Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
     UnicastEndpoint remote_ep;
 
+    // mcast_pipe (C3 two-phase, receiver side): phase-1 mirrors the migrated sender twin
+    // (reader_mcast_sender_unary_sharded_ln.cpp). The phase-1 doorbell is a level FLAG on
+    // reduce_sender_sem (S->R, the ReceiverPipe's DATA_READY_SEM_ID), acked via an up() on
+    // reduce_receiver_sem (R->S consumed counter, the CONSUMED_SEM_ID) -> PRE_HANDSHAKE=true. The
+    // sender coords (in0_remote_noc_x/y[0]) are the ack target passed to receive(). Phase-2 (the final
+    // multicast receive loop below) is DEFERRED RAW to match the sender: it reuses this SAME
+    // reduce_sender_sem cell as a MONOTONE counter (wait_min(block+2)), which the Flag/Counter Pipe
+    // verbs cannot express per-side without desyncing the receiver base. The raw reduce_sender_sem
+    // object above stays for that phase-2 wait_min (it aliases the same L1 cell the pipe drives).
+    constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
+    constexpr uint32_t reduce_receiver_sem_id = get_compile_time_arg_val(0);
+    dataflow_kernel_lib::ReceiverPipe<reduce_sender_sem_id, /*PRE_HANDSHAKE=*/true, reduce_receiver_sem_id> reduce_pipe(
+        noc);
+
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
     const uint32_t single_tile_size_bytes = get_tile_size(rms_norm ? cb_ex_partial2 : cb_ex_partial);
 
@@ -137,9 +152,12 @@ void kernel_main() {
 
         cb_partial_obj.wait_front(block_h * num_tiles_scaler);
 
+        // mcast_pipe phase-1: reset the shared flag cell (it was left holding a phase-2 monotone
+        // counter value by the previous lambda call), then ack the sender + wait the phase-1 VALID
+        // flag + clear. The leading set(INVALID) is retained because receive()'s clear-after does not
+        // reset the cell BEFORE this phase-1 wait, and phase-2 reused the cell as a counter.
         reduce_sender_sem.set(INVALID);
-        reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
-        reduce_sender_sem.wait(VALID);
+        reduce_pipe.receive(in0_remote_noc_x[0], in0_remote_noc_y[0]);
 
         // ============================================================================
         // Combine partial results

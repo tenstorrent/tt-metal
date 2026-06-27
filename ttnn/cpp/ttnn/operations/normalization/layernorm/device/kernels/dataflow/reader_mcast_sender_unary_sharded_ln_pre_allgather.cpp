@@ -9,6 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 struct RemoteCoord {
     uint32_t x;
@@ -50,9 +51,23 @@ void kernel_main() {
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
     Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
     UnicastEndpoint remote_ep;
+
+    // mcast_pipe (C2 flag-only sender): the pre-allgather coordinator broadcasts a FLAG-ONLY doorbell
+    // (no data payload) on reduce_sender_sem (CTA 1, S->R level flag) to the receiver rect, then does
+    // its gather reads (the HOLE) afterward. EXCLUDE_SRC: the sender sits outside the receiver rect.
+    // v8: PURE DELETION — the dropped NUM_ACTIVE_RECEIVER_CORES (= num_blocks - 1) equals the EXCLUDE
+    // fan-out the rect derives (the sender sits outside the receiver box, so area == num_blocks - 1 ==
+    // the recipient count). send_signal() uses that derived fan-out directly. PRE_HANDSHAKE=false:
+    // the consumer-drain gate (reduce_receiver_sem.wait below) is the protocol gate that must precede
+    // the flag broadcast, so it stays raw; CONSUMER_READY_SEM_ID omitted (no consumer-ack to override).
+    // send_signal() couples the flag set(VALID) re-assert + set_multicast(EXCLUDE_SRC) + flush.
+    constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
+    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_sem_id, /*PRE_HANDSHAKE=*/false> reduce_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect<>{
+            mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
     const DataFormat data_format = get_dataformat(cb_ex_partial2);
@@ -100,16 +115,11 @@ void kernel_main() {
 
                 // inc semaphore of other cores, tell other all-to-all workers to start
                 if constexpr (num_blocks > 1) {
-                    reduce_sender_sem.set(VALID);
+                    // mcast_pipe: consumer-drain gate stays raw (protocol gate before the flag), then
+                    // broadcast the flag-only doorbell.
                     reduce_receiver_sem.wait(num_blocks - 1);
                     reduce_receiver_sem.set(0);
-                    reduce_sender_sem.set_multicast(
-                        noc,
-                        mcast_dest_noc_start_x,
-                        mcast_dest_noc_start_y,
-                        mcast_dest_noc_end_x,
-                        mcast_dest_noc_end_y,
-                        num_blocks - 1);
+                    reduce_pipe.send_signal();
                 }
 
                 // read data from other cores

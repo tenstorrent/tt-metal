@@ -9,6 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 struct RemoteCoord {
     uint32_t x;
@@ -46,10 +47,19 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
     Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(14));
     UnicastEndpoint remote_ep;
+
+    // mcast_pipe (C2 flag receiver): pairs with the pre-allgather flag-only sender. The doorbell is a
+    // level FLAG on reduce_sender_sem (S->R, the ReceiverPipe's DATA_READY_SEM_ID); this core acks via
+    // an up() on reduce_receiver_sem (R->S consumed counter, the CONSUMED_SEM_ID) -> PRE_HANDSHAKE=true.
+    // No data lands here — the receiver does its own gather reads afterward (the HOLE) — but receive()
+    // is the right verb (it acks; receive_signal() does not). The trailing async_atomic_barrier (below)
+    // drains the up() atomic and stays raw. Sender coords (in0_remote_noc[0]) are the ack target.
+    constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
+    constexpr uint32_t reduce_receiver_sem_id = get_compile_time_arg_val(0);
+    dataflow_kernel_lib::ReceiverPipe<reduce_sender_sem_id, /*PRE_HANDSHAKE=*/true, reduce_receiver_sem_id> reduce_pipe(
+        noc);
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
     const DataFormat data_format = get_dataformat(cb_ex_partial2);
@@ -132,9 +142,9 @@ void kernel_main() {
 
         cb_partial_obj.wait_front(num_tiles_per_partial_result * block_h);
 
-        reduce_sender_sem.set(INVALID);
-        reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
-        reduce_sender_sem.wait(VALID);
+        // mcast_pipe: ack sender (consumed) + wait the doorbell VALID flag + clear. The ReceiverPipe
+        // ctor already inited the flag cell INVALID, so the old leading set(INVALID) is dropped.
+        reduce_pipe.receive(in0_remote_noc_x[0], in0_remote_noc_y[0]);
 
         if constexpr (is_all_to_all_worker) {
             uint32_t l1_read_addr_ex_par = cb_partial_obj.get_read_ptr();
