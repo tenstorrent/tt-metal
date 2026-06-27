@@ -12,13 +12,15 @@
 #
 # SHARDING (4-chip QuietBox): the device-exclusivity rule is PER CHIP, so run N
 # instances, one per chip. BUT the embedded flow regenerates a SHARED adhoc.cpp,
-# so each worker MUST run in its OWN tt-metal checkout. Recommended dispatch:
+# so each worker MUST run in its OWN tt-metal checkout. Local dispatch handles
+# that by creating/reusing detached worktrees:
 #
-#   # in checkout 0:  TT_VISIBLE_DEVICES=0 frontier_sweep.sh --shard 0 --num-shards 4 \
-#   #                   --out /shared/frontier_chip0.csv --cache /tmp/cache0
-#   # in checkout 1:  TT_VISIBLE_DEVICES=1 frontier_sweep.sh --shard 1 --num-shards 4 ...
-#   # ... chips 2,3 likewise. Then:
-#   #   python3 tools/plotting/frontier_scatter.py /shared/frontier_chip*.csv --outdir frontier_plots
+#   frontier_sweep.sh --dispatch-local 4 --precision bf16 --fresh
+#
+# It writes canonical shard CSVs back into the invoking checkout's
+# results/frontier/<precision>/data/csv/ directory. Manual shard dispatch is
+# still supported with --shard/--num-shards/--out/--cache. Use --fresh to
+# replace shard CSVs; omit it to resume.
 #
 # TT_VISIBLE_DEVICES=C restricts UMD to physical chip C; the binary's device_id=0
 # then maps to it. Each worker needs a distinct --out and --cache.
@@ -50,13 +52,17 @@ RUN_CSV="$TT_METAL_HOME/tt_metal/programming_examples/generic_lut_activation_emb
 COEFFS="$FIT_DIR/data/coefficients"
 ACTS="$FIT_DIR/activations"
 
-SHARD=0 NUM_SHARDS=1 OUT="" CACHE="" FILTER="" PRECISION="bf16" PER_CFG_TIMEOUT=240 RUN_DIR=""
+SHARD=0 NUM_SHARDS=1 OUT="" CACHE="" FILTER="" PRECISION="bf16" PER_CFG_TIMEOUT=240 RUN_DIR="" FRESH=0
+DISPATCH_LOCAL=0 WORKTREE_PREFIX=""
 while [[ $# -gt 0 ]]; do case "$1" in
   --shard) SHARD="$2"; shift 2 ;;
   --num-shards) NUM_SHARDS="$2"; shift 2 ;;
+  --dispatch-local) DISPATCH_LOCAL="$2"; shift 2 ;;
+  --worktree-prefix) WORKTREE_PREFIX="$2"; shift 2 ;;
   --run-dir) RUN_DIR="$2"; shift 2 ;;
   --out) OUT="$2"; shift 2 ;;
   --cache) CACHE="$2"; shift 2 ;;
+  --fresh) FRESH=1; shift ;;
   --activations) FILTER="$2"; shift 2 ;;   # comma or space separated; default = all
   --precision|-p) PRECISION="$2"; shift 2 ;;
   --timeout) PER_CFG_TIMEOUT="$2"; shift 2 ;;
@@ -69,6 +75,83 @@ case "$PRECISION" in
   both) PRECISIONS=(bf16 fp32) ;;
   *) echo "ERROR: --precision must be bf16, fp32, or both" >&2; exit 1 ;;
 esac
+
+dispatch_local() {
+  local n="$1"
+  [[ "$n" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --dispatch-local must be a positive integer" >&2; exit 1; }
+  [[ -z "$OUT" ]] || { echo "ERROR: --dispatch-local writes per-shard outputs; use --run-dir, not --out" >&2; exit 1; }
+  [[ -x "$RUN_CSV" ]] || { echo "ERROR: run_csv.sh not found at $RUN_CSV (set TT_METAL_HOME)" >&2; exit 1; }
+  [[ -d "$COEFFS" ]] || { echo "ERROR: corpus not found at $COEFFS (set TT_POLY_FIT_DIR)" >&2; exit 1; }
+
+  local repo_root parent base wt script out cache log_dir log pid rc failures=0
+  local -a worker_args
+  repo_root="$(cd "$TT_METAL_HOME" && pwd)"
+  parent="$(dirname "$repo_root")"
+  base="$(basename "$repo_root")"
+  [[ -n "$WORKTREE_PREFIX" ]] || WORKTREE_PREFIX="$parent/${base}-chip"
+
+  if [[ -n "$RUN_DIR" ]]; then
+    log_dir="$RUN_DIR/logs/dispatch"
+    mkdir -p "$RUN_DIR/data/csv" "$log_dir"
+  else
+    log_dir="$WORK_DIR/results/frontier/${PRECISION}/logs/dispatch"
+    mkdir -p "$WORK_DIR/results/frontier/${PRECISION}/data/csv" "$log_dir"
+  fi
+
+  echo "frontier_sweep dispatch: ${n} local worktrees, precision=${PRECISION}, filter='${FILTER:-all}'" >&2
+  pids=()
+  for ((chip=0; chip<n; chip++)); do
+    wt="${WORKTREE_PREFIX}${chip}"
+    if [[ ! -e "$wt/.git" ]]; then
+      git -C "$repo_root" worktree add --detach "$wt" HEAD >&2
+    fi
+    script="$wt/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_sweep.sh"
+    [[ -x "$script" ]] || { echo "ERROR: worktree sweep script missing/executable: $script" >&2; exit 1; }
+    if [[ -n "$RUN_DIR" ]]; then
+      out="$RUN_DIR/data/csv/frontier_chip${chip}.csv"
+    else
+      out="$WORK_DIR/results/frontier/${PRECISION}/data/csv/frontier_chip${chip}.csv"
+    fi
+    cache="${CACHE:-/tmp/tt-metal-cache-frontier}-${PRECISION}-${chip}"
+    log="$log_dir/frontier_chip${chip}.log"
+    worker_args=(
+      --shard "$chip"
+      --num-shards "$n"
+      --precision "$PRECISION"
+      --timeout "$PER_CFG_TIMEOUT"
+      --out "$out"
+      --cache "$cache"
+    )
+    [[ "$FRESH" -eq 0 ]] || worker_args+=(--fresh)
+    [[ -z "$FILTER" ]] || worker_args+=(--activations "$FILTER")
+    (
+      cd "$wt" &&
+      TT_VISIBLE_DEVICES="$chip" \
+      TT_METAL_HOME="$wt" \
+      TT_POLY_FIT_DIR="$FIT_DIR" \
+      bash "$script" "${worker_args[@]}"
+    ) >"$log" 2>&1 &
+    pid=$!
+    pids+=("$pid")
+    echo "  chip ${chip}: pid=${pid} worktree=${wt} out=${out} cache=${cache} log=${log}" >&2
+  done
+
+  for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+      rc=$?
+      echo "frontier_sweep dispatch: worker pid=${pid} failed with rc=${rc}" >&2
+      failures=$((failures+1))
+    fi
+  done
+  [[ "$failures" -eq 0 ]] || exit 1
+  echo "frontier_sweep dispatch DONE: ${n} workers completed" >&2
+}
+
+if [[ "$DISPATCH_LOCAL" -gt 0 ]]; then
+  dispatch_local "$DISPATCH_LOCAL"
+  exit 0
+fi
+
 if [[ -n "$RUN_DIR" && -z "$OUT" ]]; then
   OUT="$RUN_DIR/data/csv/frontier_chip${SHARD}.csv"
 fi
@@ -80,7 +163,9 @@ FILTER="${FILTER//,/ }"
 
 export TT_METAL_CACHE="$CACHE"   # per-worker JIT cache (isolation)
 mkdir -p "$(dirname "$OUT")"
-[[ -f "$OUT" ]] || echo "csv,activation,method,degree,segments,precision,bf16_maxulp,runtime_us,compiles,range" > "$OUT"
+if [[ "$FRESH" -eq 1 || ! -f "$OUT" ]]; then
+  echo "csv,activation,method,degree,segments,precision,bf16_maxulp,runtime_us,compiles,range" > "$OUT"
+fi
 
 csv_field_of() {
   local f="$1" field="$2"
