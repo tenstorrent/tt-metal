@@ -315,6 +315,14 @@ inline void _llk_math_eltwise_unary_datacopy_(
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
+                // @note Divergence from the Wormhole twin (intentional): the Wormhole path writes
+                // ALU_ACC_CTRL_Zero_Flag_disabled_src back to 0 here, whereas Blackhole leaves the HW bit
+                // asserted and instead invalidates the math state tracker. Invalidating to UNCONFIGURED
+                // forces the next configurator (_configure_default/unary_preserve/mov_ops_zero_flag_state_)
+                // to re-apply the flag from scratch rather than taking its skip-if-set fast path, so the
+                // stale HW value cannot leak into a later op. Both approaches are correct; this avoids one
+                // cfg RMW. Do not "fix" by adding an explicit clear-to-0 — it would be redundant with the
+                // invalidate.
                 math::_invalidate_src_zero_flag_state_();
             }
         }
