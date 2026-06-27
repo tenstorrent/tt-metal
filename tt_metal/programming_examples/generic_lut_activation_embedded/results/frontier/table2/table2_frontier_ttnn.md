@@ -5,7 +5,7 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 41. Waived faster exceptions: 1. Accuracy match but slower: 10. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 44. Waived faster exceptions: 1. Accuracy match but slower: 7. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -18,7 +18,7 @@ Comparable rows: 52. Win on ULP and runtime: 41. Waived faster exceptions: 1. Ac
 | atanh | rational:s1/d5d5 | 1.00 | 2.54 | 1.00 | 4.26 | 1.677 | win_both |
 | cbrt | newton_root:s1/d1 | 1.00 | 2.24 | 1.00 | 2.14 | 0.955 | accuracy_match_slow |
 | celu | poly:s2/d13 | 0.00 | 2.75 | 0.00 | 3.61 | 1.313 | win_both |
-| cos | trig_residual:s1/d7 | 0.00 | 2.55 | 0.00 | 2.56 | 1.004 | win_both |
+| cos | trig_residual:s1/d7 | 0.00 | 2.54 | 0.00 | 2.56 | 1.008 | win_both |
 | cosh | poly:s1/d16 | 0.00 | 3.01 | 0.00 | 2.97 | 0.987 | accuracy_match_slow |
 | digamma | rational:s1/d4d3 | 1.00 | 2.93 | 1.00 | 6.64 | 2.266 | win_both |
 | elu | poly:s2/d11 | 0.00 | 2.74 | 0.00 | 3.60 | 1.314 | win_both |
@@ -31,7 +31,7 @@ Comparable rows: 52. Win on ULP and runtime: 41. Waived faster exceptions: 1. Ac
 | gelu | basis:s1/d6 | 0.25 | 3.15 | 0.12 | 5.78 | 1.835 | waived_fast |
 | hardmish | gated_affine_product:s3/d3 | 0.00 | 1.72 | 0.03 | 1.77 | 1.029 | win_both |
 | hardshrink | threshold_identity:s3/d2 | 0.00 | 1.74 | 0.00 | 1.82 | 1.046 | win_both |
-| hardsigmoid | poly:s3/d3 | 0.50 | 1.99 | 0.50 | 1.79 | 0.899 | accuracy_match_slow |
+| hardsigmoid | clamped_affine:s3/d2 | 0.50 | 1.73 | 0.50 | 1.79 | 1.035 | win_both |
 | hardswish | gated_affine_product:s3/d6 | 0.02 | 1.78 | 0.25 | 2.01 | 1.129 | win_both |
 | hardtanh | poly:s3/d5 | 0.00 | 1.86 | 0.00 | 1.86 | 1.000 | win_both |
 | i0 | poly:s1/d10 | 0.25 | 2.35 | 1.00 | 3.10 | 1.319 | win_both |
@@ -49,8 +49,8 @@ Comparable rows: 52. Win on ULP and runtime: 41. Waived faster exceptions: 1. Ac
 | multigammaln | poly:s1/d3 | 118.12 | 1.72 | 127.00 | 0.13 | 0.076 | excluded |
 | polygamma | poly:s32/d10 | 16.00 | 25.98 | -- | -- | -- | incomplete |
 | prelu | poly:s2/d2 | 0.00 | 1.79 | -- | -- | -- | incomplete |
-| relu | poly:s2/d2 | 0.00 | 1.78 | 0.00 | 1.72 | 0.966 | accuracy_match_slow |
-| relu6 | poly:s3/d2 | 0.00 | 1.88 | 0.00 | 1.84 | 0.979 | accuracy_match_slow |
+| relu | clamped_affine:s2/d1 | 0.00 | 1.67 | 0.00 | 1.72 | 1.030 | win_both |
+| relu6 | clamped_affine:s3/d6 | 0.00 | 1.71 | 0.00 | 1.84 | 1.076 | win_both |
 | relu_max | poly:s3/d1 | 0.00 | 1.90 | -- | -- | -- | incomplete |
 | relu_min | poly:s2/d1 | 0.00 | 1.78 | -- | -- | -- | incomplete |
 | rsqrt | newton_root:s1/d13 | 0.00 | 2.02 | 0.00 | 2.47 | 1.223 | win_both |
