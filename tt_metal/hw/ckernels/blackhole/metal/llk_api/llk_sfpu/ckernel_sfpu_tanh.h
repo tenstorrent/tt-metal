@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Yugansh Tyagi
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,112 +10,79 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_trigonometry.h"
 
 namespace ckernel::sfpu {
 
 /*
- * Accurate tanh for fp32 using sigmoid: tanh(x) = 2*sigmoid(2x) - 1
- * For small |x| < 0.6, uses minimax polynomial for better accuracy
+ * tanh(x) for fp32 via expm1 with Estrin-scheme polynomial evaluation.
+ * Blackhole (BH) version — identical algorithm to WH, separate file to
+ * allow hardware-specific tuning if needed.
  *
- * Algorithm:
- * - For |x| < 0.6: Use minimax polynomial (Sollya-optimized)
- * - For |x| >= 0.6: Use 2*sigmoid(2x) - 1
+ * See wormhole_b0/ckernel_sfpu_tanh.h for full documentation.
  *
- * Target accuracy: < 5 ULP for float32 (0.5 ULP for bfloat16)
+ * Target: < 38 cycles (BH), maxulperr < 3.
  */
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
-    sfpi::vFloat result = sfpi::vConst0;
+sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
+    sfpi::vFloat a, r, f, x0, x1;
+    sfpi::vFloat t, rcp, y0, y;
+    sfpi::vInt x_exp;
 
-    constexpr float POLYNOMIAL_THRESHOLD = 0.6f;
+    sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;
+    a = x + x;
+    sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
+    sfpi::vInt i = m;
 
-    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
-    sfpi::vInt mantissa = sfpi::exman(val);
-    // exp==255: NaN (default) or ±Inf (mantissa==0)
-    v_if(exponent == 255) {
-        result = std::numeric_limits<float>::quiet_NaN();
-        v_if(mantissa == 0) {
-            sfpi::vFloat one = sfpi::vConst1;
-            result = sfpi::copysgn(one, val);
-        }
-        v_endif;
-    }
-    v_else {
-        sfpi::vFloat abs_val = sfpi::abs(val);
+    a = sfpi::setsgn(a, 0);
+    f = j * sfpi::vConstFloatPrgm1 + a;
 
-        v_if(abs_val < POLYNOMIAL_THRESHOLD) {
-            // Small |x|: Use minimax polynomial for better accuracy
-            // Polynomial coefficients found with Sollya using the following command:
-            // fpminimax(tanh(x)/x, [|0,2,4,6,8|], [|single...|], [-0.6; -2^(-40)] + [2^(-40); 0.6], relative);
-            sfpi::vFloat x2 = val * val;
+    // Estrin-scheme degree-5 minimax polynomial for expm1(f)
+    //   q(f) = (c0+c1*f) + f^2*((c2+c3*f) + f^2*(c4+c5*f))
+    // All Level-1 operations are mutually independent, enabling
+    // back-to-back issue without stalls on the SFPU pipeline.
+    sfpi::vFloat f2    = f * f;
+    sfpi::vFloat q_lo  = sfpi::vConstFloatPrgm2 * f + 0.5f;
+    sfpi::vFloat q_mi  = 8.331298828e-3f * f + 4.166680202e-2f;
+    sfpi::vFloat q_hi  = 1.974105835e-04f * f + 1.393318176e-3f;
 
-            sfpi::vFloat p = PolynomialEvaluator::eval(
-                x2,
-                0.999999940395355224609375f,
-                -0.33332359790802001953125f,
-                0.13310669362545013427734375f,
-                -5.21197654306888580322265625e-2f,
-                1.5497927553951740264892578125e-2f);
+    sfpi::vFloat q_mid = f2 * q_hi + q_mi;
+    sfpi::vFloat q     = f2 * q_mid + q_lo;
+    r                  = f2 * q + f;
 
-            result = val * p;
-            result = sfpi::copysgn(result, val);  // Preserve input sign on zero (tanh(-0.0) = -0.0);
-        }
-        v_else {
-            // Normal region: Use tanh(x) = 2*sigmoid(2x) - 1
-            sfpi::vFloat two_x = 2.f * val;
-            sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
+    sfpi::vInt e       = i + 126;
+    sfpi::vFloat scale = sfpi::setexp(sfpi::vConst0, e);
+    sfpi::vFloat w     = 0.5f;
+    sfpi::vFloat bias0 = scale - w;
+    a  = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) - 1);
+    x0 = r * scale + bias0;
+    y  = a * 0.0f + 1.0f;
+    x1 = x0 + 1.0f;
 
-            // Compute 2*sigmoid(2x) - 1
-            result = 2.f * sig - sfpi::vConst1;
+    v_if(i < 61) {
+        rcp   = sfpi::approx_recip(x1);
+        t     = -x1 * rcp + 1.0f;
+        y     = x;
+        rcp   = rcp * t + rcp;
+        y0    = x0 * rcp;
+        x_exp = sfpi::exexp(x, sfpi::ExponentMode::NoDebias);
+        t     = -x1 * y0 + x0;
+        v_if(x_exp >= 115) {
+            y = t * rcp + y0;
         }
         v_endif;
     }
     v_endif;
 
-    return result;
-}
-
-template <bool is_fp32_acc_to_dest_mode>
-sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
-    // Formula found at
-    // https://varietyofsound.wordpress.com/2011/02/14/efficient-tanh-computation-using-lamberts-continued-fraction/
-    // This approximation is derived from a continued fraction formula of tanh(x)
-
-    // For negative numbers, we compute tanh(x) = -tanh(x)
-    sfpi::vFloat x = sfpi::abs(val);  // set positive
-
-    // Compute numerator and denominator of continued fraction using Horner's method
-    sfpi::vFloat x2 = x * x;
-    sfpi::vFloat numerator = x * (135135.f + x2 * (17326.f + x2 * (378.f + x2)));
-
-    constexpr float denominator_coefs[] = {135135.f, 62370.f, 3150.f, 28.f};
-    sfpi::vFloat denominator = PolynomialEvaluator::eval(x2, 135135.f, 62370.f, 3150.f, 28.f);
-
-    sfpi::vFloat result = numerator * ckernel::sfpu::sfpu_reciprocal_iter<2>(denominator);
-
-    // For larger x, the continued fraction may exceed 1.0.
-    // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
-    sfpi::vFloat threshold_value = sfpi::vConst1;
-    sfpi::vec_min_max(result, threshold_value);
-
-    // Preserve input sign, the SFPU multiply flushes negative zero to zero, but we want to preserve the sign.
-    result = sfpi::copysgn(result, val);
-
-    return result;
+    return sfpi::copysgn(y, x);
 }
 
 template <bool is_fp32_acc_to_dest_mode>
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
-    // For negative numbers, we compute tanh(-x) = -tanh(x)
-    sfpi::vFloat val = sfpi::abs(x);  // set positive
+    sfpi::vFloat val = sfpi::abs(x);
 
-    // Polynomial coefficients found using Sollya
-    // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
-    // (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
-    // (5.876733921468257904052734375e-3))))));
     sfpi::vFloat result = PolynomialEvaluator::eval(
         val,
         sfpi::vConst0,
@@ -125,20 +93,16 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
         sfpi::vConstFloatPrgm1,
         sfpi::vConstFloatPrgm0);
 
-    // For larger x, the polynomial approximation may exceed 1.0.
-    // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
-    result = sfpi::copysgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
-
+    result = sfpi::copysgn(result, x);
     return result;
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
-        // SFPU microcode
         sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
         sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
         sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
@@ -148,23 +112,20 @@ inline void calculate_tanh() {
             sfpi::vFloat val = sfpi::dst_reg[0];
             val = sfpi::lut(val, l0, l1, l2);
             sfpi::dst_reg[0] = val;
-
             sfpi::dst_reg++;
         }
 
         l_reg[sfpi::LRegs::LReg0] = l0;
         l_reg[sfpi::LRegs::LReg1] = l1;
         l_reg[sfpi::LRegs::LReg2] = l2;
-    } else {  // APPROXIMATION_MODE is false
-
+    } else {
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
 
             sfpi::vFloat result;
 
             if constexpr (is_fp32_dest_acc_en) {
-                // Use accurate sigmoid-based tanh for fp32
-                result = _sfpu_tanh_fp32_accurate_<is_fp32_dest_acc_en>(val);
+                result = _sfpu_tanh_fp32_accurate_(val);
             } else {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
                 result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -179,18 +140,18 @@ inline void calculate_tanh() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     if constexpr (APPROXIMATION_MODE) {
-        uint imm0 = 0x1DFF;  // 0.90625*x
-        uint imm1 = 0x481A;  // 0.09375*x + 0.8125
-        uint imm2 = 0xFF00;  // 1
+        uint imm0 = 0x1DFF;
+        uint imm1 = 0x481A;
+        uint imm2 = 0xFF00;
         _sfpu_load_imm16_(0, imm0);
         _sfpu_load_imm16_(1, imm1);
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            sigmoid_init<false>();
+            sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;
+            sfpi::vConstFloatPrgm1 = -0.6931471805599453f;
+            sfpi::vConstFloatPrgm2 = 1.666667163e-1f;
         } else {
-            // Polynomial approximation
-            // Store some polynomial coefficients in programmable registers
             sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
             sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
             sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
