@@ -322,7 +322,7 @@ void run_pipeline(
             .mapper = create_mesh_mapper(*stages[0], MeshMapperConfig{.placements = replicate_all(*stages[0])}),
             .socket_buffer_type = BufferType::L1,
             .fifo_size_bytes = fifo_bytes,
-            .scratch_cb_size_bytes = fifo_bytes,
+            .max_socket_page_size_bytes = fifo_bytes,
             .worker_cores = workers,
             .metadata_size_bytes = metadata_size_bytes,
         });
