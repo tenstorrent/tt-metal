@@ -42,6 +42,7 @@
 #include "ttnn/operations/conv/conv_nanobind.hpp"
 #include "ttnn/operations/creation/creation_nanobind.hpp"
 #include "ttnn/operations/debug/debug_nanobind.hpp"
+#include "ttnn/operations/math/fft/fft_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_nanobind.hpp"
@@ -128,6 +129,9 @@ void py_module(nb::module_& mod) {
 
     auto m_complex_unary_backward = mod.def_submodule("complex_unary_backward", "complex_unary_backward operations");
     complex_unary_backward::py_module(m_complex_unary_backward);
+
+    auto m_fft = mod.def_submodule("fft", "fft operations");
+    fft::py_module(m_fft);
 
     auto m_ccl = mod.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
