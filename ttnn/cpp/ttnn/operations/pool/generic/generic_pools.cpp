@@ -306,8 +306,11 @@ static std::vector<Tensor> pool2d_L1(
         output_nhw_padded,
         output_shard_height_padded,
         output_shard_width_padded);
-    out_memory_config = out_memory_config.with_shard_spec(tt::tt_metal::ShardSpec{
-        shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
+    out_memory_config = tt::tt_metal::MemoryConfig(
+        out_memory_config.memory_layout(),
+        out_memory_config.buffer_type(),
+        tt::tt_metal::ShardSpec{
+            shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
     sliding_window_config = sliding_window::SlidingWindowConfig{
         .batch_size = batch_size,
         .channels = channels,

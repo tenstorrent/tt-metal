@@ -71,9 +71,22 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
+    // shard_W * elem_size for B/W-sharded (splits row across shards); full row otherwise.
+    // Fallback is padded for the reader tensor, unpadded for the writer tensor.
+    const auto per_shard_page_size_bytes = [&](const Tensor& t, uint32_t row_bytes) -> uint32_t {
+        const auto& mc = t.memory_config();
+        if (mc.is_sharded() && (mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                                mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
+            const auto& spec = mc.shard_spec().value();
+            return spec.shape[1] * t.element_size();
+        }
+        return row_bytes;
+    };
+    const uint32_t reader_page_size = per_shard_page_size_bytes(input_tensor, padded_row_size_bytes);
+
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address,
-        padded_row_size_bytes,
+        reader_page_size,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
         num_dims,
@@ -127,6 +140,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         reader_kernel_args[addr_offset] = num_read_per_barrier;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
+        const uint32_t writer_page_size = per_shard_page_size_bytes(output_tensor, unpadded_row_size_bytes);
         std::vector<uint32_t> writer_kernel_args = {
             output_buffer->address(),
             unpadded_row_size_bytes,
@@ -135,7 +149,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             num_sticks_per_core_read,
             num_read_per_barrier,
             num_sticks_written,
-            0};
+            writer_page_size,
+        };
         num_sticks_written += num_sticks_per_core;
         ret_val.emplace_back(reader_kernel_args, writer_kernel_args);
     }
@@ -166,8 +181,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
     if (misalignment != 0) {
         alignment *= 2;
     }
-    const ttnn::Shape& output_shape = output.padded_shape();
-    const uint32_t unpadded_row_size_bytes = output_shape[-1] * input.element_size();
+    const uint32_t unpadded_row_size_bytes = output.padded_shape()[-1] * input.element_size();
     const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
     const uint32_t stick_stride_for_merge = tt::round_up(unpadded_row_size_bytes, single_alignment);
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
@@ -212,10 +226,8 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
 
     constexpr uint8_t src0_cb_index = 0;
 
-    // CB sizing depends on slice_start (via misalignment / unpadded_row_size_bytes).
-    // padded_shape is folded into compute_program_hash() so each unique sizing
-    // gets its own cache entry; CB total_size/page_size are not patched on
-    // cache hit — the cached descriptor already carries the correct values.
+    // CB sizing varies with slice_start; padded_shape folds into compute_program_hash() so each
+    // unique CB layout gets its own cache entry (total_size/page_size are not patched on cache hit).
     const auto [cb_page_size, num_read_per_barrier, misalignment] = ttnn::operations::data_movement::compute_cb_size(
         input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 

@@ -48,7 +48,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     // Prepare a workload and a device coordinate range that spans the mesh.
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    constexpr const char* DM_KERNEL = "dm_kernel";
+    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
 
     experimental::KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
@@ -80,9 +80,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = DM_KERNEL,
-        .runtime_arg_values = {{.node = node, .args = {{"address", address}}}},
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"address", address}}}},
         .common_runtime_arg_values = {{"value", value}},
     }};
     experimental::SetProgramRunArgs(program, params);

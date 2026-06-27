@@ -21,7 +21,7 @@ def set_seed(seed: int = 42):
     """
     random.seed(seed)
     np.random.seed(seed)
-    ttml.autograd.AutoContext.get_instance().set_seed(seed)
+    ttml.manual_seed(seed)
 
 
 def get_tt_metal_runtime_root() -> str:

@@ -18,6 +18,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -42,7 +43,8 @@ void kernel_main() {
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(18);
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
-    mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    matmul_init(intermediate_cb, transformation_mat_cb);
 
     binary_op_init_common(input_cb, input_cb, input_cb);
 
@@ -71,10 +73,7 @@ void kernel_main() {
          * cb_stats = [sum(x0**2), sum(x1**2), ...]
          * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
-        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-            stats_cb,
-            reduce_scalar_cb,
-            reduce_result_cb,
+        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, stats_cb, reduce_scalar_cb, reduce_result_cb>(
             compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
 
         /*
@@ -169,7 +168,7 @@ void kernel_main() {
                  */
                 reconfig_data_format(transformation_mat_cb, intermediate_cb);
                 pack_reconfig_data_format(rotated_input_cb);
-                mm_init_short(intermediate_cb, transformation_mat_cb);
+                matmul_init(intermediate_cb, transformation_mat_cb);
                 cb_wait_front(intermediate_cb, block_size);
                 cb_reserve_back(rotated_input_cb, block_size);
                 tile_regs_acquire();

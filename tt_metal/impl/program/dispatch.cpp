@@ -380,8 +380,9 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
+                                                        .get_device_build_env(device->build_id())
+                                                        .build_key());
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {
@@ -397,6 +398,7 @@ uint32_t finalize_kernel_bins(
                 for (uint32_t processor_index : processor_indices) {
                     kg->kernel_text_offsets[processor_index] = kernel_text_offset;
                     kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                    kernel_config.kernel_text_size()[processor_index] = binaries[i]->get_packed_size();
                     hal.set_iram_text_size(
                         kg->launch_msg.view(),
                         programmable_core_type,
@@ -2302,11 +2304,11 @@ void update_program_dispatch_commands(
     static_assert(
         std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
         "program_host_id type should be uint16_t");
-    uint16_t runtime_id = program.get_runtime_id();
+    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    // Record the runtime_id -> kernel source paths mapping for real-time profiler correlation.
+    tt::TieRuntimeIdToProgramId(program);
     tt::RecordKernelSourceMap(program);
 
     if (hal.get_programmable_core_type_count() >= 2) {
@@ -2835,6 +2837,9 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_
         }
     }
 
+    tt::TieRuntimeIdToProgramId(program);
+    tt::RecordKernelSourceMap(program);
+
     return TraceNode{
         program.shared_from_this(),
         static_cast<uint32_t>(program.get_runtime_id()),
@@ -2979,17 +2984,29 @@ void reset_worker_dispatch_state_on_device(
 }
 
 void set_num_worker_sems_on_dispatch(
-    IDevice* /*device*/, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
-    // Not needed for regular dispatch kernel
-    if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
-        return;
-    }
+    IDevice* /*device*/,
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint32_t num_worker_sems,
+    tt::stl::Span<const uint32_t> workers_per_sub_device) {
+    TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+    TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_num_worker_sems();
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        calculator.add_dispatch_set_num_worker_sems();
+    }
+    calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_SUBORDINATE);
+    } else {
+        command_sequence.add_dispatch_set_sub_device_worker_counts(
+            workers_per_sub_device, DispatcherSelect::DISPATCH_MASTER);
+    }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);

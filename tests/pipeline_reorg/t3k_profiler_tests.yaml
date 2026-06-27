@@ -19,14 +19,6 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
 
-- name: T3000 async falcon7b causal-LM
-  cmd: run_async_test
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U03BJ1L3LUQ # Mo Memarian
-  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
-
 - name: T3000 async tracing resnet50 (legacy vs runtime comparison)
   cmd: run_async_tracing_T3000_test
   skus:
@@ -88,5 +80,13 @@
   skus:
     wh_llmbox:
       timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: T3000 tracy wasm gui HTTP integration
+  cmd: run_tracy_wasm_gui_http_integration
+  skus:
+    wh_llmbox:
+      timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285

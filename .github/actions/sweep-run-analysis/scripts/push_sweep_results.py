@@ -73,6 +73,28 @@ def _normalize_run_type(run_type: str) -> str:
     return run_type.strip().replace(" ", "_")
 
 
+def _format_error_cell(test: dict, max_len: int = 90) -> str:
+    """One-line error summary for the failed-tests table.
+
+    The result's message/error fields hold either the PCC value (for a PCC
+    assertion failure — a bare float) or the exception text (TT_FATAL/assert/etc.).
+    Render a bare float as ``PCC=<v>`` and otherwise the first line of the message,
+    truncated and made table-safe (no pipes/backticks/newlines).
+    """
+    raw = test.get("message") or test.get("error_message") or test.get("exception") or ""
+    raw = str(raw).strip()
+    if not raw:
+        return "—"
+    try:
+        return f"PCC={float(raw):.4f}"
+    except (TypeError, ValueError):
+        pass
+    msg = raw.splitlines()[0].replace("|", "\\|").replace("`", "'")
+    if len(msg) > max_len:
+        msg = msg[: max_len - 1] + "…"
+    return msg
+
+
 def _short_hardware_label(card_type: str) -> str:
     """Extract a concise hardware label from card_type strings like 'wormhole_b0 (N300)'."""
     if not card_type:
@@ -159,16 +181,17 @@ def _write_job_summary(tests: list[dict], run_type: str = "", **extra_fields) ->
         for module, module_tests in sorted_modules:
             lines.append(f"**{module}** ({len(module_tests)} failures)")
             lines.append("")
-            lines.append("| Test Name | Config Hash | Status | Hardware |")
-            lines.append("|-----------|-------------|--------|----------|")
+            lines.append("| Test Name | Config Hash | Status | Hardware | Error |")
+            lines.append("|-----------|-------------|--------|----------|-------|")
             for t in module_tests[:4]:
                 name = t.get("full_test_name", "unknown")
                 config_hash = t.get("input_hash", "—")
                 status = t.get("status", "fail")
                 hardware = _short_hardware_label(t.get("card_type", ""))
-                lines.append(f"| `{name}` | `{config_hash}` | {status} | {hardware} |")
+                error = _format_error_cell(t)
+                lines.append(f"| `{name}` | `{config_hash}` | {status} | {hardware} | {error} |")
             if len(module_tests) > 4:
-                lines.append(f"| ... and {len(module_tests) - 4} more | | | |")
+                lines.append(f"| ... and {len(module_tests) - 4} more | | | | |")
             lines.append("")
 
         lines.append("</details>")

@@ -15,7 +15,7 @@ using RingDirection = ttnn_fixed::distributed::RingShiftDirection;
 
 // ============== Forward Pass Types ==============
 
-struct operation_attributes_t {
+struct RingSDPAFwParams {
     uint32_t ring_size = 0;
     uint32_t ring_axis = 0;
     uint32_t step = 0;
@@ -24,13 +24,16 @@ struct operation_attributes_t {
         ttnn_fixed::distributed::RingShiftDirection::Backward;  // Direction K/V is shifting in the ring
 };
 
-struct tensor_args_t {
+struct RingSDPAFwInputs {
     ttnn::Tensor query;
     ttnn::Tensor key;
     ttnn::Tensor value;
     std::optional<ttnn::Tensor> preallocated_output;         // Preallocated output buffer
     std::optional<ttnn::Tensor> preallocated_intermediates;  // Preallocated intermediates buffer
 };
+
+using operation_attributes_t = RingSDPAFwParams;
+using tensor_args_t = RingSDPAFwInputs;
 
 using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // output, intermediates
 

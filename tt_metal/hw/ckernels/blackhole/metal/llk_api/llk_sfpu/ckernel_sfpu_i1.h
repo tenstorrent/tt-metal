@@ -56,8 +56,8 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
     // Computed first so that 1/|x| can be derived as rsqrt_y² without a
     // separate sfpu_reciprocal call.
-    const sfpi::vInt rsqrt_i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(abs_x) >> 1);
-    sfpi::vFloat rsqrt_y = sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
+    const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
+    sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
     sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
     rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
     c0 = sfpi::vConst1 + (-rsqrt_y) * (abs_x * rsqrt_y);
@@ -137,7 +137,7 @@ inline void calculate_i1() {
         v_if(abs_x > I1_THRESHOLD) { val = calculate_i1_asymptotic_(abs_x, x); }
         v_endif;
 #ifndef INP_FLOAT32
-        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::NearestEven);
+        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
 #endif
         sfpi::dst_reg[0] = val;
 

@@ -251,7 +251,9 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     dfb.reserve_back(1);
     uint32_t write_addr = dfb.get_write_ptr();
 
-    zero_tile<dfb_id>(write_addr);
+    Noc noc;
+    noc.async_write_zeros(dfb, get_tile_size(dfb_id));
+    noc.write_zeros_l1_barrier();
 
     if constexpr (use_matmul) {
         uint32_t scaler = float_to_col0_scaler_bits<data_format>(scaler_f);

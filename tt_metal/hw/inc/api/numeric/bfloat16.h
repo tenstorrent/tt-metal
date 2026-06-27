@@ -14,7 +14,17 @@ inline constexpr uint16_t POS_INF_BFLOAT16 = 0x7F80;    // Representation of pos
 inline constexpr uint16_t NAN_BFLOAT16 = 0x7FFF;        // Representation of NaN in bfloat16
 inline constexpr uint16_t BFLOAT16_SIGN_MASK = 0x8000;  // Sign bit mask for bfloat16
 
-// Convert a single-precision float to bfloat16 using IEEE 754 round-to-nearest-even.
+// Convert bfloat16 (stored as uint16_t) to float.
+// Bfloat16 occupies the high 16 bits of a float's bit representation; this
+// zero-extends the value into the low 16 bits.
+FORCE_INLINE float bf16_to_fp32(std::uint16_t bf16) {
+    std::uint32_t bits = static_cast<std::uint32_t>(bf16) << 16;
+    float result;
+    std::memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
+// Convert a single-precision float to bfloat16 using IEEE 754 round-to-nearest.
 // Matches the packer hardware semantics, so values produced via this helper compare
 // bit-identically against values rounded down to bf16 by the packer.
 FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
@@ -27,6 +37,30 @@ FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
 
     return static_cast<std::uint16_t>(bits >> 16);
 }
+
+// Convert a single-precision float to bfloat16 by truncation (round toward zero).
+// Faster than fp32_to_bf16 but drops the low 16 mantissa bits without rounding.
+// Suitable for intermediate computations where the small rounding error is acceptable.
+FORCE_INLINE std::uint16_t fp32_to_bf16_truncate(float x) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &x, sizeof(bits));
+    return static_cast<std::uint16_t>(bits >> 16);
+}
+
+// Split a float into its high and low 16-bit halves for SFPU register loads,
+// which only accept 16-bit immediate values.
+// high16 holds the bfloat16 representation; low16 holds the discarded mantissa bits.
+struct FloatBits {
+    std::uint16_t high16;
+    std::uint16_t low16;
+
+    explicit FloatBits(float value) {
+        std::uint32_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        high16 = static_cast<std::uint16_t>(bits >> 16);
+        low16 = static_cast<std::uint16_t>(bits & 0xFFFFu);
+    }
+};
 
 // Optimized function to compare two bfloat16 values using integer arithmetic
 bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {

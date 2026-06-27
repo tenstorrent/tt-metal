@@ -13,6 +13,14 @@
 
 #include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
 
+namespace tt::tt_metal::experimental::disaggregation {
+// Protobuf serializer free-functions. Declared in impl/.../kv_chunk_address_table_protobuf.hpp,
+// which is not on ttnn's include path; the definitions link from libtt_metal (the .cpp is
+// compiled into the `impl` target). Forward-declared here to bind without the impl header.
+std::string export_to_protobuf(const KvChunkAddressTable& table);
+void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path);
+}  // namespace tt::tt_metal::experimental::disaggregation
+
 namespace ttnn::disaggregation {
 
 void bind_disaggregation_api(nb::module_& mod) {
@@ -195,7 +203,7 @@ void bind_disaggregation_api(nb::module_& mod) {
     mod.def(
         "tensor_from_bfp8_bytes",
         [](const nb::bytes& raw_bytes, const std::vector<uint32_t>& shape) {
-            return ttnn::experimental::disaggregation::tensor_from_bfp8_bytes(
+            return ttnn::experimental_disaggregation::tensor_from_bfp8_bytes(
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(raw_bytes.c_str()), raw_bytes.size()), shape);
         },
         nb::arg("raw_bytes"),
@@ -205,6 +213,15 @@ void bind_disaggregation_api(nb::module_& mod) {
         with the given shape — no quantization round-trip.
         Used to compare KV-table reads against the live KV cache byte-for-byte.
         )");
+
+    // Protobuf serialization — the runner publishes the table to the
+    // migration_worker (SET_TABLE consumes a serialized protobuf file path).
+    mod.def(
+        "export_to_protobuf_file",
+        &export_to_protobuf_file,
+        nb::arg("table"),
+        nb::arg("path"),
+        "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
 }
 
 }  // namespace ttnn::disaggregation

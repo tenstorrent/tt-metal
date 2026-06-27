@@ -43,8 +43,17 @@ class UnpackerA(Unpacker):
         if compute_unit.broadcast_type != BroadcastType.None_:
             tensor_b = tensor_a
             tensor_a = None
+            src_a_tile_dims = (
+                compute_unit.src_a.tile_shape.total_row_dim(),
+                compute_unit.src_a.tile_shape.total_col_dim(),
+            )
+            src_a_num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             tensor_b = tilize_block(
-                tensor_b, compute_unit.src_a.dimensions, compute_unit.src_a.data_format
+                tensor_b,
+                compute_unit.src_a.dimensions,
+                compute_unit.src_a.data_format,
+                num_faces=src_a_num_faces,
+                tile_dimensions=src_a_tile_dims,
             )
             broadcast_golden = get_golden_generator(BroadcastGolden)
             tensor_b = broadcast_golden(
@@ -59,6 +68,8 @@ class UnpackerA(Unpacker):
                 tensor_b,
                 compute_unit.src_a.data_format,
                 compute_unit.src_a.dimensions,
+                tile_dimensions=src_a_tile_dims,
+                num_faces=src_a_num_faces,
             )
         else:
             if compute_unit.unpack_transpose_faces == Transpose.Yes:
@@ -177,6 +188,4 @@ class UnpackerA(Unpacker):
         block: BlockData,
     ) -> str:
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-
-        return f"_llk_unpack_A_uninit_<{broadcast_type}>({face_r_dim});\n"
+        return f"_llk_unpack_A_uninit_<{broadcast_type}>();\n"

@@ -533,7 +533,11 @@ class VectorExportSource(VectorSource):
                 "but no owned mesh shapes were configured for that lane."
             )
 
-        hardware_rules = capability_profile.get("hardware_rules", ())
+        # capability_profile is None when no TEST_GROUP_NAME is set and none can be
+        # inferred from the machine (common for local single-/sub-mesh runs); guard
+        # so vector loading degrades to "no hardware rules" instead of crashing with
+        # AttributeError on None.
+        hardware_rules = (capability_profile or {}).get("hardware_rules", ())
         if filter_policy["enforce_hardware_capability"] and not hardware_rules:
             logger.warning(
                 f"Manifest grouping mode is 'hw' for module '{module_name}', but no hardware capability profile "

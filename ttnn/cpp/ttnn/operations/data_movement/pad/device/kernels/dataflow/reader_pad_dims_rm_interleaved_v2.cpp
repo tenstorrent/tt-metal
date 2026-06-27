@@ -83,16 +83,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<23>();
 
     uint32_t packed_pad_value = 0;
-    uint32_t row_major_min_bytes = 0;
-    uint32_t num_front_pad_sticks_read = 0;
-    uint32_t num_end_pad_sticks_read = 0;
-    uint32_t num_sticks_padded_read = 0;
     if constexpr (not_pad_by_zero) {
         packed_pad_value = kernel_compile_time_args[13];
-        row_major_min_bytes = kernel_compile_time_args[14];
-        num_front_pad_sticks_read = kernel_compile_time_args[15];
-        num_end_pad_sticks_read = kernel_compile_time_args[16];
-        num_sticks_padded_read = kernel_compile_time_args[17];
     }
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;

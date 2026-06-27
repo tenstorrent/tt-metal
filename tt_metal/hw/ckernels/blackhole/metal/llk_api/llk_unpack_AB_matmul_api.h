@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL
@@ -29,9 +30,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
-    const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces =
-        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+    const uint32_t unpA_num_faces = get_operand_num_faces(operandA_id);
+    const uint32_t unpB_num_faces = get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
@@ -42,6 +42,17 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpB_face_r_dim,
         unpA_num_faces,
         unpB_num_faces));
+
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        unpack_src_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandA_id],
+        unpack_dst_format[operandB_id],
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE);
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -87,8 +98,19 @@ inline void llk_unpack_AB_matmul(
         unpack_dst_format[operandA_id],
         get_operand_face_r_dim(operandB_id),
         get_operand_face_r_dim(operandA_id),
-        partial_face_a ? 1 : get_operand_num_faces(operandB_id),
-        partial_face_b ? 1 : get_operand_num_faces(operandA_id)));
+        get_operand_num_faces(operandB_id),
+        get_operand_num_faces(operandA_id)));
+
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        unpack_src_format[operandB_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandB_id],
+        unpack_dst_format[operandA_id],
+        get_operand_face_r_dim(operandB_id),
+        get_operand_face_r_dim(operandA_id),
+        get_operand_num_faces(operandB_id),
+        get_operand_num_faces(operandA_id));
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(

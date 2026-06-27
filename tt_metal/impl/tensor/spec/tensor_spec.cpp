@@ -155,13 +155,6 @@ TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_la
     populate_sharding_specs();
 }
 
-TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
-    TensorSpec result = *this;
-    result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
-    result.populate_sharding_specs();
-    return result;
-}
-
 TensorSpec TensorSpec::sharded_across_dims(
     tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     Shape shard_shape = padded_shape();

@@ -8,6 +8,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -20,11 +21,11 @@
 namespace ttnn::prim {
 
 struct ExpRingJointSDPAProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const ExpRingJointSDPAParams& operation_attributes,
         const ExpRingJointSDPAInputs& tensor_args,
         ExpRingJointSDPAResult& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::prim

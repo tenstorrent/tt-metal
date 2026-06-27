@@ -8,10 +8,11 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_sqrt.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_trigonometry.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -94,8 +95,8 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tangent() {
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + P2 + P3
-    const float P0 = -0x1.92p+0f;       // representable as bf16
-    const float P1 = -0x1.fbp-12f;      // representable as fp16
+    const float P0 = -0x1.92p+0f;   // representable as bf16
+    const float P1 = -0x1.fbp-12f;  // representable as fp16
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
@@ -104,14 +105,14 @@ inline void calculate_tangent() {
         sfpi::vFloat inv_pio2 = sfpi::vConstFloatPrgm2;
 
         // j = round(v / (PI/2))
-        // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
+        // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest.
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
         sfpi::vFloat rounding_bias = sfpi::sFloat16b(0x1.8p23f);
         sfpi::vFloat j =
             __builtin_rvtt_sfpmad(v.get(), inv_pio2.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // We need the LSB of the integer later, to determine the sign of the result.
-        i = sfpi::reinterpret<sfpi::vInt>(j);
+        i = sfpi::as<sfpi::vInt>(j);
 
         // Shift mantissa bits back; j is now round(v / (PI/2)) in fp32.
         j += -rounding_bias;
@@ -129,7 +130,7 @@ inline void calculate_tangent() {
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::NearestEven);
+            a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = a;
         sfpi::dst_reg++;
@@ -143,8 +144,8 @@ inline void calculate_sine() {
     // 3. Evaluate sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, PI/2].
 
     // Constants for four-stage Cody-Waite reduction with -PI = P0 + P1 + vConstFloatPrgm0 + vConstFloatPrgm1
-    const float P0 = -0x1.92p+1f;               // representable as bf16
-    const float P1 = -0x1.fbp-11f;              // representable as fp16
+    const float P0 = -0x1.92p+1f;   // representable as bf16
+    const float P1 = -0x1.fbp-11f;  // representable as fp16
 
     sfpi::vFloat C3, C2, C1, C0;
 
@@ -168,12 +169,12 @@ inline void calculate_sine() {
         sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
 
         // Compute j = round(v / PI).
-        // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest-even.
+        // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest.
         sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // At this point, the mantissa bits of j contain the integer.
         // Store for later; the LSB determines the sign of the result.
-        sfpi::vInt q = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
         // Shift mantissa bits back; j is now round(v / PI) in fp32.
         j = j - rounding_bias;
 
@@ -187,7 +188,7 @@ inline void calculate_sine() {
 
         q <<= 31;
         sfpi::vFloat s = a * a;
-        a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) ^ q);
+        a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) ^ q);
 
         sfpi::vFloat r;
         if (is_fp32_dest_acc_en) {
@@ -201,7 +202,7 @@ inline void calculate_sine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
+            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
@@ -215,8 +216,8 @@ inline void calculate_cosine() {
     // 3. Evaluate sin(a) polynomial and use identity cos(x) = sin(x + PI/2).
 
     // Constants for four-stage Cody-Waite reduction with -PI/2 = P0 + P1 + vConstFloatPrgm0 + vConstFloatPrgm1
-    const float P0 = -0x1.92p+0f;               // representable as bf16
-    const float P1 = -0x1.fbp-12f;              // representable as fp16
+    const float P0 = -0x1.92p+0f;   // representable as bf16
+    const float P1 = -0x1.fbp-12f;  // representable as fp16
 
     sfpi::vFloat C3, C2, C1, C0;
 
@@ -244,7 +245,7 @@ inline void calculate_cosine() {
         sfpi::vFloat neg_one = sfpi::vConstNeg1;
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
-        // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest-even.
+        // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
         sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // sfpi::vFloat rounding_bias;
@@ -255,7 +256,7 @@ inline void calculate_cosine() {
 
         // At this point, the mantissa bits of j contain the rounded integer.
         // Store for later; the LSB tracks quadrant parity for sign selection.
-        sfpi::vInt q = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
 
         j = j + NEG_ROUNDING_BIAS;
 
@@ -272,7 +273,7 @@ inline void calculate_cosine() {
 
         q <<= 31;
         sfpi::vFloat s = a * a;
-        a = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(a) ^ q);
+        a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) ^ q);
 
         sfpi::vFloat r;
         if constexpr (is_fp32_dest_acc_en) {
@@ -286,7 +287,7 @@ inline void calculate_cosine() {
             sfpi::vFloat c = a * s;
             r = r * s + C0;
             r = r * c + a;
-            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
+            r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
@@ -354,7 +355,7 @@ inline void calculate_atan() {
         sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = result;
@@ -433,7 +434,7 @@ inline void calculate_asin_acos_impl() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = result;
@@ -471,8 +472,9 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;
     sfpi::vFloat a = sfpi::setsgn(x, 0);
     // Rounds the absolute value of j, clamped to [0, 255].
-    sfpi::vInt i = sfpi::float_to_uint8(j, sfpi::RoundMode::NearestEven);
-    j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
+    sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
+    sfpi::vInt i = m;
 
     sfpi::vFloat r, f, c1;
 
@@ -483,8 +485,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
         r = r * f + 0.168174848f;
         i += 125;
         r = r * f + sfpi::vConstFloatPrgm2;
-        c1 = sfpi::reinterpret<sfpi::vFloat>(
-            sfpi::reinterpret<sfpi::vInt>(sfpi::vConst1) - 613);  // 0x3f7ffd9b = 0.999963462f
+        c1 = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(sfpi::vConst1) - 613);  // 0x3f7ffd9b = 0.999963462f
         r = r * f + c1;
 
     } else {
@@ -507,7 +508,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     v_if(i < 255) {
         // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
         // materialising 2**i directly near overflow boundary.
-        y = r * sfpi::reinterpret<sfpi::vFloat>(i << 23);
+        y = r * sfpi::as<sfpi::vFloat>(i << 23);
     }
     v_endif;
 
@@ -529,7 +530,7 @@ inline void calculate_cosh() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = y;
@@ -543,8 +544,9 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;  // j = x * log2(e)
     sfpi::vFloat a = sfpi::setsgn(x, 0);
     // Rounds the absolute value of j, clamped to [0, 255].
-    sfpi::vInt i = sfpi::float_to_uint8(j, sfpi::RoundMode::NearestEven);
-    j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
+    sfpi::vMag m = sfpi::convert<sfpi::vUInt8>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(m, sfpi::RoundMode::Nearest);
+    sfpi::vInt i = m;
 
     sfpi::vFloat r, s, f, w, y, scale, bias, c0;
 
@@ -576,7 +578,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
     // Keep reconstruction quarter-scaled: scale is 0.25 * 2**i. Avoids
     // materialising 2**i directly near overflow boundary.
-    scale = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
+    scale = sfpi::as<sfpi::vFloat>((i << 23) + sfpi::as<sfpi::vInt>(w));
     bias = scale - w;
     // Handle a * log2(e) >= 130, while propagating NaN.
     y = a * std::numeric_limits<float>::infinity();
@@ -617,7 +619,7 @@ inline void calculate_sinh() {
         sfpi::vFloat y = _sfpu_sinh_<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = y;
@@ -680,6 +682,192 @@ template <bool APPROXIMATION_MODE>
 void atan_init() {
     // Initialisation for use of sfpu_reciprocal<false>.
     sfpu_reciprocal_init<false>();
+}
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat _sfpu_sine_maclaurin_series_(sfpi::vFloat val) {
+    // Good for [-pi:pi]
+    // Maclaurin series = x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11!
+    sfpi::vFloat tmp = val;
+    // x
+    sfpi::vFloat output = tmp;
+    // x^3/3!
+    tmp = tmp * val * val;
+    output += -0.166666666 * tmp;
+    // x^5/5!
+    tmp = tmp * val * val;
+    output += 0.0083333333 * tmp;
+    // x^7/7!
+    tmp = tmp * val * val;
+    output += -0.0001984126 * tmp;
+    if constexpr (not APPROXIMATION_MODE) {
+        // x^9/9!
+        tmp = tmp * val * val;
+        output += 0.0000027557 * tmp;
+        // x^11/11!
+        tmp = tmp * val * val;
+        output += -0.00000002505 * tmp;
+    }
+
+    // Write out output
+    return output;
+}
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat _sfpu_cosine_maclaurin_series_(sfpi::vFloat val) {
+    // Good for [-pi:pi]
+    // Maclaurin series = 1 - x^2/2! + x^4/4! - x^6/6! + x^8/8! - x^10/10! + x^12/12!
+    // 1
+    sfpi::vFloat output = 1.0f;
+    // x^2/2!
+    sfpi::vFloat tmp = val * val;
+    output += -0.5 * tmp;
+    // x^4/4!
+    tmp = tmp * val * val;
+    output += 0.0416666666 * tmp;
+    // x^6/6!
+    tmp = tmp * val * val;
+    output += -0.0013888888 * tmp;
+    if constexpr (not APPROXIMATION_MODE) {
+        // x^8/8!
+        tmp = tmp * val * val;
+        output += 0.0000248015 * tmp;
+        // x^10/10!
+        tmp = tmp * val * val;
+        output += -0.0000002755 * tmp;
+    }
+
+    // Write out output
+    return output;
+}
+
+// Legacy implementation
+// Candidate for removal in future versions. See https://github.com/tenstorrent/tt-llk/issues/225 for more details.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_sine_(const int iterations) {
+    // SFPU microcode
+    for (int d = 0; d < iterations; d++) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v = 0.318309886183791f * v;  // *1/pi to get number of pi rads.
+        auto whole_v = sfpi::convert<sfpi::vSMag16>(v, sfpi::RoundMode::Nearest);
+        auto whole_v_float = sfpi::convert<sfpi::vFloat>(whole_v, sfpi::RoundMode::Nearest);
+        v = v - whole_v_float;
+        v *= 3.141592653589793f;  // fractional * pi to get it in [-pi:pi]
+        v = _sfpu_sine_maclaurin_series_<APPROXIMATION_MODE>(v);
+        v_if((whole_v & 1) != 0) {
+            // odd so flip the sign
+            v *= -1;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
+    }
+}
+
+// Legacy implementation, replaced by newer void _calculate_sine_() which produces more accurate results
+// Candidate for removal in future versions. See https://github.com/tenstorrent/tt-llk/issues/225 for more details.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _calculate_cosine_(const int iterations) {
+    // SFPU microcode
+    for (int d = 0; d < iterations; d++) {
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v = 0.318309886183791f * v;  // *1/pi to get number of pi rads.
+        auto whole_v = sfpi::convert<sfpi::vSMag16>(v, sfpi::RoundMode::Nearest);
+        auto whole_v_float = sfpi::convert<sfpi::vFloat>(whole_v, sfpi::RoundMode::Nearest);
+        v = v - whole_v_float;
+        v *= 3.141592653589793f;  // fractional * pi to get it in [-pi:pi]
+        v = _sfpu_cosine_maclaurin_series_<APPROXIMATION_MODE>(v);
+        v_if((whole_v & 1) != 0) {
+            // odd so flip the sign
+            v *= -1;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
+    }
+}
+
+// https://en.wikipedia.org/wiki/Inverse_hyperbolic_functions#Definitions_in_terms_of_logarithms
+// acosh(x) = log(x + sqrt(x^2 - 1))
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_acosh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat inp = sfpi::dst_reg[0];
+        sfpi::vFloat res;
+        v_if(inp < sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(inp == sfpi::vConst1) { res = sfpi::vConst0; }
+        v_else {
+            sfpi::vFloat tmp = inp * inp;
+            tmp = tmp - sfpi::vConst1;
+            tmp = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
+            tmp = tmp + inp;
+            res = _calculate_log_body_no_init_(tmp);
+        }
+        v_endif;
+        sfpi::dst_reg[0] = res;
+        sfpi::dst_reg++;
+    }
+}
+
+// asinh(x) = log(x + sqrt(x^2 + 1))
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_asinh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat inp = sfpi::dst_reg[0];
+        sfpi::vFloat tmp = inp * inp + sfpi::vConst1;
+        tmp = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
+        tmp = tmp + sfpi::abs(inp);
+        auto res = _calculate_log_body_no_init_(tmp);
+        v_if(inp < sfpi::vConst0) { res = -res; }
+        v_endif;
+        sfpi::dst_reg[0] = res;
+        sfpi::dst_reg++;
+    }
+}
+
+// atanh[x] = 0.5 * ln((1 + x) / (1 - x))
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_atanh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat inp = sfpi::dst_reg[0];
+        sfpi::vFloat abs_inp = sfpi::abs(inp);
+        sfpi::vFloat res;
+        v_if(abs_inp > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(abs_inp == sfpi::vConst1) {
+            sfpi::vFloat inf = std::numeric_limits<float>::infinity();
+            res = sfpi::copysgn(inf, inp);
+        }
+        v_else {
+            sfpi::vFloat num = sfpi::vConst1 + inp;
+            sfpi::vFloat den = sfpi::vConst1 - inp;
+            sfpi::vFloat tmp = sfpu_reciprocal_iter<APPROXIMATION_MODE ? 0 : 2>(den);
+            tmp = sfpi::copysgn(tmp, den);
+            if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE) {
+                den = tmp;
+            } else {
+                den = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::Nearest);
+            }
+            num = num * den;
+            den = _calculate_log_body_no_init_(num);
+            res = 0.5f * den;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = res;
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE>
+void init_inverse_hyperbolic() {
+    sqrt_init<APPROXIMATION_MODE>();
+}
+
+template <bool APPROXIMATION_MODE>
+void init_atanh() {
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu

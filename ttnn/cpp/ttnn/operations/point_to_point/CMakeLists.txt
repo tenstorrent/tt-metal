@@ -5,7 +5,7 @@ include(sources.cmake)
 add_library(ttnn_op_point_to_point ${LIB_TYPE})
 add_library(TTNN::Ops::PointToPoint ALIAS ttnn_op_point_to_point)
 
-tt_reuse_precompile_headers(ttnn_op_point_to_point TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_point_to_point TTNN::PCHFull)
 
 set_target_properties(
     ttnn_op_point_to_point

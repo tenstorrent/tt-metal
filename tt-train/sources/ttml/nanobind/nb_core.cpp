@@ -149,6 +149,12 @@ void py_module(nb::module_& m) {
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
 
+        py_distributed.def(
+            "replicate_tensor_to_mesh_mapper",
+            static_cast<std::unique_ptr<ttnn::distributed::TensorToMesh> (*)(ttnn::distributed::MeshDevice&)>(
+                &ttnn::distributed::replicate_tensor_to_mesh_mapper),
+            nb::arg("device"));
+
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
             "concat_mesh_to_tensor_composer",

@@ -17,7 +17,10 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -60,7 +63,7 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 // A name identifying a KernelSpec within a ProgramSpec.
-using KernelSpecName = std::string;
+using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 
 //------------------------------------------------
 // KernelSpec
@@ -98,7 +101,7 @@ struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
         using IncludePaths = std::vector<std::filesystem::path>;
-        using Defines = std::vector<std::pair<std::string, std::string>>;
+        using Defines = Table<std::string, std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths;         // -I <path>
@@ -129,7 +132,7 @@ struct KernelSpec {
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
     };
-    std::vector<DFBBinding> dfb_bindings;
+    Group<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
@@ -138,16 +141,16 @@ struct KernelSpec {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
-    std::vector<SemaphoreBinding> semaphore_bindings;
+    Group<SemaphoreBinding> semaphore_bindings;
 
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
+    // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
-        TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
+        TensorParamName tensor_parameter_name;      // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
     };
-    std::vector<TensorBinding> tensor_bindings;
+    Group<TensorBinding> tensor_bindings;
 
     // Additional resource binding types:
     //  - Scratchpad bindings (Program-local memory resource)
@@ -162,7 +165,7 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+    using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 
@@ -175,10 +178,10 @@ struct KernelSpec {
 
     struct RuntimeArgSchema {
         // Runtime argument names (must be unique, valid C++ identifiers.)
-        std::vector<std::string> runtime_arg_names;
+        Group<std::string> runtime_arg_names;
 
         // Common runtime argument names (must be unique, valid C++ identifiers.)
-        std::vector<std::string> common_runtime_arg_names;
+        Group<std::string> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};
 

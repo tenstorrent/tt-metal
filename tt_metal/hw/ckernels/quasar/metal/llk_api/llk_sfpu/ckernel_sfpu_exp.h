@@ -16,15 +16,15 @@ template <
     bool APPROXIMATION_MODE,
     [[maybe_unused]] bool EN_32BIT_DEST,
     [[maybe_unused]] bool SCALE_EN = false,
-    int ITERATIONS = 8,
+    int ITERATIONS = SFPU_ITERATIONS,
     [[maybe_unused]] bool CLAMP_NEGATIVE = true>
-void calculate_exponential([[maybe_unused]] const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     static_assert(SCALE_EN == false, "Non-default SCALE_EN not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
     LLK_ASSERT(
         exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
         "Scaling is not supported in the current version of exp on Quasar.");
-    _calculate_exp_<APPROXIMATION_MODE>(ITERATIONS);
+    _calculate_exp_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 template <

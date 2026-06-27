@@ -61,6 +61,7 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
 
       # Step 2: Install SFPI (required to compile LLK ELFs even for ttsim).
       - name: Install SFPI
@@ -159,7 +160,7 @@ jobs:
 
           if [[ ! -f "$XML_PATH" ]]; then
             echo "No JUnit XML found at $XML_PATH — the regression likely never produced a report." >> "$GITHUB_STEP_SUMMARY"
-            for k in total passed failed errored skipped pass_pct; do
+            for k in total ran passed failed errored skipped pass_pct; do
               echo "${k}=0" >> "$GITHUB_OUTPUT"
             done
             echo "status=no-report" >> "$GITHUB_OUTPUT"
@@ -182,10 +183,12 @@ jobs:
               total   += int(s.attrib.get("tests",    0) or 0)
               failed  += int(s.attrib.get("failures", 0) or 0)
               skipped += int(s.attrib.get("skipped",  0) or 0)
-          passed = max(total - failed - skipped, 0)
-          pass_pct = (100.0 * passed / total) if total else 0.0
+          ran = max(total - skipped, 0)
+          passed = max(ran - failed, 0)
+          pass_pct = (100.0 * passed / ran) if ran else 0.0
 
           print(f"total={total}")
+          print(f"ran={ran}")
           print(f"passed={passed}")
           print(f"failed={failed}")
           print(f"skipped={skipped}")
@@ -207,6 +210,7 @@ jobs:
             echo "|---|---:|"
             echo "| 🏷️ ttsim version | v${TTSIM_VERSION} |"
             echo "| 🔢 Total | ${total} |"
+            echo "| ▶️ Ran | ${ran} |"
             echo "| ✅ Passed | ${passed} |"
             echo "| ❌ Failed | ${failed} |"
             echo "| ⏩ Skipped | ${skipped} |"

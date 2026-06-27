@@ -21,7 +21,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void erf_tile_init() {
-    MATH(SFPU_INIT_KERNEL_CALL(erf, sfpu::erf_init, fast_and_approx));
+    MATH(SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (fast_and_approx)));
 }
 
 // clang-format off
@@ -40,7 +40,7 @@ ALWI void erf_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void erf_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erf, RC, fast_and_approx, idst));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf, (fast_and_approx), idst, VectorMode::RC));
 }
 
 /************** ERFC *****************/
@@ -48,7 +48,7 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfc_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(erfc, sfpu::erfc_init, true)); }
+ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/))); }
 
 // clang-format off
 /**
@@ -65,7 +65,7 @@ ALWI void erfc_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(erfc, sfpu::erfc_init, t
  */
 // clang-format on
 ALWI void erfc_tile(uint32_t idst) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_erfc<>, idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), idst, VectorMode::RC));
 }
 
 #endif

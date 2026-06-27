@@ -38,16 +38,25 @@ class ReduceFpu(Fpu):
         config: GlobalConfig,
         compute_unit: ComputeNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = operation.output.data_format
+        output_format = config.sentinel.golden_math_format
         dimensions = operation.max_output_dimensions
-        tile_cnt = (dimensions[0] * dimensions[1]) // 1024
-        num_faces = operation.output.tile_shape.total_num_faces()
+        tile_elements = operation.tile_shape.total_tile_size()
+        tile_cnt = (dimensions[0] * dimensions[1]) // tile_elements
+        num_faces = operation.tile_shape.total_num_faces()
 
         reduce_dim = self.reduce_dim
         pool_type = self.reduce_pool
 
+        tile_dims = (
+            operation.tile_shape.total_row_dim(),
+            operation.tile_shape.total_col_dim(),
+        )
         src_a_reduced_tensor = tilize_block(
-            tensor_a, dimensions, output_format, num_faces
+            tensor_a,
+            dimensions,
+            output_format,
+            num_faces,
+            tile_dimensions=tile_dims,
         ).flatten()
 
         generate_golden = get_golden_generator(ReduceGolden)
@@ -57,10 +66,26 @@ class ReduceFpu(Fpu):
             pool_type,
             output_format,
             tile_cnt=tile_cnt,
+            tile_shape=operation.tile_shape,
         ).flatten()
 
+        if compute_unit.reduce_to_tile:
+            block_tiles = operation.block_tiles_x * operation.block_tiles_y
+            tiles = src_a_reduced_tensor.view(-1, tile_elements)
+            for b in range(0, tile_cnt, block_tiles):
+                block = tiles[b : b + block_tiles]
+                if pool_type == ReducePool.Max:
+                    tiles[b] = block.max(dim=0).values
+                else:
+                    tiles[b] = block.sum(dim=0)
+                tiles[b + 1 : b + block_tiles] = 0
+
         dest_golden_tensor = tilize_block(
-            tensor_dst, dimensions, output_format, num_faces
+            tensor_dst,
+            dimensions,
+            output_format,
+            num_faces,
+            tile_dimensions=tile_dims,
         ).flatten()
 
         generate_golden = get_golden_generator(ReduceGolden)
@@ -70,21 +95,35 @@ class ReduceFpu(Fpu):
             pool_type,
             output_format,
             tile_cnt=tile_cnt,
+            tile_shape=operation.tile_shape,
         ).flatten()
 
-        golden_tensor = torch.zeros(tile_cnt * 1024)
+        total_elements = tile_cnt * tile_elements
+        golden_tensor = torch.zeros(total_elements)
 
-        for i in range(tile_cnt * 1024):
+        reduce_dim_size = (
+            operation.tile_shape.total_col_dim()
+            if self.reduce_dim == ReduceDimension.Row
+            else operation.tile_shape.total_row_dim()
+        )
+
+        for i in range(total_elements):
             if self.reduce_pool == ReducePool.Max:
                 golden_tensor[i] = max(src_a_reduced_tensor[i], dest_golden_tensor[i])
             if self.reduce_pool == ReducePool.Sum:
                 golden_tensor[i] = src_a_reduced_tensor[i] + dest_golden_tensor[i]
             if self.reduce_pool == ReducePool.Average:
                 golden_tensor[i] = (
-                    src_a_reduced_tensor[i] * 32 + dest_golden_tensor[i]
-                ) / 32
+                    src_a_reduced_tensor[i] * reduce_dim_size + dest_golden_tensor[i]
+                ) / reduce_dim_size
 
-        golden_tensor = untilize_block(golden_tensor, output_format, dimensions)
+        golden_tensor = untilize_block(
+            golden_tensor,
+            output_format,
+            dimensions,
+            tile_dimensions=tile_dims,
+            num_faces=num_faces,
+        )
 
         return (tensor_a, tensor_b, golden_tensor)
 

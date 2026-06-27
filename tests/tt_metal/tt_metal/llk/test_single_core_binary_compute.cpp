@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
-#include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -115,12 +114,15 @@ struct BinaryStimulus {
 static BinaryStimulus generate_binary_stimulus(const SingleCoreBinaryConfig& test_config, bool is_quasar) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     BinaryStimulus s;
-    s.packed_input0 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
-    s.packed_input1 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
-    s.packed_input2 = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -1.0f, 1.0f, byte_size / sizeof(bfloat16), std::chrono::system_clock::now().time_since_epoch().count());
+    // Use fixed seeds so test results are deterministic and reproducible.
+    // Using wall-clock seeds caused intermittent tolerance failures depending on
+    // which random inputs were drawn (see https://github.com/tenstorrent/tt-metal/issues/46284).
+    s.packed_input0 =
+        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 0);
+    s.packed_input1 =
+        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 1);
+    s.packed_input2 =
+        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, byte_size / sizeof(bfloat16), 2);
 
     auto input0 = unpack_vector<bfloat16, uint32_t>(s.packed_input0);
     auto input1 = unpack_vector<bfloat16, uint32_t>(s.packed_input1);
@@ -270,20 +272,19 @@ bool single_core_binary(
 
     auto defines_map = build_binary_defines(test_config);
     experimental::KernelSpec::CompilerOptions::Defines defines;
-    defines.reserve(defines_map.size());
     for (auto& kv : defines_map) {
-        defines.emplace_back(kv.first, kv.second);
+        defines.emplace(kv.first, kv.second);
     }
 
-    constexpr const char* INP0_DFB = "inp0_dfb";
-    constexpr const char* INP1_DFB = "inp1_dfb";
-    constexpr const char* INP2_DFB = "inp2_dfb";
-    constexpr const char* OUT_DFB = "out_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
+    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
+    const experimental::DFBSpecName INP2_DFB{"inp2_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    auto make_input_dfb = [&](const std::string& name) {
+    auto make_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
@@ -418,29 +419,26 @@ bool single_core_binary(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", input0_dram_buffer->address()},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", input1_dram_buffer->address()},
-                       {"src1_bank_id", 0u},
-                       {"num_tiles", num_tiles_u},
-                       {"src2_addr", input2_dram_buffer->address()},
-                       {"src2_bank_id", 0u}}}},
+                {{node,
+                  {{"src0_addr", input0_dram_buffer->address()},
+                   {"src0_bank_id", 0u},
+                   {"src1_addr", input1_dram_buffer->address()},
+                   {"src1_bank_id", 0u},
+                   {"num_tiles", num_tiles_u},
+                   {"src2_addr", input2_dram_buffer->address()},
+                   {"src2_bank_id", 0u}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
+            .kernel = WRITER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args = {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
+                {{node, {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
+            .kernel = COMPUTE,
             .runtime_arg_values =
-                {{.node = node,
-                  .args = {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
+                {{node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -469,10 +467,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
         }
     }
 }
@@ -493,10 +487,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
         }
     }
 }
@@ -517,10 +507,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
         }
     }
 }
@@ -542,10 +528,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
         }
     }
 }
@@ -567,10 +549,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
         }
     }
 }
@@ -592,10 +570,6 @@ TEST_F(LLKMeshDeviceFixtureSlowDispatchOnly, TensixBinaryComputeSingleCoreSingle
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            // TODO: Remove early return once back-to-back tests are passing on Quasar
-            if (this->arch_ == ARCH::QUASAR) {
-                return;
-            }
         }
     }
 }

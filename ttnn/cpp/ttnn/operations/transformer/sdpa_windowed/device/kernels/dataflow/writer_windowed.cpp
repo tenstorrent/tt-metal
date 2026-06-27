@@ -49,6 +49,8 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
+    Noc noc;
+
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
@@ -58,7 +60,7 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
         /*compute_uses_reduce_tile=*/true>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
@@ -75,6 +77,7 @@ void kernel_main() {
                 const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
                 uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, out_row_start_tile, 0);
                 write_block(
+                    noc,
                     out_writer,
                     cb_out,
                     out_chunk_tiles,

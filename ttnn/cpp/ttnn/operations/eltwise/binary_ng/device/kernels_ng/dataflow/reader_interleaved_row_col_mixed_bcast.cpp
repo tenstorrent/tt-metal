@@ -44,11 +44,11 @@ void kernel_main() {
     CircularBuffer cb_src_b(cb_id_src_b);
 
 #if !SRC_SHARDED
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
     const auto src = TensorAccessor(src_args, src_addr);
 #endif
 #if !SRC_SHARDED_B
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
+    const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();
     const auto src_b = TensorAccessor(src_b_args, src_addr_b);
 #endif
     constexpr uint32_t onetile = 1;
@@ -98,7 +98,7 @@ void kernel_main() {
                         noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
+                        FILL_TILE_WITH_FIRST_COLUMN(cb_src.get_write_ptr());
                         cb_src.push_back(onetile);
 #else
                         cb_src_b.reserve_back(onetile);
@@ -107,7 +107,7 @@ void kernel_main() {
                             src_b, cb_src_b, src_tile_bytes_b, {.page_id = tile_offset_b + th}, {.offset_bytes = 0});
                         noc.async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_src_b);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_src_b.get_write_ptr());
                         cb_src_b.push_back(onetile);
 #endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
@@ -125,7 +125,7 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                            FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
+                            FILL_TILE_WITH_FIRST_ROW_B(cb_src_b.get_write_ptr());
 #endif
 #if !SRC_SHARDED_B
                             cb_src_b.push_back(onetile);
@@ -139,7 +139,7 @@ void kernel_main() {
                             noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                            FILL_TILE_WITH_FIRST_ROW(cb_id_src);
+                            FILL_TILE_WITH_FIRST_ROW(cb_src.get_write_ptr());
 #endif
 #if !SRC_SHARDED_B
                             cb_src.push_back(onetile);

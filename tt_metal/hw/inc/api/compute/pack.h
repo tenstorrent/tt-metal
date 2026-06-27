@@ -6,6 +6,7 @@
 
 #include "common_globals.h"
 #include "sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #ifdef TRISC_PACK
 #include "llk_pack_tile_api.h"
 #ifndef ARCH_QUASAR
@@ -84,6 +85,7 @@ ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 // clang-format on
 template <bool out_of_order_output = false>
 ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
@@ -124,6 +126,7 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  */
 // clang-format on
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
@@ -229,16 +232,10 @@ ALWI void pack_rows_uninit() {
  *
  * Return value: None
  *
- * | Param Type | Name   | Description                                                         | Type                  | Valid Range | Required |
- * |------------|--------|---------------------------------------------------------------------|-----------------------|-------------|----------|
- * | Function   | config | ReLU configuration (ReluConfig on Quasar, packed uint32_t on WH/BH) | ReluConfig / uint32_t | Any         | True     |
+ * | Param Type | Name   | Description                                  | Type       | Valid Range | Required |
+ * |------------|--------|----------------------------------------------|------------|-------------|----------|
+ * | Function   | config | ReLU configuration (mode + optional threshold) | ReluConfig | Any         | True     |
  */
- #ifdef ARCH_QUASAR
- ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_config(config))); }
- #else
- ALWI void pack_relu_config(const uint32_t config) {
-     PACK((llk_pack_relu_config(config)));
- }
- #endif
+ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_config(config))); }
 
 }  // namespace ckernel

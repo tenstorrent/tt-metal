@@ -73,7 +73,7 @@ static void RunTest(
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel = 0;
-    constexpr const char* ASSERT_KERNEL_NAME = "assert_kernel";
+    const experimental::KernelSpecName ASSERT_KERNEL_NAME{"assert_kernel"};
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -171,7 +171,8 @@ static void RunTest(
                 log_info(LogTest, "Skipping: DRAM programmable cores not available on this architecture.");
                 GTEST_SKIP();
             }
-            logical_core = {0, 0};
+            // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
+            logical_core = {0, 1};
             virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
             assert_kernel = CreateKernel(program, kernel, logical_core, DramConfig{.noc = tt_metal::NOC::NOC_0});
             risc = "drisc";
@@ -188,12 +189,11 @@ static void RunTest(
             SetRuntimeArgs(prog, assert_kernel, logical_core, args);
         } else {
             experimental::ProgramRunArgs params;
-            params.kernel_run_args = {{
-                .kernel_spec_name = ASSERT_KERNEL_NAME,
+            params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = ASSERT_KERNEL_NAME,
                 .runtime_arg_values =
-                    {{.node = experimental::NodeCoord{logical_core},
-                      .args =
-                          {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
+                    {{experimental::NodeCoord{logical_core},
+                      {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
             experimental::SetProgramRunArgs(prog, params);
         }

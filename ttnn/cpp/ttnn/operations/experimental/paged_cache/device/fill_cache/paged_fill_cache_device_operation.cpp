@@ -6,6 +6,8 @@
 
 #include <tt-metalium/constants.hpp>
 
+#include "ttnn/device_operation.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -141,6 +143,27 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Batch idx tensor must be DRAM-resident");
+    }
+
+    // When mesh_coords is provided, validate it is a subset of the tensor's mesh
+    // coordinates. The descriptor framework dispatches a (noop) program for every
+    // tensor_coord regardless of mesh_coords membership, so a stray coord in mesh_coords
+    // that doesn't exist in tensor_coords would silently never run — matches the legacy
+    // create_mesh_workload's TT_FATAL check.
+    if (args.mesh_coords.has_value()) {
+        const auto tensor_coords_vec =
+            ttnn::device_operation::mesh_device_operation_utils::extract_tensor_coordinates(tensor_args);
+        const std::set<ttnn::MeshCoordinate> tensor_coords_set(tensor_coords_vec.begin(), tensor_coords_vec.end());
+        for (const auto& mesh_coord : args.mesh_coords.value()) {
+            TT_FATAL(
+                tensor_coords_set.contains(mesh_coord),
+                "Mesh coordinate ({}, {}) is in mesh_coords but not found in tensor_coords. "
+                "mesh_coords size: {}, tensor_coords size: {}",
+                mesh_coord[0],
+                mesh_coord[1],
+                args.mesh_coords->size(),
+                tensor_coords_set.size());
+        }
     }
 }
 

@@ -59,7 +59,7 @@ v_if (val < 0.0f) { val = 0.0f; } v_endif;
 Use explicit conversion:
 ```cpp
 sfpi::vInt exp = exexp(val);
-sfpi::vInt bits = sfpi::reinterpret<sfpi::vInt>(val);
+sfpi::vInt bits = sfpi::as<sfpi::vInt>(val);
 ```
 
 ### Deprecated/Renamed Instruction

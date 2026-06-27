@@ -71,6 +71,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -112,7 +113,7 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
                                        (dst_format == (std::uint32_t)DataFormat::UInt32) ||
                                        (dst_format == (std::uint32_t)DataFormat::Int32);
 
-    UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
+    UNPACK((llk_unpack_A_uninit<bcast_type>()));
 
     if (enable_unpack_to_dest) {
         MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type, true>()));
@@ -121,7 +122,7 @@ ALWI void unary_bcast_uninit(uint32_t icb) {
     }
 #endif
 #else
-    UNPACK((llk_unpack_A_uninit<bcast_type>(icb)));
+    UNPACK((llk_unpack_A_uninit<bcast_type>()));
     // Quasar's llk_math_eltwise_unary_datacopy_uninit is a no-op for both unpack_to_dest values,
     // so no runtime dispatch on dst format is needed here.
     MATH((llk_math_eltwise_unary_datacopy_uninit<bcast_type>()));
@@ -306,6 +307,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t call_line =
 
     PACK((llk_pack_hw_configure(ocb)));
     PACK((llk_pack_init(ocb)));
+    PACK((llk_pack_dest_init()));
 
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));

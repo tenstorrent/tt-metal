@@ -7,6 +7,12 @@ import torch
 import ttnn
 
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
+from tests.ttnn.python_api_testing.typecast_test_helpers import (
+    assert_integer_typecast_equal,
+    make_typecast_test_input,
+    typecast_test_input_bounds,
+    uses_exact_integer_typecast_check,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 mem_configs = [
@@ -19,6 +25,38 @@ TILE_WIDTH = 32
 
 cpu_layout = ttnn.Layout.ROW_MAJOR
 npu_layout = ttnn.Layout.TILE
+
+
+def _make_fp32_to_int32_input(shape):
+    in_low, in_high = typecast_test_input_bounds(ttnn.float32, ttnn.int32)
+    return make_typecast_test_input(shape, torch.float32, in_low, in_high)
+
+
+@pytest.mark.parametrize(
+    "tt_input_dtype, tt_output_dtype, expected",
+    [
+        (ttnn.int32, ttnn.uint16, (-1000, 80000)),
+        (ttnn.uint32, ttnn.uint16, (0, 80000)),
+        (ttnn.int32, ttnn.uint32, (-1000, 80000)),
+        (ttnn.int32, ttnn.uint8, (-512, 512)),
+        (ttnn.uint16, ttnn.uint8, (0, 512)),
+        (ttnn.uint32, ttnn.uint8, (0, 512)),
+        (ttnn.uint16, ttnn.uint32, (0, 65535)),
+        (ttnn.uint16, ttnn.int32, (0, 65535)),
+        (ttnn.bfloat16, ttnn.uint8, (-512, 512)),
+        (ttnn.bfloat16, ttnn.uint16, (-1000, 80000)),
+        (ttnn.bfloat16, ttnn.bfloat16, (0, 100)),
+    ],
+)
+def test_typecast_test_input_bounds(tt_input_dtype, tt_output_dtype, expected):
+    assert typecast_test_input_bounds(tt_input_dtype, tt_output_dtype) == expected
+
+
+def test_typecast_test_input_bounds_unsigned_high_never_exceeds_input_max():
+    for tt_output_dtype in (ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8):
+        low, high = typecast_test_input_bounds(ttnn.uint16, tt_output_dtype)
+        assert low == 0
+        assert high <= 65535
 
 
 @pytest.mark.parametrize(
@@ -110,13 +148,9 @@ class TestTypecast:
     ):
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")
-        in_low = 0
-        in_high = 100
-        if tt_output_dtype == ttnn.uint8:
-            in_low = -257
-            in_high = 257
+        in_low, in_high = typecast_test_input_bounds(tt_input_dtype, tt_output_dtype)
         shape = input_shapes[0]
-        torch_input = (torch.rand(shape) * (in_high - in_low) + in_low).to(pt_input_dtype)
+        torch_input = make_typecast_test_input(shape, pt_input_dtype, in_low, in_high)
 
         tt_input = ttnn.from_torch(
             torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config
@@ -126,8 +160,10 @@ class TestTypecast:
 
         torch_golden = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
 
-        if tt_output_dtype == ttnn.float32 or tt_output_dtype == ttnn.bfloat16:
+        if tt_output_dtype in (ttnn.float32, ttnn.bfloat16):
             assert_equal(torch_golden, torch_output)
+        elif uses_exact_integer_typecast_check(tt_input_dtype, tt_output_dtype):
+            assert_integer_typecast_equal(torch_golden, torch_output)
         else:
             pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
             assert_with_pcc(torch_golden, torch_output, pcc=pcc)
@@ -349,7 +385,7 @@ def test_typecast_legacy_sharded(device, shard_layout, core_grid, shard_shape):
     shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
 
-    torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
+    torch_input = _make_fp32_to_int32_input(shape)
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
     )
@@ -357,8 +393,8 @@ def test_typecast_legacy_sharded(device, shard_layout, core_grid, shard_shape):
     assert output_tensor.dtype == ttnn.int32
 
     result = ttnn.to_torch(output_tensor)
-    expected = torch_input.int()
-    assert torch.equal(result, expected)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=ttnn.float32, tt_output_dtype=ttnn.int32)
+    assert_integer_typecast_equal(expected, result)
 
 
 @pytest.mark.parametrize(
@@ -407,7 +443,7 @@ def test_typecast_nd_sharded_int(device, tensor_shape, nd_shard_shape, shard_gri
     nd_shard_spec = ttnn.NdShardSpec(shard_shape=nd_shard_shape, grid=shard_grid, orientation=shard_orientation)
     mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
 
-    torch_input = torch.randint(0, 100, tensor_shape, dtype=torch.int32).float()
+    torch_input = _make_fp32_to_int32_input(tensor_shape)
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.float32, layout=layout, device=device, memory_config=mem_config
     )
@@ -415,8 +451,8 @@ def test_typecast_nd_sharded_int(device, tensor_shape, nd_shard_shape, shard_gri
     assert output_tensor.dtype == ttnn.int32
 
     result = ttnn.to_torch(output_tensor)
-    expected = torch_input.int()
-    assert torch.equal(result, expected)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=ttnn.float32, tt_output_dtype=ttnn.int32)
+    assert_integer_typecast_equal(expected, result)
 
 
 @pytest.mark.parametrize(
@@ -564,7 +600,7 @@ def test_typecast_legacy_sharded_dram_buffer(device, shard_layout):
     shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.DRAM, shard_spec)
 
-    torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
+    torch_input = _make_fp32_to_int32_input(shape)
 
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
@@ -573,8 +609,8 @@ def test_typecast_legacy_sharded_dram_buffer(device, shard_layout):
     assert output_tensor.dtype == ttnn.int32
 
     npu_result = ttnn.to_torch(output_tensor)
-    expected = torch_input.int()
-    assert torch.equal(npu_result, expected)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=ttnn.float32, tt_output_dtype=ttnn.int32)
+    assert_integer_typecast_equal(expected, npu_result)
 
 
 def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
@@ -593,7 +629,7 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
 
     shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
-    torch_input = torch.randint(0, 100, shape, dtype=torch.int32).float()
+    torch_input = _make_fp32_to_int32_input(shape)
 
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
@@ -602,8 +638,8 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
     assert output_tensor.dtype == ttnn.int32
 
     npu_result = ttnn.to_torch(output_tensor)
-    expected = torch_input.int()
-    assert torch.equal(npu_result, expected)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=ttnn.float32, tt_output_dtype=ttnn.int32)
+    assert_integer_typecast_equal(expected, npu_result)
 
 
 @pytest.mark.parametrize(
@@ -620,8 +656,9 @@ def test_typecast_legacy_sharded_shard_size_not_tile_aligned(device):
 def test_typecast_rm_non_aligned_width(shape, device):
     """ROW_MAJOR bfloat16→uint8 typecast with width not divisible by 32."""
     torch.manual_seed(42)
-    torch_input = (torch.rand(shape) * 200).to(torch.bfloat16)
-    expected = torch_input.to(torch.uint8)
+    in_low, in_high = typecast_test_input_bounds(ttnn.bfloat16, ttnn.uint8)
+    torch_input = make_typecast_test_input(shape, torch.bfloat16, in_low, in_high)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=ttnn.bfloat16, tt_output_dtype=ttnn.uint8)
 
     input_tensor = ttnn.from_torch(
         torch_input,
@@ -631,7 +668,7 @@ def test_typecast_rm_non_aligned_width(shape, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     result = ttnn.to_torch(ttnn.typecast(input_tensor, ttnn.uint8))
-    assert torch.equal(result, expected), f"mismatch for shape {shape}"
+    assert_integer_typecast_equal(expected, result)
 
 
 def test_typecast_rm_chunked_program_cache(device):
@@ -642,8 +679,9 @@ def test_typecast_rm_chunked_program_cache(device):
     num_cores = grid.x * grid.y
     shape = [num_cores + 1, 64]
 
-    torch_input = (torch.rand(shape) * 100).to(torch.bfloat16)
-    expected = torch_input.to(torch.uint8)
+    in_low, in_high = typecast_test_input_bounds(ttnn.bfloat16, ttnn.uint8)
+    torch_input = make_typecast_test_input(shape, torch.bfloat16, in_low, in_high)
+    expected = eltwise_typecast(torch_input, tt_input_dtype=ttnn.bfloat16, tt_output_dtype=ttnn.uint8)
 
     for i in range(2):
         input_tensor = ttnn.from_torch(
@@ -655,4 +693,4 @@ def test_typecast_rm_chunked_program_cache(device):
         )
         output_tensor = ttnn.typecast(input_tensor, ttnn.uint8)
         result = ttnn.to_torch(output_tensor)
-        assert torch.equal(result, expected), f"typecast correctness check failed on call {i + 1}"
+        assert_integer_typecast_equal(expected, result)

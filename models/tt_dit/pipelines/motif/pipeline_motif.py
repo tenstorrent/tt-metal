@@ -285,32 +285,39 @@ class MotifPipeline(PipelineAPIMixin):
             context = early_context if t >= negative_strategy_switch_time else late_context
             pooled = early_pooled if t >= negative_strategy_switch_time else late_pooled
 
-            for idx, (device, tracer) in enumerate(zip(self._devices, self._tracers, strict=True)):
+            velocity_preds = []
+            for idx, tracer in enumerate(self._tracers):
                 timestep = ttnn.full(
                     [1, 1],
                     fill_value=t * 1000,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.float32,
-                    device=device,
+                    device=self._devices[idx],
                 )
 
-                velocity_pred = tracer(
-                    submesh_idx=idx,
-                    latents=latents[idx],
-                    prompt=context[idx],
-                    pooled=pooled[idx],
-                    timestep=timestep,
-                    traced=traced,
+                velocity_preds.append(
+                    tracer(
+                        submesh_idx=idx,
+                        latents=latents[idx],
+                        prompt=context[idx],
+                        pooled=pooled[idx],
+                        timestep=timestep,
+                        traced=traced,
+                        tracer_blocking_execution=False,
+                    )
                 )
 
                 # latents can be overwritten by trace execution, use the captured input instead,
                 # which is safe.
                 latents[idx] = tracer.inputs["latents"]
 
-                if self._cfg_enabled:
-                    velocity_pred = self._combiner.combine(velocity_pred, cfg_scale)
+            if self._cfg_enabled:
+                velocity_preds = self._combiner.combine(velocity_preds, cfg_scale)
 
-                latents[idx] = self._solvers[idx].step(step=step, latent=latents[idx], velocity_pred=velocity_pred)
+            latents = [
+                solver.step(step=step, latent=latents[idx], velocity_pred=velocity_preds[idx])
+                for idx, solver in enumerate(self._solvers)
+            ]
 
             # Helps with accurate time profiling.
             self.synchronize_devices()

@@ -66,7 +66,10 @@ broadcast_types = [
     BroadcastType.None_,
 ]
 dest_acc = [DestAccumulation.Yes, DestAccumulation.No]
-disable_src_zero_flags = [False, True]
+# NOTE: disable_src_zero_flag is no longer an unpack hw_configure parameter - the Src zero-substitution
+# flag is owned by the math-side data-format state tracker. This list is kept as a
+# single value to preserve the test-variant wiring; full removal of the parameter is tracked in #47001.
+disable_src_zero_flags = [False]
 acc_to_dest_flags = [False, True]
 stochastic_rnd = [
     StochasticRounding.No,

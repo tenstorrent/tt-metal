@@ -16,6 +16,9 @@
 #include <tuple>
 #include <vector>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cxxopts.hpp>
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -68,18 +71,21 @@ PhysicalSystemDescriptor run_psd_discovery() {
  * 2. TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/<cluster_name>_physical_grouping_descriptor.textproto
  * 3. Architecture/cluster-type specific default:
  * tests/tt_metal/tt_fabric/physical_groupings/<arch>_<cluster_type>_physical_grouping_descriptor.textproto
+ *    Wormhole Galaxy + Blackhole Galaxy Rev C: wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto
+ *    Blackhole Galaxy Rev A/B: bh_galaxy_rev_ab_physical_grouping_descriptor.textproto
  * 4. Generic default: tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
  *
  * Cluster name is obtained from TT_CLUSTER_NAME environment variable.
  * Architecture and cluster type are obtained from MetalContext.
+ * When psd is provided, Blackhole Galaxy revision selects rev_ab vs rev_c PGD.
  */
-PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& pgd_path = std::nullopt) {
+PhysicalGroupingDescriptor find_and_load_pgd(
+    const std::optional<std::string>& pgd_path = std::nullopt, const PhysicalSystemDescriptor* psd = nullptr) {
     // Check for explicit PGD path from argument first
     if (pgd_path.has_value() && !pgd_path->empty()) {
         std::filesystem::path explicit_path(*pgd_path);
         if (std::filesystem::exists(explicit_path) && std::filesystem::is_regular_file(explicit_path)) {
-            log_info(
-                tt::LogFabric, "Loading Physical Grouping Descriptor from provided path: {}", explicit_path.string());
+            log_info(tt::LogFabric, "Loaded physical groupings from: {}", explicit_path.string());
             return PhysicalGroupingDescriptor(explicit_path);
         }
         TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", explicit_path.string());
@@ -90,10 +96,7 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
     if (pgd_path_env && strlen(pgd_path_env) > 0) {
         std::filesystem::path explicit_path(pgd_path_env);
         if (std::filesystem::exists(explicit_path) && std::filesystem::is_regular_file(explicit_path)) {
-            log_info(
-                tt::LogFabric,
-                "Loading Physical Grouping Descriptor from environment variable: {}",
-                explicit_path.string());
+            log_info(tt::LogFabric, "Loaded physical groupings from: {}", explicit_path.string());
             return PhysicalGroupingDescriptor(explicit_path);
         }
         TT_THROW(
@@ -138,9 +141,15 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
 
     // Hardcoded if-else if statement for cluster type and architecture combinations
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
-        arch_cluster_filename = "wh_galaxy_physical_grouping_descriptor.textproto";
-    } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && arch == tt::ARCH::BLACKHOLE) {
-        arch_cluster_filename = "bh_galaxy_physical_grouping_descriptor.textproto";
+        arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    } else if (
+        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
+        arch == tt::ARCH::BLACKHOLE) {
+        if (psd != nullptr && psd->is_bh_galaxy_rev_c()) {
+            arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+        } else {
+            arch_cluster_filename = "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+        }
     } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
     } else {
@@ -151,13 +160,11 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
     std::filesystem::path arch_cluster_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" /
                                               "tt_fabric" / "physical_groupings" / arch_cluster_filename;
     search_paths.push_back(arch_cluster_path);
-    log_info(
-        tt::LogFabric, "Will check for architecture/cluster-type specific default: {}", arch_cluster_path.string());
 
     // Try each path in order, but require explicit match (don't just take first existing)
     for (const auto& path : search_paths) {
         if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
-            log_info(tt::LogFabric, "Loading Physical Grouping Descriptor from: {}", path.string());
+            log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
             return PhysicalGroupingDescriptor(path);
         }
     }
@@ -173,33 +180,6 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
         error_msg += "TT_CLUSTER_NAME not set\n";
     }
     throw std::runtime_error(error_msg);
-}
-
-/**
- * @brief Print logical multi-mesh adjacency map
- */
-void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) {
-    log_info(tt::LogFabric, "Logical Multi-Mesh Adjacency Map:");
-
-    // Print adjacency maps using topology solver's print functions (includes degree histograms)
-    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
-    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        graph.print_adjacency_map(fmt::format("Logical Mesh {} Internal Graph", mesh_id.get()), true);
-    }
-}
-
-/**
- * @brief Print physical multi-mesh adjacency map
- */
-void print_physical_adjacency_map(
-    const PhysicalMultiMeshGraph& multi_mesh_graph, const PhysicalSystemDescriptor& /*physical_system_descriptor*/) {
-    log_info(tt::LogFabric, "Physical Multi-Mesh Adjacency Map:");
-
-    // Print adjacency maps using topology solver's print functions (includes degree histograms)
-    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
-    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        graph.print_adjacency_map(fmt::format("Physical Mesh {} Internal Graph", mesh_id.get()), true);
-    }
 }
 
 /**
@@ -230,8 +210,8 @@ TopologyMappingResult run_topology_mapping(
     LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
 
     // Print adjacency maps
-    print_logical_adjacency_map(logical_graph);
-    print_physical_adjacency_map(physical_graph, psd);
+    log_logical_multi_mesh_adjacency_histograms(logical_graph);
+    log_physical_multi_mesh_adjacency_histograms(physical_graph);
 
     // Configure topology mapping
     TopologyMappingConfig config;
@@ -248,6 +228,27 @@ TopologyMappingResult run_topology_mapping(
     const auto& pinnings = mgd.get_pinnings();
     for (const auto& [pos, fabric_node] : pinnings) {
         config.pinnings.emplace_back(pos, fabric_node);
+    }
+
+    // Apply the same galaxy corner pinnings as the control plane (Phase 2) so Phase 1 and Phase 2 place
+    // the galaxy pins identically. Full galaxies (per-host slice >= 32) pin all four corners; sub-galaxy
+    // slices pin only the NW corner to any tray-corner ASIC (asic_location==1 on trays 1..4).
+    if (cluster.is_ubb_galaxy()) {
+        const int world_size =
+            static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
+        for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+            const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+            if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
+                auto mesh_pinnings = get_galaxy_fixed_asic_position_pinnings_for_mesh(
+                    mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
+                for (const auto& [fabric_node, positions] : mesh_pinnings) {
+                    for (const auto& position : positions) {
+                        config.pinnings.emplace_back(position, fabric_node);
+                    }
+                }
+            }
+        }
     }
 
     // Set per-mesh validation modes based on mesh graph policy
@@ -618,10 +619,7 @@ int main(int argc, char** argv) {
         MeshGraphDescriptor mgd(mgd_path);
         log_info(tt::LogFabric, "Mesh Graph Descriptor loaded");
 
-        // Stage: Load Physical Grouping Descriptor
-        log_info(tt::LogFabric, "Stage: Loading Physical Grouping Descriptor...");
-        PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path);
-        log_info(tt::LogFabric, "Physical Grouping Descriptor loaded");
+        PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path, &psd);
 
         // Get current rank - only rank 0 performs topology mapping and file generation
         auto current_rank = *context->rank();
@@ -669,6 +667,32 @@ int main(int argc, char** argv) {
                     "Successfully wrote: {} (cluster descriptors used during allocation)",
                     phase2_mock_path.string());
             }
+
+            // Flush all output files to storage before signaling peers via barrier.
+            // std::ofstream::close() only drains the C++ stream buffer to the OS page cache.
+            // Without fsync(), NFS peers (and local readers) may see stale or absent files
+            // even after generate_rank_bindings exits.  We fsync each file and its parent
+            // directory so that both data and directory entries are durable before we call
+            // barrier() below — making the barrier the authoritative "writes are visible"
+            // signal and allowing ttrun.py to skip any blind sleep after this subprocess.
+            auto fsync_path = [](const std::filesystem::path& p) noexcept {
+                int fd = ::open(p.c_str(), O_RDONLY);
+                if (fd >= 0) {
+                    ::fsync(fd);
+                    ::close(fd);
+                }
+                int dir_fd = ::open(p.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
+                if (dir_fd >= 0) {
+                    ::fsync(dir_fd);
+                    ::close(dir_fd);
+                }
+            };
+            fsync_path(output_file);
+            fsync_path(rankfile_path);
+            if (!mpi_rank_to_cluster_desc_path.empty()) {
+                fsync_path(output_dir / "phase2_mock_mapping.yaml");
+            }
+            log_info(tt::LogFabric, "Fsynced output files; barrier will signal peers that writes are visible.");
 
             log_info(tt::LogFabric, "Rank bindings generation complete!");
         } else {

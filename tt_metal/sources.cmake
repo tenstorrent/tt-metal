@@ -1,4 +1,5 @@
 set(TT_METAL_PUBLIC_API
+    api/internal/service/inter_process_counter_channel.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
@@ -69,6 +70,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
+    api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
+    api/tt-metalium/experimental/metal2_host_api/utility/table.hpp
     api/tt-metalium/experimental/mock_device/mock_allocator.hpp
     api/tt-metalium/experimental/mock_device/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
@@ -112,6 +115,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
+    api/tt-metalium/internal/cluster.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
@@ -194,7 +198,9 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_relay.hpp
     impl/dispatch/kernels/cq_helpers.hpp
     impl/dispatch/kernels/telemetry.hpp
+    impl/dispatch/kernels/cq_telemetry_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler.hpp
+    impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml

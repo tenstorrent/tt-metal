@@ -37,6 +37,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -125,6 +126,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -141,8 +143,6 @@ jobs:
         # Skip this on single-card systems
         if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' }}
         timeout-minutes: 10
-        with:
-          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: Download Llama model weights from LFC
         if: ${{ matrix.test-group['weights-cache-mode'] == 'lfc' && contains(matrix.test-group.name, 'llama') }}
         timeout-minutes: 15
@@ -150,14 +150,6 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
-      - name: Download Flux.1-dev model weights from LFC
-        if: ${{ matrix.test-group['weights-cache-mode'] == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
-        timeout-minutes: 15
-        run: |
-          set -e
-          mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
       - name: Download Mochi model weights to local cache
         if: ${{ inputs.regenerate-ttnn-cache && matrix.test-group['weights-cache-mode'] == 'local-disk' && contains(matrix.test-group.name, 'Mochi') }}
         timeout-minutes: 120

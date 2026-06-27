@@ -90,7 +90,8 @@ template <
     MathFidelity math_fidelity,
     bool clear_dest = false,
     bool skip_signalling = false,
-    bool fused_signalling = false>
+    bool fused_signalling = false,
+    std::uint32_t output_granularity>
 inline void _llk_math_sdpa_bcast_col_srca_srcb_reuse_(uint dst_index) {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
@@ -105,9 +106,10 @@ inline void _llk_math_sdpa_bcast_col_srca_srcb_reuse_(uint dst_index) {
             }
         }
     } else {
-        for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num += 2) {
-            ckernel_template::run();
-            ckernel_template::run();
+        for (std::uint32_t tile_num = 0; tile_num < num_tiles; tile_num += output_granularity) {
+            for (std::uint32_t g = 0; g < output_granularity; g++) {
+                ckernel_template::run();
+            }
             if constexpr (!skip_signalling) {
                 t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
             }

@@ -25,7 +25,7 @@ namespace sfpu {
  * @return bf16 value packed in the upper 16 bits of a float32
  */
 sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
-    sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);
+    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
 
     // Extract the LSB of what will become the bf16 mantissa (bit 16 of float32).
     // Needed for the tie-breaker: round to even.
@@ -42,7 +42,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     // Clear the lower 16 bits to get bf16 in upper 16 bits (bf16 format in float32).
     bits = bits & 0xFFFF0000U;
 
-    return sfpi::reinterpret<sfpi::vFloat>(bits);
+    return sfpi::as<sfpi::vFloat>(bits);
 }
 
 /**
@@ -56,19 +56,20 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (MUL or DIV)
  * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV)
- * @param iterations: number of sfpi rows to process (runtime, one call per face)
+ * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  */
-template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
+template <
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    BinaryOp BINOP,
+    bool is_fp32_dest_acc_en = false,
+    int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_sfpu_binary(
-    const int iterations,
-    const std::uint32_t dst_index_in0,
-    const std::uint32_t dst_index_in1,
-    const std::uint32_t dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV, "calculate_sfpu_binary only supports MUL and DIV");
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat result = 0.0f;

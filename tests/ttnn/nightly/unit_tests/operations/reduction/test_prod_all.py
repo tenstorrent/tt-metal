@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_prod
 
 
 def get_tensors(input_shape, output_shape, device):
@@ -44,7 +45,7 @@ def test_prod(shapes, device):
     torch_output = torch.prod(torch_input)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_output_cpu = ttnn.prod(tt_input).cpu().to(cpu_layout).to_torch()
+    tt_output_cpu = ttnn_prod(tt_input).cpu().to(cpu_layout).to_torch()
     N = tt_output_cpu.shape
     torch.set_printoptions(threshold=10000, precision=5, sci_mode=False)
     logger.info("Input shape")

@@ -32,12 +32,11 @@ using namespace ckernel::unpacker;
 /**
  * @brief Configures the unpacker MOP for reduction operations. Handles both tiny tiles (face_r_dim < 16) and standard tiles.
  *
- * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
- * @tparam reduce_dim The dimension along which to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
+ * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
  *
- * @param tensor_shape The shape of the tensor, including face_r_dim and num_faces
- *
- * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs
+ * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs.
  * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
@@ -96,26 +95,22 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
  * - Configuring unpacker X dimension endpoints
  * - Calling the MOP configuration routine
  *
- * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
- * @tparam reduce_dim The dimension along which to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
+ * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam enforce_fp32_accumulation: Configure the ALU for FP32 accumulation (MOVB2D hi16/lo16 path).
+ * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
  *
- * @param tensor_shape The shape of the tensor, including face_r_dim and num_faces
- *
- * @note For REDUCE_ROW operations, the face is transposed using haloize mode
- * @note Unpacker 0 (SrcA) reads face_r_dim*FACE_R_DIM datums
- * @note Unpacker 1 (SrcB) reads one row (FACE_R_DIM datums)
+ * @note For REDUCE_ROW operations, the face is transposed using haloize mode.
+ * @note Unpacker 0 (SrcA) reads face_r_dim*FACE_R_DIM datums.
+ * @note Unpacker 1 (SrcB) reads one row (FACE_R_DIM datums).
+ * @ref _llk_unpack_AB_reduce_ is the matching execute call.
+ * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler-operand unpack pairing).
  */
 template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape)
 {
     // Validate tensor shape for tile-dependent operations
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-
-    if constexpr (enforce_fp32_accumulation)
-    {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
 
     // Enable transpose (haloize mode) if reducing along rows
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(reduce_dim == ReduceDim::REDUCE_ROW);
@@ -140,14 +135,14 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
  * 4. Running the configured MOP
  * 5. Switching unpacker configuration context
  *
- * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
- * @tparam reduce_dim The dimension along which to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
+ * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @param address_a: Base address for source A data in L1 memory.
+ * @param address_b: Base address for source B data in L1 memory.
  *
- * @param address_a Base address for source A data in L1 memory
- * @param address_b Base address for source B data in L1 memory
- *
- * @note This function manages dual-context switching for pipelined execution
- * @note Semaphores ensure proper synchronization between Trisc and unpacker
+ * @note Call @ref _llk_unpack_AB_reduce_init_ with matching template args before this function.
+ * @note This function manages dual-context switching for pipelined execution.
+ * @note Semaphores ensure proper synchronization between Trisc and unpacker.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)

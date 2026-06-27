@@ -6,7 +6,6 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
@@ -90,7 +89,6 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, CircularBuffer& cb_ou
         }
         cb_out_buf.push_back(Ht);
 
-        cb_out_buf.wait_front(Ht);
         tile_idx = tile_idx - HtWt + 1;
     }
     pack_untilize_uninit(cb_out);

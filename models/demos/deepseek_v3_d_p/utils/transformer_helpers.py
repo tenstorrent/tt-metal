@@ -23,10 +23,17 @@ import psutil
 import torch
 from loguru import logger
 from transformers import DynamicCache
-from transformers.modeling_utils import no_init_weights
+
+from models.common.utility_functions import hf_cache_layer_kv
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model, DeepseekV3MoE
 
 
 @dataclass
@@ -53,6 +60,7 @@ ABC_SHORT_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.j
 P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
 P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
 PIE960_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json")
+PROMPT_5K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_5k.json")
 PROMPT_25K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json")
 
 TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache")).resolve()
@@ -98,6 +106,32 @@ def find_trace_dir(
     return None
 
 
+def check_first_token_match_host_ref(
+    ref_snapshots: list | None,
+    number_of_non_padded_tokens: int,
+    padding_side: str,
+    first_token_id: int,
+    tokenizer,
+) -> bool | None:
+    """Check TT's first token vs HF reference argmax at the expected first token position.
+
+    Returns:
+        True if match, False if mismatch, None if no reference available.
+    """
+    if not ref_snapshots:
+        return None
+    hf_logits_full = ref_snapshots[-1]  # [1, seq_len, vocab]
+    last_real_idx = number_of_non_padded_tokens - 1 if padding_side == "right" else hf_logits_full.shape[-2] - 1
+    hf_token_id = int(hf_logits_full[0, last_real_idx, :].argmax().item())
+    hf_token_text = tokenizer.decode([hf_token_id]) if tokenizer else "N/A"
+    match = hf_token_id == first_token_id
+    logger.info(
+        f"HF reference token at position {last_real_idx}: "
+        f"ID={hf_token_id} [{repr(hf_token_text)}] | TT==HF match: {match}"
+    )
+    return match
+
+
 def check_first_token_match(trace, trace_dir: Path, first_token_id: int, first_token_prob: float) -> bool | None:
     """Check whether the produced first token matches the trace reference.
 
@@ -137,30 +171,40 @@ INFINITEBENCH_SUBSETS = {
     "longbook_qa_eng": "longbook_qa_eng.jsonl",
 }
 
-INFINITEBENCH_CACHE_DIR = Path(
-    os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE", "/tmp/deepseek_v3_transformer_inputs")
-)
+
+def _default_infinitebench_cache_dir() -> str:
+    # Prefer a test-specific override, then HF_HOME/infinitebench, then a temp dir.
+    explicit = os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE")
+    if explicit:
+        return explicit
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return os.path.join(hf_home, "infinitebench")
+    return "/tmp/deepseek_v3_transformer_inputs"
+
+
+INFINITEBENCH_CACHE_DIR = Path(_default_infinitebench_cache_dir())
 
 
 # --- HF model helpers ---
 
 
-def create_hf_model(config, num_layers, n_routed_experts=None):
-    """Create HF DeepseekV3Model with num_layers and random weights."""
+def create_hf_model(variant, config, num_layers, n_routed_experts=None):
+    """Create the variant's reference model with num_layers and random weights."""
     test_config = deepcopy(config)
     test_config.num_hidden_layers = num_layers
     test_config._attn_implementation = "eager"
     if n_routed_experts is not None:
         test_config.n_routed_experts = n_routed_experts
 
-    model = DeepseekV3Model(test_config)
+    model = variant.reference_model_cls(test_config)
     return model.eval().to(torch.bfloat16)
 
 
-def extract_layer_state_dict(full_sd, layer_idx, hf_layer):
+def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     """Extract one layer's weights from HF state_dict into TtPrefillBlock format."""
     prefix = f"layers.{layer_idx}."
-    is_moe = isinstance(hf_layer.mlp, DeepseekV3MoE)
+    is_moe = isinstance(hf_layer.mlp, variant.reference_moe_cls)
 
     layer_sd = {
         "attn_norm_weight": full_sd[f"{prefix}input_layernorm.weight"],
@@ -204,7 +248,7 @@ def extract_layer_state_dict(full_sd, layer_idx, hf_layer):
     return layer_sd
 
 
-def extract_tt_state_dict(hf_model):
+def extract_tt_state_dict(variant, hf_model):
     """Extract state_dict in TtPrefillTransformer format from HF model."""
     sd = hf_model.state_dict()
     num_layers = len(hf_model.layers)
@@ -216,7 +260,7 @@ def extract_tt_state_dict(hf_model):
     }
 
     for i in range(num_layers):
-        layer_sd = extract_layer_state_dict(sd, i, hf_model.layers[i])
+        layer_sd = extract_layer_state_dict(variant, sd, i, hf_model.layers[i])
         result["layers"].append(layer_sd)
 
     return result
@@ -259,15 +303,15 @@ def tt_state_dict_to_hf_state_dict(tt_sd):
     return hf_sd
 
 
-def create_hf_model_with_weights(config, num_layers, hf_sd):
-    """Create HF DeepseekV3Model with pretrained weights (no random init)."""
+def create_hf_model_with_weights(variant, config, num_layers, hf_sd):
+    """Create the variant's reference model with pretrained weights (no random init)."""
     test_config = deepcopy(config)
     test_config.num_hidden_layers = num_layers
     test_config._attn_implementation = "eager"
 
-    logger.info(f"Creating DeepseekV3Model with {num_layers} layers...")
+    logger.info(f"Creating {variant.reference_model_cls.__name__} with {num_layers} layers...")
     with no_init_weights():
-        model = DeepseekV3Model(test_config)
+        model = variant.reference_model_cls(test_config)
     logger.info("Model structure created successfully")
 
     # Load state dict layer-by-layer to avoid OOM (loading all layers at once doubles memory usage)
@@ -375,6 +419,7 @@ def get_4d_causal_mask(attention_mask, causal_only=False):
 
 
 def load_and_compute_layer_by_layer(
+    variant,
     model_path: Path,
     config,
     num_layers: int,
@@ -459,9 +504,9 @@ def load_and_compute_layer_by_layer(
         test_config.num_hidden_layers = num_layers
         test_config._attn_implementation = "eager"
 
-        logger.info(f"Creating empty HF model structure for reference computation...")
+        logger.info(f"Creating empty {variant.reference_model_cls.__name__} for reference computation...")
         with no_init_weights():
-            hf_model = DeepseekV3Model(test_config)
+            hf_model = variant.reference_model_cls(test_config).eval()
         _log_memory("After creating HF model structure")
 
         # Setup forward pass inputs
@@ -586,6 +631,7 @@ def load_and_compute_layer_by_layer(
                 cache_path=weight_cache_path,
                 mesh_device=mesh_device,
                 config=config,
+                model_cfg=variant.model_config,
                 seq_len=seq_len,
                 num_links=num_links,
                 topology=topology,
@@ -610,7 +656,7 @@ def load_and_compute_layer_by_layer(
 
     # Extract KVPE if computed reference
     if compute_reference:
-        ref_kvpe_list = [ref_cache.key_cache[i] for i in range(num_layers)]
+        ref_kvpe_list = [hf_cache_layer_kv(ref_cache, i)[0] for i in range(num_layers)]
 
     # --- Process Norm ---
     logger.info("Processing norm...")
@@ -707,50 +753,31 @@ class ReferenceCacheKey:
         )
 
 
-def check_reference_cache_exists(cache_key: ReferenceCacheKey) -> bool:
-    """
-    Check if reference output cache exists for the given cache key.
+def _ref_cache_dir(variant) -> Path:
+    env = variant.ref_cache_env or "TT_DS_PREFILL_HOST_REF_CACHE"
+    return Path(os.environ.get(env, f"/tmp/{variant.name}_transformer_ref_cache"))
 
-    Reference cache contains forward pass outputs from HF model for PCC validation.
-    This cache is machine-independent and can be generated once and shared.
 
-    Args:
-        cache_key: ReferenceCacheKey encoding all parameters that affect reference outputs
-
-    Returns:
-        True if cache file exists, False otherwise
-    """
-    cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
-    cache_path = cache_dir / f"{cache_key}.pt"
-
+def check_reference_cache_exists(variant, cache_key: ReferenceCacheKey) -> bool:
+    cache_path = _ref_cache_dir(variant) / f"{cache_key}.pt"
     exists = cache_path.exists()
-
     if exists:
         logger.info(f"Reference cache found: {cache_path}")
     else:
         logger.debug(f"Reference cache not found: {cache_path}")
-
     return exists
 
 
-def save_reference_cache(cache_key: ReferenceCacheKey, ref_snapshots, ref_kvpe_list):
-    """Save reference outputs to cache file."""
-    cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
-    cache_path = cache_dir / f"{cache_key}.pt"
+def save_reference_cache(variant, cache_key: ReferenceCacheKey, ref_snapshots, ref_kvpe_list):
+    cache_dir = _ref_cache_dir(variant)
     cache_dir.mkdir(parents=True, exist_ok=True)
-
+    cache_path = cache_dir / f"{cache_key}.pt"
     torch.save({"ref_snapshots": ref_snapshots, "ref_kvpe_list": ref_kvpe_list}, cache_path)
     logger.info(f"Saved reference to {cache_path} ({len(ref_snapshots)} snapshots, {len(ref_kvpe_list)} KVPE)")
 
 
-def load_reference_cache(cache_key: ReferenceCacheKey) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-    """Load reference outputs from cache file.
-
-    Returns:
-        Tuple of (ref_snapshots, ref_kvpe_list)
-    """
-    cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
-    cache_path = cache_dir / f"{cache_key}.pt"
+def load_reference_cache(variant, cache_key: ReferenceCacheKey) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    cache_path = _ref_cache_dir(variant) / f"{cache_key}.pt"
 
     if not cache_path.exists():
         raise FileNotFoundError(f"Reference cache not found: {cache_path}")
@@ -1011,3 +1038,64 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
         logits=logits,
         metadata=metadata,
     )
+
+
+# Golden bit_sculpt prefill trace (DeepSeek-R1-0528, 256 experts, hidden_dim 7168).
+# Layer 3 is the first MoE layer (metadata moe_layer_offset == 3).
+GOLDEN_LONGBOOK_TRACE = Path("/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad")
+
+
+def load_trace_gate_input(
+    trace_dir: Path,
+    layer_idx: int,
+    max_seq_len: int,
+    dim: int,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor | None:
+    """Load the MoE/gate block input from a bit_sculpt golden trace.
+
+    The trace stores ``post_attn_norm_layer_{i}`` per layer — the post-attention
+    RMSNorm output, which is exactly the tensor fed into the gate + experts at
+    layer ``i`` (unlike ``decoder_output_layer_{i}``, the unnormalized residual
+    stream). Returns ``[max_seq_len, dim]`` (tiled if the trace is shorter than
+    ``max_seq_len``), or ``None`` if the trace/key is unavailable or ``dim``
+    exceeds the trace hidden dim.
+
+    A sliced read is used so only the requested ``[max_seq_len, dim]`` block is
+    materialized rather than the full (seq, hidden_dim) tensor.
+    """
+    from safetensors import safe_open
+
+    layer_path = Path(trace_dir) / "hidden_states" / f"layer_{layer_idx}.safetensors"
+    if not layer_path.exists():
+        logger.warning(f"Trace file not found: {layer_path}. Falling back to synthetic input.")
+        return None
+
+    key = f"post_attn_norm_layer_{layer_idx}"
+    try:
+        with safe_open(layer_path, framework="pt") as f:
+            if key not in f.keys():
+                logger.warning(f"{key} not in {layer_path}. Falling back to synthetic input.")
+                return None
+            sl = f.get_slice(key)
+            seq_total, hidden_dim = sl.get_shape()
+            if dim > hidden_dim:
+                logger.warning(
+                    f"Requested dim {dim} > trace hidden_dim {hidden_dim} ({key}). Falling back to synthetic input."
+                )
+                return None
+            n = min(max_seq_len, seq_total)
+            hidden = sl[:n, :dim].to(dtype)
+    except Exception as e:  # safetensors / IO errors — fall back to synthetic
+        logger.warning(f"Could not load {key} from {layer_path}: {e}. Falling back to synthetic input.")
+        return None
+
+    if hidden.shape[0] < max_seq_len:
+        repeats = (max_seq_len + hidden.shape[0] - 1) // hidden.shape[0]
+        hidden = hidden.repeat(repeats, 1)[:max_seq_len]
+
+    logger.info(
+        f"Loaded gate input from {Path(trace_dir).name} {key} "
+        f"(trace {seq_total}x{hidden_dim}, sliced to {tuple(hidden.shape)})"
+    )
+    return hidden

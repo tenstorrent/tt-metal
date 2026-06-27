@@ -1,0 +1,13 @@
+{
+  "_comment": "Tracked deprecations awaiting removal. The deprecation-reaper workflow reads this file weekly, looks up when each entry's PR merged (its exact mergedAt timestamp), and once mergedAt + grace has elapsed it opens/refreshes a tracking issue and pings the owners. Entries whose PR is not merged yet are ignored, so the clock only starts at merge. Remove an entry once its functions are deleted.",
+  "deprecations": [
+    {
+      "id": "matmul-legacy-mm-inits",
+      "description": "Legacy matmul init API in tt_metal/hw/inc/api/compute/matmul.h: mm_init, mm_block_init, mm_init_short, mm_block_init_short, mm_init_short_with_dt, mm_block_init_short_with_dt, mm_block_init_short_with_both_dt, and matmul_tiles_math. Replaced by compute_kernel_hw_startup<SrcOrder::Reverse>() + the matmul_*_init API.",
+      "files": ["tt_metal/hw/inc/api/compute/matmul.h"],
+      "introduced_by_pr": 46346,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
+    }
+  ]
+}

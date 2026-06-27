@@ -48,8 +48,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/ckernel_sfpu_reduce.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_reduce.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-// copy srca to dest
+    // copy srca to dest
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         4 /* num_faces */, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
-    ckernel::sfpu::_init_reduce_<POOL_TYPE, static_cast<DataFormat>(formats.math)>();
+    ckernel::sfpu::init_reduce<POOL_TYPE, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>();
 
     if (REDUCE_DIM == ReduceDim::REDUCE_COL)
     {
@@ -92,7 +92,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
                 _llk_math_eltwise_sfpu_start_(tile);
-                ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>();
+                ckernel::sfpu::calculate_reduce<
+                    POOL_TYPE,
+                    REDUCE_DIM,
+                    static_cast<DataFormat>(formats.math),
+                    is_fp32_dest_acc_en,
+                    static_cast<DataFormat>(formats.pack_dst)>();
             }
 
             _llk_math_eltwise_sfpu_done_();
@@ -114,7 +119,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_math_eltwise_sfpu_start_(0);
-        ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>(BLOCK_CT_DIM, BLOCK_RT_DIM);
+        ckernel::sfpu::
+            calculate_reduce<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en, static_cast<DataFormat>(formats.pack_dst)>(
+                BLOCK_CT_DIM, BLOCK_RT_DIM);
 
 #ifdef ADD_TOP_ROW
         _llk_math_eltwise_binary_sfpu_init_<SfpuType::add_top_row>();

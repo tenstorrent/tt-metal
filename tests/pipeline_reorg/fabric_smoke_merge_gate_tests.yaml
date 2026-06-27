@@ -1,0 +1,13 @@
+# Fabric N300 merge-gate smoke matrix.
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, arch, owner_id.
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> smoke).
+
+- name: fabric unit tests
+  cmd: ./tests/scripts/run_cpp_fabric_tests.sh
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song

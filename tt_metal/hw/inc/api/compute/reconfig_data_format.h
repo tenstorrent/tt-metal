@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common_globals.h"
+#include "sanitizer/api.h"
 
 #ifdef TRISC_PACK
 #include "llk_pack_common_api.h"
@@ -23,6 +24,7 @@ namespace ckernel {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format(const uint32_t srca_new_operand, const uint32_t srcb_new_operand) {
+    LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
@@ -42,6 +44,7 @@ ALWI void reconfig_data_format(
     const uint32_t srca_new_operand,
     const uint32_t srcb_old_operand,
     const uint32_t srcb_new_operand) {
+    LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format<
             DST_ACCUM_MODE,
@@ -56,6 +59,7 @@ ALWI void reconfig_data_format(
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
+    LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
@@ -69,6 +73,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_new_operand) {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint32_t srca_new_operand) {
+    LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srca<
             DST_ACCUM_MODE,
@@ -82,6 +87,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
+    LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
@@ -95,6 +101,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
  */
 template <bool to_from_int8 = false, bool is_tile_dim_reconfig_en = false>
 ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_new_operand) {
+    LLK_SAN_FUNCTION();
     // If is_tile_dim_reconfig_en is enabled, modify the dimension and stride according to enum; else, ignore them
     UNPACK((llk_unpack_reconfig_data_format_srcb<
             DST_ACCUM_MODE,
@@ -127,6 +134,7 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
+    LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
         !is_tile_dim_reconfig_en,
@@ -166,6 +174,7 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
 ALWI void pack_reconfig_data_format(const uint32_t old_cb_id, const uint32_t new_cb_id) {
+    LLK_SAN_FUNCTION();
 #ifdef ARCH_QUASAR
     static_assert(
         !is_tile_dim_reconfig_en,

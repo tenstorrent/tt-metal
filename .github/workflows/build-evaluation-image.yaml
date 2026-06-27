@@ -123,7 +123,8 @@ jobs:
       sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
 
@@ -148,6 +149,7 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
 
@@ -234,7 +236,7 @@ jobs:
             ccache-layer=docker-image://${{ needs.check-tool-images.outputs.ccache-tag }}
             sfpi-layer=docker-image://${{ needs.check-tool-images.outputs.sfpi-tag }}
           secrets: |
-            CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}
+            CCACHE_REMOTE_STORAGE=redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}${{ vars.REDIS_IS_READONLY == 'true' && '|read-only=true' || '' }}
           cache-from: ${{ inputs.cache-from }}
           cache-to: ${{ inputs.cache-to }}
           outputs: |

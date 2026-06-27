@@ -14,6 +14,14 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
+namespace {
+
+uint64_t expected_mean_rstd_volume_gamma_beta_grad(const Tensor& output_grad, uint32_t num_groups) {
+    return static_cast<uint64_t>(output_grad.logical_shape()[0]) * num_groups;
+}
+
+}  // namespace
+
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
@@ -53,8 +61,18 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
 
     // mean (1, 1, N, num_groups)
     TT_FATAL(mean.logical_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
+    TT_FATAL(
+        mean.logical_volume() == expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        "mean must have logical volume {}. Got {}.",
+        expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        mean.logical_volume());
     // rstd (1, 1, N, num_groups)
     TT_FATAL(rstd.logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
+    TT_FATAL(
+        rstd.logical_volume() == expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        "rstd must have logical volume {}. Got {}.",
+        expected_mean_rstd_volume_gamma_beta_grad(output_grad, num_groups),
+        rstd.logical_volume());
 }
 
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(

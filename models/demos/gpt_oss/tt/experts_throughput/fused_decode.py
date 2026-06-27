@@ -180,7 +180,6 @@ def fused_decode_forward(
         batch_size=total_tokens,
         seq_size=1,
         select_experts_k=K_sel,
-        experts=global_experts,
         cluster_axis=cluster_axis,
         topology=ttnn.Topology.Ring,
         num_links=fused_config.num_links,

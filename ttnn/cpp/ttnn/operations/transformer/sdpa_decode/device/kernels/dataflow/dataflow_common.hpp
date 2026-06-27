@@ -6,6 +6,12 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include <vector>
 #include "../../../../sdpa/device/kernels/dataflow/dataflow_common.hpp"
 /******************************************************************************
@@ -19,22 +25,17 @@
  ******************************************************************************/
 template <uint32_t tile_bytes>
 void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
+    Noc noc;
     if (val == 0) {
-        constexpr uint32_t num_zeros_reads = tile_bytes / MEM_ZEROS_SIZE;
-        uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-        uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-
-        // Fill tile with zeros
-        for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-            noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
-            write_addr += MEM_ZEROS_SIZE;
-        }
-        noc_async_read_barrier();
+        // Arch-agnostic zeroing (#45450): async_write_zeros works on WH/BH/Quasar.
+        CircularBuffer cb(cb_id);
+        noc.async_write_zeros(cb, tile_bytes, {.offset_bytes = tile_id * tile_bytes});
+        noc.write_zeros_l1_barrier();
     } else {
         // Fill 2 uint16 datums in each writes to optimize for performance
+        CircularBuffer cb(cb_id);
         volatile tt_l1_ptr uint32_t* ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
         constexpr int num_uint32_datums_tile = tile_bytes / 4;
         for (int k = 0; k < num_uint32_datums_tile; k++) {
             ptr[k] = val;
@@ -54,10 +55,11 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
         return;
     }
     const uint16_t datum_val = partial_val >> 16;
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint16_t* uint16_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
     int face_start = (cur_pos_in_tile < 15) ? 0 : 1;
     uint32_t fill_pos_in_face = (cur_pos_in_tile + 1) % 16;
     if (face_start == 0) {
@@ -99,7 +101,8 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
 }
 
 template <uint32_t tile_bytes>
-void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t window_start_pos_in_tile, uint32_t partial_val) {
+void fill_tile_partial_sliding_window(
+    uint32_t cb_id, uint32_t tile_id, uint32_t window_start_pos_in_tile, uint32_t partial_val) {
     /*
     For sliding window mask: fill positions 0 to window_start_pos_in_tile - 1 with partial_val (-inf)
     This is the inverse of fill_tile_partial which fills from cur_pos_in_tile + 1 to end
@@ -115,10 +118,11 @@ void fill_tile_partial_sliding_window(uint32_t cb_id, uint32_t tile_id, uint32_t
     }
 
     const uint16_t datum_val = partial_val >> 16;
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint16_t* uint16_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Determine which faces to fill completely (before the window_start_pos_in_tile)
     int face_start = (window_start_pos_in_tile < 16) ? 0 : 1;  // Last face to fill completely
@@ -178,25 +182,28 @@ uint32_t read_mask_chunk(
     uint32_t mask_chunk_tiles,
     uint32_t mask_start_tile_id,
     const MaskReaderType& mask_reader) {
+    Noc noc;
     // Read mask chunk
-    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
+    CircularBuffer cb_mask(cb_mask_in);
+    cb_mask.reserve_back(mask_chunk_tiles);
+    uint32_t mask_write_ptr = cb_mask.get_write_ptr();
     uint32_t barrier_count = 0;
     for (uint32_t row = 0; row < PNHt; ++row) {
         uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
         for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-            noc_async_read_page(mask_tile_id, mask_reader, mask_write_ptr);
+            noc.async_read(
+                mask_reader, CoreLocalMem<uint32_t>(mask_write_ptr), mask_tile_bytes, {.page_id = mask_tile_id}, {});
             mask_tile_id++;
             mask_write_ptr += mask_tile_bytes;
 
             if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 barrier_count = 0;
             }
         }
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_mask_in, mask_chunk_tiles);
+    noc.async_read_barrier();
+    cb_mask.push_back(mask_chunk_tiles);
     // Advance by Sk_chunk_t (column stride), NOT mask_chunk_tiles (PNHt * Sk_chunk_t).
     // The mask tensor has shape (PNHt, St) with row stride PSt. Each chunk advances
     // Sk_chunk_t columns. Using mask_chunk_tiles would over-advance when PNHt > 1.
@@ -206,6 +213,7 @@ uint32_t read_mask_chunk(
 
 template <uint32_t cb_mask_in, uint32_t PNHt>
 void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos) {
+    Noc noc;
     /*
     example 1: 64 seqlen at cur_pos 40, 2 cores, 32 chunk size
     k_num_chunks = 2
@@ -247,10 +255,10 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
     uint32_t cur_pos_in_tile = cur_pos_in_chunk % 32;
     constexpr uint32_t NEG_INF = 0xFF80FF80;  // TODO: Make sure this is -inf
 
-    cb_reserve_back(cb_mask_in, total_read_tiles);
+    CircularBuffer cb_mask(cb_mask_in);
+    cb_mask.reserve_back(total_read_tiles);
 
-    uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_mask_in));
-    uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
+    uint32_t q_write_ptr_base = cb_mask.get_read_ptr();
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
@@ -260,9 +268,9 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
                 fill_tile<tile_bytes>(cb_mask_in, i, 0);
             } else {
                 copy_tile<tile_bytes>(
-                    noc_read_addr_base, q_write_ptr_base, 0, i);  // copy from cb_mask_in[0] to cb_mask_in[i]
+                    noc, q_write_ptr_base, q_write_ptr_base, 0, i);  // copy from cb_mask_in[0] to cb_mask_in[i]
                 if (i == cur_pos_in_chunk_t - 1) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
             }
         } else if (i == cur_pos_in_chunk_t) {
@@ -274,29 +282,31 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
                 fill_tile<tile_bytes>(cb_mask_in, i, NEG_INF);
             } else {
                 copy_tile<tile_bytes>(
-                    noc_read_addr_base,
+                    noc,
+                    q_write_ptr_base,
                     q_write_ptr_base,
                     cur_pos_in_chunk_t + 1,
                     i);  // copy from cb_mask_in[cur_pos_in_chunk_t+1] to cb_mask_in[i]
                 if (i == Sk_chunk_t - 1) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
             }
         }
         for (uint32_t j = 1; j < PNHt; ++j) {
             // copy from cb_mask_in[i] to cb_mask_in[j*Sk_chunk_t + i]
-            copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
+            copy_tile<tile_bytes>(noc, q_write_ptr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
             if (j == PNHt - 1) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
             }
         }
     }
 
-    cb_push_back(cb_mask_in, total_read_tiles);
+    cb_mask.push_back(total_read_tiles);
 }
 
 template <uint32_t cb_mask_in, uint32_t PNHt>
 void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
+    Noc noc;
     /*
     Generate sliding window mask for the first chunk:
     - Mask positions < window_start with -inf (sliding window start)
@@ -312,10 +322,10 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
     uint32_t window_start_in_tile = window_start_in_chunk % 32;
     constexpr uint32_t NEG_INF = 0xFF80FF80;  // TODO: Make sure this is -inf
 
-    cb_reserve_back(cb_mask_in, total_read_tiles);
+    CircularBuffer cb_mask(cb_mask_in);
+    cb_mask.reserve_back(total_read_tiles);
 
-    uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_mask_in));
-    uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
+    uint32_t q_write_ptr_base = cb_mask.get_read_ptr();
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
@@ -324,7 +334,7 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
             if (i == 0) {
                 fill_tile<tile_bytes>(cb_mask_in, i, NEG_INF);
             } else {
-                copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, 0, i);
+                copy_tile<tile_bytes>(noc, q_write_ptr_base, q_write_ptr_base, 0, i);
             }
         } else if (i == window_start_in_chunk_t) {
             // Tile contains sliding window start - partial mask at beginning
@@ -336,26 +346,27 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
             } else {
                 // Copy from the first allowed tile
                 copy_tile<tile_bytes>(
-                    noc_read_addr_base,
+                    noc,
+                    q_write_ptr_base,
                     q_write_ptr_base,
                     window_start_in_chunk_t + 1,
                     i);  // copy from cb_mask_in[cur_pos_in_chunk_t+1] to cb_mask_in[i]
                 if (i == Sk_chunk_t - 1) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
             }
         }
 
         // Copy to all heads
         for (uint32_t j = 1; j < PNHt; ++j) {
-            copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
+            copy_tile<tile_bytes>(noc, q_write_ptr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
             if (j == PNHt - 1) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
             }
         }
     }
 
-    cb_push_back(cb_mask_in, total_read_tiles);
+    cb_mask.push_back(total_read_tiles);
 }
 
 /*
@@ -366,28 +377,29 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
  */
 template <uint32_t cb_block_pad_mask, uint32_t PNHt>
 void generate_block_padding_mask(uint32_t Sk_chunk_t, uint32_t block_size) {
+    Noc noc;
     uint32_t total_tiles = PNHt * Sk_chunk_t;
     constexpr uint32_t tile_bytes = get_tile_size(cb_block_pad_mask);
     constexpr uint32_t NEG_INF = 0xFF80FF80;
 
-    cb_reserve_back(cb_block_pad_mask, total_tiles);
+    CircularBuffer cb_pad(cb_block_pad_mask);
+    cb_pad.reserve_back(total_tiles);
 
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
         // fill_tile_partial: columns [0, block_size-1] = 0, columns [block_size, 31] = -inf
         fill_tile_partial<tile_bytes>(cb_block_pad_mask, i, block_size - 1, NEG_INF);
 
         // Copy to all heads
-        uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_block_pad_mask));
-        uint32_t write_ptr_base = get_read_ptr(cb_block_pad_mask);
+        uint32_t write_ptr_base = cb_pad.get_read_ptr();
         for (uint32_t j = 1; j < PNHt; ++j) {
-            copy_tile<tile_bytes>(noc_read_addr_base, write_ptr_base, i, j * Sk_chunk_t + i);
+            copy_tile<tile_bytes>(noc, write_ptr_base, write_ptr_base, i, j * Sk_chunk_t + i);
             if (j == PNHt - 1) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
             }
         }
     }
 
-    cb_push_back(cb_block_pad_mask, total_tiles);
+    cb_pad.push_back(total_tiles);
 }
 
 /******************************************************************************
@@ -395,14 +407,16 @@ void generate_block_padding_mask(uint32_t Sk_chunk_t, uint32_t block_size) {
  ******************************************************************************/
 template <uint32_t cb_out, uint32_t out_chunk_tiles, uint32_t barrier_threshold, typename WriterType>
 uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writer, uint32_t& barrier_count) {
+    Noc noc;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
-    uint32_t l1_read_addr = get_read_ptr(cb_out);
+    CircularBuffer cb(cb_out);
+    uint32_t l1_read_addr = cb.get_read_ptr();
     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-        noc_async_write_page(out_tile_id, out_writer, l1_read_addr);
+        noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), out_writer, tile_bytes, {}, {.page_id = out_tile_id});
         ++out_tile_id;
         l1_read_addr += tile_bytes;
         if (++barrier_count == barrier_threshold) {
-            noc_async_writes_flushed();
+            noc.async_writes_flushed();
             barrier_count = 0;
         }
     }
@@ -417,6 +431,7 @@ uint32_t write_partial_tiles_to_memory(
     uint32_t cur_head,            // kv-head group index 0..num_kv_heads-1
     uint32_t num_heads_to_write,  // q-heads per kv-head group, e.g. 8
     uint32_t out_chunk_tiles) {   // total tiles = PNHt * vDHt
+    Noc noc;
     constexpr uint32_t FACE_HW = 16;
     constexpr uint32_t TILE_HW = 32;
     constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;
@@ -424,7 +439,8 @@ uint32_t write_partial_tiles_to_memory(
     constexpr uint32_t FACE_LINE_BYTES = FACE_HW * ELEMENT_SIZE;
     const uint32_t num_hidden_tiles = out_chunk_tiles / PNHt;
 
-    uint32_t l1_base_addr = get_read_ptr(cb_out);
+    CircularBuffer cb(cb_out);
+    uint32_t l1_base_addr = cb.get_read_ptr();
 
     for (uint32_t hidden_tile = 0; hidden_tile < num_hidden_tiles; ++hidden_tile) {
         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
@@ -441,21 +457,22 @@ uint32_t write_partial_tiles_to_memory(
             // L1: cb_out tile layout matches tile_index
             uint32_t l1_read_addr_head = l1_base_addr + tile_index * tile_bytes + in_tile_offset;
 
-            // DRAM tile: global index = out_tile_id + tile_index
-            uint64_t out_writer_tile_addr = out_writer.get_noc_addr(out_tile_id + tile_index);
-            uint64_t out_writer_noc_addr_head = out_writer_tile_addr + in_tile_offset;
-
-            // Write first phase
-            noc_async_write(l1_read_addr_head, out_writer_noc_addr_head, FACE_LINE_BYTES);
-
-            // Write second phase
-            noc_async_write(
-                l1_read_addr_head + FACE_ELEMENT_CNT * ELEMENT_SIZE,
-                out_writer_noc_addr_head + FACE_ELEMENT_CNT * ELEMENT_SIZE,
-                FACE_LINE_BYTES);
+            const uint32_t dram_tile_id = out_tile_id + tile_index;
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_read_addr_head),
+                out_writer,
+                FACE_LINE_BYTES,
+                {},
+                {.page_id = dram_tile_id, .offset_bytes = in_tile_offset});
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_read_addr_head + FACE_ELEMENT_CNT * ELEMENT_SIZE),
+                out_writer,
+                FACE_LINE_BYTES,
+                {},
+                {.page_id = dram_tile_id, .offset_bytes = in_tile_offset + FACE_ELEMENT_CNT * ELEMENT_SIZE});
 
             if (++barrier_count == barrier_threshold) {
-                noc_async_writes_flushed();
+                noc.async_writes_flushed();
                 barrier_count = 0;
             }
         }
@@ -489,48 +506,64 @@ void read_q(
     const QArgsType& q_args,
     uint32_t q_page_size_bytes,
     uint32_t q_batch_offset) {
+    Noc noc;
+    CircularBuffer cb_q(cb_q_in);
+    CircularBuffer cb_q_rm_buf(cb_q_rm);
     // If Q is locally available (pre-sharded to all cores), just reserve and push
     if (q_locally_available) {
         if constexpr (tilize_q) {
-            cb_reserve_back(cb_q_rm, q_chunk_tiles);
-            cb_push_back(cb_q_rm, q_chunk_tiles);
+            cb_q_rm_buf.reserve_back(q_chunk_tiles);
+            cb_q_rm_buf.push_back(q_chunk_tiles);
         } else {
-            cb_reserve_back(cb_q_in, q_chunk_tiles);
-            cb_push_back(cb_q_in, q_chunk_tiles);
+            cb_q.reserve_back(q_chunk_tiles);
+            cb_q.push_back(q_chunk_tiles);
         }
         return;
     }
 
     if constexpr (is_q_sharded) {
         // Q is sharded - read from output core's L1
-        uint64_t q_read_addr =
-            is_output_core ? get_noc_addr(q_addr) : get_noc_addr(output_core_noc_x, output_core_noc_y, q_addr);
+        const uint8_t noc_id = noc.get_noc_id();
+        const uint32_t src_noc_x = is_output_core ? my_x[noc_id] : output_core_noc_x;
+        const uint32_t src_noc_y = is_output_core ? my_y[noc_id] : output_core_noc_y;
+        uint32_t q_src_addr = q_addr;
 
         uint32_t q_write_ptr;
         if constexpr (tilize_q) {
-            cb_reserve_back(cb_q_rm, q_chunk_tiles);
-            q_write_ptr = get_write_ptr(cb_q_rm);
+            cb_q_rm_buf.reserve_back(q_chunk_tiles);
+            q_write_ptr = cb_q_rm_buf.get_write_ptr();
         } else {
-            cb_reserve_back(cb_q_in, q_chunk_tiles);
-            q_write_ptr = get_write_ptr(cb_q_in);
+            cb_q.reserve_back(q_chunk_tiles);
+            q_write_ptr = cb_q.get_write_ptr();
         }
 
+        UnicastEndpoint q_src;
         if constexpr (use_half_tile && !tilize_q) {
             // Q is stored as 32x32 tiles but we want 16x32 half tiles
             for (uint32_t tile = 0; tile < q_chunk_tiles; tile++) {
-                noc_async_read(q_read_addr, q_write_ptr, q_tile_bytes);
-                q_read_addr += 2 * q_tile_bytes;  // Skip bottom half of each tile
+                noc.async_read(
+                    q_src,
+                    CoreLocalMem<uint32_t>(q_write_ptr),
+                    q_tile_bytes,
+                    {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = q_src_addr},
+                    {});
+                q_src_addr += 2 * q_tile_bytes;  // Skip bottom half of each tile
                 q_write_ptr += q_tile_bytes;
             }
         } else {
-            noc_async_read(q_read_addr, q_write_ptr, q_chunk_size_bytes);
+            noc.async_read(
+                q_src,
+                CoreLocalMem<uint32_t>(q_write_ptr),
+                q_chunk_size_bytes,
+                {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = q_src_addr},
+                {});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         if constexpr (tilize_q) {
-            cb_push_back(cb_q_rm, q_chunk_tiles);
+            cb_q_rm_buf.push_back(q_chunk_tiles);
         } else {
-            cb_push_back(cb_q_in, q_chunk_tiles);
+            cb_q.push_back(q_chunk_tiles);
         }
     } else {
         // Q is not sharded - read tiles from DRAM
@@ -539,35 +572,33 @@ void read_q(
         const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
         uint32_t q_tile_id = q_batch_offset;
 
-        cb_reserve_back(cb_q_in, q_chunk_tiles);
-        uint32_t q_write_ptr = get_write_ptr(cb_q_in);
+        cb_q.reserve_back(q_chunk_tiles);
+        uint32_t q_write_ptr = cb_q.get_write_ptr();
         uint32_t barrier_count = 0;
 
         for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
-            uint64_t q_read_addr = q_reader.get_noc_addr(q_tile_id);
-            noc_async_read(q_read_addr, q_write_ptr, q_tile_bytes);
+            noc.async_read(q_reader, CoreLocalMem<uint32_t>(q_write_ptr), q_tile_bytes, {.page_id = q_tile_id}, {});
             q_tile_id += 1;
             q_write_ptr += q_tile_bytes;
 
             if (++barrier_count == barrier_threshold) {
-                noc_async_read_barrier();
+                noc.async_read_barrier();
                 barrier_count = 0;
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_q_in, q_chunk_tiles);
+        noc.async_read_barrier();
+        cb_q.push_back(q_chunk_tiles);
     }
 }
 
 // Multicast parameters for K streaming (vertical multicast along y, same x)
 struct KMcastParams {
-    bool do_mcast;                               // true = sender, false = receiver
-    uint32_t mcast_x;                            // x coordinate for multicast (fixed for vertical)
-    uint32_t mcast_y0;                           // y start for multicast range
-    uint32_t mcast_y1;                           // y end for multicast range
-    uint32_t num_dests;                          // number of multicast destinations
-    uint32_t mcast_sem_addr;                     // semaphore address for synchronization
-    volatile tt_l1_ptr uint32_t* mcast_sem_ptr;  // semaphore pointer
+    bool do_mcast;          // true = sender, false = receiver
+    uint32_t mcast_x;       // x coordinate for multicast (fixed for vertical)
+    uint32_t mcast_y0;      // y start for multicast range
+    uint32_t mcast_y1;      // y end for multicast range
+    uint32_t num_dests;     // number of multicast destinations
+    uint32_t mcast_sem_id;  // semaphore ID for synchronization (Semaphore<> takes this)
 };
 
 template <
@@ -581,7 +612,7 @@ template <
     bool use_mcast,
     uint32_t capacity_t,
     typename KReaderType>
-uint64_t read_k(
+uint32_t read_k(
     uint32_t k_chunk_tiles,
     uint32_t cur_head,
     uint32_t Sk_chunk_t_dynamic,
@@ -591,9 +622,11 @@ uint64_t read_k(
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
     const KMcastParams& mcast_params = {}) {
-    cb_reserve_back(cb_k_in, k_chunk_tiles);
-    uint32_t k_write_ptr = get_write_ptr(cb_k_in);
-    uint64_t k_base_read_ptr = get_noc_addr(k_write_ptr);
+    Noc noc;
+    CircularBuffer cb_k(cb_k_in);
+    cb_k.reserve_back(k_chunk_tiles);
+    uint32_t k_write_ptr = cb_k.get_write_ptr();
+    uint32_t k_base_read_ptr = k_write_ptr;
     barrier_count = 0;
 
     if constexpr (use_mcast) {
@@ -615,49 +648,56 @@ uint64_t read_k(
                                                   DHt,
                                                   capacity_t>(virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                 for (uint32_t col = 0; col < DHt; ++col) {
-                    noc_async_read_page(physical_k_tile_id, k_reader, k_write_ptr_col);
+                    noc.async_read(
+                        k_reader,
+                        CoreLocalMem<uint32_t>(k_write_ptr_col),
+                        k_tile_bytes,
+                        {.page_id = physical_k_tile_id},
+                        {});
                     physical_k_tile_id += 1;
                     k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;
                     if (++barrier_count == barrier_threshold) {
-                        noc_async_read_barrier();
+                        noc.async_read_barrier();
                         barrier_count = 0;
                     }
                 }
             }
-            noc_async_read_barrier();
+            noc.async_read_barrier();
             // Multicast the full K^T chunk to all receiver cores at once
-            uint64_t dst_mcast_addr = get_noc_multicast_addr(
-                mcast_params.mcast_x,   // x (same column)
-                mcast_params.mcast_y0,  // y_start
-                mcast_params.mcast_x,   // x (same column)
-                mcast_params.mcast_y1,  // y_end
-                k_write_ptr);
-            noc_async_write_multicast(
-                k_write_ptr,
-                dst_mcast_addr,
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(k_write_ptr),
+                MulticastEndpoint{},
                 k_chunk_tiles * k_tile_bytes,
                 mcast_params.num_dests,
-                /*linked=*/false);
+                {},
+                {.noc_x_start = mcast_params.mcast_x,
+                 .noc_y_start = mcast_params.mcast_y0,
+                 .noc_x_end = mcast_params.mcast_x,
+                 .noc_y_end = mcast_params.mcast_y1,
+                 .addr = k_write_ptr},
+                false);
             // Ensure data multicast is complete before signaling
-            noc_async_write_barrier();
+            noc.async_write_barrier();
             // Signal all receivers that the full K^T chunk is ready
             constexpr uint32_t VALID = 1;
-            noc_semaphore_set(mcast_params.mcast_sem_ptr, VALID);
-            uint64_t sem_mcast_addr = get_noc_multicast_addr(
+            Semaphore<> mcast_sem(mcast_params.mcast_sem_id);
+            mcast_sem.set(VALID);
+            mcast_sem.set_multicast(
+                noc,
                 mcast_params.mcast_x,
                 mcast_params.mcast_y0,
                 mcast_params.mcast_x,
                 mcast_params.mcast_y1,
-                mcast_params.mcast_sem_addr);
-            noc_semaphore_set_multicast(mcast_params.mcast_sem_addr, sem_mcast_addr, mcast_params.num_dests, false);
-            cb_push_back(cb_k_in, k_chunk_tiles);
-            noc_async_write_barrier();
+                mcast_params.num_dests);
+            cb_k.push_back(k_chunk_tiles);
+            noc.async_write_barrier();
         } else {
             // Wait for single signal that the full K^T chunk is ready
-            noc_semaphore_wait(mcast_params.mcast_sem_ptr, 1);
-            noc_semaphore_set(mcast_params.mcast_sem_ptr, 0);
-            noc_async_atomic_barrier();
-            cb_push_back(cb_k_in, k_chunk_tiles);
+            Semaphore<> mcast_sem(mcast_params.mcast_sem_id);
+            mcast_sem.wait(1);
+            mcast_sem.set(0);
+            noc.async_atomic_barrier();
+            cb_k.push_back(k_chunk_tiles);
         }
     } else {
         // Non-multicast path: original transposed read
@@ -671,18 +711,23 @@ uint64_t read_k(
                     : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt, capacity_t>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < DHt; ++col) {
-                noc_async_read_page(physical_k_tile_id, k_reader, k_write_ptr_col);
+                noc.async_read(
+                    k_reader,
+                    CoreLocalMem<uint32_t>(k_write_ptr_col),
+                    k_tile_bytes,
+                    {.page_id = physical_k_tile_id},
+                    {});
                 physical_k_tile_id += 1;                               // Go to next tile in row
                 k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
                 if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     barrier_count = 0;
                 }
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_k_in, k_chunk_tiles);
+        noc.async_read_barrier();
+        cb_k.push_back(k_chunk_tiles);
     }
     return k_base_read_ptr;
 }
@@ -707,22 +752,33 @@ void read_v(
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
-    uint64_t k_base_read_ptr = 0,
+    uint32_t k_base_read_ptr = 0,
     uint32_t k_tile_bytes = 0) {
-    cb_reserve_back(cb_v_in, v_chunk_tiles);
-    uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+    Noc noc;
+    CircularBuffer cb_v(cb_v_in);
+    cb_v.reserve_back(v_chunk_tiles);
+    uint32_t v_write_ptr = cb_v.get_write_ptr();
     if constexpr (reuse_k) {
-        // Read V chunk (transpose of K), from K's L1 buffer
-        uint64_t k_read_ptr = k_base_read_ptr;
+        // Read V chunk (transpose of K), from K's L1 buffer (same core)
+        const uint8_t noc_id = noc.get_noc_id();
+        const uint32_t my_noc_x = my_x[noc_id];
+        const uint32_t my_noc_y = my_y[noc_id];
+        UnicastEndpoint v_src;
+        uint32_t k_read_ptr = k_base_read_ptr;
         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {  // Row of V
             k_read_ptr = k_base_read_ptr + row * k_tile_bytes;     // Increment across K's Col
             for (uint32_t col = 0; col < vDHt; ++col) {            // Col of V
-                noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
+                noc.async_read(
+                    v_src,
+                    CoreLocalMem<uint32_t>(v_write_ptr),
+                    v_tile_bytes,
+                    {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_read_ptr},
+                    {});
                 v_write_ptr += v_tile_bytes;
                 k_read_ptr += Sk_chunk_t_dynamic * k_tile_bytes;  // Stride across K's width
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     } else {
         // Read V chunk in row major order, write in row-major order
         // V is an independent tensor with its own layout (width = vDHt, not DHt)
@@ -737,20 +793,21 @@ void read_v(
                     : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt, capacity_t>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < vDHt; ++col) {
-                noc_async_read_page(physical_v_tile_id, v_reader, v_write_ptr);
+                noc.async_read(
+                    v_reader, CoreLocalMem<uint32_t>(v_write_ptr), v_tile_bytes, {.page_id = physical_v_tile_id}, {});
                 physical_v_tile_id += 1;
                 v_write_ptr += v_tile_bytes;
 
                 if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     barrier_count = 0;
                 }
             }
             // No padding to skip - V is an independent tensor with contiguous layout
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     }
-    cb_push_back(cb_v_in, v_chunk_tiles);
+    cb_v.push_back(v_chunk_tiles);
 }
 
 template <
@@ -783,27 +840,34 @@ void read_kv_mask_chunks(
     uint32_t k_tile_bytes,
     uint32_t v_tile_bytes,
     uint32_t PSt) {
+    Noc noc;
+    CircularBuffer cb_k(cb_k_in);
+    CircularBuffer cb_v(cb_v_in);
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint32_t my_noc_x = my_x[noc_id];
+    const uint32_t my_noc_y = my_y[noc_id];
+
     uint32_t barrier_count = 0;
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
         // Read K chunk transposed
-        cb_reserve_back(cb_k_in, k_chunk_tiles);
-        uint32_t k_write_ptr = get_write_ptr(cb_k_in);
-        uint64_t k_base_read_ptr = get_noc_addr(k_write_ptr);
+        cb_k.reserve_back(k_chunk_tiles);
+        uint32_t k_write_ptr = cb_k.get_write_ptr();
+        uint32_t k_base_read_ptr = k_write_ptr;
         barrier_count = 0;
         for (uint32_t col = 0; col < DHt; ++col) {
             uint32_t k_tile_id = k_start_tile_id + col;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                noc_async_read_page(k_tile_id, k_reader, k_write_ptr);
+                noc.async_read(k_reader, CoreLocalMem<uint32_t>(k_write_ptr), k_tile_bytes, {.page_id = k_tile_id}, {});
                 if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     barrier_count = 0;
                 }
                 k_tile_id += DHt;
                 k_write_ptr += k_tile_bytes;
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_k_in, k_chunk_tiles);
+        noc.async_read_barrier();
+        cb_k.push_back(k_chunk_tiles);
 
         if constexpr (use_attention_mask) {
             mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
@@ -812,14 +876,20 @@ void read_kv_mask_chunks(
 
         // Read V chunk (transpose of K), from K's L1 buffer
         if constexpr (reuse_k) {
-            cb_reserve_back(cb_v_in, v_chunk_tiles);
-            uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-            uint64_t k_read_ptr = k_base_read_ptr;
+            cb_v.reserve_back(v_chunk_tiles);
+            uint32_t v_write_ptr = cb_v.get_write_ptr();
+            UnicastEndpoint v_src;
+            uint32_t k_read_ptr = k_base_read_ptr;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {       // Row of V
                 k_read_ptr = k_base_read_ptr + row * k_tile_bytes;  // Increment across K's Col
 
                 for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
-                    noc_async_read(k_read_ptr, v_write_ptr, v_tile_bytes);
+                    noc.async_read(
+                        v_src,
+                        CoreLocalMem<uint32_t>(v_write_ptr),
+                        v_tile_bytes,
+                        {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_read_ptr},
+                        {});
 
                     v_write_ptr += v_tile_bytes;
                     k_read_ptr += Sk_chunk_t * k_tile_bytes;  // Strid across K's width
@@ -827,15 +897,16 @@ void read_kv_mask_chunks(
             }
         } else {
             // V is an independent tensor with its own layout (width = vDHt)
-            cb_reserve_back(cb_v_in, v_chunk_tiles);
-            uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+            cb_v.reserve_back(v_chunk_tiles);
+            uint32_t v_write_ptr = cb_v.get_write_ptr();
             barrier_count = 0;
             uint32_t v_tile_id = v_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
-                    noc_async_read_page(v_tile_id, v_reader, v_write_ptr);
+                    noc.async_read(
+                        v_reader, CoreLocalMem<uint32_t>(v_write_ptr), v_tile_bytes, {.page_id = v_tile_id}, {});
                     if (++barrier_count == barrier_threshold) {
-                        noc_async_read_barrier();
+                        noc.async_read_barrier();
                         barrier_count = 0;
                     }
                     v_tile_id++;
@@ -844,8 +915,8 @@ void read_kv_mask_chunks(
                 // No padding to skip - V is an independent tensor with contiguous layout
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_v_in, v_chunk_tiles);
+        noc.async_read_barrier();
+        cb_v.push_back(v_chunk_tiles);
 
         // Update the starting tile id for next iteration
         k_start_tile_id += k_chunk_tiles;

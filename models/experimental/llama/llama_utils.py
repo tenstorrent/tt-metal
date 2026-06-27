@@ -77,6 +77,9 @@ def _get_logits_processor(
 
     # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
     # all samplers can be found in `generation_utils_samplers.py`
+    # NOTE(transformers-5.x): HammingDiversityLogitsProcessor (used below) was removed in
+    # transformers 5.x. This experimental path isn't run on CI and the bare name is never
+    # imported, so this diverse-beam-search branch is dead; rework it if 5.x support is needed.
     if generation_config.diversity_penalty is not None and generation_config.diversity_penalty > 0.0:
         processors.append(
             HammingDiversityLogitsProcessor(

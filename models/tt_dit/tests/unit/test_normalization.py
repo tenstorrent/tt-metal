@@ -201,7 +201,12 @@ def test_layernorm(
     ],
     ids=["yes_eltwise_no_bias", "no_eltwise_no_bias"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["fabric1d"],
+    indirect=True,
+)
 def test_distributed_rms_norm(
     mesh_device: ttnn.MeshDevice,
     mesh_axis: int,
@@ -248,9 +253,19 @@ def test_distributed_rms_norm(
 
 
 TP_SWEEP = [
-    pytest.param((1, 1), 0, id="tp1_axis0"),
-    pytest.param((1, 2), 1, id="tp2_axis1"),
-    pytest.param((1, 4), 1, id="tp4_axis1"),
+    pytest.param((1, 1), 0, {"fabric_config": None, "require_exact_physical_num_devices": False}, id="tp1_axis0"),
+    pytest.param(
+        (1, 2),
+        1,
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+        id="tp2_axis1",
+    ),
+    pytest.param(
+        (1, 4),
+        1,
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True},
+        id="tp4_axis1",
+    ),
 ]
 
 
@@ -280,8 +295,7 @@ TP_SWEEP = [
     ],
     ids=["no_affine", "static_affine", "dynamic_affine"],
 )
-@pytest.mark.parametrize("mesh_device, mesh_axis", TP_SWEEP, indirect=["mesh_device"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device, mesh_axis, device_params", TP_SWEEP, indirect=["mesh_device", "device_params"])
 def test_distributed_layernorm(
     mesh_device: ttnn.MeshDevice,
     mesh_axis: int,
@@ -349,7 +363,12 @@ def test_distributed_layernorm(
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["fabric1d"],
+    indirect=True,
+)
 @pytest.mark.parametrize("group_count", [32])
 @pytest.mark.parametrize(
     "mesh_axis",

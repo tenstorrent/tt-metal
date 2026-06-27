@@ -49,7 +49,7 @@ void kernel_main() {
             uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
                 tt::data_movement::common::noc_async_read_sharded(
-                    cb_write_ptr + l1_write_offset, s, i_stick, 0, stick_size_bytes);
+                    noc, cb_write_ptr + l1_write_offset, s, i_stick, 0, stick_size_bytes);
                 l1_write_offset += l1_write_offset_bytes;
                 i_stick += 1;
             }

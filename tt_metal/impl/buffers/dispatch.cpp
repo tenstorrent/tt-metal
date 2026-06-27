@@ -604,8 +604,8 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                     data_size_bytes);
             }
         }
-        command_sequence.align_write_offset();
     }
+    command_sequence.align_write_offset();
 }
 
 void populate_sharded_buffer_write_dispatch_cmds(

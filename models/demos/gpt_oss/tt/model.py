@@ -230,7 +230,6 @@ class Model:
                 args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
                 mesh_device=mesh_device,
                 tt_ccl=None,
-                enable_internal_trace=False,
             )
             # Hook reset_sampling_params to set prefill flag — Generator calls this
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
@@ -334,7 +333,6 @@ class Model:
         get_last_token=-1,
         is_decode=True,
         user_id=0,
-        sampling_on_device=False,
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
@@ -498,8 +496,7 @@ class Model:
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         page_tables_per_layer=None,
     ):
         if page_tables_per_layer is None:
@@ -534,20 +531,20 @@ class Model:
             page_table=page_table,
             kv_cache=kv_cache,
             is_decode=True,
-            sampling_on_device=sampling_on_device,
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        if sampling_on_device and self.sampling is not None:
-            # Pad logits batch to 32 (TTSampling requirement) before split-trace or sampling
+        if on_device_logits:
+            assert self.sampling is not None, (
+                "decode forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
+            )
+            # Pad logits batch to 32 (TTSampling requirement) before sampling
             batch_dim = out.shape[-2]
             if batch_dim < 32:
                 out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return out
-            tt_toks, tt_log_probs = self.sampling.sample(out, tt_out_tok=tokens, enable_trace=False)
-            return tt_toks, tt_log_probs
+            return out
 
         return out, None
 

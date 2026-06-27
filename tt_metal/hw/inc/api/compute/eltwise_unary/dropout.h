@@ -29,14 +29,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
-    MATH(SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(calculate_dropout, RC, APPROX, idst, probability, scale_factor));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dropout, (APPROX), idst, VectorMode::RC, probability, scale_factor));
 }
 
 /**
  * This init should be called once in kernel
  */
 ALWI void dropout_kernel_init(uint32_t seed = 0) {
-    MATH(SFPU_ONE_PARAM_KERNEL_INIT(dropout, sfpu::dropout_init, APPROX, seed));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(dropout, sfpu::dropout_init, (APPROX), seed));
 }
 
 }  // namespace ckernel

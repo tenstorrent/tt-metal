@@ -17,6 +17,11 @@
 
 namespace tt::tt_metal {
 
+// Bounds on the interleaved trace buffer page size (see compute_interleaved_trace_buf_page_size).
+// Min is bounded by NOC transfer efficiency; max by the prefetcher CmdDatQ size.
+inline constexpr uint32_t kMinTraceBufPageSize = 1024;
+inline constexpr uint32_t kMaxTraceBufPageSize = 8192;
+
 // Forward decl to avoid including header
 class Buffer;
 

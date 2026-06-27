@@ -848,3 +848,62 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+
+
+@pytest.mark.parametrize(
+    # Conv3d-style dim names. N=batch, D=depth, H=height, W=width, C=channels.
+    "N,D,H,W,C",
+    [
+        # [1, 128, 240, 240, 1],
+        # [1, 32, 40, 40, 1],
+        # [1, 8, 12, 12, 1],
+        # [1, 1, 12, 12, 1],
+        [1, 1, 8, 8, 1],
+        # [1, 1, 24, 24, 1],
+        # [1, 8, 24, 24, 1],
+    ],
+)
+def test_reshape_conv2d(device, N, D, H, W, C):
+    torch.manual_seed(0)
+    x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
+    ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
+
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    t = ttnn.reshape(t, (N, C, D, H, W))
+    out = ttnn.to_torch(t, device=device).to(torch.float32)
+
+    assert_with_pcc(ref, out, 0.99)
+
+
+@pytest.mark.parametrize(
+    "H,W,C",
+    [
+        [8, 8, 1],
+    ],
+)
+def test_reshape_conv2d_rank3(device, H, W, C):
+    torch.manual_seed(0)
+    x = torch.randn(H, W, C, dtype=torch.bfloat16)
+    ref = x.float().permute(0, 2, 1).contiguous()  # HWC -> NCDHW
+    import logging
+
+    logging.info(f"{ref.shape}")
+
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    t = ttnn.reshape(t, (H, C, W))
+    out = ttnn.to_torch(t, device=device).to(torch.float32)
+
+    assert_with_pcc(ref, out, 0.99)
+
+
+def test_reshape_4d_5d_layout(device):
+    # https://github.com/tenstorrent/tt-metal/issues/41102
+    x = torch.arange(1 * 5 * 16 * 128, dtype=torch.float32).reshape(1, 5, 16, 128)
+    expected = x.reshape(1, 5, 8, 2, 128)
+
+    x_tt = ttnn.from_torch(x, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x_tt = ttnn.to_layout(x_tt, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.to_torch(ttnn.reshape(x_tt, (1, 5, 8, 2, 128)))
+
+    diff = (result.float() - expected.float()).abs().max().item()
+    assert diff == 0.0

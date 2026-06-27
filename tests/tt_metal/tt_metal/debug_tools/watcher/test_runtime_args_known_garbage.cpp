@@ -140,8 +140,8 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             tt::tt_metal::detail::WriteToDeviceL1(device, core, compute_scratch_addr, zero_init);
         }
 
-        constexpr const char* DM_KERNEL_NAME = "zero_arg_dm";
-        constexpr const char* COMPUTE_KERNEL_NAME = "zero_arg_compute";
+        const experimental::KernelSpecName DM_KERNEL_NAME{"zero_arg_dm"};
+        const experimental::KernelSpecName COMPUTE_KERNEL_NAME{"zero_arg_compute"};
 
         experimental::KernelSpec dm_spec{
             .unique_id = DM_KERNEL_NAME,
@@ -254,7 +254,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     distributed::MeshWorkload workload;
     Program program;
-    constexpr const char* DM_KERNEL_NAME = "rta_dm";
+    const experimental::KernelSpecName DM_KERNEL_NAME{"rta_dm"};
 
     // Pad to match default_rtas.size() (== num_runtime_varargs in the schema).
     // Metal 2.0 enforces a uniform per-node RTA count across all NodeCoords in a kernel run, so
@@ -301,20 +301,20 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     auto set_metal2_runtime_args = [&](Program& prog) {
         experimental::ProgramRunArgs params;
         experimental::ProgramRunArgs::KernelRunArgs krp{
-            .kernel_spec_name = DM_KERNEL_NAME,
             .advanced_options =
                 experimental::AdvancedKernelRunArgs{
                     .common_runtime_varargs = default_crtas,
                 },
         };
         for (const auto& c : core_range1) {
-            krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
+            krp.advanced_options.runtime_varargs.emplace(experimental::NodeCoord{c}, default_rtas);
         }
         if (!is_quasar) {
             for (const auto& c : core_range2) {
-                krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, rtas_range2});
+                krp.advanced_options.runtime_varargs.emplace(experimental::NodeCoord{c}, rtas_range2);
             }
         }
+        krp.kernel = DM_KERNEL_NAME;
         params.kernel_run_args = {krp};
         experimental::SetProgramRunArgs(prog, params);
     };
@@ -380,13 +380,13 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     distributed::MeshWorkload workload;
     Program program;
 
-    constexpr const char* OOB_KERNEL_NAME = "rta_oob";
+    const experimental::KernelSpecName OOB_KERNEL_NAME{"rta_oob"};
 
     experimental::KernelSpec::CompilerOptions::Defines m2_defines;
     if (params.test_rta) {
-        m2_defines.push_back({"MAX_RTA_IDX", std::to_string(default_rtas.size())});
+        m2_defines.emplace("MAX_RTA_IDX", std::to_string(default_rtas.size()));
     } else {
-        m2_defines.push_back({"MAX_CRTA_IDX", std::to_string(default_crtas.size())});
+        m2_defines.emplace("MAX_CRTA_IDX", std::to_string(default_crtas.size()));
     }
 
     // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare
@@ -437,14 +437,15 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params_m2;
-    experimental::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = OOB_KERNEL_NAME};
+    experimental::ProgramRunArgs::KernelRunArgs krp{};
     if (params.test_rta) {
         for (const auto& c : core_range) {
-            krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
+            krp.advanced_options.runtime_varargs.emplace(experimental::NodeCoord{c}, default_rtas);
         }
     } else {
         krp.advanced_options.common_runtime_varargs = default_crtas;
     }
+    krp.kernel = OOB_KERNEL_NAME;
     params_m2.kernel_run_args = {krp};
     experimental::SetProgramRunArgs(program, params_m2);
 
@@ -468,7 +469,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     distributed::MeshWorkload workload;
     Program program;
 
-    constexpr const char* MULTI_DM_KERNEL_NAME = "multi_dm_oob";
+    const experimental::KernelSpecName MULTI_DM_KERNEL_NAME{"multi_dm_oob"};
     experimental::KernelSpec dm_spec{
         .unique_id = MULTI_DM_KERNEL_NAME,
         .source = rta_crta_kernel_path,
@@ -497,10 +498,11 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    experimental::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
+    experimental::ProgramRunArgs::KernelRunArgs krp{};
     for (const auto& c : core_range) {
-        krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
+        krp.advanced_options.runtime_varargs.emplace(experimental::NodeCoord{c}, default_rtas);
     }
+    krp.kernel = MULTI_DM_KERNEL_NAME;
     params.kernel_run_args = {krp};
     experimental::SetProgramRunArgs(program, params);
 

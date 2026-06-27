@@ -58,12 +58,19 @@ trainer = GRPOTrainer(
     completer=completer,
     dataset=dataset,
     config=GRPOConfig(
-        batch_size=4,
-        num_generations=8,
-        max_completion_length=256,
+        epsilon=0.2,
+        per_device_train_batch_size=8,
+        num_iterations=1,
         gradient_accumulation_steps=4,
         logging_steps=1,
+        output_dir="generated/grpo_run",
+        checkpointing=True,
+        checkpoint_interval=5,
         prompts_to_train=1600,
+        temperature=0.7,
+        max_completion_length=256,
+        num_generations=8,
+        warmup_steps=0,
     ),
     reward_func=my_reward,
     optimizer_dict={"type": "MorehAdamW", "lr": 5e-6},
@@ -72,6 +79,19 @@ trainer = GRPOTrainer(
 )
 trainer.train()
 ```
+
+> `GRPOConfig` has no defaults for these fields, so all of them must be
+> supplied. Alternatively, load the config from a YAML file (see
+> `configs/training_configs/grpo_boolq_llama_1dev.yaml`):
+>
+> ```python
+> import yaml
+> from ttml.trainers import get_grpo_config
+>
+> with open("configs/training_configs/grpo_boolq_llama_1dev.yaml") as f:
+>     yaml_config = yaml.safe_load(f)
+> config = get_grpo_config(yaml_config, output_dir="generated/grpo_run")
+> ```
 
 ---
 
@@ -160,14 +180,13 @@ from ttml.trainers import GRPOConfig
 
 | Parameter | Type | Default | TRL equivalent | Description |
 |-----------|------|---------|----------------|-------------|
-| `batch_size` | `int` | — | `per_device_train_batch_size` | Number of prompts sampled per batch, **across all devices combined** (not per device). With DDP each device processes `batch_size // num_devices` prompts. |
+| `per_device_train_batch_size` | `int` | — | `per_device_train_batch_size` | Number of completions processed on a **single device** within one micro-batch. The across-mesh micro-batch holds `per_device_train_batch_size * num_devices` completions and always shards evenly along axis 0. The per-microbatch prompt count is **derived** as `per_device_train_batch_size * num_devices / num_generations`. |
 | `num_generations` | `int` | — | `num_generations` | Number of completions generated per prompt. Each prompt produces this many candidate responses for reward scoring. |
 | `max_completion_length` | `int` | — | `max_completion_length` | Maximum number of tokens to generate per completion. |
-| `micro_batch_size` | `int` | — | `generation_batch_size` | Number of completions processed in a single forward pass during loss computation. Controls memory usage. |
-| `gradient_accumulation_steps` | `int` | — | `gradient_accumulation_steps` | Number of batches accumulated before each optimizer step. Effective batch = `batch_size * gradient_accumulation_steps`. |
+| `gradient_accumulation_steps` | `int` | — | `gradient_accumulation_steps` | Number of micro-batches per generation (effective) batch. Each generation batch generates `gradient_accumulation_steps` times the per-micro-batch completions, and the trainer accumulates gradients over that many micro-batches before a single optimizer step. Effective batch size (in completions) = `per_device_train_batch_size * num_devices * gradient_accumulation_steps`. |
 | `num_iterations` | `int` | — | `num_iterations` | Number of training passes over each batch of completions (mini-epochs). |
 | `epsilon` | `float` | — | `epsilon` | Clipping parameter for the GRPO surrogate loss (analogous to PPO clip range). |
-| `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * batch_size * gradient_accumulation_steps`. |
+| `prompts_to_train` | `int` | — | *(use `max_steps`)* | Total number of prompts to train on. Unlike TRL which uses `max_steps`, this directly specifies the data budget. Equivalent to `max_steps * (per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations)`. **Currently, `prompts_to_train` must be divisible by the generation batch size in prompts (`per_device_train_batch_size * num_devices * gradient_accumulation_steps / num_generations`) to avoid a ragged final batch.** |
 | `temperature` | `float` | — | `temperature` | Sampling temperature for completion generation. |
 | `warmup_steps` | `int` | — | `warmup_steps` | Number of linear learning rate warmup steps. |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
@@ -378,8 +397,11 @@ DDP is configured through `device_config` passed to the completer. When
 3. Gradients are synchronized via `ttml.core.distributed.synchronize_gradients`
    before each optimizer step.
 
-`batch_size` specifies the **global** batch size across all devices. Each device
-processes `batch_size // total_devices` prompts per batch.
+`per_device_train_batch_size` specifies the number of completions on a **single
+device** per micro-batch. The whole mesh therefore processes
+`per_device_train_batch_size * total_devices` completions per micro-batch, and
+the per-micro-batch prompt count is derived as
+`per_device_train_batch_size * total_devices / num_generations`.
 
 ---
 
@@ -430,7 +452,6 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 |--------|-------------------|---------------------|
 | **Model** | Passed as a `transformers` model object | Built by a `GRPOCompleter` (e.g. `LlamaGRPOCompleter`) from a HF ID or local path |
 | **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
-| **Batch size** | `per_device_train_batch_size` (per device) | `batch_size` (global, across all devices) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |
 | **Device setup** | Handled by HF Accelerate | Handled by the completer via `device_config` dict |

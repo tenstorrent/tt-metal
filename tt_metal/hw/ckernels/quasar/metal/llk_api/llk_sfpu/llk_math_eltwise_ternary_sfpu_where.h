@@ -7,7 +7,7 @@
 #include "ckernel_sfpu_where.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_math_eltwise_ternary_sfpu.h"
+#include "llk_math_eltwise_ternary_sfpu_macros.h"
 
 namespace ckernel {
 
@@ -42,8 +42,16 @@ template <bool APPROXIMATE, [[maybe_unused]] DataFormat data_format>
 inline void llk_math_eltwise_ternary_sfpu_where(
     uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
     LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
-    _llk_math_eltwise_ternary_sfpu_params_(
-        sfpu::calculate_where<APPROXIMATE, SFPU_ITERATIONS>, dst_index0, dst_index1, dst_index2, odst);
+    SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_where,
+        (APPROXIMATE, SFPU_ITERATIONS),
+        dst_index0,
+        dst_index1,
+        dst_index2,
+        odst,
+        VectorMode::RC);
 }
 
 }  // namespace ckernel

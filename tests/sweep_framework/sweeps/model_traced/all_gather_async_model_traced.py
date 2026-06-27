@@ -97,6 +97,30 @@ def _parse_mesh_shape(mesh_device_shape):
     return None
 
 
+def _full_galaxy_mesh_for(mesh_shape, num_devices):
+    """Full galaxy mesh to open when ``mesh_shape`` is a 2D SUBMESH of the host.
+
+    Opening MeshShape(submesh) directly on a galaxy fails fabric router sync on the
+    submesh's boundary ethernet links, so we open the full galaxy and carve the
+    submesh out of its (healthy) fabric. Returns the full mesh shape, or None when
+    ``mesh_shape`` already spans the whole host (open it directly) or is 1D (the
+    submesh carving only helps the 2D-fabric case).
+    """
+    if not mesh_shape or len(mesh_shape) != 2:
+        return None
+    r, c = int(mesh_shape[0]), int(mesh_shape[1])
+    if r <= 1 or c <= 1:  # 1D mesh: opened directly
+        return None
+    if r * c >= num_devices:  # already the full host mesh
+        return None
+    # Candidate full-galaxy orientations that can contain this submesh.
+    candidates = {32: [(8, 4), (4, 8)], 16: [(8, 2), (2, 8), (4, 4)]}.get(num_devices, [])
+    for fr, fc in candidates:
+        if fr >= r and fc >= c and fr * fc == num_devices:
+            return (fr, fc)
+    return None
+
+
 def _parse_shard_dims_from_placement(tensor_placement):
     """Extract (dim0, dim1) for ShardTensor2dMesh from a traced tensor_placement dict.
 
@@ -383,16 +407,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             if len(input_shape) == 0:
                 return True, "Empty input shape"
 
-        # Skip 4x4 meshes for now: on this Galaxy the 4x4 submesh (physical
-        # devices 16-31) stalls fabric router sync on Device 19 ethernet
-        # channels e0-8..e0-11 (boundary links to the excluded half), so fabric
-        # bring-up times out before any op runs. The full-mesh 4x8/8x4 shapes
-        # are unaffected. Tracked separately (hardware/submesh fabric).
-        _tp = test_vector.get("input_a_tensor_placement") or test_vector.get("input_tensor_tensor_placement")
-        _mesh_shape = _parse_mesh_shape(_tp.get("mesh_device_shape")) if isinstance(_tp, dict) else None
-        if _mesh_shape == (4, 4):
-            return True, "Skipped 4x4: fabric router sync timeout on this Galaxy (Device 19 ETH ch e0-8..e0-11)"
-
+        # NB: 4x4 (and other sub-galaxy) meshes are NOT skipped. Opening
+        # MeshShape(4,4) directly on the galaxy fails fabric router sync on the
+        # submesh's boundary ethernet links; instead the runner opens the full
+        # galaxy mesh and carves the submesh via create_submesh (see
+        # _full_galaxy_mesh_for + device_context), which brings fabric up healthy.
         return False, None
 
     # Original validation for generality/lead_model suites
@@ -697,8 +716,15 @@ def run(
         if _dispatch_axis is not None:
             _device_params = {"dispatch_core_axis": _dispatch_axis}
 
+    # If the target mesh is a 2D submesh of the host galaxy, open the full galaxy
+    # mesh and carve the submesh (direct MeshShape(submesh) opens fail fabric sync).
+    _full_mesh_shape = _full_galaxy_mesh_for(mesh_shape, NUM_DEVICES)
+
     try:
-        with device_context(mesh_shape, fabric_config, _device_params) as (device, device_err):
+        with device_context(mesh_shape, fabric_config, _device_params, full_mesh_shape=_full_mesh_shape) as (
+            device,
+            device_err,
+        ):
             assert tuple(device.shape) == mesh_shape
 
             if device_err is not None:

@@ -77,45 +77,43 @@ TOOLS=$(awk '
 
 # Check existence for each tool (parallel to avoid serial network latency)
 ANY_MISSING=false
-declare -A EXISTS
-declare -A PIDS
 TMPDIR_EXISTS=$(mktemp -d)
 
 for tool in $TOOLS; do
     tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
 
     if [ "$FORCE_REBUILD" = "true" ]; then
-        EXISTS[$tool]=false
+        echo false > "${TMPDIR_EXISTS}/${tool}"
         ANY_MISSING=true
     elif [ "$CHECK_EXISTS" = "true" ]; then
         # Fire all manifest inspects in parallel; results written to temp files
         ( docker manifest inspect "$tag" > /dev/null 2>&1 && echo true || echo false ) \
             > "${TMPDIR_EXISTS}/${tool}" &
-        PIDS[$tool]=$!
+        echo "$!" > "${TMPDIR_EXISTS}/${tool}.pid"
     else
-        EXISTS[$tool]=unknown
+        echo unknown > "${TMPDIR_EXISTS}/${tool}"
     fi
 done
 
 # Collect parallel results
 if [ "$CHECK_EXISTS" = "true" ] && [ "$FORCE_REBUILD" = "false" ]; then
     for tool in $TOOLS; do
-        wait "${PIDS[$tool]}"
-        EXISTS[$tool]=$(cat "${TMPDIR_EXISTS}/${tool}")
-        [ "${EXISTS[$tool]}" = "false" ] && ANY_MISSING=true
+        pid=$(<"${TMPDIR_EXISTS}/${tool}.pid")
+        wait "$pid"
+        exists=$(<"${TMPDIR_EXISTS}/${tool}")
+        [ "$exists" = "false" ] && ANY_MISSING=true
     done
 fi
 
-rm -rf "$TMPDIR_EXISTS"
-
 # Build output JSON dynamically from derived tool list
 # Start with base fields, then add per-tool existence flags
-JQ_ARGS=(--argjson tool_tags "$TOOL_TAGS" --arg any_missing "$ANY_MISSING")
 EXISTS_OBJ="{}"
 for tool in $TOOLS; do
-    JQ_ARGS+=(--arg "${tool}_exists" "${EXISTS[$tool]}")
-    EXISTS_OBJ=$(echo "$EXISTS_OBJ" | jq --arg k "${tool}_exists" --arg v "${EXISTS[$tool]}" '. + {($k): $v}')
+    exists=$(<"${TMPDIR_EXISTS}/${tool}")
+    EXISTS_OBJ=$(echo "$EXISTS_OBJ" | jq --arg k "${tool}_exists" --arg v "$exists" '. + {($k): $v}')
 done
+
+rm -rf "$TMPDIR_EXISTS"
 
 jq -n \
     --argjson tool_tags "$TOOL_TAGS" \

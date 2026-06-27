@@ -22,11 +22,18 @@ TARGETS_YAML_PATH_DEFAULT = str(Path(__file__).resolve().parents[2] / "model_tar
 _SKU_ALIASES = {
     "wh_n150": {"wh_n150", "n150"},
     "wh_n300": {"wh_n300", "n300"},
-    "wh_llmbox_perf": {"wh_llmbox_perf", "t3k"},
-    "wh_galaxy_perf": {"wh_galaxy_perf", "tg", "glx", "bhglx"},
-    "blackhole": {"blackhole", "bh", "p150", "p300", "p150x8"},
+    "wh_llmbox_perf": {"wh_llmbox_perf", "wh_llmbox", "t3k"},
+    "wh_galaxy_perf": {"wh_galaxy_perf", "wh_galaxy", "tg", "glx"},
+    "bh_p100": {"bh_p100", "p100"},
+    "bh_p150": {"bh_p150", "p150"},
+    "bh_p300": {"bh_p300", "p300"},
+    "bh_loudbox": {"bh_loudbox", "p150x8"},
     "p300x2": {"p300x2", "p150x4", "bh_quietbox_2"},
+    "bh_galaxy_perf": {"bh_galaxy_perf", "bh_galaxy", "bhglx"},
+    "blackhole": {"blackhole", "bh"},
 }
+
+DEFAULT_PERF_TOLERANCE = 0.15
 
 
 def _normalize_token(value: Any) -> str:
@@ -41,6 +48,31 @@ def normalize_sku(sku: Any) -> str:
         if token in aliases:
             return canonical
     return token
+
+
+def is_tolerance_key(metric_name: Any) -> bool:
+    """Return True when a key denotes tolerance config, not a target metric."""
+    return isinstance(metric_name, str) and (metric_name == "tolerance" or metric_name.endswith("_tolerance"))
+
+
+def metric_tolerance_key_candidates(metric_name: str) -> list[str]:
+    """Return supported per-metric tolerance key variants for a metric."""
+    slash_normalized = metric_name.replace("/", "_")
+    keys = [f"{metric_name}_tolerance", f"{slash_normalized}_tolerance"]
+    # Preserve deterministic order while removing duplicates.
+    return list(dict.fromkeys(keys))
+
+
+def resolve_metric_tolerance(metric_name: str, thresholds: dict[str, Any], default_tolerance: float) -> float:
+    """Resolve tolerance for a metric using per-metric keys with fallback default."""
+    for key in metric_tolerance_key_candidates(metric_name):
+        value = thresholds.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    generic = thresholds.get("tolerance")
+    if isinstance(generic, (int, float)) and not isinstance(generic, bool):
+        return float(generic)
+    return default_tolerance
 
 
 def load_model_targets() -> dict[str, Any]:
@@ -121,7 +153,10 @@ def resolve_target_entry(
                 if _entry_matches(entry, batch_size=batch_size, seq_len=seq_len):
                     matches.append(entry)
             if not matches:
-                return None
+                # This SKU key matched but has no entry for the requested
+                # batch/seq; keep scanning other SKU keys / models instead of
+                # giving up the whole search.
+                continue
             return sorted(matches, key=_entry_specificity, reverse=True)[0]
     return None
 

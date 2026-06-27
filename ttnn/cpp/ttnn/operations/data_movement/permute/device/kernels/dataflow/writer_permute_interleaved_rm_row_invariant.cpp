@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -54,7 +55,8 @@ void kernel_main() {
             dest_linear_idx += dest_multi_idx[i] * dest_strides[i];
         }
         cb.wait_front(1);
-        noc.async_write(cb, s0, page_size, {.offset_bytes = 0}, {.page_id = dest_linear_idx, .offset_bytes = 0});
+        uint32_t l1_read_addr = cb.get_read_ptr();
+        tt::data_movement::common::noc_async_write_sharded(noc, l1_read_addr, s0, dest_linear_idx, 0, page_size);
         noc.async_write_barrier();
         cb.pop_front(1);
     }

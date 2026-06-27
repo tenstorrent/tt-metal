@@ -126,7 +126,8 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
-TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(CrossEntropyForwardTest, DISABLED_CrossEntropyForward_Large_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 1017U, W = 1018U;

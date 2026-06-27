@@ -15,7 +15,7 @@ void kernel_main() {
 
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
 
     // For synchronization with tilize cores
     constexpr uint32_t metadata_ready_semaphore_id = get_named_compile_time_arg_val("metadata_ready_semaphore_id");
@@ -60,15 +60,15 @@ void kernel_main() {
 
     constexpr auto w0_w1_args = TensorAccessorArgs<0>();
     constexpr auto w2_args = TensorAccessorArgs<w0_w1_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<w2_args.next_compile_time_args_offset()>();
 
     // Run-time arguments
     uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
-    const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w2_addr = get_arg_val<uint32_t>(argidx++);
-    const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w2_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
@@ -87,9 +87,9 @@ void kernel_main() {
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
     // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
-    constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
+    [[maybe_unused]] constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
+    [[maybe_unused]] constexpr uint32_t w0_w1_tile_size = get_tile_size(cb_r2c_w0_w1);
+    [[maybe_unused]] constexpr uint32_t w2_tile_size = get_tile_size(cb_r2c_w2);
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     // Pre-computed shard lookup tables — same LUT definitions as compute.cpp.
@@ -99,8 +99,8 @@ void kernel_main() {
 
     // Constants for MoE — derived from compile-time shape args
     constexpr uint32_t num_w0_w1_tiles_h = Ht;
-    const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
-    const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
+    [[maybe_unused]] const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
+    [[maybe_unused]] const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
 
     using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
 
@@ -186,7 +186,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
-        NUM_CHUNKS_PER_EXPERT[expert_id] = detail::div_up(num_tokens, tokens_per_chunk);
+        NUM_CHUNKS_PER_EXPERT[expert_id] = moe_ring::detail::div_up(num_tokens, tokens_per_chunk);
     }
 
     // Tilize core we signal to that tilize cores can send another chunk of tiles
@@ -270,9 +270,13 @@ void kernel_main() {
                     }
 
                     // Wait for current data to be ready in cb_s2c_in2
+#if !defined(ARCH_BLACKHOLE)
                     while ((*my_semaphore_ptr) < semaphore_value) {
                     };
-
+#else
+                    // on BH we use standard semaphore APIs AND require the cache invalidation they provide
+                    noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
+#endif
                     // Signal to compute core that data is ready
                     cb_reserve_back(cb_w2c_rdy, 1);
                     cb_push_back(cb_w2c_rdy, 1);
@@ -332,7 +336,7 @@ void kernel_main() {
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
 
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
-            const uint32_t elts_per_page = source_width_tiles * tile_width;
+            [[maybe_unused]] const uint32_t elts_per_page = source_width_tiles * tile_width;
 
             while (width_tiles_to_send > 0) {
                 const uint32_t width_tile_start = width_tile_base + width_tiles_sent;

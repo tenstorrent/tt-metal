@@ -779,11 +779,6 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     assert torch.equal(golden_tensor, output_tensor)
 
 
-def is_int32_overflow(tensor, scalar):
-    result = tensor.to(torch.int64) - scalar
-    return (result < -(2**31) + 1) | (result > 2**31 - 1)
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -802,9 +797,6 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
     in_data = torch.cat([uniform_values, corner_cases])
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
-
-    if is_int32_overflow(in_data, scalar).any():
-        pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -1480,13 +1472,13 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
-def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device):
+def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device, expect_error):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min, max)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min, max)
@@ -1593,14 +1585,14 @@ def test_unary_square_uint16_ttnn(input_shapes, device):
         (0, 1),
     ],
 )
-def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
+def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device, expect_error):
     torch.manual_seed(0)
     in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
     if min is None and max is None:
-        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+        with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clamp(input_tensor1, min, max)
     else:
         output_tensor = ttnn.clamp(input_tensor1, min, max)
@@ -2100,10 +2092,10 @@ def test_unary_bitcast_ttnn(
     ),
 )
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol",
+    "torch_dtype, ttnn_dtype",
     [
-        (torch.bfloat16, ttnn.bfloat16, 0.04),
-        (torch.float32, ttnn.float32, 0.015),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
     ],
 )
 @pytest.mark.parametrize(
@@ -2115,7 +2107,7 @@ def test_unary_bitcast_ttnn(
     ],
 )
 @pytest.mark.parametrize("scalar", [0.25, 0.38, 0.5, 0.85])
-def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, device, atol):
+def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, device):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(low, high)
     input_tensor_a = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -2125,19 +2117,22 @@ def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, de
     golden_function = ttnn.get_golden_function(ttnn.logit)
     golden_tensor = golden_function(in_data, eps=scalar)
 
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
+    if ttnn_dtype == ttnn.bfloat16:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    else:
+        assert_allclose(output_tensor, golden_tensor, rtol=1e-6, atol=1e-6)
 
 
 @pytest.mark.parametrize("input_shape", (torch.Size([3, 128, 32]),))
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol",
+    "torch_dtype, ttnn_dtype",
     [
-        (torch.bfloat16, ttnn.bfloat16, 0.04),
-        (torch.float32, ttnn.float32, 0.016),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
     ],
 )
 @pytest.mark.parametrize("eps", [0.0, 1.0, None])
-def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, eps, atol):
+def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, eps):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-1, 1.1)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -2146,21 +2141,16 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.logit)
     golden_tensor = golden_function(in_data, eps=eps)
-    if eps is None:
-        golden_nonfinite = ~torch.isfinite(golden_tensor)
-        output_nonfinite = ~torch.isfinite(output_tensor)
 
-        # Verify non-finite values occur at the same indices
-        assert torch.equal(golden_nonfinite, output_nonfinite), f"Non-finite values don't match at the same indices."
-
-        # For finite values, check all of them
+    if ttnn_dtype == ttnn.bfloat16:
+        assert torch.equal(
+            ~torch.isfinite(golden_tensor), ~torch.isfinite(output_tensor)
+        ), "Non-finite values don't match at the same indices."
         finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_tensor)
         if finite_mask.any():
-            assert torch.allclose(
-                output_tensor[finite_mask], golden_tensor[finite_mask], equal_nan=True, rtol=1e-05, atol=atol
-            )
+            assert_with_ulp(output_tensor[finite_mask], golden_tensor[finite_mask], ulp_threshold=1)
     else:
-        assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-05, atol=atol)
+        assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-6, atol=1e-6)
 
 
 @pytest.mark.parametrize(

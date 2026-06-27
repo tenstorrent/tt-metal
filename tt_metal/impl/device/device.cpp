@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
@@ -328,7 +330,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-        for (const auto& dram_core : cluster.get_soc_desc(id_).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = cluster.get_soc_desc(id_);
+        for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
         }
     }
@@ -376,8 +379,13 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     }
 
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
-    for (auto& hw_cq : this->command_queues_) {
-        hw_cq->set_go_signal_noc_data_and_dispatch_sems(num_sub_devices(), noc_mcast_unicast_data);
+    const CoreCoord compute_grid_size = compute_with_storage_grid_size();
+    const uint32_t default_sub_device_worker_count =
+        compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
+    std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
+    for (auto& command_queue : command_queues_) {
+        command_queue->set_go_signal_noc_data_and_dispatch_sems(
+            num_sub_devices(), noc_mcast_unicast_data, workers_per_sub_device);
     }
 }
 
@@ -553,6 +561,8 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
+    tt::tt_metal::MetalContext::instance().get_service_core_manager().impl().on_device_close(this->id_);
+
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
@@ -605,7 +615,14 @@ CoreCoord Device::dram_grid_size() const {
 
 CoreCoord Device::compute_with_storage_grid_size() const {
     const auto& dispatch_core_config = context_->get_dispatch_core_manager().get_dispatch_core_config();
-    return tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
+    auto grid = tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
+    // Cap to FD-mode grid when service cores are claimed — prevents SD workloads
+    // from targeting dispatch-column cores running persistent service kernels.
+    if (auto safe = MetalContext::instance().get_service_core_manager().impl().get_safe_compute_grid(id_)) {
+        grid.x = std::min(grid.x, safe->x);
+        grid.y = std::min(grid.y, safe->y);
+    }
+    return grid;
 }
 
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {

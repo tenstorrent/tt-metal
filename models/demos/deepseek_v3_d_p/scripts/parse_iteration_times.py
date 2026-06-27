@@ -4,31 +4,36 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import os
 import re
 import statistics
 import subprocess
 from datetime import datetime
+from glob import glob
 
 
 def parse_timestamp(ts_str):
     return datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f")
 
 
-def filter_outliers(values, threshold=2.0):
-    if len(values) < 2:
-        return values, []
-    median = statistics.median(values)
-    cutoff = median * threshold
-    filtered = [v for v in values if v <= cutoff]
-    outliers = [v for v in values if v > cutoff]
-    return filtered, outliers
+def print_stats(title, values):
+    print(f"=== {title} ===")
+    if not values:
+        print("No data")
+        return
+    first, rest = values[0], values[1:]
+    print(f"First: {first:.3f}s")
+    if rest:
+        avg = statistics.mean(rest)
+        median = statistics.median(rest)
+        stddev = statistics.stdev(rest) if len(rest) > 1 else 0.0
+        print(f"Rest ({len(rest)} samples): Avg: {avg:.3f}s | Median: {median:.3f}s | Stddev: {stddev:.3f}s")
+        print(f"Min: {min(rest):.3f}s | Max: {max(rest):.3f}s")
+    else:
+        print("No additional samples")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Parse iteration timing from log files")
-    parser.add_argument("-f", "--file", required=True, help="Log file path")
-    args = parser.parse_args()
-
+def parse_file(path, show_sync=False):
     iter_pattern = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}).*Starting iteration: (\d+)")
     sync_pattern = re.compile(
         r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}).*Starting completion sync on iteration: (\d+)"
@@ -38,7 +43,7 @@ def main():
     syncs = {}
 
     proc = subprocess.Popen(
-        ["grep", "Starting", args.file],
+        ["grep", "Starting", path],
         stdout=subprocess.PIPE,
         text=True,
     )
@@ -65,29 +70,40 @@ def main():
             delta = (iterations[curr] - iterations[prev]).total_seconds()
             iter_deltas.append(delta)
 
-    sync_deltas = []
-    for sync_num, sync_ts in syncs.items():
-        next_iter = sync_num + 1
-        if next_iter in iterations:
-            delta = (iterations[next_iter] - sync_ts).total_seconds()
-            sync_deltas.append(delta)
+    print_stats("Iteration Period", iter_deltas)
 
-    print("=== Iteration Period ===")
-    if iter_deltas:
-        filtered, outliers = filter_outliers(iter_deltas)
-        print(f"Samples: {len(filtered)} (filtered {len(outliers)} outliers)")
-        print(f"Min: {min(filtered):.3f}s | Avg: {statistics.mean(filtered):.3f}s | Max: {max(filtered):.3f}s")
-    else:
-        print("No data")
+    if show_sync:
+        sync_deltas = []
+        for sync_num in sorted(syncs.keys()):
+            next_iter = sync_num + 1
+            if next_iter in iterations:
+                delta = (iterations[next_iter] - syncs[sync_num]).total_seconds()
+                sync_deltas.append(delta)
 
-    print()
-    print("=== Sync to Next Iteration ===")
-    if sync_deltas:
-        filtered, outliers = filter_outliers(sync_deltas)
-        print(f"Samples: {len(filtered)} (filtered {len(outliers)} outliers)")
-        print(f"Min: {min(filtered):.3f}s | Avg: {statistics.mean(filtered):.3f}s | Max: {max(filtered):.3f}s")
+        print()
+        print_stats("Sync to Next Iteration", sync_deltas)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Parse iteration timing from log files")
+    parser.add_argument("-f", "--file", required=True, help="Log file or directory containing log_* files")
+    parser.add_argument(
+        "-n", "--sync", action="store_true", help="Also show 'Sync to Next Iteration' stats (default: off)"
+    )
+    args = parser.parse_args()
+
+    if os.path.isdir(args.file):
+        log_files = sorted(glob(os.path.join(args.file, "log_*")))
+        if not log_files:
+            print(f"No log_* files found in {args.file}")
+            return
+        for i, path in enumerate(log_files):
+            if i:
+                print()
+            print(f"########## {os.path.basename(path)} ##########")
+            parse_file(path, show_sync=args.sync)
     else:
-        print("No sync data found")
+        parse_file(args.file, show_sync=args.sync)
 
 
 if __name__ == "__main__":

@@ -33,12 +33,6 @@ struct MeshCoreDataReadDescriptor;
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
-struct DeviceMemoryAddress {
-    MeshCoordinate device_coord;
-    CoreCoord virtual_core_coord;
-    DeviceAddr address{};
-};
-
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     // This class can now access private members of FDMeshCommandQueue
@@ -237,6 +231,11 @@ public:
         uint32_t size_bytes,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_write_dram_core_counter(
+        tt::stl::Span<const DeviceMemoryAddress> targets,
+        uint32_t value,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
@@ -252,7 +251,8 @@ public:
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
         const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+        tt::stl::Span<const uint32_t> workers_per_sub_device) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;

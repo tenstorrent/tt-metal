@@ -7,7 +7,6 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"

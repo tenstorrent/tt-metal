@@ -8,14 +8,17 @@
 
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
-struct operation_attributes_t {};
+struct CrossEntropyForwardParams {};
 
-struct tensor_args_t {
+struct CrossEntropyForwardInputs {
     const ttnn::Tensor& input;
     const ttnn::Tensor& target;
 
     std::optional<ttnn::Tensor> preallocated_output;
 };
+
+using operation_attributes_t = CrossEntropyForwardParams;
+using tensor_args_t = CrossEntropyForwardInputs;
 
 using tensor_return_value_t = ttnn::Tensor;  // return loss: tensor with shape (N, 1, H, 1)
 using spec_return_value_t = ttnn::TensorSpec;

@@ -59,7 +59,7 @@ class BinarySfpu(Sfpu):
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        math_format = operation.output.data_format
+        math_format = config.sentinel.golden_math_format
 
         generate_binary_golden = get_golden_generator(BinarySFPUGolden)
         golden_tensor = generate_binary_golden(
@@ -106,7 +106,7 @@ class BinarySfpu(Sfpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
@@ -118,7 +118,7 @@ class BinarySfpu(Sfpu):
 
         return (
             f"    test_utils::call_binary_sfpu_operation<"
-            f"dest_sync{stage}, {dest_acc}, "
+            f"{dest_sync}, {dest_acc}, "
             f"{approx_mode}, {op}, {iterations}, {format}"
             f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
         )

@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_copy ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Copy ALIAS ttnn_op_experimental_copy)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_copy TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_copy TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_copy)
 
 set_target_properties(

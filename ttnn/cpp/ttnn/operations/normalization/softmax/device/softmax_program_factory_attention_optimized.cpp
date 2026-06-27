@@ -135,7 +135,6 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
         im4_t = large_kernel_cb_size;
         im0_t = large_kernel_cb_size;
         im3_t = large_kernel_cb_size;
-        TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     if (!use_large_kernel) {
         TT_FATAL(

@@ -110,7 +110,8 @@ namespace ttnn::device {
 void py_device_module_types(nb::module_& m_device) {
     nb::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
-        .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
+        .value("BLACKHOLE", tt::ARCH::BLACKHOLE)
+        .value("QUASAR", tt::ARCH::QUASAR);
 
     nb::enum_<tt::tt_metal::DispatchCoreType>(m_device, "DispatchCoreType", "Enum of types of dispatch cores.")
         .value("WORKER", tt::tt_metal::DispatchCoreType::WORKER)
@@ -144,7 +145,7 @@ void py_device_module_types(nb::module_& m_device) {
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
-        .def_ro("program_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::program_id, "Runtime program ID")
+        .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
         .def_ro(
             "start_timestamp",
             &tt::tt_metal::experimental::ProgramRealtimeRecord::start_timestamp,
@@ -158,10 +159,12 @@ void py_device_module_types(nb::module_& m_device) {
             &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
             "Device clock frequency (cycles per ns)")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
-        .def_ro(
+        .def_prop_ro(
             "kernel_sources",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::kernel_sources,
-            "Kernel source paths for this program");
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
+            },
+            "Kernel source paths associated with this runtime ID");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -687,7 +690,7 @@ void device_module(nb::module_& m_device) {
 
             Example:
                 >>> def my_callback(record):
-                ...     print(f"Program {record.program_id} on chip {record.chip_id}")
+                ...     print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
                 >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 

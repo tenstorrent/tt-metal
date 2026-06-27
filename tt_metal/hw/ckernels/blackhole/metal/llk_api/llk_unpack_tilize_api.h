@@ -30,13 +30,12 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 /**
  * Tear down the tilize unpacker configuration so a subsequent operation can reprogram the unpacker.
  *
- * @param operand    Input circular buffer / operand index.
- * @param face_r_dim Face row dimension to restore (defaults to FACE_R_DIM).
+ * @param operand Input circular buffer / operand index.
  */
-inline void llk_unpack_tilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+inline void llk_unpack_tilize_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     const uint num_faces = get_operand_num_faces(operand);
-    _llk_unpack_tilize_uninit_((uint)unpack_dst_format[operand_id], num_faces, face_r_dim);
+    _llk_unpack_tilize_uninit_((uint)unpack_dst_format[operand_id], num_faces);
 }
 
 /**
@@ -392,6 +391,5 @@ llk_unpack_tilizeA_B_block(
  */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    _llk_unpack_tilizeA_B_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
+    _llk_unpack_tilizeA_B_uninit_((uint)unpack_dst_format[operand_id]);
 }

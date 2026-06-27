@@ -11,28 +11,27 @@ void kernel_main() {
     const auto Ht = get_arg_val<uint32_t>(i++);
     const auto origin_h = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;
+    constexpr std::uint8_t input_id = tt::CB::c_in0;
+    constexpr auto cb_x = input_id + 0;
     CircularBuffer cb_x_obj(cb_x);  // input
-    const auto cb_one = input_id++;
+    constexpr auto cb_one = input_id + 1;
     CircularBuffer cb_one_obj(cb_one);  // one
-    const auto cb_mask_h = input_id++;
+    constexpr auto cb_mask_h = input_id + 2;
     CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
 
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;
+    constexpr auto cb_y = tt::CB::c_out0;
     CircularBuffer cb_y_obj(cb_y);  // output
 
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-    const auto cb_tmp2 = intermed_id++;
+    constexpr std::uint8_t intermed_id = tt::CB::c_intermed0;
+    constexpr auto cb_tmp0 = intermed_id + 0;
+    constexpr auto cb_tmp1 = intermed_id + 1;
+    constexpr auto cb_tmp2 = intermed_id + 2;
 
-    const auto cb_val = cb_tmp0;
+    constexpr auto cb_val = cb_tmp0;
     CircularBuffer cb_val_obj(cb_val);  // f(x)
-    const auto cb_cal = cb_tmp1;
+    constexpr auto cb_cal = cb_tmp1;
     CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimension
-    const auto cb_reduce = cb_tmp2;
+    constexpr auto cb_reduce = cb_tmp2;
     CircularBuffer cb_reduce_obj(cb_reduce);  // reduce f(x)
 
     constexpr uint32_t onetile = 1;
@@ -139,8 +138,8 @@ void kernel_main() {
             }
         }
         // reduce f(x)
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            cb_cal, cb_one, cb_reduce, compute_kernel_lib::ReduceInputBlockShape::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_cal, cb_one, cb_reduce>(
+            compute_kernel_lib::ReduceInputBlockShape::single());
 
         tile_regs_acquire();
 

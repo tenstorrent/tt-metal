@@ -15,7 +15,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -845,20 +844,21 @@ def run_phase1_generate_rank_bindings(
     hosts: Optional[List[str]],
     output_dir: Path,
     subprocess_run=subprocess.run,
-    sleep_secs: int = 5,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
     mpi_args: Optional[List[str]] = None,
 ) -> tuple[Path, Path]:
     """Run Phase 1: generate_rank_bindings to produce rank_bindings.yaml and rankfile.
 
-    Orchestrates the Phase 1 MPI call, waits for file sync, and validates outputs.
+    Orchestrates the Phase 1 MPI call and validates outputs.  No sleep is needed:
+    generate_rank_bindings calls fsync() on every output file and the output directory
+    before its final MPI barrier, so all writes are durable on the server by the time
+    the subprocess exits and subprocess.run() returns here.
 
     Args:
         mgd_path: Path to mesh graph descriptor
         hosts: List of hostnames (for real cluster) or None (for mock)
         output_dir: Output directory (typically generated/ttrun)
         subprocess_run: Subprocess run function (injectable for testing)
-        sleep_secs: Seconds to sleep after Phase 1 for file sync (default 5)
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
 
@@ -880,11 +880,6 @@ def run_phase1_generate_rank_bindings(
 
     if exit_code != 0:
         raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
-
-    # Wait for file sync (NFS, shared storage)
-    if sleep_secs > 0:
-        logger.info(f"{TT_RUN_PREFIX} Waiting {sleep_secs} seconds for file sync...")
-        time.sleep(sleep_secs)
 
     # Validate outputs exist
     rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(output_dir)
@@ -2197,9 +2192,9 @@ def legacy_flow(
     Mock Cluster Rank Binding YAML Example:
         rank_to_cluster_mock_cluster_desc:
           - rank: 0
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
+            filename: "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc/6u_dual_host_cluster_desc_rank_0.yaml"
           - rank: 1
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_1.yaml"
+            filename: "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc/6u_dual_host_cluster_desc_rank_1.yaml"
 
     See examples/ttrun/ for example configuration files.
 
@@ -2611,7 +2606,6 @@ def new_mode_flow(
                 hosts_for_phase1,
                 run_dir,
                 subprocess_run=subprocess.run,
-                sleep_secs=5,
                 mock_rank_to_desc=mock_rank_to_desc,
                 mpi_args=phase1_mpi_args,
             )

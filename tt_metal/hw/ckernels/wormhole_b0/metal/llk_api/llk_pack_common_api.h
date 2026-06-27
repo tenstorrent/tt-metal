@@ -237,9 +237,11 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
 /**
  * Program the packer relu configuration register.
  *
- * @param config Packed relu configuration value.
+ * @param relu_config Relu mode/threshold configuration.
  */
-TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) { _llk_pack_relu_config_(config); }
+TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    _llk_pack_relu_config_(relu_config);
+}
 
 /**
  * Enable or disable packer L1 accumulation.

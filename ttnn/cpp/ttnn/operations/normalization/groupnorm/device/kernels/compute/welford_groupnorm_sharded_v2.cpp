@@ -13,7 +13,6 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"

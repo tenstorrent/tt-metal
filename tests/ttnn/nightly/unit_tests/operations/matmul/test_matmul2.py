@@ -9,6 +9,7 @@ from models.common.utility_functions import is_wormhole_b0
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import ttnn
+from tests.ttnn.nightly.unit_tests.operations.matmul.utility_functions import ttnn_matmul, ttnn_linear
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -93,7 +94,7 @@ def test_matmul_1d_in0_batched(
             fused_activation=None,
             mcast_in0=True,
         )
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -206,7 +207,7 @@ def test_linear_fp32_acc_l1(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -310,7 +311,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -429,7 +430,7 @@ def test_matmul_1d_fp32_input_output(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttnn.linear(
+        output_t = ttnn_linear(
             in0_t,
             in1_t,
             bias=bias_t,
@@ -541,7 +542,7 @@ def test_matmul_no_mcast_fp32_input_output(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -656,7 +657,7 @@ def test_matmul_no_untilize_output_param(
             packer_l1_acc=packer_l1_acc,
         )
 
-        output_t = ttnn.matmul(
+        output_t = ttnn_matmul(
             in0_t,
             in1_t,
             program_config=program_config,
@@ -747,7 +748,7 @@ def test_sharded_matmul_2d(
         transpose_mcast=False,
         fused_activation=None,
     )
-    output_t = ttnn.linear(
+    output_t = ttnn_linear(
         in0_t,
         in1_t,
         bias=bias_t,
@@ -848,7 +849,7 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
         fused_activation=None,
     )
     output_mem_config = sharded_block_mem_config if out_sharded else interleaved_mem_config
-    output_t = ttnn.linear(
+    output_t = ttnn_linear(
         in0_t,
         in1_t,
         bias=bias_t,
@@ -939,7 +940,7 @@ def test_sharded_matmul_2d_transposed(
         transpose_mcast=True,
         fused_activation=None,
     )
-    output_t = ttnn.linear(
+    output_t = ttnn_linear(
         in0_t,
         in1_t,
         bias=bias_t,
@@ -1037,7 +1038,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
         transpose_mcast=True,
         fused_activation=None,
     )
-    output_matmul_t = ttnn.linear(
+    output_matmul_t = ttnn_linear(
         output_binary_t,
         weight_t,
         bias=bias_t,
@@ -1127,7 +1128,7 @@ def test_sharded_matmul_1d_in0(
         fused_activation=None,
         mcast_in0=True,
     )
-    output_t = ttnn.linear(
+    output_t = ttnn_linear(
         in0_t,
         in1_t,
         bias=bias_t,
@@ -1206,7 +1207,7 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
         fused_activation=None,
         mcast_in0=False,
     )
-    output_t = ttnn.linear(
+    output_t = ttnn_linear(
         in0_t,
         in1_t,
         bias=bias_t,
@@ -1297,7 +1298,7 @@ def test_sharded_matmul_no_mcast(
         per_core_N=N // 32,
     )
 
-    output_t = ttnn.matmul(
+    output_t = ttnn_matmul(
         in0_t,
         in1_t,
         program_config=program_config,

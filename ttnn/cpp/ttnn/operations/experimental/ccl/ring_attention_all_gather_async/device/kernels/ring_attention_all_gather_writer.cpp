@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -69,6 +70,16 @@ void kernel_main() {
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        // input_batch_base: reader-only (phase-1 input offset). The writer always targets output
+        // slot 0, so it reads the arg here only for alignment.
+        (void)get_arg_val<uint32_t>(arg_idx++);
+        // valid_pages_per_batch_head: clamp the gather to the logical_n-valid slab prefix (must match
+        // the reader's clamp so cb_output producer/consumer page counts stay aligned). Default
+        // (full input) leaves the range unchanged.
+        const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
+        if (valid_pages < input_tile_id_end[input_idx]) {
+            input_tile_id_end[input_idx] = valid_pages;
+        }
     }
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
@@ -218,7 +229,9 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
-    // Write the unicast packet
+    // Write the unicast packet. num_hops=1 is correct under both topologies: 1D ring-AG always
+    // targets the immediate neighbor; 2D ignores num_hops (HybridMesh::to_chip_unicast is a no-op
+    // and route_info carries the 2D destination).
     if constexpr (num_targets_in_direction) {
         fabric_direction_connection->wait_for_empty_write_slot();
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
@@ -328,16 +341,19 @@ void kernel_main() {
             }
         }
 
-        // 2. unicast output ready semaphore forward
+        // 2. unicast output ready semaphore forward — route was set once on pkt_hdr_sem_inc
+        // before the writes loop above; unicast_route_info is constexpr, so no need to
+        // re-set it each iteration.
         fabric_direction_connection->wait_for_empty_write_slot();
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
 
         slice_writes++;
     }
-    fabric_connection.close();
 
+    // Drain in-flight writes BEFORE closing the EDM connections.
     noc_obj.async_atomic_barrier();
     noc_obj.async_write_barrier();
+
+    fabric_connection.close();
 }
