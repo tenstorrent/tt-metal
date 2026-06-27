@@ -63,6 +63,6 @@ prefill_dispatch(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_dispatch = false,
+    bool fp8_output = false,
     uint32_t num_untilizers_per_sender = 2);
 }  // namespace ttnn::prim

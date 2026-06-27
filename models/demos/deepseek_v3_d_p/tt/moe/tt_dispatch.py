@@ -277,7 +277,7 @@ class TtDispatchModule(LightweightModule):
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
-            use_fp8_dispatch=self.fp8_output,
+            fp8_output=self.fp8_output,
             subdevice_id=self.subdevice_id,
             num_untilizers_per_sender=self.num_untilizers_per_sender,
         )

@@ -28,7 +28,7 @@ struct DispatchParams {
     MemoryConfig output_mem_config;
     CoreRangeSet worker_core_range_set;
     bool use_l1_small_for_semaphores = false;
-    bool use_fp8_dispatch = false;
+    bool fp8_output = false;
     uint32_t num_untilizers_per_sender = 2;
     // Whether an optional padding_config input is present. Kept as an explicit attribute so the
     // padding-aware (HAS_PADDING_CONFIG) and full-range programs are guaranteed to hash to distinct
@@ -48,7 +48,7 @@ struct DispatchParams {
         "output_mem_config",
         "worker_core_range_set",
         "use_l1_small_for_semaphores",
-        "use_fp8_dispatch",
+        "fp8_output",
         "num_untilizers_per_sender",
         "has_padding_config");
 
@@ -66,7 +66,7 @@ struct DispatchParams {
             output_mem_config,
             worker_core_range_set,
             use_l1_small_for_semaphores,
-            use_fp8_dispatch,
+            fp8_output,
             num_untilizers_per_sender,
             has_padding_config);
     };
