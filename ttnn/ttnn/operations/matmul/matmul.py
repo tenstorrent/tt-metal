@@ -128,11 +128,37 @@ def validate(input_tensor, weight, *, compute_kernel_config=None):
         raise ValueError(f"matmul: weight rank {len(B_shape)} < 2")
     if A_shape[-1] != B_shape[-2]:
         raise ValueError(f"matmul: K mismatch A[-1]={A_shape[-1]} != B[-2]={B_shape[-2]}")
-    A_lead = A_shape[:-2]
-    B_lead = B_shape[:-2]
+    A_lead = list(A_shape[:-2])
+    B_lead = list(B_shape[:-2])
     b_has_real_batch = len(B_lead) > 0 and not all(d == 1 for d in B_lead)
-    if b_has_real_batch and list(B_lead) != list(A_lead):
-        raise ValueError(f"matmul: batched weight leading dims {B_lead} != activation " f"leading dims {A_lead}")
+    if b_has_real_batch:
+        # True batched weight (Refinement 3). The op outputs A's leading dims
+        # (one matmul per A-batch), and the reader maps each flattened A-batch
+        # index b -> weight matrix b via a fixed b*Kt*Nt offset (an IDENTITY
+        # flattened map). That identity map is correct iff B's leading dims
+        # broadcast INTO A's with a matching flattened batch count:
+        #   * B_lead equals A_lead's trailing dims, AND
+        #   * any A leading dims B does not cover are size 1.
+        # The common case is exact-match leading dims ((4,K,N) vs A_lead=[4];
+        # (2,4,K,N) vs [2,4]). A torch.matmul broadcast over a SIZE-1 A dim
+        # also qualifies (B_lead=[2] vs A_lead=[1,2]: prod equal, identity map)
+        # — this is the test_translated transpose-and-configs case. A GENUINE
+        # broadcast that replicates one weight across many distinct A-batches
+        # (e.g. A_lead=[3,2] vs B_lead=[2]) changes the b->matrix mapping and is
+        # NOT expressible with a single stride, so it is rejected here (a
+        # possible future refinement, out of this one's scope).
+        lead_ok = (
+            len(B_lead) <= len(A_lead)
+            and B_lead == A_lead[len(A_lead) - len(B_lead) :]
+            and all(d == 1 for d in A_lead[: len(A_lead) - len(B_lead)])
+        )
+        if not lead_ok:
+            raise ValueError(
+                f"matmul: batched weight leading dims {B_lead} not compatible with "
+                f"activation leading dims {A_lead} (B must broadcast into A with a "
+                f"matching per-batch mapping: equal trailing dims and size-1 A "
+                f"leading dims)"
+            )
 
     # --- registry gate (SUPPORTED per-axis, then EXCLUSIONS) ---
     axes = {

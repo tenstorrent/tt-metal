@@ -168,6 +168,42 @@ def test_validate_batched_weight_now_supported(device):
     assert pcc >= 0.999
 
 
+def test_batched_weight_broadcast_over_size1_A_dim(device):
+    """torch.matmul broadcast over a SIZE-1 activation leading dim.
+
+    A=(1, 2, M, K) against B=(2, K, N): B_lead=[2] right-aligns with A_lead=[1,2]
+    and broadcasts over A's leading size-1 dim. prod(A_lead)==prod(B_lead)==2, so
+    the flattened batch correspondence is the identity map and the reader's
+    b*Kt*Nt offset is correct. This is the test_translated
+    test_matmul_with_transpose_and_configs[1-2-4096-32-256] scenario (which feeds
+    a squeezed (2,K,N) weight against a (1,2,M,K) activation).
+    """
+    torch.manual_seed(0)
+    A = torch.rand((1, 2, 4096, 32), dtype=torch.bfloat16)
+    B = torch.rand((2, 32, 256), dtype=torch.bfloat16)  # B_lead=[2] vs A_lead=[1,2]
+    expected = torch.matmul(A.to(torch.float32), B.to(torch.float32))  # (1,2,4096,256)
+
+    ttnn_a = ttnn.from_torch(A, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(B, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(matmul(ttnn_a, ttnn_b)).to(torch.float32)
+
+    assert list(out.shape) == [1, 2, 4096, 256], f"shape {list(out.shape)}"
+    _, pcc = comp_pcc(expected, out, pcc=0.999)
+    assert pcc >= 0.999, f"broadcast-over-size1 PCC {pcc} < 0.999"
+
+
+def test_genuine_broadcast_replication_raises(device):
+    """A GENUINE broadcast that replicates one weight across many distinct
+    A-batches (A_lead=[3,2], B_lead=[2]) changes the per-batch mapping and is out
+    of this refinement's scope — must raise ValueError, not silently miscompute."""
+    A = torch.randn((3, 2, 64, 64), dtype=torch.float32)
+    B = torch.randn((2, 64, 64), dtype=torch.float32)  # B_lead=[2] vs A_lead=[3,2]
+    ttnn_a = ttnn.from_torch(A, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(B, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    with pytest.raises(ValueError):
+        matmul(ttnn_a, ttnn_b)
+
+
 def test_validate_batched_weight_leading_dim_mismatch_raises(device):
     """A batched weight whose leading dims don't match the activation's still
     raises a structural ValueError (unchanged contract)."""

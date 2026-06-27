@@ -80,3 +80,9 @@
 {"event": "phase", "phase": "refinement_2_golden", "state": "end", "at_ms": 1782567698785}
 {"event": "phase", "phase": "refinement_3", "state": "start", "at_ms": 1782567701948}
 {"source":"run_safe_pytest","pid":712684,"started_at_ms":1782567903437,"wait_ms":5,"run_ms":13869,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_batched_weight.py","exit_code":0}
+{"source":"run_safe_pytest","pid":713655,"started_at_ms":1782567939555,"wait_ms":1,"run_ms":15825,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_batched_weight.py","exit_code":0}
+{"source":"run_safe_pytest","pid":714352,"started_at_ms":1782567971891,"wait_ms":2,"run_ms":15217,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul_batched_weight.py","exit_code":0}
+{"source":"run_safe_pytest","pid":715098,"started_at_ms":1782568013808,"wait_ms":2,"run_ms":31029,"test_path":"tests/ttnn/unit_tests/operations/matmul/test_matmul.py","exit_code":0}
+{"source":"run_safe_pytest","pid":717301,"started_at_ms":1782568092124,"wait_ms":2,"run_ms":494733,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":751481,"started_at_ms":1782568639868,"wait_ms":2,"run_ms":5497,"test_path":"eval/golden_tests/matmul/test_translated.py::test_matmul_with_transpose_and_configs","exit_code":1}
+{"source":"run_safe_pytest","pid":752286,"started_at_ms":1782568802709,"wait_ms":1,"run_ms":8155,"test_path":"eval/golden_tests/matmul/test_translated.py::test_matmul_with_transpose_and_configs","exit_code":0}
