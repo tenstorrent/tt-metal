@@ -8,6 +8,11 @@ from models.common.readiness_check.contract import (
     Generator,
     NextInputFn,
 )
+from models.common.readiness_check.contract_vllm import (
+    GENERATOR_VLLM_MODULE_RELPATH,
+    ModelCapabilities,
+    VllmGeneratorAdapter,
+)
 from models.common.readiness_check.generate import generate_reference, DEFAULT_K
 from models.common.readiness_check.schema import (
     FORMAT_VERSION,
@@ -24,11 +29,14 @@ __all__ = [
     "DEFAULT_K",
     "FORMAT_VERSION",
     "GENERATOR_MODULE_RELPATH",
+    "GENERATOR_VLLM_MODULE_RELPATH",
     "Generator",
+    "ModelCapabilities",
     "NextInputFn",
     "Reference",
     "ReferenceEntry",
     "TokenAccuracy",
+    "VllmGeneratorAdapter",
     "generate_reference",
     "load_reference",
     "save_reference",
