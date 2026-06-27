@@ -422,6 +422,11 @@ inline void set_packer_config(
 
     reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
 
+    // Select 4-bit-exponent (Fp8_e4m3) packing when the L1 output format is Fp8_e4m3, else clear it.
+    // @note Pac_LF8_4b_exp lives in register word 3, which the config struct copy above does not write
+    //       (see pack_config_t), so it must be programmed separately to keep this function self-contained.
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? 1 : 0);
+
     // Program:
     // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
     // THCON_SEC0_REG1_Exp_section_size = cfg_reg_array[1][16 +: 16];
