@@ -55,3 +55,7 @@
 {"event": "phase", "phase": "drafter_stage_7", "state": "start", "at_ms": 1782579776352}
 {"source":"run_safe_pytest","pid":2627006,"started_at_ms":1782579946665,"wait_ms":1,"run_ms":17320,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
 {"source":"run_safe_pytest","pid":2627373,"started_at_ms":1782579971091,"wait_ms":2,"run_ms":11398,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"event": "phase", "phase": "drafter_stage_7", "state": "end", "at_ms": 1782579998701}
+{"event": "phase", "phase": "drafter_stage_8", "state": "start", "at_ms": 1782579998712}
+{"source":"run_safe_pytest","pid":2630259,"started_at_ms":1782580315219,"wait_ms":2,"run_ms":16953,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}
+{"source":"run_safe_pytest","pid":2630594,"started_at_ms":1782580338650,"wait_ms":2,"run_ms":10535,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":1}

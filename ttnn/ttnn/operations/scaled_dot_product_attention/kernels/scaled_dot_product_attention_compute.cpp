@@ -313,4 +313,47 @@ void kernel_main() {
         DPRINT("stage_7 rescale_l:\n{}\n", TileSlice(cb_sum_old, 0, sr, true, true));
     }
 #endif
+
+    // --- Stage 8: Subtract m_new from scores ---
+    // S = S - m_new (broadcast Col: m_new is per-row, S is 2D [B_q_t, B_kv_t])
+    //   CbA  = cb_scores_masked (B_q_t * B_kv_t = 16 tiles, Streaming — per-tile
+    //     wait+pop; phase 4 used WaitUpfrontNoPop which left all 16 tiles intact)
+    //   CbB  = cb_max_new (B_q_t = 4 tiles, HeldBulk — wait upfront, no pop;
+    //     retained for phase 13 update_m. Phase 5 used HeldBulk and did NOT pop,
+    //     so all 4 tiles are still at the front of cb_max_new)
+    //   CbOut = cb_scores_masked (in-place: CbA == CbOut)
+    //   BroadcastDim::Col: m_new tile[ht] broadcasts across all B_kv_t column tiles
+    //   OperandKind::Scalar for A (front-relative streaming, reads tile 0 per iter)
+    //   OperandKind::Col   for B (reads tile ht per row, window = Ht = B_q_t)
+    //   Shape: EltwiseShape::grid(B_q_t, B_kv_t) — 2D for Col broadcast
+    //
+    // BinaryDataFormatReconfig::Input (default): reconfigures unpacker from
+    // eltwise mul (rescale_l) format to eltwise binary format on both srcA/srcB.
+    // PackTileReconfig::Output (default): reconfigures packer from cb_sum_old
+    // to cb_scores_masked format.
+    sub<
+        /*CbA=*/cb_scores_masked,
+        /*CbB=*/cb_max_new,
+        /*CbOut=*/cb_scores_masked,
+        /*Bcast=*/BroadcastDim::Col,
+        /*ALife=*/InputLifecycle::Streaming,
+        /*BLife=*/InputLifecycle::HeldBulk,
+        /*OutLife=*/OutputLifecycle::Streaming,
+        /*Reconfig=*/BinaryDataFormatReconfig::Input,
+        /*OutReconfig=*/PackTileReconfig::Output,
+        /*AIdx=*/OperandKind::Scalar,
+        /*BIdx=*/OperandKind::Col>(EltwiseShape::grid(B_q_t, B_kv_t));
+
+    // --- Stage 8 DPRINT: cb_scores_masked tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the in-place sub completes, cb_scores_masked
+    // holds the rescaled scores (S - m_new). We wait_front tile 0, print it,
+    // then leave it (no pop — cb_scores_masked is consumed by later stage 9 exp).
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_scores_masked, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_8 subtract_max:\n{}\n", TileSlice(cb_scores_masked, 0, sr, true, true));
+    }
+#endif
 }
