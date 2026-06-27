@@ -34,10 +34,12 @@ namespace tt::tt_metal::experimental {
 //
 // A KernelSpec describes a *compiled kernel*: it specializes a kernel for
 // compilation, baking in the kernel's compile-time arguments and compiler options.
-// A compiled kernel may run as several cooperating threads (see num_threads) — a
-// small number of independent threads that each run the whole kernel function and
-// coordinate explicitly. How those threads map onto the node's physical RISC-V
-// cores — and how many binaries the kernel compiles to — is an implementation
+//
+// A compiled kernel may run as multiple threads (see num_threads), following the
+// SPMD (single-program, multiple-data) model: a small number of independent
+// threads that each run the whole kernel function, each with its own thread
+// index, coordinating explicitly. How those threads map onto the node's physical
+// RISC-V cores — and how many binaries the kernel compiles to — is an implementation
 // detail the programming model hides.
 //
 // The KernelSpec describes all the properties of a kernel:
@@ -78,8 +80,8 @@ struct KernelSpec {
     KernelSpecName unique_id;
 
     // Kernel source: either a path to a source file, or the source code itself.
-    // String literals bind directly to the path variant alternative; wrap inline
-    // source code with SourceCode{...}.
+    // To pass inline source code, wrap it in KernelSpec::SourceCode{...}.
+    // (A string literal binds directly to the path variant alternative.)
     struct SourceCode {
         std::string code;
     };
@@ -88,8 +90,12 @@ struct KernelSpec {
     // NOTE: The kernel's target node set is a DERIVED property, based on the
     //       WorkUnitSpec(s) that include this kernel.
 
-    // Kernel threading:
-    // Number of kernel threads
+    // Kernel threading: the number of SPMD threads this kernel has.
+    //
+    // The legality rules for num_threads are architecture and kernel-type dependent:
+    //  - Gen1 architectures (Wormhole, Blackhole) support single-threaded kernels only.
+    //  - Gen2 architectures (Quasar) support num_threads > 1.
+    //    Different rules apply for compute vs data-movement kernels.
     uint32_t num_threads = 1;
 
     // Kernel type (methods)
@@ -121,10 +127,12 @@ struct KernelSpec {
     struct DFBBinding {
         // Endpoint role this binding plays for the DFB.
         enum class EndpointType { PRODUCER, CONSUMER };
-        // How the kernel's threads iterate over the DFB's entries.
+        // How the kernel's threads iterate over the DFB's entries. (Only meaningful
+        // for multi-threaded kernels; at num_threads == 1 all patterns are equivalent.)
         //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
         //   ALL:     each kernel thread accesses every DFB entry
         //   BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
+        //            (NOT YET SUPPORTED — currently rejected at runtime)
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
@@ -147,7 +155,7 @@ struct KernelSpec {
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
     // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
-        TensorParamName tensor_parameter_name;      // identify the TensorBinding within the ProgramSpec
+        TensorParamName tensor_parameter_name;      // identify the TensorParameter within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
     };
     Group<TensorBinding> tensor_bindings;
