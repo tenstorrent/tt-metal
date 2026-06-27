@@ -285,3 +285,73 @@ batched weight (`weight_batch=batched`).
   across dtypes). Acceptance `test_matmul.py` (16/16), `test_matmul_precision_
   baseline.py` (4/4), `test_matmul_precision_matrix.py` (120 pass / 24 skip),
   `test_matmul_deep_k_acc_false.py` (8/8) all unchanged — full non-regression.
+
+## Refinement 3 — Batched weight (true batched matmul)
+- **Date**: 2026-06-27
+- **What was done**: Added `batched` to `SUPPORTED["weight_batch"]` — a weight
+  `(..., K, N)` whose leading dims match the activation's, one matrix per batch.
+  The implementation is exactly the verifier's note (no skill applies — an
+  op-specific reader data-path change):
+  - **Reader (`matmul_reader.cpp`)**: the in1 (weight) tile-id gains a per-batch
+    offset `b * weight_batch_stride` (new CT arg 18, `TensorAccessorArgs` offset
+    bumped 18→19). `weight_batch_stride = Kt*Nt` for a batched weight, `0` for a
+    shared 2D weight (every batch re-reads the same block — the Phase-0 behavior).
+    The outer `for b` loop already existed (for batched activation); only the in1
+    tile-id changed. **Activation read, writer, batch loop, and the entire
+    dual-multicast topology are unchanged** — for batch b the in1 sender (grid
+    row Y=0) reads weight matrix b and multicasts it down the column to all cores
+    working on batch b in lock-step.
+  - **Program descriptor (`matmul_program_descriptor.py`)**: compute
+    `weight_batch_stride` from B's leading dims; pass as the reader CT arg.
+  - **`matmul.py` SUPPORTED**: `weight_batch` = `["single", "batched"]`.
+  - **`matmul.py` validate() — broadcast-into-A relaxation**: the prior exact
+    leading-dim-match check (`B_lead == A_lead`) was relaxed to accept a
+    **torch.matmul broadcast INTO A**: B_lead must equal A_lead's trailing dims
+    with any uncovered A leading dims size 1 (e.g. B_lead=[2] vs A_lead=[1,2]).
+    In that case `prod(A_lead) == prod(B_lead)`, so the flattened A-batch → weight
+    matrix correspondence is the IDENTITY map and the reader's `b*Kt*Nt` offset is
+    already correct — **no kernel change**. A GENUINE replication broadcast
+    (A_lead=[3,2] vs B_lead=[2], one weight replicated across distinct A-batches)
+    changes the per-batch mapping, cannot be expressed with a single stride, and
+    is still rejected (a possible future refinement, out of this one's scope).
+- **Accuracy achieved** (batched-weight matrix, all within golden bands):
+  - fp32/fp32 acc=True: PCC ≥ 0.9999997, relRMS ≤ 0.0017 (band 0.999 / 0.02).
+  - bf16/bf16 acc=True: PCC ≥ 0.9999941, relRMS ≤ 0.0047 (band 0.997 / 0.04).
+  - bf16/bf16 acc=False: PCC ≥ 0.9999629, relRMS ≤ 0.0089 (band 0.99 / 0.10).
+  - bf8b/bf8b acc=True: PCC ≥ 0.9999118, relRMS ≤ 0.0135 (band 0.98 / 0.12).
+  - bf8b/bf8b acc=False: PCC ≥ 0.9998810, relRMS ≤ 0.0190 (band 0.98 / 0.15).
+  - bf16/fp32 mixed acc=True: PCC ≥ 0.9999940, relRMS ≤ 0.0052.
+  - Shapes: batch=4 (128×512×512), batch=8 small (64×128×64), rank-4 2×4 batch
+    grid (128×256×128). Broadcast-over-size-1 (1,2,4096,32)@(2,32,256): PCC ≥
+    0.999 (bf16, default config).
+- **Golden test progress**: **555 / 555 supported cells pass** (was 510/510 at
+  R2; +45 batched cells flipped xfail→pass = 3 batched INPUT shapes × 15 supported
+  dtype×weight_dtype×acc cells, minus the {fp32, acc=False} EXCLUSION). 111
+  xfailed, 1 skipped, **0 failed, 0 xpassed** (no drift). Full cold-cache run
+  (~332 s). The batched `{fp32, acc=False}` cells correctly remain EXCLUSION-xfail.
+- **test_translated flip (done-when bonus)**:
+  `test_matmul_with_transpose_and_configs[1-2-4096-32-256]` flipped from a
+  batched-weight `ValueError` refusal to a real **PASS** (the squeezed (2,K,N)
+  weight against a (1,2,M,K) activation is the broadcast-into-A case the validate
+  relaxation enables). All 6 transpose-and-configs parametrizations pass.
+- **Issues encountered**: One subtlety beyond the verifier's note — the
+  test_translated case is a torch.matmul **broadcast** (B_lead=[2] vs A_lead=[1,2]),
+  not exact-match leading dims, so the original exact-match validate would have
+  refused it. Resolved with the broadcast-into-A relaxation above (validate-only;
+  the kernel's identity flattened map already handles it because prod(A_lead) ==
+  prod(B_lead)). No numerical issues; no sub-agent needed.
+- **Tests added**: `tests/.../matmul/test_matmul_batched_weight.py` — 26 cases:
+  3 batched shapes × 6 dtype/acc configs (PCC + relRMS at golden bands + output
+  logical shape), an offset-is-live cross-check (batched output differs from
+  feeding only B[0] as a shared weight — pins the regression the offset prevents),
+  broadcast-over-size-1 acceptance, genuine-replication-broadcast rejection,
+  validate now-supported + leading-dim-mismatch raise, and shared-weight (2D)
+  against batched-activation non-regression. **All 26 pass** (--dev + non-dev
+  production timing — no multicast race on the batched re-read path). Acceptance
+  `test_matmul.py` (16/16), `test_matmul_precision_baseline.py` (4/4),
+  `test_matmul_precision_matrix.py` (120 pass / 24 skip),
+  `test_matmul_deep_k_acc_false.py` (8/8), `test_matmul_alignment_matrix.py`
+  (54/54) all unchanged — full non-regression (202 passed, 24 skipped).
+- **Advisory deviations**: none — the change is the verifier's exact in1
+  data-path note plus the validate broadcast relaxation required by the
+  done-when's test_translated flip.

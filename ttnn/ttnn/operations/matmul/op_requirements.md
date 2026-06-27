@@ -212,7 +212,25 @@ formerly-xfail `*_non_aligned` cells in `test_golden.py` pass.
   `gm>=Mt`/`gn>=Nt`, writer skips `m_tile>=Mt`/`n_tile>=Nt`); this refinement adds
   *sub-tile* masking on top.
 
-### [ ] Refinement 3 — Batched weight (true batched matmul)
+### [x] Refinement 3 — Batched weight (true batched matmul)
+
+> **Status (2026-06-27): [x] complete.** `batched` added to
+> `SUPPORTED["weight_batch"]`. Golden: **555 / 555 supported pass** (was 510/510
+> at R2; +45 batched cells = 3 batched INPUT shapes × 15 supported dtype/acc
+> cells), 111 xfailed, 1 skipped, **0 failed, 0 xpassed** (no drift). The
+> implementation is exactly the verifier's note: the reader's in1 (weight)
+> tile-id gains a per-batch `b*Kt*Nt` offset (new CT arg `weight_batch_stride`,
+> 0 for a shared 2D weight) — activation read, writer, batch loop, and
+> dual-multicast topology unchanged. `validate()` was additionally relaxed to
+> accept a **torch.matmul broadcast INTO A** (B_lead equals A_lead's trailing
+> dims with size-1 A leading dims, e.g. B_lead=[2] vs A_lead=[1,2]) — this is the
+> identity flattened map (prod(A_lead)==prod(B_lead)), so the SAME `b*Kt*Nt`
+> offset is correct with no kernel change. That flips
+> `test_translated.py::test_matmul_with_transpose_and_configs[1-2-4096-32-256]`
+> from a batched-weight refusal to a real pass (6/6 transpose-and-configs pass).
+> A GENUINE replication broadcast (A_lead=[3,2] vs B_lead=[2]) changes the
+> per-batch mapping and is still rejected (out of scope; possible future
+> refinement). Details in `changelog.md`.
 
 **Goal**: add `batched` to `SUPPORTED["weight_batch"]` — a batched weight
 `(..., K, N)` whose leading dims match the activation's (one matrix per batch). The

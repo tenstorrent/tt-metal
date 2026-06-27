@@ -86,3 +86,4 @@
 {"source":"run_safe_pytest","pid":717301,"started_at_ms":1782568092124,"wait_ms":2,"run_ms":494733,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":0}
 {"source":"run_safe_pytest","pid":751481,"started_at_ms":1782568639868,"wait_ms":2,"run_ms":5497,"test_path":"eval/golden_tests/matmul/test_translated.py::test_matmul_with_transpose_and_configs","exit_code":1}
 {"source":"run_safe_pytest","pid":752286,"started_at_ms":1782568802709,"wait_ms":1,"run_ms":8155,"test_path":"eval/golden_tests/matmul/test_translated.py::test_matmul_with_transpose_and_configs","exit_code":0}
+{"source":"run_safe_pytest","pid":753794,"started_at_ms":1782568858561,"wait_ms":2,"run_ms":335774,"test_path":"eval/golden_tests/matmul/test_golden.py","exit_code":0}
