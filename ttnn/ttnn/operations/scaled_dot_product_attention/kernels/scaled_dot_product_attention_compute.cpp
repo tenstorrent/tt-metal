@@ -88,6 +88,7 @@ void kernel_main() {
     constexpr uint32_t cb_max_new = 26;
     constexpr uint32_t cb_max_old = 27;
     constexpr uint32_t cb_exp_scores = 28;
+    constexpr uint32_t cb_sum_new = 29;
     constexpr uint32_t cb_sum_old = 30;
 
     // Compile-time args: [B_q_t, B_kv_t, D_t]
@@ -189,6 +190,14 @@ void kernel_main() {
         DPRINT("stage_4 rowmax:\n{}\n", TileSlice(cb_max_new, 0, sr, true, true));
     }
 #endif
+
+    // Pop the MAX scaler tile. The reduce<MAX> with WaitUpfrontNoPop waited for
+    // the scaler but did NOT pop it. cb_scaler_reduce holds 2 pages:
+    //   [0] = MAX scaler (row-0 fill, consumed by Stage 4)
+    //   [1] = SUM scaler (col-0 fill, consumed by Stage 10)
+    // Popping 1 tile here exposes the SUM scaler at the front for Stage 10.
+    cb_wait_front(cb_scaler_reduce, 1);
+    cb_pop_front(cb_scaler_reduce, 1);
 
     // --- Stage 5: Compute alpha = exp(m_old - m_new) ---
     // alpha = exp(m_i_old - m_blk) per Q-block row → cb_alpha (B_q_t tiles)
@@ -386,6 +395,46 @@ void kernel_main() {
         cb_wait_front(cb_exp_scores, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
         DPRINT("stage_9 exp:\n{}\n", TileSlice(cb_exp_scores, 0, sr, true, true));
+    }
+#endif
+
+    // --- Stage 10: Row-sum reduce ---
+    // l_blk = sum(cb_exp_scores, dim=-1) → cb_sum_new (B_q_t tiles)
+    //   Input: cb_exp_scores (16 tiles, WaitAndPopPerTile — per-tile wait+pop,
+    //     consuming the full exp-scores block)
+    //   Scaler: cb_scaler_reduce (1 tile at front — the SUM scaler, col-0 fill.
+    //     The MAX scaler was popped after Stage 4, so this is tile 0 now.)
+    //   Output: cb_sum_new (B_q_t = 4 tiles, per-row sum)
+    //   ReduceInputBlockShape::of(B_q_t, B_kv_t, 1) = of(4, 4, 1)
+    //
+    // SUM REDUCE_ROW uses the matmul path (reduce_uses_matmul<SUM, REDUCE_ROW>
+    // = true), which is why the reader prepared a col-0-fill scaler via
+    // calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>.
+    //
+    // WaitAndPopPerTile: waits and pops one tile at a time (streaming), pushing
+    // 4 output tiles one at a time. This consumes all 16 exp-score tiles.
+    //
+    // reconfig_mode=INPUT_AND_OUTPUT (default): reconfigures unpacker from
+    // eltwise unary (exp) format to reduce format, and packer from cb_exp_scores
+    // to cb_sum_new format.
+    reduce<
+        /*reduce_type=*/PoolType::SUM,
+        /*reduce_dim=*/ReduceDim::REDUCE_ROW,
+        /*input_dfb_id=*/cb_exp_scores,
+        /*scaler_dfb_id=*/cb_scaler_reduce,
+        /*output_dfb_id=*/cb_sum_new,
+        /*input_policy=*/ReduceInputPolicy::WaitAndPopPerTile>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+
+    // --- Stage 10 DPRINT: cb_sum_new tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the reduce completes, cb_sum_new holds the
+    // per-row sum of exp scores (l_blk = sum(P, dim=-1)). We wait_front tile 0,
+    // print it, then leave it (no pop — cb_sum_new is consumed by later stage 11).
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_sum_new, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_10 rowsum:\n{}\n", TileSlice(cb_sum_new, 0, sr, true, true));
     }
 #endif
 }

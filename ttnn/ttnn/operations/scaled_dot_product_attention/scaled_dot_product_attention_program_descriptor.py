@@ -99,6 +99,7 @@ def create_program_descriptor(
     CB_MAX_NEW = 26
     CB_MAX_OLD = 27
     CB_EXP_SCORES = 28
+    CB_SUM_NEW = 29
     CB_SUM_OLD = 30
 
     num_q_tiles = B_Q_T * D_t  # 16 for D=128
@@ -125,11 +126,14 @@ def create_program_descriptor(
                 ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)
             ],
         ),
-        # cb_scaler_reduce: single tile holding the reduce scaler (1.0 for MAX).
-        # Prepared by reader via calculate_and_prepare_reduce_scaler; consumed
-        # by compute's reduce<MAX, REDUCE_ROW>.
+        # cb_scaler_reduce: 2 tiles holding reduce scalers. The reader prepares
+        # two scaler tiles — one for MAX (row-0 fill) and one for SUM (col-0
+        # fill, since SUM REDUCE_ROW uses the matmul path). Each reduce call
+        # waits for its scaler but does NOT pop it; the compute kernel pops
+        # the MAX scaler after Stage 4 so the SUM scaler is at the front for
+        # Stage 10.
         ttnn.CBDescriptor(
-            total_size=1 * tile_size,
+            total_size=2 * tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_SCALER_REDUCE, data_format=query.dtype, page_size=tile_size)
@@ -213,6 +217,15 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_SUM_OLD, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_sum_new: per-row sum of exp scores (B_q_t tiles). Produced by
+        # compute (reduce SUM REDUCE_ROW), consumed by compute (update l_i).
+        ttnn.CBDescriptor(
+            total_size=B_Q_T * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_SUM_NEW, data_format=query.dtype, page_size=tile_size)
             ],
         ),
     ]

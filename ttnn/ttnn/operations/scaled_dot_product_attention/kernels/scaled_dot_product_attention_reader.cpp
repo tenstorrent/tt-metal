@@ -146,6 +146,14 @@ void kernel_main() {
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
 
+    // --- Stage 10: prepare reduce scaler for SUM REDUCE_ROW ---
+    // Scaler = 1.0 for SUM. SUM REDUCE_ROW uses the matmul path, so the
+    // pool-type-aware helper selects col-0 fill (matmul layout). The reduce
+    // helper waits for this tile and never pops it (caller pops after reduce
+    // completes). cb_scaler_reduce holds 2 pages: [MAX scaler, SUM scaler].
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+
     // --- Stage 1: stream Q and K tiles from DRAM ---
 
     // Runtime args: [q_addr, k_addr, scale_bits (fp32 bits)]
