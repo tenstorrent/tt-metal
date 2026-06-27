@@ -2673,6 +2673,17 @@ inline void piecewise_generic_lut_dual(const std::array<float, LUT_SIZE>& lut) {
 }
 #endif  // USE_DUAL_EVAL
 
+#if EVAL_METHOD_IS_STANDALONE
+template <uint32_t POLY_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE>
+inline void piecewise_generic_lut_dispatch(const std::array<float, LUT_SIZE>& lut) {
+#ifdef USE_DUAL_EVAL
+    piecewise_generic_lut_dual<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
+#else
+    piecewise_generic_lut<POLY_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut);
+#endif
+}
+#endif
+
 // Include specialized implementations for common segment counts
 // These use manual unrolling to work around Wormhole SFPU compiler bug
 #if !EVAL_METHOD_IS_STANDALONE
@@ -2963,6 +2974,50 @@ void kernel_main() {
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_GATED_AFFINE_PRODUCT || defined(GATED_AFFINE_PRODUCT) || defined(GATED_QUADRATIC_COLLAPSE)
         (void)p_lut;
         sfpi::gated_affine_product_eval();
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_EXPONENT_ALU || defined(EVAL_METHOD_EXPONENT_ALU)
+        (void)p_lut;
+        for (int d = 0; d < 32; d++) {
+#if defined(EXPONENT_ALU_EXP2)
+            sfpi::vFloat y = sfpi::exp_hw_eval<EXP_HW_DEGREE>(sfpi::dst_reg[d]);
+#elif defined(EXPONENT_ALU_LOG2)
+            sfpi::vFloat y = sfpi::log_hw_eval<LOG_HW_DEGREE>(sfpi::dst_reg[d]);
+#elif defined(EXPONENT_ALU_POW)
+            sfpi::vFloat y = sfpi::pow_hw_eval<POW_HW_DEGREE>(sfpi::dst_reg[d]);
+#else
+#error "EVAL_METHOD_EXPONENT_ALU requires EXPONENT_ALU_EXP2/LOG2/POW"
+#endif
+#ifdef USE_BF16
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+#endif
+            sfpi::dst_reg[d] = y;
+        }
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_NEWTON_ROOT || defined(EVAL_METHOD_NEWTON_ROOT)
+        (void)p_lut;
+        for (int d = 0; d < 32; d++) {
+            sfpi::vFloat y = sfpi::newton_root_eval<0>(sfpi::dst_reg[d]);
+#ifdef USE_BF16
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+#endif
+            sfpi::dst_reg[d] = y;
+        }
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_TRIG_RESIDUAL || defined(EVAL_METHOD_TRIG_RESIDUAL)
+        (void)p_lut;
+        for (int d = 0; d < 32; d++) {
+            sfpi::vFloat y = sfpi::trig_residual_odd_eval<TRIG_RESIDUAL_DEGREE>(sfpi::dst_reg[d]);
+#ifdef USE_BF16
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+#endif
+            sfpi::dst_reg[d] = y;
+        }
+#elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_TAN_STANDALONE || defined(EVAL_METHOD_TAN_STANDALONE)
+        (void)p_lut;
+        for (int d = 0; d < 32; d++) {
+            sfpi::vFloat y = sfpi::tan_standalone_eval<TAN_STANDALONE_DEGREE>(sfpi::dst_reg[d]);
+#ifdef USE_BF16
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+#endif
+            sfpi::dst_reg[d] = y;
+        }
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_ASIN_ACOS || defined(EVAL_METHOD_ASIN_ACOS)
         (void)p_lut;
         for (int d = 0; d < 32; d++) {
