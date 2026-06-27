@@ -49,6 +49,7 @@ ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interle
 ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp — role: hybrid | tag: refactor | open-coded chain-link + ring sync (ring part oos)
 ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp — role: both | tag: refactor | read_k vertical-column mcast; BARRIER + linked=false (inverse F1 of chain)
 ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/worker_writer.cpp — role: sender | tag: oos | fabric cross-chip data; only degenerate sem-rect-mcast local
+ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/reader_indexer_score.cpp — role: hybrid | tag: refactor | chain-link STAR: relay_multicast write-once valid_sem cross-id into recv_sem (INV12), linked=true data + unlinked relay (F4); GAP=CHAIN — helper cannot express yet
 
 # ===== data_movement + reduction =====
 ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp — role: receiver | tag: clean | cleanest modern receiver
@@ -84,3 +85,32 @@ ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernel
 ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp — role: hybrid | tag: refactor | multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait
 models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_h2d_receiver.cpp — role: sender | tag: refactor | data write_multicast + counter inc_multicast (mixed-counter); name says receiver but multicasts
 ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/reader_bmm_tile_layout_in1_ring_all_gather.cpp — role: sender | tag: defer | flag-only collective barrier; ring/CCL twin of matmul reader_bmm_tile_layout_in1_ring_all_gather (P4 defer)
+models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_d2h_sender.cpp — role: sender | tag: refactor | intra-chip inc_multicast-to-workers (F2-counter) + atomic-barrier; PCIe/socket bulk D2H leg oos; twin of persistent_h2d_receiver
+ttnn/core/tensor/kernels/persistent_d2d_receiver.cpp — role: sender | tag: refactor | intra-chip data write_multicast (F1 barrier) + inc_multicast data_ready (F2-counter) to worker grid; fabric data leg oos
+ttnn/core/tensor/kernels/persistent_d2d_sender.cpp — role: sender | tag: refactor | one intra-chip inc_multicast(consumed_sem) to sender worker grid (F2-counter, master-only); fabric bulk + lane-to-lane L1 counters oos
+ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp — role: sender | tag: ref | didactic example (raw API): pre-handshake counter wait+reset, data mcast, local=VALID + set_multicast flag, flush+barrier; previously-missed
+
+# ===== quasar (experimental metal 2.0 port) =====
+# DEFER-AS-GROUP (reconcile 2026-06-27): actively-churning mid-flight Metal-2.0 port; every kernel DUPLICATES a
+# production matmul/conv/move pattern already in census (zero new hazard coverage); 4 _metal2 forks carry live
+# #47797 hang-debug scaffolding (one with an UNRESOLVED act-mcast deadlock). Per-file tag = intrinsic target for
+# when the port stabilizes + DEBUG is stripped. All object-API (Noc::/Semaphore<>::). _metal2 forks differ from
+# their sibling only in host-binding surface; mcast+handshake body byte-identical.
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp — role: hybrid | tag: refactor | P2 3-runtime-core-types; dup of production in0_sender_dram_sharded
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp — role: sender | tag: clean | canonical P1 sender twin; legacy-binding sibling of _metal2 (coexist)
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding_metal2.cpp — role: sender | tag: clean | metal2 fork of P1 sender; body identical, host-binding only; live DPRINT debug
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp — role: hybrid | tag: refactor | P3 rotating-role STAR (H12); dup of production
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp — role: hybrid | tag: refactor | metal2 fork of P3; [DEBUG #47797] scaffolding
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp — role: sender | tag: defer | P4 flag-only collective barrier, no data half; dup of production defer
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp — role: hybrid | tag: clean | two P1 sender blocks (in1+bias); dup of production clean
+ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp — role: hybrid | tag: clean | metal2 fork; body identical
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/activation_reader_width_sharded.cpp — role: hybrid | tag: refactor | INCLUDE_SRC loopback + F2-MIXED + barrier; dup of production refactor
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/activation_reader_width_sharded_metal2.cpp — role: hybrid | tag: refactor | metal2 fork; same F2-MIXED blocker
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp — role: hybrid | tag: refactor | all-3-F3 + chunked send (R4); dup of production refactor
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2_metal2.cpp — role: hybrid | tag: defer | metal2 fork w/ UNRESOLVED #47797 act-mcast deadlock + live debug
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp — role: sender | tag: clean | canonical weights sender twin
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp — role: sender | tag: clean | metal2 fork; live layer3-hang DPRINT
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp — role: sender | tag: clean | canonical weights sender twin
+ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp — role: sender | tag: clean | metal2 fork; watcher deadlock markers
+ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp — role: hybrid | tag: refactor | multi-rect flag-only go-mcast + R-to-S counter; dup of production refactor
+ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp — role: hybrid | tag: refactor | RM/stick twin of above

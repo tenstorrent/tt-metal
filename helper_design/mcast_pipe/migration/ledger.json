@@ -1,1206 +1,1606 @@
 {
- "helper": "mcast_pipe",
- "helper_header": "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp",
- "api_version_define": "MCAST_PIPE_API_VERSION",
- "current_api_version_at_bootstrap": 4,
- "bootstrapped": "2026-06-19",
- "source_of_truth_note": "Migrated set derived by grep of SenderPipe/ReceiverPipe usage (ground truth), not changelog prose. Staleness is DERIVED: migrated_api_version < current.",
- "entries": [
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
-   "op_family": "matmul",
-   "role": "sender",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "2dc2b7e56175e21eacfa4bea67ced8a7f23dcd38",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "KNOWN INSTANCE; canonical P1",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-   "op_family": "matmul",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "85cc48b1373d2f6d0faf48ad3665de9a62ebed5d",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "P1 receiver; 3-state flag wait_min",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
-   "op_family": "matmul",
-   "role": "hybrid",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "d5ca9f7dbe154aa9b7e1a784f12123055e9ba228",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "KNOWN INSTANCE; P1",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-   "op_family": "matmul",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "592e92169277b7ae09d83348b3ebb481a4493f20",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "P1 receiver",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
-   "op_family": "matmul",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py::test_matmul_in1_dram_sharded_with_program_cache"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "P2 worker-type-dispatched (3 runtime core types) | DEFER-DESIGN-GAP: split mcast-dest count vs consumer-ack count. type1 mcasts (num_cores-1)=grid-1 but waits num_dests=banks; type2 mcasts num_cores=grid (INCLUDE) but waits num_dests-1=banks-1. Single NUM_ACTIVE_RECEIVER_CORES cannot serve both contradictory constraints. Needs helper change (out of scope).",
-   "flags": [
-    "tier:2b",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-   "op_family": "matmul",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "5a9d07277dfb07178185f131ad5290b0d0cbe7c0",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core (transpose_mcast=True, in0_sharded=True)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "R6 rotating-role STAR; lifted from quarantine by helper per-send flag-VALID re-assert (20cf0df46ee)",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
-   "op_family": "matmul",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids | DEFER-DESIGN-GAP: sem ids are RUNTIME args (Semaphore<>(get_arg_val(i++)) at lines 54-55), but v7 SenderPipe/ReceiverPipe take DATA_READY_SEM_ID/CONSUMER_READY_SEM_ID as compile-time template params. Runtime sem id inexpressible. Needs helper change (out of scope).",
-   "flags": [
-    "tier:2b",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
-   "op_family": "matmul",
-   "role": "sender",
-   "tag": "defer",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "P4 flag-only collective barrier, no data half",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
-   "op_family": "matmul",
-   "role": "n/a",
-   "tag": "defer",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "P5 ring unicast, no multicast",
-   "flags": []
-  },
-  {
-   "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
-   "op_family": "matmul",
-   "role": "hybrid",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "NO pytest - metal_example_matmul_multicore_reuse_mcast binary only"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "didactic P1 (raw API) | DEFER-COVERAGE: NO pytest - metal_example_matmul_multicore_reuse_mcast binary only",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
-   "op_family": "matmul",
-   "role": "hybrid",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "NO pytest - binary only"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
-   "op_family": "matmul",
-   "role": "hybrid",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "NO pytest - binary only"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
-   "op_family": "conv",
-   "role": "sender",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (HEIGHT_SHARDED 256x256 act_block_h=32)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "DESIGN-GAP: split mcast-dest count (total_num_cores-1, full rect incl. noop) vs consumer-ack count (total_active-1); single compile-time NUM_ACTIVE_RECEIVER_CORES cannot serve both. A/B hang-site flip confirmed on device.",
-   "flags": [
-    "tier:1",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
-   "op_family": "conv",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "d93798c8e0793bd2c104815e7a9d5b45c8f0e04f",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (HEIGHT_SHARDED ic16 oc16 256x256 act_block_h=32 BF16)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "ReceiverPipe unchanged in v8; re-verified (no code edit), JIT-built on HEIGHT_SHARDED 256x256 act_block_h=32 path. Existing commit kept.",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
-   "op_family": "conv",
-   "role": "sender",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "0826db5290c6b5920963ce08e45bdd4bbe1c5471",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (-k BLOCK_SHARDED: 48 passed, 16 skipped)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "v8 dense remigration: pure deletion of 3rd template arg (NUM_ACTIVE_RECEIVER_CORES). rect area()==num_cores_y-1/num_cores_x-1==EXCLUDE fan-out==ack count; sender at row/col 0 outside rect. JIT-verified hit.",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
-   "op_family": "conv",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "b37b1853d20cc977fdb532288faac51338c76d30",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (-k BLOCK_SHARDED: 48 passed, 16 skipped)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "ReceiverPipe unchanged in v8; re-verified (no code edit), JIT-built on block-sharded weights-mcast path. Existing commit kept.",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
-   "op_family": "conv",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "4063ade12d0",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (WIDTH_SHARDED matrix)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "INCLUDE_SRC loopback round-robin self-mcast; dual-pipe SenderPipe+ReceiverPipe. Divergent: rect fan-out (num_reader_cores) != consumer_ack_count (num_mcast_cores-1) -> v8 consumer_ack_count.",
-   "flags": [],
-   "note": "v8 dual-pipe: both faces use the helper (was sender-only + raw receiver). consumer_ack_count=num_mcast_cores-1 divergence is the v8-unblocked case."
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
-   "op_family": "conv",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (BLOCK_SHARDED 32x32 3x3)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE | DEFER-DESIGN-GAP (R4): mcast_block_chunked is a producer-overlapped STREAMING chunked send (wait_front per growing tile count interleaved with per-burst mcast). v7 send() handles only fully-ready blocks (auto-chunks a ready region); cannot express the per-burst wait_front streaming. R4 explicitly deferred this round (proposed_helpers.md). Out of scope.",
-   "flags": [
-    "tier:2b",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
-   "op_family": "conv",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/conv3d/test_conv3d.py"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope | DEFER-DESIGN-GAP: Mcast-mode McastSender emitter uses mcast_num_dests as a RUNTIME arg (get_arg_val, line 93) for both mcast dest count and ack wait, but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param. Runtime recipient count inexpressible. Receiver/Passive halves are ReceiverPipe-expressible but not worth splitting the protocol. Needs helper change (out of scope).",
-   "flags": [
-    "tier:2b",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
-   "op_family": "normalization",
-   "role": "sender",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "65d3debd959",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm (sim multi-device on 1 chip)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "C1 pure-flag NO-pre-handshake fresh-slot",
-   "flags": [
-    "tier:1"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp",
-   "op_family": "normalization",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "fcec91acc5c",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "C1",
-   "flags": [
-    "tier:1"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
-   "op_family": "normalization",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (legacy)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "C2 multi-rect | DEFER-DESIGN-GAP: multi-rect per-rect num_dests is a RUNTIME arg (get_arg_val), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param; runtime num_dests inexpressible. Needs helper change (out of scope).",
-   "flags": [
-    "tier:2a",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
-   "op_family": "normalization",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "720f0ede3ac93b542a5bb32796480775341af4df",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "C2",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
-   "op_family": "normalization",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "4c7f3b919f2",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "C2 flag-only sender -> send_signal(); consumer-drain gate + gather HOLE kept raw",
-   "flags": [
-    "tier:2a"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
-   "op_family": "normalization",
-   "role": "receiver",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "e6e5b15ef91",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "C2 flag receiver -> receive() (acks via up); atomic-barrier + gather HOLE kept raw",
-   "flags": [
-    "tier:2a"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
-   "op_family": "normalization",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "sweep-only"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "C2 multi-rect | DEFER-COVERAGE: sweep-only",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
-   "op_family": "normalization",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (welford)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "C2 multi-rect | DEFER-DESIGN-GAP: multi-rect per-rect num_dests is a RUNTIME arg (get_arg_val), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param; runtime num_dests inexpressible. Needs helper change (out of scope).",
-   "flags": [
-    "tier:2a",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
-   "op_family": "normalization",
-   "role": "receiver",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "sweep-only"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "C2 | DEFER-COVERAGE: sweep-only",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp",
-   "op_family": "normalization",
-   "role": "receiver",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "7e8e0a90bcb036f5a43c02c9431470e3d5e42087",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "C2",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
-   "op_family": "normalization",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "2b662e1ba1f",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "C3 TWO-PHASE flag\u2192MONOTONE-counter streaming",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
-   "op_family": "normalization",
-   "role": "receiver",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "f348c649e02",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/normalization/test_layer_norm_sharded.py::test_layer_norm_sharded_single_stage"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "C3 two-phase: phase-1 ReceiverPipe; phase-2 monotone wait_min(block+2) kept raw (shared-cell counter reuse, matches sender twin)",
-   "flags": [
-    "tier:2a"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
-   "op_family": "normalization",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "sweep-only (interleaved GN routes nowhere from unit tests)"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "C4 double-flag-per-exchange | DEFER-COVERAGE: sweep-only (interleaved GN routes nowhere from unit tests)",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp",
-   "op_family": "normalization",
-   "role": "receiver",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "sweep-only"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "C4 | DEFER-COVERAGE: sweep-only",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
-   "op_family": "transformer + sdpa",
-   "role": "both",
-   "tag": "ref",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "ChainLink abstraction (existing two-sided helper); flush + linked=true companion",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
-   "op_family": "transformer + sdpa",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/transformer/test_sdpa_prefill.py::test_sdpa_noncausal (b1 nh8 nkv1 s2048 d128)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "DEFERRED: CHAIN/relay topology (helper design gap). Forward path uses cross-id relay_multicast(valid_sem -> receiver_sem, src!=dst); each link is simultaneously receiver+sender. STAR SenderPipe asserts src==dst, structurally cannot relay. = chain_link.hpp reference pattern, T2 CHAIN=GAP.",
-   "flags": [
-    "tier:2c",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
-   "op_family": "transformer + sdpa",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    ">=4 devices (test_exp_ring_joint_sdpa.py)"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "open-coded chain-link + ring sync (ring part oos) | DEFER-COVERAGE: >=4 devices (test_exp_ring_joint_sdpa.py)",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
-   "op_family": "transformer + sdpa",
-   "role": "both",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/transformer/test_sdpa_decode.py::test_sdpa_decode_sharded (use_k_mcast=1)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "DEFERRED: runtime recipient count + runtime role. read_k STAR is otherwise expressible (vertical-col mcast, sem set_multicast src==dst, no pre-handshake), BUT num_dests is a pure runtime arg (helper NUM_ACTIVE_RECEIVER_CORES is compile-time only) and do_mcast selects sender-vs-receiver per-core at runtime under one binary (helper Sender/ReceiverPipe are distinct compile-time-chosen types). Two design gaps.",
-   "flags": [
-    "tier:2c",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/worker_writer.cpp",
-   "op_family": "transformer + sdpa",
-   "role": "sender",
-   "tag": "oos",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "fabric cross-chip data; only degenerate sem-rect-mcast local",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "f8879d8c5ce4d5bda50a3257b9be7e32c684b0f9",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": "2026-06-20",
-   "census_note": "cleanest modern receiver",
-   "flags": []
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "migrated",
-   "migrated_api_version": 8,
-   "commit": "a362b90343a",
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/reduction/test_topk.py::test_topk (W=8192 multicore)"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "unicast scatter + up(counter)",
-   "flags": [
-    "tier:2b"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/reduction/test_argmax.py::test_argmax (shape [64,128] use_multicore=True)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact \u2014 no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
-   "flags": [
-    "tier:2b",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor (large Wt -> multicore-DRAM branch)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "legacy raw API; FLAG-ONLY | DEFER-DESIGN-GAP: (1) mcast recipient count number_of_dest is a RUNTIME arg (get_arg_val 6 = core_range.num_cores()), v7 NUM_ACTIVE_RECEIVER_CORES is compile-time. (2) SPLIT count: start phase mcasts number_of_dest and waits number_of_dest; substage phase mcasts number_of_dest but waits Wt/2 confirmations (!= recipient count) - single PRE_HANDSHAKE ties ack-wait to recipient count. (3) sem ids are RUNTIME args (Semaphore<>(get_arg_val)). Three known design gaps. Needs helper change (out of scope).",
-   "flags": [
-    "design-gap",
-    "tier:3"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "receiver",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "legacy | DEFER-DESIGN-GAP: worker RECEIVER half of coordinator STAR. Inverted flag (coordinator_to_cores_sem: wait(0)/set(VALID), polarity opposite to helper VALID-ready). sem ids RUNTIME args (Semaphore<>(get_arg_val)) - v7 sem ids are compile-time template params. Pairs with coordinator which itself defers (runtime recipient count + split count). Out of scope.",
-   "flags": [
-    "design-gap",
-    "tier:3"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "confirmation inc | DEFER-DESIGN-GAP: return leg of the coordinator counter (up(cores_to_coordinator) per processed pair). Pure ack emit, not a Pipe face; pairs with the coordinator/reader STAR which defers (runtime recipient count + split count + runtime sem ids). No standalone Pipe migration. Out of scope.",
-   "flags": [
-    "design-gap",
-    "tier:3"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-TILE-L1-L1)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "single-shot go-flag mcast; legacy API | DEFER-DESIGN-GAP: (1) RUNTIME role selection: is_controller=get_arg_val(8) picks sender-vs-receiver per-core under one binary; v7 SenderPipe/ReceiverPipe are distinct compile-time types. (2) MULTI-RECT 2-3 rects with RUNTIME per-rect counts (range_{0,1,2}_size, do_third_multicast all get_arg_val); v7 takes single McastRect + compile-time NUM_ACTIVE_RECEIVER_CORES. (3) dual-use L1 word (control_value RUNTIME): receivers inc as counter, controller waits then broadcasts same cell as go-flag. (4) runtime sem id. Multiple known design gaps. Needs helper change (out of scope).",
-   "flags": [
-    "design-gap",
-    "tier:3"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
-   "op_family": "data_movement + reduction",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-RM-L1-L1)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "RM twin of above | DEFER-DESIGN-GAP: structurally identical to move_interleaved_with_overlap (RM data path only diff). Same gaps: runtime role selection (is_controller), multi-rect 2-3 rects with runtime per-rect counts, dual-use control_value word, runtime sem id. Needs helper change (out of scope).",
-   "flags": [
-    "design-gap",
-    "tier:3"
-   ]
-  },
-  {
-   "kernel": "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "ref",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "didactic single-shot sender (raw API); cleanest reference",
-   "flags": []
-  },
-  {
-   "kernel": "models/demos/deepseek_v3_b1/unified_kernels/mcast.hpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "both",
-   "tag": "ref",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "EXISTING two-sided Pipe (deepseek_b1_ops::Mcast); init/op/teardown; strongest API-shape evidence",
-   "flags": []
-  },
-  {
-   "kernel": "models/demos/deepseek_v3_b1/unified_kernels/dataflow_utils.hpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "n/a",
-   "tag": "ref",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "preprogram-state primitive layer",
-   "flags": []
-  },
-  {
-   "kernel": "models/demos/deepseek_v3_b1/unified_kernels/flash_mla.hpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "models/demos/deepseek_v3_b1/.../test_flash_mla.py"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "DEFER-DESIGN-GAP: num_mcast_dests is a RUNTIME arg (ReaderArgs/WriterArgs structs, lines 141/178; used at 348/356/363 etc.), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param -> runtime recipient/ack count inexpressible (same gap as gn_v2/welford/conv3d). Plus the K-chunk mcast is only one of two per-chunk-loop branches alternating with a preprogram-state TRID-pipelined sharded read (noc_async_read_one_packet_with_state, ncrisc_brisc_sync double-buffer), gated by BRISC_MCAST_LOOPS; receiver pre-handshake uses unicast_atomic_inc_with_state (preprogram-state). Needs helper change (out of scope).",
-   "flags": [
-    "tier:2d",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "models/demos/deepseek_v3_b1/unified_kernels/kv_cache_update.hpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "models/demos/deepseek_v3_b1/.../test_kv_cache_branch.py::test_kv_cache_branch"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "DEFER-DESIGN-GAP: preprogram-state mcast (noc_async_write_multicast_preprogram_all_state / multicast_write_with_state / _issue_txn set-state+issue-txn split, shared-cmd-buf branch). v7 SenderPipe.send() issues a single async_write_multicast per call with no set-state path; migrating would drop the preprogram-state perf optimization that is the whole point of these unified_kernels. proposed_helpers.md explicitly defers this (no mcast set-state in object API; future). Out of scope.",
-   "flags": [
-    "tier:2d",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "models/demos/deepseek_v3_b1/.../test_sampling.py::test_sampling_argmax_single_device_101_cores"
-   ],
-   "coverage_confidence": "high",
-   "last_verified": "2026-06-20",
-   "census_note": "DEFER-COVERAGE: loop-barrier mcast only driven by requires_grid_size(101) tests; this WH n150 has 64 cores. Was stale-v4 Pipe<> (9f47f2dbcad); RESTORED to raw working code (compile-clean). Remigrate+verify on a >=101-core machine.",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "min mesh 2x2 - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "data + COUNTER inc_multicast + wait_min | DEFER-COVERAGE: min mesh 2x2 - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "min mesh 2x2 - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "data + COUNTER inc_multicast | DEFER-COVERAGE: min mesh 2x2 - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/nightly/.../experimental/test_moe_mm.py::test_moe_mm (dispatch_row, single device)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "one_packet mcast collector->7 cores (num_dests=7 is compile-time, expressible) | DEFER-COVERAGE: test_moe_mm unconditionally pytest.skip()s on wormhole_b0 AND blackhole (issue #44858: stable nightly moe_mm failures). This is a single WH b0 chip, so the test cannot exercise dm1.cpp here -> no runnable validation. (Migration also non-trivial: the collector group-mask mcast at lines 367-373 shares partial_semaphore with the sender->collector reduce-inc phases and multiple manual resets; a SenderPipe ctor set(VALID) would corrupt that multiplexed counter. But the binding blocker is coverage.)",
-   "flags": [
-    "tier:2d",
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "mesh (rms_test.py) - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "INCLUDE_SRC loopback + barrier | DEFER-COVERAGE: mesh (rms_test.py) - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_writer.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "mesh - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "INCLUDE_SRC loopback | DEFER-COVERAGE: mesh - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/worker_receiver.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "receiver",
-   "tag": "clean",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "ring_size>1 - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "INCLUDE_SRC partner | DEFER-COVERAGE: ring_size>1 - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_reader.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "4x8 mesh - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "value-carrying flag (token counts in sem word) | DEFER-COVERAGE: 4x8 mesh - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_writer.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "4x8 mesh - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "value-carrying flag | DEFER-COVERAGE: 4x8 mesh - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss (1x1 mesh)"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "DEFER-DESIGN-GAP: co-compiled with tilize_writer (same value-carrying-flag family). Its own data broadcasts (per-expert counts, total_chunks) target MULTIPLE distinct rectangles (tilize / matmul / all-worker bounding boxes) with RUNTIME num_dests (tilize_bounding_box_num_cores-1, matmul_bounding_box_num_cores, all_worker_cores_bounding_box_num_cores-1, lines 795-857). v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is compile-time + single rect per Pipe; runtime multi-rect counts inexpressible (same gap as gn_v2). Companion to the writer's value-carrying flag. Needs helper change (out of scope). [coverage note: WH single-card test also requires grid>=7x10 (70 cores); a 64-core n150 8x8 grid would pytest.skip.]",
-   "flags": [
-    "tier:2d",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss"
-   ],
-   "coverage_confidence": "med",
-   "last_verified": "2026-06-20",
-   "census_note": "DEFER-DESIGN-GAP: VALUE-CARRYING FLAG. matmul_chunk_ready_semaphore broadcasts a MONOTONE running value via noc_semaphore_set(addr,set_value)+set_multicast (set_value=1 then set_value++ per chunk, lines 408/694-702); receivers noc_semaphore_wait(addr,value). matmul_chunk_available broadcasts an ACCUMULATED runtime value (wait_value += num_matmul_cores then set_multicast, lines 513-524). Neither maps to v7 Flag (fixed VALID/INVALID) nor Counter (inc+1/wait_min). Plus multiple distinct mcast rects with RUNTIME num_dests (num_matmul_cores etc.). Two design gaps (arbitrary-value set_multicast + runtime count). Needs helper change (out of scope).",
-   "flags": [
-    "tier:2d",
-    "design-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "galaxy (test_selective_combine_6U.py) - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "flag-only sync | DEFER-COVERAGE: galaxy (test_selective_combine_6U.py) - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "galaxy - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "flag-only sync | DEFER-COVERAGE: galaxy - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_all_gather_concat_writer.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "TG/mesh - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "flag-only | DEFER-COVERAGE: TG/mesh - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/all_to_all_sender_writer.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "bh_1d_mesh - multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "INCLUDE_SRC loopback (intra-chip leg); fabric leg oos | DEFER-COVERAGE: bh_1d_mesh - multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "hybrid",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "deepseek_prefill multi-device"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait (deepseek_prefill family) | DEFER-COVERAGE: deepseek_prefill multi-device",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_h2d_receiver.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "refactor",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [
-    "no identified single-chip test (host_io persistent path)"
-   ],
-   "coverage_confidence": "none",
-   "last_verified": null,
-   "census_note": "data write_multicast + counter inc_multicast (mixed-counter); name says receiver but it multicasts | DEFER-COVERAGE: no identified single-chip test (host_io persistent path)",
-   "flags": [
-    "coverage-gap"
-   ]
-  },
-  {
-   "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
-   "op_family": "ccl / deepseek / examples",
-   "role": "sender",
-   "tag": "defer",
-   "status": "deferred",
-   "migrated_api_version": null,
-   "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
-   "last_verified": null,
-   "census_note": "flag-only collective barrier; ring/CCL twin of matmul reader_bmm_tile_layout_in1_ring_all_gather (P4 defer)",
-   "flags": []
-  }
- ],
- "reconciled": [
-  {
-   "date": "2026-06-19",
-   "base": null,
-   "result": "3 added (2 pending/refactor, 1 deferred/defer); 13 migrated flagged needs_recheck; 0 removed/renamed/clobbered"
-  }
- ]
+  "helper": "mcast_pipe",
+  "helper_header": "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp",
+  "api_version_define": "MCAST_PIPE_API_VERSION",
+  "current_api_version_at_bootstrap": 4,
+  "bootstrapped": "2026-06-19",
+  "source_of_truth_note": "Migrated set derived by grep of SenderPipe/ReceiverPipe usage (ground truth), not changelog prose. Staleness is DERIVED: migrated_api_version < current.",
+  "entries": [
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+      "op_family": "matmul",
+      "role": "sender",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "2dc2b7e56175e21eacfa4bea67ced8a7f23dcd38",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "KNOWN INSTANCE; canonical P1",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+      "op_family": "matmul",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "85cc48b1373d2f6d0faf48ad3665de9a62ebed5d",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "P1 receiver; 3-state flag wait_min",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "d5ca9f7dbe154aa9b7e1a784f12123055e9ba228",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "KNOWN INSTANCE; P1",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+      "op_family": "matmul",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "592e92169277b7ae09d83348b3ebb481a4493f20",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "P1 receiver",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py::test_matmul_in1_dram_sharded_with_program_cache"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "P2 worker-type-dispatched (3 runtime core types) | DEFER-DESIGN-GAP: split mcast-dest count vs consumer-ack count. type1 mcasts (num_cores-1)=grid-1 but waits num_dests=banks; type2 mcasts num_cores=grid (INCLUDE) but waits num_dests-1=banks-1. Single NUM_ACTIVE_RECEIVER_CORES cannot serve both contradictory constraints. Needs helper change (out of scope).",
+      "flags": [
+        "tier:2b",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "5a9d07277dfb07178185f131ad5290b0d0cbe7c0",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core (transpose_mcast=True, in0_sharded=True)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "R6 rotating-role STAR; lifted from quarantine by helper per-send flag-VALID re-assert (20cf0df46ee)",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids | DEFER-DESIGN-GAP: sem ids are RUNTIME args (Semaphore<>(get_arg_val(i++)) at lines 54-55), but v7 SenderPipe/ReceiverPipe take DATA_READY_SEM_ID/CONSUMER_READY_SEM_ID as compile-time template params. Runtime sem id inexpressible. Needs helper change (out of scope).",
+      "flags": [
+        "tier:2b",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+      "op_family": "matmul",
+      "role": "sender",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "P4 flag-only collective barrier, no data half",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
+      "op_family": "matmul",
+      "role": "n/a",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "P5 ring unicast, no multicast",
+      "flags": []
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "NO pytest - metal_example_matmul_multicore_reuse_mcast binary only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "didactic P1 (raw API) | DEFER-COVERAGE: NO pytest - metal_example_matmul_multicore_reuse_mcast binary only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "NO pytest - binary only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
+      "op_family": "matmul",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "NO pytest - binary only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (HEIGHT_SHARDED 256x256 act_block_h=32)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "DESIGN-GAP: split mcast-dest count (total_num_cores-1, full rect incl. noop) vs consumer-ack count (total_active-1); single compile-time NUM_ACTIVE_RECEIVER_CORES cannot serve both. A/B hang-site flip confirmed on device.",
+      "flags": [
+        "tier:1",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "d93798c8e0793bd2c104815e7a9d5b45c8f0e04f",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (HEIGHT_SHARDED ic16 oc16 256x256 act_block_h=32 BF16)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "ReceiverPipe unchanged in v8; re-verified (no code edit), JIT-built on HEIGHT_SHARDED 256x256 act_block_h=32 path. Existing commit kept.",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "sender",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "0826db5290c6b5920963ce08e45bdd4bbe1c5471",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (-k BLOCK_SHARDED: 48 passed, 16 skipped)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "v8 dense remigration: pure deletion of 3rd template arg (NUM_ACTIVE_RECEIVER_CORES). rect area()==num_cores_y-1/num_cores_x-1==EXCLUDE fan-out==ack count; sender at row/col 0 outside rect. JIT-verified hit.",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "conv",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "b37b1853d20cc977fdb532288faac51338c76d30",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (-k BLOCK_SHARDED: 48 passed, 16 skipped)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "ReceiverPipe unchanged in v8; re-verified (no code edit), JIT-built on block-sharded weights-mcast path. Existing commit kept.",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
+      "op_family": "conv",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "4063ade12d0",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (WIDTH_SHARDED matrix)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "INCLUDE_SRC loopback round-robin self-mcast; dual-pipe SenderPipe+ReceiverPipe. Divergent: rect fan-out (num_reader_cores) != consumer_ack_count (num_mcast_cores-1) -> v8 consumer_ack_count.",
+      "flags": [],
+      "note": "v8 dual-pipe: both faces use the helper (was sender-only + raw receiver). consumer_ack_count=num_mcast_cores-1 divergence is the v8-unblocked case."
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
+      "op_family": "conv",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (BLOCK_SHARDED 32x32 3x3)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE | DEFER-DESIGN-GAP (R4): mcast_block_chunked is a producer-overlapped STREAMING chunked send (wait_front per growing tile count interleaved with per-burst mcast). v7 send() handles only fully-ready blocks (auto-chunks a ready region); cannot express the per-burst wait_front streaming. R4 explicitly deferred this round (proposed_helpers.md). Out of scope.",
+      "flags": [
+        "tier:2b",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
+      "op_family": "conv",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/conv3d/test_conv3d.py"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope | DEFER-DESIGN-GAP: Mcast-mode McastSender emitter uses mcast_num_dests as a RUNTIME arg (get_arg_val, line 93) for both mcast dest count and ack wait, but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param. Runtime recipient count inexpressible. Receiver/Passive halves are ReceiverPipe-expressible but not worth splitting the protocol. Needs helper change (out of scope).",
+      "flags": [
+        "tier:2b",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "65d3debd959",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm (sim multi-device on 1 chip)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "C1 pure-flag NO-pre-handshake fresh-slot",
+      "flags": [
+        "tier:1"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "fcec91acc5c",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "C1",
+      "flags": [
+        "tier:1"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (legacy)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "C2 multi-rect | DEFER-DESIGN-GAP: multi-rect per-rect num_dests is a RUNTIME arg (get_arg_val), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param; runtime num_dests inexpressible. Needs helper change (out of scope).",
+      "flags": [
+        "tier:2a",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "720f0ede3ac93b542a5bb32796480775341af4df",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "C2",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "4c7f3b919f2",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "C2 flag-only sender -> send_signal(); consumer-drain gate + gather HOLE kept raw",
+      "flags": [
+        "tier:2a"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "e6e5b15ef91",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "C2 flag receiver -> receive() (acks via up); atomic-barrier + gather HOLE kept raw",
+      "flags": [
+        "tier:2a"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "sweep-only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "C2 multi-rect | DEFER-COVERAGE: sweep-only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (welford)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "C2 multi-rect | DEFER-DESIGN-GAP: multi-rect per-rect num_dests is a RUNTIME arg (get_arg_val), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param; runtime num_dests inexpressible. Needs helper change (out of scope).",
+      "flags": [
+        "tier:2a",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "sweep-only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "C2 | DEFER-COVERAGE: sweep-only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "7e8e0a90bcb036f5a43c02c9431470e3d5e42087",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "C2",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "2b662e1ba1f",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "C3 TWO-PHASE flag\u2192MONOTONE-counter streaming",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "f348c649e02",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py::test_layer_norm_sharded_single_stage"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-27",
+      "census_note": "C3 two-phase: phase-1 ReceiverPipe; phase-2 monotone wait_min(block+2) kept raw (shared-cell counter reuse, matches sender twin)",
+      "flags": [
+        "tier:2a"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "sweep-only (interleaved GN routes nowhere from unit tests)"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "C4 double-flag-per-exchange | DEFER-COVERAGE: sweep-only (interleaved GN routes nowhere from unit tests)",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp",
+      "op_family": "normalization",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "sweep-only"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "C4 | DEFER-COVERAGE: sweep-only",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
+      "op_family": "transformer + sdpa",
+      "role": "both",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "ChainLink abstraction (existing two-sided helper); flush + linked=true companion",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/transformer/test_sdpa_prefill.py::test_sdpa_noncausal (b1 nh8 nkv1 s2048 d128)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "DEFERRED: CHAIN/relay topology (helper design gap). Forward path uses cross-id relay_multicast(valid_sem -> receiver_sem, src!=dst); each link is simultaneously receiver+sender. STAR SenderPipe asserts src==dst, structurally cannot relay. = chain_link.hpp reference pattern, T2 CHAIN=GAP.",
+      "flags": [
+        "tier:2c",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        ">=4 devices (test_exp_ring_joint_sdpa.py)"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "open-coded chain-link + ring sync (ring part oos) | DEFER-COVERAGE: >=4 devices (test_exp_ring_joint_sdpa.py)",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
+      "op_family": "transformer + sdpa",
+      "role": "both",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/transformer/test_sdpa_decode.py::test_sdpa_decode_sharded (use_k_mcast=1)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "DEFERRED: runtime recipient count + runtime role. read_k STAR is otherwise expressible (vertical-col mcast, sem set_multicast src==dst, no pre-handshake), BUT num_dests is a pure runtime arg (helper NUM_ACTIVE_RECEIVER_CORES is compile-time only) and do_mcast selects sender-vs-receiver per-core at runtime under one binary (helper Sender/ReceiverPipe are distinct compile-time-chosen types). Two design gaps.",
+      "flags": [
+        "tier:2c",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/worker_writer.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "sender",
+      "tag": "oos",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "fabric cross-chip data; only degenerate sem-rect-mcast local",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "f8879d8c5ce4d5bda50a3257b9be7e32c684b0f9",
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": "2026-06-20",
+      "census_note": "cleanest modern receiver",
+      "flags": []
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "migrated",
+      "migrated_api_version": 8,
+      "commit": "a362b90343a",
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/reduction/test_topk.py::test_topk (W=8192 multicore)"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "unicast scatter + up(counter)",
+      "flags": [
+        "tier:2b"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/reduction/test_argmax.py::test_argmax (shape [64,128] use_multicore=True)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact \u2014 no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
+      "flags": [
+        "tier:2b",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor (large Wt -> multicore-DRAM branch)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "legacy raw API; FLAG-ONLY | DEFER-DESIGN-GAP: (1) mcast recipient count number_of_dest is a RUNTIME arg (get_arg_val 6 = core_range.num_cores()), v7 NUM_ACTIVE_RECEIVER_CORES is compile-time. (2) SPLIT count: start phase mcasts number_of_dest and waits number_of_dest; substage phase mcasts number_of_dest but waits Wt/2 confirmations (!= recipient count) - single PRE_HANDSHAKE ties ack-wait to recipient count. (3) sem ids are RUNTIME args (Semaphore<>(get_arg_val)). Three known design gaps. Needs helper change (out of scope).",
+      "flags": [
+        "design-gap",
+        "tier:3"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "legacy | DEFER-DESIGN-GAP: worker RECEIVER half of coordinator STAR. Inverted flag (coordinator_to_cores_sem: wait(0)/set(VALID), polarity opposite to helper VALID-ready). sem ids RUNTIME args (Semaphore<>(get_arg_val)) - v7 sem ids are compile-time template params. Pairs with coordinator which itself defers (runtime recipient count + split count). Out of scope.",
+      "flags": [
+        "design-gap",
+        "tier:3"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "confirmation inc | DEFER-DESIGN-GAP: return leg of the coordinator counter (up(cores_to_coordinator) per processed pair). Pure ack emit, not a Pipe face; pairs with the coordinator/reader STAR which defers (runtime recipient count + split count + runtime sem ids). No standalone Pipe migration. Out of scope.",
+      "flags": [
+        "design-gap",
+        "tier:3"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-TILE-L1-L1)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "single-shot go-flag mcast; legacy API | DEFER-DESIGN-GAP: (1) RUNTIME role selection: is_controller=get_arg_val(8) picks sender-vs-receiver per-core under one binary; v7 SenderPipe/ReceiverPipe are distinct compile-time types. (2) MULTI-RECT 2-3 rects with RUNTIME per-rect counts (range_{0,1,2}_size, do_third_multicast all get_arg_val); v7 takes single McastRect + compile-time NUM_ACTIVE_RECEIVER_CORES. (3) dual-use L1 word (control_value RUNTIME): receivers inc as counter, controller waits then broadcasts same cell as go-flag. (4) runtime sem id. Multiple known design gaps. Needs helper change (out of scope).",
+      "flags": [
+        "design-gap",
+        "tier:3"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
+      "op_family": "data_movement + reduction",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-RM-L1-L1)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "RM twin of above | DEFER-DESIGN-GAP: structurally identical to move_interleaved_with_overlap (RM data path only diff). Same gaps: runtime role selection (is_controller), multi-rect 2-3 rects with runtime per-rect counts, dual-use control_value word, runtime sem id. Needs helper change (out of scope).",
+      "flags": [
+        "design-gap",
+        "tier:3"
+      ]
+    },
+    {
+      "kernel": "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "didactic single-shot sender (raw API); cleanest reference",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/mcast.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "both",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "EXISTING two-sided Pipe (deepseek_b1_ops::Mcast); init/op/teardown; strongest API-shape evidence",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/dataflow_utils.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "n/a",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "preprogram-state primitive layer",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/flash_mla.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "models/demos/deepseek_v3_b1/.../test_flash_mla.py"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "DEFER-DESIGN-GAP: num_mcast_dests is a RUNTIME arg (ReaderArgs/WriterArgs structs, lines 141/178; used at 348/356/363 etc.), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param -> runtime recipient/ack count inexpressible (same gap as gn_v2/welford/conv3d). Plus the K-chunk mcast is only one of two per-chunk-loop branches alternating with a preprogram-state TRID-pipelined sharded read (noc_async_read_one_packet_with_state, ncrisc_brisc_sync double-buffer), gated by BRISC_MCAST_LOOPS; receiver pre-handshake uses unicast_atomic_inc_with_state (preprogram-state). Needs helper change (out of scope).",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/unified_kernels/kv_cache_update.hpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "models/demos/deepseek_v3_b1/.../test_kv_cache_branch.py::test_kv_cache_branch"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "DEFER-DESIGN-GAP: preprogram-state mcast (noc_async_write_multicast_preprogram_all_state / multicast_write_with_state / _issue_txn set-state+issue-txn split, shared-cmd-buf branch). v7 SenderPipe.send() issues a single async_write_multicast per call with no set-state path; migrating would drop the preprogram-state perf optimization that is the whole point of these unified_kernels. proposed_helpers.md explicitly defers this (no mcast set-state in object API; future). Out of scope.",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "models/demos/deepseek_v3_b1/.../test_sampling.py::test_sampling_argmax_single_device_101_cores"
+      ],
+      "coverage_confidence": "high",
+      "last_verified": "2026-06-20",
+      "census_note": "DEFER-COVERAGE: loop-barrier mcast only driven by requires_grid_size(101) tests; this WH n150 has 64 cores. Was stale-v4 Pipe<> (9f47f2dbcad); RESTORED to raw working code (compile-clean). Remigrate+verify on a >=101-core machine.",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "min mesh 2x2 - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "data + COUNTER inc_multicast + wait_min | DEFER-COVERAGE: min mesh 2x2 - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "min mesh 2x2 - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "data + COUNTER inc_multicast | DEFER-COVERAGE: min mesh 2x2 - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/.../experimental/test_moe_mm.py::test_moe_mm (dispatch_row, single device)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "one_packet mcast collector->7 cores (num_dests=7 is compile-time, expressible) | DEFER-COVERAGE: test_moe_mm unconditionally pytest.skip()s on wormhole_b0 AND blackhole (issue #44858: stable nightly moe_mm failures). This is a single WH b0 chip, so the test cannot exercise dm1.cpp here -> no runnable validation. (Migration also non-trivial: the collector group-mask mcast at lines 367-373 shares partial_semaphore with the sender->collector reduce-inc phases and multiple manual resets; a SenderPipe ctor set(VALID) would corrupt that multiplexed counter. But the binding blocker is coverage.)",
+      "flags": [
+        "tier:2d",
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "mesh (rms_test.py) - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "INCLUDE_SRC loopback + barrier | DEFER-COVERAGE: mesh (rms_test.py) - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "INCLUDE_SRC loopback | DEFER-COVERAGE: mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/worker_receiver.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "receiver",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "ring_size>1 - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "INCLUDE_SRC partner | DEFER-COVERAGE: ring_size>1 - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "4x8 mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "value-carrying flag (token counts in sem word) | DEFER-COVERAGE: 4x8 mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "4x8 mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "value-carrying flag | DEFER-COVERAGE: 4x8 mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss (1x1 mesh)"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "DEFER-DESIGN-GAP: co-compiled with tilize_writer (same value-carrying-flag family). Its own data broadcasts (per-expert counts, total_chunks) target MULTIPLE distinct rectangles (tilize / matmul / all-worker bounding boxes) with RUNTIME num_dests (tilize_bounding_box_num_cores-1, matmul_bounding_box_num_cores, all_worker_cores_bounding_box_num_cores-1, lines 795-857). v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is compile-time + single rect per Pipe; runtime multi-rect counts inexpressible (same gap as gn_v2). Companion to the writer's value-carrying flag. Needs helper change (out of scope). [coverage note: WH single-card test also requires grid>=7x10 (70 cores); a 64-core n150 8x8 grid would pytest.skip.]",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss"
+      ],
+      "coverage_confidence": "med",
+      "last_verified": "2026-06-20",
+      "census_note": "DEFER-DESIGN-GAP: VALUE-CARRYING FLAG. matmul_chunk_ready_semaphore broadcasts a MONOTONE running value via noc_semaphore_set(addr,set_value)+set_multicast (set_value=1 then set_value++ per chunk, lines 408/694-702); receivers noc_semaphore_wait(addr,value). matmul_chunk_available broadcasts an ACCUMULATED runtime value (wait_value += num_matmul_cores then set_multicast, lines 513-524). Neither maps to v7 Flag (fixed VALID/INVALID) nor Counter (inc+1/wait_min). Plus multiple distinct mcast rects with RUNTIME num_dests (num_matmul_cores etc.). Two design gaps (arbitrary-value set_multicast + runtime count). Needs helper change (out of scope).",
+      "flags": [
+        "tier:2d",
+        "design-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "galaxy (test_selective_combine_6U.py) - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "flag-only sync | DEFER-COVERAGE: galaxy (test_selective_combine_6U.py) - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "galaxy - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "flag-only sync | DEFER-COVERAGE: galaxy - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_all_gather_concat_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "TG/mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "flag-only | DEFER-COVERAGE: TG/mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/all_to_all_sender_writer.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "bh_1d_mesh - multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "INCLUDE_SRC loopback (intra-chip leg); fabric leg oos | DEFER-COVERAGE: bh_1d_mesh - multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "deepseek_prefill multi-device"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait (deepseek_prefill family) | DEFER-COVERAGE: deepseek_prefill multi-device",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_h2d_receiver.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "no identified single-chip test (host_io persistent path)"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "data write_multicast + counter inc_multicast (mixed-counter); name says receiver but it multicasts | DEFER-COVERAGE: no identified single-chip test (host_io persistent path)",
+      "flags": [
+        "coverage-gap"
+      ]
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "flag-only collective barrier; ring/CCL twin of matmul reader_bmm_tile_layout_in1_ring_all_gather (P4 defer)",
+      "flags": []
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_d2h_sender.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "no identified single-chip test (host_io persistent path)"
+      ],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "intra-chip inc_multicast-to-workers (F2-counter) + atomic-barrier; PCIe/socket bulk D2H leg oos; twin of persistent_h2d_receiver | apply may DEFER-COVERAGE (host_io persistent path, like the twin) | DEFER-COVERAGE: D2HSocket test (test_send_recv_async_hd.py::test_send_async_d2h_basic) is blackhole-only, SKIPPED on wormhole_b0; no single-chip WH coverage",
+      "flags": [
+        "coverage-gap"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/core/tensor/kernels/persistent_d2d_receiver.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "intra-chip data write_multicast (F1 barrier) + inc_multicast data_ready (F2-counter) to worker grid; fabric cross-chip data leg oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
+      "flags": [
+        "coverage-gap"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/core/tensor/kernels/persistent_d2d_sender.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "none",
+      "last_verified": null,
+      "census_note": "one intra-chip inc_multicast(consumed_sem) to sender worker grid (F2-counter, master-only); fabric bulk + lane-to-lane shared-L1 counters oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
+      "flags": [
+        "coverage-gap"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/reader_indexer_score.cpp",
+      "op_family": "transformer + sdpa",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "per-direction rotating chain-link STAR: relay_multicast of write-once valid_sem cross-id into recv_sem (INV12), linked=true data + unlinked relay (F4); GAP=CHAIN the helper cannot express yet",
+      "flags": [
+        "design-gap"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp",
+      "op_family": "ccl / deepseek / examples",
+      "role": "sender",
+      "tag": "ref",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "didactic example (raw API, ttnn/examples): pre-handshake counter wait+reset, data mcast, local=VALID + set_multicast flag (F2-flag), flush+barrier; previously-missed (existed pre-rebase)",
+      "flags": [],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "P2 3-runtime-core-types; object API; dup of production in0_sender_dram_sharded",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "canonical P1 sender twin; legacy-binding sibling of _metal2 (coexist)",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "metal2 fork of P1 sender; body identical, host-binding only; live DPRINT debug",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "P3 rotating-role STAR (H12); dup of production",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "metal2 fork of P3; [DEBUG #47797] hang-localization scaffolding",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "P4 flag-only collective barrier, no data half; dup of production defer",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "two P1 sender blocks (in1+bias); dup of production clean",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "metal2 fork; body identical",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/activation_reader_width_sharded.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "INCLUDE_SRC loopback + F2-MIXED + barrier; dup of production refactor",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/activation_reader_width_sharded_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "metal2 fork; same F2-MIXED blocker",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "all-3-F3 + chunked send (R4); dup of production refactor",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "defer",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "metal2 fork w/ UNRESOLVED #47797 act-mcast deadlock on the exact handshake + live debug",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "canonical weights sender twin",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "metal2 fork; live conv2d layer3-hang DPRINT",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "canonical weights sender twin",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks_metal2.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "sender",
+      "tag": "clean",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "metal2 fork; watcher ring-buffer deadlock markers",
+      "flags": [
+        "quasar-metal2-port",
+        "hang:#47797"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "multi-rect flag-only go-mcast + R-to-S counter; dup of production refactor",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/experimental/quasar/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
+      "op_family": "quasar (experimental metal 2.0 port)",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "census_note": "RM/stick twin of above",
+      "flags": [
+        "quasar-metal2-port"
+      ],
+      "added_by_reconcile": "2026-06-27"
+    }
+  ],
+  "reconciled": [
+    {
+      "date": "2026-06-19",
+      "base": null,
+      "result": "3 added (2 pending/refactor, 1 deferred/defer); 13 migrated flagged needs_recheck; 0 removed/renamed/clobbered"
+    },
+    {
+      "date": "2026-06-27",
+      "base": "llk_helper_library (df38b5abc67); rebase-touched discriminator = pre-rebase tip 7ae140745b9..HEAD",
+      "result": "23 added (3 pending/refactor persistent; 18 deferred quasar metal-2.0 port; 1 deferred/refactor indexer_score design-gap=CHAIN; 1 deferred/ref lab_multicast); 1 migrated rebase-touched -> needs_recheck (reader_mcast_receiver_unary_sharded_ln.cpp, comment-only edit); 0 removed/renamed/clobbered"
+    }
+  ]
 }
