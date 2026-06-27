@@ -286,10 +286,14 @@ Status note, 2026-06-27 overnight:
 - Landed first-class coefficient hoisting for standalone trig residual kernels.
   The residual basis and Cody-Waite reduction are unchanged; the polynomial
   coefficients are materialized once outside the per-element replay body.
-- Controlled BF16 replay now shows 49/60 activations beating TTNN on both ULP
+- Revalidated sigmoid-compose preload instead of carrying the old register-pressure
+  guard forward. Sigmoid, sigmoid_accurate, silu, and swish keep the same ULPs
+  and run faster with preload enabled.
+- Controlled BF16 replay now shows 50/60 activations beating TTNN on both ULP
   and runtime where TTNN refs exist. New flips from this pass: log, log1p, log2,
-  log10, sin, and cos. Remaining TTNN-ref misses are tiny exp/sigmoid runtime
-  margins, GELU's explicit 0.25-ULP waiver, and multigammaln's native-op floor.
+  log10, sin, cos, and sigmoid. Remaining TTNN-ref misses are exp's 0.01 us
+  runtime margin, GELU's explicit 0.25-ULP waiver, and multigammaln's native-op
+  floor.
 - Still-open high-value items below remain valid: post-quantized scoring as a
   normal pipeline stage, true ULP-weighted fitting, centered segment residuals,
   richer segment-kind lowering, denominator-safety metadata, and eval-scheme
