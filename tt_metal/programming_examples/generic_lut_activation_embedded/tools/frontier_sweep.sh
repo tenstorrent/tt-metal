@@ -18,9 +18,10 @@
 #   frontier_sweep.sh --dispatch-local 4 --precision bf16 --fresh
 #
 # It writes canonical shard CSVs back into the invoking checkout's
-# results/frontier/<precision>/data/csv/ directory. Manual shard dispatch is
-# still supported with --shard/--num-shards/--out/--cache. Use --fresh to
-# replace shard CSVs; omit it to resume.
+# results/frontier/<precision>/data/csv/ directory and configures missing
+# per-worktree build_Release directories. Manual shard dispatch is still
+# supported with --shard/--num-shards/--out/--cache. Use --fresh to replace
+# shard CSVs; omit it to resume.
 #
 # TT_VISIBLE_DEVICES=C restricts UMD to physical chip C; the binary's device_id=0
 # then maps to it. Each worker needs a distinct --out and --cache.
@@ -107,6 +108,22 @@ dispatch_local() {
     fi
     script="$wt/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_sweep.sh"
     [[ -x "$script" ]] || { echo "ERROR: worktree sweep script missing/executable: $script" >&2; exit 1; }
+    if [[ ! -f "$wt/build_Release/build.ninja" ]]; then
+      echo "  chip ${chip}: configuring missing build_Release in ${wt}" >&2
+      (
+        cd "$wt" &&
+        ./build_metal.sh \
+          --build-programming-examples \
+          --configure-only \
+          --without-python-bindings \
+          --disable-warnings-as-errors \
+          --disable-unity-builds \
+          --enable-ccache
+      ) >"$log_dir/configure_chip${chip}.log" 2>&1 || {
+        echo "ERROR: failed to configure ${wt}/build_Release; see $log_dir/configure_chip${chip}.log" >&2
+        exit 1
+      }
+    fi
     if [[ -n "$RUN_DIR" ]]; then
       out="$RUN_DIR/data/csv/frontier_chip${chip}.csv"
     else
