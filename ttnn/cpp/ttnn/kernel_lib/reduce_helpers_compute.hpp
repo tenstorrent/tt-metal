@@ -49,7 +49,7 @@
  *
  * See reduce() function documentation for advanced usage examples including:
  * - Different input policies (BulkWaitBulkPop, NoWaitNoPop, WaitUpfrontNoPop)
- * - Post-reduce operations (e.g., recip_tile for softmax)
+ * - Post-reduce operations (e.g., recip_tile for a reciprocal-after-reduce normalization)
  * - Accumulation for block-wise reduction
  */
 
@@ -278,7 +278,7 @@ struct NoOp {
  * INPUT POLICIES: See ReduceInputPolicy enum for detailed mode descriptions.
  * - Use BulkWaitBulkPop for optimal performance when wait/pop are symmetric with ReduceInputBlockShape.
  * - Use NoWaitNoPop for asymmetric wait/pop (e.g., padding where you wait/pop more than ReduceInputBlockShape).
- * - Use WaitUpfrontNoPop for softmax patterns where tiles are reused in subsequent operations.
+ * - Use WaitUpfrontNoPop when input tiles are reused in subsequent operations after the reduce.
  *
  * POST-REDUCE OPERATIONS:
  * - post_reduce_op callback receives dst_idx parameter indicating which DEST register to operate on
@@ -336,13 +336,13 @@ struct NoOp {
  *       compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(input_stride));
  *
  * @example
- *   // WaitUpfrontNoPop policy: tiles persist for reuse (ideal for softmax pattern)
+ *   // WaitUpfrontNoPop policy: tiles persist for reuse (ideal when input tiles are reused after the reduce)
  *   // Library waits for tiles internally, but does NOT pop - tiles remain for subsequent ops
  *   compute_kernel_lib::reduce<
  *       MAX, REDUCE_ROW, dfb_values, dfb_scaler, dfb_max,
  *       compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt));
- *   // dfb_values tiles still available for sub_exp_block_bcast_cols_inplace()
+ *   // dfb_values tiles still available for a subsequent broadcast op
  *
  * @example
  *   // BulkWaitBulkPop policy (bulk wait/pop - optimal for performance)
@@ -352,7 +352,7 @@ struct NoOp {
  *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
- *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
+ *   // Post-reduce operation: reciprocal (recip_tile) after SUM reduce
  *   compute_kernel_lib::reduce<
  *       SUM, REDUCE_ROW, dfb_exps, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
  *       compute_kernel_lib::ReduceInputBlockShape::row(Wt),

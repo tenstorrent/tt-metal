@@ -580,7 +580,11 @@ void kernel_main() {
 #endif  // FUSE_BIAS
 
 #ifndef OUT_SHARDED
-                    // WRITER
+                    // WRITER (interleaved output): compute packs sequentially per subblock;
+                    // writer reads subblock-by-subblock and writes at subblock offsets.
+                    // (tile_pack_row_major is guarded to sharded-output-only in
+                    // matmul_device_operation.cpp, so there is no row-major branch for the
+                    // interleaved writer.)
                     uint32_t num_blocks_w_dim_ =
                         bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
                     uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;

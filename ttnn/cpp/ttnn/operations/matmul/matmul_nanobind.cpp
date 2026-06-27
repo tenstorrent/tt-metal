@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -16,6 +17,7 @@
 #include <fmt/ranges.h>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_tuner.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
@@ -162,7 +164,8 @@ void py_module(nb::module_& mod) {
            bool transpose_mcast,
            std::optional<UnaryWithParam> fused_activation,
            bool fuse_batch,
-           std::optional<CoreRangeSet> allowed_worker_cores) {
+           std::optional<CoreRangeSet> allowed_worker_cores,
+           bool tile_pack_row_major) {
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -178,7 +181,8 @@ void py_module(nb::module_& mod) {
                 transpose_mcast,
                 std::move(fused_activation),
                 fuse_batch,
-                std::move(allowed_worker_cores)};
+                std::move(allowed_worker_cores),
+                tile_pack_row_major};
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -192,7 +196,8 @@ void py_module(nb::module_& mod) {
         nb::arg("transpose_mcast").noconvert(),
         nb::arg("fused_activation") = nb::none(),
         nb::arg("fuse_batch").noconvert() = true,
-        nb::arg("allowed_worker_cores") = nb::none());
+        nb::arg("allowed_worker_cores") = nb::none(),
+        nb::arg("tile_pack_row_major").noconvert() = false);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -306,6 +311,15 @@ void py_module(nb::module_& mod) {
         When set, overrides ``compute_with_storage_grid_size`` for determining the active
         compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "tile_pack_row_major",
+        &MatmulMultiCoreReuseMultiCastProgramConfig::tile_pack_row_major,
+        R"doc(
+        When true, factory emits TILE_PACK_ROW_MAJOR to compute + writer kernels so the pack
+        LLK writes tiles at absolute CB offsets row-first across all N-subblocks, and the
+        writer reads per-M-row-group. Unlocks multi-row subblocks (out_subblock_h > 1 with
+        out_subblock_w < per_core_N) by decoupling subblock shape from writer tile order.
+    )doc");
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
@@ -362,7 +376,8 @@ void py_module(nb::module_& mod) {
                CoreRangeSet hop_cores,
                std::size_t num_global_cb_receivers,
                bool untilize_out,
-               std::optional<CoreRangeSet> allowed_worker_cores) {
+               std::optional<CoreRangeSet> allowed_worker_cores,
+               bool tile_pack_row_major) {
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -382,7 +397,8 @@ void py_module(nb::module_& mod) {
                     std::move(hop_cores),
                     num_global_cb_receivers,
                     untilize_out,
-                    std::move(allowed_worker_cores)};
+                    std::move(allowed_worker_cores),
+                    tile_pack_row_major};
             },
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
@@ -400,7 +416,8 @@ void py_module(nb::module_& mod) {
             nb::arg("hop_cores").noconvert() = nb::cast(CoreRangeSet()),
             nb::arg("num_global_cb_receivers").noconvert() = 1,
             nb::arg("untilize_out").noconvert() = false,
-            nb::arg("allowed_worker_cores") = nb::none())
+            nb::arg("allowed_worker_cores") = nb::none(),
+            nb::arg("tile_pack_row_major").noconvert() = false)
         .def_rw(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size,
@@ -517,6 +534,12 @@ void py_module(nb::module_& mod) {
 
             When set, overrides ``compute_with_storage_grid_size`` for determining the active
             compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
+        )doc")
+        .def_rw(
+            "tile_pack_row_major",
+            &MatmulMultiCoreReuseMultiCast1DProgramConfig::tile_pack_row_major,
+            R"doc(
+            See MatmulMultiCoreReuseMultiCastProgramConfig::tile_pack_row_major.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
@@ -1326,6 +1349,113 @@ void py_module(nb::module_& mod) {
         nb::arg("input_tensor_b"),
         nb::arg("parameters"),
         nb::arg("optional_output_tensors"));
+
+    // ── matmul_auto_tune submodule ──────────────────────────────────────────
+    // Host-side tuning helpers. Single source of truth for the algorithm —
+    // ttnn/ttnn/operations/matmul_auto_tune.py forwards to this submodule.
+    auto m_auto_tune = mod.def_submodule(
+        "matmul_auto_tune",
+        R"doc(
+        Host-side matmul tuning helpers — subblock enumeration, largest-subblock
+        pick, L1 footprint estimate.
+
+        The C++ tuner (``determine_largest_subblock``, called from
+        ``create_matmul_program_config``) only fires when no ``program_config``
+        is passed to ``ttnn.matmul``. This submodule fills the gap for explicit-
+        config callers and offline analysis. Bound from
+        ``ttnn::operations::matmul::auto_tune`` — single source of truth.
+        )doc");
+
+    namespace at = ttnn::operations::matmul::auto_tune;
+
+    m_auto_tune.attr("L1_BUDGET_BYTES_WORMHOLE") = at::L1_BUDGET_BYTES_WORMHOLE;
+    m_auto_tune.attr("L1_BUDGET_BYTES_BLACKHOLE") = at::L1_BUDGET_BYTES_BLACKHOLE;
+
+    m_auto_tune.def(
+        "dst_capacity",
+        &at::dst_capacity_from_flags,
+        nb::arg("fp32_dest_acc_en"),
+        nb::arg("dst_full_sync_en") = true,
+        R"doc(Return the number of DST tiles available for a single matmul subblock.)doc");
+
+    m_auto_tune.def(
+        "subblock_options",
+        &at::enumerate_subblock_options,
+        nb::arg("per_core_M"),
+        nb::arg("per_core_N"),
+        nb::arg("fp32_dest_acc_en") = false,
+        nb::arg("dst_full_sync_en") = true,
+        nb::arg("require_legacy_writer") = false,
+        R"doc(Return all (h, w) subblock pairs legal for this shape, sorted by descending volume.)doc");
+
+    m_auto_tune.def(
+        "largest_subblock",
+        &at::largest_subblock_from_flags,
+        nb::arg("per_core_M"),
+        nb::arg("per_core_N"),
+        nb::arg("fp32_dest_acc_en") = false,
+        nb::arg("dst_full_sync_en") = true,
+        nb::arg("require_legacy_writer") = false,
+        R"doc(Return the largest legal (out_subblock_h, out_subblock_w) for this shape.)doc");
+
+    m_auto_tune.def(
+        "needs_row_major",
+        &at::needs_row_major_writer,
+        nb::arg("h"),
+        nb::arg("w"),
+        nb::arg("per_core_N"),
+        R"doc(True iff this (h, w) requires tile_pack_row_major to compile.)doc");
+
+    // estimate_l1_per_core: takes keyword args (mirrors the Python signature),
+    // returns a dict with byte breakdowns and fit booleans.
+    m_auto_tune.def(
+        "estimate_l1_per_core",
+        [](uint32_t per_core_M,
+           uint32_t per_core_N,
+           uint32_t in0_block_w,
+           bool tile_pack_row_major,
+           bool fuse_bias,
+           uint32_t in0_tile_bytes,
+           uint32_t in1_tile_bytes,
+           uint32_t out_tile_bytes,
+           uint32_t interm_tile_bytes,
+           uint32_t num_buffered_blocks) {
+            at::L1EstimateInputs inputs;
+            inputs.per_core_M = per_core_M;
+            inputs.per_core_N = per_core_N;
+            inputs.in0_block_w = in0_block_w;
+            inputs.tile_pack_row_major = tile_pack_row_major;
+            inputs.fuse_bias = fuse_bias;
+            inputs.in0_tile_bytes = in0_tile_bytes;
+            inputs.in1_tile_bytes = in1_tile_bytes;
+            inputs.out_tile_bytes = out_tile_bytes;
+            inputs.interm_tile_bytes = interm_tile_bytes;
+            inputs.num_buffered_blocks = num_buffered_blocks;
+            auto fp = at::estimate_l1_footprint(inputs);
+            nb::dict d;
+            d["estimated_bytes"] = fp.estimated_bytes;
+            d["out_buf_bytes"] = fp.out_buf_bytes;
+            d["interm_buf_bytes"] = fp.interm_buf_bytes;
+            d["in0_buf_bytes"] = fp.in0_buf_bytes;
+            d["in1_buf_bytes"] = fp.in1_buf_bytes;
+            d["fits_wh"] = fp.fits_wh;
+            d["fits_bh"] = fp.fits_bh;
+            d["headroom_wh"] = fp.headroom_wh;
+            d["headroom_bh"] = fp.headroom_bh;
+            return d;
+        },
+        nb::kw_only(),
+        nb::arg("per_core_M"),
+        nb::arg("per_core_N"),
+        nb::arg("in0_block_w"),
+        nb::arg("tile_pack_row_major") = false,
+        nb::arg("fuse_bias") = false,
+        nb::arg("in0_tile_bytes") = 2048u,
+        nb::arg("in1_tile_bytes") = 2048u,
+        nb::arg("out_tile_bytes") = 2048u,
+        nb::arg("interm_tile_bytes") = 0u,
+        nb::arg("num_buffered_blocks") = 2u,
+        R"doc(Estimate per-core L1 footprint for a matmul program config.)doc");
 }
 
 }  // namespace ttnn::operations::matmul
