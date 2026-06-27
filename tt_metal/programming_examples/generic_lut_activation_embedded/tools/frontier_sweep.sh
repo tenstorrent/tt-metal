@@ -112,6 +112,7 @@ dispatch_local() {
       echo "  chip ${chip}: configuring missing build_Release in ${wt}" >&2
       (
         cd "$wt" &&
+        git submodule update --init --recursive &&
         ./build_metal.sh \
           --build-programming-examples \
           --configure-only \
