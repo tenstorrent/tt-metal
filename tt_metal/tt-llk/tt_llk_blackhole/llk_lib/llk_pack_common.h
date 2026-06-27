@@ -172,6 +172,9 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
+ * @note Only PACK_COUNTERS_SEC0_pack_reads_per_xy_plane is programmed because Blackhole has a single
+ *       packer interface (NUM_PACKERS == 1, see cpack_common.h). The Wormhole twin programs SEC0-3
+ *       because it has four packers; on Blackhole packers 1-3 do not exist, so SEC1-3 are never read.
  */
 template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM)
@@ -264,6 +267,9 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
  * PCK_EDGE_OFFSET_SEC0, undoing @ref _llk_pack_reduce_mask_config_.
  *
  * @note Pairs with @ref _llk_pack_reduce_mask_config_.
+ * @note Only PACK_COUNTERS_SEC0_pack_reads_per_xy_plane is reset because Blackhole has a single packer
+ *       interface (NUM_PACKERS == 1, see cpack_common.h). The Wormhole twin resets SEC0-3 for its four
+ *       packers; on Blackhole packers 1-3 do not exist, so SEC1-3 are never read.
  */
 inline void _llk_pack_reduce_mask_clear_()
 {
