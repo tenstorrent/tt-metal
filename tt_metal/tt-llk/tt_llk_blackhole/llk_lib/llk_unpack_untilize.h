@@ -227,12 +227,44 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
             if ((face_2xr_cnt + rem_blocks_in_row) >= (FACE_HEIGHT / 2))
             {
                 // Run MOP
-                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff);               // Run the MOP
+                TT_MOP(0, 8 - face_2xr_cnt - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP
+                // Fix issue #37960 (ported from the Wormhole twin): the MOP's last iteration advances
+                // TILE_OFFSET past the final tile and loads it into REG7_Offset_address. UNPACR forms its
+                // L1 read address as REG3_Base_address + (REG7_Offset_address & 0xffff) on both WH and BH
+                // (see ISA UNPACR_Regular functional model; the SET_Z counter only selects faces, it does
+                // not replace the offset term). The dvalid UNPACR below reads real datums (ZeroWrite2=0), so
+                // with the stale past-the-end offset it over-reads L1 when the buffer ends at a CB/L1
+                // boundary. Reset the offset to 0 (reads from the CB base, always valid), then restore
+                // TILE_OFFSET for the next batch's MOP. The MOP's leading DMANOP waits for the restore.
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                if (0 == unp_cfg_context)
+                {
+                    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_address_ADDR32);
+                }
+                else
+                {
+                    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
+                }
+                TTI_DMANOP;                                                                     // Wait for offset reset to complete
                 TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // set data valid
                 TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                 TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000); // Clear srcA addr y cnt
                 rem_blocks_in_row -= (8 - face_2xr_cnt);
                 face_2xr_cnt = 0;
+                // Restore the offset register to TILE_OFFSET for the next batch's MOP, if any remain.
+                // The next MOP's leading DMANOP will wait for this WRCFG to complete.
+                if (rem_blocks_in_row != 0)
+                {
+                    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                    if (0 == unp_cfg_context)
+                    {
+                        TTI_WRCFG(p_gpr_unpack::TILE_OFFSET, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_address_ADDR32);
+                    }
+                    else
+                    {
+                        TTI_WRCFG(p_gpr_unpack::TILE_OFFSET, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
+                    }
+                }
             }
             else
             {
