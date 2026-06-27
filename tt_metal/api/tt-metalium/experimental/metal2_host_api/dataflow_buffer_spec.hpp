@@ -40,8 +40,10 @@
 // INVARIANT: At the node level, a DFB instance has exactly one producer kernel
 //   instance and exactly one consumer kernel instance. You must respect this
 //   invariant across the DataflowBufferSpec's endpoint bindings.
-//   It is legal to bind more than one KernelSpec producer (or consumer) to a
-//   DFB endpoint, provided that they have:
+//   This is a per-node rule, not a per-spec one: you MAY bind more than one
+//   KernelSpec to a producer (or consumer) endpoint, because their non-overlapping
+//   node sets each still contribute exactly one instance per node. Such multiple
+//   bindings on one endpoint are legal provided they have:
 //     - non-overlapping node coverage, AND
 //     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)

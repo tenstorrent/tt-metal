@@ -718,7 +718,7 @@ static void emit_metal2_namespaces(
         f << "#include <cstdint>\n";
     }
     if (!s.ta_accessors.empty()) {
-        f << "#include \"api/tensor/tensor_accessor.h\"\n";
+        f << "#include \"api/tensor/tensor_binding_token.h\"\n";
     }
 
     if (has_args) {
@@ -759,8 +759,8 @@ static void emit_metal2_namespaces(
     if (!s.ta_accessors.empty()) {
         f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {
-            f << "using " << ta.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
-              << ta.cta_offset << "u, " << ta.addr_crta_offset << "u>;\n";
+            f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
+              << ta.addr_crta_offset << "u>;\n";
             f << "constexpr " << ta.name << "_t " << ta.name << "{};\n";
         }
         f << "}  // namespace tensor\n";
