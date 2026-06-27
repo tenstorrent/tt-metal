@@ -5,7 +5,7 @@ Rows marked `excluded` or `incomplete` are visible but are not counted as wins.
 
 ## bf16
 
-Comparable rows: 52. Win on ULP and runtime: 39. Accuracy match but slower: 12. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
+Comparable rows: 52. Win on ULP and runtime: 40. Accuracy match but slower: 11. Faster but less accurate: 0. Incomplete TTNN refs: 7. Excluded: 1.
 
 | activation | ours cfg | ours ULP | ours us | TTNN ULP | TTNN us | speedup | result |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -18,7 +18,7 @@ Comparable rows: 52. Win on ULP and runtime: 39. Accuracy match but slower: 12. 
 | atanh | rational:s1/d5d5 | 1.00 | 2.54 | 1.00 | 4.26 | 1.677 | win_both |
 | cbrt | exponent_alu_pow:s16/d1 | 1.00 | 4.41 | 1.00 | 2.14 | 0.485 | accuracy_match_slow |
 | celu | poly:s2/d13 | 0.00 | 2.75 | 0.00 | 3.61 | 1.313 | win_both |
-| cos | trig_residual:s1/d7 | 0.00 | 2.54 | 0.00 | 2.56 | 1.008 | win_both |
+| cos | trig_residual:s1/d7 | 0.00 | 2.55 | 0.00 | 2.56 | 1.004 | win_both |
 | cosh | poly:s1/d16 | 0.00 | 3.01 | 0.00 | 2.97 | 0.987 | accuracy_match_slow |
 | digamma | rational:s1/d4d3 | 1.00 | 2.93 | 1.00 | 6.64 | 2.266 | win_both |
 | elu | poly:s2/d11 | 0.00 | 2.74 | 0.00 | 3.60 | 1.314 | win_both |
@@ -58,14 +58,14 @@ Comparable rows: 52. Win on ULP and runtime: 39. Accuracy match but slower: 12. 
 | sigmoid | exponent_alu_exp2:s1/d2 | 0.50 | 2.46 | 0.50 | 2.89 | 1.175 | win_both |
 | sigmoid_accurate | exponent_alu_exp2:s1/d2 | 0.50 | 2.47 | 0.50 | 2.93 | 1.186 | win_both |
 | silu | exponent_alu_exp2:s1/d3 | 0.03 | 3.35 | 0.25 | 3.11 | 0.928 | accuracy_match_slow |
-| sin | trig:s1/d7 | 0.00 | 2.86 | 0.00 | 2.35 | 0.822 | accuracy_match_slow |
+| sin | trig_residual:s1/d7 | 0.00 | 2.39 | 0.00 | 2.35 | 0.983 | accuracy_match_slow |
 | sinh | rational:s1/d13d2 | 0.00 | 3.04 | 0.00 | 3.25 | 1.069 | win_both |
 | softplus | poly:s2/d10 | 0.12 | 3.30 | 0.12 | 5.31 | 1.609 | win_both |
 | softshrink | threshold_softshift:s3/d2 | 0.00 | 1.78 | 0.00 | 1.91 | 1.073 | win_both |
 | softsign | abs_denominator_rational:s2/d1d1 | 0.00 | 1.80 | 1.00 | 1.96 | 1.089 | win_both |
 | sqrt | newton_root:s1/d11 | 0.00 | 2.16 | 0.00 | 2.28 | 1.056 | win_both |
 | swish | exponent_alu_exp2:s1/d3 | 0.03 | 3.36 | 0.25 | 3.10 | 0.923 | accuracy_match_slow |
-| tan | tan:s1/d8 | 0.12 | 3.30 | 0.12 | 2.94 | 0.891 | accuracy_match_slow |
+| tan | tan:s1/d8 | 0.12 | 2.65 | 0.12 | 2.94 | 1.109 | win_both |
 | tanh | rational:s1/d5d3 | 0.50 | 2.38 | 0.50 | 2.29 | 0.962 | accuracy_match_slow |
 | tanhshrink | rational:s1/d12d3 | 0.12 | 2.86 | 0.12 | 3.17 | 1.108 | win_both |
 | threshold | poly:s2/d2 | 0.00 | 1.79 | -- | -- | -- | incomplete |
