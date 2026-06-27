@@ -6,7 +6,7 @@
 #include <optional>
 #include <tuple>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::transformer {
