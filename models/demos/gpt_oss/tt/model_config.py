@@ -217,18 +217,32 @@ class ModelArgs:
             # prompt_text is already a list of chat messages
             encoded = self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
-        # Depending on the tokenizer/transformers version, apply_chat_template(tokenize=True)
-        # may return a plain List[int], a single tokenizers.Encoding, or a list of
-        # tokenizers.Encoding objects (observed with the GPT-OSS fast tokenizer, which
-        # otherwise yields `torch.tensor(...)` "Could not infer dtype of tokenizers.Encoding"
-        # downstream). Normalize to a flat List[int] of token ids.
-        if hasattr(encoded, "ids"):  # single tokenizers.Encoding
-            encoded = list(encoded.ids)
-        elif isinstance(encoded, (list, tuple)) and any(hasattr(e, "ids") for e in encoded):
-            flat = []
-            for e in encoded:
-                flat.extend(e.ids if hasattr(e, "ids") else ([e] if isinstance(e, int) else list(e)))
-            encoded = flat
+        # Normalize whatever apply_chat_template(tokenize=True) returns into a flat List[int].
+        # Across tokenizer/transformers versions this may be a List[int], a tokenizers.Encoding,
+        # a list of Encodings, or a BatchEncoding/dict ({"input_ids": ...}). The GPT-OSS fast
+        # tokenizer in CI returns a non-list form, which made downstream torch.tensor(...) raise
+        # "Could not infer dtype of tokenizers.Encoding".
+        raw_type = type(encoded).__name__
+        # BatchEncoding / dict -> take input_ids
+        if isinstance(encoded, dict) or hasattr(encoded, "input_ids"):
+            encoded = encoded["input_ids"] if "input_ids" in encoded else getattr(encoded, "input_ids")
+
+        def _to_ids(obj):
+            if hasattr(obj, "ids"):  # tokenizers.Encoding
+                return list(obj.ids)
+            if isinstance(obj, (list, tuple)):
+                flat = []
+                for item in obj:
+                    flat.append(item) if isinstance(item, int) else flat.extend(_to_ids(item))
+                return flat
+            return obj
+
+        encoded = _to_ids(encoded)
+        if not (isinstance(encoded, list) and (len(encoded) == 0 or isinstance(encoded[0], int))):
+            logger.warning(
+                f"[gpt-oss encode_prompt] unexpected token container: raw={raw_type}, "
+                f"normalized={type(encoded).__name__}"
+            )
         return encoded
 
     @staticmethod
