@@ -439,6 +439,29 @@ class TTSampling(LightweightModule):
         - If `tt_ccl` exposes `line_all_gather`, prefer it (enables persistent buffer usage on some stacks).
         - Otherwise fall back to `ttnn.all_gather`.
         """
+        import os as _os
+
+        if _os.environ.get("TT_QWEN_SAMPLING_AG_BARRIER") == "1":
+            # #48222 fix-attempt: device-side barrier_semaphore gather (trace-compatible), mirroring
+            # the force-argmax path. The plain ttnn.all_gather below has no barrier, so at batch-32
+            # it can read the (traced/async) upstream output before it lands -> partial candidates ->
+            # garbage. force-argmax uses exactly this barrier and is correct at batch-32.
+            _topo = self.ag_topology if self.mesh_device.get_num_devices() >= 8 else ttnn.Topology.Linear
+            return ttnn.experimental.all_gather_async(
+                tensor,
+                persistent_output_buffer=None,
+                dim=dim,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=memory_config,
+                cluster_axis=cluster_axis,
+                topology=_topo,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=self.argmax_chunks_per_sync,
+                num_workers_per_link=self.argmax_num_workers_per_link,
+                num_buffers_per_channel=2,
+            )
+
         if callable(self._line_all_gather):
             # Some implementations accept `buffer_key` (for persistent buffers), others may not.
             line_all_gather_kwargs = {
@@ -757,14 +780,6 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        # DEBUG(#48222): fix-attempt for the batch-32 candidate-gather race. Adding host reads
-        # (i.e. forcing a sync) here previously turned batch-32 garbage (F1 0.34) into mostly
-        # coherent (0.52). Replicate that mitigation with a pure barrier (no observation) to test
-        # whether serializing the candidate gather before sampling fixes batch-32 un-instrumented.
-        import os as _os
-
-        if _os.environ.get("TT_QWEN_SAMPLING_SYNC") == "1":
-            ttnn.synchronize_device(self.mesh_device)
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,

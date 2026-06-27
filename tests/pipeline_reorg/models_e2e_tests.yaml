@@ -291,7 +291,7 @@
   cmd: |
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K
-    export TT_QWEN_DISABLE_FORCE_ARGMAX=1 TT_QWEN_SAMPLING_SYNC=1  # DEBUG(#48222): heavy path + per-step candidate-gather sync (race fix attempt, no instrumentation)
+    export TT_QWEN_DISABLE_FORCE_ARGMAX=1 TT_QWEN_SAMPLING_AG_BARRIER=1  # DEBUG(#48222): heavy path + barrier_semaphore candidate gather (device-side, trace-compatible)
     pytest --timeout 900 models/demos/qwen25_vl/demo/demo.py -k "bert-score"
   model: qwen2.5-vl-32b
   skus:
