@@ -18,13 +18,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import get_variant
+from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
-# Variant-aware golden trace dir, used only when DEEPSEEK_PREFILL_TRACE_{PT,DIR} are unset.
-DEFAULT_PREFILL_TRACE_DIR = get_variant(
-    os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p")
-).prefill_trace_default
+# Model-aware golden trace dir, used only when DEEPSEEK_PREFILL_TRACE_{PT,DIR} are unset.
+DEFAULT_PREFILL_TRACE_DIR = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).prefill_trace_default
 _kv_pt_trace_cache: dict = {}
 
 
@@ -86,6 +84,7 @@ def _load_kv_post_transform(trace_dir: Path, layer: int, total_len: int) -> "tor
 
 def _kv_cache_pcc_check(
     pipeline: TtPrefillRuntime,
+    kvpe_cache,
     slot_id: int,
     n_chunks: int,
     pt_path_override: str | None = None,
@@ -158,7 +157,7 @@ def _kv_cache_pcc_check(
 
     # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
     cache_full = ttnn.to_torch(
-        pipeline.kvpe_cache,
+        kvpe_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.float32)[
         :, :1
@@ -223,7 +222,7 @@ def _kv_cache_pcc_check(
 
 
 def validate_migration_kv(
-    pipeline: TtPrefillRuntime, src_slot: int, dst_slot: int, n_chunks: int, real_len: int | None = None
+    pipeline: TtPrefillRuntime, kvpe_cache, src_slot: int, dst_slot: int, n_chunks: int, real_len: int | None = None
 ):
     """Validate the KV cache BEFORE and AFTER a slot->slot migration.
 
@@ -241,11 +240,11 @@ def validate_migration_kv(
     `[kv-migrate-validate] BEFORE/AFTER` lines (orchestrators parse these).
     """
     logger.info(f"[kv-migrate-validate] BEFORE migration: validating SRC slot {src_slot} (real_len={real_len})")
-    src_pcc = _kv_cache_pcc_check(pipeline, src_slot, n_chunks, real_len=real_len)
+    src_pcc = _kv_cache_pcc_check(pipeline, kvpe_cache, src_slot, n_chunks, real_len=real_len)
     print(f"[kv-migrate-validate] BEFORE src_slot={src_slot} min_pcc={src_pcc:.6f}")
 
     logger.info(f"[kv-migrate-validate] AFTER migration: validating DST slot {dst_slot} (real_len={real_len})")
-    dst_pcc = _kv_cache_pcc_check(pipeline, dst_slot, n_chunks, real_len=real_len)
+    dst_pcc = _kv_cache_pcc_check(pipeline, kvpe_cache, dst_slot, n_chunks, real_len=real_len)
     print(f"[kv-migrate-validate] AFTER dst_slot={dst_slot} min_pcc={dst_pcc:.6f}")
 
     logger.success(
@@ -255,7 +254,7 @@ def validate_migration_kv(
     return src_pcc, dst_pcc
 
 
-def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
+def validate_migrations_pairwise(pipeline: TtPrefillRuntime, kvpe_cache, pairs):
     """Validate N concurrent slot->slot migrations of distinct prompts.
 
     Asserts each dst slot's KV equals its own src slot's (migration fidelity + cross-talk detection),
@@ -279,7 +278,7 @@ def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
     # device ([num_layers, 1, seq_len_cache, kvpe] each, ~8 GiB) and free them before the next pair.
     # No un-rotation is needed: both endpoints carry the same block-cyclic rotation, so comparing
     # them directly is rotation-invariant.
-    dev_shape = list(pipeline.kvpe_cache.shape)  # slice dim 0 (user*layer); keep dims 1..3 full
+    dev_shape = list(kvpe_cache.shape)  # slice dim 0 (user*layer); keep dims 1..3 full
 
     def _read_user_block(user: int) -> "torch.Tensor":
         # memory_config=DRAM interleaved is REQUIRED: kvpe_cache is ND-sharded ROUND_ROBIN_1D over
@@ -288,7 +287,7 @@ def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
         # Forcing an interleaved output makes slice gather from the banks correctly and stay
         # host-readable (verified bit-exact vs the full-cache gather in test_kv_slice_read_repro).
         sl = ttnn.slice(
-            pipeline.kvpe_cache,
+            kvpe_cache,
             [user * num_layers, 0, 0, 0],
             [(user + 1) * num_layers, dev_shape[1], dev_shape[2], dev_shape[3]],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -341,15 +340,16 @@ def validate_migrations_pairwise(pipeline: TtPrefillRuntime, pairs):
         d = next((dd for ss, dd in pairs if ss == s), None)
         gpt = golden_pt[s]
         logger.info(f"[kv-migrate-validate] golden anchor: src slot {s} (n_chunks={gchunks}) pt={gpt or 'global'}")
-        sp = _kv_cache_pcc_check(pipeline, s, gchunks, pt_path_override=gpt)
+        sp = _kv_cache_pcc_check(pipeline, kvpe_cache, s, gchunks, pt_path_override=gpt)
         print(f"[kv-migrate-validate] GOLDEN src_slot={s} min_pcc={sp:.6f}")
         if d is not None:
-            dp = _kv_cache_pcc_check(pipeline, d, gchunks, pt_path_override=gpt)
+            dp = _kv_cache_pcc_check(pipeline, kvpe_cache, d, gchunks, pt_path_override=gpt)
             print(f"[kv-migrate-validate] GOLDEN dst_slot={d} min_pcc={dp:.6f}")
 
 
 def validate_after_prefill(
     pipeline: TtPrefillRuntime,
+    kvpe_cache,
     *,
     chunks_per_slot: dict,
     real_end_per_slot: dict,
@@ -411,13 +411,13 @@ def validate_after_prefill(
         ttnn.synchronize_device(pipeline.mesh_device)
         if os.environ.get("PREFILL_MIGRATE_PAIRWISE", "0") == "1":
             # N distinct prompts: dst==src fidelity + optional per-slot golden anchor.
-            validate_migrations_pairwise(pipeline, pairs)
+            validate_migrations_pairwise(pipeline, kvpe_cache, pairs)
         else:
             # Same prompt across slots: PCC each (src, dst) against the shared golden.
             for src_slot, dst_slot in pairs:
                 n_src = chunks_per_slot.get(src_slot, total_chunks)  # per-slot chunk count (NOT the loop total)
                 rl_src = real_end_per_slot.get(src_slot)  # real ISL (excludes pad); dst copies the same range
-                validate_migration_kv(pipeline, src_slot, dst_slot, n_src, real_len=rl_src)
+                validate_migration_kv(pipeline, kvpe_cache, src_slot, dst_slot, n_src, real_len=rl_src)
         logger.success(f"[kv-migrate-validate] ALL {len(pairs)} migrated pair(s) PASSED")
     else:
         # Validate EVERY populated slot, each over its own populated range: chunks_per_slot[s]
@@ -451,7 +451,9 @@ def validate_after_prefill(
             else:
                 gpt = None  # _kv_cache_pcc_check reads the single DEEPSEEK_PREFILL_TRACE_PT
             logger.info(f"[request]  -> slot={s} n_chunks={n_chunks_s} real_len={real_len} golden={gpt or '<shared>'}")
-            slot_pccs[s] = _kv_cache_pcc_check(pipeline, s, n_chunks_s, pt_path_override=gpt, real_len=real_len)
+            slot_pccs[s] = _kv_cache_pcc_check(
+                pipeline, kvpe_cache, s, n_chunks_s, pt_path_override=gpt, real_len=real_len
+            )
         logger.success(
             f"[request] all {len(slots)} slot(s) PASSED KV-cache PCC: "
             + ", ".join(f"slot{s}={p:.6f}" for s, p in sorted(slot_pccs.items()))

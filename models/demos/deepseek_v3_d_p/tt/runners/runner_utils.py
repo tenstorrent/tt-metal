@@ -1,232 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Utilities for the prefill runner.
+"""MLA-family (DeepSeek-V3 / Kimi) prefill-runner helpers.
 
-Only metal-native helpers live here — pure ttnn, no upward dependencies
-on blaze (`_migration`, `_mpi_test_helpers`). Migration-coupled diagnostics
-live in blaze at `disaggregation/migration/python/prefill_runner_util.py`.
+The model-agnostic engine helpers (mesh open, H2D service, trace loading) live in
+the common package at ``models.demos.common.prefill.runners.runner_utils``. What
+remains here is specific to the MLA kvpe KV layout: chunked-prefill input prep, the
+block-cyclic KV-cache PCC check + golden loader, and kvpe-cache diagnostics. The
+runtime exposes ``kv_cache_pcc_check`` (which calls the function here); and
+``prepare_prefill_input_tensor`` backs ``TtPrefillRuntime.make_chunk_input``.
 """
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import torch
 from loguru import logger
-from transformers import AutoConfig
 
 import ttnn
-from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.common.prefill.runners.runner_utils import resolve_trace_dir
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
-
-
-# ---------------------------------------------------------------------------
-# Model-variant registry
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class RunnerVariant:
-    """Per-model knobs the runner needs to build a DeepSeek-V3-family model.
-
-    The TT layer code is variant-agnostic — it takes `model_config` (the static
-    dimension constants) + the HF `config`. Everything here is the runner-side
-    plumbing that differs per model: where to find the HF config and the TTNN
-    weight cache, and the sensible defaults for input layout / gate mode.
-    """
-
-    name: str  # matches the pytest weight-cache dir prefix: {name}_{arch}_{N}dev
-    model_config: type  # DeepSeekV3Config | KimiK26Config
-    hf_model_default: str  # HF model dir for config.json; PREFILL_HF_MODEL overrides
-    ttnn_cache_default: str  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides
-    default_gate_mode: str  # GateComputeMode name
-    prefill_trace_default: (
-        str  # golden trace dir (input token_ids + kv_post_transform); resolve_trace_dir descends one level if needed
-    )
-
-
-VARIANTS = {
-    "deepseek_v3_d_p": RunnerVariant(
-        name="deepseek_v3_d_p",
-        model_config=DeepSeekV3Config,
-        hf_model_default="models/demos/deepseek_v3/reference",
-        ttnn_cache_default="/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure",
-        default_gate_mode="DEVICE_FP32",
-        prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad",
-    ),
-    "kimi_k2_6": RunnerVariant(
-        name="kimi_k2_6",
-        model_config=KimiK26Config,
-        # Repo-local config (dot-free, in-tree). The runner only needs config dims; real weights come
-        # from the TTNN cache. To use a different checkpoint, set PREFILL_HF_MODEL to a dot-free path
-        # (transformers' trust_remote_code import chokes on the "." in the canonical
-        # /mnt/models/moonshotai/Kimi-K2.6-dequantized dir name).
-        hf_model_default="models/demos/deepseek_v3_d_p/reference/kimi_k2_6",
-        ttnn_cache_default="/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill",
-        default_gate_mode="DEVICE_FP32",  # Kimi (1 expert group)
-        # vllm-traced golden: metadata.json + kv_cache live under a single run-hash subdir, and the
-        # per-layer KV is row-sharded into layer_N/rows_*.safetensors. resolve_trace_dir descends to
-        # the subdir; kv_cache_pcc_check reassembles the shards.
-        prefill_trace_default="/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320",
-    ),
-}
-
-
-def get_variant(name: str) -> RunnerVariant:
-    """Resolve a RunnerVariant by name; raises KeyError with the valid set."""
-    try:
-        return VARIANTS[name]
-    except KeyError:
-        raise KeyError(f"Unknown PREFILL_MODEL_VARIANT={name!r}; valid: {sorted(VARIANTS)}")
-
-
-# ---------------------------------------------------------------------------
-# HF config loading
-# ---------------------------------------------------------------------------
-def unwrap_multimodal_config(cfg):
-    """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
-
-    The LM fields the rest of the code reads (hidden_size, n_routed_experts, ...)
-    live under `text_config`. Also stubs `quantization_config.weight_block_size`
-    when missing so DSv3's dequant helper's eager read doesn't fail on the
-    pre-dequantized Kimi checkpoint. Mirrors the test-side helper in conftest.py.
-    """
-    if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
-        logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
-        cfg = cfg.text_config
-    qc = getattr(cfg, "quantization_config", None)
-    if isinstance(qc, dict) and not qc.get("weight_block_size"):
-        qc["weight_block_size"] = [128, 128]
-        logger.info("Stubbed quantization_config.weight_block_size for pre-dequantized checkpoint")
-    return cfg
-
-
-def load_hf_config(variant: RunnerVariant):
-    """Load (and unwrap) the HF config for a variant from PREFILL_HF_MODEL
-    (falling back to the variant's repo-local default)."""
-    model_path = os.environ.get("PREFILL_HF_MODEL") or variant.hf_model_default
-    logger.info(f"Loading HF config for variant={variant.name!r} from {model_path}")
-    cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    return unwrap_multimodal_config(cfg)
-
-
-# ---------------------------------------------------------------------------
-# Device / weight-cache / H2D-service setup
-# ---------------------------------------------------------------------------
-def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0) -> ttnn.MeshDevice:
-    """Configure fabric and open the mesh device.
-
-    Default fabric is 1D for sp<=8, else 2D. PREFILL_FABRIC_MODE (1d|2d) overrides
-    this: the D2D-socket pipeline needs 2D even at sp=8 because a MeshSocket routes
-    over 2D fabric, and set_fabric_config is one global config for the whole run.
-
-    `l1_small_size` > 0 carves an L1_SMALL region (needed when an op routes its
-    semaphores there, e.g. the Kimi MoE routing all-gather with use_l1_small_for_semaphores)."""
-    sp = mesh_shape[0]
-    fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
-    if fabric_mode == "2d":
-        fabric_config = ttnn.FabricConfig.FABRIC_2D
-    elif fabric_mode == "1d":
-        fabric_config = ttnn.FabricConfig.FABRIC_1D
-    elif fabric_mode:
-        raise ValueError(f"PREFILL_FABRIC_MODE must be '1d' or '2d', got {fabric_mode!r}")
-    else:
-        fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
-    logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
-
-    fabric_router_config = create_fabric_router_config(
-        max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
-    )
-
-    ttnn.set_fabric_config(
-        fabric_config,
-        ttnn.FabricReliabilityMode.RELAXED_INIT,
-        None,
-        ttnn.FabricTensixConfig.DISABLED,
-        ttnn.FabricUDMMode.DISABLED,
-        ttnn.FabricManagerMode.DEFAULT,
-        fabric_router_config,
-    )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size)
-
-
-def resolve_weight_cache_path(variant: RunnerVariant, mesh_shape: tuple) -> Optional[Path]:
-    """Mirror the layout produced by the pytest weight_cache_path fixture so
-    we read the same files the cache-populate run wrote:
-      $PREFILL_TTNN_CACHE / {variant.name}_{arch}_{N}dev / {sp}x{tp}
-    Defaults to the variant's cache root; returns None only if explicitly empty."""
-    env_cache = os.environ.get("PREFILL_TTNN_CACHE", variant.ttnn_cache_default)
-    if not env_cache:
-        return None
-    arch = "bh" if is_blackhole() else "wh"
-    num_devices = ttnn.get_num_devices()
-    sp, tp = mesh_shape
-    path = Path(env_cache) / f"{variant.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def make_global_spec(mesh_shape: tuple, chunk_size: int) -> ttnn.TensorSpec:
-    """Per-push input spec used by `build_h2d_service` to set the service's
-    global tensor shape (the producer matches it on the host side). One push carries one
-    chunk_size-token chunk. Shape `(sp_factor, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM."""
-    sp_factor = mesh_shape[0]
-    isl_per_chip = chunk_size // sp_factor
-    return ttnn.TensorSpec(
-        shape=ttnn.Shape([sp_factor, 1, isl_per_chip]),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        buffer_type=ttnn.BufferType.DRAM,
-    )
-
-
-def build_h2d_service(
-    mesh_device: ttnn.MeshDevice,
-    *,
-    mesh_shape: tuple,
-    chunk_size: int,
-    mapper_config: ttnn.MeshMapperConfig,
-    worker_cores: ttnn.CoreRange,
-    metadata_size_bytes: int,
-) -> ttnn.H2DStreamService:
-    """Construct an H2DStreamService whose per-shard backing tensor matches
-    what `prepare_prefill_input_tensor` would have produced. Each push carries one chunk_size-token
-    chunk (chunked prefill streams one chunk per push), not the full sequence.
-
-    Per-shard target: `(1, 1, chunk_size // sp_factor)` uint32 ROW_MAJOR DRAM.
-    Achieved by setting global_spec.shape = `(sp_factor, 1, chunk_size // sp_factor)` and
-    mapping `[Shard(0), Replicate]` on a `(sp, tp)` mesh — first axis of the
-    tensor is sharded across mesh rows (sp), nothing else is split.
-    """
-    sp_factor, tp_factor = mesh_shape
-    assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
-    isl_per_chip = chunk_size // sp_factor
-    per_chip_bytes = isl_per_chip * 4  # uint32
-
-    global_spec = make_global_spec(mesh_shape, chunk_size)
-    mapper = ttnn.create_mesh_mapper(mesh_device, mapper_config)
-    # worker_cores set so the service-core kernel multicasts a data-ready inc
-    # after each transfer; inbound_socket_service_sync() waits on that on-device, which
-    # avoids the host-side barrier() round-trip per iteration.
-    # metadata_size_bytes set so the producer can ship per-iter control bytes
-    # (slot_id, actual_start, actual_end) inline with the token push.
-    service = ttnn.H2DStreamService(
-        mesh_device=mesh_device,
-        global_spec=global_spec,
-        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom
-        scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
-        mapper=mapper,
-        worker_cores=worker_cores,
-        metadata_size_bytes=metadata_size_bytes,
-    )
-    logger.info(
-        f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
-        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
-    )
-    return service
 
 
 def prepare_prefill_input_tensor(
@@ -258,18 +51,6 @@ def prepare_prefill_input_tensor(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(sp_axis, None)),
-    )
-
-
-def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
-    """Global spec of the inter-rank hidden state carried over the D2D pipeline socket:
-    [1, 1, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across SP
-    rows, emb across TP cols) to match the embedding output layout the downstream model consumes."""
-    return ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        buffer_type=ttnn.BufferType.DRAM,
     )
 
 
@@ -421,29 +202,6 @@ def dump_kv_cache_shard_readback(layer_idx: int, kvpe_cache, sample_positions=No
         logger.error(f"[verify-readback] FAILED layer={layer_idx}: {type(e).__name__}: {e}")
 
 
-def resolve_trace_dir(path) -> Path:
-    """Resolve a trace dir to the one holding metadata.json. vllm traces nest metadata.json + kv_cache
-    under a single run-hash subdir, so if `path` itself has no metadata.json, descend into the sole
-    subdir that does."""
-    path = Path(path)
-    if (path / "metadata.json").exists():
-        return path
-    subs = [d for d in sorted(path.iterdir()) if d.is_dir() and (d / "metadata.json").exists()]
-    if len(subs) != 1:
-        raise FileNotFoundError(f"no metadata.json in {path} or a unique subdir (found {len(subs)} candidates)")
-    return subs[0]
-
-
-def load_trace_token_ids(trace_dir, total_len=None) -> list:
-    """Input token_ids from a resolved trace's metadata.json (optionally truncated to total_len)."""
-    import json
-
-    with open(Path(trace_dir) / "metadata.json") as f:
-        md = json.load(f)
-    tids = list(md["token_ids"])
-    return tids[:total_len] if total_len is not None else tids
-
-
 def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int):
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
@@ -470,13 +228,15 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int):
     return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
 
 
-def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0) -> float:
-    """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
-    and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace. Returns the
-    min per-layer PCC and asserts (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is
-    below threshold.
+def kv_cache_pcc_check(
+    pipeline, kvpe_cache, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+) -> float:
+    """Gather `kvpe_cache` (the engine-owned KV cache) for `slot_id`, un-rotate the block-cyclic
+    layout to natural order, and PCC-compare each layer against the golden DeepSeek-R1
+    `kv_post_transform` trace. Returns the min per-layer PCC and asserts (unless
+    PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is below threshold.
 
-    `trace_dir` defaults to the resolved PREFILL_TRACE_DIR env (caller passes the variant's
+    `trace_dir` defaults to the resolved PREFILL_TRACE_DIR env (caller passes the adapter's
     prefill_trace_default). The golden is loaded format-agnostically (DeepSeek single-file or Kimi vllm
     row-shards) via _load_golden_kv_post.
 
@@ -510,7 +270,7 @@ def kv_cache_pcc_check(pipeline, slot_id: int, n_chunks: int, trace_dir=None, fi
 
     # One gather: [num_users*num_layers, tp_replicas, seq_len_cache, kvpe] -> collapse TP via [:, :1].
     cache_full = ttnn.to_torch(
-        pipeline.kvpe_cache,
+        kvpe_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.float32)[:, :1]
 

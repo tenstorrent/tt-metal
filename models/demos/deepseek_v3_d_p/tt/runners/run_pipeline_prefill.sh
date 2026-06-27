@@ -48,4 +48,4 @@ exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
   --rank-binding "$RANK_BINDING" \
   --mpi-args "--host ${HOST_LIST} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH" \
-  python3 -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner
+  python3 -m models.demos.common.prefill.runners.prefill_runner

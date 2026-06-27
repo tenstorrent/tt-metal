@@ -39,7 +39,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import get_variant, load_trace_token_ids, resolve_trace_dir
+from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 _METADATA_SIZE_BYTES = 12
 
@@ -51,7 +52,7 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 20 * 1024))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 10))
 MAX_CHUNKS_PER_REQ = MAX_SEQ_LEN // CHUNK_SIZE
 
-VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
+ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -123,7 +124,7 @@ def main() -> None:
     logger.info(f"[stress] attached; payload={expected}B")
 
     # One shared token pool reused across users (stress, not correctness). Pad if the trace is short.
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
+    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
     pool = load_trace_token_ids(trace_dir, MAX_SEQ_LEN)
     if len(pool) < MAX_SEQ_LEN:
         pool = pool + [1] * (MAX_SEQ_LEN - len(pool))
