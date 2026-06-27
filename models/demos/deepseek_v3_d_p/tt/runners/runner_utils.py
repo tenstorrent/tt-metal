@@ -216,8 +216,8 @@ def build_h2d_service(
     service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
         global_spec=global_spec,
-        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom
-        scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
+        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight pages of headroom (0 would auto-size)
+        max_socket_page_size_bytes=per_chip_bytes,  # cap socket page at one tensor page (0 = auto/coalesced)
         mapper=mapper,
         worker_cores=worker_cores,
         metadata_size_bytes=metadata_size_bytes,
