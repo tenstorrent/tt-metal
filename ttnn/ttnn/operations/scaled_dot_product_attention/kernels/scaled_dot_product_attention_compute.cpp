@@ -50,9 +50,18 @@
 //   - BroadcastDim::Col: alpha tile[ht] broadcasts across all D_t column tiles
 //   - Shape: EltwiseShape::grid(B_q_t, D_t) — 2D for Col broadcast
 //
-// DPRINT: cb_o tile 0, first 4×4 elements — O rescaled by alpha.
-// Printed from the unpacker (TRISC0) via DPRINT_UNPACK, front of CB (between
-// cb_wait_front and cb_pop_front).
+// Stage 7 (rescale_l): Rescale l by alpha via eltwise mul (no broadcast).
+//   l_i = alpha * l_i → cb_sum_old (in-place, B_q_t = 4 tiles)
+//   - CbA  = cb_sum_old (4 tiles, Streaming — per-tile wait+pop)
+//   - CbB  = cb_alpha   (4 tiles, Streaming — consumed; phase 6 used HeldBulk
+//     without popping, so alpha tiles remain for this phase)
+//   - CbOut = cb_sum_old (in-place: CbA == CbOut)
+//   - BroadcastDim::None (both operands are Col0 [B_q_t, 1] — same shape)
+//   - Shape: B_q_t tiles (1D column vector)
+//
+// DPRINT: cb_sum_old tile 0, first 4×4 elements — l rescaled by alpha.
+// Printed from the unpacker (TRISC0), front of CB (between cb_wait_front and
+// cb_pop_front). On the first KV-block, l_old=0 and alpha=0, so l stays 0.
 
 #include <cstdint>
 
@@ -266,6 +275,42 @@ void kernel_main() {
         cb_wait_front(cb_o, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
         DPRINT("stage_6 rescale_o:\n{}\n", TileSlice(cb_o, 0, sr, true, true));
+    }
+#endif
+
+    // --- Stage 7: Rescale l by alpha ---
+    // l_i = alpha * l_i → cb_sum_old (in-place, B_q_t = 4 tiles)
+    //   CbA  = cb_sum_old (4 tiles, Streaming — per-tile wait+pop)
+    //   CbB  = cb_alpha   (4 tiles, Streaming — consumed here; phase 6 used
+    //     HeldBulk and did NOT pop, so alpha tiles are still in the CB)
+    //   CbOut = cb_sum_old (in-place: CbA == CbOut)
+    //   BroadcastDim::None (both operands are Col0 [B_q_t, 1] — same shape per
+    //     the Broadcast Verification table; no broadcast needed)
+    //   Shape: B_q_t tiles (1D column vector, both operands 4 tiles)
+    //
+    // BinaryDataFormatReconfig::Input (default): reconfigures unpacker from
+    // eltwise mul (rescale_o) format to eltwise binary format on both srcA/srcB.
+    // PackTileReconfig::Output (default): reconfigures packer from cb_o to
+    // cb_sum_old format.
+    mul<
+        /*CbA=*/cb_sum_old,
+        /*CbB=*/cb_alpha,
+        /*CbOut=*/cb_sum_old,
+        /*Bcast=*/BroadcastDim::None,
+        /*ALife=*/InputLifecycle::Streaming,
+        /*BLife=*/InputLifecycle::Streaming>(B_q_t);
+
+    // --- Stage 7 DPRINT: cb_sum_old tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the in-place mul completes, cb_sum_old holds the
+    // rescaled l values. We wait_front tile 0, print it, then leave it (no pop —
+    // cb_sum_old is a persistent running state CB, consumed by later stages 11).
+    // On the first KV-block: l_old=0 and alpha=exp(-inf - finite)=0, so l stays 0.
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_sum_old, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_7 rescale_l:\n{}\n", TileSlice(cb_sum_old, 0, sr, true, true));
     }
 #endif
 }
