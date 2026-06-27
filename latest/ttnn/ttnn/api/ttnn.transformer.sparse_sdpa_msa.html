@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.transformer.sparse_sdpa &mdash; TT-NN&amp;trade;  documentation</title>
+  <title>ttnn.transformer.sparse_sdpa_msa &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.sparse_sdpa.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.sparse_sdpa_msa.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.transformer.sparse_sdpa_msa" href="ttnn.transformer.sparse_sdpa_msa.html" />
-    <link rel="prev" title="ttnn.transformer.scaled_dot_product_attention_decode" href="ttnn.transformer.scaled_dot_product_attention_decode.html" />
+    <link rel="next" title="ttnn.transformer.split_query_key_value_and_split_heads" href="ttnn.transformer.split_query_key_value_and_split_heads.html" />
+    <link rel="prev" title="ttnn.transformer.sparse_sdpa" href="ttnn.transformer.sparse_sdpa.html" />
  
 <script>
 (function() {
@@ -112,8 +112,8 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_mla.html">ttnn.transformer.ring_mla</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention.html">ttnn.transformer.scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention_decode.html">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.transformer.sparse_sdpa</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.sparse_sdpa_msa.html">ttnn.transformer.sparse_sdpa_msa</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.sparse_sdpa.html">ttnn.transformer.sparse_sdpa</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.transformer.sparse_sdpa_msa</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.windowed_scaled_dot_product_attention.html">ttnn.transformer.windowed_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.indexer_score_dsa.html">ttnn.experimental.indexer_score_dsa</a></li>
@@ -191,9 +191,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.sparse_sdpa</li>
+      <li class="breadcrumb-item active">ttnn.transformer.sparse_sdpa_msa</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.sparse_sdpa.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.transformer.sparse_sdpa_msa.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -201,47 +201,50 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-transformer-sparse-sdpa">
-<h1>ttnn.transformer.sparse_sdpa<a class="headerlink" href="#ttnn-transformer-sparse-sdpa" title="Permalink to this heading"></a>
+  <section id="ttnn-transformer-sparse-sdpa-msa">
+<h1>ttnn.transformer.sparse_sdpa_msa<a class="headerlink" href="#ttnn-transformer-sparse-sdpa-msa" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.transformer.sparse_sdpa">
-<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">sparse_sdpa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">v_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k_chunk_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.transformer.sparse_sdpa" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.transformer.sparse_sdpa_msa">
+<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">sparse_sdpa_msa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">v</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.transformer.sparse_sdpa_msa" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip. softmax(Q@Kᵀ·scale masked)@V over the
-top-k selected latents per query token; V = kv[…, :v_dim]. Masking is baked into <cite>indices</cite>
-(0xFFFFFFFF = masked; sentinels are a contiguous tail). Inputs are ROW-MAJOR DRAM-interleaved.
-K_DIM (the q/kv head dim) is taken from the tensors.</p>
+<p>MSA block-sparse prefill (MiniMax Sparse Attention), Blackhole single-chip.
+Attends the block_size-token K/V blocks named in <cite>indices</cite>; -1 (0xFFFFFFFF) sentinels mask a contiguous
+tail. The op has no causal flag; causal behavior must be encoded by the selected blocks. RoPE and
+QK-norm are applied upstream.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>q</strong> (<em>ttnn.Tensor</em>) – [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)</p></li>
-<li><p><strong>kv</strong> (<em>ttnn.Tensor</em>) – [1, 1, T, K_DIM] bf16 or fp8_e4m3 (fp8 halves the K-gather bytes; tilized to bfp8_b in-op).
-When cache_batch_idx is set, [B, 1, T, K_DIM] and may be ND-sharded across DRAM banks.</p></li>
-<li><p><strong>indices</strong> (<em>ttnn.Tensor</em>) – [1, 1, S, TOPK] uint32</p></li>
-<li><p><strong>v_dim</strong> (<em>int</em>) – width of V (leading v_dim cols of the K_DIM-wide cache); the output width.</p></li>
+<li><p><strong>q</strong> (<em>ttnn.Tensor</em>) – [1, H, S, d] bf16 | fp8_e4m3 ROW_MAJOR.
+H must be divisible by n_kv; H/n_kv may be 16 or a multiple of 32.</p></li>
+<li><p><strong>k</strong> (<em>ttnn.Tensor</em>) – [B, n_kv, T, d] TILE bf16|bfloat8_b (B&gt;1 only when indexed)</p></li>
+<li><p><strong>v</strong> (<em>ttnn.Tensor</em>) – [B, n_kv, T, v_dim] TILE bf16|bfloat8_b</p></li>
+<li><p><strong>indices</strong> (<em>ttnn.Tensor</em>) – [1, n_kv, S, TOPK] uint32 block-ids (-1 = sentinel, contiguous tail).
+Each row must contain a valid block, and valid block ids must be &lt; T / block_size.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – defaults to K_DIM**-0.5.</p></li>
-<li><p><strong>k_chunk_size</strong> (<em>int</em>) – defaults to 128 (must divide TOPK, multiple of 32).</p></li>
+<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – defaults to d to the power of -0.5.</p></li>
+<li><p><strong>block_size</strong> (<em>int</em>) – KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>) – select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
+<li><p><strong>cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>) – select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16-&gt;bf16, fp8-&gt;fp8).</p>
+<p><em>ttnn.Tensor</em> – [1, H, S, v_dim] ROW-MAJOR, dtype = q.</p>
 </dd>
 </dl>
+<p>Additional preconditions: d and v_dim must be multiples of 32; TOPK times 4 and output row bytes must meet
+device DRAM alignment.</p>
 </dd>
 </dl>
 
@@ -252,8 +255,8 @@ It is a dynamic runtime arg, so changing it (or T) does not recompile the kernel
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.transformer.scaled_dot_product_attention_decode.html" class="btn btn-neutral float-left" title="ttnn.transformer.scaled_dot_product_attention_decode" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.transformer.sparse_sdpa_msa.html" class="btn btn-neutral float-right" title="ttnn.transformer.sparse_sdpa_msa" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.transformer.sparse_sdpa.html" class="btn btn-neutral float-left" title="ttnn.transformer.sparse_sdpa" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.transformer.split_query_key_value_and_split_heads.html" class="btn btn-neutral float-right" title="ttnn.transformer.split_query_key_value_and_split_heads" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -291,6 +291,10 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 </tr>
 </tbody>
 </table>
+<p>ROW_MAJOR input is supported only for sharded inputs. An interleaved
+(non-sharded) input must be in TILE layout; convert it first with
+<code class="docutils literal notranslate"><span class="pre">ttnn.to_layout(input,</span> <span class="pre">ttnn.TILE_LAYOUT)</span></code> (and convert the output
+back with <code class="docutils literal notranslate"><span class="pre">ttnn.to_layout</span></code> if a ROW_MAJOR result is required).</p>
 <table class="docutils align-default" id="id3">
 <caption>
 <span class="caption-text">weight (gamma) and bias (beta)</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>

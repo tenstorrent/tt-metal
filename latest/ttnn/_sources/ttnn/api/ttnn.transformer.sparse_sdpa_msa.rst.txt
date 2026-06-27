@@ -1,0 +1,8 @@
+﻿ttnn.transformer.sparse\_sdpa\_msa
+==================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.sparse_sdpa_msa:
+
+.. autooperation:: ttnn.transformer.sparse_sdpa_msa

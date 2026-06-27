@@ -1,8 +1,0 @@
-﻿ttnn.experimental.indexer\_score
-================================
-
-.. currentmodule:: ttnn.experimental
-
-.. _ttnn.experimental.indexer_score:
-
-.. autooperation:: ttnn.experimental.indexer_score

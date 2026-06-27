@@ -1,0 +1,8 @@
+﻿ttnn.experimental.indexer\_score\_msa
+=====================================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.indexer_score_msa:
+
+.. autooperation:: ttnn.experimental.indexer_score_msa

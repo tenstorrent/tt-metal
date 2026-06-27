@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.transformer.sparse_sdpa &mdash; TT-NN&amp;trade;  documentation</title>
+  <title>ttnn.experimental.indexer_score_msa &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.sparse_sdpa.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.indexer_score_msa.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.transformer.sparse_sdpa_msa" href="ttnn.transformer.sparse_sdpa_msa.html" />
-    <link rel="prev" title="ttnn.transformer.scaled_dot_product_attention_decode" href="ttnn.transformer.scaled_dot_product_attention_decode.html" />
+    <link rel="next" title="ttnn.all_broadcast" href="ttnn.all_broadcast.html" />
+    <link rel="prev" title="ttnn.experimental.indexer_score_dsa" href="ttnn.experimental.indexer_score_dsa.html" />
  
 <script>
 (function() {
@@ -112,12 +112,12 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_mla.html">ttnn.transformer.ring_mla</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention.html">ttnn.transformer.scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention_decode.html">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.transformer.sparse_sdpa</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.sparse_sdpa.html">ttnn.transformer.sparse_sdpa</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.sparse_sdpa_msa.html">ttnn.transformer.sparse_sdpa_msa</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.windowed_scaled_dot_product_attention.html">ttnn.transformer.windowed_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.indexer_score_dsa.html">ttnn.experimental.indexer_score_dsa</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.indexer_score_msa.html">ttnn.experimental.indexer_score_msa</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.experimental.indexer_score_msa</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
@@ -191,9 +191,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.sparse_sdpa</li>
+      <li class="breadcrumb-item active">ttnn.experimental.indexer_score_msa</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.sparse_sdpa.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.experimental.indexer_score_msa.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -201,45 +201,60 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-transformer-sparse-sdpa">
-<h1>ttnn.transformer.sparse_sdpa<a class="headerlink" href="#ttnn-transformer-sparse-sdpa" title="Permalink to this heading"></a>
+  <section id="ttnn-experimental-indexer-score-msa">
+<h1>ttnn.experimental.indexer_score_msa<a class="headerlink" href="#ttnn-experimental-indexer-score-msa" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.transformer.sparse_sdpa">
-<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">sparse_sdpa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">v_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k_chunk_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.transformer.sparse_sdpa" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.experimental.indexer_score_msa">
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score_msa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_groups</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_size</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score_msa" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip. softmax(Q@Kᵀ·scale masked)@V over the
-top-k selected latents per query token; V = kv[…, :v_dim]. Masking is baked into <cite>indices</cite>
-(0xFFFFFFFF = masked; sentinels are a contiguous tail). Inputs are ROW-MAJOR DRAM-interleaved.
-K_DIM (the q/kv head dim) is taken from the tensors.</p>
+<p>MiniMax-M3 MSA lightning-indexer scorer.</p>
+<p>score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale</p>
+<p>Raw dot product (no ReLU), no learned gates – only a 1/sqrt(d) <code class="docutils literal notranslate"><span class="pre">scale</span></code>
+(applied as a constant gate). The Hi index heads are partitioned into
+<code class="docutils literal notranslate"><span class="pre">num_groups</span></code> GQA groups and summed WITHIN each group only, giving one
+output plane per group (no cross-group sum) for per-group selection.
+For DeepSeek-V3.2 / GLM-5’s relu + gated + head-summed indexer, use
+<code class="docutils literal notranslate"><span class="pre">indexer_score_dsa</span></code> instead.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>q</strong> (<em>ttnn.Tensor</em>) – [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)</p></li>
-<li><p><strong>kv</strong> (<em>ttnn.Tensor</em>) – [1, 1, T, K_DIM] bf16 or fp8_e4m3 (fp8 halves the K-gather bytes; tilized to bfp8_b in-op).
-When cache_batch_idx is set, [B, 1, T, K_DIM] and may be ND-sharded across DRAM banks.</p></li>
-<li><p><strong>indices</strong> (<em>ttnn.Tensor</em>) – [1, 1, S, TOPK] uint32</p></li>
-<li><p><strong>v_dim</strong> (<em>int</em>) – width of V (leading v_dim cols of the K_DIM-wide cache); the output width.</p></li>
+<li><p><strong>q</strong> – [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)</p></li>
+<li><p><strong>k</strong> – [B, 1, T, D] bf16 or bfp8_b tiled, single shared head</p></li>
+<li><p><strong>chunk_start_idx</strong> – absolute global position of rank 0’s query row 0
+(causality: key t visible to query s iff t &lt;= chunk_start + s).
+OMIT on a mesh -&gt; deduced as T - sp_ring*Sq; single device: set to
+history + rank*Sq per rank (same semantics as indexer_score_dsa).</p></li>
+<li><p><strong>scale</strong> – constant gate applied to every head (e.g. 1/sqrt(d))</p></li>
+<li><p><strong>num_groups</strong> – REQUIRED (no default). 1 sums all Hi heads into one plane
+(the TP=4 group-aligned deployment, Hi=1/device). G&gt;1 partitions the heads into G groups
+of Hi/G and sums within each group -&gt; output [B, G, Sq, T] (multiple
+GQA groups on one chip). G&gt;1 needs all heads resident
+(head_group_size 0 or Hi) and k_chunk_size &gt;= 64.</p></li>
+<li><p><strong>block_size</strong> – 0 (default) = no pooling -&gt; score [B, G, Sq, T]. &gt;0 =
+block-max-pool over block_size keys -&gt; score [B, G, Sq, T/block_size]
+(block selection; the downstream topk then picks per-group top-k
+blocks). Requires block_size a multiple of 32, T % block_size == 0,
+and k_chunk_size % block_size == 0.</p></li>
+<li><p><strong>program_config</strong> – work-unit knobs (q_chunk_size, k_chunk_size,
+head_group_size; elements, tile-aligned). Defaults always fit L1.</p></li>
+<li><p><strong>compute_kernel_config</strong> – optional DeviceComputeKernelConfig. Only
+math_fidelity is honored (default: HiFi2, or LoFi when q and k
+are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
+stay false (the custom LLK is validated for bf16 DEST half-sync).</p></li>
+<li><p><strong>cluster_axis</strong> – mesh axis that is the SP ring. On a mesh, device r uses
+chunk_start = chunk_start_idx + r*Sq, where r is its linearized
+index along this axis. None = linear device order.</p></li>
 </ul>
 </dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<ul class="simple">
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – defaults to K_DIM**-0.5.</p></li>
-<li><p><strong>k_chunk_size</strong> (<em>int</em>) – defaults to 128 (must divide TOPK, multiple of 32).</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – </p></li>
-<li><p><strong>cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>) – select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
-It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.</p></li>
-</ul>
-</dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><em>ttnn.Tensor</em> – [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16-&gt;bf16, fp8-&gt;fp8).</p>
+</dl>
+<dl class="simple">
+<dt>Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or</dt>
+<dd>
+<p>T/block_size when block-max-pooling); future/pad columns/blocks -inf.</p>
 </dd>
 </dl>
 </dd>
@@ -252,8 +267,8 @@ It is a dynamic runtime arg, so changing it (or T) does not recompile the kernel
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.transformer.scaled_dot_product_attention_decode.html" class="btn btn-neutral float-left" title="ttnn.transformer.scaled_dot_product_attention_decode" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.transformer.sparse_sdpa_msa.html" class="btn btn-neutral float-right" title="ttnn.transformer.sparse_sdpa_msa" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.experimental.indexer_score_dsa.html" class="btn btn-neutral float-left" title="ttnn.experimental.indexer_score_dsa" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.all_broadcast.html" class="btn btn-neutral float-right" title="ttnn.all_broadcast" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
