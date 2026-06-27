@@ -15,8 +15,8 @@ elu_p11_s2_uniform_any_ulp.csv,elu,poly,11,2,bf16,0.00,2.74,1,controlled_replay
 erf_n8d6_s1_uniform_rational_ulp.csv,erf,rational,8d6,1,bf16,0.50,2.87,1,controlled_replay
 erfc_p6_s4_uniform_any_ulp.csv,erfc,poly,6,4,bf16,0.50,4.19,1,controlled_replay
 erfinv_n4d4_s1_uniform_rational_ulp.csv,erfinv,rational,4d4,1,bf16,1.00,2.38,1,controlled_replay
-exp_p2_s1_uniform_fpminimax_ulp.csv,exp,exponent_alu_exp2,2,1,bf16,1.00,2.54,1,controlled_replay
-exp2_p2_s3_uniform_any_ulp.csv,exp2,exponent_alu_exp2,2,3,bf16,0.50,2.44,1,controlled_replay
+exp_p2_s1_uniform_fpminimax_ulp.csv,exp,exponent_alu_exp2,2,1,bf16,1.00,1.91,1,controlled_replay_exp2_preload
+exp2_p2_s3_uniform_any_ulp.csv,exp2,exponent_alu_exp2,2,3,bf16,0.50,1.91,1,controlled_replay_exp2_preload
 expm1_p7_s1_uniform_any_ulp.csv,expm1,poly,7,1,bf16,0.00,2.01,1,controlled_replay
 gelu_p2_s16_uniform_any_ulp.csv,gelu,poly,2,16,bf16,0.12,11.80,1,controlled_replay
 hardmish_p3_s3_uniform_any_ulp.csv,hardmish,gated_affine_product,3,3,bf16,0.00,1.72,1,controlled_replay

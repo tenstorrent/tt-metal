@@ -2986,6 +2986,44 @@ void kernel_main() {
         sfpi::gated_affine_product_eval();
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_EXPONENT_ALU || defined(EVAL_METHOD_EXPONENT_ALU)
         (void)p_lut;
+#if defined(HW_PRELOAD)
+#if defined(EXPONENT_ALU_EXP2)
+        sfpi::vFloat thr_hoist = 255.0f;
+        sfpi::vFloat c127_hoist = 127.0f;
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
+        sfpi::vFloat mult_hoist = EXP_HW_MULT;
+#endif
+        sfpi::vFloat exp_cvspill[(EXP_HW_DEGREE >= 2) ? (EXP_HW_DEGREE - 1) : 1];
+        if constexpr (EXP_HW_DEGREE >= 2) {
+#pragma GCC unroll 16
+            for (int k = 0; k < (int)EXP_HW_DEGREE - 1; k++) {
+                const int power = (int)EXP_HW_DEGREE - 2 - k;
+#if defined(EXP_HW_FUSED)
+                exp_cvspill[k] = EXP_HW_COEFFS[power] * sfpi::exp_hw_fused_scale(power);
+#else
+                exp_cvspill[k] = EXP_HW_COEFFS[power];
+#endif
+            }
+        }
+        for (int d = 0; d < 32; d++) {
+            sfpi::vFloat y = sfpi::exp_hw_eval_preloaded<EXP_HW_DEGREE>(
+                sfpi::dst_reg[d],
+                thr_hoist,
+                c127_hoist,
+                exp_cvspill
+#if defined(EXP_HW_COMPOSE_SIGMOID) || defined(EXP_HW_COMPOSE_SIGMOID_PRODUCT)
+                ,
+                mult_hoist
+#endif
+            );
+#ifdef USE_BF16
+            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+#endif
+            sfpi::dst_reg[d] = y;
+        }
+#endif
+#endif
+#if !defined(HW_PRELOAD) || !defined(EXPONENT_ALU_EXP2)
         for (int d = 0; d < 32; d++) {
 #if defined(EXPONENT_ALU_EXP2)
             sfpi::vFloat y = sfpi::exp_hw_eval<EXP_HW_DEGREE>(sfpi::dst_reg[d]);
@@ -3001,6 +3039,7 @@ void kernel_main() {
 #endif
             sfpi::dst_reg[d] = y;
         }
+#endif
 #elif TT_ACT_EVAL_KIND == TT_ACT_EVAL_NEWTON_ROOT || defined(EVAL_METHOD_NEWTON_ROOT)
         (void)p_lut;
 #if (NEWTON_ROOT_N == 3) && defined(NEWTON_ROOT_ALGORITHM_CBRT_MAGIC) && defined(NEWTON_ROOT_BACKEND_NATIVE_SFPU_TILE)
