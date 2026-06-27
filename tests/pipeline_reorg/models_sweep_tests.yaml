@@ -27,7 +27,7 @@
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --max_seq_len 65536
   model: llama3.1-8b
   skus:
     wh_n150:

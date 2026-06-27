@@ -316,12 +316,12 @@ models:
     bh_p300: 800
     bh_quietbox_2: 280
   sweep_tier1:
-    wh_n150: 155
-    wh_galaxy: 215
-    wh_galaxy_perf: 125
+    wh_n150: 60
+    wh_galaxy: 120
+    wh_galaxy_perf: 150
   sweep_tier2:
-    wh_n150: 155
-    wh_llmbox_perf: 485
+    wh_n150: 60
+    wh_llmbox_perf: 180
 umd:
   unit:
     wh_galaxy_perf: 35
