@@ -757,6 +757,14 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
+        # DEBUG(#48222): fix-attempt for the batch-32 candidate-gather race. Adding host reads
+        # (i.e. forcing a sync) here previously turned batch-32 garbage (F1 0.34) into mostly
+        # coherent (0.52). Replicate that mitigation with a pure barrier (no observation) to test
+        # whether serializing the candidate gather before sampling fixes batch-32 un-instrumented.
+        import os as _os
+
+        if _os.environ.get("TT_QWEN_SAMPLING_SYNC") == "1":
+            ttnn.synchronize_device(self.mesh_device)
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,
