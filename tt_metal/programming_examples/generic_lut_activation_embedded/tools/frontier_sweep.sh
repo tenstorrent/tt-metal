@@ -125,6 +125,14 @@ dispatch_local() {
         exit 1
       }
     fi
+    if [[ ! -x "$wt/build_Release/programming_examples/programming_examples_generic_lut_activation_embedded_adhoc" ]]; then
+      echo "  chip ${chip}: prebuilding adhoc target in ${wt}" >&2
+      ninja -C "$wt/build_Release" programming_examples_generic_lut_activation_embedded_adhoc \
+        >"$log_dir/prebuild_chip${chip}.log" 2>&1 || {
+        echo "ERROR: failed to prebuild ${wt}; see $log_dir/prebuild_chip${chip}.log" >&2
+        exit 1
+      }
+    fi
   done
 
   pids=()
