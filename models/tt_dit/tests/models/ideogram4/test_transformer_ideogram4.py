@@ -85,9 +85,7 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype):
     position_ids[:, text_len:, 2] = IMAGE_POSITION_OFFSET + ww
 
     # cos/sin from the reference MRoPE (ground-truth convention).
-    rope = modeling_ideogram4.Ideogram4MRoPE(
-        head_dim=HEAD_DIM, base=ROPE_THETA, mrope_section=MROPE_SECTION
-    )
+    rope = modeling_ideogram4.Ideogram4MRoPE(head_dim=HEAD_DIM, base=ROPE_THETA, mrope_section=MROPE_SECTION)
     cos, sin = rope(position_ids)  # (B, L, head_dim), float32
     cos = cos.to(torch_dtype)
     sin = sin.to(torch_dtype)
@@ -102,7 +100,7 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype):
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [(1, 1)],
+    [(2, 4)],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -142,9 +140,7 @@ def test_transformer_block(
     ).to(dtype=torch_dtype)
     torch_block.eval()
 
-    x, adaln_input, segment_ids, cos, sin, attn_bias = _build_inputs(
-        batch_size, text_len, image_len, torch_dtype
-    )
+    x, adaln_input, segment_ids, cos, sin, attn_bias = _build_inputs(batch_size, text_len, image_len, torch_dtype)
 
     with torch.no_grad():
         torch_out = torch_block(

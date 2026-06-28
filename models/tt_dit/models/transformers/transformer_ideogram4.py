@@ -121,16 +121,16 @@ class Ideogram4TransformerBlock(Module):
         self.o = Linear(hidden_size, hidden_size, bias=False, mesh_device=mesh_device)
 
         # QK-RMSNorm over head_dim (reference norm_q / norm_k = Ideogram4RMSNorm, eps=1e-5).
-        self.norm_q = RMSNorm(
-            embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device
-        )
-        self.norm_k = RMSNorm(
-            embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device
-        )
+        self.norm_q = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
+        self.norm_k = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
 
         # --- the four block RMSNorms (no affine bias; weight only) ---
-        self.attention_norm1 = RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
-        self.attention_norm2 = RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
+        self.attention_norm1 = RMSNorm(
+            embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device
+        )
+        self.attention_norm2 = RMSNorm(
+            embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device
+        )
         self.ffn_norm1 = RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
         self.ffn_norm2 = RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
 
@@ -154,7 +154,10 @@ class Ideogram4TransformerBlock(Module):
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(device_grid.x, device_grid.y),
             q_chunk_size=128,
-            k_chunk_size=512,
+            # head_dim=256 (2x the usual 128) doubles SDPA's per-core K/V/score CBs;
+            # k_chunk_size=512 overflows Blackhole L1 (1.59MB > 1.5MB max). Halve to 256
+            # so the buffers fit. Flash attention is exact regardless of chunk size.
+            k_chunk_size=256,
             exp_approx_mode=False,
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
