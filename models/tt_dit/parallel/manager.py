@@ -117,10 +117,9 @@ class CCLManager:
 
         # Per-(region,link) progress sems for fused NP+Conv3d overlap: 4 face regions
         # {H-top, H-bot, W-left, W-right} × num_links links, indexed [region*num_links + link].
-        # That is exactly 8 on BH-LB (num_links=2); up to 16 at num_links=4 (4x8). Single bank (no
-        # ping-pong): reset_global_semaphore_value is a blocking, queue-ordered write, so the reset
-        # always lands before the next dispatch reads the sem; addresses stay static so the factory
-        # bakes them once and override never refreshes them.
+        # That is exactly 8 on BH-LB (num_links=2); up to 16 at num_links=4 (4x8). Single bank, no host
+        # reset: the consuming kernels self-reset their own copies on-device after their final wait, so
+        # the op is trace-safe and the static addresses are baked once by the factory.
         self._np_region_n_sems = 4 * self.num_links
         self.np_region_progress_semaphores = {
             0: [
@@ -402,11 +401,12 @@ class CCLManager:
         conv_config.h_halo_buffer_addr = halo_buf.buffer_address()
 
         # Per-(region,link) progress sems: each edge tile waits only on the (region, owning-link) it
-        # reads. Reset to 0 before dispatch (monotonic, T-batch-counted during the op). Layout is
-        # [region*num_links + link]; pad the fixed 16-slot config array with 0 for unused link slots.
+        # reads. Layout is [region*num_links + link]; pad the fixed 16-slot config array with 0 for
+        # unused link slots. NO host reset here — the consuming kernels (conv3d_reader_vol2col,
+        # np_phase2_w_reader) self-reset their own copies on-device after their final wait, so the op is
+        # trace-safe (a host reset would be skipped under trace replay -> stale count -> hang). The
+        # signaling is intra-device (NP fabric core -> conv core), so it needs no ping-pong.
         region_sems = self.get_np_region_progress_semaphores(axes[0])
-        for s in region_sems:
-            ttnn.reset_global_semaphore_value(s, 0)
         region_addrs = [ttnn.get_global_semaphore_address(s) for s in region_sems]
         conv_config.region_progress_sem_addr = region_addrs + [0] * (16 - len(region_addrs))
 

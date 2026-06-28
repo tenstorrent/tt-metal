@@ -276,4 +276,17 @@ void kernel_main() {
     if (!is_first_chip) {
         noc_semaphore_set(w_neighbor_sem_ptr, 0);
     }
+    // Trace-safe self-reset of the H-region sems this core consumed in the corner gate above: the H
+    // producer increments HT/HB on the W-reader cores too, and the per-batch corner waits guarantee
+    // those increments have landed, so zero them for the next dispatch without a host-side reset.
+    if constexpr (progress_t_batch_size > 0) {
+        for (uint32_t l = 0; l < num_h_links && l < 4; l++) {
+            if (htop_sem[l] != 0) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(htop_sem[l]), 0);
+            }
+            if (hbot_sem[l] != 0) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hbot_sem[l]), 0);
+            }
+        }
+    }
 }

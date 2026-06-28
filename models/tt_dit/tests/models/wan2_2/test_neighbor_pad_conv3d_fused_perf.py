@@ -260,5 +260,140 @@ def test_fused_vs_standalone_perf(
     ratio = f_ms / sa_ms if sa_ms > 0 else float("inf")
     logger.info(
         f"PERF shape={shape_id}  fused={f_ms:.3f}ms  standalone={sa_ms:.3f}ms  ratio={ratio:.3f}  "
-        f"(WALL — host-bound; device truth in np_speedup_table.py; n={NUM_MEASURED_DISPATCHES})"
+        f"(WALL — host-bound; device truth in test_bench; n={NUM_MEASURED_DISPATCHES})"
     )
+
+
+# =====================================================================================================
+# Trace-mode bench (ported from cglagovich/fused_rms_norm test_bench/_trace_and_time/_print_table).
+# This is the ACCURATE device-time comparison: trace replay strips per-op host dispatch, so the wall of
+# the replay loop is the device time. Standalone (full-grid NP + conv3d, two ops) is captured as one
+# trace, fused (one NpConv3d op) as another; we report fused vs standalone wall + speedup. The fused op
+# is trace-safe because every progress/neighbor/barrier semaphore self-resets on-device (no host reset).
+# =====================================================================================================
+_BENCH_ITERS = 30
+_PINGPONG = 2  # distinct resource sets alternated across replays (absorbs cross-device fabric skew)
+
+
+def _trace_and_time(mesh_device, run_ops, *, num_iters):
+    """Capture each run_op as its own trace, replay round-robin, return host wall us/iter (= device time).
+
+    Exact port of cglagovich/fused_rms_norm `_trace_and_time`. A LIST ping-pongs distinct resource sets
+    (each call advances the CCLManager's per-call sem/halo-buffer ping-pong) so a lagging device's late
+    fabric atomic-inc isn't clobbered by an op's end-of-op sem reset under replay; a single callable is
+    plain single-trace timing.
+    """
+    if callable(run_ops):
+        run_ops = [run_ops]
+    n = len(run_ops)
+    for run_op in run_ops:  # warmup + cold-compile each program
+        run_op()
+    ttnn.synchronize_device(mesh_device)
+    trace_ids = []
+    for run_op in run_ops:
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        run_op()
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        trace_ids.append(tid)
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for i in range(num_iters):
+        ttnn.execute_trace(mesh_device, trace_ids[i % n], cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    elapsed_us = (time.perf_counter() - t0) * 1e6
+    for tid in trace_ids:
+        ttnn.release_trace(mesh_device, tid)
+    return elapsed_us / num_iters
+
+
+def _bench_shapes(suffix):
+    """The _PERF_PARAMS rows whose shape_id ends with `suffix` (exact, so _4x8 excludes _4x8mock).
+
+    NP_BENCH_ONLY=<substr>[,<substr>...] restricts to matching shape_ids (focused profiling).
+    """
+    only = [s for s in os.environ.get("NP_BENCH_ONLY", "").split(",") if s]
+    out = []
+    for p in _PERF_PARAMS:
+        sid = p.values[-1]
+        in_set = (
+            (suffix == "4x8mock" and sid.endswith("_4x8mock"))
+            or (suffix == "2x4" and sid.endswith("_2x4"))
+            or (suffix == "4x8" and sid.endswith("_4x8") and not sid.endswith("_4x8mock"))
+        )
+        if in_set and (not only or any(o in sid for o in only)):
+            out.append(p.values)
+    return out
+
+
+def _format_bench_table(rows, title):
+    """Render the bench table as a single string (emitted via one logger call so it can't be fragmented
+    by stdout interleaving with kernel-compile logs)."""
+    cid_w = max(len("config_id"), max(len(r["cid"]) for r in rows))
+    header = (
+        f"{'config_id':<{cid_w}}  {'C_in':>5} {'C_out':>5} {'T':>4} {'HxW(dev)':>9} "
+        f"{'standalone us':>13} {'fused us':>10} {'speedup':>8}"
+    )
+    box = "=" * max(len(header), len(title))
+    lines = [box, title, box, header, "-" * len(header)]
+    for r in rows:
+        sa = f"{r['sa']:>13.1f}" if r["sa"] is not None else f"{r.get('sa_err', 'n/a'):>13}"
+        fu = f"{r['f']:>10.1f}" if r["f"] is not None else f"{r.get('f_err', 'n/a'):>10}"
+        sp = f"{r['sa'] / r['f']:>7.2f}x" if (r["sa"] and r["f"]) else f"{'-':>8}"
+        lines.append(f"{r['cid']:<{cid_w}}  {r['ci']:>5} {r['co']:>5} {r['t']:>4} {r['hw']:>9} {sa} {fu} {sp}")
+    lines += [box, "speedup = standalone/fused (>1.0 => fusion faster); trace-mode wall = device time."]
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 16777216}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device, shape_set",
+    [
+        ((2, 4), "2x4"),
+        ((2, 4), "4x8mock"),
+        pytest.param((4, 8), "4x8", marks=_SKIP_4X8),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.timeout(1800)
+def test_bench(mesh_device, device_params, shape_set):
+    """Accurate trace-mode fused-vs-standalone speedup table for one shape set (rms test_bench port)."""
+    rows = []
+    for B, C_in, C_out, T, H, W, kernel_size, padding, _mesh, h_axis, w_axis, num_links, sid in _bench_shapes(
+        shape_set
+    ):
+        row = {"cid": sid, "ci": C_in, "co": C_out, "t": T, "hw": f"{H // 2}x{W // 4}", "sa": None, "f": None}
+        for key, use_fused in (("sa", False), ("f", True)):
+            try:
+                model, *_ = _build_model(
+                    mesh_device,
+                    B,
+                    C_in,
+                    C_out,
+                    T,
+                    H,
+                    W,
+                    kernel_size,
+                    padding,
+                    h_axis,
+                    w_axis,
+                    num_links,
+                    ttnn.bfloat16,
+                    use_fused=use_fused,
+                )
+                # _PINGPONG run_ops: each call advances the CCLManager's per-call ping-pong (h/w neighbor
+                # sems + halo buffer), so the traces bake distinct banks and round-robin replay absorbs skew.
+                run_ops = []
+                for _ in range(_PINGPONG):
+                    x, lh = _build_input(mesh_device, B, C_in, T, H, W, h_axis, w_axis)
+                    run_ops.append(lambda m=model, xx=x, llh=lh: m(xx, logical_h=llh))
+                row[key] = _trace_and_time(mesh_device, run_ops, num_iters=_BENCH_ITERS)
+            except Exception as e:  # noqa: BLE001 — one shape's failure must not lose the table
+                row[f"{key}_err"] = type(e).__name__
+                logger.warning(f"{sid} {'fused' if use_fused else 'standalone'} FAILED: {str(e)[:160]}")
+        rows.append(row)
+        logger.info(f"BENCH {sid}: standalone={row['sa']} fused={row['f']}")
+    logger.info("\n" + _format_bench_table(rows, f"neighbor_pad_conv3d trace-mode bench — BH {shape_set}"))

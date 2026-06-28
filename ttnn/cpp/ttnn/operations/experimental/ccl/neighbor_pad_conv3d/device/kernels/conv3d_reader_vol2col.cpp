@@ -626,4 +626,29 @@ void kernel_main() {
             }
         }
     }
+
+    // Trace-safe self-reset (mirrors np_h_reader.cpp / phase2_w_reader.cpp): zero the per-(region,link)
+    // progress sems this core consumed so the next dispatch starts from 0 WITHOUT a host-side reset
+    // (host resets are skipped under trace replay -> stale count -> hang). Gated exactly like the waits
+    // above (input_progress_signal_count>0 && core_needs_halo && needs_<side>), so we only reset a sem
+    // we waited on — the producer's increments to this core have all landed, so the reset can't race
+    // them. Interior cores never wait and never reset; their broadcast-incremented copies are never read.
+    if (input_progress_signal_count > 0 && core_needs_halo) {
+        for (uint32_t l = 0; l < h_num_links && l < 4; l++) {
+            if (needs_h_top && htop_sem_addr[l] != 0) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(htop_sem_addr[l]), 0);
+            }
+            if (needs_h_bot && hbot_sem_addr[l] != 0) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hbot_sem_addr[l]), 0);
+            }
+        }
+        for (uint32_t l = 0; l < w_pad2_num_links && l < 4; l++) {
+            if (needs_w_left && wleft_sem_addr[l] != 0) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wleft_sem_addr[l]), 0);
+            }
+            if (needs_w_right && wright_sem_addr[l] != 0) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wright_sem_addr[l]), 0);
+            }
+        }
+    }
 }
