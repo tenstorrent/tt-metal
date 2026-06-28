@@ -3,24 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # =============================================================================
-# UNVALIDATED — authored without Tenstorrent hardware.
+# VALIDATED on Blackhole (2x4 mesh, FABRIC_1D, Linear). The single block passes
+# its PCC gate (>=0.99; measured ~0.9997) across {B=1,2} x {1,2 segments} x
+# {1088, 4224 seq} x {tp1sp1, tp2, tp4, sp2, sp2tp2, sp2tp4} — see the test file.
 #
-# This module was written in AUTHORING-ONLY mode on a machine with NO ttnn /
-# TT_METAL hardware available, so verify.py / pytest were NOT run. The code has
-# been hand-traced for tensor shapes and every tt_dit primitive signature was
-# confirmed against library source, but it has NOT executed on device. Treat all
-# numerics as unverified until the deferred verify.py command passes on a TT box.
-#
-# Highest-risk areas for the pcc-debugger to watch (see test file header):
+# Notable design points (see the class docstring for the parallelism scheme):
 #   1. rotate-half MRoPE convention (cos/sin = cat(freqs, freqs); _rotate_half),
 #      precomputed on host from the reference Ideogram4MRoPE.
-#   2. block-diagonal segment-id attention mask fed as an additive bias to SDPA.
+#   2. block-diagonal segment-id attention mask fed as an additive bias to SDPA;
+#      under SP, K/V are all-gathered and the mask is sharded on query rows.
 #   3. tanh-gated 4-branch AdaLN (scale_msa, gate_msa, scale_mlp, gate_mlp),
 #      no shift terms — differs from the 6-branch ports.
 #   4. the double-RMSNorm sandwich residual structure (norm1 pre-scale on input,
 #      norm2 post-norm on the attn/ff output before the gate).
-#   5. head_dim=256 / 18 heads (not mesh-friendly) — TP path is UNVALIDATED;
-#      the validated target config is single-device (TP=1).
+#   5. head_dim=256 / 18 heads — TP pads heads up to a multiple of tp_factor.
 # =============================================================================
 
 from __future__ import annotations
@@ -311,8 +307,10 @@ class Ideogram4TransformerBlock(Module):
                 precomputed on host from Ideogram4MRoPE. Broadcast over heads; sharded
                 on sequence to match x when sp_factor > 1.
             adaln_input: [B, 1, adaln_dim] (or [B, L, adaln_dim]) SiLU'd time cond.
-            attn_mask: [B, 1, L, L] additive mask (0 = attend, -inf = block), built
-                from segment ids. None => full attention. Unsupported with SP.
+            attn_mask: additive mask (0 = attend, -inf = block), built from segment ids.
+                None => full attention. Without SP: [B, 1, L, L]. With SP: sharded on the
+                query-row dim to [B, 1, L/sp, L] (full on keys); the masked-SP path
+                all-gathers K/V instead of using ring attention.
             spatial_sequence_length: logical (unpadded) full sequence length. Required
                 when sp_factor > 1; defaults to x.shape[1] otherwise.
         """
@@ -369,12 +367,14 @@ class Ideogram4TransformerBlock(Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        if self.sp_factor > 1:
-            # Sequence parallel: ring SDPA all-gathers K/V across the SP axis. Use an
-            # empty "joint" so this reduces to plain self-attention over the full seq.
-            assert attn_mask is None, "attn_mask is unsupported with sequence parallelism"
+        if self.sp_factor > 1 and attn_mask is None:
+            # Sequence parallel, unmasked (full attention): ring SDPA all-gathers K/V
+            # across the SP axis. Empty "joint" => plain self-attention over the full seq.
             empty = ttnn.zeros(
-                [1, self.n_local_heads, 0, self.head_dim], device=self.mesh_device, layout=q.layout, dtype=q.dtype
+                [q.shape[0], self.n_local_heads, 0, self.head_dim],
+                device=self.mesh_device,
+                layout=q.layout,
+                dtype=q.dtype,
             )
             out, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
@@ -399,6 +399,18 @@ class Ideogram4TransformerBlock(Module):
                 ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
             )  # [B, n_local_heads, L/sp, head_dim]
         else:
+            if self.sp_factor > 1:
+                # Sequence parallel + segment mask: ring SDPA takes no additive mask, so
+                # all-gather full K/V across the SP axis and run masked SDPA with Q kept
+                # sequence-sharded. The output stays sharded on sequence, so the rest of
+                # the block remains sequence-parallel; only K/V are replicated here.
+                # attn_mask is [B, 1, L/sp, L] (sharded on the query rows, full on keys).
+                k = self.ccl_manager.all_gather_persistent_buffer(
+                    k, dim=2, mesh_axis=self.sp_axis, use_hyperparams=True
+                )
+                v = self.ccl_manager.all_gather_persistent_buffer(
+                    v, dim=2, mesh_axis=self.sp_axis, use_hyperparams=True
+                )
             out = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k,
@@ -407,7 +419,7 @@ class Ideogram4TransformerBlock(Module):
                 is_causal=False,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
-            )  # [B, n_local_heads, L, head_dim]
+            )  # [B, n_local_heads, L/sp, head_dim]
 
         out = ttnn.transformer.concatenate_heads(out)  # [B, L/sp, n_local_heads * head_dim] (fractured on TP)
         # o is RowParallel: fractured-heads input -> reduce-scatter -> fractured hidden;

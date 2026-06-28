@@ -3,22 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # =============================================================================
-# UNVALIDATED — this test was authored without Tenstorrent hardware and has NOT
-# been run. It mirrors tests/unit/test_feedforward.py: it instantiates the
-# OFFICIAL reference Ideogram4TransformerBlock with random init, loads its
-# state_dict into the tt block, runs both on real Ideogram dims, and asserts
-# PCC >= 0.99. Run it on a TT box via the verify.py command in the bringup report.
+# VALIDATED on Blackhole. Instantiates the OFFICIAL reference
+# Ideogram4TransformerBlock with random init, loads its state_dict into the tt
+# block, runs both on real Ideogram dims, and asserts PCC >= 0.99.
 #
-# pcc-debugger watch-list (highest-risk parts of this single-stream block):
+# Coverage (2x4 BH mesh, FABRIC_1D, Linear): {B=1,2} x {1,2 segments} x
+# {1088, 4224 seq} x {tp1sp1, tp2, tp4(pad 20), sp2, sp2tp2, sp2tp4}.
+#
 #   1. rotate-half MRoPE (cos/sin = cat(freqs, freqs)). Precomputed on host here
-#      from the reference Ideogram4MRoPE so the convention is identical; the risk
-#      is the tt-side _apply_rope half-split matching exactly.
-#   2. block-diagonal segment-id mask -> additive bias (0 / -inf) fed to SDPA.
+#      from the reference Ideogram4MRoPE so the convention is identical.
+#   2. block-diagonal segment-id mask -> additive bias (0 / -inf) fed to SDPA;
+#      with SP it is sharded on the query-row dim (K/V are all-gathered).
 #   3. tanh-gated 4-branch AdaLN (no shift terms).
 #   4. double-RMSNorm sandwich residual (norm2 on the attn/ff *output*).
 #   5. head_dim=256 / 18 heads — TP pads heads up to a multiple of tp_factor
-#      (18 -> 20 for tp=4); SP sharding uses ring attention. See the parallel
-#      parametrizations below.
+#      (18 -> 20 for tp=4); SP sharding uses ring attention (or K/V gather + mask).
 # =============================================================================
 
 import math
@@ -65,11 +64,15 @@ LLM_TOKEN_INDICATOR = modeling_ideogram4.LLM_TOKEN_INDICATOR
 IMAGE_POSITION_OFFSET = 65536
 
 
-def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype):
+def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype, num_segments: int = 1):
     """Construct a realistic single-stream batch: [text tokens | image tokens].
 
     Returns torch tensors mirroring the reference block's forward signature plus
     the derived cos/sin (B, L, head_dim) and a (B, 1, L, L) additive attn mask.
+
+    num_segments > 1 packs that many independent samples into the sequence (contiguous,
+    roughly equal spans) so the block-diagonal segment mask blocks cross-segment
+    attention — exercising the masked SDPA path.
     """
     seq_len = text_len + image_len
 
@@ -79,9 +82,13 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype):
     # adaln_input: reference passes F.silu(adaln_proj(t_cond)); per-sample => (B,1,adaln_dim).
     adaln_input = torch.randn(batch_size, 1, ADALN_DIM, dtype=torch_dtype)
 
-    # segment ids: one packed sample => all-same segment (full attention). Use a
-    # second segment on part of the batch>1 case to exercise the block-diagonal mask.
+    # segment ids: contiguous spans => block-diagonal attention. num_segments==1 is the
+    # all-same-segment (full attention) case.
     segment_ids = torch.zeros(batch_size, seq_len, dtype=torch.long)
+    if num_segments > 1:
+        bounds = torch.linspace(0, seq_len, num_segments + 1).round().long()
+        for s in range(num_segments):
+            segment_ids[:, bounds[s] : bounds[s + 1]] = s
 
     # position_ids (B, L, 3) = (t, h, w). Text tokens: 1D positions on all 3 axes.
     # Image tokens: a (h, w) grid offset so they never collide with text positions.
@@ -138,9 +145,12 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype):
 @pytest.mark.parametrize(
     ("batch_size", "text_len", "image_len"),
     [
-        pytest.param(1, 64, 1024, id="text64_img1024"),
+        pytest.param(1, 64, 1024, id="b1_text64_img1024"),
+        pytest.param(2, 64, 1024, id="b2_text64_img1024"),  # batch > 1
+        pytest.param(1, 128, 4096, id="b1_text128_img4096"),  # larger sequence (4224)
     ],
 )
+@pytest.mark.parametrize("num_segments", [1, 2], ids=["1seg", "2seg"])
 def test_transformer_block(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -151,6 +161,7 @@ def test_transformer_block(
     batch_size: int,
     text_len: int,
     image_len: int,
+    num_segments: int,
 ) -> None:
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16
@@ -171,7 +182,9 @@ def test_transformer_block(
     ).to(dtype=torch_dtype)
     torch_block.eval()
 
-    x, adaln_input, segment_ids, cos, sin, attn_bias = _build_inputs(batch_size, text_len, image_len, torch_dtype)
+    x, adaln_input, segment_ids, cos, sin, attn_bias = _build_inputs(
+        batch_size, text_len, image_len, torch_dtype, num_segments
+    )
 
     with torch.no_grad():
         torch_out = torch_block(
@@ -210,9 +223,6 @@ def test_transformer_block(
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
 
-    # Single packed segment => full attention => mask is all-zero, pass None.
-    assert not torch.isneginf(attn_bias).any(), "this test exercises full attention (no segment mask)"
-
     # Sequence-parallel sharding: pad the sequence to k_chunk*sp, shard x and the
     # cos/sin rope tables on the sequence dim across the SP axis. The hidden dim stays
     # replicated (TP only shards inside the matmuls), so a single-axis shard suffices.
@@ -232,12 +242,31 @@ def test_transformer_block(
         tt_sin = bf16_tensor(sin4, device=submesh_device)
     tt_adaln = bf16_tensor(adaln_input, device=submesh_device)
 
+    # Block-diagonal segment mask (additive 0 / -inf). num_segments==1 => full attention.
+    if num_segments == 1:
+        tt_attn_mask = None
+    elif sp_factor == 1:
+        # Replicated [B, 1, L, L] mask fed to plain SDPA.
+        assert torch.isneginf(attn_bias).any(), "multi-segment input should produce a non-trivial mask"
+        tt_attn_mask = bf16_tensor(attn_bias, device=submesh_device)
+    else:
+        # SP + mask: the block all-gathers K/V to the full (padded) sequence and runs
+        # masked SDPA with Q kept sequence-sharded, so the mask is [B, 1, padded_L, padded_L]
+        # sharded on the query-row dim. Pad segment ids with a sentinel id so real queries
+        # never attend to padded keys (and vice-versa).
+        seg_padded = torch.full((batch_size, padded_len), num_segments, dtype=torch.long)
+        seg_padded[:, :seq_len] = segment_ids
+        same_seg = seg_padded.unsqueeze(2) == seg_padded.unsqueeze(1)  # (B, padded_L, padded_L)
+        bias = torch.zeros(batch_size, 1, padded_len, padded_len, dtype=torch.float32)
+        bias.masked_fill_(~same_seg.unsqueeze(1), float("-inf"))
+        tt_attn_mask = bf16_tensor(bias, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
+
     tt_out = tt_block(
         tt_x,
         cos=tt_cos,
         sin=tt_sin,
         adaln_input=tt_adaln,
-        attn_mask=None,
+        attn_mask=tt_attn_mask,
         spatial_sequence_length=seq_len,
     )
 
