@@ -147,15 +147,19 @@ jobs:
                   total   += int(s.attrib.get("tests",    0) or 0)
                   failed  += int(s.attrib.get("failures", 0) or 0)
                   skipped += int(s.attrib.get("skipped",  0) or 0)
-              ran = max(total - skipped, 0)
-              passed = max(ran - failed, 0)
-              pct = (100.0 * passed / ran) if ran else 0.0
               # "finished" = testcases recorded in the XML; "crashed" =
               # enumerated − finished (collected but never reported because the
               # worker died first). enumerated may be unavailable on older runs.
               finished = total
               enumerated = read_enumerated(enum_path)
               crashed = max(enumerated - finished, 0) if enumerated is not None else None
+              # Include crashed tests in the denominator to match the HTML report's
+              # treatment of crashed tests as non-passing (render_ttsim_report.py:341-345).
+              ran = max(total - skipped, 0)
+              if crashed is not None and crashed > 0:
+                  ran += crashed
+              passed = max(ran - failed - (crashed or 0), 0)
+              pct = (100.0 * passed / ran) if ran else 0.0
               return dict(total=total, ran=ran, passed=passed, failed=failed,
                           skipped=skipped, pass_pct=pct, finished=finished,
                           enumerated=enumerated, crashed=crashed)
