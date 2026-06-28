@@ -118,6 +118,10 @@ void kernel_main() {
                 OperandKind::Col>(EltwiseShape::grid(B_q_t, D_t));
 
             // Phase 7: Rescale l: l *= alpha (Col broadcast)
+            // FIX: use EltwiseShape::col(B_q_t) to create Ht=B_q_t, Wt=1 so that
+            // OperandKind::Col walks ht=0..B_q_t-1 and reads alpha[ht] for each tile.
+            // Passing bare B_q_t creates EltwiseShape(Ht=1, Wt=B_q_t) which makes
+            // OperandKind::Col always return ht=0, using alpha[0] for all tiles.
             mul<cb_sum_old,
                 cb_alpha,
                 cb_sum_old,
@@ -128,7 +132,7 @@ void kernel_main() {
                 BinaryDataFormatReconfig::Input,
                 PackTileReconfig::Output,
                 OperandKind::Scalar,
-                OperandKind::Col>(B_q_t);
+                OperandKind::Col>(EltwiseShape::col(B_q_t));
 
             // Drain cb_alpha (HeldBulk — not popped by mul)
             cb_pop_front(cb_alpha, B_q_t);
