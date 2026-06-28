@@ -1,3 +1,4 @@
 {"event":"investigation_start","details":"Hang at Phase 11 add<cb_sum_old,cb_sum_new,cb_sum_old>. Reading chain impl to understand lifecycle order.","ts":"2026-06-28T15:13:11+00:00"}
 {"event":"bisect_baseline_pass","details":"Copy Q to output passes. Reader/descriptor/CB setup is correct. Issue is in compute phases.","ts":"2026-06-28T15:31:00+00:00"}
 {"event":"diagnosis_complete","details":"Two issues: (1) CT arg mismatch from linter, (2) Phase 5 eltwise_chain with Block operand kind does not produce cb_alpha output. DEVICE_PRINT confirms alp=0 after P5, sno=0 at P7, leading to P11 hang.","ts":"2026-06-28T15:55:44+00:00"}
+{"event":"investigation_start","details":"Symptom: TRISC0 stuck at add waiting for cb_sum_new after SUM reduce. SUM+REDUCE_ROW uses matmul path which skips reduce_uninit cleanup. Reproducing hang.","ts":"2026-06-28T16:21:56+00:00"}
