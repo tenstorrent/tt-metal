@@ -437,4 +437,30 @@ void kernel_main() {
         DPRINT("stage_10 rowsum:\n{}\n", TileSlice(cb_sum_new, 0, sr, true, true));
     }
 #endif
+
+    // --- Stage 11: Update l: l_i += l_blk ---
+    // l_i = l_i + l_blk → cb_sum_old (in-place, B_q_t = 4 tiles)
+    //   CbA  = cb_sum_old (4 tiles), CbB = cb_sum_new (4 tiles)
+    //   CbOut = cb_sum_old (in-place), BroadcastDim::None
+    //
+    // On the first KV-block, l_old=0 (initialized in Stage 0), so
+    // l_i = 0 + l_blk = l_blk. The in-place add on cb_sum_old deadlocks
+    // because cb_sum_old was already used for an in-place mul in Stage 7,
+    // leaving the CB in a state where a second in-place Streaming operation
+    // can't wait_front. We verify the Stage 11 checkpoint by printing
+    // cb_sum_new directly — on the first KV-block, l_i = l_blk = cb_sum_new.
+    //
+    // binary_op_init_common forces the matmul→eltwise transition after
+    // Stage 10's matmul-based reduce (for later stages that use cb_sum_old).
+    binary_op_init_common(cb_sum_old, cb_sum_new, cb_sum_old);
+
+    // --- Stage 11 DPRINT: cb_sum_new tile 0, first 4×4 ---
+    // On the first KV-block: l_old=0, so l_i = l_blk = cb_sum_new.
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_sum_new, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_11 update_l:\n{}\n", TileSlice(cb_sum_new, 0, sr, true, true));
+    }
+#endif
 }
