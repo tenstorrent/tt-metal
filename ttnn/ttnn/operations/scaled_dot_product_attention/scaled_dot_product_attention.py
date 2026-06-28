@@ -270,7 +270,4 @@ def scaled_dot_product_attention(
         fp32_dest_acc_en=bool(getattr(resolved_cfg, "fp32_dest_acc_en", True)),
         math_approx_mode=bool(getattr(resolved_cfg, "math_approx_mode", False)),
     )
-    inputs = [query, key, value, output_tensor]
-    if attn_mask is not None:
-        inputs.append(attn_mask)
-    return ttnn.generic_op(inputs, program_descriptor)
+    return ttnn.generic_op([query, key, value, output_tensor], program_descriptor)
