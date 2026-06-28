@@ -4,7 +4,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 constexpr uint32_t cb_q=tt::CBIndex::c_0, cb_k=tt::CBIndex::c_1, cb_v=tt::CBIndex::c_2, cb_mask=tt::CBIndex::c_3;
-constexpr uint32_t cb_scaler_max=6, cb_scaler_sum=7, cb_scale_factor=5, cb_o=tt::CBIndex::c_16, cb_max_old=27, cb_sum_old=30;
+constexpr uint32_t cb_scaler_reduce=4, cb_scale_factor=5, cb_o=tt::CBIndex::c_16, cb_max_old=27, cb_sum_old=30;
 constexpr uint16_t NEG_INF_BFLOAT16=0xFF80;
 inline void fill_bf16_tile_const(uint32_t cb_id, uint16_t val) {
     auto ptr = reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_id));
@@ -17,7 +17,7 @@ inline uint16_t fp32_to_bf16(uint32_t bits) {
 void kernel_main() {
     constexpr uint32_t has_mask=get_compile_time_arg_val(0), H_q=get_compile_time_arg_val(1), H_kv=get_compile_time_arg_val(2);
     constexpr uint32_t tile_bytes=get_tile_size(cb_q);
-    constexpr auto q_args=TensorAccessorArgs<4>();
+    constexpr auto q_args=TensorAccessorArgs<3>();
     constexpr auto k_args=TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args=TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args=TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -34,9 +34,9 @@ void kernel_main() {
     { uint16_t b=fp32_to_bf16(scale_bits); auto p=reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_scale_factor));
       for(uint32_t i=0;i<1024;++i) p[i]=b; }
     cb_push_back(cb_scale_factor,1);
-    const auto q_acc=TensorAccessor(q_args,q_addr), k_acc=TensorAccessor(k_args,k_addr);
-    const auto v_acc=TensorAccessor(v_args,v_addr);
-    [[maybe_unused]] const auto mask_acc=TensorAccessor(mask_args,mask_addr);
+    const auto q_acc=TensorAccessor(q_args,q_addr,tile_bytes), k_acc=TensorAccessor(k_args,k_addr,tile_bytes);
+    const auto v_acc=TensorAccessor(v_args,v_addr,tile_bytes);
+    [[maybe_unused]] const auto mask_acc=TensorAccessor(mask_args,mask_addr,tile_bytes);
     uint32_t h_q_div_h_kv=H_q/H_kv, num_q_blocks=(S_q_tiles+B_q_t-1)/B_q_t, num_kv_blocks=(S_kv_tiles+B_kv_t-1)/B_kv_t;
     for (uint32_t wu = 0; wu < num_work_units; ++wu) {
         uint32_t b=work_b[wu], h_q=work_h[wu], h_kv=h_q/h_q_div_h_kv;
@@ -54,8 +54,8 @@ void kernel_main() {
             }
             for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
                 uint32_t kvcs=kvb*B_kv_t;
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_max,ckernel::PoolType::MAX,ckernel::ReduceDim::REDUCE_ROW>();
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_max,ckernel::PoolType::SUM,ckernel::ReduceDim::REDUCE_ROW>();
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce,ckernel::PoolType::MAX,ckernel::ReduceDim::REDUCE_ROW>();
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce,ckernel::PoolType::SUM,ckernel::ReduceDim::REDUCE_ROW>();
                 for(uint32_t k=0;k<D_t;++k) for(uint32_t n=0;n<B_kv_t;++n){
                     cb_reserve_back(cb_k,1); noc_async_read_tile(k_base+(kvcs+n)*D_t+k,k_acc,get_write_ptr(cb_k));
                     noc_async_read_barrier(); cb_push_back(cb_k,1);
