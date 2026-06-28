@@ -343,12 +343,44 @@ class QwenModelTtTransformers:
         ``torch.zeros`` (FP32) and converts to bf16 TILE on device, i.e. a Tilize (FP32=>FP32) plus
         Typecast (FP32=>BF16) over a multi-MB DRAM buffer, ×2 (K,V) ×every layer, on every prefill.
         """
+        self.reset_kv_state_only()
+        self.release_trace()
+
+    def reset_kv_state_only(self) -> None:
+        """Reshuffle page table and zero cursor without releasing captured traces."""
         self._cursor = 0
         self._page_table_torch = _make_page_table(self.model_args.max_batch_size, self._paged_cfg)
-        # KV buffers were allocated once at construction; paged_fill_cache overwrites
-        # the addressed blocks on the next prefill, so no re-allocation is needed.
         self.tt_kv_cache = [layer.attention.layer_past for layer in self.tt_model.layers]
-        self.release_trace()
+
+    def warmup_jit_compile(self, tokens: torch.Tensor) -> None:
+        """Eager prefill + decode to populate the JIT cache (untimed; mirrors Devstral demos)."""
+        was_prefill_trace = self._use_prefill_trace
+        was_decode_trace = self._use_decode_trace
+        self._use_prefill_trace = False
+        self._use_decode_trace = False
+        try:
+            self.reset_kv_state_only()
+            _ = self._prefill_eager(tokens)
+            decode_pos = int(tokens.shape[1])
+            last_tok = tokens[:, -1:]
+            _ = self._decode_eager(last_tok.view(-1), decode_pos)
+            ttnn.synchronize_device(self.device)
+        finally:
+            self._use_prefill_trace = was_prefill_trace
+            self._use_decode_trace = was_decode_trace
+            self.reset_kv_state_only()
+
+    def warmup_trace_capture(self, tokens: torch.Tensor) -> None:
+        """Capture prefill/decode traces after eager JIT warmup; keeps traces for replay."""
+        if not self._use_prefill_trace and not self._use_decode_trace:
+            return
+        self.reset_kv_state_only()
+        _ = self._prefill(tokens)
+        decode_pos = int(tokens.shape[1])
+        last_tok = tokens[:, -1:]
+        _ = self._decode(last_tok.view(-1), decode_pos)
+        ttnn.synchronize_device(self.device)
+        self.reset_kv_state_only()
 
     def release_trace(self) -> None:
         if self._decode_trace.trace_id is not None:

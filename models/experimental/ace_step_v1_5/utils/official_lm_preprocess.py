@@ -930,6 +930,8 @@ def build_filtered_dit_kwargs_for_handler(
                 "lm_gen_time_s": float(lm_total_time_costs.get("total_time", 0.0)),
                 "lm_phase1_time_s": float(lm_total_time_costs.get("phase1_time", 0.0)),
                 "lm_phase2_time_s": float(lm_total_time_costs.get("phase2_time", 0.0)),
+                "lm_session_warmup_time_s": float(getattr(llm_handler, "_lm_session_warmup_time_s", 0.0)),
+                "lm_init_warmup_time_s": float(getattr(llm_handler, "_lm_init_warmup_time_s", 0.0)),
             }
 
     if params.task_type in ("repaint", "cover", "cover-nofsq", "extract"):
