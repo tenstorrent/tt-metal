@@ -93,7 +93,7 @@ void kernel_main() {
 
             // Phase 3a/3b: Mask add or passthrough copy
             if constexpr (has_mask) {
-                add<cb_scores, cb_mask, cb_scores_masked>(num_score_tiles);
+                add<cb_scores, cb_mask, cb_scores_masked>(EltwiseShape::grid(B_q_t, B_kv_t));
             } else {
                 copy<cb_scores, cb_scores_masked>(num_score_tiles);
             }
