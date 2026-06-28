@@ -1944,12 +1944,21 @@ static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // orientation, so stale entries from a previous op would corrupt the fwd/bwd ordering. Per-op reset keeps
 // it scoped to the current op's connections.
 static std::atomic<bool> g_conn_route_dirty{true};
+// Per-worker resolved line direction, keyed (src<<32 | wx<<16 | wy). On the fabric MUX path the worker's
+// fwd/bwd direction is not carried by the sender, so we infer it once from a multicast (its range equals
+// the walk length of the worker's direction on a line) and reuse it for that worker's unicast sends. Reset
+// per op alongside g_conn_route.
+static std::unordered_map<uint64_t, uint32_t> g_worker_dir;
+static inline uint64_t __emule_worker_key(uint32_t src, uint32_t wx, uint32_t wy) {
+    return (static_cast<uint64_t>(src) << 32) | (static_cast<uint64_t>(wx & 0xFFFF) << 16) | (wy & 0xFFFF);
+}
 extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor) {
     (void)wx;
     (void)wy;
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
     if (g_conn_route_dirty.exchange(false)) {
         g_conn_route.clear();
+        g_worker_dir.clear();
     }
     auto& v = g_conn_route[src];
     for (const auto& c : v) {
@@ -1981,8 +1990,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
     if (rdbg) {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         auto cit = g_conn_route.find(src_chip);
-        fprintf(stderr, "[EMULE_FABRIC]   resolve src=%u kind=%u a=%u b=%u dir_idx=%u conns=%zu\n",
-                src_chip, r.kind, r.a, r.b, r.dir_index,
+        fprintf(stderr, "[EMULE_FABRIC]   resolve src=%u kind=%u a=%u b=%u ewns=%u/%u/%u/%u dir_idx=%u conns=%zu\n",
+                src_chip, r.kind, r.a, r.b, r.c, r.d, r.e, r.f, r.dir_index,
                 cit == g_conn_route.end() ? (size_t)0 : cit->second.size());
     }
     auto& cp = MetalContext::instance().get_control_plane();
@@ -1993,8 +2002,7 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         } catch (...) {
         }
     } else if (r.kind == emule_route_kind::MCAST_2D) {
-        // Line multicast: a=start dst_dev, b=dst_mesh, {c,d,e,f}={E,W,N,S} hop counts. Walk each non-zero
-        // direction from src and collect the chips (the teleport replays the terminal op to each).
+        // 2D line multicast: {c,d,e,f}={E,W,N,S} per-direction hop counts; walk each non-zero direction.
         using RD = tt::tt_fabric::RoutingDirection;
         const std::pair<RD, uint32_t> dirs[4] = {{RD::E, r.c}, {RD::W, r.d}, {RD::N, r.e}, {RD::S, r.f}};
         std::vector<uint32_t> tgts;
@@ -2010,11 +2018,19 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         if (!tgts.empty()) {
             return tgts;
         }
-    } else if (r.kind == emule_route_kind::UNICAST_1D || r.kind == emule_route_kind::MCAST_1D) {
-        // 1D: dst(s) are `distance` (unicast) or chips at hops [start, start+range) (multicast) in the
-        // worker's connection direction. The host recorded the per-(src,worker_core) connection routes
-        // (fwd/bwd) + their forwarding_direction; pick by the send's direction-index (clamped — a
-        // 2-chip-line worker has a single connection).
+    } else if (r.kind == emule_route_kind::MCAST_1D || r.kind == emule_route_kind::UNICAST_1D) {
+        // 1D on the fabric MUX path the sender carries no direction tag. The host recorded this chip's
+        // connections (one per line direction). We infer the worker's direction from a MULTICAST — its range
+        // equals the number of chips reached that way, i.e. the walk length of that direction on a line — and
+        // cache it per (src, worker_core) so the worker's UNICAST sends follow the same direction. (Limitation:
+        // a topology where both directions have equal walk length — e.g. a ring — can't be disambiguated by
+        // range alone; that needs a real per-connection direction tag.)
+        uint32_t wx = 0, wy = 0;
+        if (__emule_self != nullptr && __emule_self->core != nullptr) {
+            wx = __emule_self->core->logical_x;
+            wy = __emule_self->core->logical_y;
+        }
+        const uint64_t wkey = __emule_worker_key(src_chip, wx, wy);
         std::vector<ConnRoute> conns;
         {
             std::lock_guard<std::mutex> lk(g_conn_route_mu);
@@ -2023,18 +2039,43 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                 conns = it->second;
             }
         }
-        if (!conns.empty()) {
-            const ConnRoute& cr = conns[r.dir_index < conns.size() ? r.dir_index : 0];
-            const auto& walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(cr.dir));
+        int dir = -1;
+        if (r.kind == emule_route_kind::MCAST_1D) {
+            const uint32_t range = r.b ? r.b : 1;
+            for (const auto& cr : conns) {
+                if (__emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(cr.dir)).size() == range) {
+                    dir = static_cast<int>(cr.dir);
+                    break;
+                }
+            }
+            if (dir < 0 && !conns.empty()) {
+                dir = static_cast<int>(conns[r.dir_index < conns.size() ? r.dir_index : 0].dir);
+            }
+            if (dir >= 0) {
+                std::lock_guard<std::mutex> lk(g_conn_route_mu);
+                g_worker_dir[wkey] = static_cast<uint32_t>(dir);
+            }
+        } else {  // UNICAST_1D — reuse this worker's multicast-inferred direction; else the conn index
+            std::lock_guard<std::mutex> lk(g_conn_route_mu);
+            auto wit = g_worker_dir.find(wkey);
+            if (wit != g_worker_dir.end()) {
+                dir = static_cast<int>(wit->second);
+            } else if (!conns.empty()) {
+                dir = static_cast<int>(conns[r.dir_index < conns.size() ? r.dir_index : 0].dir);
+            }
+        }
+        if (dir >= 0) {
+            const auto& walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(dir));
             std::vector<uint32_t> tgts;
-            if (r.kind == emule_route_kind::UNICAST_1D) {
-                const uint32_t dist = r.a ? r.a : 1;
-                tgts.push_back(dist - 1 < walk.size() ? walk[dist - 1] : cr.neighbor);
-            } else {  // MCAST_1D: a=start_distance, b=range_hops
-                const uint32_t start = r.a ? r.a : 1;
-                const uint32_t range = r.b ? r.b : 1;
+            if (r.kind == emule_route_kind::MCAST_1D) {
+                const uint32_t start = r.a ? r.a : 1, range = r.b ? r.b : 1;
                 for (uint32_t hop = start; hop < start + range && hop - 1 < walk.size(); ++hop) {
                     tgts.push_back(walk[hop - 1]);
+                }
+            } else {
+                const uint32_t dist = r.a ? r.a : 1;
+                if (dist - 1 < walk.size()) {
+                    tgts.push_back(walk[dist - 1]);
                 }
             }
             if (!tgts.empty()) {
