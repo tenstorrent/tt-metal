@@ -229,17 +229,24 @@ def create_program_descriptor(
     )
 
     # Writer kernel
-    writer_ct_args = [num_o_tiles]
+    # CT args: [B_q_t, D_t, num_q_blocks, ...TensorAccessorArgs(output)]
+    writer_ct_args = [B_Q_T, D_t, num_q_blocks]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_args = ttnn.RuntimeArgs()
+    writer_wu_assigned = 0
     for core_idx, core in enumerate(cores):
         if units_per_core_2 == 0:
             units_this_core = units_per_core_1
         else:
             group1_count = (num_work_units - num_cores * units_per_core_2) // (units_per_core_1 - units_per_core_2)
             units_this_core = units_per_core_1 if core_idx < group1_count else units_per_core_2
-        total_tiles = units_this_core * num_q_blocks * num_o_tiles
-        writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), total_tiles]
+        rt = [output_tensor.buffer_address(), units_this_core, S_q_tiles, H_q]
+        for i in range(units_this_core):
+            bh = writer_wu_assigned + i
+            rt.append(bh // H_q)
+            rt.append(bh % H_q)
+        writer_wu_assigned += units_this_core
+        writer_rt_args[core.x][core.y] = rt
 
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
