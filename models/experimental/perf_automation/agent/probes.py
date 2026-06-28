@@ -240,6 +240,12 @@ class PerfRunFailed(TracyRunError):
         self.log_path = log_path
 
 
+class TracyHangError(TracyRunError):
+    """Watchdog killed a run that made no forward progress (stalled/deadlocked,
+    e.g. an intermittent multi-chip CCL deadlock) — distinct from an edit-induced
+    crash. Retriable: reset the device and re-profile."""
+
+
 # A device-op runtime crash (the edit broke the model), distinct from a benign
 # perf-threshold AssertionError (the model ran fully — valid measurement). TT_FATAL is
 # the unambiguous device-op abort; a ttnn-op RuntimeError (decorators.py) is the wrapper.
@@ -324,13 +330,73 @@ def _pgroup_cpu_jiffies(pgid: int) -> int:
     return total
 
 
+def _descendant_pids(root_pid: int) -> list[int]:
+    children: dict[int, list[int]] = {}
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        fields = data[rp + 2 :].split()
+        if len(fields) > 1:
+            children.setdefault(int(fields[1]), []).append(int(entry))
+    out, stack = [], [root_pid]
+    while stack:
+        pid = stack.pop()
+        for c in children.get(pid, []):
+            out.append(c)
+            stack.append(c)
+    return out
+
+
+def _kill_tree(root_pid: int) -> None:
+    import signal
+
+    pids = _descendant_pids(root_pid) + [root_pid]
+    pgids = set()
+    for pid in pids:
+        try:
+            pgids.add(os.getpgid(pid))
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    for pgid in pgids:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _device_reset() -> bool:
+    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    try:
+        subprocess.run([tt_smi, "-r"], capture_output=True, text=True, timeout=240)
+        return True
+    except Exception:
+        return False
+
+
 def _execute(
     cmd: list[str],
     cwd: Path,
     env: dict,
     timeout_s: int,
     log_path: Path,
-    stall_timeout_s: int = 10800,
+    stall_timeout_s: int = 2400,
 ) -> int:
     """Run cmd with output streamed to log_path (live-tailable). Hang-proof:
     no pipes (a daemon child inheriting them cannot deadlock us), and the
@@ -344,7 +410,6 @@ def _execute(
     not elapsed time: kill only when the log has not grown AND the process group
     has burned ~no CPU for `stall_timeout_s` (a real stall/deadlock). `timeout_s`
     remains as a generous ABSOLUTE backstop against a pathological busy-spin."""
-    import signal
 
     with open(log_path, "w") as log_fh:
         proc = subprocess.Popen(
@@ -357,12 +422,9 @@ def _execute(
         )
 
         def _kill_and_raise(reason: str):
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+            _kill_tree(proc.pid)
             proc.wait()
-            raise TracyRunError(f"tracy run {reason}; log: {log_path}") from None
+            raise TracyHangError(f"tracy run {reason}; log: {log_path}") from None
 
         pgid = proc.pid
         start = time.monotonic()
@@ -513,6 +575,8 @@ def make_run_profiled(
     execute: Callable[..., int] = _execute,
     extra_env: dict[str, str] | None = None,  # e.g. TT_METAL_VISIBLE_DEVICES
     collect_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    retries: int = 2,
+    device_reset: Callable[[], bool] = _device_reset,
 ) -> Callable[..., tuple[Path, float]]:
     """Factory for tracy_tool's stage-1 `run_profiled` (real hardware).
 
@@ -535,9 +599,16 @@ def make_run_profiled(
         env.update(extra_env or {})
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
         cmd = build_tracy_command(node_id, None, out_dir)
-        watermark = time.time() - 0.05
         t_start = time.monotonic()
-        code = execute(cmd, root, env, timeout_s, log_path)
+        for _attempt in range(retries + 1):
+            watermark = time.time() - 0.05
+            try:
+                code = execute(cmd, root, env, timeout_s, log_path)
+                break
+            except TracyHangError:
+                if _attempt >= retries:
+                    raise
+                device_reset()
         wall_ms = (time.monotonic() - t_start) * 1000.0
         if code != 0:
             tail = "\n".join(log_path.read_text().splitlines()[-15:]) if log_path.is_file() else ""
