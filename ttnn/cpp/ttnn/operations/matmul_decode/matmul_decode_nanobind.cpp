@@ -49,6 +49,42 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("fused_gelu_approx") = false,
         nb::arg("reshard_input") = false,
         nb::arg("reshard_cores") = 2);
+
+    ttnn::bind_function<"gate_up_matmul_decode">(
+        mod,
+        R"doc(gate_up_matmul_decode(input_tensor_a: ttnn.Tensor, gate_b: ttnn.Tensor, up_b: ttnn.Tensor, *, dtype: Optional[ttnn.DataType] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, fused_gelu_approx: bool = False, reshard_input: bool = False, reshard_cores: int = 2) -> Tuple[ttnn.Tensor, ttnn.Tensor]
+
+        Fused GeGLU gate+up projection: ONE gather of A, TWO partial-width-sharded weights, TWO
+        outputs. Returns (gate, up) where gate = gelu(A @ gate_w) and up = A @ up_w. gate_b and up_b
+        are partial-width-sharded resident-L1 weights laid out on the SAME core grid. Replaces two
+        separate matmul_decode(partial_width_sharded, reshard_input) calls -- sharing the x-gather
+        and halving the cross-core reduce/dispatch.
+
+        Args:
+            input_tensor_a (ttnn.Tensor): activation A (gathered once).
+            gate_b (ttnn.Tensor): partial-width-sharded gate weight.
+            up_b (ttnn.Tensor): partial-width-sharded up weight (same geometry as gate_b).
+
+        Keyword Args:
+            dtype (ttnn.DataType, optional): output dtype. Defaults to A's dtype.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): math fidelity config.
+            fused_gelu_approx (bool, optional): tanh-approx (True) vs exact-erf gelu for the gate.
+            reshard_input (bool, optional): reader reshards A internally. Required True.
+            reshard_cores (int, optional): number of A-reshard sender cores. Defaults to 2.
+
+        Returns:
+            Tuple[ttnn.Tensor, ttnn.Tensor]: (gate, up).
+        )doc",
+        &ttnn::gate_up_matmul_decode,
+        nb::arg("input_tensor_a"),
+        nb::arg("gate_b"),
+        nb::arg("up_b"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("fused_gelu_approx") = false,
+        nb::arg("reshard_input") = false,
+        nb::arg("reshard_cores") = 2);
 }
 
 }  // namespace ttnn::operations::matmul_decode

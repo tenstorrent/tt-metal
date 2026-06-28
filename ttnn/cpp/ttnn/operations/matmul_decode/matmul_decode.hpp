@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -26,6 +27,22 @@ Tensor matmul_decode(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool fused_gelu = false,
     bool interleaved_output = false,
+    bool fused_gelu_approx = false,
+    bool reshard_input = false,
+    uint32_t reshard_cores = 2);
+
+// gate_up_matmul_decode: fused GeGLU gate+up projection. ONE gather of the activation A, TWO
+// partial-width-sharded resident-L1 weights (gate_b, up_b on the SAME core grid), TWO outputs:
+//   gate = gelu(A @ gate_w)  (tanh-approx when fused_gelu_approx),  up = A @ up_w.
+// Replaces two separate matmul_decode(partial_width_sharded, reshard_input) calls (gate w/
+// fused_gelu, up w/o) -- sharing the x-gather + halving the reduce/dispatch. Returns {gate, up},
+// both width-sharded with the same shape/layout the two single-output calls produced.
+std::array<Tensor, 2> gate_up_matmul_decode(
+    const Tensor& input_tensor_a,
+    const Tensor& gate_b,
+    const Tensor& up_b,
+    std::optional<const DataType> dtype = std::nullopt,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool fused_gelu_approx = false,
     bool reshard_input = false,
     uint32_t reshard_cores = 2);
