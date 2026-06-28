@@ -19,7 +19,9 @@ ttnn::Tensor concat_heads_matmul_decode(
     const Tensor& weight,
     std::optional<tt::tt_metal::DataType> output_dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    uint32_t reshard_cores) {
+    uint32_t reshard_cores,
+    std::optional<const Tensor> residual,
+    std::optional<const Tensor> gate) {
     using namespace tt::constants;
     using tt::tt_metal::BufferType;
     using tt::tt_metal::Layout;
@@ -74,7 +76,9 @@ ttnn::Tensor concat_heads_matmul_decode(
         /*interleaved_output=*/true,
         /*fused_gelu_approx=*/false,
         /*reshard_input=*/true,
-        /*reshard_cores=*/reshard_cores);
+        /*reshard_cores=*/reshard_cores,
+        /*residual=*/residual,
+        /*gate=*/gate);
 
     return out;
 }

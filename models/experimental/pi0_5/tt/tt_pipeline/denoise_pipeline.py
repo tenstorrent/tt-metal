@@ -116,6 +116,13 @@ def _kv_dtype() -> "ttnn.DataType":
 def _to_dram(tensors):
     out = []
     for t in tensors:
+        # Preserve sharded tensors as-is (e.g. the fused-residual gate must stay resident
+        # width-sharded across the down base cores; moving it to interleaved DRAM would both break
+        # the matmul_decode fused-residual contract and add a per-forward reshard). Only the plain
+        # interleaved modulation tensors are parked in DRAM.
+        if t.memory_config().is_sharded():
+            out.append(t)
+            continue
         d = ttnn.to_memory_config(t, _DRAM)
         ttnn.deallocate(t)
         out.append(d)

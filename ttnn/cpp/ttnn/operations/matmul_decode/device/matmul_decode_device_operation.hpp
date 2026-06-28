@@ -61,12 +61,27 @@ struct MatmulDecodeDeviceOperation {
         // Number of sender cores the interleaved in0 is resharded across (== _RESHARD_CORES on the
         // caller side). Only used when reshard_input is true.
         uint32_t reshard_cores = 2;
+        // When true, fuse a gated-residual epilogue into the partial width-sharded compute:
+        //   out = residual + gate * (A @ B)
+        // where `gate` is a PER-CHANNEL gate over N (broadcast over the M token rows) and
+        // `residual` is the interleaved [M, N] tensor that would otherwise be combined with the
+        // matmul output via a separate ttnn.addcmul. The reader NoC-reads each base core's N-slice
+        // of the interleaved `residual`; `gate` is a small resident width-sharded tensor (gate value
+        // replicated down the TILE_H rows so a plain mul_tiles works -- no broadcast). True iff both
+        // optional tensors are provided. Composes with interleaved_output.
+        bool fused_residual = false;
     };
 
     // Tensors passed in/out of the operation.
     struct tensor_args_t {
         const Tensor& input_tensor_a;
         const Tensor& input_tensor_b;
+        // Optional gated-residual epilogue inputs (used iff operation_attributes.fused_residual):
+        //   residual: interleaved [M, N] hidden state to add (per base core's N-slice read by reader)
+        //   gate:     per-channel gate over N, resident width-sharded [TILE_H, Nc] across base cores
+        //             (gate replicated down the rows so the kernel uses a plain mul_tiles)
+        std::optional<Tensor> residual = std::nullopt;
+        std::optional<Tensor> gate = std::nullopt;
     };
 
     // Output spec / tensor types. A single matmul output here.
@@ -134,5 +149,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     bool interleaved_output = false,
     bool fused_gelu_approx = false,
     bool reshard_input = false,
-    uint32_t reshard_cores = 2);
+    uint32_t reshard_cores = 2,
+    std::optional<const Tensor> residual = std::nullopt,
+    std::optional<const Tensor> gate = std::nullopt);
 }  // namespace ttnn::prim

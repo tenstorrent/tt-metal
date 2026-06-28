@@ -19,7 +19,9 @@ Tensor matmul_decode(
     bool interleaved_output,
     bool fused_gelu_approx,
     bool reshard_input,
-    uint32_t reshard_cores) {
+    uint32_t reshard_cores,
+    std::optional<const Tensor> residual,
+    std::optional<const Tensor> gate) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -30,7 +32,9 @@ Tensor matmul_decode(
         interleaved_output,
         fused_gelu_approx,
         reshard_input,
-        reshard_cores);
+        reshard_cores,
+        residual,
+        gate);
 }
 
 Tensor gate_up_matmul_decode(

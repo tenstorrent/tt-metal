@@ -29,7 +29,9 @@ Tensor matmul_decode(
     bool interleaved_output = false,
     bool fused_gelu_approx = false,
     bool reshard_input = false,
-    uint32_t reshard_cores = 2);
+    uint32_t reshard_cores = 2,
+    std::optional<const Tensor> residual = std::nullopt,
+    std::optional<const Tensor> gate = std::nullopt);
 
 // gate_up_matmul_decode: fused GeGLU gate+up projection. ONE gather of the activation A, TWO
 // partial-width-sharded resident-L1 weights (gate_b, up_b on the SAME core grid), ONE output:

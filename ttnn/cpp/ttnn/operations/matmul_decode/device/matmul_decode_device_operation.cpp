@@ -75,6 +75,39 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor A must be in tile layout");
     TT_FATAL(input_tensor_b.layout() == Layout::TILE, "Input tensor B must be in tile layout");
+    if (operation_attributes.fused_residual) {
+        TT_FATAL(
+            operation_attributes.partial_width_sharded,
+            "fused_residual is only supported with partial_width_sharded matmul_decode");
+        TT_FATAL(
+            tensor_args.residual.has_value() && tensor_args.gate.has_value(),
+            "fused_residual requires both residual and gate tensors");
+        const auto& residual = *tensor_args.residual;
+        const auto& gate = *tensor_args.gate;
+        TT_FATAL(residual.layout() == Layout::TILE, "fused_residual: residual must be in tile layout");
+        TT_FATAL(gate.layout() == Layout::TILE, "fused_residual: gate must be in tile layout");
+        // residual is the interleaved [M, N] hidden the reader NoC-reads each base core's N-slice from.
+        TT_FATAL(
+            residual.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "fused_residual: residual must be interleaved, but got {}",
+            residual.memory_config().memory_layout());
+        TT_FATAL(
+            residual.logical_shape()[-1] == operation_attributes.N,
+            "fused_residual: residual last dim {} must equal N {}",
+            residual.logical_shape()[-1],
+            operation_attributes.N);
+        TT_FATAL(
+            residual.logical_shape()[-2] == operation_attributes.M,
+            "fused_residual: residual M dim {} must equal M {}",
+            residual.logical_shape()[-2],
+            operation_attributes.M);
+        // gate is a resident width-sharded [TILE_H, Nc]-per-core tensor across the N_blocks base cores
+        // (gate replicated down the rows so the kernel uses a plain mul_tiles -- no broadcast).
+        TT_FATAL(
+            gate.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+            "fused_residual: gate must be width-sharded, but got {}",
+            gate.memory_config().memory_layout());
+    }
     if (operation_attributes.reshard_input) {
         // reshard_input path: the reader reshards A internally (each of `reshard_cores` sender
         // cores NoC-reads its logical K-slice into in0_cb via a TensorAccessor), so A may be
@@ -243,7 +276,9 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     bool interleaved_output,
     bool fused_gelu_approx,
     bool reshard_input,
-    uint32_t reshard_cores) {
+    uint32_t reshard_cores,
+    std::optional<const Tensor> residual,
+    std::optional<const Tensor> gate) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -265,6 +300,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         N = input_tensor_b.logical_shape()[-1];
         K = input_tensor_a.logical_shape()[-1];
     }
+    const bool fused_residual = residual.has_value() && gate.has_value();
     log_info(tt::LogOp, "matmul_decode partial_width_sharded={} with M={}, N={}, K={}", partial_width_sharded, M, N, K);
     auto operation_attributes = OperationType::operation_attributes_t{
         M,
@@ -279,8 +315,14 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         fused_gelu_approx,
         reshard_input,
         reshard_cores,
+        fused_residual,
     };
-    auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
+    auto tensor_args = OperationType::tensor_args_t{
+        input_tensor_a,
+        input_tensor_b,
+        fused_residual ? std::optional<Tensor>(*residual) : std::nullopt,
+        fused_residual ? std::optional<Tensor>(*gate) : std::nullopt,
+    };
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

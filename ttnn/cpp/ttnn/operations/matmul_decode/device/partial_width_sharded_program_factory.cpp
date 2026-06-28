@@ -242,6 +242,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     constexpr uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
     constexpr uint32_t partial_cb_index = CBIndex::c_4;   // this core's partial product
     constexpr uint32_t reduce_cb_index = CBIndex::c_5;    // gathered K_blocks partials (base cores)
+    // Fused-residual epilogue CBs (base cores only):
+    constexpr uint32_t residual_cb_index = CBIndex::c_6;  // reader-read residual N-slice [M_tiles x Nc_tiles]
+    constexpr uint32_t gate_cb_index = CBIndex::c_7;      // resident per-channel gate [TILE_H x Nc] (buffer-backed)
+    constexpr uint32_t mm_cb_index = CBIndex::c_8;        // scratch for the reduced matmul result before the epilogue
+    constexpr uint32_t mmg_cb_index = CBIndex::c_9;       // scratch for gate * mm
+
+    const bool fused_residual = operation_attributes.fused_residual;
 
     const uint32_t block_num_tiles = M_tiles * Nc_tiles;  // tiles in one (partial / output) shard
 
@@ -327,6 +334,65 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
     });
 
+    // ---- Fused-residual epilogue CBs (base cores only) ----
+    // residual: the reader NoC-reads this base core's [M_tiles x Nc_tiles] N-slice from the
+    // interleaved residual buffer (page math identical to the interleaved-output scatter).
+    // gate: this base core's per-channel gate, resident & buffer-backed (gate replicated down
+    // the TILE_H rows so compute does a plain mul_tiles -- no broadcast).
+    // mm: scratch holding the reduced (+gelu) matmul result before the gate*mul + residual add.
+    if (fused_residual) {
+        const tt::DataFormat residual_data_format = datatype_to_dataformat_converter(tensor_args.residual->dtype());
+        const tt::DataFormat gate_data_format = datatype_to_dataformat_converter(tensor_args.gate->dtype());
+        const auto& residual_tile = tensor_args.residual->tensor_spec().tile();
+        const auto& gate_tile = tensor_args.gate->tensor_spec().tile();
+        const uint32_t residual_tile_size = residual_tile.get_tile_size(residual_data_format);
+        const uint32_t gate_tile_size = gate_tile.get_tile_size(gate_data_format);
+        const TileDescriptor residual_tile_desc{residual_tile};
+        const TileDescriptor gate_tile_desc{gate_tile};
+
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = block_num_tiles * residual_tile_size,
+            .core_ranges = base_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = residual_cb_index,
+                .data_format = residual_data_format,
+                .page_size = residual_tile_size,
+                .tile = residual_tile_desc,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = Nc_tiles * gate_tile_size,
+            .core_ranges = base_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = gate_cb_index,
+                .data_format = gate_data_format,
+                .page_size = gate_tile_size,
+                .tile = gate_tile_desc,
+            }}},
+            .buffer = tensor_args.gate->buffer(),
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = block_num_tiles * out_tile_size,
+            .core_ranges = base_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = mm_cb_index,
+                .data_format = out_data_format,
+                .page_size = out_tile_size,
+                .tile = out_tile_desc,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = block_num_tiles * out_tile_size,
+            .core_ranges = base_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = mmg_cb_index,
+                .data_format = out_data_format,
+                .page_size = out_tile_size,
+                .tile = out_tile_desc,
+            }}},
+        });
+    }
+
     // ---- Semaphores ----
     const uint32_t num_senders = inputA_core_range_set.num_cores();
     constexpr uint32_t gather_sem_id = 0;  // senders -> coordinator (A gather)
@@ -364,19 +430,40 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         static_cast<uint32_t>(mcast_start_phys.y),
         in1_cb_index,
         Kc_tiles * Nc_tiles,
-        static_cast<uint32_t>(reshard_input),  // 16: read interleaved A K-slice before multicast
-        M_tiles,                               // 17: A height in tiles
-        inA_K_tiles_per_core,                  // 18: this sender's K-slice width in tiles
-        K_tiles,                               // 19: global A width in tiles (row-major page stride)
+        static_cast<uint32_t>(reshard_input),   // 16: read interleaved A K-slice before multicast
+        M_tiles,                                // 17: A height in tiles
+        inA_K_tiles_per_core,                   // 18: this sender's K-slice width in tiles
+        K_tiles,                                // 19: global A width in tiles (row-major page stride)
+        static_cast<uint32_t>(fused_residual),  // 20: base cores NoC-read their residual N-slice
+        residual_cb_index,                      // 21
+        Nc_tiles,                               // 22
+        N_tiles,                                // 23: residual interleaved width in tiles (page stride)
+        fused_residual ? tensor_args.residual->tensor_spec().tile().get_tile_size(
+                             datatype_to_dataformat_converter(tensor_args.residual->dtype()))
+                       : in0_tile_size,  // 24: residual dtype tile size (bytes)
+        gate_cb_index,                   // 25: buffer-backed gate, published by the base-core reader
+        Nc_tiles,                        // 26: gate tiles per base core
     };
-    // 20+: TensorAccessor args for the interleaved in0 buffer (senders NoC-read their K-slice from
-    // it when reshard_input). Harmless when unused (read_interleaved == 0).
+    // 27+: TensorAccessor args for the interleaved in0 buffer (senders NoC-read their K-slice from
+    // it when reshard_input). Harmless when unused (read_interleaved == 0). Then (chained) the
+    // TensorAccessor args for the interleaved residual buffer (base cores read their N-slice when
+    // fused_residual). Both are appended unconditionally; the residual buffer falls back to the in0
+    // buffer when there is no residual so the accessor is always well-formed.
     tt::tt_metal::TensorAccessorArgs(*input_tensor_a.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*(fused_residual ? tensor_args.residual->buffer() : input_tensor_a.buffer()))
+        .append_to(reader_compile_time_args);
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
     std::map<CoreCoord, uint32_t> sender_id_by_core;
     for (uint32_t id = 0; id < sender_cores.size(); id++) {
         sender_id_by_core[sender_cores[id]] = id;
+    }
+    // Base core -> its output N-slice index (n_idx). Base cores are the first N_blocks b_cores
+    // (k_idx == 0), with n_idx == position in that prefix -- identical to the writer/compute mapping
+    // and to the interleaved output's num_cores_to_corerangeset(N_blocks) ordering.
+    std::map<CoreCoord, uint32_t> base_n_idx_by_core;
+    for (uint32_t i = 0; i < N_blocks; ++i) {
+        base_n_idx_by_core[b_cores[i]] = i;
     }
     const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
 
@@ -402,12 +489,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             const bool is_sender = it != sender_id_by_core.end();
             const uint32_t sender_id = is_sender ? it->second : 0;
             const bool is_coordinator = (core == coordinator_logical);
+            const auto bit = base_n_idx_by_core.find(core);
+            const bool is_base = bit != base_n_idx_by_core.end();
+            const uint32_t n_idx = is_base ? bit->second : 0;
             reader_kernel_desc.emplace_runtime_args(
                 core,
                 {static_cast<uint32_t>(is_sender),
                  sender_id,
                  static_cast<uint32_t>(is_coordinator),
-                 input_tensor_a.buffer()});  // 3: interleaved A base addr (patched; used iff read_interleaved)
+                 input_tensor_a.buffer(),         // 3: interleaved A base addr (patched; used iff read_interleaved)
+                 static_cast<uint32_t>(is_base),  // 4: this core owns an output N-slice (fused_residual)
+                 n_idx,                           // 5: its N-slice index
+                 fused_residual ? tensor_args.residual->buffer()
+                                : input_tensor_a.buffer()});  // 6: interleaved residual base addr (patched)
         }
         return reader_kernel_desc;
     };
@@ -515,6 +609,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         inA_K_tiles_per_core,  // needed to translate global K-tile -> sender-major full_in0 slot (M_tiles>1)
         static_cast<uint32_t>(operation_attributes.fused_gelu),         // fuse (erf) gelu into phase-2 output pack
         static_cast<uint32_t>(operation_attributes.fused_gelu_approx),  // 0=erf, 1=tanh-approx
+        static_cast<uint32_t>(fused_residual),                          // 8: out = residual + gate * (A @ B) epilogue
+        residual_cb_index,                                              // 9
+        gate_cb_index,                                                  // 10
+        mm_cb_index,                                                    // 11
+        mmg_cb_index,                                                   // 12
     };
     log_debug(
         tt::LogOp,

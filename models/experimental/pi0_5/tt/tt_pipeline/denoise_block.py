@@ -103,6 +103,7 @@ DECODE_ALL = False
 _K_BLOCKS = 2
 _RESHARD_CORES = 2
 _QKV_N_BLOCKS, _O_N_BLOCKS, _MLP_N_BLOCKS = 40, 32, 32
+
 _LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
 )
@@ -138,6 +139,29 @@ def _ws_in_mc(device, m, k):
     )
 
 
+def _build_fused_gate_ws(device, gate, w, n_blocks=_MLP_N_BLOCKS):
+    """Build the resident WIDTH-SHARDED per-channel gate for a matmul_decode fused-residual epilogue.
+    The gate [1,1,W] (per-channel over W) is replicated down all 32 tile rows (so mul_tiles needs no
+    broadcast) and width-sharded [32, W/n_blocks] across the n_blocks output base cores (ordering ==
+    num_cores_to_corerangeset(n_blocks) -- the first n_blocks of the matmul's B grid). Built ONCE at
+    precompute time and held RESIDENT on the block (NOT routed through _to_dram), so it adds ZERO
+    per-replay dispatch. Used for both the MLP down (n_blocks=_MLP_N_BLOCKS) and the attention o-proj
+    (n_blocks=_O_N_BLOCKS)."""
+    g2d = ttnn.reshape(gate, (1, w))
+    g_rep = ttnn.repeat(g2d, ttnn.Shape([32, 1]))  # [32, W], gate replicated down the rows
+    ttnn.deallocate(g2d)
+    mc = ttnn.create_sharded_memory_config(
+        (32, w // n_blocks),
+        core_grid=_crs(device, n_blocks),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    g_ws = ttnn.to_memory_config(g_rep, mc)
+    ttnn.deallocate(g_rep)
+    return g_ws
+
+
 class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
     def _proj(self, x, w, dtype, m_t, grid, ck):
         k_t, n_t = w.shape[-2] // 32, w.shape[-1] // 32
@@ -158,6 +182,8 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         attention_mask: Optional[ttnn.Tensor] = None,
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
+        residual: Optional[ttnn.Tensor] = None,
+        gate_ws: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         if len(hidden_states.shape) == 3:
             b, s, _ = hidden_states.shape
@@ -222,12 +248,16 @@ class TTNNPi05DenoiseExpertAttention(TTNNPi05GemmaAttention):
         # SAME tuned program config _proj uses for the O-matmul so the matmul stays as fast.
         if DECODE_ALL:
             # FREE-view concat-heads + matmul_decode o-proj (partial-width-sharded), bf16 out.
+            # When residual/gate_ws are given, the gated residual (hidden + ga*attn_out) is folded
+            # into the o-proj epilogue (out = residual + ga * (attn @ Wo)) -- no separate addcmul.
             out = ttnn.experimental.concat_heads_matmul_decode(
                 attn_out,
                 self.wo_b,
                 output_dtype=ttnn.bfloat16,
                 compute_kernel_config=_LOFI,
                 reshard_cores=_RESHARD_CORES,
+                residual=residual,
+                gate=gate_ws,
             )
         else:
             _o_k, _o_n = self.tt_o.shape[-2] // 32, self.tt_o.shape[-1] // 32
@@ -275,6 +305,35 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
         ttnn.deallocate(hid)
         return out
 
+    @run_on_devices(DeviceArch.P150, DeviceArch.BHGLX)
+    def forward_gated_residual(self, x: ttnn.Tensor, residual: ttnn.Tensor, gate_ws: ttnn.Tensor) -> ttnn.Tensor:
+        """decode_all MLP with the gated residual FOLDED into the down matmul_decode:
+        returns residual + gate * (gelu(x@gate)*(x@up) @ down_w) -- no separate addcmul. gate_ws is the
+        resident width-sharded (row-replicated) per-channel ada gate across the down base cores;
+        residual is the interleaved [M,W] hidden."""
+        hid = ttnn.gate_up_matmul_decode(
+            x,
+            self.gate_b,
+            self.up_b,
+            compute_kernel_config=_LOFI,
+            fused_gelu_approx=True,
+            reshard_input=True,
+            reshard_cores=_RESHARD_CORES,
+        )
+        out = ttnn.matmul_decode(
+            hid,
+            self.down_b,
+            partial_width_sharded=True,
+            reshard_input=True,
+            reshard_cores=_RESHARD_CORES,
+            compute_kernel_config=_LOFI,
+            interleaved_output=True,
+            residual=residual,
+            gate=gate_ws,
+        )
+        ttnn.deallocate(hid)
+        return out
+
 
 @trace_enabled
 class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
@@ -289,6 +348,30 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         # decode_all: emit the norm block-sharded so the downstream matmul_decode(reshard_input)
         # reshards it internally (no trailing S2I / interleaved intermediate); linear path unchanged.
         return super()._apply_ada(x, scale1, shift, eps, out_block_sharded=DECODE_ALL)
+
+    # In the decode_all path both gated residuals are folded into their projection matmul_decode
+    # epilogues (out = residual + gate * (A @ W)), eliminating the separate ttnn.addcmul. The linear
+    # (DECODE_ALL=False) path keeps the explicit addcmul.
+    def _fuse_mlp_residual(self) -> bool:
+        return DECODE_ALL
+
+    def _fuse_attn_residual(self) -> bool:
+        return DECODE_ALL
+
+    def precompute_mods(self, adarms_cond: ttnn.Tensor) -> Tuple[ttnn.Tensor, ...]:
+        # When folding a gated residual into its projection matmul, additionally precompute the
+        # resident width-sharded per-channel gate ONCE here -- outside the traced forward -- so it
+        # adds zero per-replay dispatch. Appended after the 6 base mods in a fixed order: the
+        # attention gate (from ga, over _O_N_BLOCKS o-proj base cores) then the MLP gate (from gf,
+        # over _MLP_N_BLOCKS down base cores), each present only if its fold is enabled. The fused
+        # epilogues consume them and the corresponding addcmul is skipped.
+        mods = super().precompute_mods(adarms_cond)
+        extra = []
+        if self._fuse_attn_residual():
+            extra.append(_build_fused_gate_ws(self.device, mods[2], self._width, n_blocks=_O_N_BLOCKS))
+        if self._fuse_mlp_residual():
+            extra.append(_build_fused_gate_ws(self.device, mods[5], self._width, n_blocks=_MLP_N_BLOCKS))
+        return (*mods, *extra)
 
     def move_weights_to_device_impl(self):
         # L1-resident projection weights (each stage holds <=5 layers, fits in L1): removes the
@@ -327,27 +410,65 @@ class TTNNPi05DenoiseExpertBlock(TTNNPi05AdaRMSGemmaBlock):
         use_cache: bool = False,
         precomputed_mod: Optional[Tuple[ttnn.Tensor, ...]] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
+        fuse_attn = self._fuse_attn_residual()
+        fuse_mlp = self._fuse_mlp_residual()
         owned = precomputed_mod is None
         if owned:
-            sa1, sha, ga, sf1, shf, gf = self.precompute_mods(adarms_cond)
+            mods = self.precompute_mods(adarms_cond)
         else:
-            sa1, sha, ga, sf1, shf, gf = precomputed_mod
+            mods = precomputed_mod
+        # precompute_mods appends the resident width-sharded gates after the 6 base mods, in order:
+        # attn gate (if fuse_attn) then MLP gate (if fuse_mlp).
+        sa1, sha, ga, sf1, shf, gf = mods[:6]
+        _i = 6
+        attn_gate_ws = mods[_i] if fuse_attn else None
+        _i += 1 if fuse_attn else 0
+        mlp_gate_ws = mods[_i] if fuse_mlp else None
 
         normed = self._apply_ada(hidden_states, sa1, sha, self._eps)
-        attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache)
-        ttnn.deallocate(normed)
-        # Fused gated residual: hidden + ga*attn_out in one addcmul (was multiply + add).
-        hidden_states = ttnn.addcmul(hidden_states, ga, attn_out, memory_config=_L1)
-        ttnn.deallocate(attn_out)
+        if fuse_attn:
+            # Fold the attention gated residual (hidden + ga*attn_out) INTO the o-proj
+            # concat_heads_matmul_decode epilogue: out = hidden + ga * (attn @ Wo). The o-proj reads
+            # the old hidden as `residual` internally; we reassign hidden_states to the result and do
+            # NOT explicitly free the old hidden (it is the block input -- for block 0 the stage input,
+            # held by the caller; for later blocks an intermediate freed on reassignment -- exactly as
+            # the original addcmul path leaves its input). Eliminates the addcmul.
+            hidden_states, new_cache = self.attention(
+                normed,
+                cos,
+                sin,
+                attention_mask,
+                past_key_value,
+                use_cache,
+                residual=hidden_states,
+                gate_ws=attn_gate_ws,
+            )
+            ttnn.deallocate(normed)
+        else:
+            attn_out, new_cache = self.attention(normed, cos, sin, attention_mask, past_key_value, use_cache)
+            ttnn.deallocate(normed)
+            # Fused gated residual: hidden + ga*attn_out in one addcmul (was multiply + add).
+            hidden_states = ttnn.addcmul(hidden_states, ga, attn_out, memory_config=_L1)
+            ttnn.deallocate(attn_out)
 
         normed = self._apply_ada(hidden_states, sf1, shf, self._eps)
-        mlp_out = self.mlp(normed)
-        ttnn.deallocate(normed)
-        hidden_states = ttnn.addcmul(hidden_states, gf, mlp_out, memory_config=_L1)
-        ttnn.deallocate(mlp_out)
+        if fuse_mlp:
+            # Fold the MLP gated residual (hidden + gf*mlp_out) INTO the down matmul_decode epilogue:
+            # out = hidden + gf * (mlp(normed)). Eliminates the separate addcmul (its dispatch + the
+            # [M,W] mlp_out materialization + re-read). The down matmul_decode reads `residual` (the
+            # old hidden) internally; free it after.
+            residual_in = hidden_states
+            hidden_states = self.mlp.forward_gated_residual(normed, residual_in, mlp_gate_ws)
+            ttnn.deallocate(normed)
+            ttnn.deallocate(residual_in)
+        else:
+            mlp_out = self.mlp(normed)
+            ttnn.deallocate(normed)
+            hidden_states = ttnn.addcmul(hidden_states, gf, mlp_out, memory_config=_L1)
+            ttnn.deallocate(mlp_out)
 
         if owned:
-            for ten in (sa1, sha, ga, sf1, shf, gf):
+            for ten in mods:
                 ttnn.deallocate(ten)
         return hidden_states, new_cache
 
