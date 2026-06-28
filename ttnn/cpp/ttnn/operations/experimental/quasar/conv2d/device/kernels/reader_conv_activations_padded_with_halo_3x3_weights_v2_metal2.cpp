@@ -8,8 +8,8 @@
 //   - remaining positional CTAs -> get_arg(args::name)
 //   - RTAs (core_index, remaining_tiles_to_push) -> get_arg(args::name)
 //   - DRAM config-tensor read uses tensor::reader_indices (CONFIG_TENSOR_IN_DRAM path)
-//   - conv_reader_common.hpp is header-only Device-2.0 already; its helpers take experimental::CB,
-//     so CBs passed to them are constructed as experimental::CB from the dfb:: constexpr index.
+//   - conv_reader_common.hpp helpers are templated on the CB-object type, so the DataflowBuffer
+//     constructed here from the dfb:: constexpr index is passed to them directly.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -40,7 +40,7 @@ void kernel_main() {
     constexpr bool split_reader_enabled = get_arg(args::split_reader_enabled);
     constexpr bool activation_reuse_enabled = get_arg(args::activation_reuse_enabled);
 
-    experimental::CB cb_act(cb_id_act);
+    DataflowBuffer cb_act(cb_id_act);
 
     uint32_t core_index = get_arg(args::core_index);
 
@@ -49,7 +49,7 @@ void kernel_main() {
     // On the DRAM-config path the slice is DMA'd into a fresh L1 DFB (dfb::reader_indices) first.
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
 #ifdef CONFIG_TENSOR_IN_DRAM
-    experimental::CB cb_reader_idx(dfb::reader_indices);
+    DataflowBuffer cb_reader_idx(dfb::reader_indices);
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_idx.get_write_ptr());
     {
         const auto config_accessor = TensorAccessor(tensor::reader_indices);

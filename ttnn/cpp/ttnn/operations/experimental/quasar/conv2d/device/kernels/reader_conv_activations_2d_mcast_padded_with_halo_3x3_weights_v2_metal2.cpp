@@ -16,9 +16,9 @@
 //
 // split_reader_cb_shared (the side-channel-semaphore second-writer overlap) is DEFERRED on the host side
 // (the factory TT_FATAL-rejects it and forces split reader off), so all split_reader_cb_shared code paths
-// and the reserve_done/write_done semaphores are removed here.  conv_reader_common.hpp is header-only
-// Device-2.0 already; its helpers take experimental::CB, so CBs passed to them (and to the local mcast
-// helpers) are constructed as experimental::CB from the dfb:: constexpr index.
+// and the reserve_done/write_done semaphores are removed here.  conv_reader_common.hpp helpers are
+// templated on the CB-object type, so DataflowBuffers (constructed from dfb:: constexpr indices) are
+// passed to them and to the local mcast helpers directly.
 
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
@@ -50,11 +50,11 @@ void multicast_data(
     Noc noc,
     MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    experimental::CB src_cb,
+    DataflowBuffer src_cb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
-    auto src = use<CircularBuffer::AddrSelector::READ_PTR>(src_cb);
+    auto& src = src_cb;  // DataflowBuffer src -> read_ptr (was use<READ_PTR> on CircularBuffer)
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores > 0) {
             noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
@@ -92,9 +92,9 @@ template <
 void mcast_block_chunked(
     Noc noc,
     MulticastEndpoint mcast_ep,
-    experimental::CB src_cb_obj,
+    DataflowBuffer src_cb_obj,
     bool is_receiver_core,
-    experimental::CB dst_cb_obj,
+    DataflowBuffer dst_cb_obj,
     const McastRect& rect) {
     // Build mcast dst once; only .addr is updated per burst
     // number of full bursts
@@ -186,9 +186,9 @@ void kernel_main() {
     Semaphore act_mcast_sender_sem(sem::act_mcast_sender);
     Semaphore act_mcast_receiver_sem(sem::act_mcast_receiver);
     MulticastEndpoint mcast_ep;
-    experimental::CB cb_act_obj(cb_id_act);
-    experimental::CB cb_act_rm_obj(cb_id_act_row_major_bfloat16);
-    experimental::CB cb_tilized_in0_obj(tilized_in0_cb_id);
+    DataflowBuffer cb_act_obj(cb_id_act);
+    DataflowBuffer cb_act_rm_obj(cb_id_act_row_major_bfloat16);
+    DataflowBuffer cb_tilized_in0_obj(tilized_in0_cb_id);
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>(noc, cb_act_rm_obj);
@@ -217,7 +217,7 @@ void kernel_main() {
     // DRAM-config path it is DMA'd into a fresh L1 DFB (dfb::reader_indices) first.
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
 #ifdef CONFIG_TENSOR_IN_DRAM
-    experimental::CB cb_reader_indices_obj(dfb::reader_indices);
+    DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr());
     {
         const auto config_accessor = TensorAccessor(tensor::reader_indices);
