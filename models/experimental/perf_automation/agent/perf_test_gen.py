@@ -28,28 +28,33 @@ PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_<task>_perf(device_params, device):
     # 1) build the pipeline EXACTLY as demo/demo_<task>.py does
-    # 2) wrap ttnn.linear/ttnn.matmul to drain the profiler every PERF_FLUSH_EVERY calls
+    # 2) drain the device profiler every PERF_FLUSH_EVERY ops. MODEL-AGNOSTIC: wrap EVERY ttnn
+    #    operation (type 'FastOperation') across ttnn + its op submodules, so the flush counter
+    #    tracks TOTAL device dispatch for ANY op mix. A curated op list under-counts (sdpa/eltwise/
+    #    transpose/reduction slip through) and the 12000-marker buffer overflows on some device,
+    #    dropping ops -> non-reproducible device_ms. Wrapping by TYPE never misses an op.
     counter = [0]
-    # TAILOR to THIS pipeline's dispatch-dense ops (read from the demo): always matmul/linear, PLUS
-    # whatever this pipeline leans on (conv* for a vocoder, a dominant reduction/eltwise, ...). The
-    # 12000-marker/RISC buffer overflows if a hot op is left undrained. Guarded by hasattr.
-    _WRAP = ["linear", "matmul"] + [...]  # + this pipeline's heavy ops, e.g. "conv1d", "conv_transpose2d"
-    _orig = {}
+    _orig = []
     def _draining(fn):
         def inner(*a, **k):
             r = fn(*a, **k); counter[0] += 1
             if PERF_FLUSH_EVERY and counter[0] % PERF_FLUSH_EVERY == 0:
-                ttnn.ReadDeviceProfiler(device)
+                try: ttnn.ReadDeviceProfiler(device)   # 'device' = mesh_device on multi-chip
+                except Exception: pass
             return r
         return inner
-    for _n in _WRAP:
-        if hasattr(ttnn, _n):
-            _orig[_n] = getattr(ttnn, _n); setattr(ttnn, _n, _draining(_orig[_n]))
+    _mods = [ttnn] + [getattr(ttnn, _m, None) for _m in ("transformer", "experimental")]
+    for _mod in [_m for _m in _mods if _m is not None]:
+        for _n in dir(_mod):
+            _op = getattr(_mod, _n, None)
+            if type(_op).__name__ == "FastOperation":     # every dispatched ttnn op, by type
+                _orig.append((_mod, _n, _op)); setattr(_mod, _n, _draining(_op))
     try:
         out = ...  # run the pipeline BOUNDED (cap decode via PERF_MAX_NEW_TOKENS, or one forward)
-        ttnn.ReadDeviceProfiler(device)
+        try: ttnn.ReadDeviceProfiler(device)
+        except Exception: pass
     finally:
-        for _n, _f in _orig.items(): setattr(ttnn, _n, _f)
+        for _mod, _n, _f in _orig: setattr(_mod, _n, _f)
     assert out is not None   # perf only — NO PCC
 """
 
@@ -191,15 +196,14 @@ def generate_perf_test(
         f"- a pytest function named `test_{task}_perf` taking the standard device fixtures.\n"
         "- BOUNDED + profiler-safe so tracy's 12000-marker buffer never overflows: cap the work (decode "
         "loop via env TT_PERF_MAX_NEW_TOKENS default 4, or a SINGLE forward if there's no loop), AND drain "
-        "the profiler periodically + a final ttnn.ReadDeviceProfiler. TAILOR THE DRAIN TO THIS "
-        "PIPELINE: look at the demo above and wrap the DISPATCH-DENSE device ops it actually uses so "
-        "the 12000-marker/RISC buffer never overflows between drains — ALWAYS ttnn.matmul/ttnn.linear, "
-        "PLUS any heavy op THIS pipeline leans on (e.g. ttnn.conv1d/ttnn.conv2d/ttnn.conv_transpose2d "
-        "for a conv/vocoder pipeline; a dominant reduction/eltwise if that is the hot path). Build the "
-        "wrap set from the demo's own op usage, guard each with hasattr(ttnn, name), and have every "
-        "wrapped op bump a shared counter that calls ttnn.ReadDeviceProfiler every TT_PERF_FLUSH_EVERY "
-        "ops (default 32). The point is op-AGNOSTIC coverage of whatever this pipeline dispatches — not "
-        "a fixed list.\n"
+        "the profiler every TT_PERF_FLUSH_EVERY ops (default 32) + a final ttnn.ReadDeviceProfiler. DRAIN "
+        "MUST BE MODEL-AGNOSTIC — wrap EVERY ttnn op by TYPE, not a curated list: iterate ttnn (and its op "
+        "submodules ttnn.transformer / ttnn.experimental) and wrap every attribute whose "
+        "type(obj).__name__ == 'FastOperation' with a counter that drains every TT_PERF_FLUSH_EVERY calls. "
+        "A curated list (matmul/linear/conv only) UNDER-counts — sdpa/eltwise/transpose/reduction slip "
+        "through, the buffer overflows on some device, ops get dropped, and device_ms becomes "
+        "non-reproducible. Wrapping by type can never miss an op. Restore all originals in a finally. "
+        "(Use the generic wrap loop from the skeleton below verbatim — do NOT hand-pick op names.)\n"
         "- CAP THE INPUT SIZE SMALL: use a SMALL fixed sequence length / token count (e.g. 128) for every "
         "forward. Do NOT reuse the model's production / maximum shapes (max_position_embeddings, max_seq, "
         "max_enc_seq, etc.) even if the source/PCC test does — those are correctness stress sizes. Under "
