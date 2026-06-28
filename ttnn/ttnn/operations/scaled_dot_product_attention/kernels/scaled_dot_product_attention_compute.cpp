@@ -21,8 +21,7 @@ constexpr uint32_t cb_q = tt::CBIndex::c_0;
 constexpr uint32_t cb_k = tt::CBIndex::c_1;
 constexpr uint32_t cb_v = tt::CBIndex::c_2;
 constexpr uint32_t cb_mask = tt::CBIndex::c_3;
-constexpr uint32_t cb_scaler_max = 6;
-constexpr uint32_t cb_scaler_sum = 7;
+constexpr uint32_t cb_scaler_reduce = 4;
 constexpr uint32_t cb_scale_factor = 5;
 constexpr uint32_t cb_alpha = 8;
 constexpr uint32_t cb_o = tt::CBIndex::c_16;
@@ -90,15 +89,26 @@ void kernel_main() {
                 copy<cb_scores, cb_scores_masked>(num_score_tiles);
             }
 
-            reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_scores_masked, cb_scaler_max, cb_max_new,
+            reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_scores_masked, cb_scaler_reduce, cb_max_new,
                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+            cb_wait_front(cb_scaler_reduce, 1);
+            cb_pop_front(cb_scaler_reduce, 1);
 
-            eltwise_chain(B_q_t,
-                BinaryFpu<cb_max_old, cb_max_new, BinaryFpuOp::Sub, BroadcastDim::None,
-                          InputLifecycle::Bulk, InputLifecycle::HeldBulk,
-                          BinaryDataFormatReconfig::Input, Dst::D0,
-                          OperandKind::Scalar, OperandKind::Scalar>{},
-                Exp<>{}, PackTile<cb_alpha, OutputLifecycle::Streaming>{});
+            eltwise_chain(
+                B_q_t,
+                BinaryFpu<
+                    cb_max_old,
+                    cb_max_new,
+                    BinaryFpuOp::Sub,
+                    BroadcastDim::None,
+                    InputLifecycle::Streaming,
+                    InputLifecycle::HeldBulk,
+                    BinaryDataFormatReconfig::Input,
+                    Dst::D0,
+                    OperandKind::Scalar,
+                    OperandKind::Scalar>{},
+                Exp<>{},
+                PackTile<cb_alpha, OutputLifecycle::Streaming>{});
 
             mul<cb_o, cb_alpha, cb_o, BroadcastDim::Col,
                 InputLifecycle::Streaming, InputLifecycle::HeldBulk,
@@ -116,8 +126,15 @@ void kernel_main() {
 
             unary<Exp<>, cb_scores_masked, cb_exp_scores>(num_score_tiles);
 
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_exp_scores, cb_scaler_sum, cb_sum_new,
-                   ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+            reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                cb_exp_scores,
+                cb_scaler_reduce,
+                cb_sum_new,
+                ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+            cb_wait_front(cb_scaler_reduce, 1);
+            cb_pop_front(cb_scaler_reduce, 1);
 
             add<cb_sum_old, cb_sum_new, cb_sum_old>(B_q_t);
 

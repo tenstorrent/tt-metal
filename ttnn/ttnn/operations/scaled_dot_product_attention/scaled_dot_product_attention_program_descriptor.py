@@ -30,8 +30,8 @@ def create_program_descriptor(
     S_kv_tiles = S_kv // TILE_DIM
     B_q_t = min(4, S_q_tiles)
     B_kv_t = min(4, S_kv_tiles)
-    B_q_t = min(MAX_B_q_t, S_q_tiles)
-    B_kv_t = min(MAX_B_kv_t, S_kv_tiles)
+    B_q_t = min(4, S_q_tiles)
+    B_kv_t = min(4, S_kv_tiles)
     tile_size = ttnn.tile_size(query.dtype)
     resolved_scale = scale if scale is not None else (1.0 / math.sqrt(D))
     scale_bits = struct.unpack("I", struct.pack("f", resolved_scale))[0]
