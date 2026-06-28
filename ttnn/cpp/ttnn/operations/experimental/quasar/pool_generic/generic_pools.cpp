@@ -19,6 +19,7 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
@@ -254,7 +255,8 @@ static std::vector<Tensor> pool2d_L1(
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
             input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         }
-        input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, in_memory_config, std::nullopt);
+        input_tensor_sharded = ttnn::operations::experimental::quasar::to_memory_config(
+            input_tensor_flattened, in_memory_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
 
     } else {
@@ -380,7 +382,8 @@ static std::vector<Tensor> pool2d_L1(
     // format and return the result
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         for (auto& output_tensor : output_tensors) {
-            output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
+            output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+                output_tensor, memory_config.value(), std::nullopt);
         }
     }
 
@@ -1100,7 +1103,7 @@ static std::vector<Tensor> pool2d(
         //     conversion would untilize+typecast and is more expensive than the algorithmic win).
         Tensor input = input_tensor_4d;
         if (input.memory_config() != reduce_mem) {
-            input = ttnn::to_memory_config(input, reduce_mem);
+            input = ttnn::operations::experimental::quasar::to_memory_config(input, reduce_mem);
         }
         if (input.layout() != Layout::ROW_MAJOR && !spatial_is_tile_aligned && !input_is_block_float_tile) {
             input = ttnn::operations::experimental::quasar::to_layout(input, Layout::ROW_MAJOR);
@@ -1150,7 +1153,7 @@ static std::vector<Tensor> pool2d(
         // Honor caller's requested output memory config when feasible. We skip re-sharding
         // because a shard spec sized for the input H×W can't fit the 1×1 output.
         if (honor_requested_out_mem && output.memory_config() != requested_out_mem) {
-            output = ttnn::to_memory_config(output, requested_out_mem);
+            output = ttnn::operations::experimental::quasar::to_memory_config(output, requested_out_mem);
         }
         return {output};
     }

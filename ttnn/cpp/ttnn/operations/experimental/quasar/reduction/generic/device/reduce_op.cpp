@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace reduce_op_utils_qsr {
@@ -53,7 +54,7 @@ Tensor reduce_min(
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
         // Changing layout to TILE with +inf padding
         auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
-        input = ttnn::tilize_with_val_padding(
+        input = ttnn::operations::experimental::quasar::tilize_with_val_padding(
             input,
             pad_shape,
             std::numeric_limits<float>::infinity(),
@@ -149,7 +150,7 @@ Tensor reduce(
     Tensor tilized_input = input_tensor;
     if (!use_rm_dense) {
         auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-        tilized_input = ttnn::tilize_with_val_padding(
+        tilized_input = ttnn::operations::experimental::quasar::tilize_with_val_padding(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 

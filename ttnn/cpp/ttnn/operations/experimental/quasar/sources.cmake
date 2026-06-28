@@ -33,6 +33,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     reallocate/reallocate.hpp
     reduction/generic/generic_reductions.hpp
     to_device/to_device.hpp
+    typecast/typecast.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -187,4 +188,11 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     reduction/generic/device/welford_reduce_program_factory.cpp
     # to_device (thin host->device transfer wrapper; no device op / kernels)
     to_device/to_device.cpp
+    # typecast (copy of operations/copy/typecast; device op + 3 CB program factories; no nanobind,
+    # called only internally by quasar pad's BFLOAT8_B path. DFB/metal2 kernel port is a follow-up.)
+    typecast/typecast.cpp
+    typecast/device/typecast_device_op.cpp
+    typecast/device/typecast_program_factory.cpp
+    typecast/device/typecast_rm_chunked_program_factory.cpp
+    typecast/device/typecast_sharded_program_factory.cpp
 )
