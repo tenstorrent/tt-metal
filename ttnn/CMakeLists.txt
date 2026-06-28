@@ -306,6 +306,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::UnaryBackward
         TTNN::Ops::Experimental::Test
+        TTNN::Ops::Experimental::YUVConversion
         TTNN::Ops::Full
         TTNN::Ops::FullLike
         TTNN::Ops::IndexFill
@@ -575,6 +576,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
+add_subdirectory(cpp/ttnn/operations/experimental/yuv_conversion)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)

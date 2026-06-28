@@ -112,6 +112,12 @@ def _ensure_ltx_reference_on_path() -> None:
             sys.path.insert(0, path)
 
 
+def _video_output_type() -> str:
+    """Frame d2h format for the server path: on-device YUV 4:2:0 planar when LTX_YUV_EXPORT
+    is set (halves d2h + host->ffmpeg bytes), else the RGB planar default."""
+    return "yuv" if os.environ.get("LTX_YUV_EXPORT", "0") in ("1", "true", "True") else "rgb"
+
+
 def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
     """Map pixel dims to the LTX latent token grid ``(latent_frames, latent_h, latent_w)``."""
     latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
@@ -1127,8 +1133,9 @@ class LTXPipeline:
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
         video = self.vae_decoder(latent_spatial, output_type=output_type)
-        if output_type != "float":
+        if output_type == "rgb":
             return video.numpy()
+        # "float" → torch [-1,1]; "yuv" → numpy (T, planar_bytes) from fast_device_to_host_yuv.
         return video
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1209,7 +1216,9 @@ class LTXPipeline:
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         dummy = torch.zeros(1, latent_frames * latent_h * latent_w, self.in_channels)
         self._prepare_vae()
-        self.decode_latents(dummy, latent_frames, latent_h, latent_w)
+        # Warm the same decode output_type the server will request so the YUV op JIT-compiles
+        # here, not on the first request.
+        self.decode_latents(dummy, latent_frames, latent_h, latent_w, output_type=_video_output_type())
 
     def _prepare_rope(
         self, num_frames: int, latent_height: int, latent_width: int, fps: float = 24.0

@@ -30,6 +30,7 @@ from ...utils.conv3d import (
     get_conv3d_config,
 )
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+from ...utils.yuv_d2h import fast_device_to_host_yuv
 
 
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
@@ -827,6 +828,19 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.reshape(sample_tt, (B_, T_, H4, W4, 3, p, r, q))
         sample_tt = ttnn.permute(sample_tt, (0, 4, 1, 5, 2, 7, 3, 6))
         sample_tt = ttnn.reshape(sample_tt, (B_, 3, T_ * p, H4 * q, W4 * r))  # (B, 3, T, H, W)
+
+        if output_type == "yuv":
+            # On-device YUV 4:2:0 + fast d2h -> ffmpeg yuv420p planar uint8, shape (T, planar_bytes).
+            # The kernel subsamples chroma on device, so the d2h + host->ffmpeg feed move ~half the
+            # bytes of the RGB path. logical_h/logical_w trim the VAE's mesh padding on host
+            # (LTX pads W 1920->2048 on 4x8).
+            return fast_device_to_host_yuv(
+                sample_tt,
+                self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                logical_h=logical_h * q,
+                logical_w=logical_w * r,
+            )
 
         concat_dims = [None, None]
         concat_dims[self.parallel_config.height_parallel.mesh_axis] = 3
