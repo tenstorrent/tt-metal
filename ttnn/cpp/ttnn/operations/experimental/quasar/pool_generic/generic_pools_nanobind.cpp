@@ -73,7 +73,7 @@ static std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> max_pool2d_nanobind
 }
 
 void bind_max_pool2d_operation(nb::module_& mod) {
-    ttnn::bind_function<"max_pool2d">(
+    ttnn::bind_function<"max_pool2d", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Applies max pooling to the input tensor. Each output element contains the maximum value within a
@@ -128,7 +128,7 @@ void bind_max_pool2d_operation(nb::module_& mod) {
 }
 
 void bind_avg_pool2d_operation(nb::module_& mod) {
-    ttnn::bind_function<"avg_pool2d">(
+    ttnn::bind_function<"avg_pool2d", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Applies average pooling to the input tensor. Each output element contains the average value within a

@@ -9,7 +9,7 @@ on:
         type: boolean
         default: true
       blackhole:
-        description: "Run on Blackhole (bh_p150b_civ2_viommu_prio)"
+        description: "Run on Blackhole (bh_p150b_civ2_viommu)"
         required: false
         type: boolean
         default: true
@@ -80,7 +80,7 @@ jobs:
       enabled-skus: >-
         ${{ format('{0}{1}',
           inputs.wormhole && 'wh_n150_civ2' || '',
-          inputs.blackhole && format('{0}bh_p150b_civ2_viommu_prio', inputs.wormhole && ',' || '') || '')
+          inputs.blackhole && format('{0}bh_p150b_civ2_viommu', inputs.wormhole && ',' || '') || '')
         }}
       enable-watcher: ${{ inputs.enable-watcher }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}

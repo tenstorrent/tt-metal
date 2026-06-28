@@ -85,6 +85,7 @@ struct BuildEnvData {
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
     # Whether DRAM programmable RISC cores are enabled on this device (Blackhole only)
     dramProgrammableCoresEnabled @3 :Bool;
+    tensixFwLaunchAddrValue @4 :UInt32; # Expected value at L1[0] for TENSIX worker cores
 }
 
 struct BuildEnvPerDevice {
@@ -144,6 +145,14 @@ struct LogicalCoord {
     y @1 :UInt64;
 }
 
+# Translated/virtual (UMD) (x, y) coordinate without chip - chip is the map key. A distinct type from
+# LogicalCoord so the coordinate system is explicit at the schema level; translated coords are used
+# where logical coords would be ambiguous between UMD and Metal (e.g. DRAM subchannel numbering).
+struct TranslatedCoord {
+    x @0 :UInt64;
+    y @1 :UInt64;
+}
+
 # Per-chip: block type -> list of logical coordinates
 struct BlocksByTypePerChip {
     activeEth @0 :List(LogicalCoord);
@@ -154,6 +163,12 @@ struct BlocksByTypePerChip {
 struct ChipBlocksByType {
     chipId @0 :UInt64;
     blocks @1 :BlocksByTypePerChip;
+    # The DRAM cores Metal manages, i.e. every DRAM endpoint EXCEPT each view's NOC0 worker endpoint.
+    # The excluded NOC0 endpoints carry regular NOC0 DRAM traffic and are owned by the syseng firmware
+    # (CMFW DRAM telemetry, SYS-1419); Metal runs no DRISC firmware there, so tools should dump only
+    # the cores in this list. Reported as TranslatedCoord so consumers resolve cores without the
+    # UMD-vs-metal logical-DRAM numbering mismatch.
+    dramCores @2 :List(TranslatedCoord);
 }
 
 enum ConfigurationScope {

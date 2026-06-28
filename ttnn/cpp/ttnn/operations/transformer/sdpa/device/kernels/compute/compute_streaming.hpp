@@ -233,11 +233,13 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
 }
 
 ALWI void init_sdpa_streaming_semaphores() {
-    // reduce_trigger splits QK row-max reduce across a PACK->UNPACK handshake:
-    // PACK posts FPU_SFPU after QK writes are visible, then UNPACK waits before
-    // running the second half of the reduce MOP. Default firmware init covers
-    // common math/pack semaphores, but not FPU_SFPU, so initialize it here.
+    // reduce_trigger runs the QK row-max reduce as a split MOP gated by a PACK->UNPACK handshake on
+    // two T6 tokens (firmware inits neither). FPU_SFPU, posted after pack + mask + push, gates run()#2
+    // (and run()#1 on the non-overlap path). UNPACK_MATH_DONE (the first-half token) is borrowed (unused elsewhere
+    // in SDPA): PACK posts it early, once the first half is committed, to gate run()#1 on the overlap
+    // path so it overlaps the second-half pack.
     PACK((t6_semaphore_init(semaphore::FPU_SFPU, 0, 1)));
+    PACK((t6_semaphore_init(semaphore::UNPACK_MATH_DONE, 0, 1)));
 }
 
 #if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
@@ -323,7 +325,6 @@ void blocked_matmul_and_pack(
     uint32_t subblock_h,
     uint32_t inner_dim,
     uint32_t matmul_stride,
-    bool trigger_reduce = false,
     bool skip_pack_configure = false) {
     tile_regs_acquire();
     uint32_t dst_index = 0;
@@ -343,9 +344,6 @@ void blocked_matmul_and_pack(
     }
     pack_contiguous_rows_nocfg(
         out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
-    if (trigger_reduce) {
-        PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
-    }
     tile_regs_release();
 }
 
@@ -408,7 +406,8 @@ void reduce_c_row_group(
     uint32_t sbh,
     uint32_t reduce_cols,
     bool respect_trigger = false,
-    uint32_t mirror_cb = INVALID_CB) {
+    uint32_t mirror_cb = INVALID_CB,
+    bool overlap_first_half = false) {
     const uint32_t group_size = sbh;
     const uint32_t row_start = row_group_index * group_size;
 
@@ -440,9 +439,9 @@ void reduce_c_row_group(
     reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
     }
-    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
+    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -1151,6 +1150,57 @@ constexpr uint32_t largest_factor_le(uint32_t n, uint32_t max_val) {
     return 1;
 }
 
+// --- lightweight-mask predicates (single source of truth for "does this op / iter stamp a mask") ---
+
+// Compile-time: does this op configuration ever use the structured lightweight (causal / padding /
+// sliding-window) mask? Also selects the lightweight branch via `if constexpr`.
+template <bool ring_mode, bool is_causal, bool use_padded_mask, uint32_t sliding_window_size>
+constexpr bool sdpa_uses_lightweight_mask() {
+    return ring_mode || is_causal || use_padded_mask || sliding_window_size > 0;
+}
+
+// Runtime: does *this* K-chunk iteration actually stamp the lightweight mask?
+inline bool sdpa_lightweight_mask_stamped(
+    bool kv_pad_rotation_enabled, bool causal_applies, bool apply_sliding_window, bool partial_tile_mask) {
+    return kv_pad_rotation_enabled || causal_applies || apply_sliding_window || partial_tile_mask;
+}
+
+// Can the reduce's first half (run()#1, cols [0, active_Sk/2)) overlap the second-half pack? Only if
+// no masked column lands there: either nothing is stamped (no_mask_this_iter), or — on the plain
+// contiguous causal path — this q_subblock's lowest diagonal column (first_q_tile = q_subblock *
+// qkt_subblock_h) is already in the second half. A causal mask writes only cols >= the diagonal, and
+// a fully-visible column's value is its raw score, so reading it pre-mask is correct. Every other
+// variant (sliding window, kv-pad rotation, K straddle, padding/partial, provided mask) -> false.
+template <
+    bool is_causal_sdpa,
+    bool kv_pad_rotation_enabled,
+    uint32_t sliding_window_size,
+    bool use_provided_mask,
+    uint32_t Sk_chunk_t>
+inline bool sdpa_first_half_unmasked(
+    bool no_mask_this_iter,
+    bool apply_causal,
+    bool apply_sliding_window,
+    bool apply_mask,
+    uint32_t lw_partial_tile_idx,
+    uint32_t mask_straddle_col,
+    uint32_t mask_q_start_tile,
+    uint32_t mask_k_start_tile,
+    uint32_t first_q_tile,
+    uint32_t active_Sk) {
+    if (no_mask_this_iter) {
+        return true;
+    }
+    if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled && sliding_window_size == 0 && !use_provided_mask) {
+        const bool plain_causal_stamp = apply_causal && !apply_sliding_window && mask_straddle_col == 0 &&
+                                        active_Sk == Sk_chunk_t && !(apply_mask && lw_partial_tile_idx > 0);
+        const int32_t first_diag_col =
+            static_cast<int32_t>(mask_q_start_tile + first_q_tile) - static_cast<int32_t>(mask_k_start_tile);
+        return plain_causal_stamp && first_diag_col >= static_cast<int32_t>(active_Sk / 2);
+    }
+    return false;
+}
+
 /**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
@@ -1260,6 +1310,39 @@ static void sdpa_inner_loop_step(
         // so blocked_matmul_and_pack must reconfigure when q_subblock > 0.
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
+
+        // Mask plan for this q_subblock (single source of truth; reused by the mask stamp below).
+        constexpr bool uses_lightweight_mask =
+            sdpa_uses_lightweight_mask<ring_mode, is_causal_sdpa, use_padded_mask, sliding_window_size>();
+        const bool should_apply_lightweight_mask = sdpa_lightweight_mask_stamped(
+            kv_pad_rotation_enabled,
+            is_causal_sdpa && apply_causal,
+            apply_sliding_window,
+            apply_mask && lw_partial_tile_idx > 0);
+        const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
+
+        // run()#1 (the reduce's first half) may overlap the second-half pack only if no masked
+        // column lands in [0, active_Sk/2) — see sdpa_first_half_unmasked.
+        const bool overlap_first_half = reduce_trigger && sdpa_first_half_unmasked<
+                                                              is_causal_sdpa,
+                                                              kv_pad_rotation_enabled,
+                                                              sliding_window_size,
+                                                              use_provided_mask,
+                                                              Sk_chunk_t>(
+                                                              no_mask_this_iter,
+                                                              apply_causal,
+                                                              apply_sliding_window,
+                                                              apply_mask,
+                                                              lw_partial_tile_idx,
+                                                              mask_straddle_col,
+                                                              mask_q_start_tile,
+                                                              mask_k_start_tile,
+                                                              q_subblock * qkt_subblock_h,
+                                                              active_Sk);
+        // PACK posts the first-half token after the subblock covering the last first-half column
+        // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
+        const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
+
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
@@ -1280,8 +1363,6 @@ static void sdpa_inner_loop_step(
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
-                // The last subblock posts the semaphore — one post per reduce.
-                bool kt_trigger_reduce = reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1);
                 blocked_matmul_and_pack<true, KT_stride, KT_stride>(
                     cb_q_in,
                     cb_kt_in,
@@ -1294,8 +1375,12 @@ static void sdpa_inner_loop_step(
                     qkt_subblock_h,
                     in0_block_w,
                     in0_block_w,
-                    kt_trigger_reduce,
                     /*skip_pack_configure=*/q_subblock == 0);
+                // Signal the first half is committed so run()#1 overlaps the second-half
+                // pack. STALL_PACK drains the L1 writes before the token retires.
+                if (overlap_first_half && kt_subblock == first_half_last_sb) {
+                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_MATH_DONE)));
+                }
                 kt_index_offset += actual_sbw;
             }
         }
@@ -1307,8 +1392,7 @@ static void sdpa_inner_loop_step(
         // user mask supplies all masking itself (causal/sliding/padding baked in by the caller),
         // so exactly one of these branches is compiled. The only config that stamps nothing is plain
         // non-causal attention with no mask at all (uses_lightweight_mask == false).
-        constexpr bool uses_lightweight_mask =
-            ring_mode || is_causal_sdpa || use_padded_mask || sliding_window_size > 0;
+        // uses_lightweight_mask hoisted above the kt loop.
         if constexpr (use_provided_mask) {
             // Dense user-provided mask: the full per-position mask, applied on every K chunk (no
             // chunk skipping); the user mask defines the visible region. begin_mask_l1_accumulate
@@ -1331,8 +1415,7 @@ static void sdpa_inner_loop_step(
         } else if constexpr (uses_lightweight_mask) {
             // Lightweight stamp: causal and/or padding masks. Active for ring, causal non-ring, or
             // non-causal padded with a partial-tile mask (single-chip streaming partial-K case).
-            const bool should_apply_lightweight_mask = kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) ||
-                                                       apply_sliding_window || (apply_mask && lw_partial_tile_idx > 0);
+            // should_apply_lightweight_mask hoisted above the kt loop.
             if (should_apply_lightweight_mask) {
                 begin_mask_l1_accumulate<false>(cb_qkt_im, cb_mask_in);
                 apply_lightweight_mask_streaming<
@@ -1370,6 +1453,13 @@ static void sdpa_inner_loop_step(
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
         cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
 
+        // reduce_trigger barrier. Posted after pack + mask + push so it dominates every
+        // cb_qkt_im writer; gates run()#2 (and run()#1 on the non-overlap path). STALL_PACK drains
+        // the writes; one post / one uninit get stays balanced (wait_on_zero is non-consuming).
+        if (reduce_trigger) {
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::FPU_SFPU)));
+        }
+
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
@@ -1385,7 +1475,8 @@ static void sdpa_inner_loop_step(
                 qkt_subblock_h,
                 active_Sk,
                 reduce_trigger,
-                save_max_cb);
+                save_max_cb,
+                overlap_first_half);
             CircularBuffer(cur.max).push_back(qkt_subblock_h);
             if (save_max_cb != INVALID_CB) {
                 CircularBuffer(save_max_cb).push_back(qkt_subblock_h);
@@ -1502,7 +1593,6 @@ static void sdpa_inner_loop_step(
                                 qktv_h,
                                 matmul_inner,
                                 KT_stride,
-                                /*trigger_reduce=*/false,
                                 /*skip_pack_configure=*/true);
                             v_index_offset += qktv_subblock_w;
                         }
@@ -1673,7 +1763,6 @@ static void sdpa_inner_loop_step(
                         cur_h,
                         active_Sk,
                         KT_stride,
-                        /*trigger_reduce=*/false,
                         /*skip_pack_configure=*/true);
                     v_index_offset += qktv_subblock_w;
                 }

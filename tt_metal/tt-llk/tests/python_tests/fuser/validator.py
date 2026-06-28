@@ -195,6 +195,7 @@ class FpuMathSchemaBase(BaseModel):
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
     unpack_to_dest: UnpackToDest = UnpackToDest.No
+    reduce_to_tile: bool = False
     src_a: str = Field(..., min_length=1)
     src_b: str = Field(..., min_length=1)
 
@@ -261,6 +262,7 @@ class FpuMathSchemaBase(BaseModel):
             "clear_fp32_dst_acc": clear_fp32_dst_acc,
             "acc_to_dest": self.acc_to_dest,
             "unpack_to_dest": self.unpack_to_dest,
+            "reduce_to_tile": self.reduce_to_tile,
         }
         if self.unpacker is not None:
             unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]

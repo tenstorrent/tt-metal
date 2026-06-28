@@ -8,22 +8,23 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 // #include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t block_size_col = get_compile_time_arg_val(0);
-    constexpr uint32_t block_size_row = get_compile_time_arg_val(1);
-    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
+    constexpr auto block_size_col = get_arg(args::block_size_col);
+    constexpr auto block_size_row = get_arg(args::block_size_row);
+    constexpr auto third_dim = get_arg(args::third_dim);
 
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
 
-    constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<tt::CBIndex::c_0>()
+    constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<dfb::in>()
                                    ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
                                    : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
 
     compute_kernel_lib::tilize<
         block_size_row,
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_16,
+        dfb::in,
+        dfb::out,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,

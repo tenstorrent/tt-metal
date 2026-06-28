@@ -1,0 +1,23 @@
+{
+  "_comment": "Per-phase warm-wall baseline (call#3 with TT_UNIAD_TIMING=1 TT_UNIAD_WARM_ITERS=2). With trace replay enabled by default, call#2 covers one-time capture overhead; call#3+ is the production-relevant replay timing. The gate anchors on the LAST warm call, so set WARM_ITERS>=2 to land on call#3 and match this baseline.",
+  "_baseline_branch": "kyamaguchi/uniad-dcn-fp32",
+  "_measured_at": "2026-05-29",
+  "_host": "Blackhole p150b (device 0)",
+  "_invocation": "TT_DCN_DEVICE=1 TT_UNIAD_TIMING=1 TT_UNIAD_WARM_ITERS=2 pytest models/experimental/uniad/tests/pcc/test_ttnn_uniad.py::test_uniad",
+  "_tolerance_pct": 5.0,
+  "_tolerance_abs_floor_ms": 20.0,
+  "_pcc_floor_sdc_traj": 0.9905,
+  "_variance_note": "Refreshed against the squashed branch (BEV-encoder divide→multiply fix + FPN conv-prep). extract_img_feat varies 348-372 ms across runs on device 0; the abs-floor (20 ms) + percent tolerance combo gates >20 ms AND >5% regressions while tolerating that noise.",
+  "phases": {
+    "extract_img_feat (ResNet + FPN)": 360.0,
+    "pts_bbox_head.get_bev_features (BEVFormer encoder)": 422.0,
+    "pts_bbox_head.get_detections (DETR decoder)": 85.0,
+    "track_base.update + query select": 28.0,
+    "memory_bank update": 25.0,
+    "simple_test_track (backbone+BEV+decoder+tracking)": 955.0,
+    "seg_head.forward_test": 262.0,
+    "motion_head.forward_test": 122.0,
+    "planning_head.forward_test": 39.0,
+    "occ_head": 1.3
+  }
+}

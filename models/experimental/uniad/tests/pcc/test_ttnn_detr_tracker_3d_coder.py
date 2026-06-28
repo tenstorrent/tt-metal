@@ -152,6 +152,14 @@ bbox_dict_1 = {
 @pytest.mark.parametrize("img_metas", [img_metas], ids=["inp1"])
 def test_TtDETRTrack3DCoder(device, bbox_dict, img_metas, reset_seeds):
     with_mask = True
+    # NOTE: score_threshold=0.0 leaves the score-filter branch of decode_single
+    # uncovered — `if self.score_threshold:` is falsy at 0.0, so `final_scores >
+    # threshold` is never AND-ed into the keep mask. The decode math, label
+    # argmax, and the post_center_range geometric filter (with_mask=True) are
+    # still exercised across every output key. A non-zero threshold is avoided
+    # on purpose: random track_scores near the cutoff round differently in bf16
+    # vs float, which would drop/keep a different number of boxes on tt vs the
+    # reference and fail on shape mismatch rather than a real logic bug.
     reference_model = DETRTrack3DCoder(
         post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
         pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],

@@ -7,30 +7,39 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t num_dims = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
-    const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
+    constexpr uint32_t num_dims = get_arg(args::num_dims);
 
-    volatile tt_l1_ptr uint32_t* num_unpadded_tiles = (volatile tt_l1_ptr uint32_t*)(get_common_arg_addr(1));
-    volatile tt_l1_ptr uint32_t* num_padded_tiles = num_unpadded_tiles + num_dims;
+    // num_unpadded_tiles / num_padded_tiles are per-dim arrays read in the inner loop by a
+    // runtime-varying index, so they arrive as common runtime varargs: [0, num_dims) is
+    // num_unpadded_tiles and [num_dims, 2*num_dims) is num_padded_tiles.
+    uint32_t num_unpadded_tiles[num_dims];
+    uint32_t num_padded_tiles[num_dims];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        num_unpadded_tiles[j] = get_common_vararg(j);
+        num_padded_tiles[j] = get_common_vararg(num_dims + j);
+    }
 
-    const uint32_t start_id = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t start_id = get_arg(args::start_id);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
 
-    tt_l1_ptr uint32_t* id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
+    // id_per_dim is a per-core array advanced in the inner loop by a runtime-varying index → runtime varargs.
+    uint32_t id_per_dim[num_dims];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        id_per_dim[j] = get_vararg(j);
+    }
 
     // In and out are assumed to be same dataformat
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::in);
 
     // Create objects for Device 2.0 API
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::cb_in);
     Noc noc;
 
-    // Get tile size from CB interface
-    const uint32_t tile_size = cb_in0.get_tile_size();
+    // Get tile size from DFB interface
+    const uint32_t tile_size = cb_in0.get_entry_size();
 
     uint32_t src_tile_id = start_id;
 

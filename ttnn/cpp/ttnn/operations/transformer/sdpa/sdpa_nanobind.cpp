@@ -15,6 +15,8 @@
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
+#include "sparse_sdpa.hpp"
+#include "sparse_sdpa_msa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -319,6 +321,82 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("attention_sink") = nb::none());
+
+    ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip. softmax(Q@Kᵀ·scale masked)@V over the
+        top-k selected latents per query token; V = kv[..., :v_dim]. Masking is baked into `indices`
+        (0xFFFFFFFF = masked; sentinels are a contiguous tail). Inputs are ROW-MAJOR DRAM-interleaved.
+        K_DIM (the q/kv head dim) is taken from the tensors.
+
+        Args:
+            q (ttnn.Tensor):       [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)
+            kv (ttnn.Tensor):      [1, 1, T, K_DIM] bf16 or fp8_e4m3 (fp8 halves the K-gather bytes; tilized to bfp8_b in-op).
+                                   When cache_batch_idx is set, [B, 1, T, K_DIM] and may be ND-sharded across DRAM banks.
+            indices (ttnn.Tensor): [1, 1, S, TOPK] uint32
+            v_dim (int):           width of V (leading v_dim cols of the K_DIM-wide cache); the output width.
+
+        Keyword args:
+            scale (float, optional): defaults to K_DIM**-0.5.
+            k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
+                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+
+        Returns:
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
+        )doc",
+        &ttnn::transformer::sparse_sdpa,
+        nb::arg("q").noconvert(),
+        nb::arg("kv").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::arg("v_dim"),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("k_chunk_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none());
+
+    ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        MSA block-sparse prefill (MiniMax Sparse Attention), Blackhole single-chip.
+        Attends the block_size-token K/V blocks named in `indices`; -1 (0xFFFFFFFF) sentinels mask a contiguous
+        tail. The op has no causal flag; causal behavior must be encoded by the selected blocks. RoPE and
+        QK-norm are applied upstream.
+
+        Args:
+            q (ttnn.Tensor):       [1, H, S, d] bf16 | fp8_e4m3 ROW_MAJOR.
+                                   H must be divisible by n_kv; H/n_kv may be 16 or a multiple of 32.
+            k (ttnn.Tensor):       [B, n_kv, T, d] TILE bf16|bfloat8_b (B>1 only when indexed)
+            v (ttnn.Tensor):       [B, n_kv, T, v_dim] TILE bf16|bfloat8_b
+            indices (ttnn.Tensor): [1, n_kv, S, TOPK] uint32 block-ids (-1 = sentinel, contiguous tail).
+                                   Each row must contain a valid block, and valid block ids must be < T / block_size.
+
+        Keyword args:
+            scale (float, optional): defaults to d to the power of -0.5.
+            block_size (int): KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional). fp8 q requires fp32_dest_acc_en.
+            cache_batch_idx (int, optional): select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
+                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+
+        Returns:
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
+
+        Additional preconditions: d and v_dim must be multiples of 32; TOPK times 4 and output row bytes must meet
+        device DRAM alignment.
+        )doc",
+        &ttnn::transformer::sparse_sdpa_msa,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("block_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(

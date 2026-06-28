@@ -10,6 +10,7 @@ Automatically downloads weights from HuggingFace if not available locally.
 
 import json
 import os
+import shutil
 from functools import lru_cache
 from pathlib import Path
 
@@ -186,8 +187,20 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             ignore_patterns=["*.safetensors"],  # Don't download weight files
         )
 
-        logger.success(f"✓ Config files downloaded to: {model_dir}")
-        return Path(model_dir)
+        # The HF cache stores files as symlinks into blobs/ (content-hash names). With
+        # trust_remote_code=True, transformers resolves the remote module to its blob realpath
+        # and then looks for its relative-import siblings (e.g. tool_declaration_ts.py) by name in
+        # that same dir, which fails in blobs/. Copy into a flat dir of real files so relative
+        # imports resolve by name.
+        flat_dir = (
+            cache_dir
+            / "flat_config"
+            / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
+        )
+        shutil.copytree(model_dir, flat_dir, symlinks=False, dirs_exist_ok=True)
+
+        logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
+        return flat_dir
 
     except Exception as e:
         logger.error(f"Failed to download {variant.hf_repo_id} config: {e}")

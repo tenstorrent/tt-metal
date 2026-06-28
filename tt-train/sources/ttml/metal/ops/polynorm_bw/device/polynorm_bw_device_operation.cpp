@@ -142,13 +142,6 @@ PolyNorm3BWTensorReturn PolyNorm3BackwardDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
-ttsl::hash::hash_t PolyNorm3BackwardDeviceOperation::compute_program_hash(
-    const PolyNorm3BWAttributes& args, const PolyNorm3BWTensorArgs& tensor_args) {
-    const auto& input = tensor_args.input;
-    return tt::tt_metal::operation::hash_operation<PolyNorm3BackwardDeviceOperation>(
-        args.epsilon, input.dtype(), input.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::polynorm3_bw::device
 
 namespace ttnn::prim {

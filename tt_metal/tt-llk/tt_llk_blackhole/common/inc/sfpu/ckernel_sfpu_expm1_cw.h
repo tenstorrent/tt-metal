@@ -51,7 +51,7 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
     // Reconstruct: exp(x)-1 = (2^k - 1) + 2^k * expm1(r)
     // 0x4B3FFF81 = 0x4B400000 - 127: fuses k_int ISUB + bias IADD into a single ISUB
     constexpr int kC231Bias = 0x4B3FFF81;
-    sfpi::vFloat two_k      = sfpi::setexp(sfpi::vConst1, sfpi::reinterpret<sfpi::vInt>(tmp) - kC231Bias);
+    sfpi::vFloat two_k      = sfpi::setexp(sfpi::vConst1, sfpi::as<sfpi::vInt>(tmp) - kC231Bias);
     return (two_k - sfpi::vConst1) + two_k * h;
 }
 
