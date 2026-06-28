@@ -150,8 +150,9 @@ void kernel_main() {
                     ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
                 cb_wait_front(cb_scaler_reduce, 1);
                 cb_pop_front(cb_scaler_reduce, 1);
-                // Phase 11: l_i += l_blk
-                add<cb_sum_old, cb_sum_new, cb_sum_old>(B_q_t);
+                // Phase 11: l_i += l_blk (output to cb_o_accum to avoid in-place deadlock, then copy back)
+                add<cb_sum_old, cb_sum_new, cb_o_accum>(B_q_t);
+                copy<cb_o_accum, cb_sum_old>(B_q_t);
                 // Phase 12: PV = P @ V -> cb_o_accum, O += PV
                 matmul_block<
                     false,

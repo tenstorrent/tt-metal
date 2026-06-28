@@ -55,6 +55,7 @@ void kernel_main() {
                 noc_async_read_barrier(); cb_push_back(cb_q,1);
             }
             for (uint32_t kvb=0; kvb<num_kv_blocks; ++kvb) {
+                DEVICE_PRINT("READER: kvb={} start\n", kvb);
                 uint32_t kvcs=kvb*B_kv_t;
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce,ckernel::PoolType::MAX,ckernel::ReduceDim::REDUCE_ROW>();
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce,ckernel::PoolType::SUM,ckernel::ReduceDim::REDUCE_ROW>();
@@ -71,6 +72,8 @@ void kernel_main() {
                     noc_async_read_barrier(); cb_push_back(cb_mask,1);
                 }
             }
+            DEVICE_PRINT("READER: kvb done\n");
         }
     }
+    DEVICE_PRINT("READER: done\n");
 }
