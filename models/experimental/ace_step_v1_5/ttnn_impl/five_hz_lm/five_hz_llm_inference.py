@@ -119,6 +119,11 @@ class LocalFiveHzLMHandler:
         self._ttnn_sample_counter = 0
         self.last_lm_perf: Dict[str, Any] | None = None
         self._lm_gen_token_count = 0
+        # TTNN LM warmup state (Devstral-style: JIT + trace before timed generation).
+        self._ttnn_lm_warmed_shapes: set[tuple[int, int]] = set()
+        self._ttnn_lm_jit_buckets_done = False
+        self._lm_init_warmup_time_s = 0.0
+        self._lm_session_warmup_time_s = 0.0
 
     def set_ttnn_logits_device(self, device) -> None:
         """Attach the open TTNN device; LM CFG logit combine (narrow or full-vocab) uses TTNN when set."""
@@ -640,6 +645,7 @@ class LocalFiveHzLMHandler:
                     f"✅ 5Hz LM initialized (TTNN causal)\nModel: {model_path}\n"
                     f"Host tensors: {device}\nTTNN device: attached"
                 )
+                self._warmup_ttnn_lm_jit_buckets()
                 return True, status_msg
 
             self._ttnn_lm_active = False
@@ -761,6 +767,113 @@ class LocalFiveHzLMHandler:
                 use_cache=use_cache,
             )
         return outputs
+
+    def _ace_step_lm_jit_warmup_enabled(self) -> bool:
+        return os.environ.get("ACE_STEP_LM_JIT_WARMUP", "1").strip().lower() not in ("0", "false", "no", "off")
+
+    def _ttnn_lm_warmup_shape_key(self, input_ids: torch.Tensor) -> tuple[int, int]:
+        from models.tt_transformers.tt.common import get_padded_prefill_len
+
+        seq_len = int(input_ids.shape[1])
+        return (int(get_padded_prefill_len(seq_len)), seq_len)
+
+    def _tokenize_prompt_for_warmup(self, formatted_prompt: str) -> torch.Tensor:
+        inputs = self.llm_tokenizer(
+            formatted_prompt,
+            return_tensors="pt",
+            padding=False,
+            truncation=True,
+        )
+        return inputs["input_ids"]
+
+    def _warmup_ttnn_lm_jit_buckets(self) -> None:
+        """Eager JIT at common padded prefill lengths once at model load (untimed)."""
+        if not self._ace_step_lm_jit_warmup_enabled() or not getattr(self, "_ttnn_lm_active", False):
+            return
+        if getattr(self, "_ttnn_lm_jit_buckets_done", False):
+            return
+        qwen = getattr(self.llm, "qwen", None)
+        if qwen is None or not hasattr(qwen, "warmup_jit_compile"):
+            return
+
+        pad = 0
+        if self.llm_tokenizer is not None:
+            pad = int(self.llm_tokenizer.pad_token_id or self.llm_tokenizer.eos_token_id or 0)
+
+        t0 = time.perf_counter()
+        for seq_len in (64, 128, 256, 512, 768, 1024):
+            ids = torch.full((1, seq_len), pad, dtype=torch.long)
+            try:
+                qwen.warmup_jit_compile(ids)
+            except Exception as exc:
+                logger.warning(f"[ace_step_v1_5] JIT bucket warmup seq_len={seq_len} skipped: {exc}")
+
+        self._ttnn_lm_jit_buckets_done = True
+        elapsed = time.perf_counter() - t0
+        self._lm_init_warmup_time_s = float(getattr(self, "_lm_init_warmup_time_s", 0.0)) + elapsed
+        logger.info(f"[ace_step_v1_5] TTNN 5 Hz LM JIT bucket warmup done in {elapsed:.2f}s")
+
+    def _warmup_ttnn_lm_before_generate(
+        self,
+        model: Any,
+        input_ids: torch.Tensor,
+        *,
+        constrained_processor: Optional["MetadataConstrainedLogitsProcessor"] = None,
+        repetition_penalty: float = 1.0,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        temperature: float = 1.0,
+    ) -> None:
+        """Eager JIT + trace capture warmup before the timed generation loop (Devstral-style)."""
+        if not self._ace_step_lm_jit_warmup_enabled() or not getattr(self, "_ttnn_lm_active", False):
+            return
+        if not hasattr(model, "warmup_generation_path"):
+            return
+
+        warm_ids = input_ids[0:1] if int(input_ids.shape[0]) > 1 else input_ids
+        shape_key = self._ttnn_lm_warmup_shape_key(warm_ids)
+        warmed = getattr(self, "_ttnn_lm_warmed_shapes", None)
+        if warmed is None:
+            self._ttnn_lm_warmed_shapes = set()
+            warmed = self._ttnn_lm_warmed_shapes
+        if shape_key in warmed:
+            return
+
+        t0 = time.perf_counter()
+        self._sync_narrow_audio_vocab_to_model(model, constrained_processor)
+        logger.info(f"[ace_step_v1_5] TTNN 5 Hz LM warmup shape {shape_key} (JIT + trace) before timed generation")
+        with torch.inference_mode():
+            model.warmup_generation_path(warm_ids)
+            attn = torch.ones_like(warm_ids)
+            outputs = self._forward_pass(
+                model,
+                warm_ids,
+                {"attention_mask": attn},
+                None,
+                True,
+                constrained_processor,
+            )
+            logits = outputs.logits[:, -1, :]
+            if constrained_processor is not None:
+                logits = constrained_processor(warm_ids, logits)
+            logits_processor = self._build_logits_processor(repetition_penalty)
+            self._postprocess_and_sample_ttnn_or_torch(
+                warm_ids,
+                logits,
+                repetition_penalty=repetition_penalty,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                logits_processor=logits_processor,
+            )
+        if hasattr(model, "reset_decode_state_keep_traces"):
+            model.reset_decode_state_keep_traces()
+        else:
+            model.reset_decode_state()
+
+        warmed.add(shape_key)
+        elapsed = time.perf_counter() - t0
+        self._lm_session_warmup_time_s = float(getattr(self, "_lm_session_warmup_time_s", 0.0)) + elapsed
 
     def _normalize_batch_input(self, formatted_prompts: Union[str, List[str]]) -> Tuple[List[str], bool]:
         """Normalize batch input: convert single string to list and return (list, is_batch)"""
@@ -1677,11 +1790,14 @@ class LocalFiveHzLMHandler:
                 pass
 
         self._lm_gen_token_count = 0
+        self._lm_session_warmup_time_s = 0.0
 
         def _lm_extra(time_costs: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
             payload: Dict[str, Any] = {
                 "time_costs": time_costs,
                 "num_tokens": int(self._lm_gen_token_count),
+                "lm_session_warmup_time_s": float(getattr(self, "_lm_session_warmup_time_s", 0.0)),
+                "lm_init_warmup_time_s": float(getattr(self, "_lm_init_warmup_time_s", 0.0)),
             }
             payload.update(extra)
             return payload
@@ -1725,12 +1841,36 @@ class LocalFiveHzLMHandler:
                 logger.info("Batch Phase 1: Generating CoT metadata (once for all items)...")
             else:
                 logger.info("Phase 1: Generating CoT metadata...")
-            phase1_start = time.time()
 
             # Build formatted prompt for CoT phase
             formatted_prompt = self.build_formatted_prompt(caption, lyrics, generation_phase="cot")
 
             logger.info(f"generate_with_stop_condition: formatted_prompt={formatted_prompt}")
+            if getattr(self, "_ttnn_lm_active", False) and self._ace_step_lm_jit_warmup_enabled():
+                cot_warm_ids = self._tokenize_prompt_for_warmup(formatted_prompt)
+                cot_warmup_proc = self._setup_constrained_processor(
+                    use_constrained_decoding=use_constrained_decoding,
+                    constrained_decoding_debug=constrained_decoding_debug,
+                    target_duration=None,
+                    user_metadata=user_metadata,
+                    stop_at_reasoning=True,
+                    skip_genres=True,
+                    skip_caption=not use_cot_caption,
+                    skip_language=not use_cot_language,
+                    generation_phase="cot",
+                    is_batch=False,
+                )
+                self._warmup_ttnn_lm_before_generate(
+                    self.llm,
+                    cot_warm_ids,
+                    constrained_processor=cot_warmup_proc,
+                    repetition_penalty=repetition_penalty,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature,
+                )
+
+            phase1_start = time.time()
             # Generate CoT (stop at </think>)
             cot_output_text, status = self.generate_from_formatted_prompt(
                 formatted_prompt=formatted_prompt,
@@ -1853,7 +1993,6 @@ class LocalFiveHzLMHandler:
             logger.info(f"Batch Phase 2: Generating audio codes for {actual_batch_size} items...")
         else:
             logger.info("Phase 2: Generating audio codes...")
-        phase2_start = time.time()
 
         td: float | None = None
         tc: int | None = None
@@ -1892,6 +2031,33 @@ class LocalFiveHzLMHandler:
                 flush=True,
             )
 
+        if getattr(self, "_ttnn_lm_active", False) and self._ace_step_lm_jit_warmup_enabled():
+            codes_warm_ids = self._tokenize_prompt_for_warmup(formatted_prompt_with_cot)
+            codes_warmup_proc = self._setup_constrained_processor(
+                use_constrained_decoding=use_constrained_decoding,
+                constrained_decoding_debug=constrained_decoding_debug,
+                target_duration=target_duration,
+                user_metadata=None,
+                stop_at_reasoning=False,
+                skip_genres=True,
+                skip_caption=True,
+                skip_language=True,
+                generation_phase="codes",
+                is_batch=False,
+            )
+            if forced_dur > 0 and codes_warmup_proc is not None:
+                codes_warmup_proc.set_target_duration(forced_dur)
+            self._warmup_ttnn_lm_before_generate(
+                self.llm,
+                codes_warm_ids,
+                constrained_processor=codes_warmup_proc,
+                repetition_penalty=codes_repetition_penalty,
+                top_k=top_k,
+                top_p=codes_top_p,
+                temperature=codes_temperature,
+            )
+
+        phase2_start = time.time()
         progress(0.5, f"Phase 2: Generating audio codes for {actual_batch_size} items...")
         if is_batch:
             # Batch mode: generate codes for all items
@@ -2960,6 +3126,16 @@ class LocalFiveHzLMHandler:
         # Build logits processor for repetition penalty
         logits_processor = self._build_logits_processor(repetition_penalty)
 
+        self._warmup_ttnn_lm_before_generate(
+            model,
+            input_ids,
+            constrained_processor=constrained_processor,
+            repetition_penalty=repetition_penalty,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+        )
+
         with torch.inference_mode():
             if hasattr(model, "reset_decode_state"):
                 model.reset_decode_state()
@@ -3088,6 +3264,16 @@ class LocalFiveHzLMHandler:
 
         # Per-sequence finished tracking (Fix 4: batch compaction - stop when ALL done)
         seq_finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
+        self._warmup_ttnn_lm_before_generate(
+            model,
+            batch_input_ids[cond_start_idx : cond_start_idx + 1],
+            constrained_processor=constrained_processor,
+            repetition_penalty=repetition_penalty,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+        )
 
         with torch.inference_mode():
             if hasattr(model, "reset_decode_state"):

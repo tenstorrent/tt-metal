@@ -93,6 +93,17 @@ class AceStepFiveHzExperimentalTtnnCausalLM(nn.Module):
         self.qwen.reset_kv_cache()
         self._cursor = 0
 
+    def reset_decode_state_keep_traces(self) -> None:
+        """Clear KV/page-table state but retain captured prefill/decode traces."""
+        self.qwen.reset_kv_state_only()
+        self._cursor = 0
+
+    def warmup_generation_path(self, input_ids: torch.LongTensor) -> None:
+        """JIT + trace warmup before timed generation (Devstral-style)."""
+        self.qwen.warmup_jit_compile(input_ids)
+        self.qwen.warmup_trace_capture(input_ids)
+        self.reset_decode_state_keep_traces()
+
     def set_narrow_audio_vocab_indices(self, indices: torch.Tensor | None) -> None:
         """Forward narrow audio-code vocab band to the TTNN ``LMHead`` wrapper."""
         self.qwen.set_narrow_audio_vocab_indices(indices)
