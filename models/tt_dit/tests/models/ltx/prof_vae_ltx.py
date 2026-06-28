@@ -72,7 +72,9 @@ def _build_tt_decoder(mesh):
     torch_decoder.load_state_dict(state)
 
     # Match the BH (2,4) production config (create_pipeline device_configs): num_links=2.
-    ccl_manager = CCLManager(mesh, topology=ttnn.Topology.Linear, num_links=2)
+    # NP_LINKS overrides it to probe the W-transport bound (more links = more parallel bandwidth;
+    # only helps if the transport is bandwidth-bound, not the documented per-stick-latency bound).
+    ccl_manager = CCLManager(mesh, topology=ttnn.Topology.Linear, num_links=int(os.environ.get("NP_LINKS", "2")))
     parallel_config = VaeHWParallelConfig(
         height_parallel=ParallelFactor(factor=tuple(mesh.shape)[0], mesh_axis=0),
         width_parallel=ParallelFactor(factor=tuple(mesh.shape)[1], mesh_axis=1),
