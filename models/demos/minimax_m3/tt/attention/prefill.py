@@ -136,7 +136,7 @@ def prefill_forward(
     # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
     #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
     #     (msa_sp_attention_nocache): AllGather K/V/index_k across SP, keep q/index_q SP-sharded
-    #     (S/sp rows/device), per-device causal chunk_offset (cached_len + rank*S_local) -> SP-sharded
+    #     (S/sp rows/device), per-device causality via mesh-coord cluster_axis (cached_len + rank*S_local) -> SP-sharded
     #     output. num_groups = local KV heads (1 GQA group/KV head; 1 at TP=4). Degenerates to the
     #     full-context path at sp=1. cached_len is 0 for the first chunk (multi-chunk cache: TODO).
     #   Dense layers (0-2): plain causal GQA SDPA (exact at sp=1). SP dense via dense_sp_attention

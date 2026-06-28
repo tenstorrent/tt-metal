@@ -135,15 +135,16 @@ def msa_indexer_sparse(
 
 
 def msa_sp_attention_nocache(
-    q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cached_len, s_local, scale, num_groups=1
+    q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cached_len, s_local, scale, num_groups=1,
+    return_block_ids=False,
 ):
     """Sharded-query MSA under SP: AllGather only the KEYS; q/index_q stay sharded (S/sp rows/device).
 
-    Each device scores ONLY its own S/sp query rows against the gathered full context, with a per-device
-    causal `chunk_offset` (cached_len + rank*s_local). Output stays SP-sharded [1, Hq, s_local, head_dim]
-    — no replication, no reshard — which is what the SP residual stream needs. This is the deployed path
-    (vs the gather-everything golden, which gathers the query too). index_q is the device's group's index head; q is
-    its TP head-slice.
+    Each device scores ONLY its own S/sp query rows against the gathered full context, with per-device
+    causality from the op's native mesh-coord chunk_start (cluster_axis=sp_axis -> rank*s_local on top of
+    chunk_start_idx=cached_len). Output stays SP-sharded [1, Hq, s_local, head_dim] — no replication, no
+    reshard — which is what the SP residual stream needs. This is the deployed path (vs the gather-everything
+    golden, which gathers the query too). index_q is the device's group's index head; q is its TP head-slice.
     """
     sp_axis = mesh_config.sp_axis
     device = ccl_manager.mesh_device
