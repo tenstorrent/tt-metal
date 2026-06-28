@@ -107,5 +107,9 @@ void kernel_main() {
             OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input,
             PackTileReconfig::Output, OperandKind::Scalar,
             OperandKind::Col>(EltwiseShape::grid(B_q_t, D_t));
+
+        // Pop persistent state CBs for next Q-block
+        cb_pop_front(cb_sum_old, B_q_t);
+        cb_pop_front(cb_max_new, B_q_t);
     }
 }
