@@ -1902,10 +1902,11 @@ extern "C" uint32_t __emule_fabric_neighbor(uint32_t src_chip) {
 // shim's `hdr` and the teleport's `packet_header`, both the low-2GB L1 alias). KIND constants are mirrored
 // in the shim — KEEP IN SYNC.
 namespace emule_route_kind {
-constexpr uint32_t UNSET = 0, UNICAST_1D = 1, UNICAST_2D = 2, MCAST_2D = 4;
+constexpr uint32_t UNSET = 0, UNICAST_1D = 1, UNICAST_2D = 2, MCAST_1D = 3, MCAST_2D = 4;
 }
 struct EmuleRoute {
     uint32_t kind = 0, a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;
+    uint32_t dir_index = 0;  // 1D: which of the worker's connections (fwd=0/bwd=1), set at send time
 };
 static std::mutex g_route_meta_mu;
 static std::unordered_map<uint32_t, EmuleRoute> g_route_meta;
@@ -1913,7 +1914,42 @@ static std::unordered_map<uint32_t, EmuleRoute> g_route_meta;
 extern "C" void __emule_fabric_set_route(
     uint32_t hdr, uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f) {
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    g_route_meta[hdr] = EmuleRoute{kind, a, b, c, d, e, f};
+    auto& r = g_route_meta[hdr];
+    r.kind = kind; r.a = a; r.b = b; r.c = c; r.d = d; r.e = e; r.f = f;  // dir_index set separately at send
+}
+
+// Record the connection's direction-index for a 1D send (the sender knows fwd=0/bwd=1; the route-set
+// recorded the distance). Called from the sender's teleport_ just before the teleport.
+extern "C" void __emule_fabric_set_route_dir(uint32_t hdr, uint32_t conn_index) {
+    std::lock_guard<std::mutex> lk(g_route_meta_mu);
+    g_route_meta[hdr].dir_index = conn_index;
+}
+
+// Per-worker fabric connection routes, recorded host-side by append_fabric_connection_rt_args (the emule
+// analogue of the firmware connection table emule skips): for 1D the dst chip is bound to the connection,
+// not the header, so the host — which knows the forwarding_direction + the immediate neighbor for each
+// fwd/bwd connection — records them here, keyed by (src_chip, worker_core), in append order (fwd then bwd).
+struct ConnRoute {
+    uint32_t dir;       // RoutingDirection (N/E/S/W)
+    uint32_t neighbor;  // immediate neighbor physical chip
+};
+static std::mutex g_conn_route_mu;
+// Keyed by SRC CHIP only — the line direction is a per-chip property (every fabric send from chip X in a
+// given direction reaches the same neighbor), and the connection-owner core differs from the sending core
+// for some CCL ops, so a per-core key would miss. Deduped by direction; append order (fwd before bwd, per
+// the CCL builder) makes index 0=forward, 1=backward.
+static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
+extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor) {
+    (void)wx;
+    (void)wy;
+    std::lock_guard<std::mutex> lk(g_conn_route_mu);
+    auto& v = g_conn_route[src];
+    for (const auto& c : v) {
+        if (c.dir == dir) {
+            return;  // already recorded this direction for src
+        }
+    }
+    v.push_back(ConnRoute{dir, neighbor});
 }
 
 // Resolve the FINAL destination chip(s) for a send: a single chip for unicast, the line members for a
@@ -1932,6 +1968,14 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             return {__emule_fabric_neighbor(src_chip)};  // unstamped (e.g. 1D direct, not yet wired)
         }
         r = it->second;
+    }
+    static const bool rdbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
+    if (rdbg) {
+        std::lock_guard<std::mutex> lk(g_conn_route_mu);
+        auto cit = g_conn_route.find(src_chip);
+        fprintf(stderr, "[EMULE_FABRIC]   resolve src=%u kind=%u a=%u b=%u dir_idx=%u conns=%zu\n",
+                src_chip, r.kind, r.a, r.b, r.dir_index,
+                cit == g_conn_route.end() ? (size_t)0 : cit->second.size());
     }
     auto& cp = MetalContext::instance().get_control_plane();
     if (r.kind == emule_route_kind::UNICAST_2D) {  // a=dst_dev, b=dst_mesh
@@ -1958,8 +2002,39 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         if (!tgts.empty()) {
             return tgts;
         }
+    } else if (r.kind == emule_route_kind::UNICAST_1D || r.kind == emule_route_kind::MCAST_1D) {
+        // 1D: dst(s) are `distance` (unicast) or chips at hops [start, start+range) (multicast) in the
+        // worker's connection direction. The host recorded the per-(src,worker_core) connection routes
+        // (fwd/bwd) + their forwarding_direction; pick by the send's direction-index (clamped — a
+        // 2-chip-line worker has a single connection).
+        std::vector<ConnRoute> conns;
+        {
+            std::lock_guard<std::mutex> lk(g_conn_route_mu);
+            auto it = g_conn_route.find(src_chip);
+            if (it != g_conn_route.end()) {
+                conns = it->second;
+            }
+        }
+        if (!conns.empty()) {
+            const ConnRoute& cr = conns[r.dir_index < conns.size() ? r.dir_index : 0];
+            const auto& walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(cr.dir));
+            std::vector<uint32_t> tgts;
+            if (r.kind == emule_route_kind::UNICAST_1D) {
+                const uint32_t dist = r.a ? r.a : 1;
+                tgts.push_back(dist - 1 < walk.size() ? walk[dist - 1] : cr.neighbor);
+            } else {  // MCAST_1D: a=start_distance, b=range_hops
+                const uint32_t start = r.a ? r.a : 1;
+                const uint32_t range = r.b ? r.b : 1;
+                for (uint32_t hop = start; hop < start + range && hop - 1 < walk.size(); ++hop) {
+                    tgts.push_back(walk[hop - 1]);
+                }
+            }
+            if (!tgts.empty()) {
+                return tgts;
+            }
+        }
     }
-    // UNICAST_1D (needs connection direction; host hook step) and any fallthrough → neighbor.
+    // Fallthrough (unstamped / no recorded connection) → neighbor.
     return {__emule_fabric_neighbor(src_chip)};
 }
 
