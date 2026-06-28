@@ -57,6 +57,10 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>  // fabric route table (multi-chip dst resolve)
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
+#include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>     // RoutingDirection
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/tile_counter.hpp"
@@ -1252,6 +1256,13 @@ static std::map<std::string, std::string> build_kernel_defines(
         }
     }
     defines["NUM_NOCS"] = std::to_string(NUM_NOCS);
+    // Fabric routing mode for the emule packet-header stamping shims. The real
+    // fabric_set_line_unicast_route dispatches 1D-vs-2D on the header TYPE, but emule aliases
+    // LowLatencyPacketHeader == HybridMeshPacketHeader (one 64B layout), so the shim cannot tell
+    // them apart by type — it disambiguates on this build-mode define instead.
+    if (tt::tt_fabric::is_2d_fabric_config(MetalContext::instance().get_fabric_config())) {
+        defines["EMULE_FABRIC_2D"] = "1";
+    }
     // Upstream tensor/dspec.h gates `get_common_arg_addr` as a forward-decl
     // under KERNEL_BUILD; emule's jit_kernel_stubs.hpp provides the definition.
     // Without KERNEL_BUILD, dspec.h emits a stub that collides with emule's.
@@ -1747,6 +1758,56 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
     return core_map.get();
 }
 
+// ---------------------------------------------------------------------------
+// Fabric route table: resolve the FINAL destination chip for a fabric send by walking the control-plane
+// mesh graph (a static topology lookup, NOT multi-hop router simulation — then teleport). 1D dst =
+// (src, RoutingDirection, distance); 2D dst = explicit FabricNodeId via the control plane directly. The
+// 2-chip case is the degenerate distance-1 single-neighbor walk, subsuming __emule_fabric_neighbor.
+// ---------------------------------------------------------------------------
+static std::mutex g_fabric_route_mutex;
+// (src_chip << 3 | dir) -> ordered chips at distance 1,2,... in that direction (cached; topology is static).
+static std::unordered_map<uint32_t, std::vector<uint32_t>> g_fabric_walk_cache;
+
+// Immediate same-mesh neighbor physical chip of `chip` in `dir`, or -1 if none.
+static int __emule_fabric_dir_neighbor(
+    tt::tt_fabric::ControlPlane& cp, uint32_t chip, tt::tt_fabric::RoutingDirection dir) {
+    try {
+        auto node = cp.get_fabric_node_id_from_physical_chip_id(static_cast<ChipId>(chip));
+        auto neighbors = cp.get_chip_neighbors(node, dir);
+        for (auto& [mesh, chips] : neighbors) {
+            if (!chips.empty()) {
+                return static_cast<int>(cp.get_physical_chip_id_from_fabric_node_id(
+                    tt::tt_fabric::FabricNodeId(mesh, static_cast<std::uint32_t>(chips.front()))));
+            }
+        }
+    } catch (...) {
+        // control plane unavailable / chip not in graph — caller falls back to the neighbor table
+    }
+    return -1;
+}
+
+// Ordered chips reachable from `src` at distance 1,2,... in `dir` (line or ring), cached.
+static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fabric::RoutingDirection dir) {
+    std::lock_guard<std::mutex> lock(g_fabric_route_mutex);
+    uint32_t key = (src << 3) | static_cast<uint32_t>(dir);
+    auto it = g_fabric_walk_cache.find(key);
+    if (it != g_fabric_walk_cache.end()) {
+        return it->second;
+    }
+    std::vector<uint32_t> walk;
+    auto& cp = MetalContext::instance().get_control_plane();
+    uint32_t cur = src;
+    for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop (loudbox = 8)
+        int nxt = __emule_fabric_dir_neighbor(cp, cur, dir);
+        if (nxt < 0 || static_cast<uint32_t>(nxt) == src) {
+            break;  // line end, or ring wrapped back to the source
+        }
+        walk.push_back(static_cast<uint32_t>(nxt));
+        cur = static_cast<uint32_t>(nxt);
+    }
+    return g_fabric_walk_cache.emplace(key, std::move(walk)).first->second;
+}
+
 // ===========================================================================
 // Fabric teleport hooks (multi-chip CCL). emule intercepts the fabric client API
 // (WorkerToFabricEdmSender) in the jit_hw shadow and routes each send here. We do
@@ -1761,8 +1822,13 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
 // against the destination chip's cached core map (already built by that chip's launch).
 extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t noc_addr) {
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
+    static const bool rdbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
     auto it = g_core_map_cache.find(dst_chip);
     if (it == g_core_map_cache.end() || !it->second) {
+        if (rdbg) {
+            fprintf(stderr, "[EMULE_FABRIC]   resolve_remote: NO CORE MAP for dst_chip=%u (cache has %zu chips)\n",
+                    dst_chip, g_core_map_cache.size());
+        }
         return nullptr;
     }
     auto& m = *it->second;
@@ -1806,6 +1872,10 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
         }
     }
     if (cit == m.end()) {
+        if (rdbg) {
+            fprintf(stderr, "[EMULE_FABRIC]   resolve_remote: dst_chip=%u has map (%zu cores) but core (%u,%u) NOT FOUND\n",
+                    dst_chip, m.size(), noc_x, noc_y);
+        }
         return nullptr;
     }
     uint32_t offset = (cit->second->role() == tt_emule::CoreRole::WORKER)
@@ -1825,37 +1895,85 @@ extern "C" uint32_t __emule_fabric_neighbor(uint32_t src_chip) {
     return src_chip;
 }
 
-// Top-level teleport: decode the real-layout packet header (NocCommandFields @0, payload_size @40,
-// noc_send_type @42), resolve the destination chip + core, and apply the terminal NOC command.
-// payload/payload_size are the bytes staged by a prior send_payload_without_header* call (may be null
-// for header-only commands such as a bare atomic-inc).
-extern "C" void __emule_fabric_teleport(const void* packet_header, const void* payload, uint32_t payload_size) {
-    const uint8_t* h = static_cast<const uint8_t*>(packet_header);
-    if (h == nullptr) {
-        return;
-    }
-    const uint32_t dst_chip = __emule_fabric_neighbor(__emule_self->chip_id);
-    const uint16_t hdr_payload_size = *reinterpret_cast<const uint16_t*>(h + 40);
-    const uint8_t noc_send_type = *(h + 42);
-    const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
-    const uint32_t size = payload_size ? payload_size : hdr_payload_size;
-    static const bool dbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
-    if (dbg) {
-        uint8_t* dd = __emule_fabric_resolve_remote(dst_chip, noc_address);
-        fprintf(
-            stderr,
-            "[EMULE_FABRIC] teleport src=%u dst=%u send_type=%u noc_addr=0x%llx payload_size=%u resolved=%p\n",
-            __emule_self->chip_id, dst_chip, noc_send_type, (unsigned long long)noc_address, size, (void*)dd);
-    }
+// emule route metadata, keyed by packet-header L1-alias address. The kernel knows the dst only
+// semantically (2D explicit FabricNodeId, 1D hop distance, or a line-multicast extent), so the
+// fabric_set_*_route shims (tt-emule __emule_fabric_stubs.h) record it here via __emule_fabric_set_route;
+// the teleport resolves it to physical chip(s). Keyed by header address (stable + identical between the
+// shim's `hdr` and the teleport's `packet_header`, both the low-2GB L1 alias). KIND constants are mirrored
+// in the shim — KEEP IN SYNC.
+namespace emule_route_kind {
+constexpr uint32_t UNSET = 0, UNICAST_1D = 1, UNICAST_2D = 2, MCAST_2D = 4;
+}
+struct EmuleRoute {
+    uint32_t kind = 0, a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;
+};
+static std::mutex g_route_meta_mu;
+static std::unordered_map<uint32_t, EmuleRoute> g_route_meta;
 
+extern "C" void __emule_fabric_set_route(
+    uint32_t hdr, uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f) {
+    std::lock_guard<std::mutex> lk(g_route_meta_mu);
+    g_route_meta[hdr] = EmuleRoute{kind, a, b, c, d, e, f};
+}
+
+// Resolve the FINAL destination chip(s) for a send: a single chip for unicast, the line members for a
+// multicast. Gated by EMULE_FABRIC8 (off → legacy single neighbor, byte-for-byte today's behavior; the
+// 2-chip case is the degenerate distance-1 neighbor, so gate-on subsumes it — single code path).
+static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, uint32_t src_chip) {
+    static const bool fabric8 = std::getenv("EMULE_FABRIC8") != nullptr;
+    if (!fabric8) {
+        return {__emule_fabric_neighbor(src_chip)};
+    }
+    EmuleRoute r;
+    {
+        std::lock_guard<std::mutex> lk(g_route_meta_mu);
+        auto it = g_route_meta.find(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(h)));
+        if (it == g_route_meta.end()) {
+            return {__emule_fabric_neighbor(src_chip)};  // unstamped (e.g. 1D direct, not yet wired)
+        }
+        r = it->second;
+    }
+    auto& cp = MetalContext::instance().get_control_plane();
+    if (r.kind == emule_route_kind::UNICAST_2D) {  // a=dst_dev, b=dst_mesh
+        try {
+            return {static_cast<uint32_t>(cp.get_physical_chip_id_from_fabric_node_id(
+                tt::tt_fabric::FabricNodeId(tt::tt_fabric::MeshId{r.b}, r.a)))};
+        } catch (...) {
+        }
+    } else if (r.kind == emule_route_kind::MCAST_2D) {
+        // Line multicast: a=start dst_dev, b=dst_mesh, {c,d,e,f}={E,W,N,S} hop counts. Walk each non-zero
+        // direction from src and collect the chips (the teleport replays the terminal op to each).
+        using RD = tt::tt_fabric::RoutingDirection;
+        const std::pair<RD, uint32_t> dirs[4] = {{RD::E, r.c}, {RD::W, r.d}, {RD::N, r.e}, {RD::S, r.f}};
+        std::vector<uint32_t> tgts;
+        for (const auto& [dir, hops] : dirs) {
+            if (hops == 0) {
+                continue;
+            }
+            const auto& walk = __emule_fabric_walk(src_chip, dir);
+            for (uint32_t k = 0; k < hops && k < walk.size(); ++k) {
+                tgts.push_back(walk[k]);
+            }
+        }
+        if (!tgts.empty()) {
+            return tgts;
+        }
+    }
+    // UNICAST_1D (needs connection direction; host hook step) and any fallthrough → neighbor.
+    return {__emule_fabric_neighbor(src_chip)};
+}
+
+// Apply the terminal NOC command of a fabric send to ONE destination chip's L1 (the per-target delivery,
+// looped over by the teleport for multicast).
+static void __emule_fabric_deliver(
+    uint32_t dst_chip, const uint8_t* h, const void* payload, uint32_t size, uint8_t noc_send_type, bool dbg) {
+    const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
     switch (noc_send_type) {
         case 0: {  // NOC_UNICAST_WRITE
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
             if (d != nullptr && payload != nullptr && size > 0) {
                 std::memcpy(d, payload, size);
                 std::atomic_thread_fence(std::memory_order_release);
-                // Fiber model: a peer fiber may be parked on this address (e.g. a CB/data poll).
-                // The write changed its sync object, so re-queue it (no-op if none parked).
                 __emule_fiber_wake(d);
             }
             break;
@@ -1865,7 +1983,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             uint8_t* d = __emule_fabric_resolve_remote(dst_chip, noc_address);
             if (d != nullptr) {
                 reinterpret_cast<std::atomic<uint32_t>*>(d)->store(value, std::memory_order_release);
-                __emule_fiber_wake(d);  // wake the peer fiber parked on this semaphore (set)
+                __emule_fiber_wake(d);
             }
             break;
         }
@@ -1875,9 +1993,10 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             if (d != nullptr) {
                 uint32_t old = reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
                 if (dbg) {
-                    fprintf(stderr, "[EMULE_FABRIC]   atomic_inc dst=%p %u->%u (val=%u)\n", (void*)d, old, old + val, val);
+                    fprintf(stderr, "[EMULE_FABRIC]   atomic_inc chip=%u dst=%p %u->%u (val=%u)\n",
+                            dst_chip, (void*)d, old, old + val, val);
                 }
-                __emule_fiber_wake(d);  // wake the peer fiber parked on this semaphore (the CCL handshake)
+                __emule_fiber_wake(d);
             }
             break;
         }
@@ -1893,7 +2012,7 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             uint8_t* s = __emule_fabric_resolve_remote(dst_chip, sem_addr);
             if (s != nullptr) {
                 reinterpret_cast<std::atomic<uint32_t>*>(s)->fetch_add(val, std::memory_order_release);
-                __emule_fiber_wake(s);  // wake the peer fiber parked on the fused semaphore
+                __emule_fiber_wake(s);
             }
             break;
         }
@@ -1915,8 +2034,56 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
             break;
         }
         default:
-            // MCAST (5,6) — implemented in a later milestone.
-            break;
+            break;  // 5/6 native multicast send-types: emule expresses multicast via the target list above
+    }
+}
+
+// Top-level teleport: decode the real-layout packet header (NocCommandFields @0, payload_size @40,
+// noc_send_type @42), resolve the destination chip + core, and apply the terminal NOC command.
+// payload/payload_size are the bytes staged by a prior send_payload_without_header* call (may be null
+// for header-only commands such as a bare atomic-inc).
+extern "C" void __emule_fabric_teleport(const void* packet_header, const void* payload, uint32_t payload_size) {
+    const uint8_t* h = static_cast<const uint8_t*>(packet_header);
+    if (h == nullptr) {
+        return;
+    }
+    const uint16_t hdr_payload_size = *reinterpret_cast<const uint16_t*>(h + 40);
+    const uint8_t noc_send_type = *(h + 42);
+    const uint32_t size = payload_size ? payload_size : hdr_payload_size;
+    const uint32_t src_chip = __emule_self->chip_id;
+    const std::vector<uint32_t> targets = __emule_fabric_resolve_targets(h, src_chip);
+    static const bool dbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
+    if (dbg) {
+        const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
+        std::string ts;
+        for (auto t : targets) {
+            ts += " " + std::to_string(t);
+        }
+        fprintf(stderr,
+                "[EMULE_FABRIC] teleport src=%u targets=[%s ] (neighbor=%u) send_type=%u noc_addr=0x%llx "
+                "payload_size=%u\n",
+                src_chip, ts.c_str(), __emule_fabric_neighbor(src_chip), noc_send_type,
+                (unsigned long long)noc_address, size);
+        // Route-table self-consistency: dump this src chip's per-direction distance walk (once per src).
+        static std::mutex dump_mu;
+        static std::unordered_map<uint32_t, bool> dumped;
+        std::lock_guard<std::mutex> lk(dump_mu);
+        if (!dumped[src_chip]) {
+            dumped[src_chip] = true;
+            const char* dn[4] = {"N", "E", "S", "W"};
+            for (int d = 0; d < 4; ++d) {
+                const auto& w = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(d));
+                std::string s;
+                for (auto c : w) {
+                    s += " " + std::to_string(c);
+                }
+                fprintf(stderr, "[EMULE_FABRIC]   route src=%u dir=%s walk=[%s ]\n", src_chip, dn[d], s.c_str());
+            }
+        }
+    }
+    // One target for unicast; the line members for a multicast. Replay the terminal NOC op to each.
+    for (uint32_t dst_chip : targets) {
+        __emule_fabric_deliver(dst_chip, h, payload, size, noc_send_type, dbg);
     }
 }
 
