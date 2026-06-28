@@ -59,9 +59,19 @@
 //   - BroadcastDim::None (both operands are Col0 [B_q_t, 1] — same shape)
 //   - Shape: B_q_t tiles (1D column vector)
 //
-// DPRINT: cb_sum_old tile 0, first 4×4 elements — l rescaled by alpha.
+// Stage 13 (update_m): m_i = m_new via eltwise copy.
+//
+// Stage 14 (output): Final output normalization O = O / l_i and drain to writer.
+//   (a) Accumulate: O += P@V → add(cb_o, cb_o_accum) → cb_exp_scores (non-in-place
+//       to avoid consecutive in-place Streaming ops on cb_o after Stage 6).
+//   (b) Recip l_i: unary<Recip>(cb_sum_new) in-place (first in-place op on this CB
+//       since Stage 10 reduce pushed tiles).
+//   (c) Normalize: mul(cb_exp_scores, recip_l, cb_o, Col broadcast) → cb_o.
+//   (d) Writer drains cb_o to DRAM output.
+//
+// DPRINT: cb_o tile 0, first 4×4 — final O / l_i.
 // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front and
-// cb_pop_front). On the first KV-block, l_old=0 and alpha=0, so l stays 0.
+// cb_pop_front). The writer kernel reads cb_o and writes to DRAM.
 
 #include <cstdint>
 
@@ -84,6 +94,7 @@ void kernel_main() {
     constexpr uint32_t cb_scale_factor = 5;
     constexpr uint32_t cb_alpha = 8;
     constexpr uint32_t cb_o = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out = tt::CBIndex::c_17;
     constexpr uint32_t cb_scores = 24;
     constexpr uint32_t cb_scores_masked = 25;
     constexpr uint32_t cb_max_new = 26;
@@ -141,6 +152,7 @@ void kernel_main() {
     // The mul helper with default BinaryDataFormatReconfig::Input reconfigures
     // the unpacker from matmul to eltwise format.
     constexpr uint32_t num_score_tiles = B_q_t * B_kv_t;  // 16
+    constexpr uint32_t num_o_tiles = B_q_t * D_t;         // 16 for D=128
     mul<
         /*CbA=*/cb_scores,
         /*CbB=*/cb_scale_factor,
@@ -578,6 +590,86 @@ void kernel_main() {
         cb_wait_front(cb_max_old, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
         DPRINT("stage_13 update_m:\n{}\n", TileSlice(cb_max_old, 0, sr, true, true));
+    }
+#endif
+
+    // --- Stage 14: Final output: O = O / l_i ---
+    // After all KV-blocks, normalize the running output O by the running sum l_i.
+    // Two sub-steps:
+    //   (a) Compute recip(l_i): unary<Recip> in-place on cb_sum_new.
+    //   (b) Normalize: O = O * recip(l_i) → cb_out (Col broadcast).
+    //
+    // On the first (and only) KV-block, O_rescaled = alpha * O_old = 0 (alpha=0
+    // because m_old=-inf), so O = 0 + P@V = P@V = cb_o_accum. We use cb_o_accum
+    // directly as the numerator, avoiding the need to read cb_o (which was used
+    // in-place in Stage 6 and has an invalid read pointer for subsequent
+    // Streaming reads — same issue as Stage 11's in-place add on cb_sum_old).
+    //
+    // CB state entering Stage 14 (after Stage 13):
+    //   cb_o_accum: 16 tiles (P@V from Stage 12 matmul; never popped since)
+    //   cb_sum_new: 4 tiles (l_blk from Stage 10 reduce; Stage 11 printed but
+    //     didn't pop — on first KV-block, l_i = l_blk = cb_sum_new)
+    //   cb_out: empty (final output CB, drained by writer)
+
+    // --- Stage 14a: Compute recip(l_i) ---
+    // recip_l = 1 / l_i → cb_sum_new (in-place unary<Recip>).
+    //   CbIn  = cb_sum_new (4 tiles, Streaming — per-tile wait+pop)
+    //   CbOut = cb_sum_new (in-place: CbIn == CbOut, Streaming — per-tile reserve+push)
+    //   This is the first in-place Streaming op on cb_sum_new since Stage 10's
+    //   reduce pushed 4 tiles (WaitUpfrontNoPop). The reduce pushed tiles; this
+    //   unary pops and pushes them in-place.
+    //
+    // CopyTileReconfig::Input (default): reconfigures unpacker from eltwise copy
+    // (Stage 13) to eltwise unary format.
+    // PackTileReconfig::Output (default): reconfigures packer from cb_max_old
+    // to cb_sum_new format.
+    unary<
+        /*SfpuOp=*/Recip<>,
+        /*CbIn=*/cb_sum_new,
+        /*CbOut=*/cb_sum_new>(B_q_t);
+
+    // --- Stage 14b: Normalize O by recip(l_i) ---
+    // O = O * recip(l_i) → cb_out (Col broadcast: recip_l is per-row, O is 2D)
+    //   CbA  = cb_o_accum   (B_q_t * D_t = 16 tiles, Streaming — per-tile wait+pop)
+    //   CbB  = cb_sum_new   (B_q_t = 4 tiles, HeldBulk — wait upfront, no pop)
+    //   CbOut = cb_out       (Streaming — per-tile reserve+push; cb_out starts empty)
+    //   BroadcastDim::Col: recip_l tile[ht] broadcasts across all D_t column tiles
+    //   OperandKind::Scalar for A (front-relative streaming, reads tile 0 per iter)
+    //   OperandKind::Col   for B (reads tile ht per row, window = Ht = B_q_t)
+    //   Shape: EltwiseShape::grid(B_q_t, D_t) — 2D for Col broadcast
+    //
+    // Using cb_out (a separate empty CB) instead of cb_o avoids a race where
+    // the writer drains cb_o before compute finishes. cb_out starts empty, so
+    // the writer blocks on cb_wait_front until compute pushes tiles.
+    //
+    // BinaryDataFormatReconfig::Input (default): reconfigures unpacker from
+    // eltwise unary (Stage 14a recip) to eltwise binary format.
+    // PackTileReconfig::Output (default): reconfigures packer from cb_sum_new
+    // to cb_out format.
+    mul<
+        /*CbA=*/cb_o_accum,
+        /*CbB=*/cb_sum_new,
+        /*CbOut=*/cb_out,
+        /*Bcast=*/BroadcastDim::Col,
+        /*ALife=*/InputLifecycle::Streaming,
+        /*BLife=*/InputLifecycle::HeldBulk,
+        /*OutLife=*/OutputLifecycle::Streaming,
+        /*Reconfig=*/BinaryDataFormatReconfig::Input,
+        /*OutReconfig=*/PackTileReconfig::Output,
+        /*AIdx=*/OperandKind::Scalar,
+        /*BIdx=*/OperandKind::Col>(EltwiseShape::grid(B_q_t, D_t));
+
+    // --- Stage 14 DPRINT: cb_out tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the normalize mul completes, cb_out holds the
+    // final output O / l_i. We wait_front tile 0, print it, then leave it
+    // (no pop — the writer kernel drains cb_out to DRAM).
+    // Values should match reference: output = O / l_i.
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_out, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_14 output:\n{}\n", TileSlice(cb_out, 0, sr, true, true));
     }
 #endif
 }

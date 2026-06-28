@@ -95,6 +95,7 @@ def create_program_descriptor(
     CB_SCALE_FACTOR = 5
     CB_ALPHA = 8
     CB_O = 16
+    CB_OUT = 17  # Final output CB (normalized O / l_i). Writer drains to DRAM.
     CB_SCORES = 24
     CB_SCORES_MASKED = 25
     CB_MAX_NEW = 26
@@ -177,6 +178,17 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_O, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_out: final normalized output (O / l_i), B_q_t * D_t tiles. Starts
+        # empty — compute writes the normalized result here in Stage 14, and the
+        # writer drains it to DRAM. Using a separate CB avoids a race where the
+        # writer drains cb_o before compute finishes accumulating/normalizing.
+        ttnn.CBDescriptor(
+            total_size=num_o_tiles * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_OUT, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_scores: Q@K^T score matmul output (16 tiles).
@@ -277,10 +289,14 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # --- Writer (stub) ---
-    writer_ct_args = []
+    # --- Writer ---
+    # CT args: [num_o_tiles, ...TensorAccessorArgs(output)]
+    writer_ct_args = [num_o_tiles]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    # RT args: [output_addr, start_id]
     writer_rt_args = ttnn.RuntimeArgs()
-    writer_rt_args[core.x][core.y] = []
+    writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), 0]
 
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
