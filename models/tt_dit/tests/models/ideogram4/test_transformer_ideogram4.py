@@ -128,12 +128,13 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype, n
     [
         # factor == submesh axis size. TP shards heads (padded to a multiple of tp);
         # SP shards the sequence (ring attention). Full mesh is the 2x4 BH loudbox.
+        # factor == submesh axis size; sp on axis 0 (size up to 2), tp on axis 1 (size up to 4).
         pytest.param((2, 4), (1, 1), 0, 1, 1, id="tp1sp1"),  # regression: single device
         pytest.param((2, 4), (1, 2), 0, 1, 1, id="tp2"),  # 18 heads % 2 == 0, no padding
         pytest.param((2, 4), (1, 4), 0, 1, 1, id="tp4_pad20"),  # 18 -> 20 heads
-        pytest.param((2, 4), (2, 1), 1, 0, 1, id="sp2"),  # sequence parallel only
-        pytest.param((2, 4), (2, 2), 1, 0, 1, id="sp2tp2"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="sp2tp4_pad20"),
+        pytest.param((2, 4), (2, 1), 0, 1, 1, id="sp2"),  # sequence parallel only (TP=1)
+        pytest.param((2, 4), (2, 2), 0, 1, 1, id="sp2tp2"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, id="sp2tp4_pad20"),  # SP=2, TP=4 (pad 20)
     ],
     indirect=["mesh_device"],
 )
