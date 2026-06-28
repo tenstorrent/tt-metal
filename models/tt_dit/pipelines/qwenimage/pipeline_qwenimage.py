@@ -261,7 +261,8 @@ class QwenImagePipeline(PipelineAPIMixin):
             )
             for mgr in self._ccl_managers
         ]
-        self._tracers = [Tracer(self._traced_step, device=device, prep_run=False) for device in self._submesh_devices]
+        # Mesh reshape invalidates the cache, so prep_run must be True.
+        self._tracers = [Tracer(self._traced_step, device=device, prep_run=True) for device in self._submesh_devices]
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(self._checkpoint_name, subfolder="scheduler")
         self._solvers = [EulerSolver() for _ in self._submesh_devices]
         self._transformers_loaded = False

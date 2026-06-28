@@ -113,13 +113,15 @@ class TextEncoder:
                 parallel_config=parallel_config,
             )
             self._text_encoder_3.load_torch_state_dict(torch_text_encoder_3.state_dict())
-            self._t5_tracer = Tracer(self._text_encoder_3.forward, device=device, prep_run=False)
+            # Mesh reshape invalidates the cache, so prep_run must be True.
+            self._t5_tracer = Tracer(self._text_encoder_3.forward, device=device, prep_run=True)
         else:
             self._text_encoder_3 = None
             self._t5_tracer = None
 
-        self._clip_tracer_1 = Tracer(self._text_encoder_1.forward, device=device, prep_run=False)
-        self._clip_tracer_2 = Tracer(self._text_encoder_2.forward, device=device, prep_run=False)
+        # Mesh reshape invalidates the cache, so prep_run must be True.
+        self._clip_tracer_1 = Tracer(self._text_encoder_1.forward, device=device, prep_run=True)
+        self._clip_tracer_2 = Tracer(self._text_encoder_2.forward, device=device, prep_run=True)
 
     @property
     def t5_enabled(self) -> bool:

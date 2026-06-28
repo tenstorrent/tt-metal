@@ -190,7 +190,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         ]
         self.synchronize_devices()
 
-        self._tracers = [Tracer(self._traced_step, device=submesh, prep_run=False) for submesh in self.submesh_devices]
+        # Mesh reshape invalidates the cache, so prep_run must be True.
+        self._tracers = [Tracer(self._traced_step, device=submesh, prep_run=True) for submesh in self.submesh_devices]
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
         self._solvers = [EulerSolver() for _ in self.submesh_devices]
 

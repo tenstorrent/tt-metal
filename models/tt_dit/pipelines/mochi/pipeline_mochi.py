@@ -267,7 +267,8 @@ class MochiPipeline(PipelineAPIMixin):
             parallel_config=self.parallel_config,
             is_fsdp=True,
         )
-        self._tracer = Tracer(self._transformer.forward, device=device, prep_run=False)
+        # Mesh reshape invalidates the cache, so prep_run must be True.
+        self._tracer = Tracer(self._transformer.forward, device=device, prep_run=True)
 
         self._checkpoint.load(
             self._transformer,
