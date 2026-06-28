@@ -25,11 +25,21 @@ from models.experimental.audiox.tt.decoder_policy import (
 )
 
 
-_LONG_SEQUENCE_THRESHOLD = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_THRESHOLD", "131072"))
+_LONG_SEQUENCE_THRESHOLD = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_THRESHOLD", "65536"))
 _LONG_SEQUENCE_CHUNK = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_CHUNK", "65536"))
-_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "32"))
+_MID_CHANNEL_LONG_SEQUENCE_THRESHOLD = int(
+    os.getenv("AUDIOX_TT_MID_CHANNEL_LONG_SEQUENCE_THRESHOLD", "32768")
+)
+_CONV1D_DRAM_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_WIDTH_SLICES", "0"))
+_CONV1D_LOW_CHANNEL_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV1D_LOW_CHANNEL_WIDTH_SLICES", "3"))
+_CONV1D_LOW_CHANNEL_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV1D_LOW_CHANNEL_ACT_BLOCK_H", "0"))
+_CONV1D_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV1D_ACT_BLOCK_H", "32"))
 _CONV_TRANSPOSE_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_SLICES", "64"))
 _CONV_TRANSPOSE_LONG_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_HEIGHT_SLICES", "512"))
+_CONV_TRANSPOSE_LONG_WIDTH_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_WIDTH_SLICES", "0"))
+_CONV_TRANSPOSE_LONG_WIDE_CHANNEL_WIDTH_SLICES = int(
+    os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_WIDE_CHANNEL_WIDTH_SLICES", "32")
+)
 _CONV_TRANSPOSE_LONG_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_ACT_BLOCK_H", "0"))
 _CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H", "32"))
 _CONV_TRANSPOSE_STRIDE4_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_STRIDE4_ACT_BLOCK_H", "64"))
@@ -104,6 +114,23 @@ def _split_stream_chunks(chunks: list[ttnn.Tensor], max_chunk_length: int) -> li
             split_chunks.append(_slice_time(chunk, start, end))
         ttnn.deallocate(chunk, force=True)
     return split_chunks
+
+
+def _deallocate_prepared_cache(cache: dict) -> None:
+    for weight, bias in cache.values():
+        ttnn.deallocate(weight, force=True)
+        if bias is not None:
+            ttnn.deallocate(bias, force=True)
+    cache.clear()
+
+
+def _conv_compute_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
 
 
 def reconstruct_wn_weight(state_dict: dict, prefix: str) -> torch.Tensor:
@@ -182,32 +209,52 @@ def _conv1d(
     batch_size: int,
     input_length: int,
     label: str = "",
+    prepared_cache: dict | None = None,
 ):
     """Wrapper around ``ttnn.conv1d`` that returns an interleaved TILE
     tensor of shape ``[B, L_out, 1, C_out]`` so the next pointwise op can
     consume it directly."""
-    conv_config = ttnn.Conv1dConfig(
+    conv_config_kwargs = dict(
         weights_dtype=ttnn.bfloat8_b,
         deallocate_activation=True,
         reallocate_halo_output=True,
         config_tensors_in_dram=True,
-        act_block_h_override=32,
     )
+    act_block_h = _CONV1D_ACT_BLOCK_H
+    if _CONV1D_LOW_CHANNEL_ACT_BLOCK_H > 0 and out_channels <= 128:
+        act_block_h = _CONV1D_LOW_CHANNEL_ACT_BLOCK_H
+    if act_block_h > 0:
+        conv_config_kwargs["act_block_h_override"] = act_block_h
+    conv_config = ttnn.Conv1dConfig(**conv_config_kwargs)
     _debug_decoder(
         f"conv1d {label} in_ch={in_channels} out_ch={out_channels} k={kernel_size} "
         f"dil={dilation} pad={padding} batch={batch_size} input_length={input_length}"
     )
-    if input_length >= _LONG_SEQUENCE_THRESHOLD:
+    cache_key = (batch_size, input_length)
+    cached = None if prepared_cache is None else prepared_cache.get(cache_key)
+    cached_weight, cached_bias = cached if cached is not None else (None, None)
+    use_dram_slicing = input_length >= _LONG_SEQUENCE_THRESHOLD or (
+        out_channels >= 256 and input_length >= _MID_CHANNEL_LONG_SEQUENCE_THRESHOLD
+    )
+    if use_dram_slicing:
+        width_slices = _CONV1D_DRAM_WIDTH_SLICES
+        if out_channels <= 128:
+            width_slices = _CONV1D_LOW_CHANNEL_WIDTH_SLICES
         x_4d = ttnn.reshape(x, (batch_size, 1, input_length, in_channels))
-        weight_4d = ttnn.reshape(weight, (out_channels, in_channels, 1, kernel_size))
+        weight_4d = (
+            cached_weight
+            if cached_weight is not None
+            else ttnn.reshape(weight, (out_channels, in_channels, 1, kernel_size))
+        )
+        conv_bias = cached_bias if cached is not None else bias
         dram_slice_config = ttnn.Conv2dSliceConfig(
             slice_type=ttnn.Conv2dDRAMSliceWidth,
-            num_slices=_CONV1D_DRAM_WIDTH_SLICES,
+            num_slices=width_slices,
         )
-        out, [_, out_length] = ttnn.conv2d(
+        out, [_, out_length], [prepared_weight, prepared_bias] = ttnn.conv2d(
             input_tensor=x_4d,
             weight_tensor=weight_4d,
-            bias_tensor=bias,
+            bias_tensor=conv_bias,
             device=device,
             in_channels=in_channels,
             out_channels=out_channels,
@@ -220,12 +267,15 @@ def _conv1d(
             dilation=(1, dilation),
             groups=1,
             conv_config=conv_config,
+            compute_config=_conv_compute_config(device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             slice_config=dram_slice_config,
             return_output_dim=True,
-            return_weights_and_bias=False,
+            return_weights_and_bias=True,
         )
+        if prepared_cache is not None:
+            prepared_cache[cache_key] = (prepared_weight, prepared_bias)
         if out.is_sharded():
             out = ttnn.sharded_to_interleaved(out)
         if out_length < _LONG_SEQUENCE_THRESHOLD:
@@ -240,10 +290,12 @@ def _conv1d(
         out = _concat_time(chunks)
         return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 
-    out, out_length = ttnn.conv1d(
+    conv_weight = cached_weight if cached is not None else weight
+    conv_bias = cached_bias if cached is not None else bias
+    out, out_length, [prepared_weight, prepared_bias] = ttnn.conv1d(
         input_tensor=x,
-        weight_tensor=weight,
-        bias_tensor=bias,
+        weight_tensor=conv_weight,
+        bias_tensor=conv_bias,
         device=device,
         in_channels=in_channels,
         out_channels=out_channels,
@@ -255,10 +307,13 @@ def _conv1d(
         dilation=dilation,
         groups=1,
         conv_config=conv_config,
+        compute_config=_conv_compute_config(device),
         dtype=ttnn.bfloat8_b,
         return_output_dim=True,
-        return_weights_and_bias=False,
+        return_weights_and_bias=True,
     )
+    if prepared_cache is not None:
+        prepared_cache[cache_key] = (prepared_weight, prepared_bias)
     if out.is_sharded():
         out = ttnn.sharded_to_interleaved(out)
     out = ttnn.reshape(out, (batch_size, out_length, 1, out_channels))
@@ -291,6 +346,8 @@ class TtResidualUnit:
         self.b1 = ttnn.from_torch(b1.reshape(1, 1, 1, -1), dtype=ttnn.float32)
         self.w2 = ttnn.from_torch(w2, dtype=ttnn.float32)
         self.b2 = ttnn.from_torch(b2.reshape(1, 1, 1, -1), dtype=ttnn.float32)
+        self.w1_cache = {}
+        self.w2_cache = {}
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # x: [B, T, 1, C] TILE.
@@ -311,6 +368,7 @@ class TtResidualUnit:
             batch_size=batch_size,
             input_length=input_length,
             label=f"resunit[d={self.dilation}].conv7",
+            prepared_cache=self.w1_cache,
         )
 
         h = self.act2(h)
@@ -328,6 +386,7 @@ class TtResidualUnit:
             batch_size=batch_size,
             input_length=input_length,
             label=f"resunit[d={self.dilation}].conv1",
+            prepared_cache=self.w2_cache,
         )
 
         return ttnn.add(x, h)
@@ -354,6 +413,7 @@ class TtResidualUnit:
                 batch_size=chunk.shape[0],
                 input_length=ext_length,
                 label=f"resunit[d={self.dilation}].conv7",
+                prepared_cache=self.w1_cache,
             )
             h = _slice_time(h, left_len, left_len + chunk.shape[1])
 
@@ -372,6 +432,7 @@ class TtResidualUnit:
                 batch_size=chunk.shape[0],
                 input_length=chunk.shape[1],
                 label=f"resunit[d={self.dilation}].conv1",
+                prepared_cache=self.w2_cache,
             )
             outputs.append(ttnn.add(chunk, h))
             ttnn.deallocate(h, force=True)
@@ -390,11 +451,14 @@ class TtResidualUnit:
         self.act2.deallocate()
         for tensor in (self.w1, self.b1, self.w2, self.b2):
             ttnn.deallocate(tensor, force=True)
+        _deallocate_prepared_cache(self.w1_cache)
+        _deallocate_prepared_cache(self.w2_cache)
 
 
 def _conv_transpose1d_impl(
     x: ttnn.Tensor,
-    weight: ttnn.Tensor,
+    weight_height: ttnn.Tensor,
+    weight_width: ttnn.Tensor,
     bias: ttnn.Tensor,
     device,
     in_channels: int,
@@ -406,6 +470,7 @@ def _conv_transpose1d_impl(
     input_length: int,
     profile_input_length: int | None = None,
     label: str = "",
+    prepared_cache: dict | None = None,
 ):
     """Emulate ConvTranspose1d via ``ttnn.conv_transpose2d`` over ``[B, T, 1, C]``.
 
@@ -418,6 +483,10 @@ def _conv_transpose1d_impl(
     profile_length = input_length if profile_input_length is None else profile_input_length
     use_long_profile = should_use_long_transpose_profile(
         input_length=profile_length, stride=stride, out_channels=out_channels
+    )
+    use_width_axis = use_long_profile
+    width_slices = (
+        _CONV_TRANSPOSE_LONG_WIDE_CHANNEL_WIDTH_SLICES if out_channels >= 1024 else _CONV_TRANSPOSE_LONG_WIDTH_SLICES
     )
     if use_long_profile:
         if _CONV_TRANSPOSE_LONG_ACT_BLOCK_H > 0:
@@ -437,41 +506,76 @@ def _conv_transpose1d_impl(
     _debug_decoder(
         f"conv_transpose1d {label} in_ch={in_channels} out_ch={out_channels} "
         f"k={kernel_size} stride={stride} pad={padding} batch={batch_size} input_length={input_length} "
-        f"profile_length={profile_length} long_profile={int(use_long_profile)} "
-        f"act_block_h={act_block_h} slices={num_height_slices}"
+        f"profile_length={profile_length} long_profile={int(use_long_profile)} width_axis={int(use_width_axis)} "
+        f"act_block_h={act_block_h} height_slices={num_height_slices} width_slices={width_slices}"
     )
-    dram_slice_config = ttnn.Conv2dSliceConfig(
-        slice_type=ttnn.Conv2dDRAMSliceHeight,
-        num_slices=num_height_slices,
-    )
-    # No return flags -> single-tensor return. We compute out_length ourselves
-    # from the standard ConvTranspose1d formula.
-    out = ttnn.conv_transpose2d(
-        input_tensor=x,
-        weight_tensor=weight,
-        bias_tensor=bias,
-        device=device,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        kernel_size=(kernel_size, 1),
-        stride=(stride, 1),
-        padding=(padding, 0),
-        batch_size=batch_size,
-        input_height=input_length,
-        input_width=1,
-        conv_config=conv_config,
-        dtype=ttnn.bfloat8_b,
-        dram_slice_config=dram_slice_config,
-    )
+    cache_key = (use_width_axis, batch_size, input_length, profile_length)
+    cached = None if prepared_cache is None else prepared_cache.get(cache_key)
+    cached_weight, cached_bias = cached if cached is not None else (None, None)
+    if use_width_axis:
+        dram_slice_config = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
+            num_slices=width_slices,
+        )
+        x = ttnn.permute(x, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out, [prepared_weight, prepared_bias] = ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=cached_weight if cached_weight is not None else weight_width,
+            bias_tensor=cached_bias if cached is not None else bias,
+            device=device,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=(1, kernel_size),
+            stride=(1, stride),
+            padding=(0, padding),
+            batch_size=batch_size,
+            input_height=1,
+            input_width=input_length,
+            conv_config=conv_config,
+            compute_config=_conv_compute_config(device),
+            dtype=ttnn.bfloat8_b,
+            dram_slice_config=dram_slice_config,
+            mirror_kernel=True,
+            return_weights_and_bias=True,
+        )
+    else:
+        dram_slice_config = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceHeight,
+            num_slices=num_height_slices,
+        )
+        out, [prepared_weight, prepared_bias] = ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=cached_weight if cached_weight is not None else weight_height,
+            bias_tensor=cached_bias if cached is not None else bias,
+            device=device,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=(kernel_size, 1),
+            stride=(stride, 1),
+            padding=(padding, 0),
+            batch_size=batch_size,
+            input_height=input_length,
+            input_width=1,
+            conv_config=conv_config,
+            compute_config=_conv_compute_config(device),
+            dtype=ttnn.bfloat8_b,
+            dram_slice_config=dram_slice_config,
+            return_weights_and_bias=True,
+        )
+    if prepared_cache is not None:
+        prepared_cache[cache_key] = (prepared_weight, prepared_bias)
     if out.is_sharded():
         out = ttnn.sharded_to_interleaved(out)
+    if use_width_axis:
+        out = ttnn.permute(out, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     out = ttnn.reshape(out, (batch_size, out_length, 1, out_channels))
     return ttnn.to_layout(out, ttnn.TILE_LAYOUT), out_length
 
 
 def _conv_transpose1d(
     x: ttnn.Tensor,
-    weight: ttnn.Tensor,
+    weight_height: ttnn.Tensor,
+    weight_width: ttnn.Tensor,
     bias: ttnn.Tensor,
     device,
     in_channels: int,
@@ -482,6 +586,7 @@ def _conv_transpose1d(
     batch_size: int,
     input_length: int,
     label: str = "",
+    prepared_cache: dict | None = None,
 ):
     """Chunk long transpose-convs manually to avoid TTNN sliced-op failures.
 
@@ -501,7 +606,8 @@ def _conv_transpose1d(
     if chunk_length <= 0:
         return _conv_transpose1d_impl(
             x,
-            weight,
+            weight_height,
+            weight_width,
             bias,
             device,
             in_channels,
@@ -512,6 +618,7 @@ def _conv_transpose1d(
             batch_size,
             input_length,
             label=label,
+            prepared_cache=prepared_cache,
         )
 
     chunks = []
@@ -528,7 +635,8 @@ def _conv_transpose1d(
         chunk_label = f"{label}[{start}:{end}]"
         out_chunk, _ = _conv_transpose1d_impl(
             x_chunk,
-            weight,
+            weight_height,
+            weight_width,
             bias,
             device,
             in_channels,
@@ -540,6 +648,7 @@ def _conv_transpose1d(
             x_chunk.shape[1],
             profile_input_length=input_length,
             label=chunk_label,
+            prepared_cache=prepared_cache,
         )
         crop_start = stride * left_ctx
         crop_end = crop_start + (end - start) * stride
@@ -572,7 +681,9 @@ class TtDecoderBlock:
         up_w = reconstruct_wn_weight(sd, prefix + "upsample.").unsqueeze(-1)
         up_b = sd[prefix + "upsample.bias"]
         self.up_w = ttnn.from_torch(up_w, dtype=ttnn.float32)
+        self.up_w_width = ttnn.from_torch(up_w.permute(0, 1, 3, 2).contiguous(), dtype=ttnn.float32)
         self.up_b = ttnn.from_torch(up_b.reshape(1, 1, 1, -1), dtype=ttnn.float32)
+        self.up_cache = {}
 
         self.res1 = TtResidualUnit(mesh_device, sd, out_channels, dilation=1, prefix=prefix + "res1.")
         self.res2 = TtResidualUnit(mesh_device, sd, out_channels, dilation=3, prefix=prefix + "res2.")
@@ -592,6 +703,7 @@ class TtDecoderBlock:
             out_chunk, _ = _conv_transpose1d_impl(
                 ext,
                 self.up_w,
+                self.up_w_width,
                 self.up_b,
                 self.mesh_device,
                 self.in_channels,
@@ -603,6 +715,7 @@ class TtDecoderBlock:
                 ext.shape[1],
                 profile_input_length=x.shape[1],
                 label=ext_label,
+                prepared_cache=self.up_cache,
             )
             crop_start = self.stride * left_len
             crop_end = crop_start + chunk.shape[1] * self.stride
@@ -639,6 +752,7 @@ class TtDecoderBlock:
                 out_chunk, _ = _conv_transpose1d_impl(
                     ext,
                     self.up_w,
+                    self.up_w_width,
                     self.up_b,
                     self.mesh_device,
                     self.in_channels,
@@ -650,6 +764,7 @@ class TtDecoderBlock:
                     ext.shape[1],
                     profile_input_length=profile_input_length,
                     label=ext_label,
+                    prepared_cache=self.up_cache,
                 )
                 crop_start = self.stride * left_len
                 crop_end = crop_start + chunk.shape[1] * self.stride
@@ -707,6 +822,7 @@ class TtDecoderBlock:
         h, _ = _conv_transpose1d(
             h,
             self.up_w,
+            self.up_w_width,
             self.up_b,
             self.mesh_device,
             self.in_channels,
@@ -717,6 +833,7 @@ class TtDecoderBlock:
             batch_size=batch_size,
             input_length=input_length,
             label=f"decoder_block[stride={self.stride}].upsample",
+            prepared_cache=self.up_cache,
         )
         profile["upsample_seconds"] = time.perf_counter() - started_at
 
@@ -744,8 +861,9 @@ class TtDecoderBlock:
 
     def deallocate(self) -> None:
         self.act.deallocate()
-        for tensor in (self.up_w, self.up_b):
+        for tensor in (self.up_w, self.up_w_width, self.up_b):
             ttnn.deallocate(tensor, force=True)
+        _deallocate_prepared_cache(self.up_cache)
         self.res1.deallocate()
         self.res2.deallocate()
         self.res3.deallocate()
@@ -782,6 +900,7 @@ class TtOobleckDecoder:
         self.in_conv_channels_out = c_mults[-1] * channels
         self.in_w = ttnn.from_torch(in_w, dtype=ttnn.float32)
         self.in_b = ttnn.from_torch(in_b.reshape(1, 1, 1, -1), dtype=ttnn.float32)
+        self.in_conv_cache = {}
 
         self.blocks = []
         for j, i in enumerate(range(depth - 1, 0, -1)):
@@ -803,6 +922,7 @@ class TtOobleckDecoder:
         out_w = reconstruct_wn_weight(sd, "out_conv.")
         self.out_conv_channels_in = c_mults[0] * channels
         self.out_w = ttnn.from_torch(out_w, dtype=ttnn.float32)
+        self.out_conv_cache = {}
 
     def _stream_out_conv(self, chunks: ttnn.Tensor | list[ttnn.Tensor]) -> list[ttnn.Tensor]:
         if not isinstance(chunks, list):
@@ -829,6 +949,7 @@ class TtOobleckDecoder:
                 batch_size=chunk.shape[0],
                 input_length=ext.shape[1],
                 label="decoder.out_conv",
+                prepared_cache=self.out_conv_cache,
             )
             outputs.append(_slice_time(h, left_len, left_len + chunk.shape[1]))
             ttnn.deallocate(h, force=True)
@@ -859,6 +980,7 @@ class TtOobleckDecoder:
             batch_size=batch_size,
             input_length=input_length,
             label="decoder.in_conv",
+            prepared_cache=self.in_conv_cache,
         )
         profile["in_conv_seconds"] = time.perf_counter() - started_at
 
@@ -901,6 +1023,7 @@ class TtOobleckDecoder:
             batch_size=batch_size,
             input_length=out_length,
             label="decoder.out_conv",
+            prepared_cache=self.out_conv_cache,
         )
         profile["out_conv_seconds"] = time.perf_counter() - started_at
         self.last_profile = profile
@@ -909,6 +1032,8 @@ class TtOobleckDecoder:
     def deallocate(self) -> None:
         for tensor in (self.in_w, self.in_b, self.out_w):
             ttnn.deallocate(tensor, force=True)
+        _deallocate_prepared_cache(self.in_conv_cache)
+        _deallocate_prepared_cache(self.out_conv_cache)
         for block in self.blocks:
             block.deallocate()
         self.out_act.deallocate()

@@ -185,10 +185,10 @@ def test_tt_demo_cpu_decode_env_default_and_override(monkeypatch):
     from models.experimental.audiox.demo import tt_demo as tt_demo_mod
 
     monkeypatch.delenv("AUDIOX_TT_CPU_DECODE", raising=False)
-    assert tt_demo_mod._should_use_cpu_decode() is True
-
-    monkeypatch.setenv("AUDIOX_TT_CPU_DECODE", "0")
     assert tt_demo_mod._should_use_cpu_decode() is False
+
+    monkeypatch.setenv("AUDIOX_TT_CPU_DECODE", "1")
+    assert tt_demo_mod._should_use_cpu_decode() is True
 
 
 def test_tt_demo_cpu_decoder_fuses_weight_norm(monkeypatch):

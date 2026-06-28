@@ -237,29 +237,26 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
     measured_elapsed_seconds = None
     shared_cross_attn_cond = None
     device = open_tt_device(device_id=args.tt_device_id)
+    session = None
     try:
+        session = TtAudioXSession(args.checkpoint, device, seed=args.seed)
         for run_index in range(1, args.tt_warm_runs + 1):
-            session = TtAudioXSession(args.checkpoint, device, seed=args.seed)
-            try:
-                output_path = tt_output if run_index == args.tt_warm_runs else tt_output.with_name(f"tt_warmup_run{run_index}.wav")
-                started_at = time.perf_counter()
-                run_details = session.run(
-                    prompt=args.prompt,
-                    output=output_path,
-                    video_path=args.video,
-                    image_path=args.image,
-                    audio_path=args.audio,
-                    video_prompt_tensor=synthetic_video_prompt,
-                    cross_attn_cond_torch=shared_cross_attn_cond,
-                    steps=args.steps,
-                    seed=args.seed,
-                    duration_seconds=args.duration_seconds,
-                    return_details=True,
-                )
-                run_elapsed_seconds = time.perf_counter() - started_at
-            finally:
-                session.deallocate()
-                gc.collect()
+            output_path = tt_output if run_index == args.tt_warm_runs else tt_output.with_name(f"tt_warmup_run{run_index}.wav")
+            started_at = time.perf_counter()
+            run_details = session.run(
+                prompt=args.prompt,
+                output=output_path,
+                video_path=args.video,
+                image_path=args.image,
+                audio_path=args.audio,
+                video_prompt_tensor=synthetic_video_prompt,
+                cross_attn_cond_torch=shared_cross_attn_cond,
+                steps=args.steps,
+                seed=args.seed,
+                duration_seconds=args.duration_seconds,
+                return_details=True,
+            )
+            run_elapsed_seconds = time.perf_counter() - started_at
             run_details["steps"] = args.steps
             run_summary = _summarize_run_details(run_details["output_path"], run_elapsed_seconds, run_details)
             shared_cross_attn_cond = run_details["cross_attn_cond"].detach().cpu()
@@ -279,6 +276,8 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
                     }
                 )
     finally:
+        if session is not None:
+            session.deallocate()
         close_tt_device(device)
         gc.collect()
 

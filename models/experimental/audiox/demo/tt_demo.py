@@ -3,11 +3,11 @@
 
 """End-to-end text/video/image-to-audio demo for the AudioX bringup, running on TT.
 
-Same generation flow as ``demo.demo`` but the DiT denoiser runs on a
-Tenstorrent device through the TTNN port. The decoder defaults to CPU
-(``AUDIOX_TT_CPU_DECODE=1``) and can be forced onto TT with
-``AUDIOX_TT_CPU_DECODE=0``. The conditioner stack stays on CPU since it runs
-once per generation and is <0.1% of total compute.
+Same generation flow as ``demo.demo`` but the DiT denoiser and Oobleck decoder
+run on a Tenstorrent device through the TTNN port. Set
+``AUDIOX_TT_CPU_DECODE=1`` to use the CPU decoder fallback. The conditioner
+stack stays on CPU since it runs once per generation and is <0.1% of total
+compute.
 
 Run from the tt-metal root with a connected device:
 
@@ -99,7 +99,11 @@ def _local_mesh_width(device_id: int) -> int:
 
 
 def open_tt_device(device_id: int):
-    os.environ.setdefault("TT_METAL_SLOW_DISPATCH_MODE", "1")
+    slow_dispatch = os.getenv("AUDIOX_TT_SLOW_DISPATCH")
+    if slow_dispatch == "1":
+        os.environ.setdefault("TT_METAL_SLOW_DISPATCH_MODE", "1")
+    elif slow_dispatch == "0":
+        os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
     open_kwargs = tt_open_kwargs_from_env()
     if os.getenv("AUDIOX_TT_OPEN_MODE", "mesh") == "direct":
         return ttnn.open_device(device_id=device_id, **open_kwargs)
@@ -164,7 +168,7 @@ def _nct_to_nhwc(x_nct: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def _should_use_cpu_decode() -> bool:
-    return os.environ.get("AUDIOX_TT_CPU_DECODE", "1") == "1"
+    return os.environ.get("AUDIOX_TT_CPU_DECODE", "0") == "1"
 
 
 def _build_cpu_decoder_fused(decoder_sd: dict):

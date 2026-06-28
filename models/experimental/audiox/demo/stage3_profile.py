@@ -20,11 +20,20 @@ _TT_ENV_KEYS = (
     "AUDIOX_TT_TRACE_REGION_SIZE",
     "AUDIOX_TT_NUM_COMMAND_QUEUES",
     "AUDIOX_TT_WORKER_L1_SIZE",
+    "AUDIOX_TT_LONG_SEQUENCE_THRESHOLD",
     "AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK",
     "AUDIOX_TT_CONV1D_WIDTH_SLICES",
+    "AUDIOX_TT_CONV1D_LOW_CHANNEL_WIDTH_SLICES",
     "AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_SLICES",
+    "AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD",
+    "AUDIOX_TT_CONV_TRANSPOSE_LONG_HEIGHT_SLICES",
+    "AUDIOX_TT_CONV_TRANSPOSE_LONG_WIDTH_SLICES",
+    "AUDIOX_TT_CONV_TRANSPOSE_LONG_ACT_BLOCK_H",
     "AUDIOX_TT_CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H",
     "AUDIOX_TT_CONV_TRANSPOSE_STRIDE4_ACT_BLOCK_H",
+    "AUDIOX_TT_OUT_CONV_STREAM_THRESHOLD",
+    "AUDIOX_TT_RESIDUAL_STREAM_STRIDE4_THRESHOLD",
+    "AUDIOX_TT_RESIDUAL_STREAM_STRIDE2_THRESHOLD",
 )
 
 
@@ -50,11 +59,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--tt-trace-region-size", type=int)
     p.add_argument("--tt-num-command-queues", type=int)
     p.add_argument("--tt-worker-l1-size", type=int)
+    p.add_argument("--tt-long-sequence-threshold", type=int)
     p.add_argument("--tt-conv-transpose-input-chunk", type=int)
     p.add_argument("--tt-conv1d-width-slices", type=int)
+    p.add_argument("--tt-conv1d-low-channel-width-slices", type=int)
     p.add_argument("--tt-conv-transpose-height-slices", type=int)
+    p.add_argument("--tt-conv-transpose-long-threshold", type=int)
+    p.add_argument("--tt-conv-transpose-long-height-slices", type=int)
+    p.add_argument("--tt-conv-transpose-long-width-slices", type=int)
+    p.add_argument("--tt-conv-transpose-long-act-block-h", type=int)
     p.add_argument("--tt-conv-transpose-stride2-act-block-h", type=int)
     p.add_argument("--tt-conv-transpose-stride4-act-block-h", type=int)
+    p.add_argument("--tt-out-conv-stream-threshold", type=int)
+    p.add_argument("--tt-residual-stream-stride4-threshold", type=int)
+    p.add_argument("--tt-residual-stream-stride2-threshold", type=int)
     p.add_argument(
         "--rt-profiler-jsonl",
         type=Path,
@@ -224,6 +242,9 @@ def _build_perf_summary(report: dict) -> dict:
             "generation_time_lt_10s": generation_seconds < 10.0,
             "long_audio_ge_30s": report["duration_seconds"] >= 30,
         },
+        "tt_timings": timings,
+        "decode_backend": timings.get("decode_backend"),
+        "decoder_profile": timings.get("decoder_profile"),
     }
 
 
@@ -239,11 +260,20 @@ def _apply_tt_env_overrides(args: argparse.Namespace) -> dict:
         trace_region_size=args.tt_trace_region_size,
         num_command_queues=args.tt_num_command_queues,
         worker_l1_size=args.tt_worker_l1_size,
+        long_sequence_threshold=args.tt_long_sequence_threshold,
         conv_transpose_input_chunk=args.tt_conv_transpose_input_chunk,
         conv1d_width_slices=args.tt_conv1d_width_slices,
+        conv1d_low_channel_width_slices=args.tt_conv1d_low_channel_width_slices,
         conv_transpose_height_slices=args.tt_conv_transpose_height_slices,
+        conv_transpose_long_threshold=args.tt_conv_transpose_long_threshold,
+        conv_transpose_long_height_slices=args.tt_conv_transpose_long_height_slices,
+        conv_transpose_long_width_slices=args.tt_conv_transpose_long_width_slices,
+        conv_transpose_long_act_block_h=args.tt_conv_transpose_long_act_block_h,
         conv_transpose_stride2_act_block_h=args.tt_conv_transpose_stride2_act_block_h,
         conv_transpose_stride4_act_block_h=args.tt_conv_transpose_stride4_act_block_h,
+        out_conv_stream_threshold=args.tt_out_conv_stream_threshold,
+        residual_stream_stride4_threshold=args.tt_residual_stream_stride4_threshold,
+        residual_stream_stride2_threshold=args.tt_residual_stream_stride2_threshold,
     )
 
 

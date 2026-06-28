@@ -12,8 +12,18 @@ def residual_stream_mid_channel_threshold() -> int:
     return int(os.getenv("AUDIOX_TT_RESIDUAL_STREAM_MID_CHANNEL_THRESHOLD", "110336"))
 
 
+def residual_stream_stride4_threshold() -> int | None:
+    value = os.getenv("AUDIOX_TT_RESIDUAL_STREAM_STRIDE4_THRESHOLD")
+    return None if value is None else int(value)
+
+
+def residual_stream_stride2_threshold() -> int | None:
+    value = os.getenv("AUDIOX_TT_RESIDUAL_STREAM_STRIDE2_THRESHOLD")
+    return None if value is None else int(value)
+
+
 def conv_transpose_long_threshold() -> int:
-    return int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD", "131072"))
+    return int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD", "1728"))
 
 
 def conv_transpose_targeted_threshold() -> int:
@@ -29,6 +39,14 @@ def should_stream_decoder_block(input_length: int, stride: int, out_channels: in
         return False
     if out_channels > 128:
         return stride == 4 and input_length * stride >= residual_stream_mid_channel_threshold()
+    if stride == 4:
+        threshold = residual_stream_stride4_threshold()
+        if threshold is not None:
+            return input_length * stride >= threshold
+    if stride == 2:
+        threshold = residual_stream_stride2_threshold()
+        if threshold is not None:
+            return input_length * stride >= threshold
     return input_length * stride >= residual_stream_long_threshold()
 
 
