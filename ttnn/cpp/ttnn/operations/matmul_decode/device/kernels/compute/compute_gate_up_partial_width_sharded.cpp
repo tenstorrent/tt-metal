@@ -11,17 +11,20 @@
 
 using std::uint32_t;
 
-// Fused gate+up partial-width-sharded matmul compute.
+// Fused gate+up+GeGLU partial-width-sharded matmul compute.
 //
 // Mirrors compute_partial_width_sharded.cpp but runs the partial matmul (phase 1) and the
 // base-core K-reduction (phase 2) TWICE over the SINGLE gathered A: once for gate_b (in1, fused
-// gelu) and once for up_b (in1b, no activation).
+// gelu) and once for up_b (in1b, no activation). Phase 3 then multiplies the two fully-reduced
+// results into the single GeGLU output hid = gelu(A @ gate_w) * (A @ up_w) -- folding the
+// downstream eltwise multiply into the op so the MLP emits one tensor, not two.
 //
 //   full_in0_cb (c_3): full gathered A  [M_tiles x K_tiles]   (published by reader, shared)
 //   in1_cb  (c_1): this core's gate_b block [Kc_tiles x Nc_tiles]  -> gate_partial (c_4)
 //   in1b_cb (c_6): this core's up_b   block [Kc_tiles x Nc_tiles]  -> up_partial   (c_7)
 //   gate_reduce (c_5) / up_reduce (c_8): K_blocks partials gathered by the writer (base cores)
-//   -> gate_out (c_2)  (gelu fused) , up_out (c_9)
+//   -> gate_out (c_2)  (gelu fused) , up_out (c_9)  [both internal scratch on base cores]
+//   -> hid_out (c_10): gate_out * up_out  (the single device output shard)
 //
 // full_in0 is consumed (cb_pop_front) ONCE after BOTH phase-1 matmuls read it.
 
@@ -109,6 +112,31 @@ inline void phase2_reduce(uint32_t reduce_cb_id, uint32_t out_cb_id) {
     cb_pop_front(reduce_cb_id, reduce_num_tiles);
 }
 
+// Phase 3 (base cores only): elementwise multiply of the two fully-reduced results
+// gate_out (gelu fused) * up_out -> hid_out (the single device output shard). mul_tiles takes CB
+// inputs, so the two reduced operands round-trip through their L1 CBs (block_num_tiles is small).
+template <uint32_t block_num_tiles>
+inline void phase3_multiply(uint32_t gate_out_cb_id, uint32_t up_out_cb_id, uint32_t hid_out_cb_id) {
+    using namespace ckernel;
+    cb_wait_front(gate_out_cb_id, block_num_tiles);
+    cb_wait_front(up_out_cb_id, block_num_tiles);
+
+    binary_op_init_common(gate_out_cb_id, up_out_cb_id, hid_out_cb_id);
+    mul_tiles_init(gate_out_cb_id, up_out_cb_id);
+    cb_reserve_back(hid_out_cb_id, block_num_tiles);
+    for (uint32_t t = 0; t < block_num_tiles; ++t) {
+        tile_regs_acquire();
+        mul_tiles(gate_out_cb_id, up_out_cb_id, t, t, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, hid_out_cb_id, t);
+        tile_regs_release();
+    }
+    cb_push_back(hid_out_cb_id, block_num_tiles);
+    cb_pop_front(gate_out_cb_id, block_num_tiles);
+    cb_pop_front(up_out_cb_id, block_num_tiles);
+}
+
 }  // namespace
 
 using namespace ckernel;
@@ -133,6 +161,7 @@ void kernel_main() {
     constexpr uint32_t up_partial_cb_id = tt::CBIndex::c_7;
     constexpr uint32_t up_reduce_cb_id = tt::CBIndex::c_8;
     constexpr uint32_t up_out_cb_id = tt::CBIndex::c_9;
+    constexpr uint32_t hid_out_cb_id = tt::CBIndex::c_10;  // gate_out * up_out (single output)
 
     constexpr uint32_t full_in0_num_tiles = M_tiles * K_tiles;
     constexpr uint32_t in1_num_tiles = Kc_tiles * Nc_tiles;
@@ -182,4 +211,7 @@ void kernel_main() {
         gate_reduce_cb_id, gate_out_cb_id);
     phase2_reduce<M_tiles, Nc_tiles, K_blocks, block_num_tiles, /*do_gelu=*/false, false>(
         up_reduce_cb_id, up_out_cb_id);
+
+    // ---- Phase 3: GeGLU multiply gate_out * up_out -> hid_out (single device output) ----
+    phase3_multiply<block_num_tiles>(gate_out_cb_id, up_out_cb_id, hid_out_cb_id);
 }

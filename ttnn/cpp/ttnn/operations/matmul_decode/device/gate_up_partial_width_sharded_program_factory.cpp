@@ -19,14 +19,16 @@ namespace ttnn::operations::matmul_decode {
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Fused gate+up partial-width-sharded matmul: ONE gather of A, TWO weights, TWO outputs.
+// Fused gate+up+GeGLU partial-width-sharded matmul: ONE gather of A, TWO weights, ONE output.
 //
 // Identical pipeline + geometry to MatmulDecodeDeviceOperation::PartialWidthSharded, but every
 // core holds BOTH its gate_b block AND its up_b block (the two weights share the K/N split and the
 // core grid), and the compute/writer stages run the partial-matmul + cross-core reduce TWICE (once
 // per weight) over the SINGLE gathered A. The reader (A-gather) is shared -- A is gathered exactly
-// once -- which is the whole point: it halves the per-MLP x-gather and reduce/dispatch vs two
-// separate matmul_decode calls. K_blocks is the standard 2 (pairwise reduce in the compute kernel).
+// once -- which halves the per-MLP x-gather and reduce/dispatch vs two separate matmul_decode
+// calls. The compute kernel then multiplies the two reduced results (phase 3) so the op emits the
+// single GeGLU activation hid = gelu(A @ gate_w) * (A @ up_w), folding the downstream eltwise
+// multiply into the op. K_blocks is the standard 2 (pairwise reduce in the compute kernel).
 ProgramDescriptor GateUpMatmulDecodeDeviceOperation::GateUpPartialWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -34,18 +36,17 @@ ProgramDescriptor GateUpMatmulDecodeDeviceOperation::GateUpPartialWidthSharded::
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& gate_b = tensor_args.gate_b;
     const auto& up_b = tensor_args.up_b;
-    auto& gate_out = tensor_return_value[0];
-    auto& up_out = tensor_return_value[1];
+    auto& hid_out = tensor_return_value;
 
     const tt::DataFormat in0_data_format = datatype_to_dataformat_converter(input_tensor_a.dtype());
     const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(gate_b.dtype());
     const tt::DataFormat in1b_data_format = datatype_to_dataformat_converter(up_b.dtype());
-    const tt::DataFormat out_data_format = datatype_to_dataformat_converter(gate_out.dtype());
+    const tt::DataFormat out_data_format = datatype_to_dataformat_converter(hid_out.dtype());
 
     const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
     const auto& inputB_tile = gate_b.tensor_spec().tile();
     const auto& inputBb_tile = up_b.tensor_spec().tile();
-    const auto& output_tile = gate_out.tensor_spec().tile();
+    const auto& output_tile = hid_out.tensor_spec().tile();
     const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t in1b_tile_size = inputBb_tile.get_tile_size(in1b_data_format);
@@ -128,14 +129,12 @@ ProgramDescriptor GateUpMatmulDecodeDeviceOperation::GateUpPartialWidthSharded::
     }
     const CoreRangeSet base_core_range_set(base_core_ranges);
 
-    // gate_out / up_out are width-sharded over the same N_blocks base cores.
-    const auto gate_output_core_range_set = gate_out.memory_config().shard_spec().value().grid;
-    const auto up_output_core_range_set = up_out.memory_config().shard_spec().value().grid;
-    TT_FATAL(
-        gate_output_core_range_set.num_cores() == N_blocks && up_output_core_range_set.num_cores() == N_blocks,
-        "Both outputs must be sharded across N_blocks cores");
+    // hid_out is width-sharded over the N_blocks base cores; gate_out/up_out are internal scratch
+    // on those same cores (phase-2 reduces into them, phase-3 multiplies them into hid_out).
+    const auto output_core_range_set = hid_out.memory_config().shard_spec().value().grid;
+    TT_FATAL(output_core_range_set.num_cores() == N_blocks, "Output must be sharded across N_blocks cores");
 
-    const auto all_compute_cores = inputA_core_range_set.merge(inputB_core_range_set).merge(gate_output_core_range_set);
+    const auto all_compute_cores = inputA_core_range_set.merge(inputB_core_range_set).merge(output_core_range_set);
     const auto all_compute_cores_with_bbox = tt::tt_metal::CoreRangeSet(all_compute_cores.bounding_box());
 
     ProgramDescriptor desc;
@@ -143,14 +142,15 @@ ProgramDescriptor GateUpMatmulDecodeDeviceOperation::GateUpPartialWidthSharded::
     // ---- Circular buffers ----
     constexpr uint32_t in0_cb_index = CBIndex::c_0;           // this core's A slice (gather source)
     constexpr uint32_t in1_cb_index = CBIndex::c_1;           // this core's gate_b block (resident)
-    constexpr uint32_t gate_out_cb_index = CBIndex::c_2;      // final gate output shard (base cores)
+    constexpr uint32_t gate_out_cb_index = CBIndex::c_2;      // reduced gate (gelu) scratch (base cores)
     constexpr uint32_t full_in0_cb_index = CBIndex::c_3;      // gathered full A
     constexpr uint32_t gate_partial_cb_index = CBIndex::c_4;  // this core's gate partial
     constexpr uint32_t gate_reduce_cb_index = CBIndex::c_5;   // gathered K_blocks gate partials (base)
     constexpr uint32_t in1b_cb_index = CBIndex::c_6;          // this core's up_b block (resident)
     constexpr uint32_t up_partial_cb_index = CBIndex::c_7;    // this core's up partial
     constexpr uint32_t up_reduce_cb_index = CBIndex::c_8;     // gathered K_blocks up partials (base)
-    constexpr uint32_t up_out_cb_index = CBIndex::c_9;        // final up output shard (base cores)
+    constexpr uint32_t up_out_cb_index = CBIndex::c_9;        // reduced up scratch (base cores)
+    constexpr uint32_t hid_out_cb_index = CBIndex::c_10;      // gate_out * up_out -> output shard (base cores)
 
     const uint32_t block_num_tiles = M_tiles * Nc_tiles;
 
@@ -189,29 +189,38 @@ ProgramDescriptor GateUpMatmulDecodeDeviceOperation::GateUpPartialWidthSharded::
         }}},
         .buffer = up_b.buffer(),
     });
-    // gate_out: final gate output shard (base cores, buffer-backed).
+    // gate_out / up_out: reduced-result scratch on the base cores (internal; phase-3 consumes them).
     desc.cbs.push_back(CBDescriptor{
         .total_size = block_num_tiles * out_tile_size,
-        .core_ranges = gate_output_core_range_set,
+        .core_ranges = output_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = gate_out_cb_index,
             .data_format = out_data_format,
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
-        .buffer = gate_out.buffer(),
     });
-    // up_out: final up output shard (base cores, buffer-backed).
     desc.cbs.push_back(CBDescriptor{
         .total_size = block_num_tiles * out_tile_size,
-        .core_ranges = up_output_core_range_set,
+        .core_ranges = output_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = up_out_cb_index,
             .data_format = out_data_format,
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
-        .buffer = up_out.buffer(),
+    });
+    // hid_out: GeGLU output shard = gate_out * up_out (base cores, buffer-backed).
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = block_num_tiles * out_tile_size,
+        .core_ranges = output_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = hid_out_cb_index,
+            .data_format = out_data_format,
+            .page_size = out_tile_size,
+            .tile = out_tile_desc,
+        }}},
+        .buffer = hid_out.buffer(),
     });
     // full_in0: gathered full A (multicast destination).
     desc.cbs.push_back(CBDescriptor{

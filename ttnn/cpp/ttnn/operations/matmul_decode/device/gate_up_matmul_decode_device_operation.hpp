@@ -21,23 +21,23 @@ namespace ttnn::operations::matmul_decode {
 // GateUpMatmulDecodeDeviceOperation
 //
 // Fused GeGLU gate+up projection: ONE gather of the activation A, TWO weights
-// (gate_b, up_b), TWO outputs (gate, up). Both weights are partial-width-sharded
-// resident-L1 bf8_b tensors laid out on the SAME core grid (K_blocks * N_blocks
+// (gate_b, up_b), ONE output (the GeGLU activation). Both weights are partial-width-
+// sharded resident-L1 bf8_b tensors laid out on the SAME core grid (K_blocks * N_blocks
 // cores, k-major) as a single matmul_decode(partial_width_sharded=True) call.
 //
-//   gate = gelu(A @ gate_w)   (tanh-approx gelu, fused into phase-2 pack)
-//   up   =      A @ up_w
+//   hid = gelu(A @ gate_w) * (A @ up_w)   (tanh-approx gelu fused on the gate branch)
 //
 // The reader gathers the full A onto every core exactly ONCE; the compute kernel
 // runs the partial matmul twice (one per resident weight) over that single gathered
 // A; the writer cross-core-reduces BOTH partials to two reduce CBs on the base core;
-// phase-2 reduces both and packs two output shards (gate gets the fused gelu). This
-// halves the per-MLP x-gather + reduce/dispatch relative to two separate
-// matmul_decode calls.
+// phase-2 reduces both (gate gets the fused gelu) into scratch CBs, and phase-3
+// multiplies them into the single output shard. This halves the per-MLP x-gather +
+// reduce/dispatch relative to two separate matmul_decode calls AND folds the
+// downstream eltwise multiply into the op.
 //
 // Mirrors MatmulDecodeDeviceOperation::PartialWidthSharded (same A-reshard reader,
-// same geometry, same K_blocks=2 pairwise reduce) but threads a second weight + a
-// second output through every stage.
+// same geometry, same K_blocks=2 pairwise reduce) but threads a second weight through
+// every stage and multiplies the two reduced results into one output.
 // -----------------------------------------------------------------------------
 struct GateUpMatmulDecodeDeviceOperation {
     struct operation_attributes_t {
@@ -61,9 +61,9 @@ struct GateUpMatmulDecodeDeviceOperation {
         const Tensor& up_b;            // partial-width-sharded up weight
     };
 
-    // Two outputs: {gate, up}, both [..., M, N] width-sharded across N_blocks cores.
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
-    using tensor_return_value_t = std::array<Tensor, 2>;
+    // Single output: hid = gelu(A @ gate_w) * (A @ up_w), [..., M, N] width-sharded across N_blocks cores.
+    using spec_return_value_t = ttnn::TensorSpec;
+    using tensor_return_value_t = Tensor;
 
     // Single program factory: the gate+up dual-weight partial-width-sharded matmul.
     struct GateUpPartialWidthSharded {

@@ -52,13 +52,13 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"gate_up_matmul_decode">(
         mod,
-        R"doc(gate_up_matmul_decode(input_tensor_a: ttnn.Tensor, gate_b: ttnn.Tensor, up_b: ttnn.Tensor, *, dtype: Optional[ttnn.DataType] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, fused_gelu_approx: bool = False, reshard_input: bool = False, reshard_cores: int = 2) -> Tuple[ttnn.Tensor, ttnn.Tensor]
+        R"doc(gate_up_matmul_decode(input_tensor_a: ttnn.Tensor, gate_b: ttnn.Tensor, up_b: ttnn.Tensor, *, dtype: Optional[ttnn.DataType] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, fused_gelu_approx: bool = False, reshard_input: bool = False, reshard_cores: int = 2) -> ttnn.Tensor
 
-        Fused GeGLU gate+up projection: ONE gather of A, TWO partial-width-sharded weights, TWO
-        outputs. Returns (gate, up) where gate = gelu(A @ gate_w) and up = A @ up_w. gate_b and up_b
-        are partial-width-sharded resident-L1 weights laid out on the SAME core grid. Replaces two
-        separate matmul_decode(partial_width_sharded, reshard_input) calls -- sharing the x-gather
-        and halving the cross-core reduce/dispatch.
+        Fused GeGLU gate+up projection: ONE gather of A, TWO partial-width-sharded weights, ONE
+        output. Returns hid = gelu(A @ gate_w) * (A @ up_w). gate_b and up_b are partial-width-
+        sharded resident-L1 weights laid out on the SAME core grid. Replaces two separate
+        matmul_decode(partial_width_sharded, reshard_input) calls + the eltwise multiply -- sharing
+        the x-gather, halving the cross-core reduce/dispatch, and folding the GeGLU multiply in.
 
         Args:
             input_tensor_a (ttnn.Tensor): activation A (gathered once).
@@ -73,7 +73,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
             reshard_cores (int, optional): number of A-reshard sender cores. Defaults to 2.
 
         Returns:
-            Tuple[ttnn.Tensor, ttnn.Tensor]: (gate, up).
+            ttnn.Tensor: hid = gelu(A @ gate_w) * (A @ up_w), width-sharded across N_blocks cores.
         )doc",
         &ttnn::gate_up_matmul_decode,
         nb::arg("input_tensor_a"),

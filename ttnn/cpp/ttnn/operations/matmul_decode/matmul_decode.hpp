@@ -32,12 +32,12 @@ Tensor matmul_decode(
     uint32_t reshard_cores = 2);
 
 // gate_up_matmul_decode: fused GeGLU gate+up projection. ONE gather of the activation A, TWO
-// partial-width-sharded resident-L1 weights (gate_b, up_b on the SAME core grid), TWO outputs:
-//   gate = gelu(A @ gate_w)  (tanh-approx when fused_gelu_approx),  up = A @ up_w.
-// Replaces two separate matmul_decode(partial_width_sharded, reshard_input) calls (gate w/
-// fused_gelu, up w/o) -- sharing the x-gather + halving the reduce/dispatch. Returns {gate, up},
-// both width-sharded with the same shape/layout the two single-output calls produced.
-std::array<Tensor, 2> gate_up_matmul_decode(
+// partial-width-sharded resident-L1 weights (gate_b, up_b on the SAME core grid), ONE output:
+//   hid = gelu(A @ gate_w) * (A @ up_w)  (tanh-approx gelu when fused_gelu_approx).
+// Replaces two separate matmul_decode(partial_width_sharded, reshard_input) calls + the eltwise
+// multiply -- sharing the x-gather, halving the reduce/dispatch, and folding the GeGLU multiply
+// into the op. Returns hid, width-sharded with the same shape/layout a single matmul_decode would.
+Tensor gate_up_matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& gate_b,
     const Tensor& up_b,
