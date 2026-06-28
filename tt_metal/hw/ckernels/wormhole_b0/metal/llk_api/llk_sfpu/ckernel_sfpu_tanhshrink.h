@@ -59,8 +59,8 @@ inline void calculate_tanhshrink() {
                 sfpi::vFloat clamp = 9.0f;
                 sfpi::vec_min_max(axc, clamp);  // axc = min(|x|, 9)
                 sfpi::vFloat e = _sfpu_exp_fp32_accurate_unsafe_(-2.f * axc);
-                sfpi::vFloat sig = sfpu_reciprocal_iter<2>(sfpi::vConst1 + e);  // sigmoid(2|x|)
-                sfpi::vFloat tanh_ax = 2.f * sig - sfpi::vConst1;            // tanh(|x|)
+                sfpi::vFloat sig = sfpu_reciprocal_iter<2>(1.0f + e);  // sigmoid(2|x|)
+                sfpi::vFloat tanh_ax = 2.f * sig - 1.0f;               // tanh(|x|)
                 result = sfpi::copysgn(ax - tanh_ax, x);
             } else {
                 // tanh(|x|) via a degree-3 minimax fit on [1,3.3].

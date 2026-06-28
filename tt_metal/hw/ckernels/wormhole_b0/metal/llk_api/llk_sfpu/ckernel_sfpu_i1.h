@@ -60,7 +60,7 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
     sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
     rsqrt_y = rsqrt_y * (sfpi::vFloat(2.2825186f) + c0 * (sfpi::vFloat(2.2533049f) + c0));
-    c0 = sfpi::vConst1 + (-rsqrt_y) * (abs_x * rsqrt_y);
+    c0 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
     rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
 
     // 1/|x| = (1/√|x|)² — reuses the refined rsqrt instead of a fresh reciprocal.
@@ -116,7 +116,7 @@ inline void calculate_i1() {
                 1.2293555930e-12f);
             sfpi::vFloat denom = PolynomialEvaluator::eval(
                 t,
-                sfpi::vConst1,
+                1.0f,
                 -1.1361218989e-02f,
                 6.1268139689e-05f,
                 -1.9771712800e-07f,
@@ -128,7 +128,7 @@ inline void calculate_i1() {
             sfpi::vFloat numer = PolynomialEvaluator::eval(
                 t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
             sfpi::vFloat denom =
-                PolynomialEvaluator::eval(t, sfpi::vConst1, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
+                PolynomialEvaluator::eval(t, 1.0f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
 #endif
             val = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }

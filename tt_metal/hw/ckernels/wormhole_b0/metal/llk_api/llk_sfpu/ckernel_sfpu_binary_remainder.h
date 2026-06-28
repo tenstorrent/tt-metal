@@ -37,12 +37,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vFloat scale = sfpi::setman(b_f, 0);
 
     // First Newton-Raphson iteration: inv_b_f = inv_b_f * (2 - inv_b_f * b_f)
-    sfpi::vFloat t = inv_b_f * neg_b_f + sfpi::vConst1;
+    sfpi::vFloat t = inv_b_f * neg_b_f + 1.0f;
     scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
     // Second Newton-Raphson iteration (interleaved with abs(a) computation)
-    sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
+    sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
     sfpi::vMag a = sfpi::abs(a_signed);
     inv_b_f = e * inv_b_f + inv_b_f;
 

@@ -27,7 +27,7 @@ namespace ckernel::sfpu {
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
 
     constexpr float POLYNOMIAL_THRESHOLD = 0.6f;
 
@@ -37,7 +37,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
     v_if(exponent == 255) {
         result = std::numeric_limits<float>::quiet_NaN();
         v_if(mantissa == 0) {
-            sfpi::vFloat one = sfpi::vConst1;
+            sfpi::vFloat one = 1.0f;
             result = sfpi::copysgn(one, val);
         }
         v_endif;
@@ -68,7 +68,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat val) {
             sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(two_x);
 
             // Compute 2*sigmoid(2x) - 1
-            result = 2.f * sig - sfpi::vConst1;
+            result = 2.f * sig - 1.0f;
         }
         v_endif;
     }
@@ -115,7 +115,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // (5.876733921468257904052734375e-3))))));
     sfpi::vFloat result = PolynomialEvaluator::eval(
         val,
-        sfpi::vConst0,
+        0.0f,
         0.999004364013671875,
         3.0897438526153564453125e-2,
         -0.4890659749507904052734375,
