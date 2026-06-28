@@ -57,7 +57,7 @@ def create_program_descriptor(
         cb(5, 1),                   # cb_scale_factor
         cb(8, B_q_t),               # cb_alpha
         cb(16, num_o_tiles),        # cb_o
-        cb(17, num_o_tiles),        # cb_out
+        cb(17, 2 * num_o_tiles),    # cb_out (double-buffered for multi-Q-block)
         cb(24, num_score_tiles),    # cb_scores
         cb(25, num_score_tiles),    # cb_scores_masked
         cb(26, B_q_t),              # cb_max_new
