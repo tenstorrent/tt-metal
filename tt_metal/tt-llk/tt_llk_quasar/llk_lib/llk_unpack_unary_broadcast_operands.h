@@ -32,7 +32,6 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
         unpack_to_dest || (UNP_SEL == p_unpacr::UNP_B),
         "UNP_SEL must be p_unpacr::UNP_B when unpack_to_dest is false - movA2D broadcast is not working on Quasar");
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    static_assert(!(unpack_to_dest && is_fp32_dest_acc_en), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
 
     const std::uint32_t MOP_OUTER_LOOP            = num_tiles;
     constexpr std::uint32_t MOP_INNER_LOOP        = 1;
@@ -81,7 +80,7 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
                 if constexpr (unpack_to_dest)
                 {
                     TT_UNPACR_DEST_FACE(0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0, 0, buf_desc_id, 0 /*SetDatValid*/);
-                    TT_UNPACR_DEST_FACE(2 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id, 1 /*SetDatValid*/);
+                    TT_UNPACR_DEST_FACE(2 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0, 0, buf_desc_id, 0 /*SetDatValid*/);
                 }
                 else
                 {

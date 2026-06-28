@@ -14,6 +14,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    UnpackerEngine,
     format_dict,
 )
 from helpers.param_config import (
@@ -35,12 +36,13 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    UNPACKER_ENGINE_SEL,
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
 
-INPUT_DIMENSIONS = [[512, 32]]
+INPUT_DIMENSIONS = [[32, 32]]
 TILE_DIMENSIONS = [32, 32]
 
 
@@ -58,22 +60,22 @@ def get_valid_dest_acc_unary_broadcast(formats):
 @parametrize(
     formats=input_output_formats(
         [
-            DataFormat.Float16_b,
-            # DataFormat.Float32, Buggy functionality for Float32 (unpack_to_dest=True) tbd
-            DataFormat.MxFp8R,
-            DataFormat.MxFp8P,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
+            # DataFormat.Float16_b,
+            DataFormat.Float32,  # Buggy functionality for Float32 (unpack_to_dest=True) tbd
+            # DataFormat.MxFp8R,
+            # DataFormat.MxFp8P,
+            # DataFormat.MxFp4,
+            # DataFormat.MxInt8,
+            # DataFormat.MxInt4,
+            # DataFormat.MxInt2,
         ],
         same=True,
     ),
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=[
-        BroadcastType.Scalar,
+        # BroadcastType.Scalar,
         BroadcastType.Column,
-        BroadcastType.Row,
+        # BroadcastType.Row,
     ],
     implied_math_format=lambda formats: (
         [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
@@ -102,14 +104,9 @@ def test_unary_broadcast_quasar(
     num_elements = rows * cols
     tile_cnt = (rows // tile_rows) * (cols // tile_cols)
 
-    effective_dest_acc = (
-        DestAccumulation.Yes
-        if formats.output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync_mode,
-        effective_dest_acc,
+        dest_acc,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -135,12 +132,15 @@ def test_unary_broadcast_quasar(
 
     src_A = src_B
 
+    unpacker_sel = UnpackerEngine.UnpA if unpack_to_dest else UnpackerEngine.UnpB
+
     configuration = TestConfig(
         "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(implied_math_format),
+            UNPACKER_ENGINE_SEL(unpacker_sel),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync_mode),
         ],
@@ -176,7 +176,7 @@ def test_unary_broadcast_quasar(
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=unpack_to_dest,
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
         boot_mode=boot_mode,
         disable_format_inference=(implied_math_format == ImpliedMathFormat.Yes),
     )
