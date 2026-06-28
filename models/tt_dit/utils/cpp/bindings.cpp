@@ -122,7 +122,9 @@ NB_MODULE(_planar_concat, m) {
            nb::list py_cr_shards,
            std::string_view dim_order,
            std::pair<int, int> mesh_shape,
-           nb::ndarray<uint8_t, nb::numpy, nb::c_contig> out_arr) -> void {
+           nb::ndarray<uint8_t, nb::numpy, nb::c_contig> out_arr,
+           int out_H,
+           int out_W) -> void {
             const int TP = mesh_shape.first;
             const int SP = mesh_shape.second;
             if (TP <= 0 || SP <= 0) {
@@ -199,18 +201,24 @@ NB_MODULE(_planar_concat, m) {
                 throw std::invalid_argument("global H and W must be even for 4:2:0");
             }
 
-            const size_t Hu = H / 2;
-            const size_t Wu = W / 2;
-            const size_t row_stride = static_cast<size_t>(H) * W + 2 * Hu * Wu;
+            // Logical (cropped) output geometry. Defaults to the padded H/W when -1.
+            if (out_H < 0) {
+                out_H = H;
+            }
+            if (out_W < 0) {
+                out_W = W;
+            }
+            if (out_H % 2 != 0 || out_W % 2 != 0 || out_H > H || out_W > W) {
+                throw std::invalid_argument("out_H/out_W must be even and <= padded H/W");
+            }
+            const size_t out_Hu = out_H / 2;
+            const size_t out_Wu = out_W / 2;
+            const size_t row_stride = static_cast<size_t>(out_H) * out_W + 2 * out_Hu * out_Wu;
 
-            // The caller (Python wrapper) provides a pre-allocated output
-            // buffer.  We do this rather than allocating in C++ because
-            // numpy's `np.empty` ends up faster on first-touch than a C++
-            // `new uint8_t[N]` for reasons that vary by libc / page-promo
-            // settings.  Punting allocation to numpy keeps this path
-            // apples-to-apples with the torch_threaded reference.
+            // The caller (Python wrapper) provides a pre-allocated output buffer sized for the
+            // logical frame — numpy's np.empty first-touches faster than a C++ new here.
             if (out_arr.ndim() != 2 || out_arr.shape(0) != static_cast<size_t>(T) || out_arr.shape(1) != row_stride) {
-                throw std::invalid_argument("out array must have shape (T, H*W + 2*(H/2 * W/2))");
+                throw std::invalid_argument("out array must have shape (T, out_H*out_W + 2*(out_H/2 * out_W/2))");
             }
             uint8_t* out_buf = out_arr.data();
 
@@ -219,7 +227,8 @@ NB_MODULE(_planar_concat, m) {
             {
                 nb::gil_scoped_release release;
                 planar_concat(
-                    y_shards, y_h_per, y_w_per, cb_shards, uv_h_per, uv_w_per, cr_shards, dim, T, H, W, out_buf);
+                    y_shards, y_h_per, y_w_per, cb_shards, uv_h_per, uv_w_per, cr_shards, dim, T, H, W, out_H, out_W,
+                    out_buf);
             }
         },
         nb::arg("y_shards"),
@@ -228,6 +237,8 @@ NB_MODULE(_planar_concat, m) {
         nb::arg("dim_order"),
         nb::arg("mesh_shape"),
         nb::arg("out"),
+        nb::arg("out_H") = -1,
+        nb::arg("out_W") = -1,
         "Planar YUV 4:2:0 concat from per-shard uint8 inputs.\n\n"
         "Args:\n"
         "  y_shards, cb_shards, cr_shards: list of TP*SP uint8 numpy arrays.\n"

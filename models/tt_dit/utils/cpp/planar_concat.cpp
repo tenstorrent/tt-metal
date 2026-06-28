@@ -189,13 +189,22 @@ static inline void stream_copy_n(uint8_t* __restrict dst, const uint8_t* __restr
 // contiguous dest bytes — a straight copy.  We use non-temporal stores so the
 // 112 MB output buffer doesn't displace useful data from L2/L3 and so we
 // don't pay the read-for-ownership tax on every cache line written.
-void scatter_one_cthw(const uint8_t* src, uint8_t* dst, int T, int h_per, int w_per, int plane_W, int row_stride) {
+void scatter_one_cthw(
+    const uint8_t* src,
+    uint8_t* dst,
+    int T,
+    int src_h_per,
+    int src_w_per,
+    int valid_h,
+    int valid_w,
+    int plane_W,
+    int row_stride) {
     for (int t = 0; t < T; ++t) {
-        for (int h = 0; h < h_per; ++h) {
+        for (int h = 0; h < valid_h; ++h) {
             stream_copy_n(
                 dst + t * static_cast<std::ptrdiff_t>(row_stride) + h * static_cast<std::ptrdiff_t>(plane_W),
-                src + (t * h_per + h) * static_cast<std::ptrdiff_t>(w_per),
-                static_cast<size_t>(w_per));
+                src + (t * static_cast<std::ptrdiff_t>(src_h_per) + h) * static_cast<std::ptrdiff_t>(src_w_per),
+                static_cast<size_t>(valid_w));
         }
     }
     // Drain WC buffers so subsequent readers (other threads, the Python
@@ -212,17 +221,27 @@ void scatter_one_cthw(const uint8_t* src, uint8_t* dst, int T, int h_per, int w_
 // 17-T tail).  We handle both:
 //   - w_chunks of 32 (Y: 5 chunks; UV: 2 full chunks + 1 tail of 16).
 //   - t_chunks of 32 (full: 2; tail: 1 of 17).
-void scatter_one_chwt(const uint8_t* src, uint8_t* dst, int T, int h_per, int w_per, int plane_W, int row_stride) {
+void scatter_one_chwt(
+    const uint8_t* src,
+    uint8_t* dst,
+    int T,
+    int src_h_per,
+    int src_w_per,
+    int valid_h,
+    int valid_w,
+    int plane_W,
+    int row_stride) {
+    (void)src_h_per;  // CHWT source h-stride is src_w_per*T; h_per only bounds the loop (valid_h).
     const std::ptrdiff_t src_w_stride = static_cast<std::ptrdiff_t>(T);  // bytes between adjacent w in source
 
-    const int n_w_full_tiles = w_per / 32;
-    const int w_tail = w_per - n_w_full_tiles * 32;  // 0 or 16 in our shapes
+    const int n_w_full_tiles = valid_w / 32;
+    const int w_tail = valid_w - n_w_full_tiles * 32;  // padded tail cols are never written
 
     const int n_t_full_tiles = T / 32;
     const int t_tail = T - n_t_full_tiles * 32;
 
-    for (int h = 0; h < h_per; ++h) {
-        const uint8_t* src_h = src + static_cast<std::ptrdiff_t>(h) * w_per * T;
+    for (int h = 0; h < valid_h; ++h) {
+        const uint8_t* src_h = src + static_cast<std::ptrdiff_t>(h) * src_w_per * T;
         uint8_t* dst_h = dst + static_cast<std::ptrdiff_t>(h) * plane_W;
 
         // Full 32×32 (W × T) tiles.
@@ -334,9 +353,9 @@ void scatter_component(
                             static_cast<std::ptrdiff_t>(sv.c) * w_per;
 
         if (dim_order == DimOrder::CTHW) {
-            scatter_one_cthw(sv.data, dst_base, T, h_per, w_per, plane_W, row_stride);
+            scatter_one_cthw(sv.data, dst_base, T, h_per, w_per, h_per, w_per, plane_W, row_stride);
         } else {
-            scatter_one_chwt(sv.data, dst_base, T, h_per, w_per, plane_W, row_stride);
+            scatter_one_chwt(sv.data, dst_base, T, h_per, w_per, h_per, w_per, plane_W, row_stride);
         }
     });
 }
@@ -353,48 +372,63 @@ void planar_concat(
     int T,
     int H,
     int W,
+    int out_H,
+    int out_W,
     uint8_t* out) {
-    const int Hu = H / 2;
-    const int Wu = W / 2;
-    const int hw = H * W;
-    const int uv = Hu * Wu;
-    const int row_stride = hw + 2 * uv;
+    (void)H;
+    (void)W;
+    // Output geometry is the logical (cropped) frame; sources keep the padded per-shard dims.
+    const int out_Hu = out_H / 2;
+    const int out_Wu = out_W / 2;
+    const int out_hw = out_H * out_W;
+    const int out_uv = out_Hu * out_Wu;
+    const int row_stride = out_hw + 2 * out_uv;
 
     // Build a flat task list across all 3 components so the thread pool can
     // load-balance Y (4× the bytes of UV) against UV.  Each entry is a
-    // resolved per-shard task.
+    // resolved per-shard task.  ``bound_h``/``bound_w`` are the logical plane
+    // extents used to clamp each shard's write.
     struct Task {
         const ShardView* shard;
         int plane_offset;
         int plane_W;
         int h_per;
         int w_per;
+        int bound_h;
+        int bound_w;
     };
 
     std::vector<Task> tasks;
     tasks.reserve(y_shards.size() + cb_shards.size() + cr_shards.size());
 
-    auto add_component = [&](const std::vector<ShardView>& s, int plane_off, int plane_w_arg, int h_p, int w_p) {
-        for (const auto& sv : s) {
-            tasks.push_back({&sv, plane_off, plane_w_arg, h_p, w_p});
-        }
-    };
-    add_component(y_shards, 0, W, y_h_per, y_w_per);
-    add_component(cb_shards, hw, Wu, uv_h_per, uv_w_per);
-    add_component(cr_shards, hw + uv, Wu, uv_h_per, uv_w_per);
+    auto add_component =
+        [&](const std::vector<ShardView>& s, int plane_off, int plane_w_arg, int h_p, int w_p, int bnd_h, int bnd_w) {
+            for (const auto& sv : s) {
+                tasks.push_back({&sv, plane_off, plane_w_arg, h_p, w_p, bnd_h, bnd_w});
+            }
+        };
+    add_component(y_shards, 0, out_W, y_h_per, y_w_per, out_H, out_W);
+    add_component(cb_shards, out_hw, out_Wu, uv_h_per, uv_w_per, out_Hu, out_Wu);
+    add_component(cr_shards, out_hw + out_uv, out_Wu, uv_h_per, uv_w_per, out_Hu, out_Wu);
 
     auto& pool = get_pool();
     pool.run(static_cast<int>(tasks.size()), [&](int idx) {
         const Task& tk = tasks[idx];
         const ShardView& sv = *tk.shard;
+        const int r0 = sv.r * tk.h_per;
+        const int c0 = sv.c * tk.w_per;
+        const int valid_h = (tk.h_per < tk.bound_h - r0) ? tk.h_per : (tk.bound_h - r0);
+        const int valid_w = (tk.w_per < tk.bound_w - c0) ? tk.w_per : (tk.bound_w - c0);
+        if (valid_h <= 0 || valid_w <= 0) {
+            return;  // shard lies entirely in the padded tail
+        }
         uint8_t* dst_base = out + static_cast<std::ptrdiff_t>(tk.plane_offset) +
-                            static_cast<std::ptrdiff_t>(sv.r) * tk.h_per * tk.plane_W +
-                            static_cast<std::ptrdiff_t>(sv.c) * tk.w_per;
+                            static_cast<std::ptrdiff_t>(r0) * tk.plane_W + c0;
 
         if (dim_order == DimOrder::CTHW) {
-            scatter_one_cthw(sv.data, dst_base, T, tk.h_per, tk.w_per, tk.plane_W, row_stride);
+            scatter_one_cthw(sv.data, dst_base, T, tk.h_per, tk.w_per, valid_h, valid_w, tk.plane_W, row_stride);
         } else {
-            scatter_one_chwt(sv.data, dst_base, T, tk.h_per, tk.w_per, tk.plane_W, row_stride);
+            scatter_one_chwt(sv.data, dst_base, T, tk.h_per, tk.w_per, valid_h, valid_w, tk.plane_W, row_stride);
         }
     });
 }

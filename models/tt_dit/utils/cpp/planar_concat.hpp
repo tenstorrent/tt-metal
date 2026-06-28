@@ -47,6 +47,11 @@ void scatter_component(
 // Top-level entry: schedule Y/Cb/Cr scatters in one batch for maximum
 // thread-pool parallelism (96 tasks for a 4×8 mesh).  Blocks until all
 // tasks finish.
+// ``out_H``/``out_W`` are the logical output dims. When the VAE pads a global
+// right/bottom tail (``out_H < H`` and/or ``out_W < W``), each shard's write
+// extent is clamped to the logical bound while its source is still addressed
+// with the full padded per-shard dims — so the padded tail is never written
+// and ``out`` is sized for the logical (cropped) frame, no separate trim pass.
 void planar_concat(
     const std::vector<ShardView>& y_shards,
     int y_h_per,
@@ -59,6 +64,8 @@ void planar_concat(
     int T,
     int H,
     int W,
+    int out_H,
+    int out_W,
     uint8_t* out);
 
 // Optional knob — set the size of the static thread pool.  No-op after the

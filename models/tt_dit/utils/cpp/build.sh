@@ -18,8 +18,10 @@ cd "$SCRIPT_DIR"
 PYTHON="${PYTHON:-python3}"
 BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 
-if ! "$PYTHON" -c "import nanobind" 2>/dev/null; then
-    echo "[build.sh] nanobind not found in $PYTHON; installing it..."
+# Require a real nanobind (cmake_dir), not just an importable name — a namespace
+# package on PYTHONPATH can shadow it and make a bare `import nanobind` succeed.
+if ! "$PYTHON" -c "import nanobind; nanobind.cmake_dir()" 2>/dev/null; then
+    echo "[build.sh] usable nanobind (with cmake_dir) not found in $PYTHON; installing it..."
     "$PYTHON" -m pip install nanobind
 fi
 

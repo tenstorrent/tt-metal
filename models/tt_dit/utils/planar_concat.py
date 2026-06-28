@@ -75,6 +75,8 @@ if HAS_CPP_PLANAR_CONCAT:
         dim_order: str,
         mesh_shape: tuple[int, int] = (4, 8),
         out: np.ndarray | None = None,
+        out_H: int | None = None,
+        out_W: int | None = None,
     ) -> np.ndarray:
         """Vectorized YUV 4:2:0 planar concat — C++/AVX2 implementation.
 
@@ -115,8 +117,11 @@ if HAS_CPP_PLANAR_CONCAT:
         else:
             raise ValueError(f"dim_order must be 'CHWT' or 'CTHW', got {dim_order!r}")
         H, W = h_per * TP, w_per * SP
-        Hu, Wu = H // 2, W // 2
-        row_stride = H * W + 2 * Hu * Wu
+        # Logical (cropped) output: when the VAE pads a global tail, write only the valid frame.
+        oH = H if out_H is None else out_H
+        oW = W if out_W is None else out_W
+        oHu, oWu = oH // 2, oW // 2
+        row_stride = oH * oW + 2 * oHu * oWu
 
         if out is None:
             out = np.empty((T, row_stride), dtype=np.uint8)
@@ -126,7 +131,7 @@ if HAS_CPP_PLANAR_CONCAT:
                 f"got shape {out.shape} dtype {out.dtype} c_contig={out.flags.c_contiguous}"
             )
 
-        _ext.planar_concat(y_np, u_np, v_np, dim_order, mesh_shape, out)
+        _ext.planar_concat(y_np, u_np, v_np, dim_order, mesh_shape, out, oH, oW)
         return out
 
     def set_thread_pool_size(n_threads: int) -> None:

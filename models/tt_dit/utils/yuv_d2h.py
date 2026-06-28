@@ -195,13 +195,16 @@ def _yuv_planar_d2h(
     # SP_eff rectangular submesh; if the local coords are sparse (could
     # happen on irregular multi-host topologies), we fall through to the
     # Python path which handles arbitrary coord sets.
-    # The C++ path assembles full rectangular shards; only valid when there's no crop.
-    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff and out_H == H and out_W == W:
+    # C++ path: needs a complete TP_eff x SP_eff rectangular submesh; it clamps each shard's
+    # write to out_H/out_W (the padded global tail is never written) and sizes out logically.
+    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
         triples = sorted(
             zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
             key=lambda t: (int(t[0][0]), int(t[0][1])),
         )
-        out = _get_planar_out_buf(T, row_stride)
+        out_Hu, out_Wu = out_H // 2, out_W // 2
+        out_row = out_H * out_W + 2 * out_Hu * out_Wu
+        out = _get_planar_out_buf(T, out_row)
         return _planar_concat_cpp_impl(
             [t[1] for t in triples],
             [t[2] for t in triples],
@@ -209,6 +212,8 @@ def _yuv_planar_d2h(
             "CHWT",
             (TP_eff, SP_eff),
             out=out,
+            out_H=out_H,
+            out_W=out_W,
         )
 
     # --- Python fallback (torch_threaded scatter) ------------------------
