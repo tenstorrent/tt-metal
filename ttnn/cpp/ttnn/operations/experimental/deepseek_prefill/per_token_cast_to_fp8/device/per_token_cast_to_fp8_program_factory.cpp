@@ -79,8 +79,13 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
 
     const uint32_t TILE_BYTES_FP32 = tile_h * tile_w * 4;
     const uint32_t block_wt = block_w / tile_w;  // BlockWt: tiles across the 128-wide block
-    constexpr uint32_t block_ht = 1;             // BlockHt: one tile-height batch
+    constexpr uint32_t block_ht = 2;             // BlockHt: tile-rows batched per block
     const uint32_t tiles_per_block = block_ht * block_wt;
+    // Fastest config (measured): block_ht=2 amortizes per-block init/reconfig over 2 tile-rows, and
+    // half-sync (dst_full_sync=false, acq_tiles=block_wt=4) keeps math<->pack double-buffering across
+    // tile-rows. Batching all 8 tiles in one acquire (dst_full_sync=true) was measurably slower.
+    const bool dst_full_sync = false;
+    const uint32_t acq_tiles = dst_full_sync ? tiles_per_block : block_wt;
 
     const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128
     const uint32_t in_elem_bytes = input.element_size();
@@ -116,7 +121,6 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     constexpr uint32_t cb_scale_tiles_idx = CBIndex::c_5;
     constexpr uint32_t cb_scale_scratch_idx = CBIndex::c_6;
     constexpr uint32_t cb_inv_scale_tiles_idx = CBIndex::c_7;
-    constexpr uint32_t cb_out_tile_idx = CBIndex::c_8;
     constexpr uint32_t cb_output_e4m3_idx = CBIndex::c_16;
 
     auto make_fp32_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
@@ -131,12 +135,12 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
                                          .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
-    make_fp32_tile_cb(cb_tile_idx, tiles_per_block);                  // tilized input
+    make_fp32_tile_cb(cb_tile_idx, 2 * tiles_per_block);  // tilized input (double-buffered: next block's tilize
+                                                          // overlaps current block's reduce/divide)
     make_fp32_tile_cb(cb_scaler_idx, 1);                              // reduce scaler (1.0), reader-filled
-    make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);                      // abs tiles for one block row
+    make_fp32_tile_cb(cb_abs_idx, 2 * tiles_per_block);               // abs tiles for the whole block (double-buffered)
     make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht);              // col0 = scale
     make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht);          // col0 = 1/scale
-    make_fp32_tile_cb(cb_out_tile_idx, tiles_per_block);              // divided tiles -> untilize
 
     // cb_output_e4m3: output_e4m3 row-major output, one tile per page; tiles_per_block pages = one
     // block, double-buffered.
@@ -198,12 +202,13 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         cb_abs_idx,
         cb_scale_tiles_idx,
         cb_inv_scale_tiles_idx,
-        cb_out_tile_idx,
         cb_output_e4m3_idx,
         clamp_min_bits,
         clamp_max_bits,
         inv_e4m3_max_bits,
-        tile_w};
+        tile_w,
+        block_ht,
+        acq_tiles};
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     KernelHandle compute_kernel_id = CreateKernel(
@@ -211,7 +216,7 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/"
         "compute_per_token_cast_to_fp8.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args});
+        ComputeConfig{.fp32_dest_acc_en = true, .dst_full_sync_en = dst_full_sync, .compile_args = compute_ct_args});
 
     // Each core owns rows [row_offset, row_offset+rows_for_core). Its 128-element scale blocks
     // form a flat stream read/written in tile_h-block batches.
@@ -223,20 +228,31 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         const uint32_t rows_for_core =
             rows_for_core_from_split(core, core_range_set_1, core_range_set_2, rows_per_core_g1, rows_per_core_g2);
         const uint32_t total_scale_blocks = rows_for_core * scale_blocks_per_core_row;
-        const uint32_t num_blocks = tt::div_up(total_scale_blocks, tile_h);  // last block may be partial
+        // One block now spans block_ht tile-rows = block_ht*tile_h scale-blocks; last block may be partial.
+        const uint32_t block_scale_capacity = block_ht * tile_h;
+        const uint32_t num_blocks = tt::div_up(total_scale_blocks, block_scale_capacity);
 
         // Host-side invariant checks (no LLK investigation needed downstream if these hold).
         TT_FATAL(
-            num_blocks == tt::div_up(rows_for_core * scale_blocks_per_core_row, tile_h),
+            num_blocks == tt::div_up(rows_for_core * scale_blocks_per_core_row, block_scale_capacity),
             "per_token_cast_to_fp8: num_blocks invariant violated on a core");
 
         SetRuntimeArgs(
-            program, reader_kernel_id, core, {src_buffer->address(), num_blocks, row_offset, rows_for_core, H});
+            program,
+            reader_kernel_id,
+            core,
+            {src_buffer->address(), num_blocks, row_offset, rows_for_core, H, block_ht});
         SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
-            {dst_e4m3_buffer->address(), dst_scale_buffer->address(), num_blocks, row_offset, rows_for_core, H});
+            {dst_e4m3_buffer->address(),
+             dst_scale_buffer->address(),
+             num_blocks,
+             row_offset,
+             rows_for_core,
+             H,
+             block_ht});
         SetRuntimeArgs(program, compute_kernel_id, core, {num_blocks});
         row_offset += rows_for_core;
     }
