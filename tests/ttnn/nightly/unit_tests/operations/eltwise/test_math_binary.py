@@ -54,7 +54,13 @@ def run_math_binary_test_atan2(device, h, w, a1, a2, b1, b2, ttnn_function, pcc=
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    # bf16 linspace can quantize inputs so heavily that golden is constant (zero
+    # variance) — PCC is undefined.  Fall back to ULP which tolerates the small
+    # SFPU rounding scatter seen on BH (1 ULP at the constant value).
+    if torch_output_tensor.numel() > 0 and torch.max(torch_output_tensor) == torch.min(torch_output_tensor):
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
+    else:
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
 @pytest.mark.parametrize("h", [64])
