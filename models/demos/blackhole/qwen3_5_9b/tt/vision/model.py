@@ -227,7 +227,7 @@ class DropInVisionTransformer(torch.nn.Module):
             # --- Preprocessing ---
             # 1. Calculate total unpadded sequence length
             grid_thw = grid_thw.unsqueeze(0)
-            unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
+            unpadded_seq_len = grid_thw.prod(dim=1).sum().item()
             # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
             seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 

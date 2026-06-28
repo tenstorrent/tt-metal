@@ -62,10 +62,13 @@ class Qwen35Model:
         # RoPE setup (for gated attention layers only)
         self.rope = Qwen35RoPESetup(mesh_device, args)
 
-        # Per-request image grid (t,h,w), stashed by get_image_features so the prefill paths can
-        # build the multimodal 3D RoPE (M-RoPE) position ids without threading grid_thw through
-        # every prefill signature. None => text-only request.
+        # Per-request vision grid (t,h,w), stashed by get_image_features / get_video_features so the
+        # prefill paths can build the multimodal 3D RoPE (M-RoPE) position ids without threading
+        # grid_thw through every prefill signature. Exactly one is non-None for a multimodal request
+        # (image XOR video); both None => text-only. The active one also selects which placeholder
+        # token id (image_token_id vs video_token_id) the vision-splice paths look for.
         self._req_image_grid_thw = None
+        self._req_video_grid_thw = None
 
         # Transformer layers
         logger.info(f"Loading {args.n_layers} transformer layers...")
@@ -202,9 +205,11 @@ class Qwen35Model:
             the last dim on a mesh (same sharding as the text embeddings).
         """
         assert self.vision_model is not None, "init_vision_model() must be called before get_image_features()"
-        # Stash the grid so the prefill paths can build M-RoPE position ids for this request
-        # (the splice positions in input_ids + the (t,h,w) grid are all M-RoPE needs).
+        # Stash the grid (as an IMAGE grid) so the prefill paths can build M-RoPE position ids for
+        # this request (the splice positions in input_ids + the (t,h,w) grid are all M-RoPE needs).
+        # Clear any stale video grid so the modality (and thus the placeholder token id) is image.
         self._req_image_grid_thw = image_grid_thw
+        self._req_video_grid_thw = None
         image_features = self.vision_model.forward(pixel_values, grid_thw=image_grid_thw)
         # The vision tower returns [1, B, S, H]; flatten the leading (batch/seq) dims to the
         # packed [num_image_tokens, H] rows the text-model splice (_scatter_vision_tokens /
@@ -213,14 +218,51 @@ class Qwen35Model:
         hidden = image_features.shape[-1]
         return ttnn.reshape(image_features, (-1, hidden))
 
+    def get_video_features(self, pixel_values_videos, video_grid_thw):
+        """Run the vision tower over a single user's video frames.
+
+        Mirrors the HF reference's ``get_video_features`` seam, which is just ``get_image_features``
+        on the video pixels/grid — the vision tower forward is identical for image and video. The
+        only differences are downstream: M-RoPE treats the grid as a VIDEO grid (split per frame by
+        timestamps, modality==2), and the embeddings splice into ``video_token_id`` placeholders
+        rather than ``image_token_id``. Both are selected by stashing the grid here as a video grid.
+
+        Args:
+            pixel_values_videos (torch.Tensor): patchified video pixels ``[num_patches, patch_dim]``.
+            video_grid_thw (torch.Tensor): per-video grid ``(t, h, w)``, ``[num_videos, 3]``.
+
+        Returns:
+            ttnn.Tensor: ``[num_video_tokens, H]`` video embeddings, hidden-fractured along the last
+            dim on a mesh (same sharding as the text embeddings).
+        """
+        assert self.vision_model is not None, "init_vision_model() must be called before get_video_features()"
+        # Stash the grid as a VIDEO grid; clear any stale image grid so the modality (and the
+        # placeholder token id) is video.
+        self._req_video_grid_thw = video_grid_thw
+        self._req_image_grid_thw = None
+        video_features = self.vision_model.forward(pixel_values_videos, grid_thw=video_grid_thw)
+        hidden = video_features.shape[-1]
+        return ttnn.reshape(video_features, (-1, hidden))
+
+    def _vision_placeholder_token_id(self):
+        """The input-id the current request's vision embeddings splice into: ``video_token_id`` for
+        a video request (video grid stashed), else ``image_token_id``. The vision-splice paths
+        (_scatter_vision_tokens / _set_vision_merge / _vis_row_offset_for) use this to locate the
+        placeholder positions, mirroring HF's ``input_ids == image_token_id`` /
+        ``input_ids == video_token_id`` masks."""
+        if self._req_video_grid_thw is not None:
+            return int(self.args.hf_config.video_token_id)
+        return int(self.args.hf_config.image_token_id)
+
     def _build_request_rope(self, token_ids, vision_tokens):
         """Stage the per-request RoPE for this prefill: M-RoPE (3D position ids + rope_delta) when
         the request is multimodal (vision_tokens present -> use the grid stashed by
-        get_image_features), else clear to ordinary 1D RoPE. Call once at a prefill entry point
-        with the REAL token ids (token_ids[:, :actual_len]); the chunk/tail seams then slice the
-        staged table by sequence position and decode offsets by rope_delta."""
-        grid = self._req_image_grid_thw if vision_tokens is not None else None
-        self.rope.build_request_rope(token_ids, image_grid_thw=grid)
+        get_image_features / get_video_features), else clear to ordinary 1D RoPE. Call once at a
+        prefill entry point with the REAL token ids (token_ids[:, :actual_len]); the chunk/tail
+        seams then slice the staged table by sequence position and decode offsets by rope_delta."""
+        image_grid = self._req_image_grid_thw if vision_tokens is not None else None
+        video_grid = self._req_video_grid_thw if vision_tokens is not None else None
+        self.rope.build_request_rope(token_ids, image_grid_thw=image_grid, video_grid_thw=video_grid)
 
     def _alloc_vision_merge_buffers(self, device, chunk_size):
         """Allocate the persistent vision-splice buffers used by the traced prefill path.
@@ -345,7 +387,7 @@ class Qwen35Model:
         cs = self._vis_buf.shape[-2]  # seq dim: dim 1 (3D single) / dim 2 (4D TP)
         Hg = self.args.dim  # global hidden (the buffer's last dim is dim/TP on a mesh)
         flat = ids_host.reshape(-1)
-        pos = torch.nonzero(flat[:cs] == int(self.args.hf_config.image_token_id), as_tuple=False).reshape(-1)
+        pos = torch.nonzero(flat[:cs] == self._vision_placeholder_token_id(), as_tuple=False).reshape(-1)
         n = int(pos.numel())
         # No image placeholders in this segment (text-only chunk, or a tail that holds none of the
         # image rows): the merge is the identity, so just clear the mask.
@@ -402,7 +444,7 @@ class Qwen35Model:
         owns — used to splice a large image whose placeholders span multiple chunks / the tail."""
         if chunk_start <= 0:
             return 0
-        return int((token_ids[:, :chunk_start] == int(self.args.hf_config.image_token_id)).sum())
+        return int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
 
     def switch_mode(self, mode):
         """Generator calls this on mode change; Qwen has no prefetcher, so no-op."""
@@ -591,7 +633,7 @@ class Qwen35Model:
         # special_image_mask = input_ids == image_token_id, computed on host from the
         # token ids and uploaded. torch.nonzero gives the placement positions directly.
         flat_ids = token_ids.reshape(-1)
-        mask_bool = flat_ids == int(self.args.hf_config.image_token_id)
+        mask_bool = flat_ids == self._vision_placeholder_token_id()
         pos = torch.nonzero(mask_bool, as_tuple=False).reshape(-1)
         n = int(pos.numel())
         if n == 0:
