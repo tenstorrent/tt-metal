@@ -107,7 +107,7 @@ void kernel_main() {
         for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
             uint32_t q_row_start = qb * B_q_t;
 
-            // Push Q-block tiles: B_q_t rows × D_t cols
+            // Push Q-block tiles: B_q_t rows × D_t cols (once, retained across KV-blocks by matmul)
             for (uint32_t r = 0; r < B_q_t; ++r) {
                 for (uint32_t d = 0; d < D_t; ++d) {
                     cb_reserve_back(cb_q, 1);

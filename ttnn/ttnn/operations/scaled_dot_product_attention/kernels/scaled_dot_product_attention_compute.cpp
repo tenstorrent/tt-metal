@@ -79,6 +79,7 @@ void kernel_main() {
 
         for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
             // Phase 1: QK^T score matmul: S = Q @ K^T
+            // in0_policy=WaitAndRetainOnLastBlock: Q retained for next KV-block
             matmul_block<true, false, LastBlockTarget::Out, OutputCBLayout::SubblockMajor,
                 matmul_config::InitMode::Short, InputPolicy::WaitAndRetainOnLastBlock,
                 InputPolicy::WaitAndPopPerKBlock, NoPostCompute, NoPreKBlock, NoPostKBlock,
@@ -110,7 +111,6 @@ void kernel_main() {
                 Exp<>{}, PackTile<cb_alpha, OutputLifecycle::Streaming>{});
 
             // Phase 6: Rescale O: O *= alpha (Col broadcast)
-            // OperandKind::Col for B operand: per-row alpha (not Scalar tile 0)
             mul<cb_o, cb_alpha, cb_o, BroadcastDim::Col,
                 InputLifecycle::Streaming, InputLifecycle::HeldBulk,
                 OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input,
@@ -150,7 +150,7 @@ void kernel_main() {
             // Phase 11: Update l: l_i += l_blk
             add<cb_sum_old, cb_sum_new, cb_sum_old>(B_q_t);
 
-            // Phase 12: PV matmul: O += P @ V (accumulate into cb_o_accum)
+            // Phase 12: PV matmul: P @ V → cb_o_accum
             matmul_block<false, false, LastBlockTarget::Out, OutputCBLayout::SubblockMajor,
                 matmul_config::InitMode::Short, InputPolicy::WaitAndPopPerKBlock,
                 InputPolicy::WaitAndPopPerKBlock, NoPostCompute, NoPreKBlock, NoPostKBlock,

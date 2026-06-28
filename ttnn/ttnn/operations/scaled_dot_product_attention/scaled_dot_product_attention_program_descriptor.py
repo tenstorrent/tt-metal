@@ -11,10 +11,17 @@ MAX_B_KV_T = 4
 
 
 def create_program_descriptor(
-    query, key, value, output_tensor, *,
-    attn_mask=None, is_causal=False, scale=None,
+    query,
+    key,
+    value,
+    output_tensor,
+    *,
+    attn_mask=None,
+    is_causal=False,
+    scale=None,
     math_fidelity=ttnn.MathFidelity.HiFi4,
-    fp32_dest_acc_en=True, math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    math_approx_mode=False,
 ):
     q_shape = list(query.shape)
     k_shape = list(key.shape)
@@ -26,6 +33,7 @@ def create_program_descriptor(
     B_q_t = min(MAX_B_Q_T, S_q_tiles)
     B_kv_t = min(MAX_B_KV_T, S_kv_tiles)
     tile_size = ttnn.tile_size(query.dtype)
+    fp32_tile_size = ttnn.tile_size(ttnn.float32)
     resolved_scale = scale if scale is not None else (1.0 / math.sqrt(D))
     scale_bits = struct.unpack("I", struct.pack("f", resolved_scale))[0]
     num_work_units = B * H_q
@@ -47,25 +55,34 @@ def create_program_descriptor(
             ],
         )
 
+    def cb_fp32(idx, pages):
+        return ttnn.CBDescriptor(
+            total_size=pages * fp32_tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=fp32_tile_size)
+            ],
+        )
+
     cbs = [
-        cb(0, num_o_tiles),         # cb_q
-        cb(1, 2 * B_kv_t * D_t),    # cb_k
-        cb(2, 2 * B_kv_t * D_t),    # cb_v
-        cb(3, 2 * num_score_tiles), # cb_mask
-        cb(6, 1),                   # cb_scaler_max
-        cb(7, 1),                   # cb_scaler_sum
-        cb(5, 1),                   # cb_scale_factor
-        cb(8, B_q_t),               # cb_alpha
-        cb(16, num_o_tiles),        # cb_o
-        cb(17, 2 * num_o_tiles),    # cb_out (double-buffered for multi-Q-block)
-        cb(24, num_score_tiles),    # cb_scores
-        cb(25, num_score_tiles),    # cb_scores_masked
-        cb(26, B_q_t),              # cb_max_new
-        cb(27, B_q_t),              # cb_max_old
-        cb(28, num_score_tiles),    # cb_exp_scores
-        cb(29, B_q_t),              # cb_sum_new
-        cb(30, B_q_t),              # cb_sum_old
-        cb(31, num_o_tiles),        # cb_o_accum
+        cb(0, num_o_tiles),  # cb_q (bf16)
+        cb(1, 2 * B_kv_t * D_t),  # cb_k (bf16)
+        cb(2, 2 * B_kv_t * D_t),  # cb_v (bf16)
+        cb(3, 2 * num_score_tiles),  # cb_mask (bf16)
+        cb(6, 1),  # cb_scaler_max (bf16)
+        cb(7, 1),  # cb_scaler_sum (bf16)
+        cb(5, 1),  # cb_scale_factor (bf16)
+        cb_fp32(8, B_q_t),  # cb_alpha (fp32 — running state)
+        cb_fp32(16, num_o_tiles),  # cb_o (fp32 — running accumulator)
+        cb(17, 2 * num_o_tiles),  # cb_out (bf16, double-buffered)
+        cb_fp32(24, num_score_tiles),  # cb_scores (fp32 — precision)
+        cb_fp32(25, num_score_tiles),  # cb_scores_masked (fp32)
+        cb_fp32(26, B_q_t),  # cb_max_new (fp32 — running state)
+        cb_fp32(27, B_q_t),  # cb_max_old (fp32 — running state)
+        cb_fp32(28, num_score_tiles),  # cb_exp_scores (fp32)
+        cb_fp32(29, B_q_t),  # cb_sum_new (fp32)
+        cb_fp32(30, B_q_t),  # cb_sum_old (fp32 — running state)
+        cb_fp32(31, num_o_tiles),  # cb_o_accum (fp32)
     ]
 
     # Reader CT args: [has_mask, H_q, H_kv, mask_is_per_head, ...Q_acc, ...K_acc, ...V_acc, ...mask_acc]
