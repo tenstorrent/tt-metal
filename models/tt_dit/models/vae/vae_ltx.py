@@ -845,6 +845,30 @@ class LTXVideoDecoder(Module):
         for k in keys_to_remove:
             del state[k]
 
+    def decode_device(self, sample_tt, logical_h: int, logical_w: int):
+        """Device-only decode: denorm → conv_in → up_blocks → norm_out → conv_out, on an already-sharded
+        input, returning the device output before the host gather. Split out from forward() so it can be
+        captured as a single ttnn trace (the host upload/gather must stay outside the trace)."""
+        # Denormalize: x = x * std + mean (per-channel stats replicated on the mesh).
+        mean = self.per_channel_mean.data
+        std = self.per_channel_std.data
+        sample_tt = ttnn.add(ttnn.multiply(sample_tt, std), mean)
+        sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
+
+        # logical_h/logical_w scale up through each upsample so later convs mask the right region.
+        sample_tt = self.conv_in(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
+        for up_block in self.up_blocks:
+            if isinstance(up_block, LTXDepthToSpaceUpsample):
+                sample_tt, logical_h, logical_w = up_block(
+                    sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
+                )
+            else:
+                sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
+
+        sample_tt = self.norm_out(sample_tt, compute_kernel_config=self.norm_out_compute_kernel_config)
+        sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
+        return self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
+
     def forward(self, sample_BCTHW: torch.Tensor) -> torch.Tensor:
         """
         Decode latent (B, 128, F', H', W') → video (B, 3, F, H, W).
@@ -867,25 +891,7 @@ class LTXVideoDecoder(Module):
             dtype=ttnn.bfloat16,
         )
 
-        # Denormalize: x = x * std + mean (per-channel stats replicated on the mesh).
-        mean = self.per_channel_mean.data
-        std = self.per_channel_std.data
-        sample_tt = ttnn.add(ttnn.multiply(sample_tt, std), mean)
-        sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
-
-        # logical_h/logical_w scale up through each upsample so later convs mask the right region.
-        sample_tt = self.conv_in(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
-        for up_block in self.up_blocks:
-            if isinstance(up_block, LTXDepthToSpaceUpsample):
-                sample_tt, logical_h, logical_w = up_block(
-                    sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
-                )
-            else:
-                sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
-
-        sample_tt = self.norm_out(sample_tt, compute_kernel_config=self.norm_out_compute_kernel_config)
-        sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
-        sample_tt = self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
+        sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
 
         # Gather fractured (B, T, H_per_device, W_per_device, C_out) back to a single torch tensor.
         concat_dims = [None, None]

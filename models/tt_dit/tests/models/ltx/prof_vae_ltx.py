@@ -184,3 +184,69 @@ def test_prof_vae_ltx_devicetime(mesh_device, device_params):
     ttnn.ReadDeviceProfiler(mesh)
     signpost("stop")
     print(f"\nSINGLE_FORWARD_HOST_WALL_MS={host_wall:.2f}", flush=True)
+
+
+_TRACE_ITERS = int(os.environ.get("TRACE_ITERS", "10"))
+
+
+def _prepare_decode_input(tt_decoder, latent):
+    """Replicate LTXVideoDecoder.forward's host upload → device-sharded sample_tt + logical dims, so the
+    device-only decode (decode_device) can be captured as a trace with the host I/O kept outside."""
+    from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_width
+    from models.tt_dit.utils.tensor import typed_tensor_2dshard
+
+    pc = tt_decoder.parallel_config
+    sample = latent.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
+    sample, logical_h = conv_pad_height(sample, pc.height_parallel.factor)
+    sample, logical_w = conv_pad_width(sample, pc.width_parallel.factor)
+    sample_tt = typed_tensor_2dshard(
+        sample,
+        tt_decoder.mesh_device,
+        shard_mapping={pc.height_parallel.mesh_axis: 2, pc.width_parallel.mesh_axis: 3},
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    return sample_tt, logical_h, logical_w
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_prof_vae_ltx_trace(mesh_device, device_params):
+    """TRUE traced-decode WALL: capture the device-only decode as one ttnn trace and replay it, so the
+    wall/iter is the real e2e device time with no host-dispatch gap. This is the metric the per-shape
+    routing should be derived from (device-FW MIN is optimistic, the isolated-op bench is pessimistic).
+
+    LTX_USE_FUSED=1 (default) = hybrid per-shape routing; =0 = all-standalone. Run both to compare.
+    """
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    tt_decoder = _build_tt_decoder(mesh)
+    latent = _latent()
+    sample_tt, logical_h, logical_w = _prepare_decode_input(tt_decoder, latent)
+
+    # Warmup: cold-compile every program in the decode (trace capture requires cached programs).
+    _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+    ttnn.synchronize_device(mesh)
+
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    ttnn.synchronize_device(mesh)
+
+    t0 = time.perf_counter()
+    for _ in range(_TRACE_ITERS):
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh)
+    wall_ms = (time.perf_counter() - t0) * 1000 / _TRACE_ITERS
+    ttnn.release_trace(mesh, tid)
+    ttnn.deallocate(out)
+
+    mode = "hybrid(fused)" if _USE_FUSED else "all-standalone"
+    print(
+        f"\nTRACED_DECODE_WALL_MS={wall_ms:.2f}  mode={mode}  frames={_NUM_FRAMES}  {_HEIGHT}x{_WIDTH}  "
+        f"iters={_TRACE_ITERS}",
+        flush=True,
+    )
