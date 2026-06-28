@@ -6,6 +6,14 @@ user_invocable: true
 
 # /mailbox-sync-audit — RISC↔RISC mailbox handshake correctness
 
+> **Ground-truth precedence:** the live ISA doc (tt-isa-docs MCP, fetched each run) outranks every rule, table, and example baked into this skill — treat those as dated illustrations. If the live ISA doc **contradicts** a baked rule here, do NOT silently proceed: surface the conflict to the user and ask whether the baked rule should be overwritten, discarded, or kept. Default to the ISA doc.
+>
+> **Coverage — floor, not ceiling.** The grep patterns and site lists in this skill are a **seed, not an exhaustive enumeration**. After running them, widen the search with full reasoning. The techniques here are **illustrative examples, not the allowed set** — use any approach your reasoning suggests, including ones not listed: e.g. semantic search (by behavior/effect, not just token), resolving macros / wrappers / typedefs / indirection the literal pattern can't match, following the call graph to callers and callees, and diffing the WH/BH/QSR variants to catch a site present in one arch and missing in another. If you can find a hazard, primitive, or site the encoded patterns don't cover — by any means — pursue and report it; do **not** clamp a stronger analysis to this list or to these techniques. State any residual coverage gaps explicitly (no silent caps).
+>
+> **Execution — parallel by default.** When enumeration yields more than a few sites/files, **fan out concurrent `Agent` calls by default** (one per file/subsystem, a fresh context each), saturating the available concurrency (~10–16 at once); go inline only for a trivial set. The per-file fan-out described under *Thoroughness* is the **default**, not an exhaustive-only option. The cross-referencing/synthesis of results stays sequential (it must follow the per-unit findings). The heavyweight **Workflow** tool still requires explicit multi-agent opt-in — it is the opt-in exhaustive tier, not the default. Don't over-spawn a tiny diff.
+>
+> **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
+
 ## The bug class (precise)
 Mailboxes are **point-to-point FIFOs between pairs of baby-RISCV cores** (T0/unpack, T1/math, T2/pack, B) — a sync path entirely separate from Tensix semaphores (`semaphore-handshake-audit`), config registers, and MMIO. A misused mailbox → **deadlock** (blocking read on an empty FIFO that never gets written, or a writer stalled forever on a full FIFO) or **stale/lost data** (ordering not enforced; fence is a nop).
 
@@ -28,6 +36,11 @@ Mailboxes are **point-to-point FIFOs between pairs of baby-RISCV cores** (T0/unp
 3. **Direction / single-writer-single-reader.** Confirm each channel has exactly one writer and one reader. Two readers popping one FIFO would race (each value goes to only one). Verify via the write-dest/read-src convention that math vs pack read *different* FIFOs (T0→T1 vs T0→T2), not the same one.
 4. **Overflow.** Depth-4; if a producer can push >4 without the consumer popping, the writer stalls. Confirm steady-state is ≤ depth (normally 1-deep).
 5. **Ordering (fence=nop).** If a mailbox handshake is used to imply that *other* memory is ready (e.g. "wrote tile data to L1, then signal via mailbox"), the producer needs explicit ordering (a read-back fence) — the mailbox write alone does not fence the prior store. SAFE when the mailbox only carries a self-contained value consumed by data dependency AND data readiness is enforced by separate sync (CB/NOC). Flag any site that leans on the mailbox to order unrelated memory.
+6. **Signal-before-blocking-write ordering + completion fence (deadlock).** When a producer notifies a consumer through **two** mechanisms in the same function — a `semaphore_post` (consumer-release) AND a `mailbox_write` carrying related data — two things must hold:
+   - **(a) Issue order:** the `semaphore_post` must come **before** the `mailbox_write`. `mailbox_write` **stalls the producer when the FIFO is full** (depth-4), so issuing it first can wedge the producer on a full FIFO *before* it posts, while the consumer is still blocked on the un-posted semaphore and never drains the mailbox → **deadlock**.
+   - **(b) Completion fence:** program order alone is NOT enough — RISC stores are not ordered against each other (`fence` is a nop; the load/store unit reorders). Force the post to actually *land* before the mailbox write with a **read-back fence**: store-then-load the semaphore's `pc_buf_base[PC_BUF_SEMAPHORE_BASE + <sem>]` address and consume the loaded value (e.g. `andi x0, <load>, 0`) between the post and the write.
+
+   Canonical correct form (`_llk_unpack_get_tile_`): `semaphore_post(UNPACK_OPERAND_SYNC)` → read-back fence on that semaphore → `mailbox_write(<consumer>, byte_address)`. Flag **both** the reversed order and a post that lacks a completion fence ahead of the mailbox write.
 
 ## Method
 1. Enumerate every site (exclude the debug-scratch mailbox):
@@ -43,6 +56,7 @@ Mailboxes are **point-to-point FIFOs between pairs of baby-RISCV cores** (T0/unp
 - **Balanced 1:1 per channel, symmetric across threads, 1-writer/1-reader, ≤depth, value self-contained (no cross-memory ordering assumed)** → SAFE.
 - **A reachable path where write and read counts diverge across threads** → DEADLOCK (blocking-read hang or full-FIFO stall).
 - **Mailbox used to imply other memory is ready, with no explicit ordering** → ORDERING-RACE (fence=nop).
+- **A (blocking) `mailbox_write` issued before the `semaphore_post`/credit that releases the consumer** → DEADLOCK-ORDERING — producer can stall on a full FIFO before signalling, consumer waits on the un-posted release. Fix = post the release signal first, then write the mailbox.
 - **Risk only on a user-kernel / cross-layer path, LLK itself balanced** → LATENT — say so; it's an author-level invariant.
 
 ## Architecture note

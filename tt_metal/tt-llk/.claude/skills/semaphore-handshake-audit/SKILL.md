@@ -6,6 +6,14 @@ user_invocable: true
 
 # /semaphore-handshake-audit — Inter-thread semaphore & mutex correctness
 
+> **Ground-truth precedence:** the live ISA doc (tt-isa-docs MCP, fetched each run) outranks every rule, table, and example baked into this skill — treat those as dated illustrations. If the live ISA doc **contradicts** a baked rule here, do NOT silently proceed: surface the conflict to the user and ask whether the baked rule should be overwritten, discarded, or kept. Default to the ISA doc.
+>
+> **Coverage — floor, not ceiling.** The grep patterns and site lists in this skill are a **seed, not an exhaustive enumeration**. After running them, widen the search with full reasoning. The techniques here are **illustrative examples, not the allowed set** — use any approach your reasoning suggests, including ones not listed: e.g. semantic search (by behavior/effect, not just token), resolving macros / wrappers / typedefs / indirection the literal pattern can't match, following the call graph to callers and callees, and diffing the WH/BH/QSR variants to catch a site present in one arch and missing in another. If you can find a hazard, primitive, or site the encoded patterns don't cover — by any means — pursue and report it; do **not** clamp a stronger analysis to this list or to these techniques. State any residual coverage gaps explicitly (no silent caps).
+>
+> **Execution — parallel by default.** When enumeration yields more than a few sites/files, **fan out concurrent `Agent` calls by default** (one per file/subsystem, a fresh context each), saturating the available concurrency (~10–16 at once); go inline only for a trivial set. The per-file fan-out described under *Thoroughness* is the **default**, not an exhaustive-only option. The cross-referencing/synthesis of results stays sequential (it must follow the per-unit findings). The heavyweight **Workflow** tool still requires explicit multi-agent opt-in — it is the opt-in exhaustive tier, not the default. Don't over-spawn a tiny diff.
+>
+> **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
+
 ## The bug class (precise)
 The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphores[0..7]`, each a 4-bit `Value` 0–15 plus a `Max`) and **two ATGETM/ATRELM mutexes**. Unlike config-register races (covered by `cfg-word-overlap-audit`, `reconfig-stall-audit`, `mmio-race-audit`), these bugs are in the *handshake protocol*: a mis-initialized, unbalanced, wrong-direction, or wrongly-ordered post/wait/get → **lost synchronization (silent data corruption)** or **deadlock (TENSIX TIMED OUT)**.
 
@@ -46,7 +54,8 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 - Producer side waits `STALL_ON_MAX` (block while full); consumer side waits `STALL_ON_ZERO` (block while empty), then `SEMGET`. Swapped condition → either no synchronization (proceeds immediately) or permanent stall. Canonical good pair: math `wait_on_max`→compute→`post(MATH_PACK)`; pack `wait_on_zero`→pack→`get(MATH_PACK)`.
 
 ### 4. RISC-MMIO vs Tensix-instruction ordering
-- `semaphore_post`/`semaphore_get` (no `t6_`) are RISC stores that execute asynchronously to the Tensix stream (overlaps `/mmio-race-audit`). When a RISC `semaphore_post` is meant to gate a Tensix consumer, there must be a `SEMWAIT`/`TTI_SEMGET` that actually stalls on it (the `UNPACK_SYNC` context-acquire idiom: RISC `semaphore_post` → `STALLWAIT(STALL_UNPACK, TRISC_CFG)` → MOP → `t6_semaphore_get`). A bare MMIO post/get with no in-stream wait can land early/late. On **Quasar**, Auto-TTSync changes these ordering rules (see memory `quasar-auto-ttsync`) — don't apply WH/BH manual-ordering verdicts blindly.
+- `semaphore_post`/`semaphore_get` (no `t6_`) are RISC stores that execute asynchronously to the Tensix stream (overlaps `/mmio-race-audit`). When a RISC `semaphore_post` is meant to gate a Tensix consumer, there must be a `SEMWAIT`/`TTI_SEMGET` that actually stalls on it (the `UNPACK_SYNC` context-acquire idiom: RISC `semaphore_post` → `STALLWAIT(STALL_UNPACK, TRISC_CFG)` → MOP → `t6_semaphore_get`). A bare MMIO post/get with no in-stream wait can land early/late. On **Quasar**, HW Auto-TTSync (auto-orders RISC↔Tensix MMIO writes against their consumers) changes these ordering rules — don't apply WH/BH manual-ordering verdicts blindly.
+- **Ordering vs a paired blocking `mailbox_write`:** when a producer releases the consumer with a `semaphore_post` AND hands data via a `mailbox_write` in the same path, the `semaphore_post` must come **first** — a full mailbox FIFO can stall the producer before it posts, deadlocking against the waiting consumer (→ `mailbox-sync-audit`, signal-before-blocking-write).
 
 ### 5. Mutex (ATGETM/ATRELM) balance & deadlock
 - `t6_mutex_acquire(idx)`/`t6_mutex_release(idx)` (`mutex::REG_RMW`=0, `mutex::SFPU`=4) must be **balanced on every path** — an early return between acquire and release holds the mutex and **deadlocks every other thread** that acquires it. The mutex only helps parties that take it (`REG_RMW` is **not** taken by the math thread — see `cfg-word-overlap-audit`).
@@ -75,7 +84,7 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 - **Window exists only on an unused/experimental path, or value-invariant** → LATENT — say so; let the maintainer decide.
 
 ## Architecture note
-WH/BH share this model. **Quasar** adds HW Auto-TTSync (memory `quasar-auto-ttsync`) that auto-orders RISC↔Tensix, so rule #4 verdicts differ; the semaphore-protocol rules (#1–#3, #5–#6) still apply. Verify the semaphore map/wrappers resolve for Quasar before concluding.
+WH/BH share this model. **Quasar** adds HW Auto-TTSync that auto-orders RISC↔Tensix, so rule #4 verdicts differ; the semaphore-protocol rules (#1–#3, #5–#6) still apply. Verify the semaphore map/wrappers resolve for Quasar before concluding.
 
 ## Verified non-bugs (don't re-flag)
 - `deepseek_compute_kernel_init` (`tt_metal/hw/inc/api/compute/experimental/deepseek_compute_kernel_hw_startup.h`): `MATH` inits `FPU_SFPU` (sem 0), `PACK` inits `SFPU_FPU` (= `UNPACK_MATH_DONE`, sem 6). Different semaphores **on purpose** — a two-semaphore bidirectional FPU↔SFPU handshake (documented in its `@note`), not a typo.
