@@ -548,10 +548,11 @@ def render(
     # Conditional bits that only appear when a collected baseline was supplied.
     if have_collected:
         summary_cols = "240px repeat(5, 1fr)"
+        crash_pct = pct(crashed, total)
         crashed_card = (
             f'<div class="card kpi bad"><div class="label">Crashed</div>'
             f'<div class="big bad">{crashed}</div>'
-            f'<div class="sub">enumerated − finished</div></div>'
+            f'<div class="sub">{crash_pct:.1f}%</div></div>'
         )
         crash_th = "<th class='num'>Crash</th>"
         crashed_nav = "<a href='#crashed'>Crashed</a>"
@@ -563,7 +564,7 @@ def render(
             if crashed
             else ""
         )
-        total_label = "Enumerated"
+        total_label = "Total"
         total_sub_extra = (
             "<div class='sub'>"
             + f"{recorded} finished"
