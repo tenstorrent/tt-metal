@@ -87,14 +87,16 @@ def _sink_mask(num_groups, nblk, device):
 
 
 def msa_indexer_sparse(
-    index_q, index_k, q, k, v, *, chunk_start_idx, scale, num_groups, device, return_block_ids=False, chunk_offset=None
+    index_q, index_k, q, k, v, *, chunk_start_idx, scale, num_groups, device, return_block_ids=False, cluster_axis=None
 ):
     """The MSA op chain over a FULL-context (already-gathered) K/V; index_q/q may stay SP-sharded.
 
     index_q [1, num_groups, Sq, INDEX_DIM]   index_k [1, 1, T, INDEX_DIM]   (1 shared index-k head)
     q       [1, Hq, Sq, head_dim]            k, v    [1, n_kv, T, head_dim]  (TILE layout)
-    chunk_offset: optional per-device uint32 tile (causal chunk-start in TILES) — when set, each SP
-      device's Sq query rows use their own absolute positions, so q/index_q can stay sharded (Sq=S/sp).
+    cluster_axis: when set, the merged op derives a PER-DEVICE causal chunk_start from the device's
+      mesh coordinate along that axis -> chunk_start = chunk_start_idx + rank*Sq (Sq = q's S/sp rows),
+      so q/index_q stay SP-sharded. None -> uniform chunk_start_idx (single-device / gathered query).
+      (Replaces the old host-built per-device chunk_offset tile; mesh-coord approach, #47939.)
     -> out  [1, Hq, Sq, head_dim]
     """
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
@@ -106,7 +108,7 @@ def msa_indexer_sparse(
         num_groups=num_groups,
         block_size=BLOCK_SIZE,
         program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
-        chunk_offset=chunk_offset,
+        cluster_axis=cluster_axis,
     )
 
     # Force the attention sink (block 0) to always be selected: +inf at block 0 before top-k. The op
@@ -132,31 +134,6 @@ def msa_indexer_sparse(
     return (out, block_ids) if return_block_ids else out
 
 
-def _per_device_chunk_offset(cached_len, s_local, mesh_config, device):
-    """Per-device causal chunk-start tile (uint32, one 32x32 tile/device) for the sharded-query path.
-
-    SP device at rank r owns query rows [r*s_local : (r+1)*s_local) of the current chunk, whose absolute
-    start is `cached_len + r*s_local`. We pass that (in TILES) at element [0,0] of a per-device tile,
-    sharded across the SP axis and replicated across TP. (Functionally main's mesh-coord #47939 derives
-    the same value from the device coordinate; here we build it host-side.)
-    """
-    rows, cols = tuple(device.shape)
-    sp_axis = mesh_config.sp_axis
-    assert sp_axis == 0, "sharded-query chunk_offset helper assumes SP on the row axis"
-    sp = rows
-    ts = ttnn.TILE_SIZE
-    vals = torch.zeros(sp, 1, ts, ts, dtype=torch.int32)
-    for r in range(sp):
-        vals[r, 0, 0, 0] = (cached_len + r * s_local) // ts
-    return ttnn.from_torch(
-        vals,
-        dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=(rows, cols), dims=[0, None]),
-    )
-
-
 def msa_sp_attention_nocache(
     q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cached_len, s_local, scale, num_groups=1
 ):
@@ -173,18 +150,19 @@ def msa_sp_attention_nocache(
     k_full = mesh_config.allgather(k, ccl_manager, axis=sp_axis, dim=2)
     v_full = mesh_config.allgather(v, ccl_manager, axis=sp_axis, dim=2)
     index_k_full = mesh_config.allgather(index_k, ccl_manager, axis=sp_axis, dim=2)
-    chunk_offset = _per_device_chunk_offset(cached_len, s_local, mesh_config, device)
+    # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
+    # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
     return msa_indexer_sparse(
         index_q,
         index_k_full,
         q,
         k_full,
         v_full,
-        chunk_start_idx=0,
+        chunk_start_idx=cached_len,
         scale=scale,
         num_groups=num_groups,
         device=device,
-        chunk_offset=chunk_offset,
+        cluster_axis=sp_axis,
     )
 
 
@@ -257,16 +235,17 @@ def msa_sp_attention(
     k_full = gather_natural(k_acc)
     v_full = gather_natural(v_acc)
     index_k_full = gather_natural(index_k_acc)
-    chunk_offset = _per_device_chunk_offset(cached_len, s_local, mesh_config, device)
+    # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
+    # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
     return msa_indexer_sparse(
         index_q,
         index_k_full,
         q,
         k_full,
         v_full,
-        chunk_start_idx=0,
+        chunk_start_idx=cached_len,
         scale=scale,
         num_groups=num_groups,
         device=device,
-        chunk_offset=chunk_offset,
+        cluster_axis=sp_axis,
     )
