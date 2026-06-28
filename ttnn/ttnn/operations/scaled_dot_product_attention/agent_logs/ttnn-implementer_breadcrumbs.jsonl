@@ -62,3 +62,6 @@
 {"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_basic","params":"(1,1,32,32) bf16","ts":"2026-06-28T16:45:29+00:00"}
 {"event":"test_run","status":"partial","test":"full suite","passed":"single_tile (1,1,32,32)","failed":"multi_tile_128x128 (1,1,128,128) - hang","classification":"hang","ts":"2026-06-28T16:47:42+00:00"}
 {"event":"test_run","status":"pass","test":"multi_tile_128x128","params":"(1,1,128,128) bf16, B_q_t=4, B_kv_t=4, D_t=4","ts":"2026-06-28T16:51:22+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Debug SDPA matmul hang","ts":"2026-06-28T16:58:52+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_basic","details":"PASSED in 1.06s on hardware. Single tile (1,1,32,32), no mask, auto scale.","ts":"2026-06-28T16:59:59+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_basic","classification":"pass","details":"Single tile (1,1,32,32) no mask, auto scale. PCC passes. Linter+debugger fixed: FillScalar init in compute, separate scaler CBs, OperandKind::Block for alpha, proper InputLifecycle.","ts":"2026-06-28T17:00:19+00:00"}
