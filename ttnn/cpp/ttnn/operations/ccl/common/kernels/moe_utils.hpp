@@ -183,7 +183,9 @@ inline void open_direction_connections_async(
                 args.local_flow_control_address,
                 args.local_teardown_address,
                 args.local_buffer_index_address);
-
+#ifdef __EMULE_JIT_MODE
+            connections[i].emule_dir = i;  // array index == eth_chan_directions; the teleport maps it to dir
+#endif
             args.increment(rt_args_idx);
         }
     }
@@ -218,6 +220,9 @@ inline void open_direction_connections(
         if (directions[i]) {
             connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+#ifdef __EMULE_JIT_MODE
+            connections[i].emule_dir = i;  // array index == eth_chan_directions; the teleport maps it to dir
+#endif
             connections[i].open();
         }
     }
@@ -232,6 +237,9 @@ inline void open_direction_connections_async(
         if (directions[i]) {
             connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+#ifdef __EMULE_JIT_MODE
+            connections[i].emule_dir = i;  // array index == eth_chan_directions; the teleport maps it to dir
+#endif
             connections[i].open_start();
         }
     }
