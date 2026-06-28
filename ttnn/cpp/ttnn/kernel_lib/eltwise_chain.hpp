@@ -163,6 +163,8 @@ struct InputLifecycle {
 };
 
 inline constexpr InputLifecycle InputLifecycle::Streaming = {WaitPolicy::PerTile, PopPolicy::PerTile};
+// Note: Streaming pops each tile after reading. If a CB is consumed by multiple stages (e.g. persistent running state),
+// use HeldBulk or HeldStream (PopPolicy::None) so later stages can still read it.
 inline constexpr InputLifecycle InputLifecycle::Chunked = {WaitPolicy::PerChunk, PopPolicy::PerChunk};
 inline constexpr InputLifecycle InputLifecycle::Bulk = {WaitPolicy::Upfront, PopPolicy::AtEnd};
 inline constexpr InputLifecycle InputLifecycle::Pipelined = {WaitPolicy::Cumulative, PopPolicy::AtEnd};
