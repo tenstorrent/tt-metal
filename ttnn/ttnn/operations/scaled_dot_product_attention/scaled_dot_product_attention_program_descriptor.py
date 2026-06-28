@@ -1,18 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-
 """Program descriptor for scaled_dot_product_attention (Flash Attention)."""
-
 from pathlib import Path
-import math
-import struct
-
-import ttnn
+import math, struct, ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
-B_Q_T = 4
-B_KV_T = 4
+MAX_B_Q_T = 4
+MAX_B_KV_T = 4
 
 
 def create_program_descriptor(
@@ -30,35 +25,25 @@ def create_program_descriptor(
 ):
     q_shape = list(query.shape)
     k_shape = list(key.shape)
-    B = q_shape[0]
-    H_q = q_shape[1]
-    H_kv = k_shape[1]
-    S_q = q_shape[2]
-    S_kv = k_shape[2]
-    D = q_shape[-1]
+    B, H_q, H_kv = q_shape[0], q_shape[1], k_shape[1]
+    S_q, S_kv, D = q_shape[2], k_shape[2], q_shape[-1]
     D_t = D // TILE_DIM
     S_q_tiles = S_q // TILE_DIM
     S_kv_tiles = S_kv // TILE_DIM
+    B_q_t = min(MAX_B_Q_T, S_q_tiles)
+    B_kv_t = min(MAX_B_KV_T, S_kv_tiles)
     tile_size = ttnn.tile_size(query.dtype)
-
     resolved_scale = scale if scale is not None else (1.0 / math.sqrt(D))
     scale_bits = struct.unpack("I", struct.pack("f", resolved_scale))[0]
-
     num_work_units = B * H_q
     grid_size = query.device().compute_with_storage_grid_size()
-    (num_cores, all_cores, core_group_1, core_group_2, units_per_core_1, units_per_core_2) = ttnn.split_work_to_cores(
-        grid_size, num_work_units, row_wise=True
-    )
-
+    num_cores, all_cores, _, _, u1, u2 = ttnn.split_work_to_cores(grid_size, num_work_units, row_wise=True)
     has_mask = attn_mask is not None
-
-    num_q_blocks = (S_q_tiles + B_Q_T - 1) // B_Q_T
-    num_o_tiles = B_Q_T * D_t
-    num_score_tiles = B_Q_T * B_KV_T
+    num_o_tiles = B_q_t * D_t
+    num_score_tiles = B_q_t * B_kv_t
 
     CB_Q, CB_K, CB_V, CB_MASK = 0, 1, 2, 3
-    CB_SCALER_REDUCE = 4
-    CB_SCALE_FACTOR = 5
+    CB_SCALER_REDUCE, CB_SCALE_FACTOR = 4, 5
     CB_ALPHA = 8
     CB_O, CB_OUT = 16, 17
     CB_SCORES, CB_SCORES_MASKED = 24, 25
@@ -66,129 +51,35 @@ def create_program_descriptor(
     CB_EXP_SCORES, CB_SUM_NEW, CB_SUM_OLD = 28, 29, 30
     CB_O_ACCUM = 31
 
+    def cb(idx, pages):
+        return ttnn.CBDescriptor(
+            total_size=pages * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=idx, data_format=query.dtype, page_size=tile_size)
+            ],
+        )
+
     cbs = [
-        ttnn.CBDescriptor(
-            total_size=num_o_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_Q, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=2 * B_KV_T * D_t * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=2 * B_KV_T * D_t * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_V, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=2 * num_score_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_MASK, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=2 * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCALER_REDUCE, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=1 * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCALE_FACTOR, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_ALPHA, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=num_o_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_O, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=num_o_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_OUT, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=num_score_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCORES, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=num_score_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCORES_MASKED, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_MAX_NEW, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_MAX_OLD, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=num_score_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_EXP_SCORES, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SUM_NEW, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SUM_OLD, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
-        ttnn.CBDescriptor(
-            total_size=num_o_tiles * tile_size,
-            core_ranges=all_cores,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_O_ACCUM, data_format=query.dtype, page_size=tile_size)
-            ],
-        ),
+        cb(CB_Q, B_q_t * D_t),
+        cb(CB_K, 2 * B_kv_t * D_t),
+        cb(CB_V, 2 * B_kv_t * D_t),
+        cb(CB_MASK, 2 * num_score_tiles),
+        cb(CB_SCALER_REDUCE, 2),
+        cb(CB_SCALE_FACTOR, 1),
+        cb(CB_ALPHA, B_q_t),
+        cb(CB_O, num_o_tiles),
+        cb(CB_OUT, num_o_tiles),
+        cb(CB_SCORES, num_score_tiles),
+        cb(CB_SCORES_MASKED, num_score_tiles),
+        cb(CB_MAX_NEW, B_q_t),
+        cb(CB_MAX_OLD, B_q_t),
+        cb(CB_EXP_SCORES, num_score_tiles),
+        cb(CB_SUM_NEW, B_q_t),
+        cb(CB_SUM_OLD, B_q_t),
+        cb(CB_O_ACCUM, num_o_tiles),
     ]
 
-    # Reader kernel
     reader_ct_args = [1 if has_mask else 0, H_q, H_kv]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
@@ -198,21 +89,24 @@ def create_program_descriptor(
     else:
         reader_ct_args.extend(ttnn.TensorAccessorArgs().get_compile_time_args())
 
-    reader_rt_args = ttnn.RuntimeArgs()
     cores = ttnn.grid_to_cores(num_cores, grid_size.x, grid_size.y, row_wise=True)
-    work_unit_assigned = 0
-    for core_idx, core in enumerate(cores):
-        if units_per_core_2 == 0:
-            units_this_core = units_per_core_1
-        else:
-            group1_count = (num_work_units - num_cores * units_per_core_2) // (units_per_core_1 - units_per_core_2)
-            units_this_core = units_per_core_1 if core_idx < group1_count else units_per_core_2
-        rt = [units_this_core, B_Q_T, B_KV_T, D_t, S_q_tiles, S_kv_tiles]
-        for i in range(units_this_core):
-            bh = work_unit_assigned + i
+
+    def units_for_core(core_idx):
+        if u2 == 0:
+            return u1
+        g1c = (num_work_units - num_cores * u2) // (u1 - u2)
+        return u1 if core_idx < g1c else u2
+
+    reader_rt_args = ttnn.RuntimeArgs()
+    wu_assigned = 0
+    for ci, core in enumerate(cores):
+        uc = units_for_core(ci)
+        rt = [uc, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
+        for i in range(uc):
+            bh = wu_assigned + i
             rt.append(bh // H_q)
             rt.append(bh % H_q)
-        work_unit_assigned += units_this_core
+        wu_assigned += uc
         rt.append(query.buffer_address())
         rt.append(key.buffer_address())
         rt.append(scale_bits)
@@ -228,25 +122,13 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # Writer kernel
-    # CT args: [B_q_t, D_t, num_q_blocks, ...TensorAccessorArgs(output)]
-    writer_ct_args = [B_Q_T, D_t, num_q_blocks]
+    writer_ct_args = []
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_args = ttnn.RuntimeArgs()
-    writer_wu_assigned = 0
-    for core_idx, core in enumerate(cores):
-        if units_per_core_2 == 0:
-            units_this_core = units_per_core_1
-        else:
-            group1_count = (num_work_units - num_cores * units_per_core_2) // (units_per_core_1 - units_per_core_2)
-            units_this_core = units_per_core_1 if core_idx < group1_count else units_per_core_2
-        rt = [output_tensor.buffer_address(), units_this_core, S_q_tiles, H_q]
-        for i in range(units_this_core):
-            bh = writer_wu_assigned + i
-            rt.append(bh // H_q)
-            rt.append(bh % H_q)
-        writer_wu_assigned += units_this_core
-        writer_rt_args[core.x][core.y] = rt
+    wu_assigned = 0
+    for ci, core in enumerate(cores):
+        uc = units_for_core(ci)
+        writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), uc * S_q_tiles * D_t]
 
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
@@ -256,17 +138,10 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    # Compute kernel
-    compute_ct_args = [1 if has_mask else 0, B_Q_T, B_KV_T, D_t, S_q_tiles, S_kv_tiles]
+    compute_ct_args = [1 if has_mask else 0, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
     compute_rt_args = ttnn.RuntimeArgs()
-    for core_idx, core in enumerate(cores):
-        if units_per_core_2 == 0:
-            units_this_core = units_per_core_1
-        else:
-            group1_count = (num_work_units - num_cores * units_per_core_2) // (units_per_core_1 - units_per_core_2)
-            units_this_core = units_per_core_1 if core_idx < group1_count else units_per_core_2
-        compute_rt_args[core.x][core.y] = [units_this_core]
-
+    for ci, core in enumerate(cores):
+        compute_rt_args[core.x][core.y] = [units_for_core(ci)]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
         core_ranges=all_cores,
