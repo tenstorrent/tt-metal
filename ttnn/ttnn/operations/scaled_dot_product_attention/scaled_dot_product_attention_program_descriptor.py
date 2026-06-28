@@ -3,41 +3,8 @@
 
 """Program descriptor for scaled_dot_product_attention (Flash Attention).
 
-Stage 1 (qkt_matmul): The reader streams Q-block and K-block tiles from DRAM
-into L1 CBs. The compute kernel boots the matmul pipeline and calls
-matmul_block (transpose=true) to produce cb_scores = Q @ K^T.
-
-Stage 4 (rowmax): The reader prepares the reduce scaler tile (1.0 for MAX) in
-cb_scaler_reduce. The compute kernel calls reduce<MAX, REDUCE_ROW, WaitUpfrontNoPop>
-to produce cb_max_new = per-row max of cb_scores_masked.
-
-CB layout (from op_design.md, with corrected sizing — see CB sizing note below):
-
-  cb_q             (0)  — Q-block tiles, B_q_t * D_t pages (16 for D=128)
-  cb_k             (1)  — K-block tiles, B_kv_t * D_t pages (16 for D=128)
-  cb_scaler_reduce (4)  — reduce scaler tile (1.0 for MAX), 1 page
-  cb_scale_factor  (5)  — scale value tile, 1 page
-  cb_o             (16) — running output, B_q_t * D_t tiles
-  cb_scores        (24) — Q@K^T score matmul out, B_q_t * B_kv_t tiles (16)
-  cb_scores_masked (25) — scores after mask/scale, 16 tiles
-  cb_max_new       (26) — per-row max of scores, B_q_t tiles
-  cb_max_old       (27) — running max m_i, B_q_t tiles
-  cb_sum_old       (30) — running sum l_i, B_q_t tiles
-
-CB sizing note: The design specifies cb_q with B_q_t=4 pages, but matmul_block
-with k=D_t and num_k=1 requires all M*K = B_q_t*D_t Q-tiles resident in one
-call (in0_block_num_tiles = out_subblock_h * in0_block_k * in0_num_subblocks
-= 2*4*2 = 16). Similarly cb_k needs B_kv_t*D_t = 16 pages. The design's
-in0_sb=1,in1_sb=1 only produces 4 output tiles (a 2×2 subblock); we use
-in0_sb=2,in1_sb=2 to produce all 16 score tiles in one call.
-
-The design's in0_policy=NoWaitNoPop is impossible (static_assert forbids it
-for in0). We use WaitAndRetainOnLastBlock, which retains Q when num_k_blocks=1.
-
-Tile block sizing (from op_design.md):
-  B_q_t = 4  (128 rows per Q-block)
-  B_kv_t = 4 (128 cols per KV-block)
-  D_t = D // 32 (head-dim tiles)
+Implements the Flash Attention v2 recurrence with online softmax.
+See op_design.md for the full algorithm and CB layout.
 """
 
 from pathlib import Path
@@ -49,9 +16,10 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 
-# Block sizes (op_design.md tile block sizing).
-B_Q_T = 4  # Q-block tile rows (128 rows)
-B_KV_T = 4  # KV-block tile cols (128 cols)
+# Max block sizes (op_design.md tile block sizing). Actual sizes are clamped
+# to the tensor dimensions at runtime.
+MAX_B_Q_T = 4  # Max Q-block tile rows (128 rows)
+MAX_B_KV_T = 4  # Max KV-block tile cols (128 cols)
 
 
 def create_program_descriptor(
@@ -67,35 +35,45 @@ def create_program_descriptor(
     fp32_dest_acc_en: bool = True,
     math_approx_mode: bool = False,
 ) -> ttnn.ProgramDescriptor:
-    """Build the Stage-1 program descriptor.
-
-    Args mirror the op entry point's resolved parameters. Stage 1 streams
-    Q and K tiles from DRAM, runs the QK^T matmul, and DPRINTs the score
-    block for TDD verification against reference_phase_qkt.
-    """
+    """Build the program descriptor for Flash Attention."""
     q_shape = list(query.shape)
+    k_shape = list(key.shape)
+    B = q_shape[0]
+    H_q = q_shape[1]
+    H_kv = k_shape[1]
+    S_q = q_shape[2]
+    S_kv = k_shape[2]
     D = q_shape[-1]
     D_t = D // TILE_DIM
+    S_q_tiles = S_q // TILE_DIM
+    S_kv_tiles = S_kv // TILE_DIM
 
-    tile_size = ttnn.tile_size(query.dtype)  # bf16 → 2048 bytes
+    # Clamp block sizes to actual tensor dimensions.
+    B_q_t = min(MAX_B_Q_T, S_q_tiles)
+    B_kv_t = min(MAX_B_KV_T, S_kv_tiles)
 
-    core = ttnn.CoreCoord(0, 0)
-    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    tile_size = ttnn.tile_size(query.dtype)
 
-    # Resolve scale: explicit value or 1/sqrt(D).
     resolved_scale = scale if scale is not None else (1.0 / math.sqrt(D))
-    # Pack as fp32 bits for the reader (converts to bf16 in-kernel).
     scale_bits = struct.unpack("I", struct.pack("f", resolved_scale))[0]
+
+    num_work_units = B * H_q
+    grid_size = query.device().compute_with_storage_grid_size()
+    num_cores, all_cores, core_group_1, core_group_2, units_per_core_1, units_per_core_2 = \
+        ttnn.split_work_to_cores(grid_size, num_work_units, row_wise=True)
+
+    has_mask = attn_mask is not None
 
     # --- Circular Buffers ---
     CB_Q = 0
     CB_K = 1
     CB_V = 2
+    CB_MASK = 3
     CB_SCALER_REDUCE = 4
     CB_SCALE_FACTOR = 5
     CB_ALPHA = 8
     CB_O = 16
-    CB_OUT = 17  # Final output CB (normalized O / l_i). Writer drains to DRAM.
+    CB_OUT = 17
     CB_SCORES = 24
     CB_SCORES_MASKED = 25
     CB_MAX_NEW = 26
@@ -105,213 +83,180 @@ def create_program_descriptor(
     CB_SUM_OLD = 30
     CB_O_ACCUM = 31
 
-    num_q_tiles = B_Q_T * D_t  # 16 for D=128
-    num_k_tiles = B_KV_T * D_t  # 16 for D=128
-    num_v_tiles = B_KV_T * D_t  # 16 for D=128
-    num_o_tiles = B_Q_T * D_t
-    num_score_tiles = B_Q_T * B_KV_T  # 16
+    num_q_tiles = B_q_t * D_t
+    num_k_tiles = B_kv_t * D_t
+    num_v_tiles = B_kv_t * D_t
+    num_mask_tiles = B_q_t * B_kv_t
+    num_o_tiles = B_q_t * D_t
+    num_score_tiles = B_q_t * B_kv_t
 
     cbs = [
-        # cb_q: one Q-block (B_q_t * D_t tiles). Filled by reader; retained
-        # across KV-blocks by compute (WaitAndRetainOnLastBlock).
         ttnn.CBDescriptor(
             total_size=num_q_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_Q, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_Q, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_k: one KV-block of K (B_kv_t * D_t tiles). Streamed by reader;
-        # consumed per KV-block by compute (WaitAndPopPerKBlock).
         ttnn.CBDescriptor(
-            total_size=num_k_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)
-            ],
+            total_size=2 * num_k_tiles * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_v: one KV-block of V (B_kv_t * D_t tiles). Streamed by reader;
-        # consumed per KV-block by compute (PV matmul in1, WaitAndPopPerKBlock).
-        # V is D-wide (not B_kv-wide), so num_v_tiles = B_kv_t * D_t.
         ttnn.CBDescriptor(
-            total_size=num_v_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_V, data_format=query.dtype, page_size=tile_size)
-            ],
+            total_size=2 * num_v_tiles * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_V, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_scaler_reduce: 2 tiles holding reduce scalers. The reader prepares
-        # two scaler tiles — one for MAX (row-0 fill) and one for SUM (col-0
-        # fill, since SUM REDUCE_ROW uses the matmul path). Each reduce call
-        # waits for its scaler but does NOT pop it; the compute kernel pops
-        # the MAX scaler after Stage 4 so the SUM scaler is at the front for
-        # Stage 10.
+        ttnn.CBDescriptor(
+            total_size=2 * num_mask_tiles * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_MASK, data_format=query.dtype, page_size=tile_size)],
+        ),
         ttnn.CBDescriptor(
             total_size=2 * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCALER_REDUCE, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_SCALER_REDUCE, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_scale_factor: single tile holding the scale value (1/sqrt(D) or
-        # explicit). Filled by reader; held as HeldBulk by compute's eltwise mul.
         ttnn.CBDescriptor(
             total_size=1 * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCALE_FACTOR, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_SCALE_FACTOR, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_alpha: alpha = exp(m_old - m_new) per Q-block row. B_q_t tiles.
-        # Produced by compute (eltwise_chain: BinaryFpu Sub + Exp + PackTile),
-        # consumed by compute (rescale O and l via eltwise mul with Col broadcast).
         ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_ALPHA, data_format=query.dtype, page_size=tile_size)
-            ],
+            total_size=B_q_t * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_ALPHA, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_o: running output, B_q_t * D_t tiles. Initialized to 0 in Stage 0.
         ttnn.CBDescriptor(
             total_size=num_o_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_O, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_O, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_out: final normalized output (O / l_i), B_q_t * D_t tiles. Starts
-        # empty — compute writes the normalized result here in Stage 14, and the
-        # writer drains it to DRAM. Using a separate CB avoids a race where the
-        # writer drains cb_o before compute finishes accumulating/normalizing.
         ttnn.CBDescriptor(
             total_size=num_o_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_OUT, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_OUT, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_scores: Q@K^T score matmul output (16 tiles).
         ttnn.CBDescriptor(
             total_size=num_score_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCORES, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_SCORES, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_scores_masked: scores after mask-add (or passthrough copy when no
-        # mask). 16 tiles. Produced by compute (copy/add eltwise), consumed by
-        # compute (row-max reduce, subtract, exp).
         ttnn.CBDescriptor(
             total_size=num_score_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SCORES_MASKED, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_SCORES_MASKED, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_max_new: per-row max of scores (B_q_t tiles). Produced by compute
-        # (reduce MAX REDUCE_ROW, WaitUpfrontNoPop), consumed by compute
-        # (alpha computation, update m_i, subtract max).
         ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_MAX_NEW, data_format=query.dtype, page_size=tile_size)
-            ],
+            total_size=B_q_t * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_MAX_NEW, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_max_old: running max m_i, B_q_t tiles. Initialized to -inf in Stage 0.
         ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_MAX_OLD, data_format=query.dtype, page_size=tile_size)
-            ],
+            total_size=B_q_t * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_MAX_OLD, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_exp_scores: exp(S - m_new), B_q_t * B_kv_t tiles (16). Produced by
-        # compute (unary<Exp> eltwise), consumed by compute (row-sum reduce, PV matmul).
         ttnn.CBDescriptor(
             total_size=num_score_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_EXP_SCORES, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_EXP_SCORES, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_sum_old: running sum l_i, B_q_t tiles. Initialized to 0 in Stage 0.
         ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SUM_OLD, data_format=query.dtype, page_size=tile_size)
-            ],
+            total_size=B_q_t * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_SUM_NEW, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_sum_new: per-row sum of exp scores (B_q_t tiles). Produced by
-        # compute (reduce SUM REDUCE_ROW), consumed by compute (update l_i).
         ttnn.CBDescriptor(
-            total_size=B_Q_T * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_SUM_NEW, data_format=query.dtype, page_size=tile_size)
-            ],
+            total_size=B_q_t * tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_SUM_OLD, data_format=query.dtype, page_size=tile_size)],
         ),
-        # cb_o_accum: scratch for PV matmul output (B_q_t * D_t tiles). The PV
-        # matmul (packer_l1_acc=true, num_k_blocks=1) writes P@V here. An
-        # eltwise add then accumulates into cb_o: O += P@V.
         ttnn.CBDescriptor(
             total_size=num_o_tiles * tile_size,
-            core_ranges=core_grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_O_ACCUM, data_format=query.dtype, page_size=tile_size)
-            ],
+            core_ranges=all_cores,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_O_ACCUM, data_format=query.dtype, page_size=tile_size)],
         ),
     ]
 
-    # --- Reader ---
-    # CT args: [B_q_t, D_t, B_kv_t, ...TensorAccessorArgs(Q), ...TensorAccessorArgs(K), ...TensorAccessorArgs(V)]
-    reader_ct_args = [B_Q_T, D_t, B_KV_T]
+    # --- Reader kernel ---
+    reader_ct_args = [1 if has_mask else 0, H_q, H_kv]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
+    if has_mask:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(attn_mask).get_compile_time_args())
+    else:
+        reader_ct_args.extend(ttnn.TensorAccessorArgs().get_compile_time_args())
 
-    # RT args: [q_addr, k_addr, scale_bits (fp32 bits), v_addr]
     reader_rt_args = ttnn.RuntimeArgs()
-    reader_rt_args[core.x][core.y] = [
-        query.buffer_address(),
-        key.buffer_address(),
-        scale_bits,
-        value.buffer_address(),
-    ]
+    cores = ttnn.grid_to_cores(num_cores, grid_size.x, grid_size.y, row_wise=True)
+    work_unit_assigned = 0
+    for core_idx, core in enumerate(cores):
+        if units_per_core_2 == 0:
+            units_this_core = units_per_core_1
+        else:
+            group1_count = (num_work_units - num_cores * units_per_core_2) // (units_per_core_1 - units_per_core_2)
+            if core_idx < group1_count:
+                units_this_core = units_per_core_1
+            else:
+                units_this_core = units_per_core_2
+
+        rt = [units_this_core, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
+        for i in range(units_this_core):
+            bh = work_unit_assigned + i
+            b = bh // H_q
+            h = bh % H_q
+            rt.append(b)
+            rt.append(h)
+        work_unit_assigned += units_this_core
+        rt.append(query.buffer_address())
+        rt.append(key.buffer_address())
+        rt.append(scale_bits)
+        rt.append(value.buffer_address())
+        rt.append(attn_mask.buffer_address() if has_mask else 0)
+        reader_rt_args[core.x][core.y] = rt
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
-        core_ranges=core_grid,
+        core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # --- Writer ---
-    # CT args: [num_o_tiles, ...TensorAccessorArgs(output)]
-    writer_ct_args = [num_o_tiles]
+    # --- Writer kernel ---
+    writer_ct_args = [0]  # placeholder (total_tiles is now RT arg)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    # RT args: [output_addr, start_id]
+    # RT args per core: [output_addr, total_tiles]
+    # total_tiles = num_work_units * num_o_tiles (each work unit produces num_o_tiles output tiles)
     writer_rt_args = ttnn.RuntimeArgs()
-    writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), 0]
+    for core_idx, core in enumerate(cores):
+        if units_per_core_2 == 0:
+            units_this_core = units_per_core_1
+        else:
+            group1_count = (num_work_units - num_cores * units_per_core_2) // (units_per_core_1 - units_per_core_2)
+            if core_idx < group1_count:
+                units_this_core = units_per_core_1
+            else:
+                units_this_core = units_per_core_2
+        total_tiles = units_this_core * num_o_tiles
+        writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), total_tiles]
 
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
-        core_ranges=core_grid,
+        core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    # --- Compute ---
-    # CT args: [B_q_t, B_kv_t, D_t]
-    compute_ct_args = [B_Q_T, B_KV_T, D_t]
+    # --- Compute kernel ---
+    # CT args: [has_mask, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
+    compute_ct_args = [1 if has_mask else 0, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
-        core_ranges=core_grid,
+        core_ranges=all_cores,
         compile_time_args=compute_ct_args,
         runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(

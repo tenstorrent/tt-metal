@@ -3,239 +3,196 @@
 
 // Reader for scaled_dot_product_attention (Flash Attention).
 //
-// Stage 0 (init): Initializes the running-state CBs with constant fills:
-//   cb_max_old (27) <- -inf tiles (B_q_t tiles, running max m_i)
-//   cb_sum_old (30) <- 0.0   tiles (B_q_t tiles, running sum l_i)
-//   cb_o       (16) <- 0.0   tiles (B_q_t * D_t tiles, running output O_i)
-//
-// Stage 1 (qkt_matmul): Streams Q-block and K-block tiles from DRAM into L1 CBs.
-//   cb_q  (0) <- Q tiles (B_q_t * D_t tiles, loaded once, retained)
-//   cb_k  (1) <- K tiles (B_kv_t * D_t tiles, streamed per KV-block)
-//
-// Stage 2 (scale): Fills cb_scale_factor (1 tile) with the scale value
-//   (1/sqrt(D) or explicit). The scale arrives as fp32 bits (uint32_t)
-//   in runtime args; the reader converts to bf16 and fills the tile.
-//   cb_scale_factor is HeldBulk by the compute eltwise mul (never popped).
-//
-// Stage 4 (rowmax): Prepares the reduce scaler tile in cb_scaler_reduce (1 tile)
-//   via calculate_and_prepare_reduce_scaler<MAX, REDUCE_ROW>. Scaler = 1.0 for MAX.
-//   The reduce helper waits for this tile and never pops it (caller pops).
-//
-// Stage 12 (pv_matmul): Streams V-block tiles from DRAM into cb_v.
-//   cb_v  (2) <- V tiles (B_kv_t * D_t tiles, streamed per KV-block)
-//   V tiles are loaded in natural row-major order for the non-transpose PV matmul.
-//
-// The Q tiles are loaded in standard tile-row-major order:
-//   tile(r, d) at DRAM page r * D_t + d  (row r, head-dim-tile d)
-//   pushed to cb_q in the same order: [0,1,2,...,B_q_t*D_t-1]
-//
-// The K tiles for transpose matmul must be loaded in a specific order. With
-// transpose=true, the matmul LLK accesses in1 tiles with stride in1_per_core_w
-// along the K dimension. The expected in1 tile order for one K-block is:
-//   For each head-dim-tile k in [0, D_t):
-//     For each kv-col-tile n in [0, B_kv_t):
-//       push K tile at DRAM page n * D_t + k
-// This gives cb_k order: [K(0,0), K(1,0), ..., K(B_kv-1,0),
-//                          K(0,1), K(1,1), ..., K(B_kv-1,1),
-//                          ...]
-// which the transpose matmul reads as K^T.
-//
-// The V tiles for the non-transpose PV matmul are loaded in natural row-major
-// order. With transpose=false, the matmul LLK accesses in1 tiles with stride
-// in1_per_core_w=D_t along the K dimension. The V tile order is:
-//   For each kv-row-tile n in [0, B_kv_t):
-//     For each head-dim-tile d in [0, D_t):
-//       push V tile at DRAM page n * D_t + d
-// This gives cb_v order: [V(0,0), V(0,1), ..., V(0,D_t-1),
-//                          V(1,0), V(1,1), ..., V(B_kv-1,D_t-1)]
-// which is the natural DRAM row-major order.
-//
-// Constant-fill pattern for init: cb_reserve_back -> write loop -> cb_push_back.
+// CT args: [has_mask, H_q, H_kv, ...Q_accessor, ...K_accessor, ...V_accessor, ...mask_accessor]
+// RT args: [num_work_units, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles,
+//           b0, h0, b1, h1, ..., q_addr, k_addr, scale_bits, v_addr, mask_addr]
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
-// CB indices (match op_design.md CB layout).
 constexpr uint32_t cb_q = tt::CBIndex::c_0;
 constexpr uint32_t cb_k = tt::CBIndex::c_1;
 constexpr uint32_t cb_v = tt::CBIndex::c_2;
+constexpr uint32_t cb_mask = tt::CBIndex::c_3;
 constexpr uint32_t cb_scaler_reduce = 4;
 constexpr uint32_t cb_scale_factor = 5;
 constexpr uint32_t cb_o = tt::CBIndex::c_16;
 constexpr uint32_t cb_max_old = 27;
 constexpr uint32_t cb_sum_old = 30;
 
-// bf16 representation of -inf (0xFF80).
 constexpr uint16_t NEG_INF_BFLOAT16 = 0xFF80;
 
-// Fill an entire CB tile (bf16, 32x32 = 1024 elements) with a constant
-// uint16 bit pattern.
 inline void fill_bf16_tile_with_const(uint32_t cb_id, uint16_t val_bits) {
     uint32_t write_addr = get_write_ptr(cb_id);
     auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
-    for (uint32_t i = 0; i < 1024; ++i) {
-        ptr[i] = val_bits;
-    }
+    for (uint32_t i = 0; i < 1024; ++i) ptr[i] = val_bits;
 }
 
-// Zero-fill a CB tile (bf16).
 inline void fill_bf16_tile_zero(uint32_t cb_id) {
     uint32_t write_addr = get_write_ptr(cb_id);
     auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
-    for (uint32_t i = 0; i < 1024; ++i) {
-        ptr[i] = 0;
-    }
+    for (uint32_t i = 0; i < 1024; ++i) ptr[i] = 0;
 }
 
-// Convert fp32 bits to bf16 bits (round-to-nearest-even, truncating low 16 bits).
 inline uint16_t fp32_bits_to_bf16_bits(uint32_t fp32_bits) {
-    // Round-to-nearest-even: add bias 0x7FFF + (sticky bit) before truncation.
     uint16_t lsw = static_cast<uint16_t>(fp32_bits & 0xFFFF);
     uint16_t bias = 0x7FFFu + (lsw >> 15);
     uint32_t rounded = fp32_bits + bias;
     return static_cast<uint16_t>(rounded >> 16);
 }
 
-// Fill an entire CB tile (bf16, 32x32 = 1024 elements) with a scalar value
-// given as fp32 bits. Converts to bf16 and broadcasts across all elements.
 inline void fill_bf16_tile_with_scalar_fp32(uint32_t cb_id, uint32_t fp32_bits) {
     uint16_t bf16_bits = fp32_bits_to_bf16_bits(fp32_bits);
     uint32_t write_addr = get_write_ptr(cb_id);
     auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
-    for (uint32_t i = 0; i < 1024; ++i) {
-        ptr[i] = bf16_bits;
-    }
+    for (uint32_t i = 0; i < 1024; ++i) ptr[i] = bf16_bits;
 }
 
 void kernel_main() {
-    // Compile-time args (from program descriptor).
-    constexpr uint32_t B_q_t = get_compile_time_arg_val(0);       // Q-block tile rows (4)
-    constexpr uint32_t D_t = get_compile_time_arg_val(1);         // head-dim tiles (D/32)
-    constexpr uint32_t B_kv_t = get_compile_time_arg_val(2);      // KV-block tile cols (4)
+    constexpr uint32_t has_mask = get_compile_time_arg_val(0);
+    constexpr uint32_t H_q = get_compile_time_arg_val(1);
+    constexpr uint32_t H_kv = get_compile_time_arg_val(2);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_q);
 
-    // --- Stage 0: initialize running state ---
+    // --- Read runtime args ---
+    uint32_t rt_idx = 0;
+    uint32_t num_work_units = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t B_q_t = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t B_kv_t = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t D_t = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t S_q_tiles = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t S_kv_tiles = get_arg_val<uint32_t>(rt_idx++);
 
-    // cb_max_old: B_q_t tiles of -inf (running max m_i = -inf).
+    uint32_t work_b[16], work_h[16];
+    for (uint32_t i = 0; i < num_work_units; ++i) {
+        work_b[i] = get_arg_val<uint32_t>(rt_idx++);
+        work_h[i] = get_arg_val<uint32_t>(rt_idx++);
+    }
+
+    uint32_t q_addr = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t k_addr = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t scale_bits = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t v_addr = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t mask_addr = get_arg_val<uint32_t>(rt_idx++);
+
+    uint32_t num_o_tiles = B_q_t * D_t;
+
+    // --- Stage 0: initialize running state ---
     for (uint32_t t = 0; t < B_q_t; ++t) {
         cb_reserve_back(cb_max_old, 1);
         fill_bf16_tile_with_const(cb_max_old, NEG_INF_BFLOAT16);
         cb_push_back(cb_max_old, 1);
     }
-
-    // cb_sum_old: B_q_t tiles of 0.0 (running sum l_i = 0).
     for (uint32_t t = 0; t < B_q_t; ++t) {
         cb_reserve_back(cb_sum_old, 1);
         fill_bf16_tile_zero(cb_sum_old);
         cb_push_back(cb_sum_old, 1);
     }
-
-    // cb_o: B_q_t * D_t tiles of 0.0 (running output O_i = 0).
-    constexpr uint32_t num_o_tiles = B_q_t * D_t;
     for (uint32_t t = 0; t < num_o_tiles; ++t) {
         cb_reserve_back(cb_o, 1);
         fill_bf16_tile_zero(cb_o);
         cb_push_back(cb_o, 1);
     }
 
-    // --- Stage 2: fill cb_scale_factor with scale value ---
-    // The scale (1/sqrt(D) or explicit) is passed as fp32 bits in runtime args.
-    // The reader converts to bf16 and fills a single tile. The compute kernel
-    // uses this as a HeldBulk scalar broadcast for the eltwise mul.
-    {
-        uint32_t rt_arg_idx = 2;  // scale_bits is runtime arg index 2
-        uint32_t scale_bits = get_arg_val<uint32_t>(rt_arg_idx);
-        cb_reserve_back(cb_scale_factor, 1);
-        fill_bf16_tile_with_scalar_fp32(cb_scale_factor, scale_bits);
-        cb_push_back(cb_scale_factor, 1);
-    }
+    // Fill cb_scale_factor
+    cb_reserve_back(cb_scale_factor, 1);
+    fill_bf16_tile_with_scalar_fp32(cb_scale_factor, scale_bits);
+    cb_push_back(cb_scale_factor, 1);
 
-    // --- Stage 4: prepare reduce scaler for MAX REDUCE_ROW ---
-    // Scaler = 1.0 for MAX. The pool-type-aware helper selects the correct
-    // layout (row-0 fill for MAX reduce_tile path). The reduce helper waits
-    // for this tile and never pops it (caller pops after reduce completes).
+    // Prepare reduce scalers (pushed once, consumed once per Q-block's first KV-block)
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-
-    // --- Stage 10: prepare reduce scaler for SUM REDUCE_ROW ---
-    // Scaler = 1.0 for SUM. SUM REDUCE_ROW uses the matmul path, so the
-    // pool-type-aware helper selects col-0 fill (matmul layout). The reduce
-    // helper waits for this tile and never pops it (caller pops after reduce
-    // completes). cb_scaler_reduce holds 2 pages: [MAX scaler, SUM scaler].
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
-    // --- Stage 1: stream Q, K, and V tiles from DRAM ---
-
-    // Runtime args: [q_addr, k_addr, scale_bits (fp32 bits), v_addr]
-    uint32_t q_addr = get_arg_val<uint32_t>(0);
-    uint32_t k_addr = get_arg_val<uint32_t>(1);
-    // scale_bits already read above for cb_scale_factor fill
-    uint32_t v_addr = get_arg_val<uint32_t>(3);
-
-    // Reconstruct TensorAccessor layout from compile-time args.
-    // CT args layout: [B_q_t(0), D_t(1), B_kv_t(2), ...Q_accessor(3+), ...K_accessor(after Q),
-    //                  ...V_accessor(after K)]
+    // TensorAccessor setup
     constexpr auto q_args = TensorAccessorArgs<3>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
 
-    // --- Read Q tiles (tile-row-major: row r, head-dim d at page r*D_t + d) ---
-    {
-        const auto accessor = TensorAccessor(q_args, q_addr, tile_bytes);
-        constexpr uint32_t num_q_tiles = B_q_t * D_t;
-        for (uint32_t t = 0; t < num_q_tiles; ++t) {
-            cb_reserve_back(cb_q, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_q);
-            noc_async_read_tile(t, accessor, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_q, 1);
-        }
-    }
+    const auto q_accessor = TensorAccessor(q_args, q_addr, tile_bytes);
+    const auto k_accessor = TensorAccessor(k_args, k_addr, tile_bytes);
+    const auto v_accessor = TensorAccessor(v_args, v_addr, tile_bytes);
+    const auto mask_accessor = TensorAccessor(mask_args, mask_addr, tile_bytes);
 
-    // --- Read K tiles (transposed order for transpose=true matmul) ---
-    // For transpose matmul: K tiles must be loaded as K^T column tiles.
-    // in1_per_core_w = B_kv_t, in0_block_k = D_t.
-    // The matmul reads in1 with stride in1_per_core_w along K.
-    // Required cb_k order: for k in [0,D_t): for n in [0,B_kv_t): K[n*D_t + k]
-    {
-        const auto accessor = TensorAccessor(k_args, k_addr, tile_bytes);
-        constexpr uint32_t num_k_tiles = B_kv_t * D_t;
-        for (uint32_t k = 0; k < D_t; ++k) {
-            for (uint32_t n = 0; n < B_kv_t; ++n) {
-                uint32_t dram_page = n * D_t + k;
-                cb_reserve_back(cb_k, 1);
-                uint32_t l1_write_addr = get_write_ptr(cb_k);
-                noc_async_read_tile(dram_page, accessor, l1_write_addr);
+    uint32_t h_q_div_h_kv = H_q / H_kv;
+    uint32_t num_q_blocks = (S_q_tiles + B_q_t - 1) / B_q_t;
+    uint32_t num_kv_blocks = (S_kv_tiles + B_kv_t - 1) / B_kv_t;
+
+    for (uint32_t wu = 0; wu < num_work_units; ++wu) {
+        uint32_t b = work_b[wu];
+        uint32_t h_q = work_h[wu];
+        uint32_t h_kv = h_q / h_q_div_h_kv;
+
+        uint32_t q_base = b * H_q * S_q_tiles * D_t + h_q * S_q_tiles * D_t;
+        uint32_t k_base = b * H_kv * S_kv_tiles * D_t + h_kv * S_kv_tiles * D_t;
+        uint32_t v_base = k_base;
+        uint32_t mask_base = b * S_q_tiles * S_kv_tiles;
+
+        for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
+            uint32_t q_row_start = qb * B_q_t;
+
+            // Load Q tiles
+            for (uint32_t qt = 0; qt < B_q_t * D_t; ++qt) {
+                uint32_t q_row = q_row_start + qt / D_t;
+                uint32_t d_col = qt % D_t;
+                cb_reserve_back(cb_q, 1);
+                noc_async_read_tile(q_base + q_row * D_t + d_col, q_accessor, get_write_ptr(cb_q));
                 noc_async_read_barrier();
-                cb_push_back(cb_k, 1);
+                cb_push_back(cb_q, 1);
             }
-        }
-    }
 
-    // --- Read V tiles (row-major order for transpose=false PV matmul) ---
-    // For the PV matmul (transpose=false), V is in1 (B in the A*B matmul).
-    // M=B_q_t=4 (P rows), N=D_t=4 (V cols), K=B_kv_t=4 (P cols / V rows).
-    // The matmul reads in1 with stride in1_per_core_w=D_t along K.
-    // V tiles in DRAM are row-major: tile(kv_row, d_col) at page kv_row*D_t + d_col.
-    // Pushed in natural row-major order: for kv_row in [0,B_kv_t): for d_col in [0,D_t):
-    //   V[kv_row * D_t + d_col]
-    // This gives cb_v layout: tile(0,0), tile(0,1), ..., tile(0,D_t-1),
-    //                          tile(1,0), ..., tile(B_kv_t-1, D_t-1)
-    // which the non-transpose matmul reads correctly with in1_per_core_w=D_t stride.
-    {
-        const auto accessor = TensorAccessor(v_args, v_addr, tile_bytes);
-        constexpr uint32_t num_v_tiles = B_kv_t * D_t;
-        for (uint32_t t = 0; t < num_v_tiles; ++t) {
-            cb_reserve_back(cb_v, 1);
-            uint32_t l1_write_addr = get_write_ptr(cb_v);
-            noc_async_read_tile(t, accessor, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_v, 1);
+            for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
+                uint32_t kv_col_start = kvb * B_kv_t;
+
+                // Load K tiles (transposed order)
+                for (uint32_t k = 0; k < D_t; ++k) {
+                    for (uint32_t n = 0; n < B_kv_t; ++n) {
+                        uint32_t kv_row = kv_col_start + n;
+                        cb_reserve_back(cb_k, 1);
+                        noc_async_read_tile(k_base + kv_row * D_t + k, k_accessor, get_write_ptr(cb_k));
+                        noc_async_read_barrier();
+                        cb_push_back(cb_k, 1);
+                    }
+                }
+
+                // Load V tiles (row-major)
+                for (uint32_t n = 0; n < B_kv_t; ++n) {
+                    for (uint32_t d = 0; d < D_t; ++d) {
+                        uint32_t kv_row = kv_col_start + n;
+                        cb_reserve_back(cb_v, 1);
+                        noc_async_read_tile(v_base + kv_row * D_t + d, v_accessor, get_write_ptr(cb_v));
+                        noc_async_read_barrier();
+                        cb_push_back(cb_v, 1);
+                    }
+                }
+
+                // Load mask tiles (if has_mask)
+                if constexpr (has_mask) {
+                    for (uint32_t qr = 0; qr < B_q_t; ++qr) {
+                        for (uint32_t kc = 0; kc < B_kv_t; ++kc) {
+                            uint32_t q_row = q_row_start + qr;
+                            uint32_t kv_col = kv_col_start + kc;
+                            cb_reserve_back(cb_mask, 1);
+                            noc_async_read_tile(mask_base + q_row * S_kv_tiles + kv_col, mask_accessor, get_write_ptr(cb_mask));
+                            noc_async_read_barrier();
+                            cb_push_back(cb_mask, 1);
+                        }
+                    }
+                }
+
+                // Re-push scalers for next KV-block iteration
+                if (kvb < num_kv_blocks - 1 || qb < num_q_blocks - 1 || wu < num_work_units - 1) {
+                    dataflow_kernel_lib::
+                        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+                    dataflow_kernel_lib::
+                        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+                }
+            }
         }
     }
 }
