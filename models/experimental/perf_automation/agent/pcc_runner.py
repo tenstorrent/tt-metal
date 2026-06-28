@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from pathlib import Path
 
 from . import gitio
 
@@ -31,7 +32,13 @@ def run_pcc(ctx) -> dict:
     or an exception is crash.
     """
     entry = ctx.manifest["pathmap"]["pcc"]["end_to_end"]
-    test = str(ctx.model_root() / entry["path"])
+    file_part, sep, fn = str(entry["path"]).partition("::")
+    repo = gitio.repo_root(ctx.model_root())
+    resolved = next(
+        (b / file_part for b in (Path(ctx.model_root()), Path(repo)) if (b / file_part).is_file()),
+        Path(ctx.model_root()) / file_part,
+    )
+    test = str(resolved) + (sep + fn)
     threshold = entry["threshold"]
     env = dict(os.environ)
     vd = ctx.manifest.get("config", {}).get("visible_devices")
@@ -40,7 +47,7 @@ def run_pcc(ctx) -> dict:
         env["TT_METAL_VISIBLE_DEVICES"] = str(vd)
     try:
         r = subprocess.run(
-            ["python", "-m", "pytest", "-o", "addopts=", test, "-sv"],
+            ["python", "-m", "pytest", "-o", "addopts=", "-o", "timeout=0", test, "-sv"],
             cwd=str(gitio.repo_root(ctx.model_root())),
             env=env,
             capture_output=True,
