@@ -162,6 +162,8 @@ void kernel_main() {
             add<cb_o, cb_o_accum, cb_o>(num_o_tiles);
 
             // Phase 13: Update m: m_i = m_new
+            // Note: the online softmax recurrence uses alpha = exp(m_old - m_new) to rescale,
+            // so m_i = m_new is sufficient for correctness (alpha handles the rescaling).
             copy<cb_max_new, cb_max_old>(B_q_t);
         }
 
