@@ -49,7 +49,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_
 @pytest.mark.parametrize("output_core_range_set", [QKV_CRS])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_iters, warmup_iters", [(20, 5)])
-@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("trace_mode", [False])  # emule: slow dispatch has no trace capture
 @pytest.mark.parametrize(
     "device_params",
     [

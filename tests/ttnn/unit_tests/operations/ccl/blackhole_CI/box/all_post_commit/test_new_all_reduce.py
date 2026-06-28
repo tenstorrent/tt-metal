@@ -325,7 +325,7 @@ def run_all_reduce_impl(
         (100, 10),
     ],
 )
-@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("trace_mode", [False])  # emule: slow dispatch has no trace capture
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -404,7 +404,7 @@ def test_all_reduce(
         (100, 10),
     ],
 )
-@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("trace_mode", [False])  # emule: slow dispatch has no trace capture
 @pytest.mark.parametrize(
     "device_params",
     [
