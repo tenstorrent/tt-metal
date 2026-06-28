@@ -90,6 +90,7 @@ def create_program_descriptor(
     # --- Circular Buffers ---
     CB_Q = 0
     CB_K = 1
+    CB_V = 2
     CB_SCALER_REDUCE = 4
     CB_SCALE_FACTOR = 5
     CB_ALPHA = 8
@@ -101,9 +102,11 @@ def create_program_descriptor(
     CB_EXP_SCORES = 28
     CB_SUM_NEW = 29
     CB_SUM_OLD = 30
+    CB_O_ACCUM = 31
 
     num_q_tiles = B_Q_T * D_t  # 16 for D=128
     num_k_tiles = B_KV_T * D_t  # 16 for D=128
+    num_v_tiles = B_KV_T * D_t  # 16 for D=128
     num_o_tiles = B_Q_T * D_t
     num_score_tiles = B_Q_T * B_KV_T  # 16
 
@@ -124,6 +127,16 @@ def create_program_descriptor(
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=CB_K, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
+        # cb_v: one KV-block of V (B_kv_t * D_t tiles). Streamed by reader;
+        # consumed per KV-block by compute (PV matmul in1, WaitAndPopPerKBlock).
+        # V is D-wide (not B_kv-wide), so num_v_tiles = B_kv_t * D_t.
+        ttnn.CBDescriptor(
+            total_size=num_v_tiles * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_V, data_format=query.dtype, page_size=tile_size)
             ],
         ),
         # cb_scaler_reduce: 2 tiles holding reduce scalers. The reader prepares
@@ -228,20 +241,32 @@ def create_program_descriptor(
                 ttnn.CBFormatDescriptor(buffer_index=CB_SUM_NEW, data_format=query.dtype, page_size=tile_size)
             ],
         ),
+        # cb_o_accum: scratch for PV matmul output (B_q_t * D_t tiles). The PV
+        # matmul (packer_l1_acc=true, num_k_blocks=1) writes P@V here. An
+        # eltwise add then accumulates into cb_o: O += P@V.
+        ttnn.CBDescriptor(
+            total_size=num_o_tiles * tile_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=CB_O_ACCUM, data_format=query.dtype, page_size=tile_size)
+            ],
+        ),
     ]
 
     # --- Reader ---
-    # CT args: [B_q_t, D_t, B_kv_t, ...TensorAccessorArgs(Q), ...TensorAccessorArgs(K)]
+    # CT args: [B_q_t, D_t, B_kv_t, ...TensorAccessorArgs(Q), ...TensorAccessorArgs(K), ...TensorAccessorArgs(V)]
     reader_ct_args = [B_Q_T, D_t, B_KV_T]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
 
-    # RT args: [q_addr, k_addr, scale_bits (fp32 bits)]
+    # RT args: [q_addr, k_addr, scale_bits (fp32 bits), v_addr]
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [
         query.buffer_address(),
         key.buffer_address(),
         scale_bits,
+        value.buffer_address(),
     ]
 
     reader_kernel = ttnn.KernelDescriptor(

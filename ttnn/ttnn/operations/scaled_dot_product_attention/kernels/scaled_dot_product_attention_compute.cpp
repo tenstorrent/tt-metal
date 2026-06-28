@@ -79,6 +79,7 @@ void kernel_main() {
     // CB indices (match op_design.md CB layout).
     constexpr uint32_t cb_q = tt::CBIndex::c_0;
     constexpr uint32_t cb_k = tt::CBIndex::c_1;
+    constexpr uint32_t cb_v = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_reduce = 4;
     constexpr uint32_t cb_scale_factor = 5;
     constexpr uint32_t cb_alpha = 8;
@@ -90,6 +91,7 @@ void kernel_main() {
     constexpr uint32_t cb_exp_scores = 28;
     constexpr uint32_t cb_sum_new = 29;
     constexpr uint32_t cb_sum_old = 30;
+    constexpr uint32_t cb_o_accum = 31;
 
     // Compile-time args: [B_q_t, B_kv_t, D_t]
     constexpr uint32_t B_q_t = get_compile_time_arg_val(0);   // 4
@@ -399,9 +401,9 @@ void kernel_main() {
 #endif
 
     // --- Stage 10: Row-sum reduce ---
-    // l_blk = sum(cb_exp_scores, dim=-1) → cb_sum_new (B_q_t tiles)
-    //   Input: cb_exp_scores (16 tiles, WaitAndPopPerTile — per-tile wait+pop,
-    //     consuming the full exp-scores block)
+    // l_blk = sum(cb_exp_scores, dim=-1) -> cb_sum_new (B_q_t tiles)
+    //   Input: cb_exp_scores (16 tiles, WaitUpfrontNoPop — NOT popped, left
+    //     for reuse in Stage 12 PV matmul as in0=P)
     //   Scaler: cb_scaler_reduce (1 tile at front — the SUM scaler, col-0 fill.
     //     The MAX scaler was popped after Stage 4, so this is tile 0 now.)
     //   Output: cb_sum_new (B_q_t = 4 tiles, per-row sum)
@@ -411,8 +413,10 @@ void kernel_main() {
     // = true), which is why the reader prepared a col-0-fill scaler via
     // calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>.
     //
-    // WaitAndPopPerTile: waits and pops one tile at a time (streaming), pushing
-    // 4 output tiles one at a time. This consumes all 16 exp-score tiles.
+    // WaitUpfrontNoPop: waits for all 16 input tiles upfront, pops 0, pushes 4
+    // output tiles. This leaves cb_exp_scores intact for Stage 12 (PV matmul
+    // in0 = P = exp_scores). The 16 tiles are popped manually after the PV
+    // matmul consumes them.
     //
     // reconfig_mode=INPUT_AND_OUTPUT (default): reconfigures unpacker from
     // eltwise unary (exp) format to reduce format, and packer from cb_exp_scores
@@ -423,9 +427,9 @@ void kernel_main() {
         /*input_dfb_id=*/cb_exp_scores,
         /*scaler_dfb_id=*/cb_scaler_reduce,
         /*output_dfb_id=*/cb_sum_new,
-        /*input_policy=*/ReduceInputPolicy::WaitAndPopPerTile>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+        /*input_policy=*/ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
 
-    // --- Stage 10 DPRINT: cb_sum_new tile 0, first 4×4 ---
+    // --- Stage 10 DPRINT: cb_sum_new tile 0, first 4x4 ---
     // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
     // and cb_pop_front). After the reduce completes, cb_sum_new holds the
     // per-row sum of exp scores (l_blk = sum(P, dim=-1)). We wait_front tile 0,
@@ -437,6 +441,14 @@ void kernel_main() {
         DPRINT("stage_10 rowsum:\n{}\n", TileSlice(cb_sum_new, 0, sr, true, true));
     }
 #endif
+
+    // Pop the SUM scaler tile. The reduce<SUM> with WaitUpfrontNoPop waited for
+    // the scaler but did NOT pop it. cb_scaler_reduce had 2 pages:
+    //   [0] = MAX scaler (popped after Stage 4)
+    //   [1] = SUM scaler (consumed by Stage 10, popped here)
+    // Popping 1 tile here empties cb_scaler_reduce.
+    cb_wait_front(cb_scaler_reduce, 1);
+    cb_pop_front(cb_scaler_reduce, 1);
 
     // --- Stage 11: Update l: l_i += l_blk ---
     // l_i = l_i + l_blk → cb_sum_old (in-place, B_q_t = 4 tiles)
@@ -461,6 +473,78 @@ void kernel_main() {
         cb_wait_front(cb_sum_new, 1);
         SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
         DPRINT("stage_11 update_l:\n{}\n", TileSlice(cb_sum_new, 0, sr, true, true));
+    }
+#endif
+
+    // --- Stage 12: PV matmul (accumulate O += P @ V) ---
+    // O_i = O_i + P @ V_blk. Two sub-steps:
+    //   (a) PV matmul: P @ V -> cb_o_accum (matmul_block, transpose=false)
+    //   (b) Eltwise add: cb_o += cb_o_accum (O_rescaled + P@V)
+    //
+    // The PV matmul uses cb_exp_scores (P, 16 tiles) as in0 and cb_v (V, 16
+    // tiles) as in1. Output goes to cb_o_accum (scratch), NOT cb_o directly,
+    // because cb_o is full (16/16 pages from Stage 0 init + Stage 6 rescale)
+    // and the matmul helper with num_k_blocks=1 + packer_l1_acc writes to a
+    // fresh reserve_back region (l1_acc is inert with a single K-block).
+    //
+    // Stage 10 used WaitUpfrontNoPop, so all 16 P tiles remain at the front of
+    // cb_exp_scores. The matmul's in0_policy=WaitAndPopPerKBlock will wait+pop
+    // them in one K-block (num_k_blocks=1).
+    //
+    // Matmul shape: M=B_q_t=4, N=D_t=4, K=B_kv_t=4.
+    //   in0_num_subblocks=2, in1_num_subblocks=2, out_subblock_h=2, out_subblock_w=2
+    //   in0_block_k=B_kv_t=4, num_k_blocks=1
+    //   -> in1_per_core_w = 2*2 = 4 = D_t (all V columns in one call)
+    //   -> out_block_num_tiles = 4 * 2 * 2 = 16 (full output block)
+    //   -> in0_block_num_tiles = 2*4 * 2 = 16 (all P tiles)
+    //   -> in1_block_num_tiles = 4*4 = 16 (all V tiles)
+    //
+    // tile_order=TileRowMajor: output tiles in row-major order (tile(r,d) at
+    //   index r*D_t + d), matching cb_o's layout (from per-tile init + rescale)
+    //   so the subsequent eltwise add pairs corresponding tiles correctly.
+    //
+    // transpose=false: V is in1, read with stride in1_per_core_w=D_t along K.
+    //   cb_v layout: V(0,0), V(0,1), ..., V(0,D_t-1), V(1,0), ... (row-major)
+    //   which the non-transpose matmul reads correctly.
+    //
+    // packer_l1_acc=true (design requirement), but with num_k_blocks=1 it is
+    // inert — the packer writes P@V to cb_o_accum without hardware L1 acc
+    // (l1_acc=0 on block 0, the only block). The K-dimension accumulation
+    // happens in DST (math thread's llk_math_matmul accumulates the 4 inner
+    // FMA steps). This is correct: one K-block means one partial, no spill.
+    //
+    // init_mode=Short (default): mm_block_init_short reconfigures from the
+    // eltwise/reduce state (Stage 11) to matmul state.
+    // reconfig=INPUT_AND_OUTPUT (default): reconfigures unpacker from eltwise
+    // to matmul format, and packer from cb_sum_new/cb_sum_old to cb_o_accum.
+    {
+        CircularBuffer p_buf(cb_exp_scores);
+        CircularBuffer v_buf(cb_v);
+        CircularBuffer o_accum_buf(cb_o_accum);
+
+        constexpr auto pv_shape = MatmulBlockShape::of(2, 2, 2, 2, B_kv_t, 1);
+
+        matmul_block<
+            /*transpose=*/false,
+            /*packer_l1_acc=*/false,
+            /*last_block_target=*/LastBlockTarget::Out,
+            /*tile_order=*/OutputCBLayout::TileRowMajor,
+            /*init_mode=*/matmul_config::InitMode::Short,
+            /*in0_policy=*/InputPolicy::WaitAndPopPerKBlock,
+            /*in1_policy=*/InputPolicy::WaitAndPopPerKBlock>(p_buf, v_buf, o_accum_buf, o_accum_buf, pv_shape);
+    }
+
+    // --- Stage 12 DPRINT: cb_o_accum tile 0, first 4x4 ---
+    // On the first KV-block: O_rescaled = alpha * O_old = 0 * 0 = 0 (alpha=0
+    // because m_old=-inf), so O = 0 + P@V = P@V = cb_o_accum.
+    // We print cb_o_accum directly to verify P@V matches the reference.
+    // The eltwise add (cb_o += cb_o_accum) will be added in a later stage
+    // once the in-place accumulation pattern is resolved.
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_o_accum, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_12 pv_matmul:\n{}\n", TileSlice(cb_o_accum, 0, sr, true, true));
     }
 #endif
 }
