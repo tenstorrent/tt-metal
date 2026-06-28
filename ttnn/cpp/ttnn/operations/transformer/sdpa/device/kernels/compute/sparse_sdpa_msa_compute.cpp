@@ -134,7 +134,6 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/DHt,
                             /*matmul_stride=*/DHt,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
                     // Publish the band to UNPACK while holding wr_ptr for in-place sub_exp.
@@ -192,7 +191,6 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/Skt,
                             /*matmul_stride=*/KT_stride,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
                     pack_to_unpack_sync();                // publish held out_cur packs before flash combine
