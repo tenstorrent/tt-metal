@@ -4,6 +4,7 @@
 // CT args: [B_q_t, B_kv_t, D_t, has_mask, num_q_blocks, num_kv_blocks]
 
 #include <cstdint>
+#include <limits>
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -60,12 +61,12 @@ void kernel_main() {
 
     constexpr auto qkt_shape = MatmulBlockShape::of(B_q_t, B_kv_t, 1, 1, D_t, 1);
     constexpr auto pv_shape = MatmulBlockShape::of(B_q_t, D_t, 1, 1, B_kv_t, 1);
+    constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
+
     for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
-        // Wait for init state pushed by reader (m_i=-inf, l_i=0, O_i=0) + Q tiles
-        cb_wait_front(cb_max_old, B_q_t);
-        cb_wait_front(cb_sum_old, B_q_t);
-        cb_wait_front(cb_o, num_o_tiles);
-        cb_wait_front(cb_q, num_o_tiles);
+        eltwise_chain(B_q_t, FillScalar<Dst::D0>{NEG_INF}, PackTile<cb_max_old, OutputLifecycle::Streaming>{});
+        eltwise_chain(B_q_t, FillScalar<Dst::D0>{0.0f}, PackTile<cb_sum_old, OutputLifecycle::Streaming>{});
+        eltwise_chain(num_o_tiles, FillScalar<Dst::D0>{0.0f}, PackTile<cb_o, OutputLifecycle::Streaming>{});
 
         for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
             matmul_block<true, false, LastBlockTarget::Out, OutputCBLayout::SubblockMajor,
