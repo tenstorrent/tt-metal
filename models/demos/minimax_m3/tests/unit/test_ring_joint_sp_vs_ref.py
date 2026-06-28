@@ -44,7 +44,7 @@ def _torch_gqa_causal(q, k, v):
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize("seq_len", [512], ids=["s512"])
+@pytest.mark.parametrize("seq_len", [512, 5120], ids=["s512", "s5120"])  # 5120 = real prefill (640/dev)
 def test_ring_joint_sp_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     """ring_joint GQA causal attention, SP=8 (rows) × TP=4 (cols), vs torch golden. Needs (8,4)."""
     rows, cols = tuple(mesh_device.shape)
