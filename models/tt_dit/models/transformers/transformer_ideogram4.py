@@ -25,10 +25,11 @@ import torch
 
 import ttnn
 
+from ...layers.embeddings import Embedding
 from ...layers.feedforward import ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
-from ...layers.normalization import RMSNorm
+from ...layers.normalization import LayerNorm, RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.padding import pad_weight_tensor
@@ -427,18 +428,56 @@ class Ideogram4TransformerBlock(Module):
         return self._all_gather_hidden(self.o(out))
 
 
+class _EmbedScalarMLP(Module):
+    """The learnable tail of reference Ideogram4EmbedScalar: silu(mlp_in(x)) -> mlp_out.
+
+    The parameter-free sinusoidal embedding is precomputed on host (see
+    Ideogram4Transformer.sinusoidal_embedding) and fed in.
+    """
+
+    def __init__(self, dim: int, *, mesh_device: ttnn.MeshDevice) -> None:
+        super().__init__()
+        self.mlp_in = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+        self.mlp_out = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+
+    def forward(self, emb: ttnn.Tensor) -> ttnn.Tensor:
+        return self.mlp_out(ttnn.silu(self.mlp_in(emb)))
+
+
+class _FinalLayer(Module):
+    """Reference Ideogram4FinalLayer: linear(norm_final(x) * (1 + adaln_modulation(silu(c))))."""
+
+    def __init__(self, hidden_size: int, out_channels: int, adaln_dim: int, *, mesh_device: ttnn.MeshDevice) -> None:
+        super().__init__()
+        self.norm_final = LayerNorm(hidden_size, norm_eps=1e-6, norm_elementwise_affine=False, mesh_device=mesh_device)
+        self.linear = Linear(hidden_size, out_channels, bias=True, mesh_device=mesh_device)
+        self.adaln_modulation = Linear(adaln_dim, hidden_size, bias=True, mesh_device=mesh_device)
+
+    def forward(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
+        scale = self.adaln_modulation(ttnn.silu(c)) + 1.0
+        return self.linear(self.norm_final(x) * scale)
+
+
 class Ideogram4Transformer(Module):
-    """Full Ideogram 4.0 single-stream denoiser (34 blocks).
+    """Full Ideogram 4.0 single-stream flow-matching denoiser (34 blocks).
 
-    Provided for completeness/structure; the bringup target validated here is the
-    single block. The end-to-end model wires the input/LLM/time embeddings, MRoPE,
-    the block stack, and the final layer. Several host-side preprocessing pieces
-    (sinusoidal time embed, MRoPE table construction, masked token fusion) are
-    expected to be precomputed on host and fed to the block stack, mirroring how
-    the Mochi/Qwen ports precompute RoPE and timestep features on host.
+    Faithful port of the reference Ideogram4Transformer. Learnable transforms run on
+    device; the parameter-free scaffolding (MRoPE cos/sin tables, the sinusoidal time
+    embedding, the indicator-derived masks and the image-indicator index) is
+    precomputed on host and fed in as device tensors — mirroring the Mochi/Qwen/Wan
+    ports. Forward mirrors the reference:
 
-    NOTE: only the block (Ideogram4TransformerBlock) is covered by the bringup
-    test. This class is a thin scaffold and is itself UNVALIDATED.
+        x = input_proj(x * out_img_mask) * out_img_mask
+        llm = llm_cond_proj(llm_cond_norm(llm * llm_mask)) * llm_mask
+        h = x + llm + embed_image_indicator(is_image)
+        adaln_input = silu(adaln_proj(t_embedding(t_sin)))
+        for layer: h = layer(h, cos, sin, adaln_input, mask)
+        out = final_layer(h, adaln_input)
+
+    Parallelism is delegated to the blocks: TP shards heads/FFN internally and keeps
+    the residual replicated on hidden, so the replicated wrapper embeddings compose
+    with TP unchanged. SP shards the sequence (sequence-parallel wrapper handling is
+    threaded through forward via pre-sharded inputs + spatial_sequence_length).
     """
 
     def __init__(
@@ -450,6 +489,7 @@ class Ideogram4Transformer(Module):
         intermediate_size: int = 12288,
         adaln_dim: int = 512,
         in_channels: int = 128,
+        llm_features_dim: int = 4096 * len(QWEN3_VL_ACTIVATION_LAYERS),
         norm_eps: float = 1e-5,
         mesh_device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None = None,
@@ -459,7 +499,18 @@ class Ideogram4Transformer(Module):
         super().__init__()
         self.emb_dim = emb_dim
         self.num_layers = num_layers
+        self.in_channels = in_channels
+        self.llm_features_dim = llm_features_dim
+        self.head_dim = emb_dim // num_heads
         self.mesh_device = mesh_device
+
+        # --- input / conditioning embeddings (replicated) ---
+        self.input_proj = Linear(in_channels, emb_dim, bias=True, mesh_device=mesh_device)
+        self.llm_cond_norm = RMSNorm(embedding_dim=llm_features_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+        self.llm_cond_proj = Linear(llm_features_dim, emb_dim, bias=True, mesh_device=mesh_device)
+        self.t_embedding = _EmbedScalarMLP(emb_dim, mesh_device=mesh_device)
+        self.adaln_proj = Linear(emb_dim, adaln_dim, bias=True, mesh_device=mesh_device)
+        self.embed_image_indicator = Embedding(2, emb_dim, device=mesh_device)
 
         self.layers = ModuleList(
             Ideogram4TransformerBlock(
@@ -476,16 +527,72 @@ class Ideogram4Transformer(Module):
             for _ in range(num_layers)
         )
 
+        self.final_layer = _FinalLayer(emb_dim, in_channels, adaln_dim, mesh_device=mesh_device)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # rotary_emb is a parameter-free buffer module in the reference; drop it (cos/sin
+        # are precomputed on host). Everything else maps 1:1 by attribute name.
+        for key in list(state):
+            if key.startswith("rotary_emb."):
+                state.pop(key)
+
+    @staticmethod
+    def sinusoidal_embedding(t: torch.Tensor, dim: int, *, input_range=(0.0, 1.0), scale: float = 1e4) -> torch.Tensor:
+        """Host-side replica of reference Ideogram4EmbedScalar's sinusoid (no params).
+
+        t: (...,) scalars. Returns (..., dim). Feed the result to t_embedding on device.
+        """
+        import math
+
+        lo, hi = input_range
+        x = scale * (t.to(torch.float32) - lo) / (hi - lo)
+        half = dim // 2
+        freq = math.log(scale) / (half - 1)
+        freq = torch.exp(torch.arange(half, dtype=torch.float32) * -freq)
+        emb = x.unsqueeze(-1) * freq
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+        if dim % 2 == 1:
+            emb = torch.nn.functional.pad(emb, (0, 1))
+        return emb
+
     def forward(
         self,
-        h: ttnn.Tensor,
         *,
+        x: ttnn.Tensor,
+        llm_features: ttnn.Tensor,
+        t_sin: ttnn.Tensor,
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
-        adaln_input: ttnn.Tensor,
+        image_indicator_index: ttnn.Tensor,
+        llm_token_mask: ttnn.Tensor,
+        output_image_mask: ttnn.Tensor,
         attn_mask: ttnn.Tensor | None = None,
         spatial_sequence_length: int | None = None,
     ) -> ttnn.Tensor:
+        """Velocity prediction.
+
+        Host-precomputed device inputs (sharded on sequence for SP, replicated otherwise):
+            x: [B, L/sp, in_channels] noise tokens.
+            llm_features: [B, L/sp, llm_features_dim] Qwen3-VL features.
+            t_sin: [B, 1, emb_dim] sinusoidal time embedding (per-sample).
+            cos, sin: [B, 1, L/sp, head_dim] MRoPE tables.
+            image_indicator_index: [B, L/sp] uint32 (1 = OUTPUT_IMAGE token, else 0).
+            llm_token_mask, output_image_mask: [B, L/sp, 1] bf16 (0/1).
+            attn_mask: segment mask (see Ideogram4TransformerBlock.forward).
+            spatial_sequence_length: logical full sequence length (required for SP).
+
+        Returns [B, L/sp, in_channels] velocity (only OUTPUT_IMAGE positions are meaningful).
+        """
+        x = self.input_proj(x * output_image_mask) * output_image_mask
+
+        llm = self.llm_cond_norm(llm_features * llm_token_mask)
+        llm = self.llm_cond_proj(llm) * llm_token_mask
+
+        h = x + llm
+        h = h + self.embed_image_indicator(image_indicator_index)
+
+        adaln_input = ttnn.silu(self.adaln_proj(self.t_embedding(t_sin)))
+
         for layer in self.layers:
             h = layer(
                 h,
@@ -495,4 +602,5 @@ class Ideogram4Transformer(Module):
                 attn_mask=attn_mask,
                 spatial_sequence_length=spatial_sequence_length,
             )
-        return h
+
+        return self.final_layer(h, adaln_input)
