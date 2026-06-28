@@ -122,13 +122,19 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    writer_ct_args = []
+    writer_ct_args = [B_q_t, D_t, num_q_blocks]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_args = ttnn.RuntimeArgs()
     wu_assigned = 0
     for ci, core in enumerate(cores):
         uc = units_for_core(ci)
-        writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), uc * S_q_tiles * D_t]
+        rt = [output_tensor.buffer_address(), uc, S_q_tiles, H_q]
+        for i in range(uc):
+            bh = wu_assigned + i
+            rt.append(bh // H_q)
+            rt.append(bh % H_q)
+        wu_assigned += uc
+        writer_rt_args[core.x][core.y] = rt
 
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
