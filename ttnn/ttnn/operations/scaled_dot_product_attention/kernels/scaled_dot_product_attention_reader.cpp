@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reader for scaled_dot_product_attention (Flash Attention).
-// CT args: [B_q_t, D_t, B_kv_t, has_mask, H_q, H_kv, ...accessors]
-// RT args: [num_work_units, S_q_tiles, S_kv_tiles, b0,h0,..., q_addr,k_addr,scale_bits,v_addr,mask_addr]
+//
+// CT args: [has_mask, H_q, H_kv, ...Q_accessor, ...K_accessor, ...V_accessor, ...mask_accessor]
+// RT args: [num_work_units, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles,
+//           b0, h0, b1, h1, ..., q_addr, k_addr, scale_bits, v_addr, mask_addr]
 
 #include <cstdint>
 
@@ -22,10 +24,16 @@ constexpr uint32_t cb_sum_old = 30;
 
 constexpr uint16_t NEG_INF_BFLOAT16 = 0xFF80;
 
-inline void fill_bf16_tile_const(uint32_t cb_id, uint16_t val_bits) {
+inline void fill_bf16_tile_with_const(uint32_t cb_id, uint16_t val_bits) {
     uint32_t write_addr = get_write_ptr(cb_id);
     auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
     for (uint32_t i = 0; i < 1024; ++i) ptr[i] = val_bits;
+}
+
+inline void fill_bf16_tile_zero(uint32_t cb_id) {
+    uint32_t write_addr = get_write_ptr(cb_id);
+    auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
+    for (uint32_t i = 0; i < 1024; ++i) ptr[i] = 0;
 }
 
 inline uint16_t fp32_bits_to_bf16_bits(uint32_t fp32_bits) {
@@ -35,19 +43,26 @@ inline uint16_t fp32_bits_to_bf16_bits(uint32_t fp32_bits) {
     return static_cast<uint16_t>(rounded >> 16);
 }
 
+inline void fill_bf16_tile_with_scalar_fp32(uint32_t cb_id, uint32_t fp32_bits) {
+    uint16_t bf16_bits = fp32_bits_to_bf16_bits(fp32_bits);
+    uint32_t write_addr = get_write_ptr(cb_id);
+    auto ptr = reinterpret_cast<volatile uint16_t*>(write_addr);
+    for (uint32_t i = 0; i < 1024; ++i) ptr[i] = bf16_bits;
+}
+
 void kernel_main() {
-    constexpr uint32_t B_q_t = get_compile_time_arg_val(0);
-    constexpr uint32_t D_t = get_compile_time_arg_val(1);
-    constexpr uint32_t B_kv_t = get_compile_time_arg_val(2);
-    constexpr uint32_t has_mask = get_compile_time_arg_val(3);
-    constexpr uint32_t H_q = get_compile_time_arg_val(4);
-    constexpr uint32_t H_kv = get_compile_time_arg_val(5);
+    constexpr uint32_t has_mask = get_compile_time_arg_val(0);
+    constexpr uint32_t H_q = get_compile_time_arg_val(1);
+    constexpr uint32_t H_kv = get_compile_time_arg_val(2);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_q);
-    constexpr uint32_t num_o_tiles = B_q_t * D_t;
 
+    // --- Read runtime args ---
     uint32_t rt_idx = 0;
     uint32_t num_work_units = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t B_q_t = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t B_kv_t = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t D_t = get_arg_val<uint32_t>(rt_idx++);
     uint32_t S_q_tiles = get_arg_val<uint32_t>(rt_idx++);
     uint32_t S_kv_tiles = get_arg_val<uint32_t>(rt_idx++);
 
@@ -63,22 +78,38 @@ void kernel_main() {
     uint32_t v_addr = get_arg_val<uint32_t>(rt_idx++);
     uint32_t mask_addr = get_arg_val<uint32_t>(rt_idx++);
 
+    uint32_t num_o_tiles = B_q_t * D_t;
+
+    // --- Stage 0: initialize running state ---
+    for (uint32_t t = 0; t < B_q_t; ++t) {
+        cb_reserve_back(cb_max_old, 1);
+        fill_bf16_tile_with_const(cb_max_old, NEG_INF_BFLOAT16);
+        cb_push_back(cb_max_old, 1);
+    }
+    for (uint32_t t = 0; t < B_q_t; ++t) {
+        cb_reserve_back(cb_sum_old, 1);
+        fill_bf16_tile_zero(cb_sum_old);
+        cb_push_back(cb_sum_old, 1);
+    }
+    for (uint32_t t = 0; t < num_o_tiles; ++t) {
+        cb_reserve_back(cb_o, 1);
+        fill_bf16_tile_zero(cb_o);
+        cb_push_back(cb_o, 1);
+    }
+
     // Fill cb_scale_factor
     cb_reserve_back(cb_scale_factor, 1);
-    {
-        uint16_t bf16_bits = fp32_bits_to_bf16_bits(scale_bits);
-        auto ptr = reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_scale_factor));
-        for (uint32_t i = 0; i < 1024; ++i) ptr[i] = bf16_bits;
-    }
+    fill_bf16_tile_with_scalar_fp32(cb_scale_factor, scale_bits);
     cb_push_back(cb_scale_factor, 1);
 
-    // Prepare reduce scalers
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    // Prepare reduce scalers (pushed once, consumed once per Q-block's first KV-block)
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
-    constexpr auto q_args = TensorAccessorArgs<6>();
+    // TensorAccessor setup
+    constexpr auto q_args = TensorAccessorArgs<3>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -104,23 +135,6 @@ void kernel_main() {
 
         for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
             uint32_t q_row_start = qb * B_q_t;
-
-            // Push init state: m_i=-inf, l_i=0, O_i=0
-            for (uint32_t t = 0; t < B_q_t; ++t) {
-                cb_reserve_back(cb_max_old, 1);
-                fill_bf16_tile_const(cb_max_old, NEG_INF_BFLOAT16);
-                cb_push_back(cb_max_old, 1);
-            }
-            for (uint32_t t = 0; t < B_q_t; ++t) {
-                cb_reserve_back(cb_sum_old, 1);
-                fill_bf16_tile_const(cb_sum_old, 0);
-                cb_push_back(cb_sum_old, 1);
-            }
-            for (uint32_t t = 0; t < num_o_tiles; ++t) {
-                cb_reserve_back(cb_o, 1);
-                fill_bf16_tile_const(cb_o, 0);
-                cb_push_back(cb_o, 1);
-            }
 
             // Load Q tiles
             for (uint32_t qt = 0; qt < B_q_t * D_t; ++qt) {
@@ -157,7 +171,7 @@ void kernel_main() {
                     }
                 }
 
-                // Load mask tiles
+                // Load mask tiles (if has_mask)
                 if constexpr (has_mask) {
                     for (uint32_t qr = 0; qr < B_q_t; ++qr) {
                         for (uint32_t kc = 0; kc < B_kv_t; ++kc) {
@@ -171,17 +185,13 @@ void kernel_main() {
                     }
                 }
 
-                // Re-push scalers for next KV-block
-                if (kvb < num_kv_blocks - 1) {
-                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-                    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+                // Re-push scalers for next KV-block iteration
+                if (kvb < num_kv_blocks - 1 || qb < num_q_blocks - 1 || wu < num_work_units - 1) {
+                    dataflow_kernel_lib::
+                        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+                    dataflow_kernel_lib::
+                        calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
                 }
-            }
-
-            // Re-push scalers for next Q-block
-            if (qb < num_q_blocks - 1) {
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
             }
         }
     }

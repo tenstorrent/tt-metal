@@ -179,7 +179,7 @@ def create_program_descriptor(
     ]
 
     # --- Reader kernel ---
-    reader_ct_args = [B_q_t, D_t, B_kv_t, 1 if has_mask else 0, H_q, H_kv]
+    reader_ct_args = [1 if has_mask else 0, H_q, H_kv]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
@@ -201,7 +201,7 @@ def create_program_descriptor(
             else:
                 units_this_core = units_per_core_2
 
-        rt = [units_this_core, S_q_tiles, S_kv_tiles]
+        rt = [units_this_core, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
         for i in range(units_this_core):
             bh = work_unit_assigned + i
             b = bh // H_q
@@ -225,7 +225,7 @@ def create_program_descriptor(
     )
 
     # --- Writer kernel ---
-    writer_ct_args = []  # no scalar CT args (total_tiles is now RT arg)
+    writer_ct_args = [0]  # placeholder (total_tiles is now RT arg)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     # RT args per core: [output_addr, total_tiles]
@@ -253,27 +253,12 @@ def create_program_descriptor(
 
     # --- Compute kernel ---
     # CT args: [has_mask, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
-    compute_ct_args = [B_q_t, B_kv_t, D_t, 1 if has_mask else 0, S_q_tiles, S_kv_tiles]
-
-    # RT args per core: [num_work_units]
-    compute_rt_args = ttnn.RuntimeArgs()
-    work_unit_assigned = 0
-    for core_idx, core in enumerate(cores):
-        if units_per_core_2 == 0:
-            units_this_core = units_per_core_1
-        else:
-            group1_count = (num_work_units - num_cores * units_per_core_2) // (units_per_core_1 - units_per_core_2)
-            if core_idx < group1_count:
-                units_this_core = units_per_core_1
-            else:
-                units_this_core = units_per_core_2
-        compute_rt_args[core.x][core.y] = [units_this_core]
-
+    compute_ct_args = [1 if has_mask else 0, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
-        runtime_args=compute_rt_args,
+        runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
