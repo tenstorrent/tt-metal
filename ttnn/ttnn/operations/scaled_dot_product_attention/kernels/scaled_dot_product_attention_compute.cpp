@@ -37,12 +37,14 @@ constexpr uint32_t cb_sum_old = 30;
 constexpr uint32_t cb_o_accum = 31;
 
 void kernel_main() {
-    constexpr uint32_t B_q_t = get_compile_time_arg_val(0);
-    constexpr uint32_t B_kv_t = get_compile_time_arg_val(1);
-    constexpr uint32_t D_t = get_compile_time_arg_val(2);
-    constexpr uint32_t has_mask = get_compile_time_arg_val(3);
-    constexpr uint32_t num_q_blocks = get_compile_time_arg_val(4);
-    constexpr uint32_t num_kv_blocks = get_compile_time_arg_val(5);
+    constexpr uint32_t has_mask = get_compile_time_arg_val(0);
+    constexpr uint32_t B_q_t = get_compile_time_arg_val(1);
+    constexpr uint32_t B_kv_t = get_compile_time_arg_val(2);
+    constexpr uint32_t D_t = get_compile_time_arg_val(3);
+    constexpr uint32_t S_q_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t S_kv_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t num_q_blocks = (S_q_tiles + B_q_t - 1) / B_q_t;
+    constexpr uint32_t num_kv_blocks = (S_kv_tiles + B_kv_t - 1) / B_kv_t;
     constexpr uint32_t num_score_tiles = B_q_t * B_kv_t;
     constexpr uint32_t num_o_tiles = B_q_t * D_t;
 
@@ -64,9 +66,12 @@ void kernel_main() {
     constexpr float NEG_INF = -std::numeric_limits<float>::infinity();
 
     for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
-        eltwise_chain(B_q_t, FillScalar<Dst::D0>{NEG_INF}, PackTile<cb_max_old, OutputLifecycle::Streaming>{});
-        eltwise_chain(B_q_t, FillScalar<Dst::D0>{0.0f}, PackTile<cb_sum_old, OutputLifecycle::Streaming>{});
-        eltwise_chain(num_o_tiles, FillScalar<Dst::D0>{0.0f}, PackTile<cb_o, OutputLifecycle::Streaming>{});
+        // Reader pushes init state (m_i=-inf, l_i=0, O_i=0) + Q tiles per Q-block.
+        // Wait for them.
+        cb_wait_front(cb_max_old, B_q_t);
+        cb_wait_front(cb_sum_old, B_q_t);
+        cb_wait_front(cb_o, num_o_tiles);
+        cb_wait_front(cb_q, num_o_tiles);
 
         for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
             matmul_block<true, false, LastBlockTarget::Out, OutputCBLayout::SubblockMajor,
