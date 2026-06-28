@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/device_print.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 constexpr uint32_t cb_q=tt::CBIndex::c_0, cb_k=tt::CBIndex::c_1, cb_v=tt::CBIndex::c_2, cb_mask=tt::CBIndex::c_3;
 constexpr uint32_t cb_scaler_reduce=4, cb_scale_factor=5, cb_o=tt::CBIndex::c_16, cb_max_old=27, cb_sum_old=30;
@@ -39,6 +40,7 @@ void kernel_main() {
     [[maybe_unused]] const auto mask_acc=TensorAccessor(mask_args,mask_addr,tile_bytes);
     uint32_t h_q_div_h_kv=H_q/H_kv, num_q_blocks=(S_q_tiles+B_q_t-1)/B_q_t, num_kv_blocks=(S_kv_tiles+B_kv_t-1)/B_kv_t;
     for (uint32_t wu=0; wu<num_work_units; ++wu) {
+        DEVICE_PRINT("READER: started wu={}\n", wu);
         uint32_t b=work_b[wu], h_q=work_h[wu], h_kv=h_q/h_q_div_h_kv;
         uint32_t q_base=b*H_q*S_q_tiles*D_t+h_q*S_q_tiles*D_t, k_base=b*H_kv*S_kv_tiles*D_t+h_kv*S_kv_tiles*D_t;
         uint32_t v_base=k_base, mask_base=b*S_q_tiles*S_kv_tiles;

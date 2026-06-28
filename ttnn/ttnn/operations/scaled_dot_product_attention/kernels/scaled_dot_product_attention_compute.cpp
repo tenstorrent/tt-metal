@@ -39,7 +39,11 @@ void kernel_main() {
     const uint32_t num_q_blocks = (S_q_tiles + B_q_t - 1) / B_q_t;
     const uint32_t num_kv_blocks = (S_kv_tiles + B_kv_t - 1) / B_kv_t;
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_q, cb_k, cb_scores);
-    mm_block_init(cb_q, cb_k, cb_scores, 1, 2, 2, D_t);
+    constexpr uint32_t sb_h = (B_q_t < 2) ? B_q_t : 2;
+    constexpr uint32_t sb_w = (B_kv_t < 2) ? B_kv_t : 2;
+    constexpr uint32_t in0_sb = (B_q_t + sb_h - 1) / sb_h;
+    constexpr uint32_t in1_sb = (B_kv_t + sb_w - 1) / sb_w;
+    mm_block_init(cb_q, cb_k, cb_scores, 1, sb_w, sb_h, D_t);
     CircularBuffer q_buf(cb_q);
     CircularBuffer k_buf(cb_k);
     CircularBuffer v_buf(cb_v);
@@ -48,10 +52,10 @@ void kernel_main() {
     CircularBuffer exp_scores_buf(cb_exp_scores);
     CircularBuffer o_buf(cb_o);
     CircularBuffer o_accum_buf(cb_o_accum);
-    constexpr auto qkt_shape = MatmulBlockShape::of(2, 2, 2, 2, D_t, 1);
+    constexpr auto qkt_shape = MatmulBlockShape::of(in0_sb, in1_sb, sb_h, sb_w, D_t, 1);
     constexpr uint32_t pv_sb_w = (D_t < 2) ? D_t : 2;
     constexpr uint32_t pv_in1_sb = (D_t + pv_sb_w - 1) / pv_sb_w;
-    constexpr auto pv_shape = MatmulBlockShape::of(2, pv_in1_sb, 2, pv_sb_w, B_kv_t, 1);
+    constexpr auto pv_shape = MatmulBlockShape::of(in0_sb, pv_in1_sb, sb_h, pv_sb_w, B_kv_t, 1);
     uint32_t num_work_units = get_arg_val<uint32_t>(0);
     for (uint32_t wu = 0; wu < num_work_units; ++wu) {
         for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
