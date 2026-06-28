@@ -56,30 +56,49 @@ def dense_sp_attention(
     slot_idx=0,
     layer_idx=0,
     num_layers=1,
+    write_chunk=True,
 ):
-    """Write this chunk's K/V into the chunked-KV cache, then ring_joint cache-read over the prefix.
+    """Write this chunk's K/V into the chunked-KV cache (unless already written), then ring_joint
+    cache-read over the prefix.
 
     tt_q              [1, n_q_local, chunk_global, head_dim]   block-cyclic over the chunk, SP×TP sharded
     cache_k, cache_v  the chunked-KV caches (init_kvpe_cache), SP-sharded block-cyclic, bf8
     tt_k_chunk/v      [1, n_kv_local, chunk_global, head_dim]  this chunk, block-cyclic, to write
+                      (ignored when write_chunk=False — e.g. the model seam already wrote it)
     kv_actual         prefix length already in the cache before this chunk (drives on-device rotation)
     logical_n         total valid prefix length (q attends causally over [0:logical_n])
+    write_chunk       when False, skip the cache write and only read (the per-layer seam is the writer)
     -> out            [1, n_q_local, chunk_local, head_dim]    block-cyclic over the chunk
     """
     rows, cols = tuple(mesh_device.shape)
 
-    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-        cache_k, tt_k_chunk, slot_idx=slot_idx, layer_idx=layer_idx, num_layers=num_layers,
-        kv_actual_global=kv_actual, cluster_axis=cluster_axis,
-    )
-    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-        cache_v, tt_v_chunk, slot_idx=slot_idx, layer_idx=layer_idx, num_layers=num_layers,
-        kv_actual_global=kv_actual, cluster_axis=cluster_axis,
-    )
+    if write_chunk:
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache_k,
+            tt_k_chunk,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual,
+            cluster_axis=cluster_axis,
+        )
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            cache_v,
+            tt_v_chunk,
+            slot_idx=slot_idx,
+            layer_idx=layer_idx,
+            num_layers=num_layers,
+            kv_actual_global=kv_actual,
+            cluster_axis=cluster_axis,
+        )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-        tt_q, cache_k, cache_v,
-        None, None, None,
+        tt_q,
+        cache_k,
+        cache_v,
+        None,
+        None,
+        None,
         persistent_output_buffer_k=_persistent_buf(mesh_device, rows, cols, n_kv, cache_global, head_dim),
         persistent_output_buffer_v=_persistent_buf(mesh_device, rows, cols, n_kv, cache_global, head_dim),
         joint_strategy="rear",
@@ -104,7 +123,18 @@ def dense_sp_attention(
 
 
 def dense_sp_attention_nocache(
-    tt_q, tt_k, tt_v, *, mesh_config, ccl_manager, logical_n, n_kv, head_dim, scale, program_config, compute_kernel_config
+    tt_q,
+    tt_k,
+    tt_v,
+    *,
+    mesh_config,
+    ccl_manager,
+    logical_n,
+    n_kv,
+    head_dim,
+    scale,
+    program_config,
+    compute_kernel_config,
 ):
     """First-chunk dense SP attention: ring_joint over the chunk's OWN SP-sharded K/V (NO persistent cache).
 
@@ -124,18 +154,36 @@ def dense_sp_attention_nocache(
 
     def pbuf():
         return ttnn.from_torch(
-            torch.zeros(1, n_kv, logical_n, head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=pbuf_dims),
+            torch.zeros(1, n_kv, logical_n, head_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=pbuf_dims),
         )
 
     out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-        tt_q, tt_k, tt_v, None, None, None,
-        persistent_output_buffer_k=pbuf(), persistent_output_buffer_v=pbuf(),
-        joint_strategy="rear", logical_n=logical_n, program_config=program_config,
-        compute_kernel_config=compute_kernel_config, dim=2,
+        tt_q,
+        tt_k,
+        tt_v,
+        None,
+        None,
+        None,
+        persistent_output_buffer_k=pbuf(),
+        persistent_output_buffer_v=pbuf(),
+        joint_strategy="rear",
+        logical_n=logical_n,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
         multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
-        num_links=ccl_manager.num_links, cluster_axis=sp_axis, mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear, ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset,
-        use_column_major_ccl=True, is_causal=True, scale=scale, is_balanced=False,
+        num_links=ccl_manager.num_links,
+        cluster_axis=sp_axis,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear,
+        ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset,
+        use_column_major_ccl=True,
+        is_causal=True,
+        scale=scale,
+        is_balanced=False,
     )
     return out

@@ -86,7 +86,6 @@ def test_attention_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seed
         program_config=MiniMaxM3AttentionProgramConfig(),
         layer_idx=0,
         transformation_mats=trans_mats,
-        create_kv_cache=True,
     )
 
     rope_mats = [
@@ -100,7 +99,7 @@ def test_attention_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seed
         dtype=ttnn.bfloat8_b,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    tt_out = attn(x_tt, rope_mats=rope_mats, position_idx=None, page_table=None, kv_cache=None)
+    tt_out = attn(x_tt, rope_mats=rope_mats, position_idx=None, kv_cache=None)
     out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(1, seq_len, hidden)
 
     passing, pcc = comp_pcc(ref_out, out, 0.97)

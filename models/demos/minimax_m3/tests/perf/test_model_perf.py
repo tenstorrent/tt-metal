@@ -80,7 +80,6 @@ def _build_random_model(mesh, layers, experts, seq):
         state_dict=sd,
         ccl_manager=ccl,
         mesh_config=mesh_config,
-        create_kv_cache=False,
         max_local_batch_size=1,
         users_row_sharded=True,
         use_ep_moe=True,
@@ -110,7 +109,6 @@ def _build_real_model(mesh, seq):
         ccl_manager=ccl,
         mesh_config=mesh_config,
         tensor_cache_path=ma.weight_cache_path(ttnn.bfloat8_b),
-        create_kv_cache=False,
         max_local_batch_size=1,
         users_row_sharded=True,
         use_ep_moe=True,
@@ -148,7 +146,7 @@ def test_model_fwd():
             f"[model-perf] built ({'REAL' if real else 'random'}) layers={cfg.num_hidden_layers} experts={cfg.num_local_experts} seq={seq}"
         )
         toks = torch.randint(0, cfg.vocab_size, (4, seq), dtype=torch.int32)
-        host_out = model.prepare_inputs_prefill(toks, page_table=None, batched_prefill=True)
+        host_out = model.prepare_inputs_prefill(toks, batched_prefill=True)
         last = ((seq - 1) // 32) * 32
         # The decoder layer frees its OWN input buffer (layer.py: residual.deallocate after the
         # residual add), so each forward consumes host_out[0]. Keep it PERSISTENT and run the
@@ -159,7 +157,6 @@ def test_model_fwd():
             ttnn.clone(x_persist),
             rot_mats_global=host_out[1],
             rot_mats_local=host_out[2],
-            page_table=host_out[3],
             kv_cache=None,
             batch_size=1,
             get_last_token=last,

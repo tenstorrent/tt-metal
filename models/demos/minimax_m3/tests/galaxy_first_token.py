@@ -70,7 +70,6 @@ def main():
             ccl_manager=ccl,
             mesh_config=mesh_config,
             tensor_cache_path=cache,
-            create_kv_cache=True,
             max_local_batch_size=1,
         )
         del state_dict

@@ -9,8 +9,8 @@ SCAFFOLD — see PREFILL_PROPOSAL.md §5/§7. Status of the parts:
   * model forward (RMSNorm/attn/MoE/residual per layer) — VALIDATED (single decoder
     layer PCC 0.99993 @ TP=1; full-model assembly not yet run on this card — needs Galaxy)
   * _build_migration_callback / on_layer_complete seam — wired into model.forward
-  * chunked prefill (chunk_start_idx into chunked SDPA) — TIER 1, NOT YET WIRED into
-    attention/prefill.py (op confirmed available; see PREFILL_PROPOSAL.md §11.2)
+  * chunked prefill — the per-chunk cache-read attention is wired into attention/prefill.py
+    (gated on ``cached_len``); the chunk-loop driver here is the remaining runner work
   * migration transport — NoOp until the migration team's endpoint lands
 
 Reference: models/demos/deepseek_v3_d_p/tt/tt_deepseek_prefill_pipeline.py
@@ -54,12 +54,13 @@ class MiniMaxPrefillPipeline:
     def prefill(self, token_ids, slot_id: int, actual_isl: int, dst_slot: int):
         """Chunked prefill for one request, migrating KV per layer.
 
-        SCAFFOLD: the chunk loop + chunk_start_idx wiring into the model's chunked SDPA
-        is Tier-1 work (attention/prefill.py must call chunked_scaled_dot_product_attention).
+        SCAFFOLD: the per-chunk cache-read attention is wired into attention/prefill.py (gated on
+        ``cached_len``); this is the remaining chunk-loop driver — split token_ids into chunks and call
+        ``ttnn_prefill_forward(..., cached_len=c*chunk)`` per chunk + on_layer_complete callback.
         Left as NotImplementedError so this never silently runs a wrong (non-chunked) path.
         """
         logger.info(f"MiniMaxPrefillPipeline.prefill: isl={actual_isl} chunk={self.chunk_size} slot={slot_id}")
         raise NotImplementedError(
-            "Tier 1: wire chunk loop -> ttnn_prefill_forward(chunk_start_idx=..., chunk_page_table=...) "
-            "with chunked SDPA + on_layer_complete callback. See PREFILL_PROPOSAL.md §5, §9."
+            "wire chunk loop -> ttnn_prefill_forward(cached_len=c*chunk) per chunk + on_layer_complete "
+            "callback. See PREFILL_PROPOSAL.md §5, §9."
         )

@@ -6,11 +6,11 @@ import ttnn
 from models.demos.minimax_m3.config import MeshConfig
 
 from .config import AttentionConfig, ProgramConfig
-from .kv_cache import init_kv_cache
+from .kv_cache import MiniMaxKVCache, allocate_kv_caches
 from .prefill import prefill_forward
 from .weights import load_attention_weights
 
-__all__ = ["Attention", "AttentionConfig", "ProgramConfig"]
+__all__ = ["Attention", "AttentionConfig", "ProgramConfig", "MiniMaxKVCache", "allocate_kv_caches"]
 
 
 class Attention:
@@ -30,11 +30,9 @@ class Attention:
         mesh_config: MeshConfig,
         program_config: ProgramConfig,
         layer_idx,
-        paged_attention_config=None,
         transformation_mats=None,
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
-        create_kv_cache=True,
     ):
         """
         Initialize attention layer.
@@ -47,11 +45,9 @@ class Attention:
             mesh_config: Mesh parallelization config
             program_config: Model-specific program configurations
             layer_idx: Layer index (for sliding window)
-            paged_attention_config: Optional paged attention configuration
             transformation_mats: Optional transformation matrices for RoPE
             weight_dtype: Data type for weights (default: bfloat8_b)
             tensor_cache_path: Optional path for weight caching
-            create_kv_cache: Whether to create KV cache (default: True)
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -60,7 +56,6 @@ class Attention:
         self.program_config = program_config
         self.layer_idx = layer_idx
         self.transformation_mats = transformation_mats
-        self.paged_attention_config = paged_attention_config
 
         # MiniMax-M2 uses full causal attention on every layer (no sliding window).
         object.__setattr__(config, "sliding_window", None)
@@ -75,20 +70,6 @@ class Attention:
             tensor_cache_path=tensor_cache_path,
         )
 
-        # Initialize KV cache
-        if create_kv_cache:
-            self.kv_cache = init_kv_cache(
-                mesh_device=mesh_device,
-                config=config,
-                mesh_config=mesh_config,
-                paged_attention_config=paged_attention_config,
-                tensor_cache_path=tensor_cache_path,
-            )
-            self.layer_past = self.kv_cache  # For tt-transformers compatibility
-        else:
-            self.kv_cache = None
-            self.layer_past = None
-
         # Store references for backward compatibility
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_heads
@@ -101,10 +82,10 @@ class Attention:
         hidden_states,
         rope_mats,
         position_idx=None,
-        page_table=None,
         kv_cache=None,
         user_id=0,
         batch_size=1,
+        cached_len=0,
     ):
         """
         Prefill attention forward.
@@ -112,14 +93,13 @@ class Attention:
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
             rope_mats: Tuple of (cos, sin) matrices for RoPE
-            page_table: Page table for paged attention (optional)
-            kv_cache: External KV cache (optional, uses internal if not provided)
-            user_id: User/batch index for KV cache fill (default: 0)
+            kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k). ``user_id`` is the
+                cache slot, ``self.layer_idx`` the layer, ``cached_len`` the prior-prefix length.
+            user_id: User/batch index; also the cache slot index (default: 0).
 
         Returns:
             Attention output [batch, seq_len, hidden_size]
         """
-        cache = kv_cache if kv_cache is not None else self.kv_cache
         transformation_mat = self.transformation_mats["prefill"] if self.transformation_mats else None
 
         return prefill_forward(
@@ -127,14 +107,15 @@ class Attention:
             rope_mats=rope_mats,
             user_id=user_id,
             weights=self.weights,
-            kv_cache=cache,
+            kv_cache=kv_cache,
             config=self.config,
             mesh_config=self.mesh_config,
             mesh_device=self.mesh_device,
             program_config=self.program_config,
             transformation_mat=transformation_mat,
             position_idx=position_idx,
-            page_table=page_table,
             ccl_manager=self.ccl_manager,
             batch_size=batch_size,
+            layer_idx=self.layer_idx,
+            cached_len=cached_len,
         )

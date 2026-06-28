@@ -203,7 +203,6 @@ def test_model_sp_dense_vs_ref(mesh_device, device_params, seq_len, reset_seeds)
         state_dict=state,
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
-        create_kv_cache=True,
         max_local_batch_size=1,
         sequence_parallel=True,
     )
@@ -224,7 +223,10 @@ def test_model_sp_dense_vs_ref(mesh_device, device_params, seq_len, reset_seeds)
     def reshard_rope(dev_tensor):
         full = ttnn.to_torch(ttnn.get_device_tensors(dev_tensor)[0])[:, :, :seq_len, :]
         return ttnn.from_torch(
-            full, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+            full,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
         )
 
@@ -351,7 +353,6 @@ def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         state_dict=state,
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
-        create_kv_cache=True,
         max_local_batch_size=1,
         sequence_parallel=True,
         use_ep_moe=True,
@@ -361,14 +362,20 @@ def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     in_dims = [None, None]
     in_dims[sp_axis] = 2  # seq -> SP rows
     x_tt = ttnn.from_torch(
-        x.reshape(1, 1, seq_len, HIDDEN), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+        x.reshape(1, 1, seq_len, HIDDEN),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
     )
 
     def reshard_rope(dev_tensor):
         full = ttnn.to_torch(ttnn.get_device_tensors(dev_tensor)[0])[:, :, :seq_len, :]
         return ttnn.from_torch(
-            full, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+            full,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
         )
 
@@ -388,7 +395,9 @@ def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         _, rpcc = comp_pcc(ref_logits[:, r * s_local : (r + 1) * s_local], out[:, r * s_local : (r + 1) * s_local])
         row_pccs.append(rpcc)
         logger.info(f"  row{r} (pos {r*s_local}:{(r+1)*s_local}) pcc={rpcc}")
-    logger.info(f"SP=8xTP=4 + MoE(EP=32) model vs torch ref: pcc={pcc} row_pccs=[{min(row_pccs):.4f}..{max(row_pccs):.4f}]")
+    logger.info(
+        f"SP=8xTP=4 + MoE(EP=32) model vs torch ref: pcc={pcc} row_pccs=[{min(row_pccs):.4f}..{max(row_pccs):.4f}]"
+    )
     assert passing, f"SP+MoE model PCC fail: {pcc}"
     assert min(row_pccs) > 0.93, f"SP+MoE row collapse (sharding bug): row_pccs={row_pccs}"
 
@@ -436,8 +445,12 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
     with open(cfg_path) as f:
         c = json.load(f)
     c.update(
-        num_hidden_layers=len(schedule), num_local_experts=E, num_experts_per_tok=TOPK,
-        intermediate_size=INTER, vocab_size=V, moe_layer_freq=list(schedule),
+        num_hidden_layers=len(schedule),
+        num_local_experts=E,
+        num_experts_per_tok=TOPK,
+        intermediate_size=INTER,
+        vocab_size=V,
+        moe_layer_freq=list(schedule),
     )
     hf_config = SimpleNamespace(**c)
 
@@ -454,7 +467,11 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
         state[p + "self_attn.k_norm.weight"] = w["k_norm"]
         if val == 0:
             g, u, d = w["dense"]
-            state[p + "mlp.gate_proj.weight"], state[p + "mlp.up_proj.weight"], state[p + "mlp.down_proj.weight"] = g, u, d
+            state[p + "mlp.gate_proj.weight"], state[p + "mlp.up_proj.weight"], state[p + "mlp.down_proj.weight"] = (
+                g,
+                u,
+                d,
+            )
         else:
             state[p + "block_sparse_moe.gate.weight"] = w["gate"]
             state[p + "block_sparse_moe.e_score_correction_bias"] = w["bias"]
@@ -470,20 +487,34 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
     mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     model = Model(
-        mesh_device=mesh_device, hf_config=hf_config, state_dict=state, ccl_manager=ccl_manager,
-        mesh_config=mesh_config, create_kv_cache=True, max_local_batch_size=1,
-        sequence_parallel=True, use_ep_moe=True, ep_seq_len_per_chip=s_local,
+        mesh_device=mesh_device,
+        hf_config=hf_config,
+        state_dict=state,
+        ccl_manager=ccl_manager,
+        mesh_config=mesh_config,
+        max_local_batch_size=1,
+        sequence_parallel=True,
+        use_ep_moe=True,
+        ep_seq_len_per_chip=s_local,
     )
 
     # REAL I/O path: token ids -> SP shard + per-row RoPE inside prepare_inputs_prefill
     host_out = model.prepare_inputs_prefill(toks)
     logits = model.ttnn_prefill_forward(
-        host_out[0], rot_mats_global=host_out[1], rot_mats_local=host_out[2],
-        page_table=host_out[3], kv_cache=None, batch_size=1, get_last_token=-1,
+        host_out[0],
+        rot_mats_global=host_out[1],
+        rot_mats_local=host_out[2],
+        kv_cache=None,
+        batch_size=1,
+        get_last_token=-1,
     )
-    out = ttnn.to_torch(
-        logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
-    ).float().reshape(1, seq_len, -1)[..., :V]
+    out = (
+        ttnn.to_torch(
+            logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
+        )
+        .float()
+        .reshape(1, seq_len, -1)[..., :V]
+    )
 
     passing, pcc = comp_pcc(ref_logits, out, 0.93)
     row_pccs = []
@@ -491,7 +522,9 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
         _, rpcc = comp_pcc(ref_logits[:, r * s_local : (r + 1) * s_local], out[:, r * s_local : (r + 1) * s_local])
         row_pccs.append(rpcc)
     last_tok_ref, last_tok_out = int(ref_logits[0, -1].argmax()), int(out[0, -1].argmax())
-    logger.info(f"SP token-path (prepare_inputs + EP MoE) vs ref: pcc={pcc} rows=[{min(row_pccs):.4f}..{max(row_pccs):.4f}] argmax ref={last_tok_ref} out={last_tok_out}")
+    logger.info(
+        f"SP token-path (prepare_inputs + EP MoE) vs ref: pcc={pcc} rows=[{min(row_pccs):.4f}..{max(row_pccs):.4f}] argmax ref={last_tok_ref} out={last_tok_out}"
+    )
     assert passing, f"SP token-path PCC fail: {pcc}"
     assert min(row_pccs) > 0.93, f"SP token-path row collapse: row_pccs={row_pccs}"
 

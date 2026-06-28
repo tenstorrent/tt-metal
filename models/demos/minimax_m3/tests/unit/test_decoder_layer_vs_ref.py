@@ -159,7 +159,6 @@ def test_dense_decoder_layer_vs_ref(mesh_device, device_params, seq_len, reset_s
         mesh_config=mesh_config,
         transformation_mats=rope_setup.get_both_trans_mats(),
         max_seq_len=max(seq_len, 128),
-        create_kv_cache=True,
     )
     assert layer.is_dense, "layer 0 should select the dense MLP path"
 

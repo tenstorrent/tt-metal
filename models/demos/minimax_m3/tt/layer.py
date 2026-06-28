@@ -22,9 +22,7 @@ class DecoderLayer:
         ccl_manager,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
-        paged_attention_config=None,
         mesh_config=None,
-        create_kv_cache=True,
         transformation_mats=None,
         max_seq_len=1024,
         max_local_batch_size=1,
@@ -122,10 +120,8 @@ class DecoderLayer:
             mesh_config=mesh_config,
             program_config=attention_program_config,
             layer_idx=layer_idx,
-            paged_attention_config=paged_attention_config,
             transformation_mats=transformation_mats,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
-            create_kv_cache=create_kv_cache,
         )
         self.mesh_device = mesh_device
 
@@ -134,10 +130,10 @@ class DecoderLayer:
         hidden_states,
         position_embeddings=None,
         position_idx=None,
-        page_table=None,
         kv_cache=None,
         user_id=0,
         batch_size=1,
+        cached_len=0,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -155,10 +151,10 @@ class DecoderLayer:
             hidden_states_post_norm,
             rope_mats=position_embeddings,
             position_idx=position_idx,
-            page_table=page_table,
             kv_cache=kv_cache,
             user_id=user_id,
             batch_size=batch_size,
+            cached_len=cached_len,
         )
         hidden_states_post_norm.deallocate(True)
 

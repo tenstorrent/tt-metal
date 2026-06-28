@@ -111,7 +111,6 @@ def main():
             state_dict=sd,
             ccl_manager=ccl,
             mesh_config=mesh_config,
-            create_kv_cache=True,
             max_local_batch_size=1,
         )
         print("[model-smoke] full Model assembled", flush=True)
