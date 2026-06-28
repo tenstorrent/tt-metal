@@ -148,7 +148,7 @@ def test_msa_native_prod_shape_sampled_accuracy(device):
 
 
 @run_for_blackhole()
-@pytest.mark.parametrize("H,n_kv", [(32, 2), (64, 4)])
+@pytest.mark.parametrize("H,n_kv", [(32, 2), (64, 4), (64, 2)])
 def test_msa_native_gqa_pcc_random_selection(device, H, n_kv):
     """Native GQA: each KV group serves H/n_kv query heads and owns its own block-id rows."""
     d, S, topk, nblk = 128, 33, 16, 16

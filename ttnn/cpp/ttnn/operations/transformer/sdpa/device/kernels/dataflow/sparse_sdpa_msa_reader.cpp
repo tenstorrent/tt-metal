@@ -6,7 +6,6 @@
 // split each block gather into upper/lower tile halves. Masking is represented only by sentinel block ids.
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>  // tt::constants::TILE_HEIGHT
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
@@ -18,34 +17,28 @@ void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(1);
     constexpr uint32_t S = get_compile_time_arg_val(2);
     constexpr uint32_t topk = get_compile_time_arg_val(3);
-    constexpr uint32_t block_size = get_compile_time_arg_val(4);
-    constexpr uint32_t d = get_compile_time_arg_val(5);
-    constexpr uint32_t v_dim = get_compile_time_arg_val(6);
-    constexpr uint32_t n_kv = get_compile_time_arg_val(7);
+    constexpr uint32_t n_kv = get_compile_time_arg_val(4);
+    constexpr uint32_t q_row_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t idx_row_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t k_tiles_per_block = get_compile_time_arg_val(7);
+    constexpr uint32_t v_tiles_per_block = get_compile_time_arg_val(8);
+    constexpr uint32_t k_half = get_compile_time_arg_val(9);  // writer gathers [0, half)
+    constexpr uint32_t v_half = get_compile_time_arg_val(10);
 
     // CB ids match the factory's reader compile-arg block.
-    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_k_in = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_v_in = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_idx = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_kreq = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_kack = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_q_rm = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_idx = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_kreq = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_kack = get_compile_time_arg_val(17);
 
-    constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(15);
-    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(16);  // K is tiled: per-tile read size
-    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(17);  // V is tiled: per-tile read size
-    constexpr uint32_t idx_elem_bytes = get_compile_time_arg_val(18);
-
-    // K/V tile-grid geometry; one chunk is one selected block.
-    constexpr uint32_t Skt = block_size / 32;  // key tile-rows per block (TILE_WIDTH=32)
-    constexpr uint32_t DHt = d / 32;           // K head-dim tiles
-    constexpr uint32_t vDHt = v_dim / 32;      // V head-dim tiles
-    constexpr uint32_t k_tiles_per_block = Skt * DHt;
-    constexpr uint32_t v_tiles_per_block = Skt * vDHt;
+    constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(18);  // K is tiled: per-tile read size
+    constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(19);  // V is tiled: per-tile read size
 
     // K/V use RuntimeTensorShape so T can vary without recompilation.
-    constexpr auto q_args = TensorAccessorArgs<19, 0>();
+    constexpr auto q_args = TensorAccessorArgs<20, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =
@@ -68,9 +61,6 @@ void kernel_main() {
         k_group_tile_stride = get_arg_val<uint32_t>(8);
         v_group_tile_stride = get_arg_val<uint32_t>(9);
     }
-
-    constexpr uint32_t q_row_bytes = d * q_elem_bytes;
-    constexpr uint32_t idx_row_bytes = topk * idx_elem_bytes;
 
     Noc noc;
     experimental::CB q_cb(cb_q_rm), k_cb(cb_k_in), v_cb(cb_v_in), idx_cb(cb_idx), ctrl_cb(cb_ctrl);
@@ -137,12 +127,9 @@ void kernel_main() {
         {
             volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
             cp[0] = n_active;
-            cp[1] = n_active * block_size;
         }
         ctrl_cb.push_back(1);
 
-        constexpr uint32_t k_half = k_tiles_per_block >> 1;  // writer gathers [0, half)
-        constexpr uint32_t v_half = v_tiles_per_block >> 1;
         for (uint32_t chunk = 0; chunk < n_active; ++chunk) {
             const uint32_t block_id = idx_ptr[chunk];
             // Producer contract requires at least one valid block and no sentinels in the active prefix.

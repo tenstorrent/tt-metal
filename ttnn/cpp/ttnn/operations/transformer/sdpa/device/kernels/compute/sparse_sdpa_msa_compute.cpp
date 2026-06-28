@@ -8,7 +8,6 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/bcast.h"  // add_tiles_bcast_rows (mask add)
 // compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
 #include "compute_common.hpp"
@@ -18,25 +17,11 @@
 #include "api/dataflow/circular_buffer.h"  // CircularBuffer: COMPILE_FOR_TRISC-aware CB lifecycle
 #include <tt-metalium/constants.hpp>       // tt::constants::TILE_HEIGHT
 
-// In-place scores[tile] += row-broadcast mask row 0. cb_qk_im is held, so re-pack at the absolute position.
-ALWI void add_bcast_row_mask_tile(uint32_t scores_cb, uint32_t mask_cb, uint32_t score_tile) {
-    tile_regs_acquire();
-    add_tiles_bcast_rows(scores_cb, mask_cb, score_tile, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile<true>(0, scores_cb, score_tile);
-    tile_regs_release();
-}
-
 // Make in-place packer writes to a held CB visible to the next unpacker read.
 ALWI void pack_to_unpack_sync() {
-#ifdef TRISC_PACK
-    t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE);
-#endif
-#ifdef TRISC_UNPACK
-    t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
-    t6_semaphore_get<>(semaphore::PACK_DONE);
-#endif
+    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
 }
 
 ALWI void swap_cb(CircularBuffer& a, CircularBuffer& b) {
@@ -57,24 +42,22 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(6);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(7);  // K tiled [Skt, DHt] (reader-filled, pre-tiled)
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(8);  // V tiled [Skt, vDHt] (reader-filled, pre-tiled)
-    constexpr uint32_t cb_neginf = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_mask_part = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_scale = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_max_a = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_max_b = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_sum_a = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_sum_b = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_out_a = get_compile_time_arg_val(17);
-    constexpr uint32_t cb_out_b = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_corr = get_compile_time_arg_val(19);
-    constexpr uint32_t cb_out_im = get_compile_time_arg_val(20);
-    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(22);
-    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(23);
-    constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_scale = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_max_a = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_max_b = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_sum_a = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_sum_b = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_out_a = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_out_b = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_corr = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_out_im = get_compile_time_arg_val(18);
+    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_ctrl = get_compile_time_arg_val(20);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(22);
 
-    constexpr uint32_t qsb = get_compile_time_arg_val(25);    // query tile-rows per DST group (<= dst_size)
+    constexpr uint32_t qsb = get_compile_time_arg_val(23);    // query tile-rows per DST group (<= dst_size)
     constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;  // total query tile-rows (32 heads each)
     constexpr uint32_t q_groups = Sqt / qsb;                  // DST-bound work runs in this many query-row passes
     constexpr uint32_t KT_stride = Skt;                       // cb_qk_im physical row width
@@ -85,12 +68,12 @@ void kernel_main() {
     // CB wrappers for the fixed (non-ping-pong) buffers' lifecycle verbs.
     CircularBuffer q_in_cb(cb_q_in), k_in_cb(cb_k_in), v_in_cb(cb_v_in), qk_cb(cb_qk_im), scale_cb(cb_scale),
         ctrl_cb(cb_ctrl);
-    CircularBuffer neginf_cb(cb_neginf), mask_part_cb(cb_mask_part), corr_cb(cb_corr);
+    CircularBuffer corr_cb(cb_corr);
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
     compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-    mm_init(cb_q_in, cb_k_in, cb_out_im);  // one-time full matmul init; the no_mop matmuls reinit off this
+    matmul_init(cb_q_in, cb_k_in);  // one-time matmul init; the no_mop matmuls reinit off this
 
     scale_cb.wait_front(1);  // persistent reduce scaler; the streaming reduce assumes it is ready
 
@@ -100,10 +83,9 @@ void kernel_main() {
         // fp8 Q tilize leaves the packer in bfp8 format; restore bf16 before QK writes scores.
         pack_reconfig_data_format(cb_qk_im);
 
-        // Per-token control from the reader: active block count and valid key count.
+        // Per-token control from the reader: active full-block count.
         ctrl_cb.wait_front(1);
         const uint32_t num_active_chunks = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/0);
-        const uint32_t num_valid_keys = ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/1);
         ctrl_cb.pop_front(1);
 
         // Flash running state, ping-pong. Reset every token; all buffers start empty.
@@ -117,7 +99,6 @@ void kernel_main() {
 
             const bool is_first = (chunk == 0);
             const bool is_last = (chunk == num_active_chunks - 1);
-            const bool has_mask = is_last;  // only the last active chunk can hold sentinels
 
             // cb_qk_im / sum_cur / out_cur span all Sqt rows; the qg loop fills them band-by-band (sub_exp & PV
             // pack at absolute row offsets; reduce/corr reserve+push per band).
@@ -128,13 +109,6 @@ void kernel_main() {
             v_in_cb.wait_front(Skt * vDHt);  // V: shared by every query group (PV)
             q_in_cb.wait_front(Sqt * DHt);
 
-            // Boundary-mask path is inactive because selected blocks are always full block_size chunks.
-            const uint32_t k_chunk = Skt * tt::constants::TILE_WIDTH;
-            const uint32_t valid_last = num_valid_keys - (num_active_chunks - 1) * k_chunk;
-            const uint32_t full_start = (valid_last + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
-            const uint32_t part_t = valid_last / tt::constants::TILE_WIDTH;
-            const bool has_part_mask = has_mask && (valid_last % tt::constants::TILE_WIDTH != 0);
-
             // DST holds qsb query tile-rows; process Sqt rows in q_groups passes (one pass when qsb==Sqt).
             for (uint32_t qg = 0; qg < q_groups; ++qg) {
                 const uint32_t row_base = qg * qsb;  // first query tile-row of this group
@@ -142,7 +116,7 @@ void kernel_main() {
                 // Set exp to the softmax scale; salad's correction below re-inits it to unit scale.
                 exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
 
-                // Phase 1: Q@K^T -> scores, optional mask, running row max.
+                // Phase 1: Q@K^T -> scores and running row max.
                 {
                     // Use pack width 1 because Q tilize changes packer addrmods; wider packs need extra reinit.
                     mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, DHt);
@@ -160,39 +134,15 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/DHt,
                             /*matmul_stride=*/DHt,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
-                    // Publish the band to UNPACK while holding wr_ptr (for the in-place mask/sub_exp).
+                    // Publish the band to UNPACK while holding wr_ptr for in-place sub_exp.
                     cb_push_back_hold_wr_ptr(cb_qk_im, qsb * KT_stride);
                 }
 
                 {
-                    // Mask/reduce/sub_exp read scores and bf16 scalers.
+                    // Reduce/sub_exp read scores and bf16 scalers.
                     reconfig_data_format(cb_qk_im, cb_scale);
-                    if (has_mask) {
-                        qk_cb.wait_front((qg + 1) * qsb * KT_stride);  // band visible before the in-place mask
-                        // Same mask for every query row in this group.
-                        if (full_start < Skt) {
-                            neginf_cb.wait_front(1);
-                            add_bcast_rows_init_short(cb_qk_im, cb_neginf);
-                            configure_single_tile_pack(cb_qk_im);
-                            for (uint32_t r = 0; r < qsb; ++r) {
-                                for (uint32_t t = full_start; t < Skt; ++t) {
-                                    add_bcast_row_mask_tile(cb_qk_im, cb_neginf, (row_base + r) * Skt + t);
-                                }
-                            }
-                        }
-                        if (has_part_mask) {
-                            mask_part_cb.wait_front(1);  // persistent until popped after the group loop
-                            add_bcast_rows_init_short(cb_qk_im, cb_mask_part);
-                            configure_single_tile_pack(cb_qk_im);
-                            for (uint32_t r = 0; r < qsb; ++r) {
-                                add_bcast_row_mask_tile(cb_qk_im, cb_mask_part, (row_base + r) * Skt + part_t);
-                            }
-                        }
-                        pack_to_unpack_sync();  // mask writes must be visible to row-max
-                    }
                     // running row-max (MAX-only; eltwise-max against prev on chunk>0)
                     max_cur.reserve_back(qsb);
                     configure_single_tile_pack(max_cur.get_cb_id());
@@ -241,7 +191,6 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/Skt,
                             /*matmul_stride=*/KT_stride,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
                     pack_to_unpack_sync();                // publish held out_cur packs before flash combine
@@ -257,9 +206,8 @@ void kernel_main() {
                         max_prev.get_cb_id(), max_cur.get_cb_id(), cb_corr, /*q_subblock=*/qg, qsb);
                     corr_cb.push_back(qsb);
                     // Restore default packer geometry before the fused flash correction.
-#ifdef TRISC_PACK
-                    llk_pack_init<ckernel::PackMode::Default, false, false, false>(out_cur.get_cb_id(), dst_size);
-#endif
+                    PACK((
+                        llk_pack_init<ckernel::PackMode::Default, false, false, false>(out_cur.get_cb_id(), dst_size)));
                     pack_reconfig_l1_acc(1);
                     // out_prev and corr are consumed per group; sum_prev is indexed by group.
                     salad_correct_fused<qsb, vDHt, dst_size>(
@@ -277,10 +225,6 @@ void kernel_main() {
                 }
             }  // query groups
 
-            // Pop cb_mask_part once: every group bcast-added the same straddling-tile mask.
-            if (has_part_mask) {
-                mask_part_cb.pop_front(1);
-            }
             // prev max/sum consumed into cur (out_prev popped per band above).
             if (!is_first) {
                 max_prev.pop_front(Sqt);

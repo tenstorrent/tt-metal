@@ -24,11 +24,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb_q_in,      // Q tiled [Sqt, DHt]
         cb_k_in,      // K tiled [Skt, DHt] (reader-filled from the tiled cache; QK within-tile transpose)
         cb_v_in,      // V tiled [Skt, vDHt] (reader-filled; separate tensor)
-        cb_neginf,    // boundary-mask tile; currently inert because indices select full blocks
-        cb_mask_part,
-        cb_scale,  // reduce identity scaler (1 tile)
-        cb_qk_im,  // scores [Sqt, Skt]
-        cb_max_a,  // running max ping-pong [Sqt, 1]
+        cb_scale,     // reduce identity scaler (1 tile)
+        cb_qk_im,     // scores [Sqt, Skt]
+        cb_max_a,     // running max ping-pong [Sqt, 1]
         cb_max_b,
         cb_sum_a,  // running sum ping-pong [Sqt, 1]
         cb_sum_b,
@@ -38,7 +36,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb_out_im,         // fixed pre-untilize copy of the final out [Sqt, vDHt]
         cb_out_rm,         // untilized row-major out (compute -> writer)
         cb_idx,            // reader-internal: one token's block-id row (uint32)
-        cb_ctrl,           // reader -> compute: [active chunk count, valid_keys] per token
+        cb_ctrl,           // reader -> compute: active block count per token
         cb_col_identity,   // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
         cb_recip_scratch,  // 1-tile reciprocal scratch for normalize_row_streaming
         cb_kreq,           // reader->writer dual-NoC handoff {block_id, is_last} (writer co-gathers the lower half)
@@ -64,6 +62,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t k_chunk = block_size;                       // a chunk is exactly one block
     const uint32_t Skt = k_chunk / tt::constants::TILE_WIDTH;  // tiles per chunk along keys (block_size/32)
     const uint32_t Sqt = H / tt::constants::TILE_HEIGHT;       // query tile-rows (32 heads each)
+    const uint32_t k_tiles_per_block = Skt * DHt;
+    const uint32_t v_tiles_per_block = Skt * vDHt;
+    const uint32_t k_half = k_tiles_per_block >> 1;
+    const uint32_t v_half = v_tiles_per_block >> 1;
     const uint32_t scale_packed = std::bit_cast<uint32_t>(attrs.scale);
 
     // Q is row-major; K/V are tiled and addressed per tile.
@@ -71,6 +73,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t idx_elem_bytes = t.indices.element_size();  // 4
     const uint32_t out_elem_bytes = output.element_size();     // 2
     const uint32_t q_row_bytes = d * q_elem_bytes;
+    const uint32_t idx_row_bytes = topk * idx_elem_bytes;
     constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
     constexpr uint32_t tile_bytes = tt::tile_size(bf);  // 2048 (intermediate/Q/out tiles are bf16)
     // K/V cache formats drive CB format and tile size.
@@ -108,38 +111,36 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     cb(q_row_bytes, H, q_rm_df);              // cb_q_rm : H row-sticks (native Q dtype: bf16/fp8)
     cb(q_in_tile_bytes, Sqt * DHt, q_in_df);  // cb_q_in : [Sqt,DHt] (bfp8 when Q is fp8, else Q's float format)
     // Single-buffered: reader reserves one block and writer fills its half into the same L1 region.
-    cb(k_tile_bytes, Skt * DHt, k_df);        // cb_k_in : [Skt,DHt] tiled cache (reader-filled, no tilize)
-    cb(v_tile_bytes, Skt * vDHt, v_df);       // cb_v_in : [Skt,vDHt] tiled cache (reader-filled, no tilize)
-    cb(tile_bytes, 1, bf);                    // cb_neginf
-    cb(tile_bytes, 1, bf);                    // cb_mask_part
-    cb(tile_bytes, 1, bf);                    // cb_scale
-    cb(tile_bytes, Sqt * Skt, bf);            // cb_qk_im : [Sqt,Skt]
-    cb(tile_bytes, Sqt, bf);                  // cb_max_a
-    cb(tile_bytes, Sqt, bf);                  // cb_max_b
-    cb(tile_bytes, Sqt, bf);                  // cb_sum_a
-    cb(tile_bytes, Sqt, bf);                  // cb_sum_b
-    cb(tile_bytes, Sqt * vDHt, bf);           // cb_out_a
-    cb(tile_bytes, Sqt * vDHt, bf);           // cb_out_b
-    cb(tile_bytes, Sqt, bf);                  // cb_corr
-    cb(tile_bytes, Sqt * vDHt, bf);           // cb_out_im (bf16 accumulator, full precision)
-    cb(out_tile_bytes, Sqt * vDHt, out_df);   // cb_out_rm : untilized output in Q's dtype
-    cb(topk * idx_elem_bytes, 1, bf);         // cb_idx : one block-id row
-    cb(16, 2, bf);                            // cb_ctrl : [n_active, valid_keys] (double-buffered)
-    cb(tile_bytes, 1, bf);                    // cb_col_identity
-    cb(tile_bytes, 1, bf);                    // cb_recip_scratch
-    cb(16, 2, bf);                            // cb_kreq : {block_id, is_last} reader->writer (double-buffered)
-    cb(16, 2, bf);                            // cb_kack : writer->reader ack (double-buffered)
+    cb(k_tile_bytes, Skt * DHt, k_df);       // cb_k_in : [Skt,DHt] tiled cache (reader-filled, no tilize)
+    cb(v_tile_bytes, Skt * vDHt, v_df);      // cb_v_in : [Skt,vDHt] tiled cache (reader-filled, no tilize)
+    cb(tile_bytes, 1, bf);                   // cb_scale
+    cb(tile_bytes, Sqt * Skt, bf);           // cb_qk_im : [Sqt,Skt]
+    cb(tile_bytes, Sqt, bf);                 // cb_max_a
+    cb(tile_bytes, Sqt, bf);                 // cb_max_b
+    cb(tile_bytes, Sqt, bf);                 // cb_sum_a
+    cb(tile_bytes, Sqt, bf);                 // cb_sum_b
+    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_a
+    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_b
+    cb(tile_bytes, Sqt, bf);                 // cb_corr
+    cb(tile_bytes, Sqt * vDHt, bf);          // cb_out_im (bf16 accumulator, full precision)
+    cb(out_tile_bytes, Sqt * vDHt, out_df);  // cb_out_rm : untilized output in Q's dtype
+    cb(topk * idx_elem_bytes, 1, bf);        // cb_idx : one block-id row
+    cb(16, 2, bf);                           // cb_ctrl : active block count (double-buffered)
+    cb(tile_bytes, 1, bf);                   // cb_col_identity
+    cb(tile_bytes, 1, bf);                   // cb_recip_scratch
+    cb(16, 2, bf);                           // cb_kreq : {block_id, is_last} reader->writer (double-buffered)
+    cb(16, 2, bf);                           // cb_kack : writer->reader ack (double-buffered)
 
     // ---- compile-time args ----
-    // Reader args: scalars, CB ids, element sizes, then q/k/v/indices accessors. K/V use RuntimeTensorShape.
-    std::vector<uint32_t> reader_ct = {H_logical, H, S, topk, block_size, d, v_dim, n_kv};
+    // Reader args: scalars, derived geometry, CB ids, element sizes, then q/k/v/indices accessors.
+    // K/V use RuntimeTensorShape.
+    std::vector<uint32_t> reader_ct = {
+        H_logical, H, S, topk, n_kv, q_row_bytes, idx_row_bytes, k_tiles_per_block, v_tiles_per_block, k_half, v_half};
     for (uint32_t id : {cb_q_rm, cb_k_in, cb_v_in, cb_idx, cb_ctrl, cb_kreq, cb_kack}) {
         reader_ct.push_back(id);
     }
-    reader_ct.push_back(q_elem_bytes);
     reader_ct.push_back(k_tile_bytes);  // K is tiled: per-tile read size
     reader_ct.push_back(v_tile_bytes);  // V is tiled: per-tile read size
-    reader_ct.push_back(idx_elem_bytes);
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -149,14 +150,24 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
 
     // Writer builds persistent compute tiles, co-gathers K/V halves, and drains row-major output.
+    const uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;
+    const uint32_t block_tiles = Sqt * vDHt;
     std::vector<uint32_t> writer_ct = {
-        H_logical, H, S, vDHt, n_kv, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
+        H_logical,
+        S,
+        n_kv,
+        row_bytes,
+        block_tiles,
+        k_tiles_per_block,
+        v_tiles_per_block,
+        k_half,
+        v_half,
+        cb_out_rm,
+        cb_scale,
+        cb_col_identity};
     for (uint32_t id : {cb_k_in, cb_v_in, cb_kreq, cb_kack}) {
         writer_ct.push_back(id);
     }
-    writer_ct.push_back(block_size);
-    writer_ct.push_back(d);
-    writer_ct.push_back(v_dim);
     writer_ct.push_back(k_tile_bytes);
     writer_ct.push_back(v_tile_bytes);
     std::vector<uint32_t> writer_crt;
@@ -166,31 +177,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
 
-    std::vector<uint32_t> compute_ct = {H,
-                                        DHt,
-                                        vDHt,
-                                        Skt,
-                                        scale_packed,
-                                        cb_q_rm,
-                                        cb_q_in,
-                                        cb_k_in,
-                                        cb_v_in,
-                                        cb_neginf,
-                                        cb_mask_part,
-                                        cb_scale,
-                                        cb_qk_im,
-                                        cb_max_a,
-                                        cb_max_b,
-                                        cb_sum_a,
-                                        cb_sum_b,
-                                        cb_out_a,
-                                        cb_out_b,
-                                        cb_corr,
-                                        cb_out_im,
-                                        cb_out_rm,
-                                        cb_ctrl,
-                                        cb_col_identity,
-                                        cb_recip_scratch};
+    std::vector<uint32_t> compute_ct = {
+        H,        DHt,      vDHt,      Skt,       scale_packed, cb_q_rm,         cb_q_in,         cb_k_in,
+        cb_v_in,  cb_scale, cb_qk_im,  cb_max_a,  cb_max_b,     cb_sum_a,        cb_sum_b,        cb_out_a,
+        cb_out_b, cb_corr,  cb_out_im, cb_out_rm, cb_ctrl,      cb_col_identity, cb_recip_scratch};
 
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";

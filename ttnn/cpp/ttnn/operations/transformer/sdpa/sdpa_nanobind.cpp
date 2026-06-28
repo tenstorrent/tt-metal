@@ -375,16 +375,16 @@ void bind_sdpa(nb::module_& mod) {
                                    Each row must contain a valid block, and valid block ids must be < T / block_size.
 
         Keyword args:
-            scale (float, optional): defaults to d**-0.5.
+            scale (float, optional): defaults to d to the power of -0.5.
             block_size (int): KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional). fp8 q requires fp32_dest_acc_en.
-            cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, *] K/V cache. It is a
-                dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+            cache_batch_idx (int, optional): select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
+                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
 
-        Additional preconditions: d and v_dim must be multiples of 32; TOPK*4 and output row bytes must meet
+        Additional preconditions: d and v_dim must be multiples of 32; TOPK times 4 and output row bytes must meet
         device DRAM alignment.
         )doc",
         &ttnn::transformer::sparse_sdpa_msa,

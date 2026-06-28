@@ -26,6 +26,9 @@ from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import (
 )
 
 _D = 128
+REFERENCE_PCC = 0.99999  # torch reference vs equivalent torch reference
+DEVICE_PCC = 0.99  # TTNN device output vs torch reference
+FP8_Q_DEVICE_PCC = 0.985
 
 
 # CPU reference checks.
@@ -39,7 +42,7 @@ def test_golden_all_blocks_selected_equals_dense(H, n_kv):
     scale = d**-0.5
     ref = sparse_attention_ref_msa(q, k, v, indices, scale)
     dense = dense_grouped_kv_attention(q, k, v, scale)
-    assert pcc(ref, dense) > 0.99999, f"sparse(all)=dense mismatch, pcc={pcc(ref, dense)}"
+    assert pcc(ref, dense) > REFERENCE_PCC, f"sparse(all)=dense mismatch, pcc={pcc(ref, dense)}"
 
 
 def test_golden_sentinel_tail_is_truncation():
@@ -58,7 +61,7 @@ def test_golden_sentinel_tail_is_truncation():
         tight[0, 0, s] = chosen
     out_pad = sparse_attention_ref_msa(q, k, v, full, scale)
     out_tight = sparse_attention_ref_msa(q, k, v, tight, scale)
-    assert pcc(out_pad, out_tight) > 0.99999
+    assert pcc(out_pad, out_tight) > REFERENCE_PCC
 
 
 def test_op_is_registered():
@@ -75,7 +78,7 @@ def test_msa_native_pcc_random_selection(device):
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=1)
     gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)
     out = run_op_msa_native(q, k, v, indices, device)
-    assert pcc(out, gold) > 0.99
+    assert pcc(out, gold) > DEVICE_PCC
 
 
 @run_for_blackhole()
@@ -85,7 +88,7 @@ def test_msa_native_gqa_pcc_random_selection(device):
     q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=21)
     gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)
     out = run_op_msa_native(q, k, v, indices, device, kv_dtype=ttnn.bfloat8_b)
-    assert pcc(out, gold) > 0.99
+    assert pcc(out, gold) > DEVICE_PCC
 
 
 @run_for_blackhole()
@@ -110,7 +113,7 @@ def test_msa_native_pcc_sentinel_tail(device):
     indices[0, 0, 1, 2:] = SENTINEL
     gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)
     out = run_op_msa_native(q, k, v, indices, device)
-    assert pcc(out, gold) > 0.99
+    assert pcc(out, gold) > DEVICE_PCC
 
 
 @run_for_blackhole()
@@ -121,7 +124,7 @@ def test_msa_native_q_dtype(device, q_dtype):
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=11)
     gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)
     out = run_op_msa_native(q, k, v, indices, device, kv_dtype=ttnn.bfloat8_b, q_dtype=q_dtype)
-    thresh = 0.99 if q_dtype == ttnn.bfloat16 else 0.985
+    thresh = DEVICE_PCC if q_dtype == ttnn.bfloat16 else FP8_Q_DEVICE_PCC
     assert pcc(out, gold) > thresh
 
 
@@ -161,6 +164,19 @@ def test_msa_gqa_kv_len_no_recompile(device):
         q, k_full, v_full, indices = make_msa_inputs(H, n_kv, S, T, topk, _D, causal=False, seed=T)
         out = _msa_op(device, q, _tile(k_full, device), _tile(v_full, device), indices)
         gold = sparse_attention_ref_msa(q, k_full, v_full, indices, _D**-0.5)
-        assert pcc(out, gold) > 0.99, f"GQA T={T}"
+        assert pcc(out, gold) > DEVICE_PCC, f"GQA T={T}"
     n = device.num_program_cache_entries()
     assert n == 1, f"changing GQA K/V length recompiled: {n} entries (expected 1)"
+
+
+@run_for_blackhole()
+def test_msa_bad_n_kv_rejected_on_hit(device, expect_error):
+    H, S, T, topk = 32, 8, 2048, 16
+    device.clear_program_cache()
+    q, k_full, v_full, indices = make_msa_inputs(H, 1, S, T, topk, _D, causal=False, seed=41)
+    _msa_op(device, q, _tile(k_full, device), _tile(v_full, device), indices)
+    assert device.num_program_cache_entries() == 1
+
+    q_bad, k_bad, v_bad, _ = make_msa_inputs(H, 2, S, T, topk, _D, causal=False, seed=42)
+    with expect_error(RuntimeError, "indices must be"):
+        _msa_op(device, q_bad, _tile(k_bad, device), _tile(v_bad, device), indices)

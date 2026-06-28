@@ -13,8 +13,9 @@
 namespace ttnn::prim {
 
 namespace {
-// Re-check invariants excluded from the program hash. Interleaved K/V length and cache_batch_idx may vary on a
-// cache hit; tensor layout, padding, memory placement, and device must still match kernel assumptions.
+// Re-check invariants excluded from the program hash. Interleaved K/V shape fields (T, batch slots, and n_kv)
+// and cache_batch_idx may vary on a cache hit; tensor layout, padding, memory placement, and device must still
+// match kernel assumptions.
 void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     const auto& q = t.q;
     const auto& k = t.k;
@@ -34,7 +35,13 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
     for (const Tensor* tp : {&k, &v}) {
         TT_FATAL(tp->layout() == Layout::TILE, "sparse_sdpa_msa k/v must be TILE (pre-tiled cache)");
         TT_FATAL(tp->memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa_msa k/v must be in DRAM");
+        TT_FATAL(tp->padded_shape() == tp->logical_shape(), "sparse_sdpa_msa k/v must not be padded");
     }
+    const auto qs = q.logical_shape();
+    const auto is = idx.logical_shape();
+    TT_FATAL(qs.rank() == 4 && qs[0] == 1, "q must be [1,H,S,d]");
+    const uint32_t H = qs[1];
+    const uint32_t S = qs[2];
     const uint32_t d = q.logical_shape()[3];
     const auto ks = k.logical_shape();
     const auto vs = v.logical_shape();
@@ -50,6 +57,21 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
         vs[3]);
     TT_FATAL(ks[1] > 0, "n_kv must be > 0");
     TT_FATAL(ks[2] > 0, "k/v T (cache length) must be > 0");
+    const uint32_t n_kv = ks[1];
+    TT_FATAL(H % n_kv == 0, "sparse_sdpa_msa: H ({}) must be divisible by n_kv ({})", H, n_kv);
+    const uint32_t heads_per_kv = H / n_kv;
+    constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
+    // Each KV group computes full 32-head tile rows. 16 heads/group is padded internally for the production
+    // TP-shard and single-chip GQA cases; larger per-group head counts must already be full tiles.
+    TT_FATAL(
+        heads_per_kv == 16 || (heads_per_kv % tile_h == 0 && heads_per_kv >= tile_h),
+        "sparse_sdpa_msa: H / n_kv must be 16 or a multiple of {} (got H {}, n_kv {}, H/n_kv {})",
+        tile_h,
+        H,
+        n_kv,
+        heads_per_kv);
+    TT_FATAL(is.rank() == 4 && is[0] == 1 && is[1] == n_kv && is[2] == S, "indices must be [1,n_kv,S,TOPK]");
+    TT_FATAL(S > 0 && is[3] > 0, "S/TOPK must be > 0");
     TT_FATAL(
         attrs.block_size > 0 && ks[2] % attrs.block_size == 0,
         "block_size must divide T (got block_size {}, T {})",
@@ -97,35 +119,15 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
         !q_is_fp8 || get_fp32_dest_acc_en(attrs.compute_kernel_config),
         "fp8 q requires fp32_dest_acc_en=true (32-bit DEST for the fp8 tilize)");
 
-    const auto qs = q.logical_shape();
-    const auto is = idx.logical_shape();
-    TT_FATAL(qs.rank() == 4 && qs[0] == 1, "q must be [1,H,S,d]");
-    const uint32_t H = qs[1];
-    const uint32_t S = qs[2];
-    const uint32_t d = qs[3];
-    constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
-    constexpr uint32_t tile_w = tt::constants::TILE_WIDTH;
-    const uint32_t n_kv = k.logical_shape()[1];
-    TT_FATAL(n_kv > 0, "n_kv must be > 0");
-    TT_FATAL(H % n_kv == 0, "sparse_sdpa_msa: H ({}) must be divisible by n_kv ({})", H, n_kv);
-    const uint32_t heads_per_kv = H / n_kv;
-    // Each KV group computes full 32-head tile rows. 16 heads/group is padded internally for the production
-    // TP-shard and single-chip GQA cases; larger per-group head counts must already be full tiles.
-    TT_FATAL(
-        heads_per_kv == 16 || (heads_per_kv % tile_h == 0 && heads_per_kv >= tile_h),
-        "sparse_sdpa_msa: H / n_kv must be 16 or a multiple of {} (got H {}, n_kv {}, H/n_kv {})",
-        tile_h,
-        H,
-        n_kv,
-        heads_per_kv);
-
     validate_non_hashed(attrs, t);
 
+    const auto qs = q.logical_shape();
+    const auto is = idx.logical_shape();
+    const uint32_t d = qs[3];
     const uint32_t v_dim = v.logical_shape()[3];
-    TT_FATAL(is.rank() == 4 && is[0] == 1 && is[1] == n_kv && is[2] == S, "indices must be [1,n_kv,S,TOPK]");
     const uint32_t TOPK = is[3];
-    TT_FATAL(S > 0 && TOPK > 0, "S/TOPK must be > 0");
 
+    constexpr uint32_t tile_w = tt::constants::TILE_WIDTH;
     TT_FATAL(d % tile_w == 0, "d (q/k last dim) must be a multiple of {} (got {})", tile_w, d);
     // v_dim positivity and tile_w alignment are checked on hits and misses.
 

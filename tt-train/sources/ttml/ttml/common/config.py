@@ -118,7 +118,7 @@ class TransformerConfig:
             self.original_context_length = self.rope.get("original_context_length", None)
 
         # Qwen3-specific
-        self.head_dim = int(tc.get("head_dim", None))
+        self.head_dim = tc.get("head_dim", None)
 
 
 @dataclass
