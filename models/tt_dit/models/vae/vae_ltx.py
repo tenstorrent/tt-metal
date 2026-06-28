@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import torch
@@ -831,15 +832,31 @@ class LTXVideoDecoder(Module):
 
         if output_type == "yuv":
             # On-device YUV 4:2:0 + fast d2h -> ffmpeg yuv420p planar uint8, shape (T, planar_bytes).
-            # The kernel subsamples chroma on device, so the d2h + host->ffmpeg feed move ~half the
-            # bytes of the RGB path. logical_h/logical_w trim the VAE's mesh padding on host
-            # (LTX pads W 1920->2048 on 4x8).
+            out_h, out_w = logical_h * q, logical_w * r
+            if os.environ.get("LTX_YUV_DEVICE_CROP", "0") in ("1", "true", "True"):
+                # Device-side W crop: the W pad is a global tail (only the last column-shard), so it
+                # can't be sliced per-shard-locally. All-gather W, slice the tail off the now-replicated
+                # width, then re-partition to uniform logical 240/shard — the op + d2h then consume true
+                # logical width. Correct but the all-gather moves ~SP x the W data, so it's far costlier
+                # than the post-gather host crop below; opt-in only.
+                wax = self.parallel_config.width_parallel.mesh_axis
+                B_, C_, T_, H_, W_ = sample_tt.shape
+                x4 = ttnn.reshape(sample_tt, (C_, T_, H_, W_))
+                x4 = self.ccl_manager.all_gather(x4, dim=3, mesh_axis=wax, use_hyperparams=False)
+                x4 = ttnn.slice(x4, [0, 0, 0, 0], [C_, x4.shape[1], x4.shape[2], out_w])
+                x4 = ttnn.mesh_partition(x4, dim=3, cluster_axis=wax)
+                sample_tt = ttnn.reshape(x4, (1, C_, x4.shape[1], x4.shape[2], x4.shape[3]))
+                return fast_device_to_host_yuv(
+                    sample_tt, self.mesh_device, ccl_manager=self.ccl_manager, logical_h=out_h
+                )
+            # Default: convert on the padded shards; logical_h/logical_w crop the global-tail mesh
+            # padding post-gather in the (host AVX2) planar kernel — the only cheap, correct location.
             return fast_device_to_host_yuv(
                 sample_tt,
                 self.mesh_device,
                 ccl_manager=self.ccl_manager,
-                logical_h=logical_h * q,
-                logical_w=logical_w * r,
+                logical_h=out_h,
+                logical_w=out_w,
             )
 
         concat_dims = [None, None]
