@@ -25,24 +25,6 @@ AUDIT_OVERRIDES = {
             "metadata was introduced; rerun controlled p=4 FP32 before claiming"
         ),
     },
-    ("bf16", "gelu"): {
-        "role": "fastest_waived_ulp",
-        "method": "basis",
-        "degree": "6",
-        "segments": "1",
-        "max_ulp": "0.25",
-        "runtime_us": "3.15",
-        "csv": "gelu_p6_s1_uniform_basis_ulp.csv",
-        "coeff_csv": (
-            "/home/ttuser/tt-polynomial-fitter/data/coefficients/"
-            "gelu_p6_s1_uniform_basis_ulp.csv"
-        ),
-        "status": "waived_gelu_0p25ulp_fast",
-        "note": (
-            "explicit GELU waiver: accept the 0.25 ULP basis-factor candidate "
-            "because it is substantially faster than TTNN"
-        ),
-    },
 }
 
 
