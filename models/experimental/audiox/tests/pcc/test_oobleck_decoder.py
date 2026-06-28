@@ -136,22 +136,31 @@ def test_should_stream_decoder_block_only_for_really_long_low_channel_tail():
     assert should_stream_decoder_block(input_length=165376, stride=4, out_channels=512) is False
 
 
-def test_targeted_transpose_chunking_only_kicks_in_for_mid_decoder_long_audio():
+def test_long_transpose_profile_and_chunking():
     assert should_use_long_transpose_profile(input_length=27584, stride=4, out_channels=256) is True
     assert should_use_long_transpose_profile(input_length=41472, stride=4, out_channels=256) is True
-    assert should_use_long_transpose_profile(input_length=41472, stride=4, out_channels=128) is False
+    assert should_use_long_transpose_profile(input_length=41472, stride=4, out_channels=128) is True
     assert should_use_long_transpose_profile(input_length=165376, stride=4, out_channels=128) is True
     assert (
         decoder_transpose_input_chunk_size(input_length=27584, stride=4, out_channels=256, default_chunk_size=32768)
-        == 8192
+        == 32768
     )
     assert (
         decoder_transpose_input_chunk_size(input_length=41472, stride=4, out_channels=256, default_chunk_size=32768)
-        == 8192
+        == 32768
     )
     assert (
         decoder_transpose_input_chunk_size(input_length=41472, stride=4, out_channels=128, default_chunk_size=32768)
-        == 0
+        == 32768
+    )
+
+
+def test_targeted_mid_decoder_chunking_with_raised_long_threshold(monkeypatch):
+    monkeypatch.setenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD", "131072")
+    assert should_use_long_transpose_profile(input_length=27584, stride=4, out_channels=256) is True
+    assert (
+        decoder_transpose_input_chunk_size(input_length=27584, stride=4, out_channels=256, default_chunk_size=32768)
+        == 8192
     )
 
 
@@ -170,7 +179,8 @@ def test_chunked_transpose_keeps_original_long_profile_length(monkeypatch):
 
     def fake_conv_transpose1d_impl(
         x,
-        weight,
+        weight_height,
+        weight_width,
         bias,
         device,
         in_channels,
@@ -182,6 +192,7 @@ def test_chunked_transpose_keeps_original_long_profile_length(monkeypatch):
         input_length,
         profile_input_length=None,
         label="",
+        prepared_cache=None,
     ):
         calls.append((input_length, profile_input_length, label))
         return FakeTensor(x.shape[1] * stride), x.shape[1] * stride
@@ -192,7 +203,8 @@ def test_chunked_transpose_keeps_original_long_profile_length(monkeypatch):
 
     out, out_length = tt_oobleck._conv_transpose1d(
         FakeTensor(41472),
-        weight=None,
+        weight_height=None,
+        weight_width=None,
         bias=None,
         device=None,
         in_channels=256,
@@ -226,7 +238,8 @@ def test_stream_upsample_keeps_original_long_profile_length(monkeypatch):
 
     def fake_conv_transpose1d_impl(
         x,
-        weight,
+        weight_height,
+        weight_width,
         bias,
         device,
         in_channels,
@@ -238,6 +251,7 @@ def test_stream_upsample_keeps_original_long_profile_length(monkeypatch):
         input_length,
         profile_input_length=None,
         label="",
+        prepared_cache=None,
     ):
         calls.append((input_length, profile_input_length, label))
         return FakeTensor(x.shape[1] * stride, out_channels), x.shape[1] * stride
@@ -249,7 +263,9 @@ def test_stream_upsample_keeps_original_long_profile_length(monkeypatch):
 
     block = tt_oobleck.TtDecoderBlock.__new__(tt_oobleck.TtDecoderBlock)
     block.up_w = None
+    block.up_w_width = None
     block.up_b = None
+    block.up_cache = {}
     block.mesh_device = None
     block.in_channels = 256
     block.out_channels = 128
@@ -283,7 +299,8 @@ def test_streamed_chunk_chain_keeps_original_long_profile_length(monkeypatch):
 
     def fake_conv_transpose1d_impl(
         x,
-        weight,
+        weight_height,
+        weight_width,
         bias,
         device,
         in_channels,
@@ -295,6 +312,7 @@ def test_streamed_chunk_chain_keeps_original_long_profile_length(monkeypatch):
         input_length,
         profile_input_length=None,
         label="",
+        prepared_cache=None,
     ):
         calls.append((input_length, profile_input_length, label))
         return FakeTensor(x.shape[1] * stride, out_channels), x.shape[1] * stride
@@ -308,7 +326,9 @@ def test_streamed_chunk_chain_keeps_original_long_profile_length(monkeypatch):
 
     block = tt_oobleck.TtDecoderBlock.__new__(tt_oobleck.TtDecoderBlock)
     block.up_w = None
+    block.up_w_width = None
     block.up_b = None
+    block.up_cache = {}
     block.mesh_device = None
     block.in_channels = 256
     block.out_channels = 128

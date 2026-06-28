@@ -37,10 +37,28 @@ def test_tt_env_snapshot_and_restore(monkeypatch):
             "rain",
             "--tt-num-command-queues",
             "2",
+            "--tt-long-sequence-threshold",
+            "65536",
             "--tt-conv-transpose-input-chunk",
             "65536",
             "--tt-conv1d-width-slices",
             "4",
+            "--tt-conv1d-low-channel-width-slices",
+            "8",
+            "--tt-conv-transpose-long-threshold",
+            "55296",
+            "--tt-conv-transpose-long-height-slices",
+            "256",
+            "--tt-conv-transpose-long-width-slices",
+            "32",
+            "--tt-conv-transpose-long-act-block-h",
+            "32",
+            "--tt-out-conv-stream-threshold",
+            "1000000",
+            "--tt-residual-stream-stride4-threshold",
+            "999999999",
+            "--tt-residual-stream-stride2-threshold",
+            "220672",
         ]
     )
     previous = stage3_profile_mod._apply_tt_env_overrides(args)
@@ -48,15 +66,33 @@ def test_tt_env_snapshot_and_restore(monkeypatch):
         snapshot = stage3_profile_mod._tt_env_snapshot()
         assert snapshot["AUDIOX_TT_TRACE_REGION_SIZE"] == "123"
         assert snapshot["AUDIOX_TT_NUM_COMMAND_QUEUES"] == "2"
+        assert snapshot["AUDIOX_TT_LONG_SEQUENCE_THRESHOLD"] == "65536"
         assert snapshot["AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK"] == "65536"
         assert snapshot["AUDIOX_TT_CONV1D_WIDTH_SLICES"] == "4"
+        assert snapshot["AUDIOX_TT_CONV1D_LOW_CHANNEL_WIDTH_SLICES"] == "8"
+        assert snapshot["AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD"] == "55296"
+        assert snapshot["AUDIOX_TT_CONV_TRANSPOSE_LONG_HEIGHT_SLICES"] == "256"
+        assert snapshot["AUDIOX_TT_CONV_TRANSPOSE_LONG_WIDTH_SLICES"] == "32"
+        assert snapshot["AUDIOX_TT_CONV_TRANSPOSE_LONG_ACT_BLOCK_H"] == "32"
+        assert snapshot["AUDIOX_TT_OUT_CONV_STREAM_THRESHOLD"] == "1000000"
+        assert snapshot["AUDIOX_TT_RESIDUAL_STREAM_STRIDE4_THRESHOLD"] == "999999999"
+        assert snapshot["AUDIOX_TT_RESIDUAL_STREAM_STRIDE2_THRESHOLD"] == "220672"
     finally:
         stage3_profile_mod._restore_tt_env(previous)
 
     assert stage3_profile_mod.os.environ.get("AUDIOX_TT_TRACE_REGION_SIZE") == "123"
     assert "AUDIOX_TT_NUM_COMMAND_QUEUES" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_LONG_SEQUENCE_THRESHOLD" not in stage3_profile_mod.os.environ
     assert "AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK" not in stage3_profile_mod.os.environ
     assert "AUDIOX_TT_CONV1D_WIDTH_SLICES" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_CONV1D_LOW_CHANNEL_WIDTH_SLICES" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_CONV_TRANSPOSE_LONG_HEIGHT_SLICES" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_CONV_TRANSPOSE_LONG_WIDTH_SLICES" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_CONV_TRANSPOSE_LONG_ACT_BLOCK_H" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_OUT_CONV_STREAM_THRESHOLD" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_RESIDUAL_STREAM_STRIDE4_THRESHOLD" not in stage3_profile_mod.os.environ
+    assert "AUDIOX_TT_RESIDUAL_STREAM_STRIDE2_THRESHOLD" not in stage3_profile_mod.os.environ
 
 
 def test_summarize_realtime_records_aggregates_kernel_durations():
@@ -115,6 +151,17 @@ def test_main_writes_stage3_profile_summary(tmp_path, monkeypatch):
                         "timings": {
                             "decode_seconds": 7.0,
                             "conditioning_seconds": 0.5,
+                            "decode_backend": "tt",
+                            "decoder_profile": {
+                                "blocks": [
+                                    {
+                                        "block_index": 4,
+                                        "stride": 2,
+                                        "out_channels": 128,
+                                        "seconds": 31.5,
+                                    }
+                                ]
+                            },
                         },
                     },
                 }
@@ -152,6 +199,9 @@ def test_main_writes_stage3_profile_summary(tmp_path, monkeypatch):
     assert summary["tt_env"]["AUDIOX_TT_NUM_COMMAND_QUEUES"] == "2"
     assert summary["tt_env"]["AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK"] == "65536"
     assert summary["perf_summary"]["generation_seconds"] == 9.5
+    assert summary["perf_summary"]["decode_backend"] == "tt"
+    assert summary["perf_summary"]["decoder_profile"]["blocks"][0]["seconds"] == 31.5
+    assert summary["perf_summary"]["tt_timings"]["decode_seconds"] == 7.0
     assert summary["perf_summary"]["stage3_checks"]["diffusion_tps_ge_50"] is True
     assert summary["perf_summary"]["stage3_checks"]["generation_time_lt_10s"] is True
 
