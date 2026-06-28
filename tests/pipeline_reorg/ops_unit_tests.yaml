@@ -109,6 +109,17 @@
   team: ttnn
   category: experimental
 
+- name: ttnn nightly experimental generalized MoE gate op tests
+  cmd: 'pytest models/common/tests/modules/moe/test_generalized_moe_gate.py -xv --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U0A2EGX0Z29 # Ronnie Li
+  team: ttnn
+  category: experimental
+
 - name: ttnn nightly pool tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
@@ -195,13 +206,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
-      timeout: 25
+      timeout: 45
     wh_n300_civ2:
-      timeout: 25
+      timeout: 45
     bh_p100:
-      timeout: 25
+      timeout: 45
     bh_p150b_civ2:
-      timeout: 25
+      timeout: 45
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: moreh

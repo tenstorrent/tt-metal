@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/sub_device_types.hpp>
@@ -69,6 +70,31 @@ struct AllReduceAsyncParams {
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
+    }
+
+    // Compile-time attributes drive the default program-cache reflection hash and the canonical key
+    // (ttsl::hash::hash_objects_with_default_seed + ttsl::hash::canonical_key)
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "num_links",
+        "ring_size",
+        "dtype",
+        "output_mem_config",
+        "topology",
+        "use_noc1_only",
+        "use_optimal_ccl_for_llama",
+        "cluster_axis",
+        "sub_device_id");
+    auto attribute_values() const {
+        return std::make_tuple(
+            num_links,
+            ring_size,
+            dtype,
+            output_mem_config,
+            topology,
+            use_noc1_only,
+            use_optimal_ccl_for_llama,
+            cluster_axis,
+            sub_device_id);
     }
 };
 

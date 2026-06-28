@@ -1053,12 +1053,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
-    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp). Only safe
-    // when Phase-2's save_to_staging branch can't fire — i.e. `is_last_k && !is_last_ring_iter
-    // && q_per_core > 1` is always false. That branch packs at offset qktv_h*vDHt and would
-    // overrun the 2*qktv_h*vDHt buffer on its 2nd Q chunk.
-    const bool streaming_shrink_safe =
-        use_streaming_compute && (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1);
+    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp), unless either:
+    //  - Phase-2's save_to_staging branch can fire (packs at offset qktv_h*vDHt, overruns the
+    //    2*qktv_h*vDHt buffer on the 2nd Q chunk): gated by ring_size==1 || max_q_per_core==1.
+    //  - the full Sq_chunk_t*vDHt output doesn't fit in 2 row groups: Phase-2 reserves it in a
+    //    single reserve_back, which then blocks forever (deadlock seen at q_chunk=256 causal).
+    // Otherwise keep the full-size cb_out (the default path).
+    const bool streaming_shrink_fits = Sq_chunk_t <= 2 * writer_out_row_group_h;
+    const bool streaming_shrink_safe = use_streaming_compute &&
+                                       (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1) &&
+                                       streaming_shrink_fits;
     if (streaming_shrink_safe) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
@@ -2178,9 +2182,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_compile_time_args[batch_mcast_arg_index] = k_mcast_enabled ? 1 : 0;
     }
     if (gqa_grouped_kv) {
-        const uint32_t gqa_mcast_arg_index = sem_args_offset + kRingJointChainCompileArgCount +
-                                             (k_uses_batch_chain ? kRingJointChainCompileArgCount : 0) +
-                                             kRingJointChainMcastEnabledCompileArgOffset;
+        const uint32_t gqa_mcast_arg_index =
+            sem_args_offset + kRingJointChainCompileArgCount + kRingJointChainMcastEnabledCompileArgOffset;
         reader_compile_time_args[gqa_mcast_arg_index] = gqa_mcast_enabled ? 1 : 0;
     }
 

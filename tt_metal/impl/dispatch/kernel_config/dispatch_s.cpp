@@ -35,6 +35,7 @@
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/debug_helpers.hpp"
 #include "hostdev/device_print_structures.h"
+#include "hostdevcommon/dispatch_telemetry_types.hpp"
 #include "hostdevcommon/dprint_common.h"
 
 using namespace tt::tt_metal;
@@ -158,6 +159,11 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
     static_config_.realtime_profiler_msg_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
+    static_config_.dispatch_telemetry_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+    static_config_.dispatch_telemetry_disabled = descriptor_.rtoptions().get_dispatch_telemetry_disabled();
+    static_config_.dispatch_telemetry_control_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL);
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
@@ -294,6 +300,9 @@ void DispatchSKernel::CreateKernel() {
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
+        {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
+        {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         {"DEVICE_PRINT_DISPATCH_ENABLED", std::to_string(static_config_.device_print_dispatch_enabled.value_or(0))},
         // For each per-device dispatch_s build, MaxNocLocations equals the actual print-core count
         // for that device — passed as a compile-time #define so DevicePrintDispatch<>'s LDM arrays
@@ -323,6 +332,10 @@ void DispatchSKernel::CreateKernel() {
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
             {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
             {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
+            {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
+            {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
+            {"TOTAL_SUB_DEVICES", std::to_string(static_config_.max_num_worker_sems.value())},
+            {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         };
         tt::tt_metal::ComputeConfig compute_config;
         compute_config.defines = compute_defines;
@@ -339,9 +352,35 @@ void DispatchSKernel::ConfigureCore() {
             GetCoreType(),
             descriptor_.hal(),
             static_config_.realtime_profiler_msg_addr.value());
+
+        TT_ASSERT(static_config_.dispatch_telemetry_control_addr.has_value());
+        DispatchTelemetryControl zero_dispatch_telemetry_control{};
+        detail::WriteToDeviceL1(
+            device_,
+            logical_core_,
+            static_config_.dispatch_telemetry_control_addr.value(),
+            std::span<const uint8_t>(
+                reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry_control),
+                sizeof(zero_dispatch_telemetry_control)),
+            GetCoreType());
     }
 
     if (get_dispatch_query_manager_ref().distributed_dispatcher()) {
+        // Dispatch_s needs to init telemetry since it has a dedicated core
+        TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
+        TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
+        DispatchCoreTelemetry zero_dispatch_telemetry{};
+        if (static_config_.dispatch_telemetry_disabled.value()) {
+            zero_dispatch_telemetry.signature = INVALID_TELEMETRY_SIGNATURE;
+        }
+        detail::WriteToDeviceL1(
+            device_,
+            logical_core_,
+            static_config_.dispatch_telemetry_addr.value(),
+            std::span<const uint8_t>(
+                reinterpret_cast<const uint8_t*>(&zero_dispatch_telemetry), sizeof(zero_dispatch_telemetry)),
+            GetCoreType());
+
         // Just need to clear the dispatch message
         std::vector<uint32_t> zero = {0x0};
         const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();

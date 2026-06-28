@@ -110,7 +110,8 @@ namespace ttnn::device {
 void py_device_module_types(nb::module_& m_device) {
     nb::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
-        .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
+        .value("BLACKHOLE", tt::ARCH::BLACKHOLE)
+        .value("QUASAR", tt::ARCH::QUASAR);
 
     nb::enum_<tt::tt_metal::DispatchCoreType>(m_device, "DispatchCoreType", "Enum of types of dispatch cores.")
         .value("WORKER", tt::tt_metal::DispatchCoreType::WORKER)

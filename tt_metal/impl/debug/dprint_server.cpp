@@ -941,8 +941,9 @@ DPrintServer::Impl::~Impl() {
 
     // Wait for the thread to end, with a timeout
     auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
-    if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-        log_fatal(tt::LogMetal, "Timed out waiting on debug print thread to terminate.");
+    const int join_timeout_sec = debug_server_finish_timeout_sec(env_.get_rtoptions());
+    if (future.wait_for(std::chrono::seconds(join_timeout_sec)) == std::future_status::timeout) {
+        log_fatal(tt::LogMetal, "Timed out waiting on debug print thread to terminate ({}s).", join_timeout_sec);
     }
     delete print_server_thread_;
     print_server_thread_ = nullptr;
@@ -986,8 +987,9 @@ void DPrintServer::Impl::await() {
         } while (num_riscs_waiting > 0 || new_data_last_iter_ || wait_loop_iterations_ < 2);
     };
     auto future = std::async(std::launch::async, poll_until_no_new_data);
-    if (future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
-        TT_THROW("Timed out waiting on debug print server to read data.");
+    const int await_timeout_sec = debug_server_wait_timeout_sec(env_.get_rtoptions());
+    if (future.wait_for(std::chrono::seconds(await_timeout_sec)) == std::future_status::timeout) {
+        TT_THROW("Timed out waiting on debug print server to read data ({}s).", await_timeout_sec);
     }
 }  // await
 

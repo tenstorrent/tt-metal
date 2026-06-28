@@ -20,8 +20,6 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
 
-#include <cmath>
-
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -36,7 +34,7 @@ namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 // Sq x Sk attention window. A new Q chunk attends to all prior K/V tokens as a full
 // rectangle, then attends to its own chunk causally as a triangle:
 //
-//   valid_pairs_global = q_chunk * prefix_k + q_chunk * q_chunk / 2
+//   valid_pairs_global = q_chunk * prefix_k + q_chunk * (q_chunk + 1) / 2
 //
 // Ring-joint shards Q rows across the ring, while every shard still sees the same
 // global K prefix, so each device models 1 / ring_size of the global valid pairs.
@@ -56,18 +54,11 @@ int compute_chunked_causal_sdpa_ideal_cycles(
         return 0;
     }
 
-    constexpr double FLOPS_PER_FMA = 2.0;
-    constexpr double tensix_mul_adds_per_cycle_lofi = 4096.0;
-
     const double q = static_cast<double>(q_global);
     const double prefix_k = static_cast<double>(prefix_k_global);
-    const double valid_pairs_per_device = (q * prefix_k + (q * q / 2.0)) / static_cast<double>(ring_size);
-    const double flops = FLOPS_PER_FMA * valid_pairs_per_device * static_cast<double>(DH + DV) *
-                         static_cast<double>(num_heads_q) * static_cast<double>(batch_size);
-    const double cycles =
-        (flops / (static_cast<double>(num_cores) * tensix_mul_adds_per_cycle_lofi)) *
-        static_cast<double>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
-    return static_cast<int>(std::ceil(cycles));
+    const double valid_pairs_per_device = (q * prefix_k + (q * (q + 1.0) / 2.0)) / static_cast<double>(ring_size);
+    return operations::transformer::sdpa::compute_sdpa_ideal_cycles_for_valid_pairs(
+        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, math_fidelity, num_cores);
 }
 
 void validate_ring_joint_all_gather_on_program_cache_miss(
@@ -541,11 +532,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             NQH,
             NKH,
             NVH);
-        TT_FATAL(
-            NVH == NQH || (NQH % NVH == 0),
-            "Q num_heads must be divisible by V num_heads when V is grouped. Got Q: {}, V: {}",
-            NQH,
-            NVH);
     } else {
         TT_FATAL(
             NKH == NVH || NKH == 1,
@@ -645,48 +631,6 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
         create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
     };
-}
-
-ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
-
-    std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
-    if (tensor_args.input_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.input_v.value());
-    }
-    if (tensor_args.joint_q.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_q.value());
-        input_tensors.emplace_back(tensor_args.joint_k.value());
-    }
-    if (tensor_args.joint_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_v.value());
-    }
-    input_tensors.emplace_back(tensor_args.gathered_k);
-    if (tensor_args.gathered_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.gathered_v.value());
-    }
-    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.is_causal,
-        args.is_balanced,
-        args.is_cross,
-        cache_key_logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.ccl_core_grid_offset,
-        args.kv_cache_batch_idx.has_value(),
-        kv_pad_rotation_enabled,
-        tensor_args.has_latent_v(),
-        tensor_args.v_num_heads(),
-        tensor_args.v_head_dim(args.latent_v_head_dim),
-        ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
-            args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
-    );
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(

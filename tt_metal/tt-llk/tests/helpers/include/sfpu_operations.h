@@ -324,6 +324,10 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_atanh<APPROX_MODE>);
     }
+    else if constexpr (OPERATION == SfpuType::cosine)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(cosine_init<APPROX_MODE>);
+    }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE, is_fp32_dest_acc_en>);
@@ -355,6 +359,10 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, false /* legacy_compat */>);
+    }
+    else if constexpr (OPERATION == SfpuType::sine)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sine_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {

@@ -21,7 +21,7 @@ import ttml
 from ttml.common.config import (
     TrainingConfig,
     DeviceConfig,
-    SchedulerConfig,
+    SpeedrunSchedulerConfig,
     load_config,
     yaml_deep_update,
 )
@@ -336,7 +336,7 @@ def train():
         print("*********************************\n\n")
 
     training_config = TrainingConfig(yaml_config)
-    scheduler_config = SchedulerConfig(yaml_config)
+    scheduler_config = SpeedrunSchedulerConfig.from_yaml(yaml_config)
 
     batch_size = training_config.batch_size
 

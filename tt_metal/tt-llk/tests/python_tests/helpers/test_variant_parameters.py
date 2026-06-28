@@ -30,7 +30,6 @@ from .llk_params import (
     StableSort,
     StochasticRounding,
     Tilize,
-    TilizeUnpackerSel,
     TopKSortDirection,
     Transpose,
     UnpackerEngine,
@@ -322,14 +321,6 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
-
-
-@dataclass
-class TILIZE_UNPACKER_SEL(TemplateParameter):
-    tilize_unp_sel: TilizeUnpackerSel = TilizeUnpackerSel.UnpA
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr TilizeUnpackerSel TILIZE_UNP_SEL = TilizeUnpackerSel::{self.tilize_unp_sel.value};"
 
 
 @dataclass

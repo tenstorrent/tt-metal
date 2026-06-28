@@ -37,8 +37,11 @@ void bind_indexer_score(nb::module_& mod) {
             k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
             weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
                 pre-folded)
-            chunk_start_idx: global position of query row 0 (causality: key t
-                visible to query s iff t <= chunk_start_idx + s)
+            chunk_start_idx: absolute global position of rank 0's query row 0
+                (rank 0 = lowest cluster_axis coord; causality: key t visible to
+                query s iff t <= chunk_start + s). OMIT on a mesh -> deduced as
+                T - sp_ring*Sq (sp_ring = mesh extent along cluster_axis, whole
+                mesh if unset). Single device: set to history + rank*Sq per rank.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Defaults always fit
                 L1; raise head_group_size (0 = all resident) for performance.
@@ -46,6 +49,19 @@ void bind_indexer_score(nb::module_& mod) {
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
                 stay false (the custom LLK is validated for bf16 DEST half-sync).
+            cache_batch_idx: optional int. Selects the batch slot of a shared
+                [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
+                banks). Re-applied each dispatch, so switching slots does not
+                recompile.
+            kv_len: optional int. Valid prefix of a k allocated at its full T;
+                the rest is masked out. Tile-aligned, in (0, T], with
+                chunk_start_idx + Sq <= kv_len. Re-applied each dispatch, so a
+                serving loop growing kv_len (<= T) reuses one program -- no
+                recompile. Only output columns [0, kv_len) are written.
+            cluster_axis: mesh axis that is the SP ring. On a mesh, device r uses
+                chunk_start = chunk_start_idx + r*Sq, where r is its linearized
+                index along this axis (Sq = q seq len). None = linear device order
+                (1 on a single device, so chunk_start_idx is used as-is).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -54,9 +70,12 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("k"),
         nb::arg("weights"),
         nb::kw_only(),
-        nb::arg("chunk_start_idx") = 0,
+        nb::arg("chunk_start_idx") = std::nullopt,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
-        nb::arg("compute_kernel_config") = std::nullopt);
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("cache_batch_idx") = std::nullopt,
+        nb::arg("kv_len") = std::nullopt,
+        nb::arg("cluster_axis") = std::nullopt);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -75,11 +94,13 @@ void bind_indexer_score(nb::module_& mod) {
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
             k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
-            chunk_start_idx: global position of query row 0 (causality: key t
-                visible to query s iff t <= chunk_start_idx + s)
+            chunk_start_idx: absolute global position of rank 0's query row 0
+                (causality: key t visible to query s iff t <= chunk_start + s).
+                OMIT on a mesh -> deduced as T - sp_ring*Sq; single device: set to
+                history + rank*Sq per rank (same semantics as indexer_score_dsa).
             scale: constant gate applied to every head (e.g. 1/sqrt(d))
-            num_groups: 1 sums all Hi heads into one plane (the TP=4 group-aligned
-                deployment, Hi=1/device). G>1 partitions the heads into G groups
+            num_groups: REQUIRED (no default). 1 sums all Hi heads into one plane
+                (the TP=4 group-aligned deployment, Hi=1/device). G>1 partitions the heads into G groups
                 of Hi/G and sums within each group -> output [B, G, Sq, T] (multiple
                 GQA groups on one chip). G>1 needs all heads resident
                 (head_group_size 0 or Hi) and k_chunk_size >= 64.
@@ -94,13 +115,9 @@ void bind_indexer_score(nb::module_& mod) {
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
                 stay false (the custom LLK is validated for bf16 DEST half-sync).
-            chunk_offset: optional per-device causal chunk-start tensor (uint32,
-                one 32x32 TILE per device; element [0,0] = chunk-start in TILES).
-                When bound, the reader DRAM-reads each device's tile and the
-                compute/writer kernels use that RUNTIME value as the causal-mask
-                diagonal / local-block base instead of chunk_start_idx (lets each
-                SP chip mask against its own absolute query positions). When None
-                (default), the compile-time chunk_start_idx is used (single-shot).
+            cluster_axis: mesh axis that is the SP ring. On a mesh, device r uses
+                chunk_start = chunk_start_idx + r*Sq, where r is its linearized
+                index along this axis. None = linear device order.
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
@@ -109,13 +126,13 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("q"),
         nb::arg("k"),
         nb::kw_only(),
-        nb::arg("chunk_start_idx") = 0,
+        nb::arg("num_groups"),  // required: per-GQA-group selection is MSA's purpose, no implicit default
+        nb::arg("chunk_start_idx") = std::nullopt,
         nb::arg("scale") = 1.0f,
-        nb::arg("num_groups") = 1,
         nb::arg("block_size") = 0,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = std::nullopt,
-        nb::arg("chunk_offset") = std::nullopt);
+        nb::arg("cluster_axis") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

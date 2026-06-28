@@ -5,6 +5,12 @@ name: "[internal] Check Harbor Availability"
 
 on:
   workflow_call:
+    inputs:
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-light"
+        description: "Runner label for the Harbor health check job"
     outputs:
       harbor-prefix:
         description: "Harbor pull-through prefix from org vars when healthy; empty to pull GHCR directly"
@@ -15,7 +21,7 @@ on:
 jobs:
   check:
     name: "Check Harbor"
-    runs-on: tt-ubuntu-light
+    runs-on: ${{ inputs.runs-on || 'tt-ubuntu-light' }}
     permissions:
       contents: read
     outputs:

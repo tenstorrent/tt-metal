@@ -689,7 +689,7 @@ void kernel_main() {
                     // Padded GQA receivers must also receive V, because the row injector multicasts
                     // both K and V and waits for every receiver's ready signal. The data remains
                     // staging-only because we intentionally do not push it to compute.
-                    if constexpr (gqa_grouped_kv && gqa_mcast_enabled && !v_shares_k_buffer) {
+                    if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
                         const uint32_t nv = nq / q_heads_per_v;
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(2 * v_cb_entry_tiles);
