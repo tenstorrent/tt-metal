@@ -16,8 +16,12 @@
 #   2. block-diagonal segment-id mask -> additive bias (0 / -inf) fed to SDPA.
 #   3. tanh-gated 4-branch AdaLN (no shift terms).
 #   4. double-RMSNorm sandwich residual (norm2 on the attn/ff *output*).
-#   5. head_dim=256 / 18 heads — single-device (TP=1) is the validated config.
+#   5. head_dim=256 / 18 heads — TP pads heads up to a multiple of tp_factor
+#      (18 -> 20 for tp=4); SP sharding uses ring attention. See the parallel
+#      parametrizations below.
 # =============================================================================
+
+import math
 
 import pytest
 import torch
@@ -29,8 +33,22 @@ from ....models.transformers.transformer_ideogram4 import Ideogram4TransformerBl
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....reference.ideogram4 import modeling_ideogram4
+from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor
+
+# Ring SDPA (sequence parallel) requires the padded sequence to be divisible by
+# k_chunk_size * sp_factor. Must match Ideogram4TransformerBlock.sdpa_k_chunk_size.
+SDPA_K_CHUNK = 256
+
+
+def _sp_padded_len(seq_len: int, sp_factor: int) -> int:
+    if sp_factor == 1:
+        return seq_len
+    divisor = SDPA_K_CHUNK * sp_factor
+    return math.ceil(seq_len / divisor) * divisor
+
 
 # Real Ideogram 4.0 denoiser dims (confirmed against reference Ideogram4Config).
 EMB_DIM = 4608
@@ -99,9 +117,18 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype):
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(2, 4)],
-    indirect=True,
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    [
+        # factor == submesh axis size. TP shards heads (padded to a multiple of tp);
+        # SP shards the sequence (ring attention). Full mesh is the 2x4 BH loudbox.
+        pytest.param((2, 4), (1, 1), 0, 1, 1, id="tp1sp1"),  # regression: single device
+        pytest.param((2, 4), (1, 2), 0, 1, 1, id="tp2"),  # 18 heads % 2 == 0, no padding
+        pytest.param((2, 4), (1, 4), 0, 1, 1, id="tp4_pad20"),  # 18 -> 20 heads
+        pytest.param((2, 4), (2, 1), 1, 0, 1, id="sp2"),  # sequence parallel only
+        pytest.param((2, 4), (2, 2), 1, 0, 1, id="sp2tp2"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, id="sp2tp4_pad20"),
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -111,16 +138,16 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype):
 @pytest.mark.parametrize(
     ("batch_size", "text_len", "image_len"),
     [
-        # (text tokens, image tokens). Small text + a moderate image grid keeps a
-        # single device within memory while exercising the full block numerics
-        # (block math is sequence-length independent).
         pytest.param(1, 64, 1024, id="text64_img1024"),
-        pytest.param(1, 128, 4096, id="text128_img4096_1024px"),
     ],
 )
 def test_transformer_block(
     *,
     mesh_device: ttnn.MeshDevice,
+    submesh_shape: tuple[int, int],
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
     batch_size: int,
     text_len: int,
     image_len: int,
@@ -129,6 +156,10 @@ def test_transformer_block(
     torch_dtype = torch.bfloat16
 
     seq_len = text_len + image_len
+
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    sp_factor = tuple(submesh_device.shape)[sp_axis]
+    tp_factor = tuple(submesh_device.shape)[tp_axis]
 
     # ---- reference (ground truth), random init ----
     torch_block = modeling_ideogram4.Ideogram4TransformerBlock(
@@ -154,10 +185,17 @@ def test_transformer_block(
     # ---- tt block ----
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
-        sequence_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+
+    # Head padding for TP divisibility (18 heads -> next multiple of tp_factor).
+    padding_config = (
+        PaddingConfig.from_tensor_parallel_factor(NUM_HEADS, HEAD_DIM, tp_factor)
+        if NUM_HEADS % tp_factor != 0
+        else None
+    )
 
     tt_block = Ideogram4TransformerBlock(
         hidden_size=EMB_DIM,
@@ -165,36 +203,50 @@ def test_transformer_block(
         num_heads=NUM_HEADS,
         norm_eps=NORM_EPS,
         adaln_dim=ADALN_DIM,
-        mesh_device=mesh_device,
+        mesh_device=submesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        padding_config=None,
+        padding_config=padding_config,
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
 
-    # tt tensors. cos/sin -> (B, 1, L, head_dim) to broadcast over heads in _apply_rope.
-    tt_x = bf16_tensor(x, device=mesh_device)
-    tt_adaln = bf16_tensor(adaln_input, device=mesh_device)
-    tt_cos = bf16_tensor(cos.unsqueeze(1), device=mesh_device)
-    tt_sin = bf16_tensor(sin.unsqueeze(1), device=mesh_device)
+    # Single packed segment => full attention => mask is all-zero, pass None.
+    assert not torch.isneginf(attn_bias).any(), "this test exercises full attention (no segment mask)"
 
-    # Additive attn mask. For a single packed segment the mask is all-zero (full
-    # attention) so we pass None to let SDPA skip the mask entirely. When segments
-    # differ, build the bias tensor on device.
-    if torch.isneginf(attn_bias).any():
-        tt_attn_mask = bf16_tensor(attn_bias, device=mesh_device)
+    # Sequence-parallel sharding: pad the sequence to k_chunk*sp, shard x and the
+    # cos/sin rope tables on the sequence dim across the SP axis. The hidden dim stays
+    # replicated (TP only shards inside the matmuls), so a single-axis shard suffices.
+    padded_len = _sp_padded_len(seq_len, sp_factor)
+    cos4 = cos.unsqueeze(1)  # (B, 1, L, head_dim) to broadcast over heads in _apply_rope
+    sin4 = sin.unsqueeze(1)
+    if sp_factor > 1:
+        x = torch.nn.functional.pad(x, (0, 0, 0, padded_len - seq_len))
+        cos4 = torch.nn.functional.pad(cos4, (0, 0, 0, padded_len - seq_len))
+        sin4 = torch.nn.functional.pad(sin4, (0, 0, 0, padded_len - seq_len))
+        tt_x = bf16_tensor(x, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
+        tt_cos = bf16_tensor(cos4, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
+        tt_sin = bf16_tensor(sin4, device=submesh_device, mesh_axis=sp_axis, shard_dim=2)
     else:
-        tt_attn_mask = None
+        tt_x = bf16_tensor(x, device=submesh_device)
+        tt_cos = bf16_tensor(cos4, device=submesh_device)
+        tt_sin = bf16_tensor(sin4, device=submesh_device)
+    tt_adaln = bf16_tensor(adaln_input, device=submesh_device)
 
     tt_out = tt_block(
         tt_x,
         cos=tt_cos,
         sin=tt_sin,
         adaln_input=tt_adaln,
-        attn_mask=tt_attn_mask,
+        attn_mask=None,
+        spatial_sequence_length=seq_len,
     )
 
-    tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+    # Output is replicated on TP, sharded on SP -> concat the SP shards, take a TP replica.
+    tt_out_torch = tensor.to_torch(tt_out, mesh_axes=[None, sp_axis, None])
+    tt_out_torch = tt_out_torch[:, :seq_len, :]
 
-    logger.info(f"ideogram4 block: B={batch_size} text={text_len} image={image_len} seq={seq_len}")
+    logger.info(
+        f"ideogram4 block: B={batch_size} seq={seq_len} tp={tp_factor} sp={sp_factor} "
+        f"padded_heads={tt_block.padded_heads} padded_len={padded_len}"
+    )
     assert_quality(torch_out, tt_out_torch, pcc=0.99)

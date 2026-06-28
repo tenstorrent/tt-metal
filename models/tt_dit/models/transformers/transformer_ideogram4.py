@@ -29,12 +29,13 @@ import torch
 
 import ttnn
 
-from ...layers.feedforward import FeedForward
-from ...layers.linear import Linear
+from ...layers.feedforward import ParallelFeedForward
+from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils.padding import pad_weight_tensor
 from ...utils.substate import pop_substate
 
 # Per-token role indicators (mirrors reference src/ideogram4/constants.py).
@@ -78,9 +79,20 @@ class Ideogram4TransformerBlock(Module):
         x = x + gate_msa * attention_norm2(attn_out)
         x = x + gate_mlp * ffn_norm2(feed_forward(ffn_norm1(x) * scale_mlp))
 
-    Validated target config: single device (TP=1). The tensor-parallel path
-    (tp_factor>1) is UNVALIDATED — 18 heads are not mesh-friendly (flag for
-    hw-mapper), so the first-win config keeps TP=1.
+    Parallelism (Megatron-style TP + ring sequence parallelism):
+      * The residual stream stays REPLICATED on hidden and SHARDED on sequence
+        ([B, L/sp, hidden]). Norms / AdaLN run replicated (regular RMSNorm/Linear),
+        so their numerics match the TP=1 validated path exactly.
+      * Only the four big matmuls are sharded across the TP axis: qkv is
+        ColParallel (heads fractured), o is RowParallel, and the SwiGLU FFN is a
+        ParallelFeedForward (ff1 col, ff2 row). Each sub-block reduces back to a
+        replicated-hidden activation via an all-gather, i.e. an all-reduce.
+      * 18 heads are not mesh-friendly; head padding (PaddingConfig) rounds the head
+        count up to a multiple of tp_factor with zero-initialized heads, so the
+        padded heads/o-proj columns contribute nothing.
+      * When sequence_parallel.factor > 1 the sequence is sharded on the SP axis and
+        attention uses ring_joint_scaled_dot_product_attention, which all-gathers
+        K/V across the SP axis. cos/sin are sharded on sequence to match.
     """
 
     def __init__(
@@ -110,17 +122,42 @@ class Ideogram4TransformerBlock(Module):
         self.parallel_config = parallel_config
         self.padding_config = padding_config
 
-        tp_factor = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
-        assert tp_factor == 1, (
-            "Ideogram4TransformerBlock validated path is TP=1 only; "
-            "TP>1 is unvalidated (18 heads are not mesh-friendly). Flag for hw-mapper."
-        )
+        self.tp_factor = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
+        self.tp_axis = parallel_config.tensor_parallel.mesh_axis if parallel_config is not None else 0
+        self.sp_factor = parallel_config.sequence_parallel.factor if parallel_config is not None else 1
+        self.sp_axis = parallel_config.sequence_parallel.mesh_axis if parallel_config is not None else 0
+
+        if self.tp_factor > 1 or self.sp_factor > 1:
+            assert ccl_manager is not None, "TP/SP require a CCLManager"
+
+        # Head padding for TP divisibility (18 heads is not mesh-friendly).
+        self.padded_heads = padding_config.target_heads if padding_config is not None else num_heads
+        assert self.padded_heads % self.tp_factor == 0, "padded heads must be divisible by tp_factor"
+        self.n_local_heads = self.padded_heads // self.tp_factor
+        padded_inner_dim = self.head_dim * self.padded_heads
 
         # --- attention projections (fused QKV, no bias; matches reference qkv/o) ---
-        self.qkv = Linear(hidden_size, 3 * hidden_size, bias=False, mesh_device=mesh_device)
-        self.o = Linear(hidden_size, hidden_size, bias=False, mesh_device=mesh_device)
+        # qkv is column-parallel (output heads fractured across TP); o is row-parallel
+        # (input heads fractured, partial sums reduce-scattered then all-gathered).
+        self.qkv = ColParallelLinear(
+            hidden_size,
+            3 * padded_inner_dim,
+            bias=False,
+            mesh_device=mesh_device,
+            mesh_axis=self.tp_axis,
+            ccl_manager=ccl_manager,
+        )
+        self.o = RowParallelLinear(
+            padded_inner_dim,
+            hidden_size,
+            bias=False,
+            mesh_device=mesh_device,
+            mesh_axis=self.tp_axis,
+            ccl_manager=ccl_manager,
+        )
 
         # QK-RMSNorm over head_dim (reference norm_q / norm_k = Ideogram4RMSNorm, eps=1e-5).
+        # head_dim is never sharded, so these stay replicated regular RMSNorms.
         self.norm_q = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
         self.norm_k = RMSNorm(embedding_dim=self.head_dim, norm_eps=attention_eps, bias=False, mesh_device=mesh_device)
 
@@ -135,29 +172,41 @@ class Ideogram4TransformerBlock(Module):
         self.ffn_norm2 = RMSNorm(embedding_dim=hidden_size, norm_eps=norm_eps, bias=False, mesh_device=mesh_device)
 
         # --- SwiGLU MLP: w2(silu(w1(x)) * w3(x)) ---
-        # FeedForward fuses w1 (gate) and w3 (value) into ff1 via the "swiglu"
-        # activation (ff1 out doubled, ttnn.chunk + silu inside the linear).
-        self.feed_forward = FeedForward(
+        # ParallelFeedForward fuses w1 (gate) and w3 (value) into ff1 (ColParallel)
+        # via the "swiglu" activation; ff2 (RowParallel) reduce-scatters its output.
+        self.feed_forward = ParallelFeedForward(
             dim=hidden_size,
             dim_out=hidden_size,
             inner_dim=intermediate_size,
             activation_fn="swiglu",
             bias=False,
             mesh_device=mesh_device,
+            mesh_axis=self.tp_axis,
+            ccl_manager=ccl_manager,
         )
 
         # --- AdaLN: project adaln_input -> 4 * hidden_size (with bias) ---
         self.adaln_modulation = Linear(adaln_dim, 4 * hidden_size, bias=True, mesh_device=mesh_device)
 
         # SDPA config (fidelity recipe §4 — HiFi2, fp32 acc off; flip on if attn PCC suffers).
+        # head_dim=256 (2x the usual 128) doubles SDPA's per-core K/V/score CBs;
+        # k_chunk_size=512 overflows Blackhole L1 (1.59MB > 1.5MB max). Halve to 256
+        # so the buffers fit. Flash attention is exact regardless of chunk size.
+        self.sdpa_q_chunk_size = 128
+        self.sdpa_k_chunk_size = 256
         device_grid = mesh_device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(device_grid.x, device_grid.y),
-            q_chunk_size=128,
-            # head_dim=256 (2x the usual 128) doubles SDPA's per-core K/V/score CBs;
-            # k_chunk_size=512 overflows Blackhole L1 (1.59MB > 1.5MB max). Halve to 256
-            # so the buffers fit. Flash attention is exact regardless of chunk size.
-            k_chunk_size=256,
+            q_chunk_size=self.sdpa_q_chunk_size,
+            k_chunk_size=self.sdpa_k_chunk_size,
+            exp_approx_mode=False,
+        )
+        # Ring SDPA (sequence parallel) reserves the last worker row for the CCL all-gather.
+        self.sdpa_worker_grid = (device_grid.x, device_grid.y - 1)
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            q_chunk_size=self.sdpa_q_chunk_size,
+            k_chunk_size=self.sdpa_k_chunk_size,
             exp_approx_mode=False,
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -174,6 +223,31 @@ class Ideogram4TransformerBlock(Module):
             packer_l1_acc=True,
         )
 
+    def _merge_qkv_for_tp(self, qkv_weight: torch.Tensor) -> torch.Tensor:
+        """Rearrange the fused reference QKV weight so column-fracturing shards heads.
+
+        The reference qkv is a single nn.Linear [3*H*hd, hidden] laid out as
+        view(.., 3, H, hd): the output is the block [q(all heads) | k | v]. We split
+        it back into q/k/v, optionally pad the heads to padded_heads with zeros, then
+        interleave per-device so device d's contiguous output slice is
+        [q_local | k_local | v_local] for its n_local_heads — exactly what
+        split_query_key_value_and_split_heads(num_heads=n_local_heads) consumes.
+        """
+        hidden = qkv_weight.shape[1]
+        per = self.num_heads * self.head_dim
+        q, k, v = qkv_weight[:per], qkv_weight[per : 2 * per], qkv_weight[2 * per :]  # each [H*hd, hidden]
+        n_dev = self.tp_factor
+
+        def _shape(w):  # nn.Linear [out=H*hd, in=hidden] -> [in, n_dev, n_local_heads, hd]
+            w = w.T  # [hidden, H*hd]
+            if self.padding_config is not None:
+                w = pad_weight_tensor(w, self.padding_config, pad_output_dim=True)  # -> [hidden, padded_H*hd]
+            return w.reshape(hidden, n_dev, self.n_local_heads, self.head_dim)
+
+        qkv = torch.cat([_shape(q), _shape(k), _shape(v)], dim=2)  # [hidden, n_dev, 3*n_local_heads, hd]
+        qkv = qkv.reshape(hidden, 3 * self.padded_heads * self.head_dim)
+        return qkv.T  # nn.Linear layout [3*padded_inner, hidden]; ColParallel transposes + shards output
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Reference submodule names:
         #   attention.qkv / attention.o / attention.norm_q / attention.norm_k
@@ -181,9 +255,15 @@ class Ideogram4TransformerBlock(Module):
         #   attention_norm1/2, ffn_norm1/2, adaln_modulation
         attn = pop_substate(state, "attention")
         if "qkv.weight" in attn:
-            state["qkv.weight"] = attn["qkv.weight"]
+            state["qkv.weight"] = self._merge_qkv_for_tp(attn["qkv.weight"])
         if "o.weight" in attn:
-            state["o.weight"] = attn["o.weight"]
+            # o is nn.Linear [hidden_out, inner_in]. Pad the input (head) dim at the end
+            # with zeros to padded_inner so the padded heads contribute nothing; the
+            # RowParallel _prepare then transposes [out, in] -> [in, out].
+            o_weight = attn["o.weight"]
+            if self.padding_config is not None:
+                o_weight = pad_weight_tensor(o_weight, self.padding_config, pad_input_dim=False, pad_output_dim=True)
+            state["o.weight"] = o_weight
         if "norm_q.weight" in attn:
             state["norm_q.weight"] = attn["norm_q.weight"]
         if "norm_k.weight" in attn:
@@ -202,6 +282,16 @@ class Ideogram4TransformerBlock(Module):
         if "w2.weight" in ff:
             state["feed_forward.ff2.weight"] = ff["w2.weight"]
 
+    def _all_gather_hidden(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """All-gather a TP-fractured-on-hidden activation back to replicated hidden.
+
+        No-op when TP is disabled. Together with the RowParallel reduce-scatter inside
+        o / ff2 this forms an all-reduce, restoring the replicated-hidden residual.
+        """
+        if self.tp_factor <= 1:
+            return t
+        return self.ccl_manager.all_gather_persistent_buffer(t, dim=2, mesh_axis=self.tp_axis, use_hyperparams=True)
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -210,20 +300,27 @@ class Ideogram4TransformerBlock(Module):
         sin: ttnn.Tensor,
         adaln_input: ttnn.Tensor,
         attn_mask: ttnn.Tensor | None = None,
+        spatial_sequence_length: int | None = None,
     ) -> ttnn.Tensor:
         """Single-stream block forward.
 
         Args:
-            x: [B, L, hidden_size] unified text+image sequence (replicated).
-            cos, sin: [B, 1, L, head_dim] rotary tables (rotate-half convention),
-                precomputed on host from Ideogram4MRoPE. Broadcast over heads.
+            x: [B, L/sp, hidden_size] unified text+image sequence. Replicated on the TP
+                axis, sharded on the SP axis (full L when sp_factor == 1).
+            cos, sin: [B, 1, L/sp, head_dim] rotary tables (rotate-half convention),
+                precomputed on host from Ideogram4MRoPE. Broadcast over heads; sharded
+                on sequence to match x when sp_factor > 1.
             adaln_input: [B, 1, adaln_dim] (or [B, L, adaln_dim]) SiLU'd time cond.
             attn_mask: [B, 1, L, L] additive mask (0 = attend, -inf = block), built
-                from segment ids. None => full attention.
+                from segment ids. None => full attention. Unsupported with SP.
+            spatial_sequence_length: logical (unpadded) full sequence length. Required
+                when sp_factor > 1; defaults to x.shape[1] otherwise.
         """
-        batch_size, seq_len, _ = x.shape
+        batch_size, local_seq_len, _ = x.shape
+        if spatial_sequence_length is None:
+            spatial_sequence_length = local_seq_len
 
-        # --- AdaLN: 4-branch, tanh gates, (1 + scale). ---
+        # --- AdaLN: 4-branch, tanh gates, (1 + scale). Replicated on all TP devices. ---
         mod = self.adaln_modulation(adaln_input, compute_kernel_config=self.adaln_compute_kernel_config)
         scale_msa, gate_msa, scale_mlp, gate_mlp = ttnn.chunk(mod, 4, -1)
         gate_msa = ttnn.tanh(gate_msa, fast_and_approximate_mode=False)
@@ -233,12 +330,14 @@ class Ideogram4TransformerBlock(Module):
 
         # ----------------- attention sub-block -----------------
         attn_in = self.attention_norm1(x) * scale_msa
-        attn_out = self._attention(attn_in, cos=cos, sin=sin, attn_mask=attn_mask)
+        attn_out = self._attention(
+            attn_in, cos=cos, sin=sin, attn_mask=attn_mask, spatial_sequence_length=spatial_sequence_length
+        )
         x = x + gate_msa * self.attention_norm2(attn_out)
 
         # ----------------- feed-forward sub-block -----------------
         ff_in = self.ffn_norm1(x) * scale_mlp
-        ff_out = self.feed_forward(ff_in)
+        ff_out = self._all_gather_hidden(self.feed_forward(ff_in))  # fractured -> replicated hidden
         x = x + gate_mlp * self.ffn_norm2(ff_out)
 
         return x
@@ -250,19 +349,17 @@ class Ideogram4TransformerBlock(Module):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
         attn_mask: ttnn.Tensor | None,
+        spatial_sequence_length: int,
     ) -> ttnn.Tensor:
-        batch_size, seq_len, _ = x.shape
-
-        qkv = self.qkv(x)  # [B, L, 3*hidden_size]
-        # Split into heads: ttnn.transformer.split_query_key_value_and_split_heads
-        # consumes [B, L, 3*H*hd] (interleaved as q|k|v on the last dim, matching the
-        # reference view(B,L,3,H,hd).unbind(2)) and returns [B, H, L, hd] each.
+        # qkv is ColParallel: replicated-hidden input -> output fractured on heads, so
+        # the per-device output slice is [q_local | k_local | v_local] for n_local_heads.
+        qkv = self.qkv(x)  # [B, L/sp, 3 * n_local_heads * head_dim]
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv,
-            num_heads=self.num_heads,
+            num_heads=self.n_local_heads,
             transpose_key=False,
             memory_config=qkv.memory_config(),
-        )
+        )  # each [B, n_local_heads, L/sp, head_dim]
 
         # QK-RMSNorm over head_dim (applied per-head, before RoPE — matches reference,
         # which norms q/k of shape [..., hd] then transposes then applies rope).
@@ -272,18 +369,50 @@ class Ideogram4TransformerBlock(Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        out = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=attn_mask,
-            is_causal=False,
-            program_config=self.sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
-        )  # [B, H, L, hd]
+        if self.sp_factor > 1:
+            # Sequence parallel: ring SDPA all-gathers K/V across the SP axis. Use an
+            # empty "joint" so this reduces to plain self-attention over the full seq.
+            assert attn_mask is None, "attn_mask is unsupported with sequence parallelism"
+            empty = ttnn.zeros(
+                [1, self.n_local_heads, 0, self.head_dim], device=self.mesh_device, layout=q.layout, dtype=q.dtype
+            )
+            out, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                empty,
+                empty,
+                empty,
+                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, self.sp_axis),
+                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.sp_axis),
+                joint_strategy="rear",
+                logical_n=spatial_sequence_length,
+                program_config=self.ring_sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
+                num_links=self.ccl_manager.num_links,
+                cluster_axis=self.sp_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_manager.topology,
+                subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
+            )  # [B, n_local_heads, L/sp, head_dim]
+        else:
+            out = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attn_mask,
+                is_causal=False,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+            )  # [B, n_local_heads, L, head_dim]
 
-        out = ttnn.transformer.concatenate_heads(out)  # [B, L, hidden_size]
-        return self.o(out)
+        out = ttnn.transformer.concatenate_heads(out)  # [B, L/sp, n_local_heads * head_dim] (fractured on TP)
+        # o is RowParallel: fractured-heads input -> reduce-scatter -> fractured hidden;
+        # all-gather restores the replicated-hidden residual stream.
+        return self._all_gather_hidden(self.o(out))
 
 
 class Ideogram4Transformer(Module):
@@ -343,7 +472,15 @@ class Ideogram4Transformer(Module):
         sin: ttnn.Tensor,
         adaln_input: ttnn.Tensor,
         attn_mask: ttnn.Tensor | None = None,
+        spatial_sequence_length: int | None = None,
     ) -> ttnn.Tensor:
         for layer in self.layers:
-            h = layer(h, cos=cos, sin=sin, adaln_input=adaln_input, attn_mask=attn_mask)
+            h = layer(
+                h,
+                cos=cos,
+                sin=sin,
+                adaln_input=adaln_input,
+                attn_mask=attn_mask,
+                spatial_sequence_length=spatial_sequence_length,
+            )
         return h
