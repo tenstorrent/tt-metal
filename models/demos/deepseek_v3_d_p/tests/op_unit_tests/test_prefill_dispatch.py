@@ -113,6 +113,7 @@ def run_dispatch(
     run_pcc_check,
     is_ci_env,
     is_ci_v2_env,
+    cast_input=False,
 ):
     """Run the TTNN dispatch op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -224,8 +225,9 @@ def run_dispatch(
 
     # For fp8 input the device quantizes the input tensor to fp8, so quantize the reference input
     # too — otherwise bf16-output combos would compare fp8-rounded device values against
-    # full-precision reference values.
-    if fp8_input:
+    # full-precision reference values. Skipped for cast_input: that path feeds bf16 straight to the
+    # on-device cast op and is perf-only (no torch reference comparison).
+    if fp8_input and not cast_input:
         x = x.to(torch.float8_e4m3fn).to(torch.float32)
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
@@ -233,7 +235,23 @@ def run_dispatch(
     # x and indices: sharded across SP axis, replicated across EP ranks
     mesh_mapper_replicated = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
-    if fp8_input:
+    scales = None
+    tt_scales = None
+    if cast_input:
+        # Perf path: build a bf16 device tensor (ROW_MAJOR, DRAM) and run the real
+        # per_token_cast_to_fp8 op so the profiler captures cast->dispatch end-to-end. The op
+        # returns the fp8 input tensor and its per-token fp32 scales, which feed the fp8-scaled
+        # dispatch path directly.
+        tt_x_bf16 = ttnn.from_torch(
+            x,
+            mesh_mapper=mesh_mapper_replicated,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_x, tt_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(tt_x_bf16)
+    elif fp8_input:
         # FP8_E4M3 is ROW_MAJOR-only, and the on-device float32->fp8 conversion path would build an
         # illegal FP8_E4M3 TILE intermediate (typecast requires TILE). Construct on host instead
         # (host does float32->fp8 directly with no tile round-trip), then move to device.
@@ -245,10 +263,9 @@ def run_dispatch(
         )
 
     # Per-token fp8 scales: arbitrary fp32 values (dispatch only byte-copies them into the metadata
-    # tail), one row of emb_dim/128 per token, sharded/replicated exactly like x.
-    scales = None
-    tt_scales = None
-    if fp8_scaled_input:
+    # tail), one row of emb_dim/128 per token, sharded/replicated exactly like x. The cast_input
+    # path already produced real scales above, so only build fake ones here otherwise.
+    if fp8_scaled_input and not cast_input:
         num_scale_blocks = emb_dim // 128
         scales = torch.randn(dispatch_group_size, seq_len_per_chip, num_scale_blocks, dtype=torch.float32)
         tt_scales = ttnn.from_torch(
@@ -481,7 +498,7 @@ def dispatch_shape_params():
         )
         params.append(
             pytest.param(
-                3200,
+                640,
                 config.EMB_SIZE,
                 config.NUM_ROUTED_EXPERTS // 4,
                 2,
@@ -492,6 +509,12 @@ def dispatch_shape_params():
             )
         )
     return params
+
+
+def dispatch_cast_perf_shape_params():
+    """Perf-only subset of dispatch_shape_params() (run_pcc_check=False). Used by the
+    cast->dispatch perf test, which has no torch reference and must never hit the PCC branch."""
+    return [p for p in dispatch_shape_params() if p.id.endswith("perf_no_pcc")]
 
 
 @pytest.mark.parametrize(
@@ -560,4 +583,51 @@ def test_ttnn_dispatch(
         run_pcc_check,
         is_ci_env,
         is_ci_v2_env,
+    )
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    dispatch_cast_perf_shape_params(),
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    ALL_MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_ttnn_cast_then_dispatch(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    run_pcc_check,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    """Perf-only end-to-end path: bf16 input -> per_token_cast_to_fp8 (on device) -> fp8-scaled
+    dispatch, so the profiler captures the full cast+dispatch chain. No PCC (run_pcc_check is False
+    for every perf shape, so run_dispatch returns right after the dispatch op)."""
+    run_dispatch(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        use_predictable_data=False,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        input_dtype=ttnn.fp8_e4m3,
+        output_dtype=ttnn.fp8_e4m3,
+        fp8_scaled_input=True,
+        verbose=False,
+        run_pcc_check=run_pcc_check,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
+        cast_input=True,
     )
