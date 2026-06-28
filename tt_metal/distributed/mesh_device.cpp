@@ -943,15 +943,15 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
         // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
         // the final TERMINATE) but before the rest of the device teardown.
-        if (realtime_profiler_) {
+        if (realtime_profiler_ && realtime_profiler_->is_active()) {
             for (auto* device : view_->get_devices()) {
                 auto* dev = dynamic_cast<Device*>(device);
                 for (uint8_t cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
                     dev->command_queue(cq_id).terminate();
                 }
             }
-            realtime_profiler_.reset();
         }
+        realtime_profiler_.reset();
     }
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the

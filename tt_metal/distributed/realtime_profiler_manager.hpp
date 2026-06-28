@@ -78,6 +78,10 @@ public:
     // 60 seconds (except the first finish-path sync after init, which always runs).
     void trigger_sync_check();
 
+    // True when at least one device is actively recording. False on mock/emulated/ineligible
+    // meshes, where the manager is still constructed but no device or D2H socket is set up.
+    bool is_active() const;
+
     // First active device's D2H socket, or nullptr if no device is active.
     D2HSocket* get_socket() const;
 

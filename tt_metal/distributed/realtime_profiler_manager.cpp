@@ -1290,6 +1290,8 @@ void RealtimeProfilerManager::trigger_sync_check() {
     pause_requested_.store(false, std::memory_order_release);
 }
 
+bool RealtimeProfilerManager::is_active() const { return !devices_.empty(); }
+
 D2HSocket* RealtimeProfilerManager::get_socket() const {
     return devices_.empty() ? nullptr : devices_.front().socket.get();
 }
