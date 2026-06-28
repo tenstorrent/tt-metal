@@ -551,15 +551,33 @@ def render(
         crashed_card = (
             f'<div class="card kpi bad"><div class="label">Crashed</div>'
             f'<div class="big bad">{crashed}</div>'
-            f'<div class="sub">collected − recorded</div></div>'
+            f'<div class="sub">enumerated − finished</div></div>'
         )
         crash_th = "<th class='num'>Crash</th>"
         crashed_nav = "<a href='#crashed'>Crashed</a>"
+        # "Enumerated" = tests pytest --collect-only listed; "finished" = tests
+        # that produced a JUnit result (passed/failed/skipped); the difference
+        # is the crashed gap.
+        count_summary = f"{total} enumerated · {recorded} finished" + (
+            f" · <span style='color:#ffd5d5;font-weight:600'>{crashed} crashed</span>"
+            if crashed
+            else ""
+        )
+        total_label = "Enumerated"
+        total_sub_extra = (
+            "<div class='sub'>"
+            + f"{recorded} finished"
+            + (f" · <span class='bad'>{crashed} crashed</span>" if crashed else "")
+            + "</div>"
+        )
     else:
         summary_cols = "240px repeat(4, 1fr)"
         crashed_card = ""
         crash_th = ""
         crashed_nav = ""
+        count_summary = f"{total} tests"
+        total_label = "Total"
+        total_sub_extra = ""
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -751,7 +769,7 @@ def render(
   <div class="hero-inner">
     <div class="brand">
       <h1>ttsim regression</h1>
-      <div class="meta">{html.escape(xml_path.name)} · {total} tests · {wall_time_str_full or (cases_time_str + " test-time")}</div>
+      <div class="meta">{html.escape(xml_path.name)} · {count_summary} · {wall_time_str_full or (cases_time_str + " test-time")}</div>
     </div>
     <div class="passrate">
       <div class="passrate-num">{pass_pct:.1f}%</div>
@@ -790,7 +808,7 @@ def render(
           </div>
         </div>
       </div>
-      <div class="card kpi"><div class="label">Total</div><div class="big">{total}</div><div class="sub" title="Σ test-time = sum of per-test durations from JUnit. Wall-clock = end-to-end runtime estimated from the suite's timestamp and the XML mtime.">{("wall " + wall_time_str + " · ") if wall_time_str else ""}Σ test {cases_time_str}</div></div>
+      <div class="card kpi"><div class="label">{total_label}</div><div class="big">{total}</div><div class="sub" title="Σ test-time = sum of per-test durations from JUnit. Wall-clock = end-to-end runtime estimated from the suite's timestamp and the XML mtime.">{("wall " + wall_time_str + " · ") if wall_time_str else ""}Σ test {cases_time_str}</div>{total_sub_extra}</div>
       <div class="card kpi ok"><div class="label">Passed</div><div class="big ok">{passed}</div><div class="sub">{pass_pct:.1f}%</div></div>
       <div class="card kpi bad"><div class="label">Failed</div><div class="big bad">{failed + errored}</div><div class="sub">{fail_pct:.1f}%</div></div>
       {crashed_card}

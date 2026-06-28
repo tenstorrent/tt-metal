@@ -263,20 +263,37 @@ fi
 # Enumerate the expected test set (stable denominator)
 # ──────────────────────────────────────────────────────────────
 # `--collect-only` lists the tests pytest *would* run for this selection. This
-# set is pure Python parametrization and therefore identical across ttsim
-# versions, so it gives us a version-independent denominator. The renderer
-# diffs it against the testcases actually recorded in the JUnit XML; anything
-# collected but never recorded is counted as "crashed" (a hard crash that took
-# down the worker before its result could be written, so --forked never turned
-# it into a normal failure). We deliberately omit --run-simulator: collection
-# only needs the parametrization, and the flag would force conftest to load and
-# init the ttsim .so at import time, which just makes enumeration slower.
+# set is pure static parametrization (there is no pytest_generate_tests, and
+# pytest_collection_modifyitems no-ops without --test-order-file) and therefore
+# identical across ttsim versions, so it gives us a version-independent
+# denominator. The renderer diffs it against the testcases actually recorded in
+# the JUnit XML; anything collected but never recorded is counted as "crashed"
+# (a hard crash that took down the worker before its result could be written,
+# so --forked never turned it into a normal failure).
+#
+# We avoid --run-simulator here (it would load+init the ttsim .so just to
+# enumerate). Instead:
+#   * CHIP_ARCH=<arch> lets conftest import without probing for a real device
+#     (helpers.device runs get_all_cores() at import → get_chip_architecture(),
+#     which short-circuits on CHIP_ARCH instead of calling check_context()).
+#   * --compile-producer puts conftest in BuildMode.PRODUCE, which is the only
+#     mode that skips *both* check_context() calls in pytest_configure
+#     (override_gprs_used_by_tensix_dump and the device/simulator init block).
+# --collect-only never executes a test, so producer mode compiles nothing and
+# the selected set matches the real run (build mode / run_simulator only affect
+# runtime, never collection).
+case "$ARCHITECTURE" in
+    blackhole|bh)                 COLLECT_CHIP_ARCH=blackhole ;;
+    wormhole|wormhole_b0|wh)      COLLECT_CHIP_ARCH=wormhole ;;
+    *)                            COLLECT_CHIP_ARCH="$ARCHITECTURE" ;;
+esac
 COLLECT_CMD=(
     "pytest"
     --collect-only
     -q
     -p no:sugar
     -o log_cli=false
+    --compile-producer
     -m "$MARKER_EXPR"
 )
 if [[ ${#TEST_PATHS[@]} -gt 0 ]]; then
@@ -290,7 +307,7 @@ collected_count=0
 collect_exit=0
 (
     cd "$TESTS_DIR"
-    "${COLLECT_CMD[@]}"
+    CHIP_ARCH="$COLLECT_CHIP_ARCH" "${COLLECT_CMD[@]}"
 ) 2>/dev/null | grep -E '\.py::' >"$COLLECTED_PATH" || collect_exit=$?
 # `grep` returns 1 when it matches nothing; only treat a missing/empty file as
 # a real failure so the run still proceeds (gap analysis is best-effort).
