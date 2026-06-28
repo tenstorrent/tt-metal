@@ -1,5 +1,5 @@
 ---
-description: 'PR review for tt-metalium public API headers — ABI stability, API ergonomics, deprecation policy, and include hygiene'
+description: 'PR review for tt-metalium public API headers — API stability, API ergonomics, deprecation policy, and include hygiene'
 applyTo: 'tt_metal/api/**'
 excludeAgent: "cloud-agent"
 ---
@@ -10,14 +10,15 @@ The public API surface lives in `tt_metal/api/tt-metalium/`. Everything here is 
 
 ## 🔴 CRITICAL
 
-- **ABI breakage**: any of the following in a public header is a release blocker:
-  - Struct or class with changed field layout (added/removed/reordered members)
-  - Virtual function added, removed, or reordered in a base class
-  - Default argument added or changed on a public function
+- **API (source-level) breakage**: we promise API stability, not ABI stability. The release blocker is breaking source compatibility for downstream code, not binary layout. Any of the following in a public header is a release blocker:
   - Symbol removed or renamed without a deprecation cycle
-  - `sizeof()` of any exported type changed
+  - Public function signature changed (parameters added/removed/retyped) so existing call sites no longer compile
+  - Default argument changed such that existing call sites silently change behavior
+  - Public type or member removed/renamed so existing references no longer compile
+
+  Note: binary-level (ABI) changes — struct/class field layout, `sizeof()` of a type, or virtual function order/`vtable` layout — are NOT release blockers on their own. We do not promise ABI stability; downstream consumers recompile against the headers.
 - **`impl/` leak into `api/`**: a public header must never `#include` anything from `tt_metal/impl/`. Flag any such include — it exposes unstable internals to customers.
-- **`experimental/` stability boundary**: headers in `tt_metal/api/tt-metalium/experimental/` have relaxed ABI rules but must NOT be included by stable (non-experimental) headers. If a stable header pulls in an experimental one, that experimental API becomes a de facto stable commitment.
+- **`experimental/` stability boundary**: headers in `tt_metal/api/tt-metalium/experimental/` carry no API-stability guarantee — they may freely change struct internals and layout, retype members, or reorganize as needed — but they must NOT be included by stable (non-experimental) headers. If a stable header pulls in an experimental one, that experimental API becomes a de facto stable commitment.
 
 ## 🟡 IMPORTANT
 
@@ -68,8 +69,7 @@ To add an experimental method affiliated with an existing stable class:
 
 ## Review Checklist
 
-- [ ] No struct/class layout changes in public headers without version bump
-- [ ] No virtual function signature changes in public base classes
+- [ ] No source-breaking changes to public symbols (removed/renamed/retyped) without a deprecation cycle
 - [ ] No `#include` of `impl/` from `api/` headers
 - [ ] Stable API removals have a prior `[[deprecated]]` commit on `main` (≥4 weeks old)
 - [ ] Deprecation messages include expiration notice + refactor instruction
