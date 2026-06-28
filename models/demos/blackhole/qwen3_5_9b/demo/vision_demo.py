@@ -13,7 +13,14 @@ prefill/decode traces — on a single device and on a TP mesh.
 Covered cases (parametrized):
   - single image  : "Describe this image."          (traced + paged)
   - multi image   : "Identify the differences ..."  (traced)
+  - video         : "Describe this video."          (traced)
   - text only     : vision tower skipped            (traced)
+
+Video reuses the exact image pipeline on the model side: the processor emits ``pixel_values_videos``
+/ ``video_grid_thw`` (plus per-frame timestamp tokens), the same TT vision tower produces the
+embeddings, and they splice into ``video_token_id`` placeholders with the video M-RoPE. The mp4 is
+decoded the way the HF reference does — transformers' ``load_video`` (pyav backend) feeding the
+``Qwen3VLProcessor`` — rather than via qwen_vl_utils (whose video backends are unavailable here).
 
 Multi-device (TP) is selected via MESH_DEVICE and uses the chunk-outer traced prefill +
 paged traced decode path, exactly like the text demo.
@@ -63,6 +70,13 @@ SAMPLE_PROMPTS_DIR = "models/demos/blackhole/qwen3_5_9b/demo/sample_prompts"
 BLOCK_SIZE = 64
 PREFILL_CHUNK = 2048  # chunked-prefill chunk; prompts are processed in chunks of this size
 
+# Video sampling defaults (overridable per-video in the prompt JSON). The Qwen3.5 processor expands
+# every sampled frame into a timestamp marker + a full grid of video tokens, so the prompt length
+# grows quickly with frame count and resolution. These keep the demo prompt short enough to fit the
+# test's max_seq_len and the vision tower fast, while still exercising a real multi-frame video.
+VIDEO_NUM_FRAMES = 16  # frames uniformly sampled from the clip (temporal grid = this // temporal_patch_size)
+VIDEO_LONGEST_EDGE = 1605632  # per-video total-pixel budget passed to the processor; caps per-frame resolution
+
 
 def _load_conversation(prompt_file):
     """Load the first conversation (a list of message dicts) from a sample-prompt JSON file."""
@@ -72,12 +86,76 @@ def _load_conversation(prompt_file):
     return data[0]
 
 
+def _has_video(messages):
+    """True if any message carries a ``{"type": "video", ...}`` content block."""
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and any(el.get("type") == "video" for el in content):
+            return True
+    return False
+
+
+def _process_video_prompt(processor, messages, text):
+    """Decode + preprocess a video prompt the way the HF reference does — via transformers'
+    ``load_video`` + ``Qwen3VLProcessor`` (NOT qwen_vl_utils).
+
+    qwen_vl_utils only ships torchcodec/decord/torchvision video backends, and recent torchvision
+    dropped ``torchvision.io.read_video``; the transformers loader defaults to the ``pyav`` backend,
+    which is what the official Qwen3-VL snippets rely on. We decode each clip with ``load_video``
+    (sampling ``num_frames`` uniformly) to get the frames AND the ``VideoMetadata`` (fps +
+    frame indices). The processor needs that metadata to lay down the per-frame ``<t seconds>``
+    timestamp markers that Qwen3.5 uses to separate frames; ``do_sample_frames=False`` because we
+    already sampled at decode time.
+    """
+    from transformers.video_utils import load_video
+
+    videos, metadatas = [], []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for el in content:
+            if el.get("type") != "video":
+                continue
+            uri = el.get("video") or el.get("url") or el.get("path")
+            num_frames = el.get("num_frames", VIDEO_NUM_FRAMES)
+            frames, metadata = load_video(uri, backend="pyav", num_frames=num_frames)
+            videos.append(frames)
+            metadatas.append(metadata)
+
+    inputs = processor(
+        text=text,
+        videos=videos,
+        video_metadata=metadatas,
+        do_sample_frames=False,  # frames were already sampled by load_video(num_frames=...)
+        size={"longest_edge": VIDEO_LONGEST_EDGE, "shortest_edge": 4096},
+        return_tensors="pt",
+    )
+    input_ids = inputs["input_ids"]
+    grid = inputs["video_grid_thw"]
+    merge_length = processor.video_processor.merge_size**2
+    num = int(grid.prod(dim=-1).sum().item() // merge_length)
+    return input_ids, {"modality": "video", "pixel_values": inputs["pixel_values_videos"], "grid_thw": grid}, num
+
+
 def _process_prompt(processor, messages):
     """Apply the chat template + processor to produce model inputs.
 
-    Returns (input_ids [1,T], pixel_values or None, image_grid_thw or None, num_image_tokens).
+    Returns (input_ids [1,T], vision_inputs, num_vision_tokens). ``vision_inputs`` is None for a
+    text-only prompt, else a dict describing the (single) visual modality in this prompt:
+    ``{"modality": "image"|"video", "pixel_values": <patchified pixels>, "grid_thw": <(t,h,w) grid>}``.
+
+    Images and videos share the same patchify/merge pipeline; the only differences are the input
+    key the processor emits (``pixel_values``/``image_grid_thw`` vs ``pixel_values_videos``/
+    ``video_grid_thw``) and, downstream, the placeholder token id + M-RoPE modality the model uses.
+    Video decoding goes through the transformers/pyav path (``_process_video_prompt``); images/text
+    use qwen_vl_utils.
     """
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+    if _has_video(messages):
+        return _process_video_prompt(processor, messages, text)
+
     image_inputs, video_inputs = process_vision_info(messages)
     inputs = processor(
         text=text,
@@ -88,29 +166,51 @@ def _process_prompt(processor, messages):
     )
 
     input_ids = inputs["input_ids"]
-    pixel_values = inputs.get("pixel_values")
-    image_grid_thw = inputs.get("image_grid_thw")
-
-    num_image_tokens = 0
-    if image_grid_thw is not None:
+    if inputs.get("pixel_values") is not None:
+        grid = inputs["image_grid_thw"]
         merge_length = processor.image_processor.merge_size**2
-        num_image_tokens = int(image_grid_thw.prod(dim=-1).sum().item() // merge_length)
-    return input_ids, pixel_values, image_grid_thw, num_image_tokens
+        num = int(grid.prod(dim=-1).sum().item() // merge_length)
+        return input_ids, {"modality": "image", "pixel_values": inputs["pixel_values"], "grid_thw": grid}, num
+    return input_ids, None, 0
 
 
-def _compute_vision_tokens(model, pixel_values, image_grid_thw):
-    """Run the TT vision tower; returns packed image embeddings (ttnn) or None for text-only.
+def _compute_vision_tokens(model, vision_inputs):
+    """Run the TT vision tower; returns (packed embeddings (ttnn), warm_runtime_s).
 
-    Called BEFORE any prefill/decode trace is captured so the (eager) vision programs compile
-    while no trace is parked — a request-time compile would clobber a parked trace.
+    Returns (None, 0.0) for a text-only request.
+
+    The FIRST vision-tower call compiles all of its (eager) programs, so timing it would fold one-
+    time compilation into the reported runtime (and, on the traced path, into TTFT). Mirroring
+    text_demo's warmup/compile split, we run one throwaway warmup call to compile + cache the
+    programs, then time a second (warm) call whose runtime reflects actual device compute. Both
+    calls run BEFORE any prefill/decode trace is captured, so the eager compile never clobbers a
+    parked trace. The vision forward is identical for image and video; dispatching to
+    ``get_video_features`` (vs ``get_image_features``) is what tells the model to splice into
+    ``video_token_id`` placeholders and build the video M-RoPE for this request.
     """
-    if pixel_values is None:
-        return None
+    if vision_inputs is None:
+        return None, 0.0
+    fn = model.get_video_features if vision_inputs["modality"] == "video" else model.get_image_features
+    pixel_values, grid_thw = vision_inputs["pixel_values"], vision_inputs["grid_thw"]
+
+    # Warmup: compile the vision programs, then discard the result.
     t0 = time.time()
-    vision_tokens = model.get_image_features(pixel_values, image_grid_thw)
+    warmup = fn(pixel_values, grid_thw)
     ttnn.synchronize_device(model.mesh_device)
-    logger.info(f"Vision tower: {time.time() - t0:.2f}s for {int(vision_tokens.shape[0])} image tokens")
-    return vision_tokens
+    compile_time = time.time() - t0
+    ttnn.deallocate(warmup)
+
+    # Timed (warm) run — programs are now cached, so this is device compute only.
+    t0 = time.time()
+    vision_tokens = fn(pixel_values, grid_thw)
+    ttnn.synchronize_device(model.mesh_device)
+    vis_time = time.time() - t0
+
+    logger.info(
+        f"Vision tower: {vis_time:.2f}s (warmup/compile {compile_time:.2f}s) for "
+        f"{int(vision_tokens.shape[0])} {vision_inputs['modality']} tokens"
+    )
+    return vision_tokens, vis_time
 
 
 def _blocks_for(seqlen, max_generated_tokens, max_seq_len):
@@ -135,12 +235,14 @@ def _blocks_for(seqlen, max_generated_tokens, max_seq_len):
         ("vision_demo.json", True, 300, 8192),
         ("vision_demo.json", False, 300, 8192),
         ("vision_multi_image.json", True, 300, 8192),
+        ("vision_video.json", True, 300, 8192),
         ("vision_text_only.json", True, 100, 4096),
     ],
     ids=[
         "traced_single_image",
         "paged_single_image",
         "traced_multi_image",
+        "traced_video",
         "traced_text_only",
     ],
 )
@@ -168,26 +270,27 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
     model.init_vision_model()
     logger.info(f"Vision model init: {time.time() - t0:.1f}s")
 
-    # ---- Preprocess the prompt (chat template + image patchify) ----
+    # ---- Preprocess the prompt (chat template + image/video patchify) ----
     messages = _load_conversation(f"{SAMPLE_PROMPTS_DIR}/{prompt_file}")
-    token_ids, pixel_values, image_grid_thw, num_image_tokens = _process_prompt(processor, messages)
+    token_ids, vision_inputs, num_vision_tokens = _process_prompt(processor, messages)
     T = token_ids.shape[1]
-    logger.info(f"Prompt: {T} tokens ({num_image_tokens} image tokens), prompt_file={prompt_file}")
+    modality = vision_inputs["modality"] if vision_inputs is not None else "text"
+    logger.info(f"Prompt: {T} tokens ({num_vision_tokens} {modality} tokens), prompt_file={prompt_file}")
     assert T <= max_seq_len, f"prompt {T} tokens exceeds max_seq_len {max_seq_len}"
 
     num_blocks = _blocks_for(T, max_generated_tokens, max_seq_len)
 
     if model.num_devices > 1:
         generated, perf = _run_tp_vision_generation(
-            model, tokenizer, token_ids, pixel_values, image_grid_thw, max_generated_tokens, num_blocks
+            model, tokenizer, token_ids, vision_inputs, max_generated_tokens, num_blocks
         )
     elif use_trace:
         generated, perf = _run_traced_vision_generation(
-            model, tokenizer, device, token_ids, pixel_values, image_grid_thw, max_generated_tokens, num_blocks
+            model, tokenizer, device, token_ids, vision_inputs, max_generated_tokens, num_blocks
         )
     else:
         generated, perf = _run_paged_vision_generation(
-            model, tokenizer, device, token_ids, pixel_values, image_grid_thw, max_generated_tokens, num_blocks
+            model, tokenizer, device, token_ids, vision_inputs, max_generated_tokens, num_blocks
         )
 
     text = tokenizer.decode(generated, skip_special_tokens=True)
@@ -201,9 +304,7 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
     assert len(set(generated)) > 1, f"degenerate generation: {generated}"
 
 
-def _run_traced_vision_generation(
-    model, tokenizer, device, token_ids, pixel_values, image_grid_thw, max_generated_tokens, num_blocks
-):
+def _run_traced_vision_generation(model, tokenizer, device, token_ids, vision_inputs, max_generated_tokens, num_blocks):
     """Single-device traced prefill (chunk-outer) + paged traced decode, with the vision splice.
 
     The vision tower runs first (so its eager programs compile before any trace is parked), then
@@ -217,10 +318,9 @@ def _run_traced_vision_generation(
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
-    # Vision tower BEFORE trace capture (its compile must not clobber a parked trace).
-    t = time.time()
-    vision_tokens = _compute_vision_tokens(model, pixel_values, image_grid_thw)
-    t_vis = time.time() - t
+    # Vision tower BEFORE trace capture (its compile must not clobber a parked trace). The returned
+    # time is the WARM (post-compile) runtime, so TTFT below reflects vision compute, not compilation.
+    vision_tokens, t_vis = _compute_vision_tokens(model, vision_inputs)
 
     # Capture the per-chunk prefill trace (warmup; allocates the vision splice buffers). Warm ALL
     # masked buckets: a short prompt (T < chunk) runs entirely through a masked bucket, and a long
@@ -268,9 +368,7 @@ def _run_traced_vision_generation(
     return generated, _perf(ttft, decode_times)
 
 
-def _run_paged_vision_generation(
-    model, tokenizer, device, token_ids, pixel_values, image_grid_thw, max_generated_tokens, num_blocks
-):
+def _run_paged_vision_generation(model, tokenizer, device, token_ids, vision_inputs, max_generated_tokens, num_blocks):
     """Single-device non-traced paged prefill + decode, with the vision splice.
 
     No trace is parked here, so the prefill uses the on-device scatter path (``prefill_paged``
@@ -281,12 +379,14 @@ def _run_paged_vision_generation(
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
-    vision_tokens = _compute_vision_tokens(model, pixel_values, image_grid_thw)
+    # TTFT includes the (warm) vision-tower runtime: a multimodal request can't emit its first
+    # token until the image/video embeddings are spliced into the prompt.
+    vision_tokens, t_vis = _compute_vision_tokens(model, vision_inputs)
 
     t0 = time.time()
     logits = model.prefill_paged(token_ids, page_table, vision_tokens=vision_tokens)
     ttnn.synchronize_device(device)
-    ttft = time.time() - t0
+    ttft = time.time() - t0 + t_vis
 
     logits_torch = ttnn.to_torch(logits).squeeze()
     assert not torch.isnan(logits_torch).any(), "NaN in paged prefill logits"
@@ -316,9 +416,7 @@ def _run_paged_vision_generation(
     return generated, _perf(ttft, decode_times)
 
 
-def _run_tp_vision_generation(
-    model, tokenizer, token_ids, pixel_values, image_grid_thw, max_generated_tokens, num_blocks
-):
+def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_generated_tokens, num_blocks):
     """Multi-device (TP) traced chunk-outer prefill + paged traced decode, with the vision splice.
 
     Mirrors text_demo._run_tp_generation: prefill captures ONE chunk's all-layer forward and
@@ -339,8 +437,10 @@ def _run_tp_vision_generation(
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
 
-    # Vision tower BEFORE trace capture (its eager compile must not clobber a parked trace).
-    vision_tokens = _compute_vision_tokens(model, pixel_values, image_grid_thw)
+    # Vision tower BEFORE trace capture (its eager compile must not clobber a parked trace). The
+    # returned time is the WARM (post-compile) runtime and is folded into TTFT below, since a
+    # multimodal request can't emit its first token until the vision embeddings are spliced in.
+    vision_tokens, t_vis = _compute_vision_tokens(model, vision_inputs)
 
     t_cap = time.time()
     model.capture_prefill_trace_chunked(mesh, page_table, chunk_size=PREFILL_CHUNK)
@@ -349,7 +449,7 @@ def _run_tp_vision_generation(
     t0 = time.time()
     logits_dev = model.prefill_traced_chunked(token_ids, page_table, actual_len=T, vision_tokens=vision_tokens)
     ttnn.synchronize_device(mesh)
-    ttft = time.time() - t0
+    ttft = time.time() - t0 + t_vis
 
     def _pick(vec):
         return int(torch.argmax(vec.float()).item())
