@@ -1008,6 +1008,21 @@ def test_demo_text(
 
     is_seqlen_sweep = "seqlen-sweep" in test_id
 
+    # The paged KV-cache pool is sized by page_max_num_blocks_per_dp, independent of max_seq_len, so a
+    # capped sweep (e.g. --max_seq_len on a single-N150 SKU) would still allocate the full 128k-capacity
+    # pool and OOM. Shrink the pool to the swept context so the cache fits smaller-DRAM SKUs. min() only
+    # ever reduces it, so multi-device SKUs running the full 128k keep their original pool.
+    if is_seqlen_sweep:
+        blocks_needed = -(-(max_seq_len + max_generated_tokens) // page_params["page_block_size"])  # ceil div
+        page_params = {
+            **page_params,
+            "page_max_num_blocks_per_dp": min(page_params["page_max_num_blocks_per_dp"], blocks_needed),
+        }
+        logger.info(
+            f"Seqlen sweep: page_max_num_blocks_per_dp capped to {page_params['page_max_num_blocks_per_dp']} "
+            f"(max_seq_len={max_seq_len}, block_size={page_params['page_block_size']})"
+        )
+
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
     sweep_prompt_files = None
