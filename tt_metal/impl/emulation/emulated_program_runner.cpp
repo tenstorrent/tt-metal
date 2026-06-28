@@ -1939,10 +1939,18 @@ static std::mutex g_conn_route_mu;
 // for some CCL ops, so a per-core key would miss. Deduped by direction; append order (fwd before bwd, per
 // the CCL builder) makes index 0=forward, 1=backward.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
+// Cleared at the first connection-record of each new op (set true by execute_program_emulated): the table
+// is keyed by src chip and deduped by direction, but a later op can give a chip a DIFFERENT line
+// orientation, so stale entries from a previous op would corrupt the fwd/bwd ordering. Per-op reset keeps
+// it scoped to the current op's connections.
+static std::atomic<bool> g_conn_route_dirty{true};
 extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor) {
     (void)wx;
     (void)wy;
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
+    if (g_conn_route_dirty.exchange(false)) {
+        g_conn_route.clear();
+    }
     auto& v = g_conn_route[src];
     for (const auto& c : v) {
         if (c.dir == dir) {
@@ -2924,6 +2932,9 @@ static void dispatch_to_device(
 void execute_program_emulated(IDevice* device, Program& program) {
     auto device_id = device->id();
     log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
+    // Mark the fabric connection-route table stale: the next op's first connection record clears it, so
+    // routes stay scoped to the current op (this op's builds already recorded before this launch).
+    g_conn_route_dirty.store(true, std::memory_order_relaxed);
 
     ResolvedProgram& resolved = prepare_program(device, program);  // compile-once (memoized)
 
