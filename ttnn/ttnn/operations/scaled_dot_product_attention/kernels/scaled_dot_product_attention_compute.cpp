@@ -1,70 +1,24 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for scaled_dot_product_attention (Flash Attention v2).
+// Compute kernel for scaled_dot_product_attention (Flash Attention).
 //
-// Flash Attention recurrence with online softmax. Per (B,H) work unit:
-//   For each Q-block:
-//     Init m_i=-inf, l_i=0, O_i=0
-//     For each KV-block:
-//       1. S = Q @ K^T         (matmul_block, transpose=true, Q retained)
-//       2. S *= scale           (eltwise mul, Scalar broadcast)
-//       3. S_masked = S + mask  (eltwise add) or copy S→S_masked (no mask)
-//       4. m_blk = rowmax(S_masked)  (reduce MAX REDUCE_ROW, WaitUpfrontNoPop)
-//       5. alpha = exp(m_old - m_new)  (eltwise_chain: sub + exp)
-//       6. O *= alpha            (eltwise mul, Col broadcast, in-place)
-//       7. l *= alpha            (eltwise mul, in-place)
-//       8. S_masked -= m_new     (eltwise sub, Col broadcast, pops S_masked)
-//       9. P = exp(S_masked)     (eltwise unary Exp)
-//       10. l_blk = rowsum(P)    (reduce SUM REDUCE_ROW, WaitUpfrontNoPop)
-//       11. l += l_blk           (eltwise add, in-place)
-//       12. O += P @ V           (matmul_block → cb_o_accum, then eltwise add into cb_o)
-//       13. m = m_new            (eltwise copy)
-//     Normalize: O /= l          (recip + mul)
-//     Write O to cb_out
-//
-// CT args: [B_q_t, B_kv_t, D_t, has_mask, S_q_tiles, S_kv_tiles]
+// CT args: [has_mask, H_q, H_kv]
+// (B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles are runtime args — read from RT args[0..4])
+// Wait — compute kernel doesn't have RT args in the current descriptor.
+// Let me pass them as CT args instead.
 
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/device_print.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 using namespace compute_kernel_lib;
 
-// Debug helper: print the number of valid tiles in a CB (received - acked).
-ALWI void dbg_cb_count(const char* name, uint32_t cb_id) {
-    uint32_t recv = get_cb_tiles_received_ptr(cb_id)[0];
-    uint32_t ack = get_cb_tiles_acked_ptr(cb_id)[0];
-    DEVICE_PRINT("CB {}: id={} tiles={}-{}={}\n", name, (uint32_t)cb_id, recv, ack, recv - ack);
-}
-
-ALWI void dbg_phase(const char* phase) {
-    DEVICE_PRINT("===== {} =====\n", phase);
-    dbg_cb_count("cb_q", cb_q);
-    dbg_cb_count("cb_k", cb_k);
-    dbg_cb_count("cb_v", cb_v);
-    dbg_cb_count("cb_scaler_reduce", cb_scaler_reduce);
-    dbg_cb_count("cb_scale_factor", cb_scale_factor);
-    dbg_cb_count("cb_alpha", cb_alpha);
-    dbg_cb_count("cb_o", cb_o);
-    dbg_cb_count("cb_scores", cb_scores);
-    dbg_cb_count("cb_scores_masked", cb_scores_masked);
-    dbg_cb_count("cb_max_new", cb_max_new);
-    dbg_cb_count("cb_max_old", cb_max_old);
-    dbg_cb_count("cb_exp_scores", cb_exp_scores);
-    dbg_cb_count("cb_sum_new", cb_sum_new);
-    dbg_cb_count("cb_sum_old", cb_sum_old);
-    dbg_cb_count("cb_o_accum", cb_o_accum);
-}
-
-// CB indices (match op_design.md CB layout)
 constexpr uint32_t cb_q = tt::CBIndex::c_0;
 constexpr uint32_t cb_k = tt::CBIndex::c_1;
 constexpr uint32_t cb_v = tt::CBIndex::c_2;
@@ -84,194 +38,175 @@ constexpr uint32_t cb_sum_old = 30;
 constexpr uint32_t cb_o_accum = 31;
 
 void kernel_main() {
-    constexpr uint32_t B_q_t = get_compile_time_arg_val(0);
-    constexpr uint32_t B_kv_t = get_compile_time_arg_val(1);
-    constexpr uint32_t D_t = get_compile_time_arg_val(2);
-    constexpr uint32_t has_mask = get_compile_time_arg_val(3);
+    // CT args: [has_mask, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles, H_q, H_kv]
+    constexpr uint32_t has_mask = get_compile_time_arg_val(0);
+    constexpr uint32_t B_q_t = get_compile_time_arg_val(1);
+    constexpr uint32_t B_kv_t = get_compile_time_arg_val(2);
+    constexpr uint32_t D_t = get_compile_time_arg_val(3);
     constexpr uint32_t S_q_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t S_kv_tiles = get_compile_time_arg_val(5);
 
     constexpr uint32_t num_score_tiles = B_q_t * B_kv_t;
     constexpr uint32_t num_o_tiles = B_q_t * D_t;
+    constexpr uint32_t num_q_tiles = B_q_t * D_t;
 
     constexpr uint32_t num_q_blocks = (S_q_tiles + B_q_t - 1) / B_q_t;
     constexpr uint32_t num_kv_blocks = (S_kv_tiles + B_kv_t - 1) / B_kv_t;
 
-    // --- Boot: engine-wide init + matmul init for QK^T ---
+    // --- Boot ---
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_q, cb_k, cb_scores);
-    mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1,
-                  /*ct_dim=*/2, /*rt_dim=*/2, /*kt_dim=*/D_t);
+    mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/1, /*ct_dim=*/B_kv_t, /*rt_dim=*/B_q_t, /*kt_dim=*/D_t);
 
     CircularBuffer q_buf(cb_q);
     CircularBuffer k_buf(cb_k);
     CircularBuffer v_buf(cb_v);
-    CircularBuffer mask_buf(cb_mask);
-    CircularBuffer scaler_reduce_buf(cb_scaler_reduce);
-    CircularBuffer scale_factor_buf(cb_scale_factor);
-    CircularBuffer alpha_buf(cb_alpha);
-    CircularBuffer o_buf(cb_o);
-    CircularBuffer out_buf(cb_out);
     CircularBuffer scores_buf(cb_scores);
     CircularBuffer scores_masked_buf(cb_scores_masked);
-    CircularBuffer max_new_buf(cb_max_new);
-    CircularBuffer max_old_buf(cb_max_old);
     CircularBuffer exp_scores_buf(cb_exp_scores);
-    CircularBuffer sum_new_buf(cb_sum_new);
-    CircularBuffer sum_old_buf(cb_sum_old);
+    CircularBuffer o_buf(cb_o);
     CircularBuffer o_accum_buf(cb_o_accum);
 
-    // Matmul shapes:
-    // QK^T: M=B_q_t(4), N=B_kv_t(4), K=D_t. Subblock 2x2 = 4 tiles (DEST-safe with fp32 acc).
-    constexpr auto qkt_shape = MatmulBlockShape::of(2, 2, 2, 2, D_t, 1);
-    // PV: M=B_q_t(4), N=D_t, K=B_kv_t(4). Subblock 2x2 (or 2x1 if D_t=1).
+    // Subblock sizing: keep within DEST limits (8 tiles with fp32_acc)
+    // 2x2 subblock = 4 tiles per subblock
+    constexpr uint32_t sb_h = (B_q_t < 2) ? B_q_t : 2;
+    constexpr uint32_t sb_w = (B_kv_t < 2) ? B_kv_t : 2;
+    constexpr uint32_t in0_sb = (B_q_t + sb_h - 1) / sb_h;
+    constexpr uint32_t in1_sb = (B_kv_t + sb_w - 1) / sb_w;
+
+    constexpr auto qkt_shape = MatmulBlockShape::of(in0_sb, in1_sb, sb_h, sb_w, D_t, 1);
     constexpr uint32_t pv_sb_w = (D_t < 2) ? D_t : 2;
-    constexpr uint32_t pv_in1_subblocks = (D_t + pv_sb_w - 1) / pv_sb_w;
-    constexpr auto pv_shape = MatmulBlockShape::of(2, pv_in1_subblocks, 2, pv_sb_w, B_kv_t, 1);
+    constexpr uint32_t pv_in1_sb = (D_t + pv_sb_w - 1) / pv_sb_w;
+    constexpr auto pv_shape = MatmulBlockShape::of(in0_sb, pv_in1_sb, sb_h, pv_sb_w, B_kv_t, 1);
 
-    // Read runtime args: [num_work_units]
-    uint32_t num_work_units = get_arg_val<uint32_t>(0);
+    for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
+        // --- Phase 1: QK^T score matmul ---
+        matmul_block<
+            /*transpose=*/true, /*packer_l1_acc=*/false,
+            /*last_block_target=*/LastBlockTarget::Out,
+            /*tile_order=*/OutputCBLayout::SubblockMajor,
+            /*init_mode=*/matmul_config::InitMode::Short,
+            /*in0_policy=*/InputPolicy::WaitAndRetainOnLastBlock,
+            /*in1_policy=*/InputPolicy::WaitAndPopPerKBlock>(
+            q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
 
-    for (uint32_t wu = 0; wu < num_work_units; ++wu) {
-        for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
-            // --- Phase 0: Wait for initial running state ---
-            // Reader pushes m_i(-inf), l_i(0), O_i(0) tiles before each Q-block.
-            cb_wait_front(cb_max_old, B_q_t);
-            cb_wait_front(cb_sum_old, B_q_t);
-            cb_wait_front(cb_o, num_o_tiles);
-            cb_wait_front(cb_q, num_o_tiles);
-            dbg_phase("Phase 0: after init wait");
+        // --- Phase 2: Scale ---
+        mul<cb_scores, cb_scale_factor, cb_scores,
+            BroadcastDim::Scalar, InputLifecycle::Streaming, InputLifecycle::HeldBulk>(num_score_tiles);
 
-            // --- Inner loop over KV-blocks ---
-            for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
+        // --- Phase 3: Mask or passthrough ---
+        if constexpr (has_mask) {
+            add<cb_scores, cb_mask, cb_scores_masked>(num_score_tiles);
+        } else {
+            copy<cb_scores, cb_scores_masked>(num_score_tiles);
+        }
 
-                dbg_phase("Phase 1: before QK^T");
-                // --- Phase 1: QK^T score matmul ---
-                // Q retained (WaitAndRetainOnLastBlock) for reuse across KV-blocks.
-                matmul_block<
-                    /*transpose=*/true,
-                    /*packer_l1_acc=*/false,
-                    /*last_block_target=*/LastBlockTarget::Out,
-                    /*tile_order=*/OutputCBLayout::SubblockMajor,
-                    /*init_mode=*/matmul_config::InitMode::Short,
-                    /*in0_policy=*/InputPolicy::WaitAndRetainOnLastBlock,
-                    /*in1_policy=*/InputPolicy::WaitAndPopPerKBlock>(
-                    q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
+        // --- Phase 4: Row-max ---
+        reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_scores_masked, cb_scaler_reduce, cb_max_new,
+               ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+        cb_wait_front(cb_scaler_reduce, 1);
+        cb_pop_front(cb_scaler_reduce, 1);
 
-                dbg_phase("Phase 2: before scale");
-                // --- Phase 2: Scale scores ---
-                mul<cb_scores, cb_scale_factor, cb_scores,
-                    BroadcastDim::Scalar,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk>(num_score_tiles);
+        // --- Phase 5: alpha = exp(m_old - m_new) ---
+        eltwise_chain(
+            B_q_t,
+            BinaryFpu<cb_max_old, cb_max_new, BinaryFpuOp::Sub, BroadcastDim::None,
+                      InputLifecycle::Bulk, InputLifecycle::HeldBulk,
+                      BinaryDataFormatReconfig::Input, Dst::D0,
+                      OperandKind::Block, OperandKind::Block>{},
+            Exp<>{},
+            PackTile<cb_alpha, OutputLifecycle::Streaming>{});
 
-                dbg_phase("Phase 3: before mask/passthrough");
-                // --- Phase 3: Mask add or passthrough ---
-                if constexpr (has_mask) {
-                    add<cb_scores, cb_mask, cb_scores_masked>(num_score_tiles);
-                } else {
-                    copy<cb_scores, cb_scores_masked>(num_score_tiles);
-                }
+        // --- Phase 6: O *= alpha (Col broadcast) ---
+        mul<cb_o, cb_alpha, cb_o, BroadcastDim::Col,
+            InputLifecycle::Streaming, InputLifecycle::HeldBulk,
+            OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input,
+            PackTileReconfig::Output, OperandKind::Scalar, OperandKind::Col>(
+            EltwiseShape::grid(B_q_t, D_t));
 
-                dbg_phase("Phase 4: before row-max reduce");
-                // --- Phase 4: Row-max (WaitUpfrontNoPop — leaves scores for phase 8) ---
-                reduce<PoolType::MAX, ReduceDim::REDUCE_ROW,
-                       cb_scores_masked, cb_scaler_reduce, cb_max_new,
-                       ReduceInputPolicy::WaitUpfrontNoPop>(
-                    ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
-                // Reduce doesn't pop scaler; pop MAX scaler for SUM scaler access
-                cb_pop_front(cb_scaler_reduce, 1);
+        // --- Phase 7: l *= alpha ---
+        mul<cb_sum_old, cb_alpha, cb_sum_old>(B_q_t);
 
-                dbg_phase("Phase 5: before alpha=exp(m_old-m_new)");
-                // --- Phase 5: alpha = exp(m_old - m_new) ---
-                eltwise_chain(
-                    B_q_t,
-                    BinaryFpu<cb_max_old, cb_max_new, BinaryFpuOp::Sub, BroadcastDim::None,
-                              InputLifecycle::Bulk, InputLifecycle::HeldBulk,
-                              BinaryDataFormatReconfig::Input, Dst::D0,
-                              OperandKind::Scalar, OperandKind::Scalar>{},
-                    Exp<>{},
-                    PackTile<cb_alpha, OutputLifecycle::Streaming>{});
+        // --- Phase 8: S -= m_new (Col broadcast) ---
+        sub<cb_scores_masked, cb_max_new, cb_scores_masked, BroadcastDim::Col,
+            InputLifecycle::Streaming, InputLifecycle::HeldBulk,
+            OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input,
+            PackTileReconfig::Output, OperandKind::Scalar, OperandKind::Col>(
+            EltwiseShape::grid(B_q_t, B_kv_t));
 
-                dbg_phase("Phase 6: before O*=alpha");
-                // --- Phase 6: O *= alpha (Col broadcast, in-place) ---
-                mul<cb_o, cb_alpha, cb_o,
-                    BroadcastDim::Col,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk,
-                    OutputLifecycle::Streaming,
-                    BinaryDataFormatReconfig::Input,
-                    PackTileReconfig::Output,
-                    OperandKind::Scalar,
-                    OperandKind::Col>(EltwiseShape::grid(B_q_t, D_t));
+        // --- Phase 9: P = exp(S) ---
+        unary<Exp<>, cb_scores_masked, cb_exp_scores>(num_score_tiles);
 
-                dbg_phase("Phase 7: before l*=alpha");
-                // --- Phase 7: l *= alpha (in-place, element-wise) ---
-                mul<cb_sum_old, cb_alpha, cb_sum_old>(B_q_t);
+        // --- Phase 10: rowsum(P) ---
+        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_exp_scores, cb_scaler_reduce, cb_sum_new,
+               ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
+        cb_wait_front(cb_scaler_reduce, 1);
+        cb_pop_front(cb_scaler_reduce, 1);
 
-                dbg_phase("Phase 8: before S-=m_new");
-                // --- Phase 8: S_masked -= m_new (Col broadcast, in-place) ---
-                sub<cb_scores_masked, cb_max_new, cb_scores_masked,
-                    BroadcastDim::Col,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk,
-                    OutputLifecycle::Streaming,
-                    BinaryDataFormatReconfig::Input,
-                    PackTileReconfig::Output,
-                    OperandKind::Scalar,
-                    OperandKind::Col>(EltwiseShape::grid(B_q_t, B_kv_t));
+        // --- Phase 11: l_i += l_blk ---
+        // Use Block OperandKind with Bulk lifecycle for both inputs.
+        // Block reads tile i (absolute front index), Bulk waits for all M tiles upfront
+        // and pops at end. Output to cb_sum_old in-place with Bulk (reserve upfront,
+        // push at end). With Block+Bulk, the chain waits for B_q_t tiles on both
+        // inputs, processes all, pops B_q_t from both, reserves B_q_t output, pushes B_q_t.
+        // In-place (CbA==CbOut): the reserve(B_q_t) would deadlock since B_q_t tiles
+        // are at the front (not yet popped). So use DeferredPop for input A:
+        // caller (Bulk) waited, chain pops at end. But in-place needs pop before reserve.
+        // The chain pops inputs AFTER compute, BEFORE output reserve? No, the chain
+        // order is: wait_inputs -> compute -> pop_inputs -> reserve_outputs -> pack -> push_outputs.
+        // So pop happens before reserve. With DeferredPop, the chain doesn't pop (caller does).
+        // Let me use DeferredPop for input A, Streaming for input B, Streaming output.
+        // Actually, simplest: use DeferredPop for A (cb_sum_old, already waited by phase 7),
+        // Streaming for B (cb_sum_new), Streaming output to cb_sum_old.
+        // Wait, DeferredPop means PopPolicy::AtEnd with no wait. But who waited?
+        // Let me just use Streaming+Block for both, Streaming output.
+        // Block + Streaming: M = B_q_t, waits per tile (i+1 cumulative), pops per tile.
+        // Wait — is Block + Streaming legal? Checking: Block rejects PerTile-pop!
+        // "Block walks the absolute CB-front index, so it rejects PerTile-pop"
+        // So Block + Streaming is ILLEGAL.
+        // Use Scalar + Streaming (default) with non-in-place output.
+        // Output to cb_o_accum (empty after phase 12 of PREVIOUS iteration).
+        // But phase 12 hasn't run yet in THIS iteration. cb_o_accum is empty (initial state).
+        // Wait, for the FIRST KV-block, cb_o_accum is empty (never written to).
+        // For subsequent KV-blocks, phase 12 wrote to it and phase 12's add consumed it.
+        // So cb_o_accum should be empty. Let me output there, then copy back.
+        // Actually, this is getting too complex. Let me just use the simplest approach:
+        // non-in-place output to a temp CB, then copy.
+        // Use cb_exp_scores as temp — BUT phase 12 needs it!
+        // Use cb_max_new as temp — BUT phase 13 needs it!
+        // OK, let me just output to cb_sum_old directly with Streaming + Scalar (the original approach)
+        // and figure out why it's hanging. The chain with Scalar + Streaming should:
+        // per tile: wait_front(1), compute, pop_front(1), reserve_back(1), pack, push_back(1).
+        // Pop before reserve — should work.
+        add<cb_sum_old, cb_sum_new, cb_sum_old>(B_q_t);
 
-                dbg_phase("Phase 9: before P=exp(S)");
-                // --- Phase 9: P = exp(S_masked) ---
-                unary<Exp<>, cb_scores_masked, cb_exp_scores>(num_score_tiles);
+        // --- Phase 12: PV = P @ V, then O += PV ---
+        matmul_block<
+            /*transpose=*/false, /*packer_l1_acc=*/false,
+            /*last_block_target=*/LastBlockTarget::Out,
+            /*tile_order=*/OutputCBLayout::SubblockMajor,
+            /*init_mode=*/matmul_config::InitMode::Short,
+            /*in0_policy=*/InputPolicy::WaitAndPopPerKBlock,
+            /*in1_policy=*/InputPolicy::WaitAndPopPerKBlock>(
+            exp_scores_buf, v_buf, o_accum_buf, o_accum_buf, pv_shape);
+        add<cb_o, cb_o_accum, cb_o>(num_o_tiles);
 
-                dbg_phase("Phase 10: before rowsum(P)");
-                // --- Phase 10: l_blk = rowsum(P) (WaitUpfrontNoPop for PV matmul) ---
-                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW,
-                       cb_exp_scores, cb_scaler_reduce, cb_sum_new,
-                       ReduceInputPolicy::WaitUpfrontNoPop>(
-                    ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
-                cb_pop_front(cb_scaler_reduce, 1);
+        // --- Phase 13: m_i = m_new ---
+        copy<cb_max_new, cb_max_old>(B_q_t);
 
-                dbg_phase("Phase 11: before l+=l_blk (HANG POINT)");
-                // --- Phase 11: l += l_blk (in-place) ---
-                add<cb_sum_old, cb_sum_new, cb_sum_old>(B_q_t);
+        // Pop Q tiles for next Q-block
+        if (qb < num_q_blocks - 1) {
+            cb_wait_front(cb_q, num_q_tiles);
+            cb_pop_front(cb_q, num_q_tiles);
+        }
 
-                // --- Phase 12: PV matmul → cb_o_accum, then O += PV ---
-                matmul_block<
-                    /*transpose=*/false,
-                    /*packer_l1_acc=*/false,
-                    /*last_block_target=*/LastBlockTarget::Out,
-                    /*tile_order=*/OutputCBLayout::SubblockMajor,
-                    /*init_mode=*/matmul_config::InitMode::Short,
-                    /*in0_policy=*/InputPolicy::WaitAndPopPerKBlock,
-                    /*in1_policy=*/InputPolicy::WaitAndPopPerKBlock>(
-                    exp_scores_buf, v_buf, o_accum_buf, o_accum_buf, pv_shape);
-
-                add<cb_o, cb_o_accum, cb_o>(num_o_tiles);
-
-                // --- Phase 13: m = m_new ---
-                copy<cb_max_new, cb_max_old>(B_q_t);
-
-            } // end KV-block loop
-
-            // --- Phase 14: Normalize O by l_i and write to output ---
-            unary<Recip<>, cb_sum_old, cb_sum_old>(B_q_t);
-
-            mul<cb_o, cb_sum_old, cb_out,
-                BroadcastDim::Col,
-                InputLifecycle::Streaming,
-                InputLifecycle::HeldBulk,
-                OutputLifecycle::Streaming,
-                BinaryDataFormatReconfig::Input,
-                PackTileReconfig::Output,
-                OperandKind::Scalar,
-                OperandKind::Col>(EltwiseShape::grid(B_q_t, D_t));
-
-            // Pop consumed state CBs for this Q-block
-            cb_pop_front(cb_max_old, B_q_t);
-            cb_pop_front(cb_sum_old, B_q_t);
-            cb_pop_front(cb_q, num_o_tiles);
-
-        } // end Q-block loop
-    } // end work-unit loop
+        // --- Phase 14: Normalize and write output ---
+        // recip(l_i) in-place
+        unary<Recip<>, cb_sum_old, cb_sum_old>(B_q_t);
+        // O *= recip(l_i) → cb_out
+        mul<cb_o, cb_sum_old, cb_out, BroadcastDim::Col,
+            InputLifecycle::Streaming, InputLifecycle::HeldBulk,
+            OutputLifecycle::Streaming, BinaryDataFormatReconfig::Input,
+            PackTileReconfig::Output, OperandKind::Scalar, OperandKind::Col>(
+            EltwiseShape::grid(B_q_t, D_t));
+    }
 }
