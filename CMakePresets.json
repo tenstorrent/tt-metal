@@ -30,8 +30,7 @@
           "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
           "BUILD_TT_TRAIN": {"value": "ON"},
           "CMAKE_CXX_LINK_EXECUTABLE": {"value": "${dollar}{CMAKE_COMMAND} -E touch <TARGET>"},
-          "CMAKE_C_LINK_EXECUTABLE": {"value": "${dollar}{CMAKE_COMMAND} -E touch <TARGET>"},
-          "CMAKE_TRY_COMPILE_TARGET_TYPE": {"value": "STATIC_LIBRARY"}
+          "CMAKE_C_LINK_EXECUTABLE": {"value": "${dollar}{CMAKE_COMMAND} -E touch <TARGET>"}
         }
       },
       {
