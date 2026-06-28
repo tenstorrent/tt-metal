@@ -33,7 +33,7 @@ Tensor matmul_decode(
         reshard_cores);
 }
 
-std::array<Tensor, 2> gate_up_matmul_decode(
+Tensor gate_up_matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& gate_b,
     const Tensor& up_b,

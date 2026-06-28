@@ -82,9 +82,9 @@ GateUpMatmulDecodeDeviceOperation::spec_return_value_t GateUpMatmulDecodeDeviceO
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
 
-    // Each output is width-sharded across N_blocks cores with shard [M, Nc] -- identical to a
-    // single partial-width-sharded matmul_decode (no interleaved-output fold; the downstream
-    // multiply(gate, up) consumes the width-sharded outputs directly).
+    // The single GeGLU output is width-sharded across N_blocks cores with shard [M, Nc] --
+    // identical geometry to a single partial-width-sharded matmul_decode; the downstream
+    // down-projection reshards it as its K.
     int per_core_output_width = tt::constants::TILE_WIDTH;
     const auto& b_mem = tensor_args.gate_b.memory_config();
     if (b_mem.is_sharded() && b_mem.shard_spec().has_value()) {
@@ -99,20 +99,18 @@ GateUpMatmulDecodeDeviceOperation::spec_return_value_t GateUpMatmulDecodeDeviceO
         tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
     auto memory_config = MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec);
 
-    auto spec = TensorSpec(
+    return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             dtype,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input_tensor_a.tensor_spec().tile()),
             memory_config));
-    return {spec, spec};
 }
 
 GateUpMatmulDecodeDeviceOperation::tensor_return_value_t GateUpMatmulDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto specs = compute_output_specs(operation_attributes, tensor_args);
-    auto* device = tensor_args.input_tensor_a.device();
-    return {create_device_tensor(specs[0], device), create_device_tensor(specs[1], device)};
+    auto spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(spec, tensor_args.input_tensor_a.device());
 }
 
 }  // namespace ttnn::operations::matmul_decode

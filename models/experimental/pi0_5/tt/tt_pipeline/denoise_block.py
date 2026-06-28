@@ -251,9 +251,10 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
             return super().forward(x)
         # adaRMS emits block-sharded (fast 8-core norm, no S2I); matmul_decode reshards in0 in its reader.
         # x (== the block's `normed`) is owned + freed by the block forward.
-        # Fused gate+up: ONE A-gather, two resident weights, two outputs (gate gets the tanh-approx
-        # gelu). Shares the x-gather across both projections (halves the MLP gather/reduce/dispatch).
-        gate, up = ttnn.gate_up_matmul_decode(
+        # Fused gate+up+GeGLU: ONE A-gather, two resident weights, one output hid = gelu(x@gate)*(x@up)
+        # (gate gets the tanh-approx gelu, the multiply is folded into the op). Shares the x-gather
+        # across both projections and emits the GeGLU activation directly -- no separate multiply.
+        hid = ttnn.gate_up_matmul_decode(
             x,
             self.gate_b,
             self.up_b,
@@ -262,7 +263,6 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
             reshard_input=True,
             reshard_cores=_RESHARD_CORES,
         )
-        hid = ttnn.multiply(gate, up, memory_config=_L1)
         out = ttnn.matmul_decode(
             hid,
             self.down_b,
@@ -272,8 +272,7 @@ class TTNNPi05DenoiseExpertMLP(TTNNPi05GemmaMLP):
             compute_kernel_config=_LOFI,
             interleaved_output=True,
         )
-        for t in (gate, up, hid):
-            ttnn.deallocate(t)
+        ttnn.deallocate(hid)
         return out
 
 
