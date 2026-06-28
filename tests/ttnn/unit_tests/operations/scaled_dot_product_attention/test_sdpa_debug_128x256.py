@@ -115,9 +115,7 @@ def test_sdpa_debug_128x256(device):
 
     # torch F.scaled_dot_product_attention for ground truth
     scale = 1.0 / math.sqrt(64)
-    expected_torch = torch.nn.functional.scaled_dot_product_attention(
-        Q.float(), K.float(), V.float(), scale=scale
-    )
+    expected_torch = torch.nn.functional.scaled_dot_product_attention(Q.float(), K.float(), V.float(), scale=scale)
 
     print(f"\n=== Reference comparison ===")
     diff_blocked_vs_single = (expected_blocked.float() - expected_single.float()).abs().max().item()
@@ -128,12 +126,15 @@ def test_sdpa_debug_128x256(device):
     print(f"Max diff single-vs-torch:   {diff_single_vs_torch:.2e}")
 
     # Run on device
-    ttnn_Q = ttnn.from_torch(Q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-                             memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn_K = ttnn.from_torch(K, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-                             memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn_V = ttnn.from_torch(V, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
-                             memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_Q = ttnn.from_torch(
+        Q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn_K = ttnn.from_torch(
+        K, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn_V = ttnn.from_torch(
+        V, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
     output = scaled_dot_product_attention(ttnn_Q, ttnn_K, ttnn_V)
     torch_output = ttnn.to_torch(output)
