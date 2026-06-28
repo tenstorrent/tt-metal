@@ -547,4 +547,37 @@ void kernel_main() {
         DPRINT("stage_12 pv_matmul:\n{}\n", TileSlice(cb_o_accum, 0, sr, true, true));
     }
 #endif
+
+    // --- Stage 13: Update m: m_i = m_new ---
+    // copy<cb_max_new, cb_max_old>(B_q_t) — copy 4 tiles from cb_max_new to
+    // cb_max_old. After this, cb_max_old holds the updated running max m_i.
+    //
+    // CB state entering Stage 13:
+    //   cb_max_new: 4 tiles at front (held via HeldBulk in Stages 5 and 8,
+    //     never popped — all 4 tiles still available for consumption here)
+    //   cb_max_old: empty (4 init tiles were popped via Bulk in Stage 5 alpha)
+    //
+    // copy with Streaming input/output: per-tile wait+pop from cb_max_new,
+    // per-tile reserve+push to cb_max_old. After the copy, cb_max_old holds
+    // 4 tiles (m_i = m_new), cb_max_new is empty.
+    //
+    // CopyTileReconfig::Input (default): reconfigures unpacker from matmul
+    // (Stage 12 PV) to eltwise copy format. PackTileReconfig::Output (default):
+    // reconfigures packer from cb_o_accum to cb_max_old format.
+    copy<cb_max_new, cb_max_old>(B_q_t);
+
+    // --- Stage 13 DPRINT: cb_max_old tile 0, first 4×4 ---
+    // Printed from the unpacker (TRISC0), front of CB (between cb_wait_front
+    // and cb_pop_front). After the copy completes, cb_max_old holds the updated
+    // running max (m_i = m_new). We wait_front tile 0, print it, then leave it
+    // (no pop — cb_max_old is persistent running state, consumed in future
+    // KV-block iterations or drained at Q-block end).
+    // Values should match reference: m_new = row-max of scaled scores.
+#ifdef TRISC_UNPACK
+    {
+        cb_wait_front(cb_max_old, 1);
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
+        DPRINT("stage_13 update_m:\n{}\n", TileSlice(cb_max_old, 0, sr, true, true));
+    }
+#endif
 }
