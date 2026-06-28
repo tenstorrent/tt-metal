@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/debug/device_print.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
@@ -58,12 +59,19 @@ void kernel_main() {
     constexpr auto pv_shape = MatmulBlockShape::of(in0_sb, pv_in1_sb, sb_h, pv_sb_w, B_kv_t, 1);
     uint32_t num_work_units = get_arg_val<uint32_t>(0);
     for (uint32_t wu = 0; wu < num_work_units; ++wu) {
+        DEVICE_PRINT("COMPUTE: wu={} start\n", wu);
         for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
+            DEVICE_PRINT("COMPUTE: qb={} waiting for max_old\n", qb);
             cb_wait_front(cb_max_old, B_q_t);
+            DEVICE_PRINT("COMPUTE: qb={} waiting for sum_old\n", qb);
             cb_wait_front(cb_sum_old, B_q_t);
+            DEVICE_PRINT("COMPUTE: qb={} waiting for o\n", qb);
             cb_wait_front(cb_o, num_o_tiles);
+            DEVICE_PRINT("COMPUTE: qb={} waiting for q\n", qb);
             cb_wait_front(cb_q, num_o_tiles);
+            DEVICE_PRINT("COMPUTE: qb={} Phase 0 done, entering KV loop\n", qb);
             for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
+                DEVICE_PRINT("COMPUTE: qb={} kvb={} before QK^T matmul\n", qb, kvb);
                 // Phase 1: QK^T
                 matmul_block<
                     true,
@@ -73,6 +81,7 @@ void kernel_main() {
                     matmul_config::InitMode::Short,
                     InputPolicy::WaitAndRetainOnLastBlock,
                     InputPolicy::WaitAndPopPerKBlock>(q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
+                DEVICE_PRINT("COMPUTE: qb={} kvb={} after QK^T matmul\n", qb, kvb);
                 // Phase 2: Scale
                 mul<cb_scores,
                     cb_scale_factor,
