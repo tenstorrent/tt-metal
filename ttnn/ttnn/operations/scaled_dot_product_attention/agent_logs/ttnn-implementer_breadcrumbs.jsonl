@@ -65,3 +65,8 @@
 {"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Debug SDPA matmul hang","ts":"2026-06-28T16:58:52+00:00"}
 {"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_basic","details":"PASSED in 1.06s on hardware. Single tile (1,1,32,32), no mask, auto scale.","ts":"2026-06-28T16:59:59+00:00"}
 {"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_basic","classification":"pass","details":"Single tile (1,1,32,32) no mask, auto scale. PCC passes. Linter+debugger fixed: FillScalar init in compute, separate scaler CBs, OperandKind::Block for alpha, proper InputLifecycle.","ts":"2026-06-28T17:00:19+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_basic + test_scaled_dot_product_attention_gqa","classification":"pass","details":"Both basic (1,1,32,32) and GQA (1,8,128,64) with H_q=8,H_kv=2 pass. PCC > 0.995.","ts":"2026-06-28T17:07:55+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Debug SDPA compute hang","result":"Fixed multi-tile hang, root cause identified in expert debugger commits","ts":"2026-06-28T17:12:08+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_basic","details":"Single tile (1,1,32,32), no mask, auto scale","ts":"2026-06-28T17:15:24+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention[no_mask_auto_scale-multi_tile_128x128]","details":"Multi-tile 128x128, no mask, auto scale — PCC passes","ts":"2026-06-28T17:28:43+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"ttnn-static-analyzer","description":"Analyze SDPA kernels for bugs","ts":"2026-06-28T17:29:53+00:00"}
