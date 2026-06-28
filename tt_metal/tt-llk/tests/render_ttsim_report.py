@@ -555,7 +555,7 @@ def render(
             f'<div class="sub">{crash_pct:.1f}%</div></div>'
         )
         crash_th = "<th class='num'>Crash</th>"
-        crashed_nav = "<a href='#crashed'>Crashed</a>"
+        crashed_nav = "<a href='#crashed'>Crashed</a>" if rows_crash else ""
         # "Enumerated" = tests pytest --collect-only listed; "finished" = tests
         # that produced a JUnit result (passed/failed/skipped); the difference
         # is the crashed gap.
