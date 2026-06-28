@@ -25,6 +25,7 @@ file(
     llama_reduce_scatter/device/kernels/*
     llama_reduce_scatter_create_heads/device/kernels/*
     neighbor_pad_async/device/kernels/*
+    wan_fused_distributed_rmsnorm/device/kernels/*
     reduce_scatter_minimal_async/device/kernels/*
     ring_attention_all_gather_async/device/kernels/*
     rms_allgather/device/kernels/*

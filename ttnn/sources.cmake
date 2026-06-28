@@ -406,6 +406,10 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
+    cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/wan_fused_distributed_rmsnorm.cpp
+    cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/wan_fused_distributed_rmsnorm_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/wan_fused_distributed_rmsnorm_program_factory.cpp
+    cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/wan_fused_distributed_rmsnorm_nanobind.cpp
 )
 
 set(TTNN_P2P_PYBIND cpp/ttnn/operations/point_to_point/point_to_point_nanobind.cpp)
