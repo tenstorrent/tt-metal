@@ -361,7 +361,6 @@ STAGES = [
             "checkpoint": "cb_max_old tile 0, first 4×4 elements — all -inf (running max initialized)",
             "pass_criteria": "All elements are -inf; m_i and l_i initialized correctly",
         },
-        "turn_budget": 80,
     },
     {
         "index": 1,
@@ -373,7 +372,6 @@ STAGES = [
             "checkpoint": "cb_scores tile 0 (first Q-row × first K-col), first 4×4 elements — Q @ K^T values",
             "pass_criteria": "Score values match reference Q@K^T (pre-scale) within fp32 rounding",
         },
-        "turn_budget": 80,
     },
     {
         "index": 2,
@@ -385,7 +383,6 @@ STAGES = [
             "checkpoint": "cb_scores tile 0, first 4×4 — scaled by scale factor",
             "pass_criteria": "Score values = Q@K^T * scale, matching reference",
         },
-        "turn_budget": 60,
     },
     {
         "index": 3,
@@ -397,7 +394,6 @@ STAGES = [
             "checkpoint": "cb_scores_masked tile 0, first 4×4 — mask applied or passthrough",
             "pass_criteria": "Values match reference (passthrough when no mask)",
         },
-        "turn_budget": 60,
     },
     {
         "index": 4,
@@ -409,7 +405,6 @@ STAGES = [
             "checkpoint": "cb_max_new tile 0, first 4×4 — per-row max of first score rows",
             "pass_criteria": "Max values match reference row-max of scores",
         },
-        "turn_budget": 80,
     },
     {
         "index": 5,
@@ -421,7 +416,6 @@ STAGES = [
             "checkpoint": "cb_alpha tile 0, first 4×4 — exp(m_old - m_new)",
             "pass_criteria": "Alpha values match reference exp(m_old - m_new)",
         },
-        "turn_budget": 60,
     },
     {
         "index": 6,
@@ -433,7 +427,6 @@ STAGES = [
             "checkpoint": "cb_o tile 0, first 4×4 — O rescaled by alpha",
             "pass_criteria": "O values = alpha * O_old, matching reference (O_old=0 on first KV-block so O stays 0)",
         },
-        "turn_budget": 60,
     },
     {
         "index": 7,
@@ -445,7 +438,6 @@ STAGES = [
             "checkpoint": "cb_sum_old tile 0, first 4×4 — l rescaled by alpha",
             "pass_criteria": "l values = alpha * l_old, matching reference (l_old=0 so l stays 0 on first KV-block)",
         },
-        "turn_budget": 60,
     },
     {
         "index": 8,
@@ -457,7 +449,6 @@ STAGES = [
             "checkpoint": "cb_scores_masked tile 0, first 4×4 — scores minus m_new",
             "pass_criteria": "Values = scores - m_new, matching reference",
         },
-        "turn_budget": 60,
     },
     {
         "index": 9,
@@ -469,7 +460,6 @@ STAGES = [
             "checkpoint": "cb_exp_scores tile 0, first 4×4 — exp(scores - m_new)",
             "pass_criteria": "Values = exp(scores - m_new), matching reference",
         },
-        "turn_budget": 60,
     },
     {
         "index": 10,
@@ -481,7 +471,6 @@ STAGES = [
             "checkpoint": "cb_sum_new tile 0, first 4×4 — per-row sum of exp scores",
             "pass_criteria": "Sum values match reference row-sum of exp scores",
         },
-        "turn_budget": 80,
     },
     {
         "index": 11,
@@ -493,7 +482,6 @@ STAGES = [
             "checkpoint": "cb_sum_old tile 0, first 4×4 — l_i + l_blk",
             "pass_criteria": "l values = l_old + sum_new, matching reference",
         },
-        "turn_budget": 60,
     },
     {
         "index": 12,
@@ -505,7 +493,6 @@ STAGES = [
             "checkpoint": "cb_o tile 0, first 4×4 — O after P @ V accumulation",
             "pass_criteria": "O values = O_rescaled + P @ V, matching reference",
         },
-        "turn_budget": 80,
     },
     {
         "index": 13,
@@ -517,7 +504,6 @@ STAGES = [
             "checkpoint": "cb_max_old tile 0, first 4×4 — m_i = m_new",
             "pass_criteria": "m values = m_new, matching reference",
         },
-        "turn_budget": 60,
     },
     {
         "index": 14,
@@ -529,6 +515,5 @@ STAGES = [
             "checkpoint": "output DRAM tile 0, first 4×4 — final O / l_i",
             "pass_criteria": "Output = O / l_i, matching torch.nn.functional.scaled_dot_product_attention within fp32 rounding (max diff < 1e-4)",
         },
-        "turn_budget": 80,
     },
 ]
