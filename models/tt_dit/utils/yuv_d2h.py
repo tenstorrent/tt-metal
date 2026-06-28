@@ -76,6 +76,8 @@ def _yuv_planar_d2h(
     W: int,
     T: int,
     *,
+    out_H: int | None = None,
+    out_W: int | None = None,
     view=None,
     pool: ThreadPoolExecutor | None = None,
 ) -> np.ndarray:
@@ -114,6 +116,12 @@ def _yuv_planar_d2h(
     hw = H * W
     uv = Hu * Wu
     row_stride = hw + 2 * uv
+
+    # Logical output dims: when the VAE pads (global right/bottom tail, e.g. LTX W 1920->2048),
+    # the scatter writes each shard's valid columns/rows straight into a logical-sized buffer —
+    # no separate trim copy. Defaults to the padded H/W (no crop).
+    out_H = H if out_H is None else out_H
+    out_W = W if out_W is None else out_W
 
     # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
     host_Y = tt_Y.cpu(blocking=False)
@@ -187,7 +195,8 @@ def _yuv_planar_d2h(
     # SP_eff rectangular submesh; if the local coords are sparse (could
     # happen on irregular multi-host topologies), we fall through to the
     # Python path which handles arbitrary coord sets.
-    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
+    # The C++ path assembles full rectangular shards; only valid when there's no crop.
+    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff and out_H == H and out_W == W:
         triples = sorted(
             zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
             key=lambda t: (int(t[0][0]), int(t[0][1])),
@@ -203,143 +212,43 @@ def _yuv_planar_d2h(
         )
 
     # --- Python fallback (torch_threaded scatter) ------------------------
-    # Allocate the planar output and view each plane region as a (T, h, w)
-    # strided torch tensor (no copy, shares storage with `out`).
-    out = np.empty((T, row_stride), dtype=np.uint8)
+    # Assemble directly into the logical-sized planar buffer; each shard's scatter is clamped to
+    # the logical bound so padded tail rows/cols are simply not written (no separate trim pass).
+    out_Hu, out_Wu = out_H // 2, out_W // 2
+    out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
+    out_row = out_hw + 2 * out_uv
+
+    out = np.empty((T, out_row), dtype=np.uint8)
     out_t = torch.from_numpy(out)
-    y_view = out_t.as_strided((T, H, W), (row_stride, W, 1), 0)
-    u_view = out_t.as_strided((T, Hu, Wu), (row_stride, Wu, 1), hw)
-    v_view = out_t.as_strided((T, Hu, Wu), (row_stride, Wu, 1), hw + uv)
+    y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
+    u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
+    v_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw + out_uv)
 
     if pool is None:
         pool = _get_default_reassemble_pool()
 
-    def _write(view, shard, r, c, h_per, w_per):
-        # shard (1, h_per, w_per, T) -> squeeze(0).permute(2, 0, 1) -> strided (T, h_per, w_per).
-        src = shard.squeeze(0).permute(2, 0, 1)
-        view[:, r * h_per : (r + 1) * h_per, c * w_per : (c + 1) * w_per].copy_(src)
+    def _write(view, shard, r, c, h_per, w_per, bound_h, bound_w):
+        r0, c0 = r * h_per, c * w_per
+        vh = min(h_per, bound_h - r0)
+        vw = min(w_per, bound_w - c0)
+        if vh <= 0 or vw <= 0:
+            return  # shard lies entirely in the padded tail
+        # shard (1, h_per, w_per, T) -> squeeze(0).permute(2, 0, 1) -> (T, h_per, w_per).
+        src = shard.squeeze(0).permute(2, 0, 1)[:, :vh, :vw]
+        view[:, r0 : r0 + vh, c0 : c0 + vw].copy_(src)
 
     futures = []
     for coord, shard in zip(mesh_coords, Y_shards):
         r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y))
+        futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y, out_H, out_W))
     for coord, shard in zip(mesh_coords, Cb_shards):
         r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv))
+        futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
     for coord, shard in zip(mesh_coords, Cr_shards):
         r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv))
+        futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
     for f in futures:
         f.result()
-
-    return out
-
-
-def _trim_yuv420p_planar_height(planar: np.ndarray, full_H: int, full_W: int, new_H: int) -> np.ndarray:
-    """Trim the H dimension of a flattened YUV 4:2:0 planar uint8 buffer.
-
-    Input ``planar`` has shape ``(T, full_H*full_W + 2*(full_H/2)*(full_W/2))``
-    uint8 and is laid out as ``[Y plane | Cb plane | Cr plane]`` per frame.
-    Returns a new buffer of shape
-    ``(T, new_H*full_W + 2*(new_H/2)*(full_W/2))`` keeping the top ``new_H``
-    rows of Y and the top ``new_H/2`` rows of Cb / Cr.
-
-    Used after ``fast_device_to_host_yuv`` when the VAE pads its output height
-    (``new_logical_h < full_H``); the bottom rows of every plane contain
-    garbage that ffmpeg would otherwise encode.
-
-    No-op when ``new_H == full_H``.
-    """
-    if new_H == full_H:
-        return planar
-    if new_H > full_H:
-        raise ValueError(f"new_H ({new_H}) must not exceed full_H ({full_H})")
-    if new_H % 2 != 0 or full_W % 2 != 0:
-        raise ValueError(f"YUV 4:2:0 trim requires even new_H and full_W (got new_H={new_H}, full_W={full_W})")
-
-    full_Hu, full_Wu = full_H // 2, full_W // 2
-    new_Hu = new_H // 2
-
-    full_hw = full_H * full_W
-    full_uv = full_Hu * full_Wu
-    full_row_stride = full_hw + 2 * full_uv
-
-    new_hw = new_H * full_W
-    new_uv = new_Hu * full_Wu
-    new_row_stride = new_hw + 2 * new_uv
-
-    T = planar.shape[0]
-    out = np.empty((T, new_row_stride), dtype=planar.dtype)
-
-    # Strided 3D views into source / dest planes — no copy until the assignment.
-    src_y = np.lib.stride_tricks.as_strided(planar, shape=(T, full_H, full_W), strides=(full_row_stride, full_W, 1))
-    src_u = np.lib.stride_tricks.as_strided(
-        planar[:, full_hw:], shape=(T, full_Hu, full_Wu), strides=(full_row_stride, full_Wu, 1)
-    )
-    src_v = np.lib.stride_tricks.as_strided(
-        planar[:, full_hw + full_uv :],
-        shape=(T, full_Hu, full_Wu),
-        strides=(full_row_stride, full_Wu, 1),
-    )
-
-    dst_y = np.lib.stride_tricks.as_strided(
-        out, shape=(T, new_H, full_W), strides=(new_row_stride, full_W, 1), writeable=True
-    )
-    dst_u = np.lib.stride_tricks.as_strided(
-        out[:, new_hw:], shape=(T, new_Hu, full_Wu), strides=(new_row_stride, full_Wu, 1), writeable=True
-    )
-    dst_v = np.lib.stride_tricks.as_strided(
-        out[:, new_hw + new_uv :],
-        shape=(T, new_Hu, full_Wu),
-        strides=(new_row_stride, full_Wu, 1),
-        writeable=True,
-    )
-
-    # Inner W stride matches (1) on both sides, so numpy's strided iterator
-    # collapses to a per-row memcpy of `full_W` (or `full_Wu`) bytes.
-    dst_y[:] = src_y[:, :new_H, :]
-    dst_u[:] = src_u[:, :new_Hu, :]
-    dst_v[:] = src_v[:, :new_Hu, :]
-
-    return out
-
-
-def _trim_yuv420p_planar(planar: np.ndarray, full_H: int, full_W: int, new_H: int, new_W: int) -> np.ndarray:
-    """Trim H and/or W of a flattened YUV 4:2:0 planar uint8 buffer.
-
-    Input ``(T, full_H*full_W + 2*(full_H/2)*(full_W/2))`` laid out ``[Y | Cb | Cr]`` per frame;
-    returns the top-left ``new_H x new_W`` crop in the same packed layout. Used when the VAE pads
-    its output (LTX pads W 1920->2048 on 4x8); the padded rows/cols hold garbage ffmpeg would encode.
-    """
-    if new_H == full_H and new_W == full_W:
-        return planar
-    if new_H > full_H or new_W > full_W:
-        raise ValueError(f"new dims ({new_H}x{new_W}) must not exceed full ({full_H}x{full_W})")
-    if new_H % 2 or new_W % 2 or full_H % 2 or full_W % 2:
-        raise ValueError(f"YUV 4:2:0 trim requires even dims (got new {new_H}x{new_W}, full {full_H}x{full_W})")
-
-    full_Hu, full_Wu = full_H // 2, full_W // 2
-    new_Hu, new_Wu = new_H // 2, new_W // 2
-    full_hw, full_uv = full_H * full_W, full_Hu * full_Wu
-    new_hw, new_uv = new_H * new_W, new_Hu * new_Wu
-    full_row = full_hw + 2 * full_uv
-    new_row = new_hw + 2 * new_uv
-
-    T = planar.shape[0]
-    out = np.empty((T, new_row), dtype=planar.dtype)
-    ast = np.lib.stride_tricks.as_strided
-
-    src_y = ast(planar, (T, full_H, full_W), (full_row, full_W, 1))
-    src_u = ast(planar[:, full_hw:], (T, full_Hu, full_Wu), (full_row, full_Wu, 1))
-    src_v = ast(planar[:, full_hw + full_uv :], (T, full_Hu, full_Wu), (full_row, full_Wu, 1))
-
-    dst_y = ast(out, (T, new_H, new_W), (new_row, new_W, 1), writeable=True)
-    dst_u = ast(out[:, new_hw:], (T, new_Hu, new_Wu), (new_row, new_Wu, 1), writeable=True)
-    dst_v = ast(out[:, new_hw + new_uv :], (T, new_Hu, new_Wu), (new_row, new_Wu, 1), writeable=True)
-
-    dst_y[:] = src_y[:, :new_H, :new_W]
-    dst_u[:] = src_u[:, :new_Hu, :new_Wu]
-    dst_v[:] = src_v[:, :new_Hu, :new_Wu]
 
     return out
 
@@ -519,17 +428,14 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h]   Cb: {list(tt_Cb.shape)}")
         print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
 
-    # 3+4. Batched D2H + planar concat — uses GLOBAL H, W to size the buffer.
-    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, view=d2h_view, pool=pool)
-
-    # 5. Optional host-side trim of H and/or W in the planar buffer for the case where the
-    # VAE pads its output beyond the logical extent (LTX pads W 1920->2048 on 4x8).
+    # 3+4. Batched D2H + planar concat, assembled straight into the logical-sized buffer.
+    # The VAE pads a global right/bottom tail (LTX pads W 1920->2048 on 4x8); passing
+    # out_H/out_W clamps each shard's scatter so the padded tail is never written — no trim copy.
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
-    if new_H != H or new_W != W:
-        if debug:
-            print(f"  [yuv-d2h] trimming {H}x{W} -> {new_H}x{new_W}")
-        out = _trim_yuv420p_planar(out, H, W, new_H, new_W)
+    out = _yuv_planar_d2h(
+        tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, out_H=new_H, out_W=new_W, view=d2h_view, pool=pool
+    )
 
     return out
 
