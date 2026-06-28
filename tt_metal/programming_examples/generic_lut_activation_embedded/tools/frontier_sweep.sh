@@ -258,8 +258,14 @@ for work_item in "${WORK[@]}"; do
     out=$(timeout "$PER_CFG_TIMEOUT" bash "$RUN_CSV" "$f" --activation "$act" --precision "$prec" --tiles 256 "${RA[@]}" 2>&1)
     row=$(echo "$out" | grep -aE '^(256_tiles|custom_256t)' | tail -1)
     if [[ -n "$row" ]]; then
-      ulp=$(echo "$row" | awk '{print $5}'); us=$(echo "$row" | awk '{print $7}' | sed 's/µs//'); ok=1
-      [[ -z "$ulp" || -z "$us" ]] && { ulp="-"; us="-"; ok=0; }
+      ulp=$(echo "$row" | awk '{print $5}')
+      us=$(echo "$row" | awk '{print $7}' | sed 's/µs//')
+      ok=1
+      if [[ ! "$ulp" =~ ^-?([0-9]+([.][0-9]*)?|[.][0-9]+)$ || ! "$us" =~ ^-?([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
+        ulp="-"
+        us="-"
+        ok=0
+      fi
     else
       ulp="-"; us="-"; ok=0
       if [[ -n "$RUN_DIR" ]]; then
