@@ -55,6 +55,13 @@ void kernel_main() {
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t fused_gelu = get_compile_time_arg_val(6);
     constexpr uint32_t fused_gelu_approx = get_compile_time_arg_val(7);
+    // Gated-residual epilogue: out = residual + gate * (A @ B). gate is per-channel over N
+    // (replicated down the rows so a plain mul_tiles works); residual is this base core's N-slice.
+    constexpr uint32_t fused_residual = get_compile_time_arg_val(8);
+    constexpr uint32_t residual_cb_id = get_compile_time_arg_val(9);
+    constexpr uint32_t gate_cb_id = get_compile_time_arg_val(10);
+    constexpr uint32_t mm_cb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t mmg_cb_id = get_compile_time_arg_val(12);  // scratch for gate * mm
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t is_base = get_arg_val<uint32_t>(1);
@@ -122,7 +129,17 @@ void kernel_main() {
         gelu_tile_init<(bool)fused_gelu_approx>();
     }
 
+    if (fused_residual) {
+        // Gated-residual epilogue: out = residual + gate * (A @ B). The reader has staged this base
+        // core's gate (resident, replicated down the rows) and residual N-slice into their CBs.
+        cb_wait_front(gate_cb_id, Nc_tiles);
+        cb_wait_front(residual_cb_id, block_num_tiles);
+    }
+
     cb_reserve_back(out_cb_id, block_num_tiles);
+    if (fused_residual) {
+        cb_reserve_back(mm_cb_id, block_num_tiles);
+    }
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {
         for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
             const uint32_t tile_in_block = mt * Nc_tiles + nc;
@@ -142,10 +159,58 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
+            // Without the residual epilogue: pack the reduced (+gelu) tile straight to the output.
+            // With it: stash the reduced tile in mm_cb, then apply gate*mul + residual add below.
+            pack_tile<true>(0, fused_residual ? mm_cb_id : out_cb_id, tile_in_block);
+            tile_regs_release();
+        }
+    }
+    if (!fused_residual) {
+        cb_push_back(out_cb_id, block_num_tiles);
+        cb_pop_front(reduce_cb_id, reduce_num_tiles);
+        return;
+    }
+    cb_push_back(mm_cb_id, block_num_tiles);
+    cb_pop_front(reduce_cb_id, reduce_num_tiles);
+
+    // ---- Gated-residual epilogue ----
+    // mm_cb holds the reduced matmul result. gate_cb holds Nc_tiles per-channel gate tiles (the
+    // gate for N-column nc is replicated down all TILE_H rows, so a plain mul_tiles applies it per
+    // channel without a broadcast). residual_cb holds this core's interleaved [M_tiles x Nc_tiles]
+    // N-slice. Compute out[mt,nc] = residual[mt,nc] + gate[nc] * mm[mt,nc].
+    cb_wait_front(mm_cb_id, block_num_tiles);
+    cb_reserve_back(mmg_cb_id, block_num_tiles);
+    // gate * mm -> mmg (gate tile index is nc -- one gate tile per N-column, replicated down rows).
+    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+        for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
+            const uint32_t tile_in_block = mt * Nc_tiles + nc;
+            tile_regs_acquire();
+            mul_tiles_init(mm_cb_id, gate_cb_id);
+            mul_tiles(mm_cb_id, gate_cb_id, tile_in_block, nc, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, mmg_cb_id, tile_in_block);
+            tile_regs_release();
+        }
+    }
+    cb_push_back(mmg_cb_id, block_num_tiles);
+    cb_pop_front(mm_cb_id, block_num_tiles);
+    // residual + (gate*mm) -> out.
+    cb_wait_front(mmg_cb_id, block_num_tiles);
+    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+        for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
+            const uint32_t tile_in_block = mt * Nc_tiles + nc;
+            tile_regs_acquire();
+            add_tiles_init(residual_cb_id, mmg_cb_id);
+            add_tiles(residual_cb_id, mmg_cb_id, tile_in_block, tile_in_block, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile<true>(0, out_cb_id, tile_in_block);
             tile_regs_release();
         }
     }
     cb_push_back(out_cb_id, block_num_tiles);
-    cb_pop_front(reduce_cb_id, reduce_num_tiles);
+    cb_pop_front(mmg_cb_id, block_num_tiles);
+    cb_pop_front(gate_cb_id, Nc_tiles);
+    cb_pop_front(residual_cb_id, block_num_tiles);
 }

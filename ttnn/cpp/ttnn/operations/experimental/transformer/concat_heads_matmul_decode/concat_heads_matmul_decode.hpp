@@ -21,13 +21,19 @@ namespace ttnn::experimental {
 //
 // weight is the partial-width-sharded resident-L1 B tensor (the "_pws_B" layout: a [K, N]
 // weight reshaped/permuted into a width-sharded [Kc, N*K_blocks] tensor over K_blocks*N_blocks
-// cores). Returns an INTERLEAVED L1 [1, 1, seq, N] (interleaved_output=true), ready for the
-// downstream gated residual.
+// cores). Returns an INTERLEAVED L1 [1, 1, seq, N] (interleaved_output=true).
+//
+// Optional gated-residual epilogue (forwarded to matmul_decode): when `residual` (interleaved
+// [seq, N]) and `gate` (per-channel, resident width-sharded across the N_blocks base cores) are
+// given, the op folds in the attention gated residual, returning residual + gate * (attn @ Wo) and
+// eliminating the separate addcmul.
 ttnn::Tensor concat_heads_matmul_decode(
     const Tensor& attn,
     const Tensor& weight,
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    uint32_t reshard_cores = 2);
+    uint32_t reshard_cores = 2,
+    std::optional<const Tensor> residual = std::nullopt,
+    std::optional<const Tensor> gate = std::nullopt);
 
 }  // namespace ttnn::experimental

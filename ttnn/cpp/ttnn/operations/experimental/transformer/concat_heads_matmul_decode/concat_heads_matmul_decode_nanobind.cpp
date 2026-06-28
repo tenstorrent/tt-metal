@@ -36,9 +36,13 @@ void bind_concat_heads_matmul_decode(nb::module_& mod) {
             output_dtype (ttnn.DataType, optional): Defaults to bfloat16.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             reshard_cores (int, optional): cores to width-shard the input activation over. Defaults to 2.
+            residual (ttnn.Tensor, optional): interleaved [seq, N] residual; when given with `gate`,
+                folds in the gated residual epilogue out = residual + gate * (attn @ weight).
+            gate (ttnn.Tensor, optional): per-channel gate, resident width-sharded across the N_blocks
+                base cores (row-replicated), consumed by the fused-residual epilogue.
 
         Returns:
-            ttnn.Tensor: the projected output [1, 1, seq, N], interleaved L1.
+            ttnn.Tensor: the projected output [1, 1, seq, N], interleaved L1 (or the gated residual).
         )doc",
         &ttnn::experimental::concat_heads_matmul_decode,
         nb::arg("attn"),
@@ -46,7 +50,9 @@ void bind_concat_heads_matmul_decode(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("output_dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("reshard_cores") = 2);
+        nb::arg("reshard_cores") = 2,
+        nb::arg("residual") = nb::none(),
+        nb::arg("gate") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

@@ -59,13 +59,26 @@ void kernel_main() {
     constexpr uint32_t in0_M_tiles = get_compile_time_arg_val(17);           // A height in tiles
     constexpr uint32_t in0_K_tiles_per_core = get_compile_time_arg_val(18);  // this sender's K-slice width (tiles)
     constexpr uint32_t in0_K_tiles_total = get_compile_time_arg_val(19);     // global A width in tiles (page stride)
-    constexpr auto in0_args = TensorAccessorArgs<20>();
+    // fused_residual path: base cores NoC-read their [M_tiles x Nc_tiles] N-slice of the interleaved
+    // residual buffer into residual_cb for the gated-residual epilogue (out = residual + gate*(A@B)).
+    constexpr uint32_t fused_residual = get_compile_time_arg_val(20);
+    constexpr uint32_t residual_cb_index = get_compile_time_arg_val(21);
+    constexpr uint32_t residual_Nc_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t residual_N_tiles = get_compile_time_arg_val(23);  // residual width in tiles (page stride)
+    constexpr uint32_t residual_tile_size_bytes = get_compile_time_arg_val(24);  // residual dtype tile size
+    constexpr uint32_t gate_cb_index = get_compile_time_arg_val(25);             // buffer-backed gate (publish it)
+    constexpr uint32_t gate_num_tiles = get_compile_time_arg_val(26);            // Nc_tiles gate tiles
+    constexpr auto in0_args = TensorAccessorArgs<27>();
+    constexpr auto residual_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // ---- Runtime args ----
     const uint32_t is_sender = get_arg_val<uint32_t>(0);       // 1 if this core holds a slice of A
     const uint32_t sender_id = get_arg_val<uint32_t>(1);       // K-slice index (valid when is_sender)
     const uint32_t is_coordinator = get_arg_val<uint32_t>(2);  // 1 if this is the first core
     const uint32_t in0_buffer_addr = get_arg_val<uint32_t>(3);  // interleaved A base addr (read_interleaved only)
+    const uint32_t is_base = get_arg_val<uint32_t>(4);          // 1 if this core owns an output N-slice
+    const uint32_t res_n_idx = get_arg_val<uint32_t>(5);        // this base core's N-slice index
+    const uint32_t residual_buffer_addr = get_arg_val<uint32_t>(6);  // interleaved residual base addr
 
     constexpr uint32_t full_num_tiles = num_senders * shard_num_tiles;
     const uint32_t shard_size_bytes = shard_num_tiles * tile_size_bytes;
@@ -86,6 +99,28 @@ void kernel_main() {
     // B (in1) is already resident in L1; just publish it to compute.
     in1_cb.reserve_back(in1_num_tiles);
     in1_cb.push_back(in1_num_tiles);
+
+    // fused_residual: this base core NoC-reads its [in0_M_tiles x residual_Nc_tiles] N-slice of the
+    // interleaved residual into residual_cb (page = mt*N_tiles + n_idx*Nc_tiles + nc -- identical to
+    // the interleaved-output writer's scatter), so compute can add it after the gate multiply.
+    if (fused_residual && is_base) {
+        // gate is resident (buffer-backed); publish it to compute like in1.
+        cb_reserve_back(gate_cb_index, gate_num_tiles);
+        cb_push_back(gate_cb_index, gate_num_tiles);
+        const auto res_acc = TensorAccessor(residual_args, residual_buffer_addr, residual_tile_size_bytes);
+        const uint32_t res_num_tiles = in0_M_tiles * residual_Nc_tiles;
+        cb_reserve_back(residual_cb_index, res_num_tiles);
+        uint32_t res_l1_addr = get_write_ptr(residual_cb_index);
+        for (uint32_t mt = 0; mt < in0_M_tiles; ++mt) {
+            for (uint32_t nc = 0; nc < residual_Nc_tiles; ++nc) {
+                const uint32_t page = mt * residual_N_tiles + res_n_idx * residual_Nc_tiles + nc;
+                noc_async_read_tile(page, res_acc, res_l1_addr);
+                res_l1_addr += residual_tile_size_bytes;
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(residual_cb_index, res_num_tiles);
+    }
 
     // reshard_input: this sender NoC-reads its K-slice of the interleaved A into in0_cb in the SAME
     // m-major contiguous order the buffer-backed shard used (shard is [M_tiles*th, in0_K_tiles_per_core],

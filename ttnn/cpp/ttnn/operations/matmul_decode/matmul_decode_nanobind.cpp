@@ -48,7 +48,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("interleaved_output") = false,
         nb::arg("fused_gelu_approx") = false,
         nb::arg("reshard_input") = false,
-        nb::arg("reshard_cores") = 2);
+        nb::arg("reshard_cores") = 2,
+        nb::arg("residual") = nb::none(),
+        nb::arg("gate") = nb::none());
 
     ttnn::bind_function<"gate_up_matmul_decode">(
         mod,
