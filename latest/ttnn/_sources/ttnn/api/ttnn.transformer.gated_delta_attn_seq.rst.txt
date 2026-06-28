@@ -1,0 +1,8 @@
+﻿ttnn.transformer.gated\_delta\_attn\_seq
+========================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.gated_delta_attn_seq:
+
+.. autooperation:: ttnn.transformer.gated_delta_attn_seq
