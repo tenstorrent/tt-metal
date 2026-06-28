@@ -2,10 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from loguru import logger
 
 import ttnn
+
+
+def _dbg_layer_stats(tag, t):
+    """DEBUG_LAYERS=1: log per-layer residual health (device-0 shard) to localize where SP real-weights
+    output degrades (token-0 debug). max|x| blow-up / std collapse / non-finite pinpoints the bad op."""
+    try:
+        x = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        logger.info(
+            f"[DBG {tag}] shape={tuple(x.shape)} max|x|={x.abs().max().item():.3f} "
+            f"mean={x.mean().item():.4f} std={x.std().item():.4f} finite={bool(torch.isfinite(x).all())}"
+        )
+    except Exception as e:
+        logger.info(f"[DBG {tag}] stat-failed: {e}")
+
+
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import nearest_32
 from models.demos.minimax_m3.config import MeshConfig, Mode, ModeConfig
@@ -388,6 +405,9 @@ class Model:
             )
 
         # Process through decoder layers
+        _dbg = os.getenv("DEBUG_LAYERS") == "1"
+        if _dbg:
+            _dbg_layer_stats("input(embed)", hidden_states)
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
@@ -400,6 +420,8 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            if _dbg:
+                _dbg_layer_stats(f"L{i}", hidden_states)
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
                 on_layer_complete(i)
@@ -1109,7 +1131,21 @@ class Model:
                 _reshard_rope(self.rope_setup.cos_matrix_prefill),
                 _reshard_rope(self.rope_setup.sin_matrix_prefill),
             ]
+        elif self.sequence_parallel and trace_enabled:
+            # Tripwire (do NOT silently fall through to replicated rope): under sequence-parallel the
+            # rows are SEQUENCE shards, so row r must rotate positions [r*s_local:(r+1)*s_local]. The
+            # reshard above uses a host round-trip and is gated `not trace_enabled`, so tracing an SP
+            # prefill would otherwise hit the `else` and rotate EVERY row from position 0 -> global
+            # garbage. SP prefill is currently run eagerly; if SP+trace is ever needed, build the
+            # SP-sharded cos/sin as a persistent device tensor instead of removing this guard.
+            raise NotImplementedError(
+                "Sequence-parallel prefill RoPE must be resharded per SP row, but that is not "
+                "implemented on the trace path (would replicate position-0 angles to all rows). "
+                "Run SP prefill eagerly (trace_enabled=False), or add a persistent SP-sharded cos/sin."
+            )
         else:
+            # Non-SP, or batched_prefill where each mesh row is a different USER at the SAME positions
+            # [0:seq_len]: replicated cos/sin is correct (rows are users, not sequence shards).
             rot_mats_global = [
                 self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
                 self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],

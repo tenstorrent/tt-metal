@@ -57,7 +57,9 @@ def main():
     expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
     rows, cols = 8, 4
     sp, tp = rows, cols
-    print(f"[sp-gen] mesh=({rows},{cols}) TP={tp} SP={sp} EP=32 | expert_dtype={expert_dtype} | gen={NUM_GEN}", flush=True)
+    print(
+        f"[sp-gen] mesh=({rows},{cols}) TP={tp} SP={sp} EP=32 | expert_dtype={expert_dtype} | gen={NUM_GEN}", flush=True
+    )
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols))
@@ -67,18 +69,58 @@ def main():
         tok = model_args.tokenizer
         V = hf_config.vocab_size
 
-        # Build a ~TARGET_LEN-token prompt by repeating the passage, then frame it as a question.
+        # LOCALIZATION KNOB: FORCE_DENSE=1 zeroes sparse_attention_freq -> all layers use dense (full-GQA)
+        # attention, NO MSA. Lets us test whether the degenerate token-0 is MSA-specific or a general SP
+        # real-weights issue. Also TARGET_LEN overridable (default 5120).
+        target_len = int(os.getenv("TARGET_LEN", str(TARGET_LEN)))
+        if os.getenv("FORCE_DENSE") == "1":
+            sa = hf_config.sparse_attention_config
+            n = hf_config.num_hidden_layers
+            if isinstance(sa, dict):
+                sa["sparse_attention_freq"] = [0] * n
+            else:
+                sa.sparse_attention_freq = [0] * n
+            print("[sp-gen] FORCE_DENSE=1 -> all layers DENSE attention (MSA disabled)", flush=True)
+
+        # SPEED/ISOLATION KNOB: NLAYERS=K builds only the first K real layers (and M3_LOAD_NLAYERS makes
+        # load_state_dict read only the shards for those layers -> ~minutes, not ~2hr). For isolating
+        # where the real-weights SP residual degrades, e.g. NLAYERS=1 (just the dense layer 0).
+        nlayers = int(os.getenv("NLAYERS", str(hf_config.num_hidden_layers)))
+        if nlayers < hf_config.num_hidden_layers:
+            os.environ["M3_LOAD_NLAYERS"] = str(nlayers)  # consumed by ModelArgs._load_text_backbone_safetensors
+            hf_config.num_hidden_layers = nlayers
+            if isinstance(getattr(hf_config, "moe_layer_freq", None), list):
+                hf_config.moe_layer_freq = hf_config.moe_layer_freq[:nlayers]
+            _sa = hf_config.sparse_attention_config
+            _saf = (
+                _sa["sparse_attention_freq"] if isinstance(_sa, dict) else getattr(_sa, "sparse_attention_freq", None)
+            )
+            if isinstance(_saf, list):
+                if isinstance(_sa, dict):
+                    _sa["sparse_attention_freq"] = _saf[:nlayers]
+                else:
+                    _sa.sparse_attention_freq = _saf[:nlayers]
+            print(f"[sp-gen] NLAYERS={nlayers} (truncated from 60 for a fast isolation run)", flush=True)
+
+        # Build a prompt that FITS in target_len WITHOUT truncating the trailing question (the bug-free
+        # construction): grow the body, then verify the full chat-templated prompt fits.
+        QUESTION = "\n\nIn one word, the central theme of the text above is"
         body = PASSAGE
-        while len(tok(body, add_special_tokens=False)["input_ids"]) < TARGET_LEN - 64:
+        while (
+            len(
+                tok.apply_chat_template(
+                    [{"role": "user", "content": body + PASSAGE + QUESTION}], add_generation_prompt=True, tokenize=True
+                )
+            )
+            < target_len - NUM_GEN
+        ):
             body += PASSAGE
         ids = tok.apply_chat_template(
-            [{"role": "user", "content": body + "\n\nIn one word, the central theme above is"}],
-            add_generation_prompt=True,
-            tokenize=True,
+            [{"role": "user", "content": body + QUESTION}], add_generation_prompt=True, tokenize=True
         )
-        ids = ids[: TARGET_LEN - NUM_GEN]  # leave room to append generated tokens
+        assert len(ids) <= target_len - NUM_GEN, f"prompt {len(ids)} would truncate the question (target {target_len})"
         real_len = len(ids)
-        seq = TARGET_LEN
+        seq = target_len
         assert seq % sp == 0, f"seq {seq} must be divisible by sp {sp}"
         toks = torch.zeros(1, seq, dtype=torch.int32)
         toks[0, :real_len] = torch.tensor(ids, dtype=torch.int32)
@@ -93,9 +135,17 @@ def main():
         ep_seq = int(os.getenv("EP_SEQ_PER_CHIP", str(seq // sp)))
         print(f"[sp-gen] ep_seq_len_per_chip={ep_seq} (per-device tokens={seq//sp})", flush=True)
         model = Model(
-            mesh_device=mesh, hf_config=hf_config, state_dict=state_dict, ccl_manager=ccl,
-            mesh_config=mesh_config, tensor_cache_path=cache, create_kv_cache=False,
-            max_local_batch_size=1, sequence_parallel=True, use_ep_moe=True, ep_seq_len_per_chip=ep_seq,
+            mesh_device=mesh,
+            hf_config=hf_config,
+            state_dict=state_dict,
+            ccl_manager=ccl,
+            mesh_config=mesh_config,
+            tensor_cache_path=cache,
+            create_kv_cache=False,
+            max_local_batch_size=1,
+            sequence_parallel=(os.getenv("NO_SP") != "1"),
+            use_ep_moe=True,
+            ep_seq_len_per_chip=ep_seq,
             expert_weight_dtype=expert_dtype,
         )
         del state_dict
@@ -105,14 +155,23 @@ def main():
         for g in range(NUM_GEN):
             host_out = model.prepare_inputs_prefill(toks)  # SP path (self.sequence_parallel)
             logits = model.ttnn_prefill_forward(
-                host_out[0], rot_mats_global=host_out[1], rot_mats_local=host_out[2],
-                page_table=host_out[3], kv_cache=None, batch_size=1, get_last_token=-1,
+                host_out[0],
+                rot_mats_global=host_out[1],
+                rot_mats_local=host_out[2],
+                page_table=host_out[3],
+                kv_cache=None,
+                batch_size=1,
+                get_last_token=-1,
             )
             ttnn.synchronize_device(mesh)
             # gather: rows -> seq (dim -2), cols -> vocab (dim -1)
-            out = ttnn.to_torch(
-                logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=(rows, cols), dims=(-2, -1))
-            ).float().reshape(seq, -1)
+            out = (
+                ttnn.to_torch(
+                    logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=(rows, cols), dims=(-2, -1))
+                )
+                .float()
+                .reshape(seq, -1)
+            )
             pred_pos = real_len + g - 1
             nxt = int(out[pred_pos][:V].argmax())
             gen.append(nxt)

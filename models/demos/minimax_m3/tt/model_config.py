@@ -268,7 +268,27 @@ class ModelArgs:
         index_path = os.path.join(weights_path, "model.safetensors.index.json")
         with open(index_path) as f:
             weight_map = json.load(f)["weight_map"]
-        shards = sorted(set(weight_map.values()))
+
+        # DEBUG SPEED: M3_LOAD_NLAYERS=K loads ONLY the shards holding layers 0..K-1 (+ embed/norm/lm_head)
+        # instead of all 869GB — for fast single-/few-layer real-weights isolation runs.
+        _ln = os.getenv("M3_LOAD_NLAYERS")
+        if _ln:
+            kln = int(_ln)
+            keep = set()
+            for k, shard in weight_map.items():
+                kk = k[len("language_model.") :] if k.startswith("language_model.") else k
+                if kk.startswith("model.layers."):
+                    li = int(kk.split(".")[2])
+                    if li < kln:
+                        keep.add(shard)
+                else:  # embed / norm / lm_head / non-layer
+                    keep.add(shard)
+            shards = sorted(keep)
+            logger.info(
+                f"M3_LOAD_NLAYERS={kln}: loading {len(shards)} shards (of {len(set(weight_map.values()))}) for layers 0..{kln-1}"
+            )
+        else:
+            shards = sorted(set(weight_map.values()))
 
         PREFIX = "language_model."
         state_dict = {}
