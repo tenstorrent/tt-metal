@@ -8,8 +8,8 @@
 //   - remaining positional CTAs -> get_arg(args::name)
 //   - RTAs (core_index, remaining_tiles_to_push) -> get_arg(args::name)
 //   - DRAM config-tensor read uses tensor::reader_indices (CONFIG_TENSOR_IN_DRAM path)
-//   - conv_reader_common.hpp is header-only Device-2.0 already; its helpers take experimental::CB,
-//     so CBs passed to them are constructed as experimental::CB from the dfb:: constexpr index.
+//   - conv_reader_common.hpp helpers are templated on the CB-object type, so the DataflowBuffer
+//     constructed here from the dfb:: constexpr index is passed to them directly.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -36,23 +36,21 @@ void kernel_main() {
 
     constexpr bool needs_act_block_zero_out = get_arg(args::needs_act_block_zero_out) == 1;
     constexpr uint32_t cb_id_act = dfb::act;
-    constexpr uint32_t cb_id_sharded_act = dfb::act_sharded;
-    constexpr uint32_t cb_reader_indices = dfb::reader_indices;
 
     constexpr bool split_reader_enabled = get_arg(args::split_reader_enabled);
     constexpr bool activation_reuse_enabled = get_arg(args::activation_reuse_enabled);
 
-    experimental::CB cb_act(cb_id_act);
-    experimental::CB cb_sharded_act(cb_id_sharded_act);
-    experimental::CB cb_reader_idx(cb_reader_indices);
-
-    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_idx.get_write_ptr());
+    DataflowBuffer cb_act(cb_id_act);
 
     uint32_t core_index = get_arg(args::core_index);
 
+    // Reader-indices base. On the resident (L1) path the config slice already lives in L1, so it is
+    // reached by base address from a local TensorAccessor (tensor::reader_indices) — no borrowed CB.
+    // On the DRAM-config path the slice is DMA'd into a fresh L1 DFB (dfb::reader_indices) first.
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
 #ifdef CONFIG_TENSOR_IN_DRAM
-    // Read this core's slice of the reader-indices config tensor from DRAM into reader_indices CB.
+    DataflowBuffer cb_reader_idx(dfb::reader_indices);
+    packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_idx.get_write_ptr());
     {
         const auto config_accessor = TensorAccessor(tensor::reader_indices);
         constexpr uint32_t config_page_size = get_arg(args::config_page_size);
@@ -60,6 +58,10 @@ void kernel_main() {
         Noc().async_read_barrier();
         cb_reader_idx.push_back(1);
     }
+#else
+    packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
+    (void)core_index;
 #endif
 
     // Activation reuse args
@@ -97,8 +99,9 @@ void kernel_main() {
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized
     // the other path away this has shown to be a big perf win
 
-    // coalesce reads along weight_size_w
-    uint32_t act_l1_read_addr = cb_sharded_act.get_read_ptr();
+    // coalesce reads along weight_size_w. The resident activation shard is reached by L1 base address
+    // from a local TensorAccessor (tensor::act_sharded), not a borrowed self-loop CB.
+    uint32_t act_l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
 
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);

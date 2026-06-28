@@ -5,9 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -18,17 +19,14 @@ void kernel_main() {
 
     Noc noc;
 
-    // Both DFBs are borrowed onto the actual tensor buffers (src_cb <- input, dst_cb <- output),
-    // so their base pointers are the real L1 addresses of those buffers and are refreshed by the
-    // framework on every program-cache hit.  We deliberately recompute the move-chunk size from
-    // these refreshed base pointers in-kernel rather than receiving the host-computed
-    // (output_addr - input_addr) delta via a runtime arg, which would go stale on a cache hit with
-    // different storage and silently read/write the wrong addresses.
-    DataflowBuffer src_cb(dfb::src_cb);
-    DataflowBuffer dst_cb(dfb::dst_cb);
-
-    uint32_t src_cb_base_addr = src_cb.get_read_ptr();
-    uint32_t dst_cb_base_addr = dst_cb.get_write_ptr();
+    // The resident input/output shards are reached by L1 base address from local TensorAccessors
+    // (no borrowed self-loop DFBs, which Metal 2.0 forbids on DM kernels). These base addresses are
+    // the real L1 addresses of those buffers, refreshed by the framework on every program-cache hit.
+    // We deliberately recompute the move-chunk size from these base pointers in-kernel rather than
+    // receiving the host-computed (output_addr - input_addr) delta via a runtime arg, which would go
+    // stale on a cache hit with different storage and silently read/write the wrong addresses.
+    uint32_t src_cb_base_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::input).get_noc_addr(0));
+    uint32_t dst_cb_base_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::output).get_noc_addr(0));
 
     // The op only takes this (backwards, intra-L1, overlapping) path when the output buffer is at a
     // higher address than the input buffer, so the delta is strictly positive.
