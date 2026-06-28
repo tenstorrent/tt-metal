@@ -95,7 +95,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         # pytest.param(32, 7168, 16, 4, 4, True, id="pcc"),
-        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
+        pytest.param(640, 7168, 64, 2, 8, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
@@ -295,6 +295,7 @@ def test_ttnn_dispatch(
         topology=topology,
         fp8_output=use_fp8_output,
         fp8_scale=use_fp8_scale,
+        num_untilizers_per_sender=4,
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
