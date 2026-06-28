@@ -445,6 +445,19 @@ _SKIP_4X8 = pytest.mark.skip(reason="4x8 (32-device) shape — needs a 32-chip m
         # log-only in the perf test). Small T keeps the large-spatial CPU torch ref tractable;
         # halo_last is position-independent so PCC holds at any T.
         pytest.param(1, 128, 128, 7, 272, 480, 3, 1, (2, 4), 0, 1, 2, id="ltx_s4_res_2x4"),
+        # This test forces the fused path, so it covers only FUSED-DEPLOYED shapes (conv.py routes the
+        # rest — conv_in, s0/s1/s2 res, upsamplers — to standalone; the fused kernel is not built for
+        # them and throws at small T). s4_res/s4_out above + s3_res/s3_chg here = all 2x4 fused shapes.
+        # --- LTX 2x4 halo_last-deployed (small T; PCC is position-/T-independent) ---
+        pytest.param(1, 256, 256, 7, 136, 240, 3, 1, (2, 4), 0, 1, 2, id="ltx_s3_res_2x4"),  # per-dev 68x60
+        pytest.param(1, 256, 512, 7, 136, 240, 3, 1, (2, 4), 0, 1, 2, id="ltx_s3_chg_2x4"),  # per-dev 68x60
+        # --- LTX 4x8 fused-deployed (real (4,8) mesh; halo_last s1_up/s2_res/s3_res/s3_chg + force_spatial
+        #     s4_res). Per-device sizes match the 4x8 deployment. Skipped on the 8-chip BH-LB. ---
+        pytest.param(1, 512, 4096, 7, 68, 120, 3, 1, (4, 8), 0, 1, 2, id="ltx_s1_up_4x8", marks=_SKIP_4X8),
+        pytest.param(1, 512, 512, 7, 136, 240, 3, 1, (4, 8), 0, 1, 2, id="ltx_s2_res_4x8", marks=_SKIP_4X8),
+        pytest.param(1, 256, 256, 7, 136, 240, 3, 1, (4, 8), 0, 1, 2, id="ltx_s3_res_4x8", marks=_SKIP_4X8),
+        pytest.param(1, 256, 512, 7, 136, 240, 3, 1, (4, 8), 0, 1, 2, id="ltx_s3_chg_4x8", marks=_SKIP_4X8),
+        pytest.param(1, 128, 128, 7, 272, 480, 3, 1, (4, 8), 0, 1, 2, id="ltx_s4_res_4x8", marks=_SKIP_4X8),
     ],
     indirect=["mesh_device"],
 )
