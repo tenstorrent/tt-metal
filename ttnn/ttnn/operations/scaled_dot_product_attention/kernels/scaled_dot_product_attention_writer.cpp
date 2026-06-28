@@ -9,7 +9,7 @@
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t total_tiles = get_arg_val<uint32_t>(1);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr auto dst_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_out = tt::CBIndex::c_17;
     uint32_t tile_bytes = get_tile_size(cb_out);
     const auto accessor = TensorAccessor(dst_args, dst_addr, tile_bytes);

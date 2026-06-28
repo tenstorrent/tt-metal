@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (c) 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 // Reader for scaled_dot_product_attention (Flash Attention).
-// CT args: [has_mask, H_q, H_kv, ...Q_acc, ...K_acc, ...V_acc, ...mask_acc]
+// CT args: [has_mask, H_q, H_kv, mask_is_per_head, ...Q_acc, ...K_acc, ...V_acc, ...mask_acc]
 // RT args: [num_work_units, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles, b0,h0,..., q_addr, k_addr, v_addr, scale_bits, mask_addr]
 
 #include <cstdint>
@@ -12,7 +12,8 @@ constexpr uint32_t cb_q = tt::CBIndex::c_0;
 constexpr uint32_t cb_k = tt::CBIndex::c_1;
 constexpr uint32_t cb_v = tt::CBIndex::c_2;
 constexpr uint32_t cb_mask = tt::CBIndex::c_3;
-constexpr uint32_t cb_scaler_reduce = 4;
+constexpr uint32_t cb_scaler_max = 6;
+constexpr uint32_t cb_scaler_sum = 7;
 constexpr uint32_t cb_scale_factor = 5;
 
 inline uint16_t fp32_bits_to_bf16_bits(uint32_t fp32_bits) {
@@ -26,13 +27,12 @@ void kernel_main() {
     constexpr uint32_t has_mask = get_compile_time_arg_val(0);
     constexpr uint32_t H_q = get_compile_time_arg_val(1);
     constexpr uint32_t H_kv = get_compile_time_arg_val(2);
+    constexpr uint32_t mask_is_per_head = get_compile_time_arg_val(3);
 
-    // Prepare reduce scalers (once per kernel)
-    // MAX scaler: tile 0 (row-0 fill), SUM scaler: tile 1 (col-0 fill)
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler
-        <cb_scaler_reduce, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+        <cb_scaler_max, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler
-        <cb_scaler_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        <cb_scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     uint32_t rt_idx = 0;
     uint32_t num_work_units = get_arg_val<uint32_t>(rt_idx++);
@@ -53,7 +53,6 @@ void kernel_main() {
     uint32_t scale_bits = get_arg_val<uint32_t>(rt_idx++);
     uint32_t mask_addr = get_arg_val<uint32_t>(rt_idx++);
 
-    // Fill cb_scale_factor (once)
     cb_reserve_back(cb_scale_factor, 1);
     {
         uint16_t bf16_bits = fp32_bits_to_bf16_bits(scale_bits);
@@ -62,7 +61,7 @@ void kernel_main() {
     }
     cb_push_back(cb_scale_factor, 1);
 
-    constexpr auto q_args = TensorAccessorArgs<3>();
+    constexpr auto q_args = TensorAccessorArgs<4>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -84,13 +83,13 @@ void kernel_main() {
         uint32_t q_base = b * H_q * S_q_tiles * D_t + h_q * S_q_tiles * D_t;
         uint32_t k_base = b * H_kv * S_kv_tiles * D_t + h_kv * S_kv_tiles * D_t;
         uint32_t v_base = k_base;
-        // Mask: (B, 1, S_q, S_kv) — no per-head dimension
-        uint32_t mask_base = b * S_q_tiles * S_kv_tiles;
+        uint32_t mask_h = mask_is_per_head ? h_q : 0;
+        uint32_t mask_base = b * (mask_is_per_head ? H_q : 1) * S_q_tiles * S_kv_tiles
+                           + mask_h * S_q_tiles * S_kv_tiles;
 
         for (uint32_t qb = 0; qb < num_q_blocks; ++qb) {
             uint32_t q_row_start = qb * B_q_t;
 
-            // Load Q tiles in row-major order
             for (uint32_t r = 0; r < B_q_t; ++r) {
                 for (uint32_t d = 0; d < D_t; ++d) {
                     uint32_t q_row = q_row_start + r;
@@ -104,7 +103,6 @@ void kernel_main() {
             for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
                 uint32_t kv_col_start = kvb * B_kv_t;
 
-                // Load K tiles: for k=0..D_t-1, for n=0..B_kv_t-1 (column-major for transpose)
                 for (uint32_t k = 0; k < D_t; ++k) {
                     for (uint32_t n = 0; n < B_kv_t; ++n) {
                         uint32_t kv_row = kv_col_start + n;
@@ -115,7 +113,6 @@ void kernel_main() {
                     }
                 }
 
-                // Load V tiles: row-major
                 for (uint32_t n = 0; n < B_kv_t; ++n) {
                     for (uint32_t d = 0; d < D_t; ++d) {
                         uint32_t kv_row = kv_col_start + n;
@@ -126,7 +123,6 @@ void kernel_main() {
                     }
                 }
 
-                // Load mask tiles
                 if constexpr (has_mask) {
                     for (uint32_t qr = 0; qr < B_q_t; ++qr) {
                         for (uint32_t kc = 0; kc < B_kv_t; ++kc) {
