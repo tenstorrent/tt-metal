@@ -17,7 +17,6 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/binary_max_min.h"
 #include "api/compute/bcast.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -47,7 +46,7 @@ constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 //   7: cb_abs_id           - abs tiles for one 128-element block (c_20)
 //   8: cb_scale_tiles_id   - col0 = per-token scale; compute -> writer (c_21)
 //   9: cb_inv_scale_tiles_id - col0 = 1/scale, internal (c_22)
-//  10: cb_out_tile_id      - divided tiles -> pack_untilize (c_23)
+//  10: (unused) was cb_out_tile_id; fused divide -> pack_untilize_dest no longer needs it (c_23)
 //  11: clamp_min_bits      - bit_cast(1e-4f)
 //  12: clamp_max_bits      - bit_cast(3.0e38f)
 //  13: inv_e4m3_max_bits   - bit_cast(1.0f / 448.0f)
@@ -68,7 +67,7 @@ void kernel_main() {
     constexpr uint32_t cb_abs_id = get_compile_time_arg_val(7);
     constexpr uint32_t cb_scale_tiles_id = get_compile_time_arg_val(8);
     constexpr uint32_t cb_inv_scale_tiles_id = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_out_tile_id = get_compile_time_arg_val(10);
+    // arg 10 (cb_out_tile) is no longer read: divide now packs straight from DST via pack_untilize_dest.
     constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(11);
     constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(12);
     constexpr uint32_t inv_e4m3_max_bits = get_compile_time_arg_val(13);
@@ -76,9 +75,6 @@ void kernel_main() {
     // tile_h / BlockHt loop in compute_per_token_cast_to_fp8.cpp). block_ct_dim stays one scale
     // block wide (4 tiles), so every acquire is <= 4 fp32 tiles and half-sync DEST is kept.
     constexpr uint32_t block_ht = get_compile_time_arg_val(14);
-
-    constexpr uint32_t IDST0 = 0;
-    constexpr uint32_t IDST1 = 1;
 
     // block_ct_dim == 4 on this path: one pack-untilize block is exactly one 128-element scale block
     // (4 tiles of 32 cols). REDUCE_ROW over those 4 tiles yields one amax per token (per tile row).
@@ -107,25 +103,19 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_blocks; block += block_ht) {
             constexpr uint32_t tiles_per_iter = block_ht * block_ct_dim;
             cb_wait_front(cb_in_id, tiles_per_iter);
+            DeviceZoneScopedN("DISPATCH-UNTILIZE-BLOCK");
 
-            // One scale block's full pipeline per iteration, all under one DeviceZone:
-            // abs -> REDUCE_ROW amax -> scale/recip -> divide -> pack_untilize. cb_in is
-            // read from the current front (abs and divide read the same block_ct_dim tiles)
-            // and popped at the end of the block, so the next block slides to the front and
-            // every cb_in index counts from 0. Blocks are independent (own amax/scale/column),
-            // so fusing the loops is numerically identical to the phase-split form.
-            for (uint32_t h = 0; h < block_ht; ++h) {
-                DeviceZoneScopedN("DISPATCH-UNTILIZE-BLOCK");
-
-                // ----- 1. abs of one 128-element scale block -----
-                reconfig_data_format_srca<false, true>(cb_in_id);
-                pack_reconfig_data_format(cb_abs_id);
-                copy_tile_init(cb_in_id);
-                cb_reserve_back(cb_abs_id, block_ct_dim);
-                abs_tile_init();
+            // ----- 1. abs all block_ht scale blocks into cb_abs (block_ct_dim tiles per acquire) -----
+            // block_ct_dim == 4 keeps each acquire within the fp32 half-sync DEST budget.
+            reconfig_data_format_srca<false, true>(cb_in_id);
+            pack_reconfig_data_format(cb_abs_id);
+            copy_tile_init(cb_in_id);
+            abs_tile_init();
+            cb_reserve_back(cb_abs_id, tiles_per_iter);
+            for (uint32_t c = 0; c < tiles_per_iter; c += block_ct_dim) {
                 tile_regs_acquire();
                 for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                    copy_tile(cb_in_id, k, k);
+                    copy_tile(cb_in_id, c + k, k);
                     abs_tile(k);
                 }
                 tile_regs_commit();
@@ -134,68 +124,76 @@ void kernel_main() {
                     pack_tile(k, cb_abs_id);
                 }
                 tile_regs_release();
-                cb_push_back(cb_abs_id, block_ct_dim);
-
-                // ----- 2. REDUCE_ROW amax -> clamp -> *1/448 -> scale; recip -> 1/scale -----
-                cb_wait_front(cb_abs_id, block_ct_dim);
-                cb_reserve_back(cb_scale_tiles_id, 1);
-                cb_reserve_back(cb_inv_scale_tiles_id, 1);
-                tile_regs_acquire();
-                reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_scale_tiles_id);
-                for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, k, 0, k);
-                }
-                reduce_uninit();
-                binary_max_tile_init();
-                for (uint32_t i = 1; i < block_ct_dim; ++i) {
-                    binary_max_tile(IDST0, i, IDST0);  // slot 0 = amax over the 128-element block
-                }
-                clamp_tile_init();
-                clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
-                binop_with_scalar_tile_init();
-                mul_unary_tile(IDST0, inv_e4m3_max_bits);  // slot 0 = scale = clamp(amax)/448
-                copy_dest_values_init();
-                copy_dest_values<DataFormat::Float32>(IDST0, IDST1);  // slot 1 = scale
-                recip_tile_init();
-                recip_tile(IDST1);  // slot 1 = 1/scale (col 0 valid; other cols unused by bcast)
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(IDST0, cb_scale_tiles_id);      // per-token scales (col 0) -> writer
-                pack_tile(IDST1, cb_inv_scale_tiles_id);  // 1/scale for the divide
-                tile_regs_release();
-                cb_push_back(cb_scale_tiles_id, 1);
-                cb_push_back(cb_inv_scale_tiles_id, 1);
-                cb_pop_front(cb_abs_id, block_ct_dim);
-
-                // ----- 3. divide: cb_out_tile = cb_in * bcast_col(1/scale) -----
-                reconfig_data_format(cb_in_id, cb_inv_scale_tiles_id);
-                pack_reconfig_data_format(cb_out_tile_id);
-                mul_bcast_cols_init_short(cb_in_id, cb_inv_scale_tiles_id);
-                cb_wait_front(cb_inv_scale_tiles_id, 1);
-                cb_reserve_back(cb_out_tile_id, block_ct_dim);
-                tile_regs_acquire();
-                for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                    mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_tiles_id, k, 0, k);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                    pack_tile(k, cb_out_tile_id);
-                }
-                tile_regs_release();
-                cb_push_back(cb_out_tile_id, block_ct_dim);
-                cb_pop_front(cb_in_id, block_ct_dim);
-                cb_pop_front(cb_inv_scale_tiles_id, 1);
-
-                // ----- 4. pack_untilize this scale block -> e4m3 row-major output at column (block + h) -----
-                reconfig_data_format_srca(cb_out_tile_id);
-                pack_reconfig_data_format(cb_untilize_id);
-                pack_untilize_init<block_ct_dim, full_ct_dim>(cb_out_tile_id, cb_untilize_id);
-                cb_wait_front(cb_out_tile_id, block_ct_dim);
-                pack_untilize_block<block_ct_dim, full_ct_dim>(cb_out_tile_id, 1, cb_untilize_id, block + h);
-                cb_pop_front(cb_out_tile_id, block_ct_dim);
-                pack_untilize_uninit(cb_untilize_id);
             }
+            cb_push_back(cb_abs_id, tiles_per_iter);
+
+            // ----- 2. per-block amax -> scale + 1/scale, all block_ht blocks under one acquire -----
+            // Block h reduces its block_ct_dim tiles into dst slot 2*h (MAX-pool accumulates across
+            // tiles), then clamp / *1/448 -> scale (slot 2*h); copy to slot 2*h+1 and recip -> 1/scale.
+            // 2*block_ht slots fit the fp32 half-sync DEST budget at block_ht == 2.
+            cb_wait_front(cb_abs_id, tiles_per_iter);
+            cb_reserve_back(cb_scale_tiles_id, block_ht);
+            cb_reserve_back(cb_inv_scale_tiles_id, block_ht);
+            tile_regs_acquire();
+            reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs_id, cb_scaler_id, cb_scale_tiles_id);
+            for (uint32_t h = 0; h < block_ht; ++h) {
+                for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(
+                        cb_abs_id, cb_scaler_id, h * block_ct_dim + k, 0, 2 * h);
+                }
+            }
+            reduce_uninit();
+            clamp_tile_init();
+            for (uint32_t h = 0; h < block_ht; ++h) {
+                clamp_tile(2 * h, clamp_min_bits, clamp_max_bits);  // slot 2*h = clamp(amax)
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t h = 0; h < block_ht; ++h) {
+                mul_unary_tile(2 * h, inv_e4m3_max_bits);  // slot 2*h = scale = clamp(amax)/448
+            }
+            copy_dest_values_init();
+            for (uint32_t h = 0; h < block_ht; ++h) {
+                copy_dest_values<DataFormat::Float32>(2 * h, 2 * h + 1);  // slot 2*h+1 = scale
+            }
+            recip_tile_init();
+            for (uint32_t h = 0; h < block_ht; ++h) {
+                recip_tile(2 * h + 1);  // slot 2*h+1 = 1/scale (col 0 valid; other cols unused by bcast)
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t h = 0; h < block_ht; ++h) {
+                pack_tile(2 * h, cb_scale_tiles_id);          // per-token scales (col 0) -> writer
+                pack_tile(2 * h + 1, cb_inv_scale_tiles_id);  // 1/scale for the divide
+            }
+            tile_regs_release();
+            cb_push_back(cb_scale_tiles_id, block_ht);
+            cb_push_back(cb_inv_scale_tiles_id, block_ht);
+            cb_pop_front(cb_abs_id, tiles_per_iter);
+
+            // ----- 3+4 fused: divide (cb_in * bcast_col(1/scale)) then pack_untilize DST -> e4m3 -----
+            // mul_tiles_bcast_cols leaves the divided tiles in DST; pack_untilize_dest untilizes them
+            // straight into cb_untilize, skipping the cb_out_tile L1 round-trip and the separate
+            // untilize math pass (mirrors compute_per_token_cast_to_fp8.cpp). The pack target column is
+            // (block + h) per scale block, so this stays one block per acquire -- unlike the standalone
+            // op it cannot batch the pack across blocks, since those map to different hidden columns.
+            reconfig_data_format(cb_in_id, cb_inv_scale_tiles_id);
+            mul_bcast_cols_init_short(cb_in_id, cb_inv_scale_tiles_id);
+            pack_untilize_dest_init<block_ct_dim, full_ct_dim>(cb_untilize_id);
+            cb_wait_front(cb_inv_scale_tiles_id, block_ht);
+            for (uint32_t h = 0; h < block_ht; ++h) {
+                tile_regs_acquire();
+                for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                    mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_tiles_id, h * block_ct_dim + k, h, k);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_untilize_dest<block_ct_dim, full_ct_dim>(
+                    cb_untilize_id, /*block_rt_dim=*/1, /*block_c_index=*/block + h);
+                tile_regs_release();
+            }
+            pack_untilize_uninit(cb_untilize_id);
+            cb_pop_front(cb_in_id, tiles_per_iter);
+            cb_pop_front(cb_inv_scale_tiles_id, block_ht);
         }
 #else
         for (uint32_t block = 0; block < num_blocks; block++) {
