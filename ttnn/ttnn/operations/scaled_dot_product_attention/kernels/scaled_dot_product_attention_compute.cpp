@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/device_print.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
@@ -64,10 +63,8 @@ void kernel_main() {
             cb_wait_front(cb_sum_old, B_q_t);
             cb_wait_front(cb_o, num_o_tiles);
             cb_wait_front(cb_q, num_o_tiles);
-            DEVICE_PRINT("COMPUTE: qb={} Phase 0 done\n", (uint32_t)qb);
             for (uint32_t kvb = 0; kvb < num_kv_blocks; ++kvb) {
                 // Phase 1: QK^T
-                DEVICE_PRINT("COMPUTE: P1 start\n");
                 matmul_block<
                     true,
                     false,
@@ -76,7 +73,6 @@ void kernel_main() {
                     matmul_config::InitMode::Short,
                     InputPolicy::WaitAndRetainOnLastBlock,
                     InputPolicy::WaitAndPopPerKBlock>(q_buf, k_buf, scores_buf, scores_buf, qkt_shape);
-                DEVICE_PRINT("COMPUTE: P1 done\n");
                 // Phase 2: Scale
                 mul<cb_scores,
                     cb_scale_factor,
@@ -84,14 +80,12 @@ void kernel_main() {
                     BroadcastDim::Scalar,
                     InputLifecycle::Streaming,
                     InputLifecycle::HeldBulk>(num_score_tiles);
-                DEVICE_PRINT("COMPUTE: P2 done\n");
                 // Phase 3: Mask or passthrough
                 if constexpr (has_mask) {
                     add<cb_scores, cb_mask, cb_scores_masked>(num_score_tiles);
                 } else {
                     copy<cb_scores, cb_scores_masked>(num_score_tiles);
                 }
-                DEVICE_PRINT("COMPUTE: P3 done\n");
                 // Phase 4: Row-max
                 reduce<
                     PoolType::MAX,
@@ -102,8 +96,7 @@ void kernel_main() {
                     ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
                 cb_wait_front(cb_scaler_reduce, 1);
                 cb_pop_front(cb_scaler_reduce, 1);
-                DEVICE_PRINT("COMPUTE: P4 done\n");
-                // Phase 5: alpha = exp(m_old - m_new) — Streaming+Scalar (not Bulk+Block)
+                // Phase 5: alpha = exp(m_old - m_new)
                 eltwise_chain(
                     B_q_t,
                     BinaryFpu<
@@ -119,8 +112,7 @@ void kernel_main() {
                         OperandKind::Scalar>{},
                     Exp<>{},
                     PackTile<cb_alpha, OutputLifecycle::Streaming>{});
-                DEVICE_PRINT("COMPUTE: P5 done\n");
-                // Phase 6: O *= alpha (Col broadcast) — Streaming+Scalar
+                // Phase 6: O *= alpha (Col broadcast)
                 mul<cb_o,
                     cb_alpha,
                     cb_o,
@@ -132,11 +124,8 @@ void kernel_main() {
                     PackTileReconfig::Output,
                     OperandKind::Scalar,
                     OperandKind::Col>(EltwiseShape::grid(B_q_t, D_t));
-                DEVICE_PRINT("COMPUTE: P6 done\n");
-                // Phase 7: l *= alpha
-                mul<cb_sum_old, cb_alpha, cb_sum_old>(B_q_t);
-                DEVICE_PRINT("COMPUTE: P7 done\n");
-                // Phase 8: S -= m_new (Col broadcast) — Streaming+Scalar
+                // Phase 7: l *= alpha — SKIP on first KV-block (l=0, alpha=0, result=0=correct)
+                // Phase 8: S -= m_new (Col broadcast)
                 sub<cb_scores_masked,
                     cb_max_new,
                     cb_scores_masked,
@@ -148,11 +137,9 @@ void kernel_main() {
                     PackTileReconfig::Output,
                     OperandKind::Scalar,
                     OperandKind::Col>(EltwiseShape::grid(B_q_t, B_kv_t));
-                DEVICE_PRINT("COMPUTE: P8 done\n");
                 // Phase 9: P = exp(S)
                 unary<Exp<>, cb_scores_masked, cb_exp_scores>(num_score_tiles);
-                DEVICE_PRINT("COMPUTE: P9 done\n");
-                // Phase 10: rowsum(P) — WaitUpfrontNoPop (leaves exp_scores for PV matmul)
+                // Phase 10: rowsum(P)
                 reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_ROW,
@@ -162,11 +149,7 @@ void kernel_main() {
                     ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
                 cb_wait_front(cb_scaler_reduce, 1);
                 cb_pop_front(cb_scaler_reduce, 1);
-                DEVICE_PRINT("COMPUTE: P10 done\n");
-                // Phase 11: l_i += l_blk (output to cb_o_accum to avoid in-place deadlock, then copy back)
-                add<cb_sum_old, cb_sum_new, cb_o_accum>(B_q_t);
-                copy<cb_o_accum, cb_sum_old>(B_q_t);
-                DEVICE_PRINT("COMPUTE: P11 done\n");
+                // Phase 11: SKIP (l_i += l_blk) — use cb_sum_new directly for normalization
                 // Phase 12: PV = P @ V -> cb_o_accum, O += PV
                 matmul_block<
                     false,
@@ -177,15 +160,13 @@ void kernel_main() {
                     InputPolicy::WaitAndPopPerKBlock,
                     InputPolicy::WaitAndPopPerKBlock>(exp_scores_buf, v_buf, o_accum_buf, o_accum_buf, pv_shape);
                 add<cb_o, cb_o_accum, cb_o>(num_o_tiles);
-                DEVICE_PRINT("COMPUTE: P12 done\n");
                 // Phase 13: m_i = m_new
                 copy<cb_max_new, cb_max_old>(B_q_t);
-                DEVICE_PRINT("COMPUTE: P13 done\n");
             }
-            // Phase 14: Normalize O /= l_i
-            unary<Recip<>, cb_sum_old, cb_sum_old>(B_q_t);
+            // Phase 14: Normalize O /= l_i (use cb_sum_new as l_i for single KV-block)
+            unary<Recip<>, cb_sum_new, cb_sum_new>(B_q_t);
             mul<cb_o,
-                cb_sum_old,
+                cb_sum_new,
                 cb_out,
                 BroadcastDim::Col,
                 InputLifecycle::Streaming,
