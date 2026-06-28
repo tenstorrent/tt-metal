@@ -121,7 +121,7 @@ class MLP:
                 deepseek_permuted_weights = load_throughput_expert_weights(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
-                    state_dict=permuted_sd,
+                    state_dict=experts_state_dict,
                     weight_dtype=ttnn.bfloat4_b,
                     tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts_ds_perm"),
                 )
