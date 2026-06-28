@@ -27,6 +27,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "api/debug/dprint.h"  // [DEBUG #47797] in0 mcast handshake diagnosis
 
@@ -76,7 +77,6 @@ void kernel_main() {
     uint32_t rt_args_idx = vararg_idx;
 
     constexpr uint32_t cb_id_in0 = dfb::cb_in0;
-    constexpr uint32_t cb_id_in2 = dfb::cb_in0_sharded;  // Sharded cb
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
@@ -90,7 +90,6 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb_in0(cb_id_in0);
-    DataflowBuffer cb_in2(cb_id_in2);
     Semaphore sender_sem(sem::in0_sender);
     Semaphore receiver_sem(sem::in0_receiver);
 
@@ -148,9 +147,9 @@ void kernel_main() {
         (uint32_t)remote_sender_noc_x[0],
         (uint32_t)remote_sender_noc_y[0]);
 
-    cb_in2.reserve_back(batch * in0_block_num_tiles);
-
-    uint32_t in0_tensor_shard_read_addr = cb_in2.get_read_ptr();
+    // The resident in0 shard is reached by L1 base address from a local TensorAccessor over the in0
+    // tensor (no borrowed self-loop CB, which Metal 2.0 forbids on DM kernels).
+    uint32_t in0_tensor_shard_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::in0).get_noc_addr(0));
     uint32_t in0_tensor_read_addr = 0;
 
     MatmulOpReceiver fused_op_receiver;

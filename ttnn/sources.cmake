@@ -205,6 +205,12 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/quasar/binary/binary_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/fold/fold_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/reshape_view/reshape_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/untilize/untilize_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/to_layout/to_layout_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/reallocate/reallocate_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/to_device/to_device_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
     cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp

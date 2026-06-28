@@ -15,7 +15,7 @@
 //   - CB-index CTAs -> dfb:: tokens (weights / bias / act_second_reader / act_sharded / reader_indices)
 //   - weights-mcast semaphore RTAs -> Semaphore(sem::weights_mcast_sender / weights_mcast_receiver)
 //   - remaining positional CTAs -> get_arg(args::name); remaining RTAs -> get_arg(args::name)
-//   - experimental::CB -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
+//   - DataflowBuffer -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
 //     experimental::CB); dfb::bias gated behind FUSE_BIAS; dfb::act_second_reader behind SPLIT_READER
 
 #include <api/dataflow/dataflow_api.h>
@@ -72,7 +72,7 @@ void kernel_main() {
     Noc noc;
 
 #ifdef SPLIT_READER
-    experimental::CB cb_act_second_obj(dfb::act_second_reader);
+    DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     if constexpr (split_reader_enabled) {
         if constexpr (needs_act_block_zero_out) {
             zero_out_tiles<dfb::act_second_reader>(noc, cb_act_second_obj);
