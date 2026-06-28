@@ -14,6 +14,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_conv3d/device/kernels/np_reorder.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -36,24 +37,6 @@ inline ccl_routing_utils::line_multicast_route_info_t get_line_multicast_route_i
         .w_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
         .n_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
         .s_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
-}
-
-// Per-batch two-pass reorder (W path): within a FULL batch of nf frames, all interior rows first then
-// all corner rows. Returns (frame_in_batch, h_padded). MUST stay identical to
-// np_phase2_w_reader.cpp::np_reorder_batch — reader and writer address the halo buffer in lockstep.
-inline void np_reorder_batch(
-    uint32_t k, uint32_t nf, uint32_t input_H_dev, uint32_t padding_h, uint32_t& frame, uint32_t& h_padded) {
-    const uint32_t interior = nf * input_H_dev;
-    if (k < interior) {
-        frame = k / input_H_dev;
-        h_padded = padding_h + (k % input_H_dev);
-    } else {
-        const uint32_t kc = k - interior;
-        const uint32_t cpf = 2 * padding_h;
-        frame = kc / cpf;
-        const uint32_t c = kc % cpf;
-        h_padded = (c < padding_h) ? c : (padding_h + input_H_dev + (c - padding_h));
-    }
 }
 
 // Compile-time args (uniform across all cores sharing this kernel)
