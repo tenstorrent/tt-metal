@@ -80,14 +80,14 @@ def create_program_descriptor(
         cb(CB_O_ACCUM, num_o_tiles),
     ]
 
-    reader_ct_args = [1 if has_mask else 0, H_q, H_kv]
+    reader_ct_args = [1 if has_mask else 0, H_q, H_kv, 1 if mask_is_per_head else 0]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
     if has_mask:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(attn_mask).get_compile_time_args())
     else:
-        reader_ct_args.extend(ttnn.TensorAccessorArgs().get_compile_time_args())
+        reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
 
     cores = ttnn.grid_to_cores(num_cores, grid_size.x, grid_size.y, row_wise=True)
 
@@ -109,8 +109,8 @@ def create_program_descriptor(
         wu_assigned += uc
         rt.append(query.buffer_address())
         rt.append(key.buffer_address())
-        rt.append(scale_bits)
         rt.append(value.buffer_address())
+        rt.append(scale_bits)
         rt.append(attn_mask.buffer_address() if has_mask else 0)
         reader_rt_args[core.x][core.y] = rt
 
@@ -122,12 +122,20 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    writer_ct_args = []
+    num_q_blocks = (S_q_tiles + B_q_t - 1) // B_q_t
+    writer_ct_args = [num_o_tiles]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_args = ttnn.RuntimeArgs()
+    wu_assigned = 0
     for ci, core in enumerate(cores):
         uc = units_for_core(ci)
-        writer_rt_args[core.x][core.y] = [output_tensor.buffer_address(), uc * S_q_tiles * D_t]
+        rt = [output_tensor.buffer_address(), uc, S_q_tiles, H_q]
+        for i in range(uc):
+            bh = wu_assigned + i
+            rt.append(bh // H_q)
+            rt.append(bh % H_q)
+        wu_assigned += uc
+        writer_rt_args[core.x][core.y] = rt
 
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
