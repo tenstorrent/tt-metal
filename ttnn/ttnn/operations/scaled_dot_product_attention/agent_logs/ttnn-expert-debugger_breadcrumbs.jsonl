@@ -1,1 +1,2 @@
 {"event":"investigation_start","details":"Hang at Phase 11 add<cb_sum_old,cb_sum_new,cb_sum_old>. Reading chain impl to understand lifecycle order.","ts":"2026-06-28T15:13:11+00:00"}
+{"event":"bisect_baseline_pass","details":"Copy Q to output passes. Reader/descriptor/CB setup is correct. Issue is in compute phases.","ts":"2026-06-28T15:31:00+00:00"}
