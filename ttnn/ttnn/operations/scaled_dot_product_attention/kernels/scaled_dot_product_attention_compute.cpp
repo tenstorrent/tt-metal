@@ -71,7 +71,7 @@ void kernel_main() {
                 BinaryFpu<cb_max_old, cb_max_new, BinaryFpuOp::Sub, BroadcastDim::None,
                           InputLifecycle::Bulk, InputLifecycle::HeldBulk,
                           BinaryDataFormatReconfig::Input, Dst::D0,
-                          OperandKind::Scalar, OperandKind::Scalar>{},
+                          OperandKind::Block, OperandKind::Block>{},
                 Exp<>{}, PackTile<cb_alpha, OutputLifecycle::Streaming>{});
             mul<cb_o, cb_alpha, cb_o, BroadcastDim::Col,
                 InputLifecycle::Streaming, InputLifecycle::HeldBulk,
