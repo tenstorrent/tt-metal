@@ -73,6 +73,10 @@ const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
+    if (this->terminated_) {
+        log_debug(tt::LogDispatch, "Command queue {} already terminated; skipping", this->id_);
+        return;
+    }
     log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
@@ -101,6 +105,7 @@ void HWCommandQueue::terminate() {
     this->manager_.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
     this->manager_.fetch_queue_reserve_back(this->id_);
     this->manager_.fetch_queue_write(cmd_sequence_sizeB, this->id_);
+    this->terminated_ = true;
 }
 
 }  // namespace tt::tt_metal

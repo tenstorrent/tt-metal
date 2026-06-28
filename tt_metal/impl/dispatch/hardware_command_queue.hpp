@@ -56,6 +56,8 @@ private:
     Device* device_;
 
     CoreCoord virtual_enqueue_program_dispatch_core_;
+
+    bool terminated_ = false;
 };
 
 }  // namespace tt::tt_metal
