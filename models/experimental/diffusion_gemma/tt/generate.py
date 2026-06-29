@@ -591,6 +591,9 @@ def generate_blocks(
             page_table=page_table,
             page_tables_per_layer=page_tables_per_layer,
         )
+        expected_next_pos = next_pos + block.committed.shape[1]
+        if block.next_pos != expected_next_pos:
+            raise ValueError("block.next_pos must equal start_pos + committed length")
         committed_blocks.append(block.committed)
         trajectories.append(block.trajectory)
         next_pos = block.next_pos

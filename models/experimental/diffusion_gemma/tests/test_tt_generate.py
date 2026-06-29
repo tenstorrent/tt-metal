@@ -208,6 +208,28 @@ def test_generate_blocks_allows_zero_blocks_without_init_canvas():
     assert torch.equal(out.generated, torch.empty((2, 0), dtype=torch.long))
 
 
+def test_generate_blocks_rejects_block_next_pos_mismatch():
+    def bad_block(tt_model, logits_fn, init_canvas, config, **kwargs):
+        committed = torch.full((1, config.canvas_length), 7, dtype=torch.long)
+        trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
+        return GeneratedBlock(
+            committed=committed,
+            next_pos=kwargs["start_pos"] + committed.shape[1] + 1,
+            trajectory=trajectory,
+        )
+
+    with pytest.raises(ValueError, match="block.next_pos"):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn=lambda *args: "canvas",
+            block_fn=bad_block,
+        )
+
+
 def test_generate_blocks_stops_after_committed_stop_token():
     calls = []
 
