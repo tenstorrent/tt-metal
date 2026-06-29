@@ -167,7 +167,7 @@ skus:
     runs_on:
       - BH-Quietbox-2
       - pipeline-perf
-      - in-service
+      - qb2-120-p02t04
 
   bh_spsg:
     runs_on:
