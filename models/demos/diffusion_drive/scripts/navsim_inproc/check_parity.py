@@ -10,18 +10,21 @@ still matches the PyTorch reference under that env *before* committing to a full
 PDM eval.  Mirrors ``tests/pcc/test_pcc_stage4.py`` but exercises the in-process
 AGENT and the real checkpoint (latent=False) — i.e. the deployed eval config.
 
-  conda activate navsim310
-  PYTHONPATH=/root/tt/tt-metal:/root/02/DiffusionDrive \
+  conda activate "$NAVSIM_CONDA_ENV"   # machine-specific env name; default navsim310
+  PYTHONPATH="$TT_METAL_HOME:$NAVSIM_DEVKIT_ROOT" \
     python models/demos/diffusion_drive/scripts/navsim_inproc/check_parity.py \
-      --checkpoint /root/02/weights/diffusiondrive_navsim_88p1_PDMS.pth \
-      --anchors    /root/02/resnet34/kmeans_navsim_traj_20.npy
+      --checkpoint "$DD_CHECKPOINT_PATH" \
+      --anchors    "$DD_ANCHOR_PATH"
 
-Exit code 0 if trajectory PCC >= threshold (default 0.999), else 1.
+--checkpoint/--anchors default to $DD_CHECKPOINT_PATH / $DD_ANCHOR_PATH when set
+(see the demo README "Eval environment" block).  Exit code 0 if trajectory
+PCC >= threshold (default 0.999), else 1.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 
 import torch
 
@@ -44,10 +47,12 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--anchors", required=True)
+    ap.add_argument("--checkpoint", default=os.environ.get("DD_CHECKPOINT_PATH"), help="default: $DD_CHECKPOINT_PATH")
+    ap.add_argument("--anchors", default=os.environ.get("DD_ANCHOR_PATH"), help="default: $DD_ANCHOR_PATH")
     ap.add_argument("--threshold", type=float, default=0.999)
     args = ap.parse_args()
+    if not args.checkpoint or not args.anchors:
+        ap.error("set --checkpoint/--anchors or export $DD_CHECKPOINT_PATH / $DD_ANCHOR_PATH")
 
     from models.demos.diffusion_drive.reference.model import DiffusionDriveConfig, load_model
 

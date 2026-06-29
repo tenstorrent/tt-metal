@@ -40,9 +40,10 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _checkpoint_path() -> str | None:
+    data_root = os.environ.get("DD_DATA_ROOT", "/mnt/diffusion-drive")
     candidates = [
         os.environ.get("DD_CHECKPOINT_PATH"),
-        "/root/02/weights/diffusiondrive_navsim_88p1_PDMS.pth",
+        f"{data_root}/weights/diffusiondrive_navsim_88p1_PDMS.pth",
     ]
     return next((p for p in candidates if p and Path(p).exists()), None)
 
