@@ -252,6 +252,7 @@ def _lstm_step_fused(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     fold_bias: bool = False,
     program_config=None,
+    fuse_cell_math: bool = False,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """One fused BiLSTM step advancing both directions at once.
 
@@ -300,11 +301,20 @@ def _lstm_step_fused(
     # Fold tanh(g) and tanh(c_new) into their consuming multiply (operand activation kwarg):
     # same SFPU tanh, one kernel instead of two, leaving the add's accumulation order
     # untouched (bit-identical) — drops 2 unary ops/timestep. See _lstm_step.
-    c_new = ttnn.add(
-        ttnn.multiply(f, c, memory_config=memory_config),
-        ttnn.multiply(g_raw, i, input_tensor_a_activations=[ttnn.UnaryOpType.TANH], memory_config=memory_config),
-        memory_config=memory_config,
-    )
+    itg = ttnn.multiply(g_raw, i, input_tensor_a_activations=[ttnn.UnaryOpType.TANH], memory_config=memory_config)
+    if fuse_cell_math:
+        # c_new = f*c + tanh(g)*i collapsed into ONE op: ttnn.addcmul(a,b,c) = a + b*c lowers to a single
+        # TernaryDeviceOperation (verified via graph capture), so addcmul(itg, f, c) = itg + f*c replaces
+        # the separate mul(f,c) + add — genuinely -1 device op/step. (NOTE: ttnn.mac is NOT used here — it
+        # is a python/cpp *composite* that lowers to 2 BinaryNg device ops, i.e. mul+add, giving ZERO
+        # reduction; the perf report showed no change with mac. addcmul is the real fused kernel.)
+        # The fused MAC changes the cell-state accumulation rounding (one fused fp32 op vs a separate bf16
+        # multiply then bf16 add), so it is **opt-in and used ONLY by the ASR TextEncoder**: the
+        # prosody/duration BiLSTMs share this step and feed the F0 curve (amplified ~1885x by the
+        # vocoder), which rejects any numeric change. itg keeps its tanh folded, so only the cell add moves.
+        c_new = ttnn.addcmul(itg, f, c, memory_config=memory_config)
+    else:
+        c_new = ttnn.add(ttnn.multiply(f, c, memory_config=memory_config), itg, memory_config=memory_config)
     h_new = ttnn.multiply(c_new, o, input_tensor_a_activations=[ttnn.UnaryOpType.TANH], memory_config=memory_config)
     return h_new, c_new
 
@@ -347,6 +357,7 @@ def tt_bilstm_nlc(
     w_h_block: Optional[ttnn.Tensor] = None,
     fold_gates_bias: bool = False,
     recurrent_program_config=None,
+    fuse_cell_math: bool = False,
 ) -> ttnn.Tensor:
     """
     1-layer BiLSTM over sequence for NLC ``[B, L, in]``.
@@ -362,6 +373,11 @@ def tt_bilstm_nlc(
     **opt-in and enabled ONLY on the ASR TextEncoder LSTM** — the duration/F0 BiLSTMs reject any
     numeric change (flipped durations / amplified F0, see the LSTM-gate-matmul notes). Applied only
     when ``B == 1`` (gates_x is one bias row) and ``not fp32_state`` (keeps dtypes aligned).
+
+    ``fuse_cell_math`` folds the per-step ``f*c + tanh(g)*i`` cell-state update into a single
+    ``ttnn.mac`` (one fewer BinaryNg/step). Like ``fold_gates_bias`` it alters the gate-math rounding,
+    so it is **opt-in and enabled ONLY on the ASR TextEncoder** (direction-fused path); the F0-feeding
+    prosody/duration BiLSTMs reject it (see :func:`_lstm_step_fused`).
 
     ``w_h_block`` (from :func:`build_fused_recurrent_weight`) enables the **direction-fused**
     loop: a single step advances both passes at once over ``[B, 2H]`` state, halving the
@@ -462,11 +478,15 @@ def tt_bilstm_nlc(
         # output accumulation is the only L-scaling term, so gate on a sequence-length budget and
         # fall back to DRAM for long sequences (keeps L1 footprint bounded).
         #
-        # L1 takes PRIORITY over the B==1 bias-fold (``do_fold``): the fold saves one BinaryNg/step
-        # but its bias-epilogue matmul TT_FATALs with L1 in0/out, whereas L1 cuts the recurrent
-        # matmul (~8->6 us) AND every per-step elementwise/slice. So when L1 is eligible we disable
-        # the fold and run the separate gate-add (the B>1 path) on L1 — net faster even at B==1.
-        # (Drops the fold's "one fp32 epilogue add" rounding edge, fine for the tolerant TextEncoder.)
+        # L1 AND the B==1 bias-fold (``do_fold``) now COMPOSE: the fold folds the per-step gates_x add
+        # into the recurrent matmul's bias epilogue (one fewer BinaryNg/step — the highest-dispatch-gap
+        # op in the loop), and the L1 in0/out + L1 bias matmul that this needs is verified to run on BH
+        # (the old "bias-epilogue TT_FATALs with L1 in0/out" limitation that forced us to pick L1 *or*
+        # fold has been lifted in ttnn). So for B==1 we keep both: L1 cuts the matmul (~8->6 us) and
+        # every per-step elementwise/slice, AND the fold drops the gate-add. (The fold's fp32-epilogue
+        # rounding differs from the separate bf16 add — fine for the tolerant ASR TextEncoder, which is
+        # the only B==1 fused-path caller; the B>1 standalone test can't broadcast the [B,8H] gates_x as
+        # a bias row so it keeps do_fold=False and the separate add, unchanged.)
         l1_weights: list[ttnn.Tensor] = []
         if (
             recurrent_program_config is not None
@@ -474,7 +494,8 @@ def tt_bilstm_nlc(
             and step_mc.buffer_type != ttnn.BufferType.L1
             and L * _tensor_nbytes((B, 2 * H), state_dtype) <= _FUSED_L1_ACCUM_BUDGET_BYTES
         ):
-            do_fold = False  # L1 over fold (see above); bias-fold + L1 in0/out is a TT_FATAL
+            # Keep ``do_fold`` as computed above (True for B==1 + fold_gates_bias): L1 in0/out + L1
+            # bias is verified to run on BH, so the fold and L1 now compose (see comment above).
             step_mc = ttnn.L1_MEMORY_CONFIG
             # Co-locate the gate-projection buffer (gx_comb [L,B,8H]) + its per-step slices/concat on
             # L1 too (same seq budget bounds both it and the [L,B,2H] state accumulation), and stage
@@ -514,6 +535,13 @@ def tt_bilstm_nlc(
         # one input row * 1.0, so it is a bit-exact reordering). Then ``gx_rev`` computed from the
         # reversed input is already indexed in the order the reverse pass consumes it, so combined
         # step ``k`` pairs forward position ``k`` with reverse position ``L-1-k`` by a plain slice.
+        # NOTE: keep these reorders at the caller's fidelity (HiFi3). The cliff is LoFi-specific: a LoFi
+        # variant looks bit-exact in isolation (anti is 0/1) and passes the standalone encoder PCC, but
+        # ``tt_bilstm_nlc`` is SHARED with the prosody DurationEncoder — running its reverse-input
+        # reorder at LoFi shifts the bf16 activations enough to perturb F0/source phase, which the
+        # vocoder amplifies: full kmodel config-E PCC collapses 0.872 -> 0.451. HiFi2 is fine here
+        # (config-E 0.872, unchanged) but saves only ~0.2 µs/reorder on these 3 µs one-shot ops — moot
+        # on a dispatch-bound model — so there is no reason to deviate. Validated via test_tt_kmodel_pcc.py.
         anti = torch.eye(L, dtype=torch.float32).flip(0).reshape(1, L, L).expand(B, L, L).contiguous()
         anti_tt = ttnn.from_torch(
             anti, dtype=x_nlc.dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=gx_mc
@@ -566,6 +594,7 @@ def tt_bilstm_nlc(
                 memory_config=step_mc,
                 fold_bias=do_fold,
                 program_config=recurrent_program_config,
+                fuse_cell_math=fuse_cell_math,
             )
             # hc = [h_f@pos t | h_r@pos L-1-t]: forward output for position t and reverse output for
             # position L-1-t. Stash the whole [B,2H] state and split in bulk after the loop (avoids
