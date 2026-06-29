@@ -49,7 +49,7 @@
 
 **Done when**: `SUPPORTED["mask_mode"]` contains `["none", "custom", "causal"]` and `is_causal=True` cells pass for self-attention (S_q == S_kv). The `{mask_mode: causal, attention_kind: cross}` EXCLUSION is declared.
 
-### [ ] Refinement 4 — L1 budget fit for large head dims
+### [x] Refinement 4 — L1 budget fit for large head dims
 
 **Goal**: rewrite the output accumulation and score CB sizing so the per-core L1 CB footprint is bounded by a constant (not by `D_t`), so the op stops OOMing on D=512 (D_t=16) and D=1024 (D_t=32). The 8 currently-failing OOM cells all have D ≥ 512 within the SUPPORTED rectangle. No SUPPORTED axis is added — this is a resource boundary, not a kernel-level branch.
 

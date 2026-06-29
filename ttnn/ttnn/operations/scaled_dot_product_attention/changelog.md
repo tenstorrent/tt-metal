@@ -70,3 +70,25 @@
   - Fixed: `TensorAccessorArgs(attn_mask)` called with `None` when `is_causal=True` (has_mask is True but no mask tensor). Fix: condition on `has_mask and not is_causal` for mask accessor creation.
   - OOM on D=512/D=1024/D=256+fp32: pre-existing, Refinement 4 scope. Causal cells at these shapes fail identically to none/custom — no causal-specific issue.
 - **Tests added**: test_scaled_dot_product_attention_causal.py (62 tests: 14 shapes × 2 scales × bf16=28, 14 shapes × fp32=14, 14 shapes × bf8b=14, GQA, MQA, single-tile diagonal, causal=custom equivalence, cross-attn exclusion, mutual exclusion)
+
+## Refinement 4 — L1 budget fit for large head dims
+- **Date**: 2026-06-29
+- **What was done**:
+  - D-chunked the PV matmul: D-chunk loop is OUTSIDE the KV-block loop. For each D-chunk, the full online softmax recurrence runs independently with O bounded by D_BLOCK (constant, not D_t-scaling). Q and K are re-read from DRAM per D-chunk (weights-restreaming pattern), and QK^T is recomputed per D-chunk. This is the explicit trade: more DRAM traffic and compute for constant-bounded CBs.
+  - K-blocked the QK^T matmul: when D_t > D_BLOCK (i.e., D-chunking is active), the QK^T matmul uses `matmul_block` with `num_k_blocks > 1` so cb_q and cb_k are bounded by k_block_dim (= D_BLOCK). With fp32_dest_acc_en=True, the DEST accumulator is fp32, so K-accumulation rounding is minimal even for bf16 inputs.
+  - Program descriptor: added D_BLOCK (constant = 4), num_d_chunks, use_k_blocking, k_block_dim as CT/RT args. CB sizing: cb_o, cb_o_accum, cb_v, cb_out bounded by D_BLOCK; cb_q, cb_k bounded by k_block_dim.
+  - Reader kernel: restructured with D-chunk loop outside KV-block loop. For K-blocking, Q and K are pushed in k_block_dim-sized K-blocks per KV-block (Q re-read per D-chunk). For non-K-blocking (D_t == D_BLOCK), Q is pushed once per D-chunk and retained across KV-blocks.
+  - Compute kernel: D-chunk loop outside KV-block loop. Each D-chunk runs full online softmax recurrence (init m/l/O, KV-block loop, normalize). K-blocking via `matmul_block` with `num_k_blocks > 1` for QK^T when D_t > D_BLOCK.
+  - Writer kernel: writes output in D_BLOCK-sized chunks per D-chunk.
+  - No SUPPORTED axis changes (this is a resource boundary, not a kernel-level branch).
+  - Advisory deviations: D-chunk loop placement (outside KV-block, not inside) is an advisory choice — inside would require O to persist across KV-blocks for all D-chunks simultaneously (defeating the purpose). The outside placement recomputes QK^T per D-chunk, which is the standard "reload-and-accumulate" trade from /memory-budget-metal §6.2.
+- **Accuracy achieved**:
+  - D=512 bf16: max_diff=0.003906, D=1024 bf16: max_diff=0.007812
+  - D=256 fp32: max_diff=0.006995, D=512 fp32: max_diff=0.006911, D=1024 fp32: max_diff=0.005054
+  - D=512 bf8b: max_diff=0.015625, D=1024 bf8b: max_diff=0.015625
+  - All previously-OOM shapes now pass within tolerance.
+- **Golden test progress**: 66 new cells passing (D=256 fp32 ×6, D=512 bf16/fp32/bf8b ×18, D=1024 bf16/fp32/bf8b ×18, plus mask variants). All 48 previously-OOM cells now pass. 12 xfailed (fp32+fp32_dest_acc_en=False EXCLUSION).
+- **Issues encountered**:
+  - D=1024 bf16 initially OOM by 3872B when K-blocking was fp32-only. Fix: enabled K-blocking for ALL dtypes when D_t > D_BLOCK. The HiFi4+bf16 K-acc concern (issue #38306) is mitigated by fp32_dest_acc_en=True keeping partials in fp32 DEST.
+  - Initial test had a bug: torch reference call was missing attn_mask parameter, causing false failure on custom mask test. Fixed.
+- **Tests added**: test_scaled_dot_product_attention_large_d.py (30 tests: D=256/512/1024 × bf16/fp32/bf8b, causal mask, custom mask, explicit scale, GQA, cross-attention, fp32_dest_acc_en=False, D=32/D=64 regression)
