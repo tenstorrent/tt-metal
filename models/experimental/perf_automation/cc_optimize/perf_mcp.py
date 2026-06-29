@@ -177,6 +177,33 @@ def _op_has_attempt(op_code: str, attempts: list):
     return None
 
 
+_SEALED_OP_MARKERS = (
+    "conv",
+    "untilize",
+    "tilize",
+    "slice",
+    "allgather",
+    "all_gather",
+    "allreduce",
+    "all_reduce",
+    "reducescatter",
+    "reduce_scatter",
+    "scaleddotproduct",
+    "sdpa",
+    "layernorm",
+    "rmsnorm",
+    "groupnorm",
+    "softmax",
+    "embedding",
+    "pool",
+)
+
+
+def _is_kernel_able(op_code: str) -> bool:
+    oc = (op_code or "").lower()
+    return not any(m in oc for m in _SEALED_OP_MARKERS)
+
+
 def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool, str, str]:
     """DETERMINISTIC ladder gate for ONE open op. Returns (done, rung, reason).
 
@@ -226,16 +253,19 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             "knob:dtype",
             f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
         )
-    # BOX (2) tt-lang kernel — knobs exhausted.
-    if "tt-lang" not in kinds:
-        return (False, "tt-lang", "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it")
-    # BOX (3) C++ kernel — tt-lang tried.
-    if "cpp" not in kinds:
-        return (
-            False,
-            "cpp",
-            "tt-lang tried; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it",
-        )
+    if _is_kernel_able(op_code):
+        if "tt-lang" not in kinds:
+            return (
+                False,
+                "tt-lang",
+                "knobs exhausted (grid+dtype); author a tt-lang kernel (GUIDELINES/11) and record it",
+            )
+        if "cpp" not in kinds:
+            return (
+                False,
+                "cpp",
+                "tt-lang tried; author a C++ Metalium kernel via ttnn.generic_op (GUIDELINES/12) and record it",
+            )
     # BOX (4) STRUCTURAL (ALWAYS ON, GENERAL — no model/architecture knowledge) — the per-op ladder
     # above (grid+dtype+tt-lang+C++) is exhausted but a MATERIAL GAP REMAINS (this op is in the
     # blocking set, so its gap >= the material threshold). That is the universal, config-free signal
