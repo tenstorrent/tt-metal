@@ -124,6 +124,14 @@ COMMON_MESH_PARAMS = [
     pytest.param(
         (2, 4), (2, 4), 1, 0, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0"
     ),
+    # WH (ring) on 4x8
+    pytest.param(
+        (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
+    ),
+    # BH (ring) on 4x8
+    pytest.param(
+        (4, 8), (4, 8), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"
+    ),
 ]
 
 
@@ -131,21 +139,6 @@ COMMON_MESH_PARAMS = [
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     COMMON_MESH_PARAMS
     + [
-        # WH (ring) on 4x8
-        pytest.param(
-            (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
-        ),
-        pytest.param(
-            (4, 8),
-            (4, 8),
-            1,
-            0,
-            2,
-            ring_params_req_exact_num_devices,
-            ttnn.Topology.Ring,
-            False,
-            id="ring_bh_4x8sp1tp0",
-        ),
         pytest.param(
             (4, 8),
             (4, 8),
@@ -320,14 +313,6 @@ def test_wan_transformer_block(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     COMMON_MESH_PARAMS
     + [
-        # WH (ring) on 4x8
-        pytest.param(
-            (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
-        ),
-        # BH (ring) on 4x8
-        pytest.param(
-            (4, 8), (4, 8), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"
-        ),
         pytest.param(
             (4, 8),
             (4, 8),
@@ -369,16 +354,18 @@ def test_wan_transformer_model(
 ) -> None:
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
+    num_layers = 1
 
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
-    num_layers = 1
-
     param_id = request.node.name
     commit_hash, golden, torch_model = _load_model_and_golden("wan_transformer_model", param_id)
-    hooks = _register_block_hooks(torch_model)
+
+    # Truncate to 1 layer
+    torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
     torch_model.eval()
+    hooks = _register_block_hooks(torch_model)
     state_dict = torch_model.state_dict()
 
     if golden is not None:
@@ -453,17 +440,7 @@ def test_wan_transformer_model(
 
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    COMMON_MESH_PARAMS
-    + [
-        # WH (ring) on 4x8
-        pytest.param(
-            (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
-        ),
-        # BH (ring) on 4x8
-        pytest.param(
-            (4, 8), (4, 8), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"
-        ),
-    ],
+    COMMON_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 def test_wan_transformer_inner_step(
@@ -480,7 +457,7 @@ def test_wan_transformer_inner_step(
     B = 1
     T, H, W = 8, 40, 50
     prompt_seq_len = 118
-
+    num_layers = 1
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
 
@@ -541,7 +518,7 @@ def test_wan_transformer_inner_step(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
-        num_layers=1,
+        num_layers=num_layers,
     )
     start = time.time()
     tt_model.load_torch_state_dict(state_dict)
