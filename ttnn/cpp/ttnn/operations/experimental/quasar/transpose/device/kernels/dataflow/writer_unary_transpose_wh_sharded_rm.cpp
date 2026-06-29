@@ -5,7 +5,8 @@
 // Metal 2.0 conversion (in place; this kernel is transpose-owned). The device-side NoC + local-copy
 // logic is unchanged; only the resource bindings move to the Metal 2.0 namespaces (dfb::/args::).
 // Only instantiated on the Ht>8 path: cb_src (dfb::cb_src) is the compute kernel's tile-staging
-// output; cb_dst (dfb::cb_dst) is the borrowed output shard — written by L1 address (get_write_ptr).
+// output; the output shard is written by L1 address obtained from tensor::output (a local
+// TensorAccessor over the resident shard), not a borrowed self-loop CB.
 // The Ht>8 guard is preserved verbatim (always true here, since the factory only builds this kernel
 // when ht>8).
 
@@ -15,6 +16,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 // get_arg lives in `namespace experimental` and is normally found via ADL on the args:: accessor
@@ -35,9 +37,10 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb_src(dfb::cb_src);
-    DataflowBuffer cb_dst(dfb::cb_dst);
 
-    uint32_t dst_addr = cb_dst.get_write_ptr();
+    // Local output-shard base L1 address from the resident output TensorAccessor (no borrowed self-loop CB).
+    const auto s = TensorAccessor(tensor::output);
+    uint32_t dst_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0));
 
     // temporary fix until pack_untilze is fully fixed
     if constexpr (Ht > 8) {

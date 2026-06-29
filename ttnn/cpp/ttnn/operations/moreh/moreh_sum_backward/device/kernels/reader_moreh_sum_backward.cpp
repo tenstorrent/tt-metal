@@ -78,7 +78,8 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 0.0f;
-    fill_cb_with_value(cb_id_in1, scaler.u);
+    CircularBuffer cb_in1_obj(cb_id_in1);
+    fill_cb_with_value(cb_in1_obj, scaler.u);
 
     const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 

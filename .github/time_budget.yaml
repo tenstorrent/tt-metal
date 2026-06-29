@@ -88,8 +88,8 @@ ttnn:
     wh_llmbox: 50
     wh_galaxy: 35
     bh_p100: 780
-    bh_p150b_civ2: 1035
-    wh_n150_civ2: 1175
+    bh_p150b_civ2: 1045
+    wh_n150_civ2: 1185
     wh_n300_civ2: 1175
     bh_p150b_civ2_viommu: 115
   e2e:
@@ -116,6 +116,20 @@ ttnn:
     wh_n300_civ2: 60
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+  # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
+  # workflows. Budget planning uses a 30-min figure per job (the verify step
+  # passes --timeout-minutes 30); actual job timeout is 60 min.
+  sweep:
+    wh_n150: 900        # ~30 jobs × 30 min
+    wh_n300: 900
+    bh_p150b_civ2: 900
+    wh_galaxy: 900      # lead-models + model-traced Galaxy sweeps
+    bh_loudbox: 300
+  sweep_validation:
+    wh_n150: 120
+    wh_n300: 120
+    bh_p150b_civ2: 120
+    wh_galaxy: 120
 
 train:
   merge_gate:
@@ -142,13 +156,16 @@ shield:
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 115
-    bh_p150b_civ2: 70
+    bh_p150b_civ2: 125
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
   merge_gate:
+    cpu_medium: 10
+    cpu_medium_prio: 10
     wh_n300_civ2: 10
   unit:
+    cpu_medium: 90 # 6 fabric CPU-only shards × 15 min
     wh_llmbox: 60
     wh_galaxy: 25
   stress:
@@ -249,7 +266,7 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 63
     bh_p300: 20
-    bh_loudbox: 160
+    bh_loudbox: 162
     bh_quietbox_2: 80
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
@@ -257,7 +274,7 @@ models:
     wh_n150: 28
     wh_galaxy_perf: 120
     bh_p150: 27
-    bh_quietbox_2: 145
+    bh_quietbox_2: 155
     bh_galaxy: 78
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -283,7 +300,7 @@ models:
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 215
+    bh_quietbox_2: 225
     bh_galaxy: 70
   unit_tier2:
     wh_llmbox: 114
@@ -321,7 +338,7 @@ models:
     wh_n300_perf: 200
     bh_p150: 250
     bh_p150_perf: 420
-    bh_p150b_civ2: 250
+    bh_p150b_civ2: 130
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
