@@ -1,0 +1,15 @@
+# --- Meshes ---------------------------------------------------------------
+# Single 2x8 mesh carved from one 8x4 Blackhole galaxy. Scopes fabric to 16
+# devices so boundary links into the unused half are never handshaked. Both
+# axes LINE: TP (size-2) gather needs no closure, SP (size-8) does no collective.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 8 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

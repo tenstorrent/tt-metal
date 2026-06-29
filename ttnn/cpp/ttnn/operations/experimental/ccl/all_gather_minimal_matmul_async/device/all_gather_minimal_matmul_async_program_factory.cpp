@@ -48,7 +48,8 @@ static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_a
     tt::tt_metal::NOC noc,
     bool axis_is_x_when_not_transposed,
     const CoreCoord& initial_endpoint,
-    bool force_increasing = false) {
+    bool force_increasing = false,
+    uint32_t axis_offset = 0) {
     std::vector<CoreCoord> order;
     order.reserve(axis_length);
     order.push_back(initial_endpoint);
@@ -72,7 +73,7 @@ static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_a
         size_t& coord_to_modify = transpose_core_grid ? (axis_is_x_when_not_transposed ? worker_core.y : worker_core.x)
                                                       : (axis_is_x_when_not_transposed ? worker_core.x : worker_core.y);
 
-        coord_to_modify = increasing ? worker_idx : (axis_length - worker_idx);
+        coord_to_modify = axis_offset + (increasing ? worker_idx : (axis_length - worker_idx));
         if (coord_to_modify == current_axis_value) {
             index_of_current = worker_idx;
         }
@@ -307,6 +308,44 @@ all_gather_minimal_matmul_async_factory_helper(
     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
     uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
+    // The in1-parallel (N) axis is split into m_fold contiguous bands; each band computes a distinct
+    // M-range against the full N (in1 replicated). N is divided across n_band_cores per band (raising
+    // per-core N), M across m_fold_cores across all bands. m_fold=1 leaves the layout unchanged.
+    uint32_t m_fold = (config.has_value() && config.value().m_fold > 0) ? config.value().m_fold : 1;
+    TT_FATAL(
+        in1_parallel_axis_cores % m_fold == 0,
+        "in1-parallel axis core count ({}) must be divisible by m_fold ({})",
+        in1_parallel_axis_cores,
+        m_fold);
+    uint32_t n_band_cores = in1_parallel_axis_cores / m_fold;
+    uint32_t m_fold_cores = in0_parallel_axis_cores * m_fold;
+
+    // Each band adds a full set of fabric senders sharing the same mux cores, so the channels per mux
+    // scale with m_fold (band b uses channels [b*num_workers_per_link, (b+1)*num_workers_per_link)).
+    // Mux-core count and the column grouping (num_workers_per_link) are unchanged; only the per-mux
+    // channel count grows. Keep mux L1 flat by lowering num_buffers_per_channel accordingly.
+    uint32_t channels_per_mux = num_workers_per_link * m_fold;
+
+    // Diagnostic (perf only, wrong result): run only the bottom band (band 1, the high M-range) and
+    // fully isolate band 0 from the fabric, so the mux serves a single band's senders. Isolates the
+    // fold's per-core in0-volume reduction (M/core halved) from the doubled-channel mux contention.
+    const char* bottom_band_only_env = std::getenv("AGMM_BOTTOM_BAND_ONLY");
+    const char* top_band_only_env = std::getenv("AGMM_TOP_BAND_ONLY");
+    bool bottom_band_only =
+        (bottom_band_only_env != nullptr && std::string(bottom_band_only_env) == "1") && m_fold == 2;
+    bool top_band_only =
+        (top_band_only_env != nullptr && std::string(top_band_only_env) == "1") && m_fold == 2 && !bottom_band_only;
+    bool single_band_only = bottom_band_only || top_band_only;
+    // The band fully isolated from the fabric (its in0 cores compile MATMUL_ISOLATION). bottom-band-only
+    // keeps band 1 and isolates band 0; top-band-only is the mirror (keeps band 0, isolates band 1).
+    uint32_t iso_band = top_band_only ? 1u : 0u;
+    if (single_band_only) {
+        // Full grid is kept (so the gather's per-band chain accounting stays valid). The isolated band's
+        // in0 cores are compiled MATMUL_ISOLATION (no fabric send, no fabric-recv-wait, no mux connect)
+        // below, so only the active band's senders use the mux -> num_workers_per_link channels (no-fold load).
+        channels_per_mux = num_workers_per_link;
+    }
+
     /**
      * We pad the input dimensions to the nearest multiple of the parallelization factor.
      *
@@ -314,12 +353,12 @@ all_gather_minimal_matmul_async_factory_helper(
      * Within a core, tiles are blocked by M_block_tiles and N_block_tiles.
      * Most output blocks are the full block size, but the last block in M or N can be partial.
      */
-    uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
+    uint32_t padded_M_tiles = tt::round_up(M_tiles, m_fold_cores);
+    uint32_t padded_N_tiles = tt::round_up(N_tiles, n_band_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
-    uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
-    uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
+    uint32_t M_tiles_per_core = padded_M_tiles / m_fold_cores;
+    uint32_t N_tiles_per_core = padded_N_tiles / n_band_cores;
 
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
@@ -394,16 +433,59 @@ all_gather_minimal_matmul_async_factory_helper(
     auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
-    auto core_endx_2_endy = CoreCoord{grid_size.x - 3, grid_size.y - 1};
-    auto core_endx_endy_2 = CoreCoord{grid_size.x - 1, grid_size.y - 3};
-    auto core_0_endy_1 = CoreCoord{0, grid_size.y - 2};
-    auto core_endx_1_0 = CoreCoord{grid_size.x - 2, 0};
 
-    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores_no_fabric =
-        transpose_core_grid ? CoreRange(core_0_1, core_endx_endy_2) : CoreRange(core_1_0, core_endx_2_endy);
-    auto in0_receiver_cores_fabric =
-        transpose_core_grid ? CoreRange(core_0_endy_1, core_endx_endy) : CoreRange(core_endx_1_0, core_endx_endy);
+    // The in0 forwarding chain runs along the in1-parallel axis (y when transposed, else x), split into
+    // m_fold bands of n_band_cores. Per band: injector at the low edge, the two fabric senders at the
+    // high edge, the remainder receivers. Each role repeats once per band, so the kernel placement is a
+    // CoreRangeSet over bands. For m_fold==1 these collapse to the original single ranges.
+    TT_FATAL(
+        n_band_cores >= 3,
+        "Each m_fold band needs >=3 cores along the in1-parallel axis (injector + 2 fabric); got {}",
+        n_band_cores);
+    std::vector<CoreRange> in0_injector_ranges, in0_no_fabric_ranges, in0_fabric_ranges;
+    // In single-band-only mode, only the active band gets the normal fabric/injector/receiver kernels; the
+    // isolated band's rows are compiled as MATMUL_ISOLATION (injector + receivers, no fabric/mux) so they
+    // relay/compute locally without touching the mux -> only the active band's senders use it.
+    std::vector<CoreRange> in0_iso_injector_ranges, in0_iso_receiver_ranges;
+    if (single_band_only) {
+        // Isolated band = rows [iso_lo, iso_hi]: injector at the band low edge, receivers the rest.
+        std::size_t iso_lo = (std::size_t)iso_band * n_band_cores;
+        std::size_t iso_hi = (std::size_t)(iso_band + 1) * n_band_cores - 1;
+        if (transpose_core_grid) {
+            in0_iso_injector_ranges.emplace_back(CoreCoord{0, iso_lo}, CoreCoord{grid_size.x - 1, iso_lo});
+            in0_iso_receiver_ranges.emplace_back(CoreCoord{0, iso_lo + 1}, CoreCoord{grid_size.x - 1, iso_hi});
+        } else {
+            in0_iso_injector_ranges.emplace_back(CoreCoord{iso_lo, 0}, CoreCoord{iso_lo, grid_size.y - 1});
+            in0_iso_receiver_ranges.emplace_back(CoreCoord{iso_lo + 1, 0}, CoreCoord{iso_hi, grid_size.y - 1});
+        }
+    }
+    // The single active band (mirror of iso_band) when single-band-only; 0 in normal mode. Pins the
+    // termination master and the active band's fabric-row positions below.
+    uint32_t first_active_band = single_band_only ? ((m_fold - 1) - iso_band) : 0u;
+    for (uint32_t band = 0; band < m_fold; ++band) {
+        if (single_band_only && band == iso_band) {
+            continue;  // isolated band gets MATMUL_ISOLATION kernels, not the normal fabric/injector set
+        }
+        uint32_t lo = band * n_band_cores;              // injector position (band low edge)
+        uint32_t fab0 = (band + 1) * n_band_cores - 2;  // first fabric position (band high edge)
+        uint32_t fab1 = (band + 1) * n_band_cores - 1;  // second fabric position
+        if (transpose_core_grid) {
+            in0_injector_ranges.emplace_back(CoreCoord{0, lo}, CoreCoord{grid_size.x - 1, lo});
+            if (fab0 > lo + 1) {
+                in0_no_fabric_ranges.emplace_back(CoreCoord{0, lo + 1}, CoreCoord{grid_size.x - 1, fab0 - 1});
+            }
+            in0_fabric_ranges.emplace_back(CoreCoord{0, fab0}, CoreCoord{grid_size.x - 1, fab1});
+        } else {
+            in0_injector_ranges.emplace_back(CoreCoord{lo, 0}, CoreCoord{lo, grid_size.y - 1});
+            if (fab0 > lo + 1) {
+                in0_no_fabric_ranges.emplace_back(CoreCoord{lo + 1, 0}, CoreCoord{fab0 - 1, grid_size.y - 1});
+            }
+            in0_fabric_ranges.emplace_back(CoreCoord{fab0, 0}, CoreCoord{fab1, grid_size.y - 1});
+        }
+    }
+    CoreRangeSet in0_sender_cores(in0_injector_ranges);
+    CoreRangeSet in0_receiver_cores_no_fabric(in0_no_fabric_ranges);
+    CoreRangeSet in0_receiver_cores_fabric(in0_fabric_ranges);
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
@@ -510,7 +592,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t l1_unreserved_base_address =
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    auto num_full_size_channels = num_workers_per_link;
+    auto num_full_size_channels = channels_per_mux;
     auto num_header_only_channels = 0;
     size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
@@ -581,6 +663,18 @@ all_gather_minimal_matmul_async_factory_helper(
     if (env_profiling_mode != nullptr && std::string(env_profiling_mode) == "1") {
         defines["MATMUL_ISOLATION_MODE"] = "1";
         matmul_isolation = true;
+    }
+    // Diagnostic: skip the in0/in1 DATA writes for the lower M-half (band 0), keeping all handshake
+    // semaphores so the gather doesn't deadlock. Isolates band-0's fabric data volume at fixed channels.
+    const char* skip_top_half_env = std::getenv("AGMM_SKIP_TOP_HALF_DATA");
+    if (skip_top_half_env != nullptr && std::string(skip_top_half_env) == "1") {
+        defines["SKIP_TOP_M_HALF_FABRIC"] = "1";
+    }
+    // Mirror of the above for the upper M-half (band 1): keeps all handshake semaphores, suppresses only
+    // the data writes, so the mux stays at full channel count with the bottom half sending nothing.
+    const char* skip_bottom_half_env = std::getenv("AGMM_SKIP_BOTTOM_HALF_DATA");
+    if (skip_bottom_half_env != nullptr && std::string(skip_bottom_half_env) == "1") {
+        defines["SKIP_BOTTOM_M_HALF_FABRIC"] = "1";
     }
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
@@ -697,6 +791,36 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = in0_receiver_no_fabric_compile_time_args,
             .defines = in0_defines});
 
+    // Single-band-only: the isolated band's in0 cores run MATMUL_ISOLATION (no fabric send, no
+    // fabric-recv-wait, no mux connect) so they compute/relay locally without occupying a mux channel.
+    // Injector reads DRAM (sender CT args, is_injector=true); the rest are receivers (no-fabric CT args).
+    tt::tt_metal::KernelHandle in0_sender_iso_kernels_id{};
+    tt::tt_metal::KernelHandle in0_no_fabric_iso_kernels_id{};
+    if (single_band_only) {
+        auto in0_iso_defines = in0_defines;
+        in0_iso_defines["MATMUL_ISOLATION_MODE"] = "1";
+        in0_sender_iso_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
+            "dm_in0_sender.cpp",
+            CoreRangeSet(in0_iso_injector_ranges),
+            tt::tt_metal::DataMovementConfig{
+                .processor = in0_risc,
+                .noc = in0_noc,
+                .compile_args = in0_sender_compile_time_args,
+                .defines = in0_iso_defines});
+        in0_no_fabric_iso_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
+            "dm_in0_sender.cpp",
+            CoreRangeSet(in0_iso_receiver_ranges),
+            tt::tt_metal::DataMovementConfig{
+                .processor = in0_risc,
+                .noc = in0_noc,
+                .compile_args = in0_receiver_no_fabric_compile_time_args,
+                .defines = in0_iso_defines});
+    }
+
     std::vector<uint32_t> in0_receiver_fabric_compile_time_args = {
         M_tiles,
         padded_M_tiles,
@@ -725,7 +849,7 @@ all_gather_minimal_matmul_async_factory_helper(
         N_tiles_per_chunk,  // N_tiles_per_chunk
     };
     fabric_mux_connection_ct_args(
-        num_workers_per_link,
+        channels_per_mux,  // num_mux_clients: each band contributes a client per column to the shared mux
         tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
         mux_kernel_config,
         in0_receiver_fabric_compile_time_args);
@@ -940,6 +1064,10 @@ all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_sender_kernels_id, in0_common_args);
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_fabric_kernels_id, in0_common_args);
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, in0_common_args);
+        if (single_band_only) {
+            tt::tt_metal::SetCommonRuntimeArgs(program, in0_sender_iso_kernels_id, in0_common_args);
+            tt::tt_metal::SetCommonRuntimeArgs(program, in0_no_fabric_iso_kernels_id, in0_common_args);
+        }
     }
 
     // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
@@ -977,19 +1105,27 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
+        // Which m_fold band this core belongs to (partition of the in1-parallel axis), and the band's
+        // low-edge coordinate. The in0 chain is confined to the band; the in1 chain spans the full axis.
+        uint32_t band = in1_idx / n_band_cores;
+        uint32_t band_offset = band * n_band_cores;
+
         CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
+        CoreCoord in0_band_edge = transpose_core_grid ? CoreCoord{(std::size_t)core.x, (std::size_t)band_offset}
+                                                      : CoreCoord{(std::size_t)band_offset, (std::size_t)core.y};
 
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
             core,
             transpose_core_grid,
-            in1_parallel_axis_cores,
+            n_band_cores,
             in0_noc,
             /*axis_is_x_when_not_transposed=*/true,
-            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core),
-            /*force_increasing=*/false);  // chain direction follows in0_noc: increasing on NOC_0 (transposed),
-                                          // decreasing on NOC_1 (non-transposed). Role indices below use the same
-                                          // predicate.
+            /*initial_endpoint=*/in0_band_edge,
+            /*force_increasing=*/false,  // chain direction follows in0_noc: increasing on NOC_0 (transposed),
+                                         // decreasing on NOC_1 (non-transposed). Role indices below use the same
+                                         // predicate.
+            /*axis_offset=*/band_offset);
 
         auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
             core,
@@ -1023,10 +1159,14 @@ all_gather_minimal_matmul_async_factory_helper(
          * We can't yet get rid of these blocks, since the receiver cores must ack
          * all blocks that sender cores are expected to send.
          */
-        uint32_t M_start_tile = M_tiles_per_core * in0_idx;
-        uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
-        uint32_t N_start_tile = N_tiles_per_core * in1_idx;
-        uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
+        // Bands stack along M: each band's columns own a distinct M-range, while N is indexed within the
+        // band (so every band covers the full N — in1 is replicated across bands).
+        uint32_t folded_m_idx = in0_idx + band * in0_parallel_axis_cores;
+        uint32_t row_in_band = in1_idx - band_offset;
+        uint32_t M_start_tile = M_tiles_per_core * folded_m_idx;
+        uint32_t M_end_tile = M_tiles_per_core * (folded_m_idx + 1);
+        uint32_t N_start_tile = N_tiles_per_core * row_in_band;
+        uint32_t N_end_tile = N_tiles_per_core * (row_in_band + 1);
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
@@ -1060,13 +1200,31 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_core_order.size(),
             in0_fwd_idx,
             in0_bwd_idx};
-        if (in0_is_fabric_core) {
-            uint32_t worker_idx = in0_idx % num_workers_per_link;
-            const auto in0_bwd_core = in0_core_order.at(in0_bwd_idx);
-            const auto in0_fwd_core = in0_core_order.at(in0_fwd_idx);
+        // In single-band-only mode the isolated band has no mux, so skip its fabric/mux RT wiring entirely.
+        if (in0_is_fabric_core && !(single_band_only && band == iso_band)) {
+            // Channel id within the shared mux: band b occupies [b*nwpl, (b+1)*nwpl), so both bands of a
+            // column connect to the same mux core on distinct channels. The column group (mux selection)
+            // is band-independent.
+            // Channel id within the shared mux: band b uses [b*nwpl, (b+1)*nwpl). In single-band-only mode
+            // the active band is alone but the mux has just nwpl channels, so drop the band offset (use 0..nwpl-1).
+            uint32_t worker_idx =
+                (in0_idx % num_workers_per_link) + (single_band_only ? 0u : band * num_workers_per_link);
+            uint32_t col_group_start = (in0_idx / num_workers_per_link) * num_workers_per_link;
+            // One band holds the single termination master per mux. Its fabric rows sit at that band's high
+            // edge (n_band_cores-1 fwd, n_band_cores-2 bwd) regardless of NOC direction. Without pinning the
+            // master to one band, every band's column-group-start core would claim master for the same mux.
+            // Normally the master band is 0; in single-band-only mode it's the active band (rows shifted by
+            // its band offset), so derive the positions from first_active_band.
+            uint32_t band0_bwd_pos = (first_active_band + 1) * n_band_cores - 2;
+            uint32_t band0_fwd_pos = (first_active_band + 1) * n_band_cores - 1;
+            // The termination master is band 0's group-start core normally; in single-band-only mode the
+            // active band is alone, so it owns the master.
+            bool is_termination_master =
+                (single_band_only ? (band == first_active_band) : (band == 0)) && !(in0_idx % num_workers_per_link);
+
             auto termination_master_logical_core_backward = transpose_core_grid
-                                                                ? CoreCoord(in0_idx - worker_idx, in0_bwd_core.y)
-                                                                : CoreCoord(in0_bwd_core.x, in0_idx - worker_idx);
+                                                                ? CoreCoord(col_group_start, band0_bwd_pos)
+                                                                : CoreCoord(band0_bwd_pos, col_group_start);
             CoreCoord termination_master_virtual_core_backward =
                 device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
@@ -1077,7 +1235,7 @@ all_gather_minimal_matmul_async_factory_helper(
             CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(0),
-                (in0_core_order_index == in0_bwd_idx) && !(in0_idx % num_workers_per_link),
+                (in0_core_order_index == in0_bwd_idx) && is_termination_master,
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core_backward,
                 worker_idx,
@@ -1088,8 +1246,8 @@ all_gather_minimal_matmul_async_factory_helper(
                 in0_args);
 
             auto termination_master_logical_core_forward = transpose_core_grid
-                                                               ? CoreCoord(in0_idx - worker_idx, in0_fwd_core.y)
-                                                               : CoreCoord(in0_fwd_core.x, in0_idx - worker_idx);
+                                                               ? CoreCoord(col_group_start, band0_fwd_pos)
+                                                               : CoreCoord(band0_fwd_pos, col_group_start);
             CoreCoord termination_master_virtual_core_forward =
                 device->worker_core_from_logical_core(termination_master_logical_core_forward);
 
@@ -1100,7 +1258,7 @@ all_gather_minimal_matmul_async_factory_helper(
             CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
             fabric_mux_connection_rt_args(
                 mux_connection_valid(1),
-                (in0_core_order_index == in0_fwd_idx) && !(in0_idx % num_workers_per_link),
+                (in0_core_order_index == in0_fwd_idx) && is_termination_master,
                 tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                 mux_virtual_core_forward,
                 worker_idx,
@@ -1110,7 +1268,14 @@ all_gather_minimal_matmul_async_factory_helper(
                 termination_master_virtual_core_forward,
                 in0_args);
         }
-        if (in0_core_order_index == 0) {
+        if (single_band_only && band == iso_band) {
+            // Isolated band: injector reads DRAM, the rest relay locally; no fabric/mux args.
+            if (in0_core_order_index == 0) {
+                SetRuntimeArgs(program, in0_sender_iso_kernels_id, core, in0_args);
+            } else {
+                SetRuntimeArgs(program, in0_no_fabric_iso_kernels_id, core, in0_args);
+            }
+        } else if (in0_core_order_index == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else if (in0_is_fabric_core) {

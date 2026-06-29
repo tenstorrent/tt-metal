@@ -59,6 +59,17 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
+    // Diagnostic: a core in the lower M-half (band 0) skips its actual in1 relay DATA writes but still
+    // raises the "data ready" semaphore, so the chain handshake stays intact (no hang). Isolates the
+    // effect of removing band-0's weight data volume at a fixed channel count.
+#ifdef SKIP_TOP_M_HALF_FABRIC
+    const bool skip_my_fabric_data = (M_start_tile < (padded_M_tiles / 2));
+#elif defined(SKIP_BOTTOM_M_HALF_FABRIC)
+    const bool skip_my_fabric_data = (M_start_tile >= (padded_M_tiles / 2));
+#else
+    constexpr bool skip_my_fabric_data = false;
+#endif
+
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<20>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
@@ -148,10 +159,10 @@ void kernel_main() {
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("AVAILABLE");
+                DeviceZoneScopedN("WGT-BLOCK");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        DeviceZoneScopedN("DEFER-WRITE");
+                        DeviceZoneScopedN("WRITE-OUT");
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
                         // write_block_sync_split is more generic (support multiple output tensors)
@@ -185,7 +196,7 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
-                    DeviceZoneScopedN("DRAM-Latency");
+                    DeviceZoneScopedN("READ-DRAM-WGT");
                     uint32_t k_block_left_tile = 0;
                     uint32_t k_block_right_tile = 0;
                     uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
@@ -215,7 +226,7 @@ void kernel_main() {
                         n_tile,
                         n_tile_end);
                 } else {
-                    DeviceZoneScopedN("RECV-WAIT");
+                    DeviceZoneScopedN("WAIT-LEFT");
                     noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
@@ -226,23 +237,29 @@ void kernel_main() {
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+                    {
+                        DeviceZoneScopedN("WAIT-RIGHT");
+                        noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
+                        noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+                    }
+                    DeviceZoneScopedN("SEND-RIGHT");
 
                     /**
                      * in1 is K_block_tiles x N_block_tiles. When N block is partial, we don't need to write the
                      * padded tiles. For each tile in the K block, write only the non-padded N tiles. Use
                      * `current_N_tiles_bytes`.
                      */
-                    for (uint32_t i = 0; i < K_block_tiles; i++) {
-                        uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
-                        noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
-                        in1_start_address += full_N_tiles_bytes;
-                    }
+                    if (!skip_my_fabric_data) {
+                        for (uint32_t i = 0; i < K_block_tiles; i++) {
+                            uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
+                            noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
+                            in1_start_address += full_N_tiles_bytes;
+                        }
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                        noc_async_writes_flushed();
 #endif
+                    }
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }

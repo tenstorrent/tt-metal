@@ -139,7 +139,7 @@ void compute_actual_k_block(
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
-            DeviceZoneScopedN("FAB-RECV-WAIT");
+            DeviceZoneScopedN("WAIT-FABRIC");
             noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
             sem_target_forward += in0_core_order_size;
             noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);

@@ -70,6 +70,8 @@ def run_test_linear_impl(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    m_fold=1,
+    num_buffers_per_channel=48,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -169,6 +171,7 @@ def run_test_linear_impl(
         subblock_h=subblock_h,
         subblock_w=subblock_w,
         compute_with_storage_grid_size=core_grid,
+        m_fold=m_fold,
     )
 
     tt_output_tensor_list = []
@@ -240,7 +243,7 @@ def run_test_linear_impl(
                 barrier_semaphore=barrier_semaphore_handles[0] if not use_persistent_buffers else None,
                 force_transpose=force_transpose,
                 num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=num_buffers_per_channel,
                 scalar=addcmul_scalar,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
@@ -375,6 +378,8 @@ def run_test_linear(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    m_fold=1,
+    num_buffers_per_channel=48,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -469,6 +474,8 @@ def run_test_linear(
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
         broadcast_gate=broadcast_gate,
+        m_fold=m_fold,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
 
@@ -583,6 +590,25 @@ def run_test_linear(
             9,
             0,
         ],
+        [
+            # 16-device 2x8 carve: pair with a MESH (LINE/LINE) custom descriptor via
+            # TT_MESH_GRAPH_DESC_PATH. FABRIC_1D requests MESH, matching the descriptor;
+            # FABRIC_1D_RING would demand a torus the carve has no wrap links for.
+            (2, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
     ],
     ids=[
         "2x4links1",
@@ -592,6 +618,7 @@ def run_test_linear(
         "wh4x8links4_linear",
         "bh4x8links2",
         "bh2x8links2",
+        "bh2x8links2_linear",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -633,6 +660,8 @@ def run_test_linear(
         (4864, 4096, 1024, True, True, None, 1, False, 16, 64, 4, 2, 2),
         # N=2048 models TP=2 column-parallel weight shape; Nb=8 is the per-row ceiling at N=2048
         (4864, 4096, 2048, True, True, None, 1, False, 8, 8, 8, 2, 2),
+        # M=2560 (5 tiles/dev) is the nearest SP=16-legal M: per-device M must tile-align.
+        (2560, 4096, 2048, True, True, None, 1, False, 8, 8, 8, 2, 2),
     ],
     ids=[
         "4k4k4k",
@@ -666,6 +695,7 @@ def run_test_linear(
         "4864x4096x1024-kb32",
         "4864x4096x1024-kb64",
         "4864x4096x2048-nb8",
+        "2560x4096x2048",
     ],
 )
 @pytest.mark.parametrize(

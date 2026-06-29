@@ -20,6 +20,11 @@ struct MinimalMatmulConfig {
     uint32_t subblock_w{};
 
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
+
+    // Stack m_fold M-ranges along the in1-parallel (N) axis: the N axis is split into m_fold bands,
+    // each computing a distinct M-range against the full N. Raises per-core N (better masking of the
+    // in0 fabric gather) at the cost of replicated in1. m_fold=1 is the unfolded layout.
+    uint32_t m_fold = 1;
 };
 
 struct MinimalMatmulParams {

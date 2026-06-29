@@ -141,6 +141,17 @@ void kernel_main() {
     const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 
+    // Diagnostic: a core in the lower M-half (band 0, M0..M/2) skips its actual fabric/relay DATA writes
+    // but still raises every "data ready" semaphore, so the gather handshake stays intact (no hang).
+    // Isolates the effect of removing band-0's in0 data volume at a fixed channel count.
+#ifdef SKIP_TOP_M_HALF_FABRIC
+    const bool skip_my_fabric_data = (M_start_tile < (padded_M_tiles / 2));
+#elif defined(SKIP_BOTTOM_M_HALF_FABRIC)
+    const bool skip_my_fabric_data = (M_start_tile >= (padded_M_tiles / 2));
+#else
+    constexpr bool skip_my_fabric_data = false;
+#endif
+
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr);
@@ -293,10 +304,10 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("AVAILABLE");
+                DeviceZoneScopedN("ACT-BLOCK");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        DeviceZoneScopedN("DEFER-WRITE");
+                        DeviceZoneScopedN("WRITE-OUT");
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
@@ -362,9 +373,9 @@ void kernel_main() {
                     k_block_right_tile);
 
                 {
-                    DeviceZoneScopedN("SNF-CHAIN");
+                    DeviceZoneScopedN("ACT-ACQUIRE");
                     if (is_injector_core) {
-                        DeviceZoneScopedN("DRAM-Latency");
+                        DeviceZoneScopedN("READ-DRAM-ACT");
                         read_in0_block_sync<M_block_tiles, K_block_tiles>(
                             in0_reader,
                             in0_shape,
@@ -386,7 +397,7 @@ void kernel_main() {
                             k_right_tiles);
                     } else {
                         // Get from previous device
-                        DeviceZoneScopedN("RECV-WAIT");
+                        DeviceZoneScopedN("WAIT-UP");
                         noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                         noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                         noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
@@ -396,10 +407,12 @@ void kernel_main() {
                     // This frees sender to start next read earlier
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
                     if (!is_sink_core) {
-                        DeviceZoneScopedN("NOC-LATENCY");
-                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-
+                        {
+                            DeviceZoneScopedN("WAIT-DN");
+                            noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                            noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                        }
+                        DeviceZoneScopedN("SEND-DN");
                         uint64_t in0_unicast_data_addr =
                             get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
@@ -407,11 +420,13 @@ void kernel_main() {
                          * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                          * padded tiles. Use `current_block_bytes`.
                          */
-                        noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                        if (!skip_my_fabric_data) {
+                            noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
-                        noc_async_writes_flushed();
+                            noc_async_writes_flushed();
 #endif
+                        }
 
                         noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                     }
@@ -419,7 +434,7 @@ void kernel_main() {
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
-                    DeviceZoneScopedN("FABRIC-SEND");
+                    DeviceZoneScopedN("SEND-FABRIC");
 
                     bool forward_slice = false;
                     if (k_block_iter < (K_num_blocks - (K_num_blocks / num_devices))) {
@@ -445,7 +460,7 @@ void kernel_main() {
                                 out_ready_sem_injector_noc_addr_forward_in_pkt,
                                 true,
                                 M_tiles,
-                                true);
+                                !skip_my_fabric_data);
                         } else if (in0_core_order_index == backward_in0_core_order_index) {
                             // If backward, send forward
                             forward_half_block_to_fabric_neighbor(
@@ -464,7 +479,7 @@ void kernel_main() {
                                 out_ready_sem_injector_noc_addr_backward_in_pkt,
                                 false,
                                 M_tiles,
-                                true);
+                                !skip_my_fabric_data);
                         }
                     }
                 }

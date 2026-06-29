@@ -137,22 +137,24 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("dtype") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
-    auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
-                                        mod,
-                                        "MinimalMatmulConfig",
-                                        R"doc(
+    auto py_minimal_matmul_config =
+        nb::class_<MinimalMatmulConfig>(
+            mod,
+            "MinimalMatmulConfig",
+            R"doc(
                             Configuration for the MinimalMatmul operation.
                             )doc")
-                                        .def(nb::init<>())
-                                        .def(
-                                            nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
-                                            nb::kw_only(),
-                                            nb::arg("M_block_size") = 1,
-                                            nb::arg("K_block_size") = 1,
-                                            nb::arg("N_block_size") = 1,
-                                            nb::arg("subblock_h") = 1,
-                                            nb::arg("subblock_w") = 1,
-                                            nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
+            .def(nb::init<>())
+            .def(
+                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord, uint32_t>(),
+                nb::kw_only(),
+                nb::arg("M_block_size") = 1,
+                nb::arg("K_block_size") = 1,
+                nb::arg("N_block_size") = 1,
+                nb::arg("subblock_h") = 1,
+                nb::arg("subblock_w") = 1,
+                nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}),
+                nb::arg("m_fold") = 1);
 
     py_minimal_matmul_config.def_rw("M_block_size", &MinimalMatmulConfig::M_block_size, "");
     py_minimal_matmul_config.def_rw("K_block_size", &MinimalMatmulConfig::K_block_size, "");
@@ -161,6 +163,7 @@ void bind_minimal_matmul(nb::module_& mod) {
     py_minimal_matmul_config.def_rw("subblock_w", &MinimalMatmulConfig::subblock_w, "");
     py_minimal_matmul_config.def_rw(
         "compute_with_storage_grid_size", &MinimalMatmulConfig::compute_with_storage_grid_size, "");
+    py_minimal_matmul_config.def_rw("m_fold", &MinimalMatmulConfig::m_fold, "");
 
     py_minimal_matmul_config.def(
         "__repr__", [](const MinimalMatmulConfig& config) { return fmt::format("{}", config); });
