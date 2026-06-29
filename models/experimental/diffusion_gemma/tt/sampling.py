@@ -127,8 +127,16 @@ def _rand_mesh_mapper(device):
     return None
 
 
+def _validate_ttnn_rand_seed(seed: int) -> int:
+    seed = int(seed)
+    if seed <= 0:
+        raise ValueError("TTNN regenerated Gumbel noise requires a positive nonzero seed")
+    return seed
+
+
 def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
     """Generate device Gumbel(0,1) noise with a deterministic TTNN rand seed."""
+    seed = _validate_ttnn_rand_seed(seed)
     u = ttnn.rand(
         shape,
         device=device,
@@ -150,6 +158,7 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
     the vocab axis first and permuting back preserves one random draw per logits
     element while avoiding that correlation in W4 distributional validation.
     """
+    seed = _validate_ttnn_rand_seed(seed)
     shape = tuple(shape)
     if len(shape) < 2:
         raise ValueError("shape must include at least a sample axis and a vocab axis")
@@ -178,6 +187,7 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
     distinct seed removes that toy-vocab bias, but this is intentionally a
     validation/diagnostic path rather than the full-vocab production sampler.
     """
+    seed = _validate_ttnn_rand_seed(seed)
     if vocab_chunk_size <= 0:
         raise ValueError("vocab_chunk_size must be positive")
 

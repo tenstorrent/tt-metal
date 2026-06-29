@@ -55,6 +55,14 @@ def test_canvas_sampling_params_rejects_greedy_temperature():
         canvas_sampling_config_from_params(params, default_temperature=0.8)
 
 
+@pytest.mark.parametrize("seed", [0, -1])
+def test_canvas_sampling_params_rejects_nonpositive_seed(seed):
+    params = {"temperature": 0.8, "seed": seed}
+
+    with pytest.raises(ValueError, match="positive nonzero"):
+        canvas_sampling_config_from_params(params, default_temperature=0.8)
+
+
 def test_canvas_sample_from_params_requires_noise_or_seed():
     params = {"temperature": 0.8}
 

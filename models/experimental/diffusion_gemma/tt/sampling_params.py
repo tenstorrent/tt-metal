@@ -62,6 +62,8 @@ def canvas_sampling_config_from_params(
 
     raw_seed = _first_value(_get_param(sampling_params, "seed", default_seed))
     seed = None if raw_seed is None else int(raw_seed)
+    if seed is not None and seed <= 0:
+        raise ValueError("DiffusionGemma canvas sampling seed must be a positive nonzero integer")
 
     raw_top_k = _first_value(_get_param(sampling_params, "top_k", None))
     top_k = None if raw_top_k is None else int(raw_top_k)

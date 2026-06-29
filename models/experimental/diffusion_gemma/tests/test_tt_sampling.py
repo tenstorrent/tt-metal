@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
 
@@ -42,3 +44,15 @@ def test_rand_mesh_mapper_replicates_over_flattened_mesh(monkeypatch):
 
 def test_rand_mesh_mapper_single_device_returns_none():
     assert TS._rand_mesh_mapper(_FakeDevice(num_devices=1)) is None
+
+
+@pytest.mark.parametrize("seed", [0, -3])
+def test_ttnn_gumbel_noise_helpers_reject_nonpositive_seed(seed):
+    device = _FakeDevice(num_devices=1)
+
+    with pytest.raises(ValueError, match="positive nonzero"):
+        TS.sample_gumbel_noise((1, 1, 32, 32), device=device, seed=seed)
+    with pytest.raises(ValueError, match="positive nonzero"):
+        TS.sample_gumbel_noise_with_permuted_vocab((1, 1, 32, 32), device=device, seed=seed)
+    with pytest.raises(ValueError, match="positive nonzero"):
+        TS.sample_gumbel_noise_by_vocab_chunks((1, 1, 32, 32), device=device, seed=seed)
