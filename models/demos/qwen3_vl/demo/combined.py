@@ -15,6 +15,7 @@ from transformers import AutoProcessor
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 
 import ttnn
+from models.demos.qwen3_vl.tt.common import get_hf_visual
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 
@@ -121,7 +122,7 @@ def test_qwen_vl_end_to_end(
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_new_tokens)
-        model.model.visual = DropInVisionTransformer(model.visual, model_args, debug=True)  # show PCC
+        model.model.visual = DropInVisionTransformer(get_hf_visual(model), model_args, debug=True)  # show PCC
 
     # Run inference
     logger.info("Running model generation...")

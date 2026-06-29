@@ -394,33 +394,6 @@ AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsync
     return output_tensors;
 }
 
-tt::tt_metal::operation::Hash AllGatherMinimalMatmulAsyncOp::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllGatherMinimalMatmulAsyncOp::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<AllGatherMinimalMatmulAsyncOp>(
-        attributes.num_links,
-        attributes.ring_size,
-        attributes.output_mem_config,
-        attributes.topology,
-        attributes.cluster_axis,
-        attributes.force_transpose,
-        attributes.num_workers_per_link,
-        attributes.num_buffers_per_channel,
-        attributes.config.value().M_block_size,
-        attributes.config.value().K_block_size,
-        attributes.config.value().N_block_size,
-        attributes.config.value().subblock_h,
-        attributes.config.value().subblock_w,
-        attributes.fsdp_cluster_axis,
-        attributes.fsdp_ring_size,
-        attributes.using_persistent_weight_buffer,
-        tensor_args,
-        program_factory.index());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

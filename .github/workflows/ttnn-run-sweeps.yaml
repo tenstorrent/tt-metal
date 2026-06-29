@@ -992,6 +992,15 @@ jobs:
           jq . /tmp/sweep_matrix.pretty.json
           echo "::endgroup::"
 
+      - name: Verify sweep budget
+        shell: bash
+        run: |
+          pip3 install PyYAML > /dev/null 2>&1
+          python3 .github/scripts/utils/verify_time_budget.py \
+            tests/pipeline_reorg/ttnn_sweep_tests.yaml \
+            .github/time_budget.yaml \
+            sweep
+
   ttnn-run-single-sweep:
     name: Run single sweep
     needs: [resolve-inputs, build-artifact, ttnn-generate-sweeps]
