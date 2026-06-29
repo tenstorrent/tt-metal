@@ -25,6 +25,8 @@ void kernel_main() {
     uint32_t end_row = get_arg_val<uint32_t>(3);
     uint32_t num_rows_in_dim = get_arg_val<uint32_t>(4);
     uint32_t dim_size = get_arg_val<uint32_t>(5);
+    uint32_t col_shard_id = get_arg_val<uint32_t>(6);
+    uint32_t row_page_stride = get_arg_val<uint32_t>(7);
 
     // Derived
     constexpr uint32_t src_cb_id = tt::CBIndex::c_0;
@@ -57,7 +59,7 @@ void kernel_main() {
             // Read input page
             cb_reserve_back(src_cb_id, onepage);
             uint32_t input_addr = get_write_ptr(src_cb_id);
-            uint64_t input_noc_addr = s0.get_noc_addr(row_id);
+            uint64_t input_noc_addr = s0.get_noc_addr(row_id * row_page_stride + col_shard_id);
             noc_async_read(input_noc_addr, input_addr, input_page_size);
             noc_async_read_barrier();
             cb_push_back(src_cb_id, onepage);

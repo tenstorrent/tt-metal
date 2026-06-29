@@ -54,7 +54,12 @@ void bind_index_fill_operation(nb::module_& mod) {
                     - TILE
 
             Memory Support:
-                - Interleaved: DRAM and L1
+                - Interleaved (DRAM or L1): output may be any supported layout
+                - Height sharded (DRAM or L1): output may be any supported layout
+                - Width sharded (DRAM or L1): output must be interleaved, height sharded, or width sharded
+                  with the same shard spec; conversion to block sharded is not supported
+                - Block sharded (DRAM or L1): output must be interleaved, height sharded, or block sharded
+                  with the same shard spec; conversion to width sharded is not supported
 
             Limitations:
                 -  The input tensor must be on the device.
