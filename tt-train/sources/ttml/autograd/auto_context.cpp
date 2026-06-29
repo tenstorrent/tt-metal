@@ -29,6 +29,9 @@ std::string AutoContext::get_generator_state() const {
 void AutoContext::set_generator_state(const std::string& state) {
     std::istringstream iss(state);
     iss >> m_generator;
+    if (iss.fail()) {
+        throw std::runtime_error("Failed to deserialize RNG generator state.");
+    }
 }
 
 void AutoContext::set_seed(uint32_t seed) {
