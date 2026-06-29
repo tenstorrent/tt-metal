@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import OrderedDict
 from typing import List
 
 import pytest
@@ -22,9 +23,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
@@ -148,23 +151,59 @@ ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinatio
 )
 
 
-@pytest.mark.quasar
-@parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
-)
-def test_unpack_unary_operand_quasar(
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
-    boot_mode=BootMode.DEFAULT,
-):
-    (
-        formats,
+def _split_unpack_unary_operand_combinations(combinations):
+    """Split the bundled sweep into a compile-time key and its runtime payloads.
+
+    `(dimensions, tile_dims)` only feed stimuli / runtime args (TILE_COUNT, NUM_FACES,
+    face dims) and never the compiled kernel, so they are collapsed in
+    --compile-producer. `(formats, dest_acc, dest_sync, transpose_en, unpacker_sel)`
+    drive formats / dest_acc / templates and stay compile-time. Grouping reuses the
+    exact generator output (keyed by repr, since FormatConfig is an unhashable
+    dataclass), preserving per-combo constraints (e.g. transpose only with 32x32).
+    """
+    payloads_by_key = OrderedDict()
+    combo_by_key = OrderedDict()
+    for (
+        fmt,
         dest_acc,
-        dest_sync_mode,
+        dest_sync,
         transpose_en,
         unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
+        dimensions,
+        tile_dims,
+    ) in combinations:
+        compile_combo = (fmt, dest_acc, dest_sync, transpose_en, unpacker_sel)
+        key = repr(compile_combo)
+        combo_by_key.setdefault(key, compile_combo)
+        payloads_by_key.setdefault(key, []).append((dimensions, tile_dims))
+    return list(combo_by_key.values()), payloads_by_key
+
+
+UNPACK_UNARY_COMPILE_COMBOS, UNPACK_UNARY_RUNTIME_PAYLOADS = (
+    _split_unpack_unary_operand_combinations(ALL_UNPACK_UNARY_OPERAND_COMBINATIONS)
+)
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats_dest_acc_sync_transpose_unpack_sel=compile_time(
+        UNPACK_UNARY_COMPILE_COMBOS
+    ),
+    dims_tile=runtime(
+        lambda formats_dest_acc_sync_transpose_unpack_sel: UNPACK_UNARY_RUNTIME_PAYLOADS[
+            repr(formats_dest_acc_sync_transpose_unpack_sel)
+        ]
+    ),
+)
+def test_unpack_unary_operand_quasar(
+    formats_dest_acc_sync_transpose_unpack_sel,
+    dims_tile,
+    boot_mode=BootMode.DEFAULT,
+):
+    formats, dest_acc, dest_sync_mode, transpose_en, unpacker_sel = (
+        formats_dest_acc_sync_transpose_unpack_sel
+    )
+    input_dimensions, tile_dimensions = dims_tile
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

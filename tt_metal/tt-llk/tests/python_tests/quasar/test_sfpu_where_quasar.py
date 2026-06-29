@@ -15,9 +15,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -100,12 +102,17 @@ def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=_get_valid_formats_dest_acc(),
-    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
-        formats_dest_acc[0]
+    formats_dest_acc=compile_time(_get_valid_formats_dest_acc()),
+    implied_math_format=compile_time(
+        lambda formats_dest_acc: _get_valid_implied_math_formats(formats_dest_acc[0])
     ),
-    test_case=["mixed", "all_ones", "all_zeros"],
-    vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
+    # test_case only chooses the condition stimuli regime (via
+    # _build_condition_for_test_case); it does not affect the compiled kernel, so it
+    # is collapsed in --compile-producer.
+    test_case=runtime(["mixed", "all_ones", "all_zeros"]),
+    vector_mode=compile_time(
+        [VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC]
+    ),
 )
 def test_sfpu_where_quasar(
     formats_dest_acc, implied_math_format, test_case, vector_mode
@@ -217,11 +224,13 @@ def test_sfpu_where_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=_get_valid_formats_dest_acc()[:3],
-    implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
-        formats_dest_acc[0]
+    formats_dest_acc=compile_time(_get_valid_formats_dest_acc()[:3]),
+    implied_math_format=compile_time(
+        lambda formats_dest_acc: _get_valid_implied_math_formats(formats_dest_acc[0])
     ),
-    vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
+    vector_mode=compile_time(
+        [VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC]
+    ),
 )
 def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mode):
     """

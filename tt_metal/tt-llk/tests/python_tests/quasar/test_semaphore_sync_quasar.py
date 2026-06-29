@@ -19,7 +19,7 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import compile_time, input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -38,22 +38,26 @@ from helpers.utils import passed_test
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ],
+    formats=compile_time(
+        input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.MxFp4,
+                DataFormat.MxInt8,
+                DataFormat.MxInt4,
+                DataFormat.MxInt2,
+            ],
+        )
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    dest_sync=[DestSync.Full, DestSync.Half],
+    dest_acc=compile_time([DestAccumulation.No, DestAccumulation.Yes]),
+    dest_sync=compile_time([DestSync.Full, DestSync.Half]),
     # MX formats require implied_math_format=Yes on Quasar (bypass format inference pipeline).
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
+    implied_math_format=compile_time(
+        lambda formats: (
+            [ImpliedMathFormat.No]
+            if not formats.input_format.is_mx_format()
+            else [ImpliedMathFormat.Yes]
+        )
     ),
 )
 def test_semaphore_sync_quasar(

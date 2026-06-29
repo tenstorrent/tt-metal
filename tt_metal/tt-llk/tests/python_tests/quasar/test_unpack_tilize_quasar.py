@@ -20,6 +20,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -113,7 +114,12 @@ ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_unpack_sel_dimensions=ALL_UNPACK_TILIZE_COMBINATIONS,
+    # input_dimensions is baked into the kernel here (generate_input_dim / TILE_COUNT
+    # live in templates=[...], runtimes=[] is empty), so the whole tuple is compile-time
+    # and there is nothing to collapse.
+    formats_dest_acc_sync_unpack_sel_dimensions=compile_time(
+        ALL_UNPACK_TILIZE_COMBINATIONS
+    ),
 )
 def test_unpack_tilize_quasar(
     formats_dest_acc_sync_unpack_sel_dimensions, boot_mode=BootMode.DEFAULT

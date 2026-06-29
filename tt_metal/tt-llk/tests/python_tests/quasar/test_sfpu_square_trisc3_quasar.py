@@ -20,8 +20,10 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -50,15 +52,13 @@ from test_eltwise_unary_sfpu_quasar import (
 
 def generate_sfpu_square_combinations(formats_list):
     """
-    Square-only sweep for the TRISC3 variant: (fmt, dest_acc, dest_sync,
-    implied_math_format, input_dimensions) tuples. Uniform dims [32,32]/[64,64]
-    x {Half,Full} sync (the redundant [32,64] dim is dropped, matching the
-    consolidated unary test).
+    Square-only compile-time sweep for the TRISC3 variant: (fmt, dest_acc,
+    dest_sync, implied_math_format) tuples. input_dimensions is a separate
+    runtime axis (see below) since it does not affect the compiled kernel.
     """
     combinations = []
     dest_sync_modes = (DestSync.Half, DestSync.Full)
     implied_math_modes = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-    input_dimension_options = ([32, 32], [64, 64])
     for fmt in formats_list:
         in_fmt = fmt.input_format
         dest_acc_modes = (
@@ -71,35 +71,34 @@ def generate_sfpu_square_combinations(formats_list):
                 continue
             for dest_sync in dest_sync_modes:
                 for implied_math_format in implied_math_modes:
-                    for input_dimensions in input_dimension_options:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                dest_sync,
-                                implied_math_format,
-                                input_dimensions,
-                            )
-                        )
+                    combinations.append((fmt, dest_acc, dest_sync, implied_math_format))
     return combinations
+
+
+# input_dimensions only feeds stimuli / TILE_COUNT / golden (runtime), so it is a
+# separate runtime axis collapsed in --compile-producer. Uniform dims [32,32]/[64,64]
+# (the redundant [32,64] dim is dropped, matching the consolidated unary test).
+SFPU_SQUARE_INPUT_DIMENSIONS = [[32, 32], [64, 64]]
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_implied_math_dims=generate_sfpu_square_combinations(
-        SFPU_SQUARE_FORMATS
+    formats_dest_acc_sync_implied_math=compile_time(
+        generate_sfpu_square_combinations(SFPU_SQUARE_FORMATS)
     ),
+    input_dimensions=runtime(SFPU_SQUARE_INPUT_DIMENSIONS),
 )
 def test_sfpu_square_trisc3_quasar(
-    formats_dest_acc_sync_implied_math_dims,
+    formats_dest_acc_sync_implied_math,
+    input_dimensions,
 ):
     """
     Test square operation on Quasar with SFPU on TRISC3.
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    formats, dest_acc, dest_sync_mode, implied_math_format, input_dimensions = (
-        formats_dest_acc_sync_implied_math_dims[0]
+    formats, dest_acc, dest_sync_mode, implied_math_format = (
+        formats_dest_acc_sync_implied_math
     )
 
     torch.manual_seed(42)

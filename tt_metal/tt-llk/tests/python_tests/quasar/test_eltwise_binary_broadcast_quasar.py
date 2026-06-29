@@ -22,9 +22,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -47,41 +49,53 @@ FACE_ELEMS = 16 * 16
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
+    formats=compile_time(
+        input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.Float16,
+                DataFormat.MxFp4,
+                DataFormat.MxInt8,
+                DataFormat.MxInt4,
+                DataFormat.MxInt2,
+            ],
+        )
+        + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    ),
+    dest_acc=compile_time(lambda formats: get_valid_dest_accumulation_modes(formats)),
+    mathop=compile_time(
         [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ],
-    )
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    mathop=[
-        MathOperation.Elwadd,
-        MathOperation.Elwsub,
-        MathOperation.Elwmul,
-    ],
-    broadcast_type=[
-        BroadcastType.Column,
-        BroadcastType.Row,
-        BroadcastType.Scalar,
-    ],
-    math_fidelity=lambda formats, mathop: (
-        [MathFidelity.LoFi]
-        if formats.input_format == DataFormat.Int8
-        else get_valid_math_fidelities(formats, mathop)
+            MathOperation.Elwadd,
+            MathOperation.Elwsub,
+            MathOperation.Elwmul,
+        ]
     ),
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
+    broadcast_type=compile_time(
+        [
+            BroadcastType.Column,
+            BroadcastType.Row,
+            BroadcastType.Scalar,
+        ]
     ),
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
-        dest_acc, dest_sync_mode
+    math_fidelity=compile_time(
+        lambda formats, mathop: (
+            [MathFidelity.LoFi]
+            if formats.input_format == DataFormat.Int8
+            else get_valid_math_fidelities(formats, mathop)
+        )
+    ),
+    implied_math_format=compile_time(
+        lambda formats: (
+            [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+            if not formats.input_format.is_mx_format()
+            else [ImpliedMathFormat.Yes]
+        )
+    ),
+    dest_sync_mode=compile_time([DestSync.Half, DestSync.Full]),
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
+            dest_acc, dest_sync_mode
+        )
     ),
 )
 def test_eltwise_binary_broadcast_quasar(

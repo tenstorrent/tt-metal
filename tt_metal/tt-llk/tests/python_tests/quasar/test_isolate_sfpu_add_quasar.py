@@ -13,9 +13,11 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
 from helpers.param_config import (
+    compile_time,
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -49,24 +51,28 @@ SFPU_ADD_FORMATS = input_output_formats(
     ]
 )
 
-SFPU_ADD_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, input_dimensions)
+# input_dimensions only feeds stimuli / TILE_COUNT / golden (runtime); the rest is
+# compile-time. They are independent, so split into a compile-time key and a runtime
+# axis that collapses in --compile-producer.
+SFPU_ADD_COMPILE_COMBINATIONS = [
+    (fmt, dest_acc, implied_math_format)
     for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_ADD_FORMATS)
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    for input_dimensions in [[32, 32], [64, 64]]
 ]
+SFPU_ADD_INPUT_DIMENSIONS = [[32, 32], [64, 64]]
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
-def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
+@parametrize(
+    formats_dest_acc_implied_math=compile_time(SFPU_ADD_COMPILE_COMBINATIONS),
+    input_dimensions=runtime(SFPU_ADD_INPUT_DIMENSIONS),
+)
+def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math, input_dimensions):
     """
     Test isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only). Two input operands unpacked to SrcS, added, packed.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
-    )
+    (formats, dest_acc, implied_math_format) = formats_dest_acc_implied_math
 
     torch.manual_seed(42)
 

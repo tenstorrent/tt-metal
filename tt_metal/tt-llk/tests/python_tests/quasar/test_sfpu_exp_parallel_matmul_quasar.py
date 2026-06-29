@@ -30,6 +30,7 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
+    compile_time,
     generate_sfpu_format_dest_acc_combinations,
     parametrize,
 )
@@ -116,7 +117,10 @@ PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_COMBINATIONS,
+    # exp_input_dimensions is runtime-only but uniquely paired with the (compile-time)
+    # matmul A/B dims via DIMENSION_PROFILES (CRK_TILE_DIMM template), so there is one
+    # runtime value per compile combo and nothing to collapse: keep the bundle compile-time.
+    format_dest_acc_sync_implied_math=compile_time(PARALLEL_MATMUL_EXP_COMBINATIONS),
 )
 def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     (

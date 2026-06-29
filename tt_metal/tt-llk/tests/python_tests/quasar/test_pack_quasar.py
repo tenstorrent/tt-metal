@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import OrderedDict
 from typing import List
 
 import pytest
@@ -21,9 +22,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
@@ -171,19 +174,47 @@ PACK_FORMATS = input_output_formats(
 )
 
 
+def _split_pack_combinations(combinations):
+    """Split the bundled sweep into a compile-time key and its runtime payloads.
+
+    `(dimensions, relu_type, tile_dims)` only feed stimuli / runtime args (TILE_COUNT,
+    RELU_CONFIG, NUM_FACES, face dims) and never the compiled kernel, so they are
+    collapsed in --compile-producer. `(formats, dest_acc, dest_sync)` drive formats /
+    dest_acc / the DEST_SYNC template and stay compile-time. Grouping reuses the exact
+    generator output (keyed by repr, since FormatConfig is an unhashable dataclass).
+    """
+    payloads_by_key = OrderedDict()
+    combo_by_key = OrderedDict()
+    for (
+        fmt,
+        dest_acc,
+        dest_sync,
+        dimensions,
+        relu_type,
+        tile_dims,
+    ) in combinations:
+        compile_combo = (fmt, dest_acc, dest_sync)
+        key = repr(compile_combo)
+        combo_by_key.setdefault(key, compile_combo)
+        payloads_by_key.setdefault(key, []).append((dimensions, relu_type, tile_dims))
+    return list(combo_by_key.values()), payloads_by_key
+
+
+PACK_COMPILE_COMBOS, PACK_RUNTIME_PAYLOADS = _split_pack_combinations(
+    generate_qsr_pack_combinations(PACK_FORMATS)
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dims_relu=generate_qsr_pack_combinations(PACK_FORMATS),
+    formats_dest_acc_sync=compile_time(PACK_COMPILE_COMBOS),
+    dims_relu_tile=runtime(
+        lambda formats_dest_acc_sync: PACK_RUNTIME_PAYLOADS[repr(formats_dest_acc_sync)]
+    ),
 )
-def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        input_dimensions,
-        relu_type,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_dims_relu[0]
+def test_pack_quasar(formats_dest_acc_sync, dims_relu_tile, boot_mode=BootMode.DEFAULT):
+    formats, dest_acc, dest_sync_mode = formats_dest_acc_sync
+    input_dimensions, relu_type, tile_dimensions = dims_relu_tile
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

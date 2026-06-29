@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from collections import OrderedDict
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -25,8 +27,10 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
+    compile_time,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -68,6 +72,45 @@ def matmul_dimensions_dest_sync(dest_acc_modes):
     ]
 
 
+# Cache keyed by repr(format) so the compile axis and the runtime payload lambdas
+# (evaluated separately by the parametrize solver) see one consistent split.
+_MATMUL_DIM_GROUPS: dict = {}
+
+
+def _matmul_dim_groups(format):
+    """Split matmul variants into a compile-time and a runtime axis.
+
+    The tile dimensions (CT/RT/KT, output tile count) are uploaded to L1 at runtime
+    (matmul_quasar_test.cpp reads params.CT_DIM/RT_DIM/KT_DIM; the math kernel uses the
+    register SETRWC form so runtime dims compile), so they do NOT change the ELF. Only
+    (dest_acc, dest_sync) are compile-time (dest_acc + DEST_SYNC template affect the
+    build). Returns:
+      ([ (dest_acc, dest_sync), ... ],                          # compile-time axis
+       { repr((dest_acc, dest_sync)): [ (in_A, in_B), ... ] })  # runtime dims per combo
+    """
+    key = repr(format)
+    if key not in _MATMUL_DIM_GROUPS:
+        dest_acc_modes = (
+            (DestAccumulation.Yes,)
+            if format.input_format == DataFormat.Int8
+            else (DestAccumulation.Yes, DestAccumulation.No)
+        )
+        groups: "OrderedDict[tuple, list]" = OrderedDict()
+        for (
+            input_A_dims,
+            input_B_dims,
+            dest_acc,
+            dest_sync,
+        ) in matmul_dimensions_dest_sync(dest_acc_modes):
+            groups.setdefault((dest_acc, dest_sync), []).append(
+                (input_A_dims, input_B_dims)
+            )
+        compile_axis = list(groups.keys())
+        runtime_payloads = {repr(k): v for k, v in groups.items()}
+        _MATMUL_DIM_GROUPS[key] = (compile_axis, runtime_payloads)
+    return _MATMUL_DIM_GROUPS[key]
+
+
 # Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
 # unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
 # entries where MxFp4 would land as an output.
@@ -89,43 +132,60 @@ _ARCH = get_chip_architecture()
 
 @pytest.mark.quasar
 @parametrize(
-    format=MATMUL_FORMAT,
+    format=compile_time(MATMUL_FORMAT),
     # Integer matmul is LoFi-only on Quasar.
-    math_fidelity=lambda format: (
-        [MathFidelity.LoFi]
-        if format.input_format == DataFormat.Int8
-        else [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
+    math_fidelity=compile_time(
+        lambda format: (
+            [MathFidelity.LoFi]
+            if format.input_format == DataFormat.Int8
+            else [
+                MathFidelity.LoFi,
+                MathFidelity.HiFi2,
+                MathFidelity.HiFi3,
+                MathFidelity.HiFi4,
+            ]
+        )
+    ),
+    # dest_acc / dest_sync are compile-time (dest_acc + DEST_SYNC template affect the
+    # ELF). The tile dimensions are runtime: CRK_TILE_DIMM / TILE_COUNT are in runtimes=[]
+    # and read from L1 (params.CT_DIM/RT_DIM/KT_DIM); _llk_math_matmul_block_ uses the
+    # register SETRWC form so runtime dims compile. They are therefore collapsed in
+    # --compile-producer: each (format, fidelity, dest_acc/sync, implied, 2x-hint,
+    # direct-indexing) ELF is built once instead of once per matmul shape.
+    dest_acc_dest_sync=compile_time(lambda format: _matmul_dim_groups(format)[0]),
+    dimensions=runtime(
+        lambda format, dest_acc_dest_sync: _matmul_dim_groups(format)[1][
+            repr(dest_acc_dest_sync)
         ]
     ),
-    dimensions_dest_acc_dest_sync=lambda format: (
-        matmul_dimensions_dest_sync((DestAccumulation.Yes,))
-        if format.input_format == DataFormat.Int8
-        else matmul_dimensions_dest_sync((DestAccumulation.Yes, DestAccumulation.No))
+    implied_math_format=compile_time(
+        lambda format: (
+            [ImpliedMathFormat.Yes]
+            if format.input_format.is_mx_format()
+            else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+        )
     ),
-    implied_math_format=lambda format: (
-        [ImpliedMathFormat.Yes]
-        if format.input_format.is_mx_format()
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    register_format_hint=compile_time(
+        lambda format: (
+            [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
+            # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
+            if format.input_format == DataFormat.MxFp4
+            and _ARCH == ChipArchitecture.QUASAR
+            else [None]
+        )
     ),
-    register_format_hint=lambda format: (
-        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
-        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
-        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
-        else [None]
+    enable_direct_indexing=compile_time(
+        lambda register_format_hint: (
+            [False] if register_format_hint is None else [True, False]
+        )
     ),
-    enable_direct_indexing=lambda register_format_hint: (
-        [False] if register_format_hint is None else [True, False]
-    ),
-    transpose=[Transpose.No],
+    transpose=compile_time([Transpose.No]),
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    dimensions_dest_acc_dest_sync,
+    dest_acc_dest_sync,
+    dimensions,
     format,
     implied_math_format,
     register_format_hint,
@@ -141,9 +201,8 @@ def test_matmul(
         register_format_hint=register_format_hint,
     )
 
-    input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
-        dimensions_dest_acc_dest_sync
-    )
+    dest_acc, dest_sync_mode = dest_acc_dest_sync
+    input_A_dimensions, input_B_dimensions = dimensions
 
     torch_format = format_dict[format.output_format]
 
@@ -255,11 +314,12 @@ def test_matmul(
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
-            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-            TILE_COUNT(matmul_dims.output_tile_cnt),
             NUM_FACES(num_faces, num_faces, num_faces),
         ],
-        runtimes=[],
+        runtimes=[
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+            TILE_COUNT(matmul_dims.output_tile_cnt),
+        ],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
             format.input_format,

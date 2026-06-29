@@ -22,7 +22,7 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import compile_time, input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -71,25 +71,33 @@ def generate_pool_type_and_math_fidelity_combinations():
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ],
+    formats=compile_time(
+        input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.Float16,
+                DataFormat.MxFp4,
+                DataFormat.MxInt8,
+                DataFormat.MxInt4,
+                DataFormat.MxInt2,
+            ],
+        )
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
+    dest_acc=compile_time([DestAccumulation.No, DestAccumulation.Yes]),
+    reduce_dim=compile_time(
+        [ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar]
+    ),
+    pool_type_and_math_fidelity=compile_time(
+        generate_pool_type_and_math_fidelity_combinations()
+    ),
+    dest_sync_mode=compile_time([DestSync.Half, DestSync.Full]),
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
+    implied_math_format=compile_time(
+        lambda formats: (
+            [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+            if not formats.input_format.is_mx_format()
+            else [ImpliedMathFormat.Yes]
+        )
     ),
 )
 def test_reduce_quasar(
@@ -242,24 +250,26 @@ _ARCH = get_chip_architecture()
     reason="MxFp4_2x GAPOOL reduce is op_mmul-family-only and exists on Quasar. Architecture derivations don't support it.",
 )
 @parametrize(
-    register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
-    formats=lambda register_format_hint: [
-        InputOutputFormat(
-            DataFormat.MxFp4,
-            DataFormat.Float16,
-            register_format_hint=register_format_hint,
-        ),
-        InputOutputFormat(
-            DataFormat.MxFp4,
-            DataFormat.Float16_b,
-            register_format_hint=register_format_hint,
-        ),
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    reduce_dim=[ReduceDimension.Column],
-    pool_type=[ReducePool.Sum, ReducePool.Average],
-    math_fidelity=MATH_FIDELITY_MODES,
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
+    register_format_hint=compile_time([DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]),
+    formats=compile_time(
+        lambda register_format_hint: [
+            InputOutputFormat(
+                DataFormat.MxFp4,
+                DataFormat.Float16,
+                register_format_hint=register_format_hint,
+            ),
+            InputOutputFormat(
+                DataFormat.MxFp4,
+                DataFormat.Float16_b,
+                register_format_hint=register_format_hint,
+            ),
+        ]
+    ),
+    dest_acc=compile_time([DestAccumulation.No, DestAccumulation.Yes]),
+    reduce_dim=compile_time([ReduceDimension.Column]),
+    pool_type=compile_time([ReducePool.Sum, ReducePool.Average]),
+    math_fidelity=compile_time(MATH_FIDELITY_MODES),
+    dest_sync_mode=compile_time([DestSync.Half, DestSync.Full]),
 )
 def test_reduce_quasar_mxfp4_2x_gapool(
     register_format_hint,

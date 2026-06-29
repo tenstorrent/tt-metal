@@ -14,6 +14,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -110,7 +111,10 @@ ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dimensions=ALL_PACK_UNTILIZE_COMBINATIONS,
+    # input_dimensions is baked into the kernel here (generate_input_dim / TILE_COUNT
+    # live in templates=[...], runtimes=[] is empty), so the whole tuple is compile-time
+    # and there is nothing to collapse.
+    formats_dest_acc_sync_dimensions=compile_time(ALL_PACK_UNTILIZE_COMBINATIONS),
 )
 def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
     (formats, dest_acc, dest_sync_mode, input_dimensions) = (

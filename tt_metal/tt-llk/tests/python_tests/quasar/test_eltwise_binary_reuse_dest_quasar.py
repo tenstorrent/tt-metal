@@ -21,9 +21,11 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
+    compile_time,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -98,52 +100,62 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.MxFp8R,
-            DataFormat.MxFp8P,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-        ],
+    formats=compile_time(
+        input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.Float16,
+                DataFormat.MxFp8R,
+                DataFormat.MxFp8P,
+                DataFormat.MxFp4,
+                DataFormat.MxInt8,
+                DataFormat.MxInt4,
+                DataFormat.MxInt2,
+            ],
+        )
     ),
     # Elwmul with MxFp8R or MxFp8P input and reuse_dest has rounding differences; skip to avoid flaky tolerance failures
-    mathop=lambda formats: (
-        [
-            MathOperation.Elwadd,
-            MathOperation.Elwsub,
-        ]
-        if (
-            formats.input_format == DataFormat.MxFp8R
-            or formats.input_format == DataFormat.MxFp8P
+    mathop=compile_time(
+        lambda formats: (
+            [
+                MathOperation.Elwadd,
+                MathOperation.Elwsub,
+            ]
+            if (
+                formats.input_format == DataFormat.MxFp8R
+                or formats.input_format == DataFormat.MxFp8P
+            )
+            else [
+                MathOperation.Elwadd,
+                MathOperation.Elwsub,
+                MathOperation.Elwmul,
+            ]
         )
-        else [
-            MathOperation.Elwadd,
-            MathOperation.Elwsub,
-            MathOperation.Elwmul,
-        ]
     ),
     # Math fidelity only affects multiplication; for add/sub only LoFi is meaningful.
-    math_fidelity=lambda mathop: (
-        [MathFidelity.LoFi]
-        if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
-        else [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
+    math_fidelity=compile_time(
+        lambda mathop: (
+            [MathFidelity.LoFi]
+            if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
+            else [
+                MathFidelity.LoFi,
+                MathFidelity.HiFi2,
+                MathFidelity.HiFi3,
+                MathFidelity.HiFi4,
+            ]
+        )
+    ),
+    reuse_dest_type=compile_time(
+        [
+            EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+            EltwiseBinaryReuseDestType.DEST_TO_SRCB,
         ]
     ),
-    reuse_dest_type=[
-        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
-        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
-    ],
-    dest_sync_mode=[DestSync.Half, DestSync.Full],
-    input_dimensions=INPUT_DIMENSIONS,
-    output_dimensions=valid_output_dimensions,
+    dest_sync_mode=compile_time([DestSync.Half, DestSync.Full]),
+    # input_dimensions is baked into the kernel via generate_input_dim (templates),
+    # so it is compile-time.
+    input_dimensions=compile_time(INPUT_DIMENSIONS),
+    output_dimensions=runtime(valid_output_dimensions),
 )
 def test_eltwise_binary_reuse_dest_quasar(
     formats,

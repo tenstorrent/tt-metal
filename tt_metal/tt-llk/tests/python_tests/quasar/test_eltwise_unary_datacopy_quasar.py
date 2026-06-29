@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import OrderedDict
 from typing import List
 
 import pytest
@@ -20,9 +21,11 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
+    compile_time,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -123,31 +126,65 @@ ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
 )
 
 
+def _split_datacopy_combinations(combinations):
+    """Split the bundled sweep into a compile-time key and its runtime payloads.
+
+    `(dimensions, dest_index, tile_dims)` only feed stimuli / runtime args (TILE_COUNT,
+    DEST_INDEX, NUM_FACES, face dims) and never the compiled kernel, so they are
+    collapsed in --compile-producer. `(formats, dest_acc, data_copy_type, dest_sync)`
+    drive formats / dest_acc / templates and stay compile-time. Grouping is derived
+    from the exact same generator output (keyed by repr, since FormatConfig is an
+    unhashable dataclass) so coverage is identical to the un-split sweep.
+    """
+    payloads_by_key = OrderedDict()
+    combo_by_key = OrderedDict()
+    for (
+        fmt,
+        dest_acc,
+        data_copy_type,
+        dimensions,
+        dest_sync,
+        dest_index,
+        tile_dims,
+    ) in combinations:
+        compile_combo = (fmt, dest_acc, data_copy_type, dest_sync)
+        key = repr(compile_combo)
+        combo_by_key.setdefault(key, compile_combo)
+        payloads_by_key.setdefault(key, []).append((dimensions, dest_index, tile_dims))
+    return list(combo_by_key.values()), payloads_by_key
+
+
+DATACOPY_COMPILE_COMBOS, DATACOPY_RUNTIME_PAYLOADS = _split_datacopy_combinations(
+    ALL_DATACOPY_COMBINATIONS
+)
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
+    formats_dest_acc_data_copy_type_sync=compile_time(DATACOPY_COMPILE_COMBOS),
     # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
-        [ImpliedMathFormat.Yes]
-        if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[
-            0
-        ].input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+    implied_math_format=compile_time(
+        lambda formats_dest_acc_data_copy_type_sync: (
+            [ImpliedMathFormat.Yes]
+            if formats_dest_acc_data_copy_type_sync[0].input_format.is_mx_format()
+            else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+        )
+    ),
+    dims_dest_index_tile=runtime(
+        lambda formats_dest_acc_data_copy_type_sync: DATACOPY_RUNTIME_PAYLOADS[
+            repr(formats_dest_acc_data_copy_type_sync)
+        ]
     ),
 )
 def test_eltwise_unary_datacopy_quasar(
-    formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
+    formats_dest_acc_data_copy_type_sync,
     implied_math_format,
+    dims_dest_index_tile,
 ):
-    (
-        formats,
-        dest_acc,
-        data_copy_type,
-        input_dimensions,
-        dest_sync_mode,
-        dest_index,
-        tile_dimensions,
-    ) = formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices
+    formats, dest_acc, data_copy_type, dest_sync_mode = (
+        formats_dest_acc_data_copy_type_sync
+    )
+    input_dimensions, dest_index, tile_dimensions = dims_dest_index_tile
 
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
     if (
