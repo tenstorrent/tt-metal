@@ -58,15 +58,27 @@ ALWI constexpr bool is_block_float_format(uint32_t format) {
     return format == 2 || format == 3 || format == 11 || format == 6 || format == 7 || format == 15;
 }
 
+// Needed by the regular tilize path on Quasar (no fast tilize) — used only by debug capacity ASSERTs.
+ALWI uint32_t get_dfb_num_pages(uint32_t dfb_id) {
+#ifdef ARCH_QUASAR
+    // Quasar compute kernels use the DFB interface (g_dfb_interface), NOT cb_interface — the latter is
+    // undefined on the Quasar TRISC link (only the data-movement firmware defines it). get_dfb_num_pages
+    // is only consumed by the `>=` capacity ASSERTs in the tilize/untilize/reduce helpers; return a max
+    // sentinel so those pass without referencing cb_interface. The real DFB capacity is validated
+    // host-side via DataflowBufferSpec num_entries. TODO: read the DFB ring depth if a device-side
+    // runtime check is ever wanted (ring_size is a per-TC byte span, not a page count).
+    (void)dfb_id;
+    return 0xFFFFFFFFu;
+#else
+    auto& cb = get_local_cb_interface(dfb_id);
+    return cb.fifo_size / cb.fifo_page_size;
+#endif
+}
+
 #ifndef ARCH_QUASAR
 // CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT value (= 4): fifo_page_size is stored in
 // 16-byte units on WH/BH, so shifting left by 4 converts to bytes.
 constexpr uint32_t DFB_COMPUTE_ADDR_SHIFT = 4; // almeet
-
-ALWI uint32_t get_dfb_num_pages(uint32_t dfb_id) {
-    auto& cb = get_local_cb_interface(dfb_id);
-    return cb.fifo_size / cb.fifo_page_size;
-}
 
 template <DataFormat format>
 ALWI bool is_valid_dfb_tile_page_size(uint32_t dfb_id) {
