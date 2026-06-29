@@ -2368,6 +2368,19 @@ def test_make_host_canvas_init_fn_rejects_bad_replay_shapes():
         make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]]), torch.tensor([[6, 7, 8]])])
 
 
+@pytest.mark.parametrize(
+    ("canvas", "message"),
+    [
+        (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
+    ],
+)
+def test_make_host_canvas_init_fn_rejects_invalid_replay_token_ids(canvas, message):
+    with pytest.raises(ValueError, match=message):
+        make_host_canvas_init_fn("mesh", [canvas])
+
+
 def test_make_host_canvas_init_fn_rejects_bad_block_index():
     init_fn = make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]])])
 
@@ -2526,6 +2539,19 @@ def test_make_host_noise_tokens_fn_rejects_bad_shapes():
         make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]]), torch.tensor([[4, 5]])]])
     with pytest.raises(ValueError, match="host_noise_tokens"):
         make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])], [torch.tensor([[4, 5]])]])
+
+
+@pytest.mark.parametrize(
+    ("tokens", "message"),
+    [
+        (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
+    ],
+)
+def test_make_host_noise_tokens_fn_rejects_invalid_replay_token_ids(tokens, message):
+    with pytest.raises(ValueError, match=message):
+        make_host_noise_tokens_fn("mesh", [[tokens]])
 
 
 def test_make_host_noise_tokens_fn_rejects_bad_block_or_step_index():

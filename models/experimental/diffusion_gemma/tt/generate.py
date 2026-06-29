@@ -242,21 +242,22 @@ def _validate_logits_fn_args(logits_fn, logits_fn_builder) -> None:
         raise ValueError("pass either logits_fn or logits_fn_builder, not both")
 
 
-def _validate_replay_canvases(canvases) -> None:
+def _validate_replay_canvases(canvases, *, value_kind: str = "host_canvases") -> None:
     if not canvases:
         return
     if canvases[0].dim() != 2:
         raise ValueError("host_canvases must contain tensors with shape [batch, canvas_len]")
     expected_shape = tuple(canvases[0].shape)
-    for canvas in canvases[1:]:
+    for canvas in canvases:
         if canvas.dim() != 2 or tuple(canvas.shape) != expected_shape:
             raise ValueError("host_canvases must all have shape [batch, canvas_len]")
+        _validate_nonnegative_integer_token_tensor(canvas, name=value_kind, shape_name="[batch, canvas_len]")
 
 
 def _validate_replay_canvas_blocks(blocks, *, kind: str) -> None:
     expected_shape = None
     for block in blocks:
-        _validate_replay_canvases(block)
+        _validate_replay_canvases(block, value_kind=kind)
         if not block:
             continue
         block_shape = tuple(block[0].shape)
