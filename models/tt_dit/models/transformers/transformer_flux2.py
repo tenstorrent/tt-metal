@@ -106,6 +106,8 @@ class Flux2SingleTransformerBlock(Module):
         )
 
         # Shard output, since size of input dimension << size of output dimension.
+        # bf8 FSDP weight gather: proj_mlp (swiglu MLP in-proj) and proj_out (MLP+attn
+        # down-projection) are the largest weight gathers and robust to bf8.
         self.proj_mlp = ColParallelLinear(
             dim,
             mlp_hidden_dim,
@@ -115,6 +117,7 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            fsdp_gather_bf8=True,
         )
 
         # Shard input, since size of input dimension >> size of output dimension.
@@ -126,6 +129,7 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            fsdp_gather_bf8=True,
         )
 
         self._dim = dim

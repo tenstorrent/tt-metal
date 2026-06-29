@@ -27,6 +27,12 @@ grid_1d_configs: dict[tuple[int, int, int, int, int], tuple[int, int, int]] = {
     (32, 6144, 4608, 11, 10): (2, 2, 2),  # 149.9 μs,  6.1% FLOP util
     (32, 6144, 2304, 11, 10): (4, 2, 2),  # 76.6 μs,  11.9% FLOP util
     (32, 6144, 1536, 11, 10): (6, 2, 2),  # 51.6 μs,  17.6% FLOP util
+    # Flux2 M=32 shapes — WH 4×8 ring, 8×9 grid (2026-06-01, sweep_1d_matmul.py)
+    (32, 6144, 6144, 8, 9): (2, 3, 3),
+    (32, 6144, 4608, 8, 9): (1, 3, 3),
+    (32, 6144, 2304, 8, 9): (4, 3, 3),
+    (32, 6144, 1536, 8, 9): (4, 2, 2),
+    (32, 256, 6144, 8, 9): (4, 3, 3),
     # Flux2 SP1 (1024-res) shapes — BH 4×8 ring, 11×10 grid (2026-06-01, 2048_sp1.md)
     (32, 6144, 9216, 11, 10): (6, 9, 3),  # 290.7 μs
     (32, 6144, 3072, 11, 10): (12, 3, 3),  # 99.5 μs
@@ -107,6 +113,16 @@ grid_88_configs = {
     (512, 8192, 5120): (4, 16, 4),
     (512, 16384, 5120): (2, 16, 8),
     (512, 32768, 5120): (4, 16, 8),
+    # Flux2 WH Galaxy AGMM (sp=4, tp=8, 8x8 grid) — sweep 2026-06-01
+    (1024, 768, 4608): (20, 3, 6, (2, 2)),  # AGMM qkv — 355 us
+    (512, 768, 4608): (10, 3, 12, (1, 4)),  # AGMM qkv — 242 us
+    (1024, 768, 768): (4, 1, 16, (1, 4)),  # AGMM to_out — 190 us
+    (512, 768, 768): (2, 1, 16, (1, 4)),  # AGMM to_out — 132 us
+    # Flux2 WH Galaxy plain MM on 8x8 grid — sweep 2026-06-01
+    (1024, 6144, 4608): (4, 8, 10, (2, 2)),  # 792 us
+    (512, 6144, 4608): (2, 12, 6, (2, 2)),  # 721 us (K_block must divide K_tiles_per_device=24 for AGMM)
+    (1024, 6144, 768): (4, 4, 4, (1, 4)),  # 207 us
+    (512, 6144, 768): (2, 8, 5, (2, 1)),  # 151 us
 }
 
 
@@ -134,6 +150,35 @@ grid_89_configs = {
     (128, 5120, 1280): (2, 16, 2),
     (9472, 5120, 3456): (8, 8, 8),
     (9472, 3456, 5120): (8, 8, 8),
+    # Flux2 WH Galaxy (sp=4, tp=8) — sweep_mm_block_sizes.py 2026-05-31
+    (1024, 6144, 2304): (4, 6, 10, (2, 2)),  # 451 us
+    (512, 6144, 2304): (2, 8, 5, (2, 1)),  # 392 us
+    (512, 15360, 768): (3, 10, 3, (1, 3)),  # 357 us
+    (1024, 6144, 128): (2, 12, 1, (2, 1)),  # 170 us
+    # Flux2 WH Galaxy plain MM on 8x9 grid — sweep 2026-06-01
+    (1024, 6144, 4608): (4, 8, 10, (2, 2)),  # 818 us
+    (512, 6144, 4608): (2, 8, 9, (1, 3)),  # 750 us
+    (1024, 128, 768): (6, 2, 3, (1, 3)),  # 20 us
+}
+
+# Known best blockings for the 8x7 core grid (WH Galaxy AGMM compute zone:
+# full grid is 8x9, the all-gather-matmul reserves 2 rows → compute on 8x7).
+# Each value is (M_block, K_block, N_block, (subblock_h, subblock_w)).
+# K=6144 is the global K (K_per_device = 6144/tp8 = 24 tiles; K_block divides 24).
+# M: 1024=spatial, 1152=xc-merged (1024+128), 128=prompt.
+# Source: sweep_mm_block_sizes.py wh_4x8_ring_sp0tp1, 2026-06-29 (device profiler).
+grid_87_configs = {
+    # FFN in-proj — fused swiglu, N=4608 (packed [gate|up])
+    (1152, 6144, 4608): (5, 6, 8, (1, 4)),  # 1635 us — SNG_x_c_mlp (xc merged)
+    (1024, 6144, 4608): (4, 8, 6, (2, 2)),  # 1397 us — DBL_ff_spatial_mm_in_proj
+    (128, 6144, 4608): (2, 12, 2, (2, 2)),  # 1196 us — ff in-proj prompt
+    # Attention QKV — chunks=3
+    (1152, 6144, 2304): (5, 6, 16, (1, 4)),  # 767 us — to_qkv (xc merged)
+    (1024, 6144, 2304): (14, 6, 6, (2, 2)),  # 685 us — to_qkv spatial
+    (128, 6144, 2304): (2, 4, 6, (2, 2)),  # 589 us — to_qkv prompt
+    # Attention out — fused addcmul
+    (1024, 6144, 768): (6, 6, 6, (2, 2)),  # 372 us — to_out spatial
+    (128, 6144, 768): (2, 8, 2, (2, 2)),  # 225 us — to_out prompt
 }
 
 grid_13_9_configs = {
@@ -425,6 +470,7 @@ grid_12_8_configs = {
 }
 
 _grid_config_lookup = {
+    (8, 7): grid_87_configs,
     (8, 8): grid_88_configs,
     (8, 9): grid_89_configs,
     (13, 9): grid_13_9_configs,
@@ -684,6 +730,11 @@ else:
 fused_mmrs_configs = {
     ttnn.CoreCoord(8, 9): {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
+        # Flux2 WH Galaxy MM+RS — sweep 2026-06-01
+        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 12, 6, 8, 1, 4, None, 1),  # 953 us
+        (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 662 us
+        (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 1082 us
+        (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 787 us
     },
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),

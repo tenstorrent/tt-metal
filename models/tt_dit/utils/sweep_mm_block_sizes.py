@@ -86,6 +86,19 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # Matches the wh_glx_ring_sp0tp1_fsdp perf config: SP on mesh axis 0,
+    # TP=8 on mesh axis 1 (cluster_axis=1 for the AGMM all-gather).
+    "wh_4x8_ring_sp0tp1": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 4096,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+    },
     "wh_4x8_linear": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D",
@@ -359,6 +372,25 @@ SHAPES = [
     (1152, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 xc-merged
     (1024, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 spatial
     (128, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 prompt
+    # -----------------------------------------------------------------------
+    # Flux2 WH Galaxy 4×8 — TP8/SP4 (wh_4x8_ring_sp0tp1), 1024-res denoising.
+    # Full compute grid is 8×9; AGMM reserves 2 rows → compute grid 8×7
+    # (matches the grids requested at runtime, see fallback warnings). K=6144
+    # global → K_per_device=24 tiles (6144/32/8). M: 1024=spatial, 1152=xc
+    # merged (1024+128), 128=prompt. in-proj is fused swiglu (N=4608 packed
+    # [gate|up]); to_qkv chunks=3 (qkv); to_out has fused addcmul (to_out).
+    # -----------------------------------------------------------------------
+    # FFN in-proj — fused swiglu, N=4608 (N_block must be even)
+    (1024, 6144, 4608, 8, 7, True, "ff1_swiglu"),  # DBL_ff_spatial_mm_in_proj
+    (1152, 6144, 4608, 8, 7, True, "ff1_swiglu"),  # SNG_x_c_mlp (xc merged)
+    (128, 6144, 4608, 8, 7, True, "ff1_swiglu"),  # DBL_ff_ctx/prompt_mm_in_proj
+    # Attention QKV — chunks=3, approx math
+    (1024, 6144, 2304, 8, 7, True, "qkv"),  # SNG/DBL_attn_to_qkv spatial
+    (1152, 6144, 2304, 8, 7, True, "qkv"),  # SNG_attn_to_qkv (xc merged)
+    (128, 6144, 2304, 8, 7, True, "qkv"),  # DBL_attn_to_qkv prompt
+    # Attention out — fused addcmul
+    (1024, 6144, 768, 8, 7, True, "to_out"),  # DBL_attn_out_mm spatial
+    (128, 6144, 768, 8, 7, True, "to_out"),  # DBL_attn_out_mm prompt
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

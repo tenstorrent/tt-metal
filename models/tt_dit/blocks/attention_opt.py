@@ -51,6 +51,7 @@ class Attention(Module):
     ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
         # -1 is the default resolution.
         (False, 2, 4): {-1: (256, 256)},
+        (False, 4, 8): {-1: (128, 512), 4096: (256, 512)},  # WH Galaxy ring (non-fsdp)
         (False, 8, 4): {-1: (256, 256)},
         (True, 2, 2): {-1: (128, 512)},
         (True, 4, 8): {
