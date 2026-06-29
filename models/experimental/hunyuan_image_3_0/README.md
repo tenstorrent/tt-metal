@@ -91,6 +91,27 @@ HY_STEPS=8 HY_NUM_LAYERS=32 HY_GUIDANCE=5.0 python_env/bin/python \
   "a photo of a cat, studio lighting"
 ```
 
+By default the demo first runs an **AR recaption** stage that rewrites the prompt into a
+detailed caption using the shared text-sampling loop (`ref/generate.py`, re-exported by
+`tt/generate.py`): repetition penalty → temperature → top-k → top-p → sample. The
+recaption text is injected as the assistant turn before the gen-image block, mirroring
+upstream base `generate_image`. Knobs (env vars):
+
+| Env | Default | Meaning |
+|---|---|---|
+| `HY_RECAPTION` | `1` | `0` skips recaption (prompt used verbatim — the original fast path) |
+| `HY_BOT_TASK` | `recaption` | `recaption` / `think` / `think_recaption` |
+| `HY_MAX_NEW_TOKENS` | `512` | AR token budget — caps recaption latency |
+| `HY_TEMPERATURE` | `0.6` | sampling temperature |
+| `HY_TOP_K` | `1024` | top-k filter (0 disables) |
+| `HY_TOP_P` | `0.95` | nucleus top-p (1.0 disables) |
+| `HY_REP_PENALTY` | `1.0` | repetition penalty (1.0 disables) |
+| `HY_DO_SAMPLE` | `1` | `0` = greedy argmax |
+
+> The text-only recaption path has **no KV cache** (it re-runs the full forward per token,
+> unlike the I2I cond path), so it is O(N²) and slow for large `HY_MAX_NEW_TOKENS`. Lower
+> `HY_MAX_NEW_TOKENS` or set `HY_RECAPTION=0` to skip it.
+
 ### Instruct image-to-image (50-step CFG)
 
 Replace `/path/to/input.png` with your cond image. `--bot-task image` skips the AR
