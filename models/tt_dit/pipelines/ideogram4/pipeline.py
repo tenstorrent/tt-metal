@@ -297,7 +297,14 @@ class Ideogram4Pipeline:
 
     @torch.no_grad()
     def __call__(
-        self, prompt: str, *, height: int = 512, width: int = 512, preset: str = "V4_TURBO_12", seed: int = 1234
+        self,
+        prompt: str,
+        *,
+        height: int = 512,
+        width: int = 512,
+        preset: str = "V4_TURBO_12",
+        seed: int = 1234,
+        guidance_scale: float | None = None,
     ):
         import time as _time
 
@@ -336,15 +343,25 @@ class Ideogram4Pipeline:
             return tensor.to_torch(out, mesh_axes=[None, None, None])[:, br["seq"] - num_img :].float()
 
         _td = _time.perf_counter()
+        self.step_trace = []
         for i in reversed(range(sampler.num_steps)):
             t_val, s_val = sampler.times_for_step(i)
-            gw = sampler.guidance_weight(i)
+            gw = sampler.guidance_weight(i) if guidance_scale is None else guidance_scale
             pos_x = torch.zeros(1, n_text + num_img, cfg.in_channels, dtype=torch.bfloat16)
             pos_x[:, n_text:] = z.to(torch.bfloat16)
             v_cond = _v(self.cond, cond_b, pos_x, t_val)
             v_uncond = _v(self.uncond, uncond_b, z.to(torch.bfloat16), t_val)
             v = gw * v_cond + (1.0 - gw) * v_uncond
             z = z + v * (s_val - t_val)
+            # guidance-direction magnitude relative to the cond velocity: if CFG amplifies
+            # a diluted (small) cond-uncond difference, this ratio is small and bf16-noisy.
+            guide_ratio = float((v_cond - v_uncond).norm() / (v_cond.norm() + 1e-6))
+            self.step_trace.append((t_val, s_val, gw, float(v.std()), float(z.std()), guide_ratio))
+            if getattr(self, "_verbose_steps", False):
+                _lg.info(
+                    f"  step {sampler.num_steps - i}/{sampler.num_steps}: t={t_val:.4f} s={s_val:.4f} gw={gw:.0f} "
+                    f"vc_std={v_cond.std():.4f} vu_std={v_uncond.std():.4f} |vc-vu|/|vc|={guide_ratio:.4f} z_std={z.std():.4f}"
+                )
         ttnn.synchronize_device(dev)
         self.timings["denoise"] = _time.perf_counter() - _td
         self.timings["denoise_per_step"] = self.timings["denoise"] / sampler.num_steps

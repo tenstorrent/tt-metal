@@ -309,3 +309,126 @@ def test_transformer_real_inputs(*, mesh_device: ttnn.MeshDevice) -> None:
     mask = (indicator == OUTPUT_IMAGE_INDICATOR)[0]
     logger.info("transformer REAL weights + REAL llm_features:")
     assert_quality(ref_out[:, mask], tt_torch[:, mask], pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
+@pytest.mark.parametrize("grid", [32, 64], ids=["g32_1024tok", "g64_4096tok"])
+def test_transformer_real_inputs_by_seq(*, mesh_device: ttnn.MeshDevice, grid: int) -> None:
+    """Denoiser single-forward PCC + output-std ratio vs image sequence length.
+
+    grid=32 -> 1024 image tokens (the 512px regime that GENERATES fine);
+    grid=64 -> 4096 image tokens (the 1024px regime that washes out).
+    Same real weights + real llm_features; only the image grid grows. If PCC / std
+    ratio degrade from g32 to g64, the per-step denoiser forward is the culprit and
+    the bug is sequence-length-dependent (vs an iterative-loop/harness artifact).
+    """
+    import gc
+
+    from ....reference.ideogram4.constants import IMAGE_POSITION_OFFSET, LLM_TOKEN_INDICATOR
+
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16
+    config = modeling_ideogram4.Ideogram4Config()
+
+    tok = transformers.AutoTokenizer.from_pretrained(f"{FP8}", subfolder="tokenizer")
+    hf = transformers.AutoModel.from_pretrained("Qwen/Qwen3-VL-8B-Instruct", torch_dtype=torch_dtype)
+    lm = hf.language_model if hasattr(hf, "language_model") else hf.model.language_model
+    enc_sd = dequant_fp8_state_dict(load_file(f"{FP8}/text_encoder/model.safetensors"))
+    lm.load_state_dict(
+        {k[len("language_model.") :]: v for k, v in enc_sd.items() if k.startswith("language_model.")}, strict=False
+    )
+    lm.eval()
+    msgs = [{"role": "user", "content": [{"type": "text", "text": "a red panda reading a book under a cherry tree"}]}]
+    text = tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+    ids = tok(text, return_tensors="pt", add_special_tokens=False)["input_ids"]
+    n_text = ids.shape[1]
+    caps = {}
+    hh = [
+        lm.layers[i].register_forward_hook(
+            lambda m, i_, o, i=i: caps.__setitem__(i, (o[0] if isinstance(o, tuple) else o).detach())
+        )
+        for i in QWEN3_VL_ACTIVATION_LAYERS
+    ]
+    with torch.no_grad():
+        lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+    for h in hh:
+        h.remove()
+    # interleaved layout (matches generation); irrelevant for PCC but faithful
+    llm_text = (
+        torch.stack([caps[i] for i in QWEN3_VL_ACTIVATION_LAYERS], 0)
+        .permute(1, 2, 3, 0)
+        .reshape(1, n_text, -1)
+        .to(torch_dtype)
+    )
+    del hf, lm, caps
+    gc.collect()
+
+    image_len = grid * grid
+    seq = n_text + image_len
+    llm_features = torch.zeros(1, seq, config.llm_features_dim, dtype=torch_dtype)
+    llm_features[:, :n_text] = llm_text
+    x = torch.randn(1, seq, config.in_channels, dtype=torch_dtype)
+    t = torch.tensor([0.5])
+    indicator = torch.full((1, seq), OUTPUT_IMAGE_INDICATOR, dtype=torch.long)
+    indicator[:, :n_text] = LLM_TOKEN_INDICATOR
+    position_ids = torch.zeros(1, seq, 3, dtype=torch.long)
+    tp = torch.arange(n_text)
+    position_ids[:, :n_text] = torch.stack([tp, tp, tp], dim=1)
+    hh2 = torch.arange(grid).repeat_interleave(grid)
+    ww2 = torch.arange(grid).repeat(grid)
+    position_ids[:, n_text:, 0] = IMAGE_POSITION_OFFSET
+    position_ids[:, n_text:, 1] = IMAGE_POSITION_OFFSET + hh2
+    position_ids[:, n_text:, 2] = IMAGE_POSITION_OFFSET + ww2
+    segment_ids = torch.zeros(1, seq, dtype=torch.long)
+
+    sd = dequant_fp8_state_dict(load_file(f"{FP8}/transformer/diffusion_pytorch_model.safetensors"))
+    ref = modeling_ideogram4.Ideogram4Transformer(config).to(torch_dtype).eval()
+    ref.load_state_dict(sd, strict=False)
+    with torch.no_grad():
+        ref_out = ref(
+            llm_features=llm_features, x=x, t=t, position_ids=position_ids, segment_ids=segment_ids, indicator=indicator
+        )
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        sequence_parallel=ParallelFactor(factor=1, mesh_axis=0),
+    )
+    tt = Ideogram4Transformer(
+        emb_dim=config.emb_dim,
+        num_layers=config.num_layers,
+        num_heads=config.num_heads,
+        intermediate_size=config.intermediate_size,
+        adaln_dim=config.adanln_dim,
+        in_channels=config.in_channels,
+        llm_features_dim=config.llm_features_dim,
+        norm_eps=config.norm_eps,
+        mesh_device=mesh_device,
+        ccl_manager=CCLManager(mesh_device, topology=ttnn.Topology.Linear),
+        parallel_config=parallel_config,
+    )
+    tt.load_torch_state_dict(sd)
+
+    cos, sin = ref.rotary_emb(position_ids)
+    t_sin = Ideogram4Transformer.sinusoidal_embedding(t, config.emb_dim)
+    llm_mask = (indicator == LLM_TOKEN_INDICATOR).float().unsqueeze(-1)
+    img_mask = (indicator == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1)
+    image_idx = (indicator == OUTPUT_IMAGE_INDICATOR).to(torch.int32)
+    tt_out = tt(
+        x=bf16_tensor(x, device=mesh_device),
+        llm_features=bf16_tensor(llm_features, device=mesh_device),
+        t_sin=bf16_tensor(t_sin.unsqueeze(1), device=mesh_device),
+        cos=bf16_tensor(cos.unsqueeze(1), device=mesh_device),
+        sin=bf16_tensor(sin.unsqueeze(1), device=mesh_device),
+        image_indicator_index=tensor.from_torch(image_idx, device=mesh_device, dtype=ttnn.uint32),
+        llm_token_mask=bf16_tensor(llm_mask, device=mesh_device),
+        output_image_mask=bf16_tensor(img_mask, device=mesh_device),
+        spatial_sequence_length=seq,
+    )
+    tt_torch = tensor.to_torch(tt_out, mesh_axes=[None, None, None])
+    mask = (indicator == OUTPUT_IMAGE_INDICATOR)[0]
+    ref_img, tt_img = ref_out[:, mask], tt_torch[:, mask]
+    std_ratio = tt_img.float().std().item() / ref_img.float().std().item()
+    logger.info(f"DENOISER FWD grid={grid} ({image_len} img tok): out/ref std ratio={std_ratio:.4f}")
+    assert_quality(ref_img, tt_img, pcc=0.99)
