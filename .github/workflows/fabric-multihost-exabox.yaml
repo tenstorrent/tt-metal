@@ -266,9 +266,12 @@ jobs:
         timeout-minutes: 20
         working-directory: /home/user/tt-metal
         run: |
+          TTRUN_DIR=/etc/ttop
+          PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+
           tt-run --skip-mgd-check --skip-executable-check \
-            --rank-binding /etc/ttop/rank_bindings.yaml \
-            --mpi-args "--tag-output --host $(paste -sd, /etc/ttop/hostfile)" \
+            --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+            --mpi-args "--tag-output --host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --wdir ${TT_METAL_HOME}" \
             /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_superpod_short_running.yaml
 
   cleanup:
