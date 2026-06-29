@@ -164,9 +164,9 @@ def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY
 
 def assert_inplace_binary_matches(torch_output_tensor, output_tensor, *, pcc_threshold=0.99):
     # Contract: both tensors must have the same shape.
-    assert list(torch_output_tensor.shape) == list(
-        output_tensor.shape
-    ), f"Shape mismatch: golden {list(torch_output_tensor.shape)} vs device {list(output_tensor.shape)}"
+    assert (
+        torch_output_tensor.shape == output_tensor.shape
+    ), f"Shape mismatch: golden {torch_output_tensor.shape} vs device {output_tensor.shape}"
 
     if torch_output_tensor.numel() == 0:
         return
@@ -184,9 +184,7 @@ def assert_inplace_binary_matches(torch_output_tensor, output_tensor, *, pcc_thr
         assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=4)
         return
 
-    # If only one tensor is constant (or neither), ttnn.pearson_correlation_coefficient can return a
-    # MaskedConstant false-pass of 1.0. Use comp_pcc which has the correct allclose fallback for
-    # zero-variance inputs.
+    # If one tensor is constant (or neither), comp_pcc falls back to allclose.
     pcc_passed, pcc_val = comp_pcc(torch_output_tensor, output_tensor, pcc=pcc_threshold)
     assert pcc_passed, f"PCC {pcc_val:.6f} < threshold {pcc_threshold}"
 
