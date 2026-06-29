@@ -411,6 +411,14 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
 
 
+def pytest_ignore_collect(collection_path, config):
+    # Skip collecting the quasar/ dir on non-quasar arch — those tests are
+    # deselected there anyway, so there's no need to collect them.
+    if get_chip_architecture() != ChipArchitecture.QUASAR:
+        return "quasar" in collection_path.parts
+    return None
+
+
 def pytest_collection_modifyitems(config, items):
     test_order_file = config.getoption("--test-order-file")
 
