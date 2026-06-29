@@ -4,20 +4,20 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation_types.hpp"
 
 namespace ttnn::prim::qsr {
 
+// Metal 2.0 (ProgramSpecFactoryConcept) factory for the interleaved + B/W-sharded
+// row-major no-step slice path.
+//
+// The src0 DataflowBuffer's entry_size / num_entries depend on slice_start (via
+// misalignment / unpadded_row_size_bytes), so each unique slice layout produces a
+// distinct ProgramSpec and therefore its own cache entry (the spec is the cache key).
 struct SliceRmProgramFactory {
-    // Contract (1): per-coord ProgramDescriptor.  The src0 CB's total_size /
-    // page_size depend on slice_start (via misalignment / unpadded_row_size_bytes),
-    // so padded_shape is folded into compute_program_hash() — each unique CB
-    // sizing keeps its own cache entry.  On cache hit the framework copies
-    // runtime args and patches dynamic CB addresses; CB total_size/page_size
-    // are not re-applied (the cached descriptor already carries them).
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 

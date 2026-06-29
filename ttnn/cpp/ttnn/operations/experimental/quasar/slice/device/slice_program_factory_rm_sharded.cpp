@@ -5,14 +5,20 @@
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_rm_sharded.hpp"
 
+#include <algorithm>
 #include <map>
 #include <optional>
+#include <utility>
+#include <vector>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/spec_run_args.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -192,10 +198,20 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
 namespace ttnn::prim::qsr {
 
-tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
+namespace {
+
+// Spec resource names. Prefixed to stay distinct under unity builds.
+const DFBSpecName SRC0{"slice_rmsh_c0"};
+const DFBSpecName OUT{"slice_rmsh_c16"};
+const TensorParamName INPUT{"slice_rmsh_input"};
+const TensorParamName OUTPUT{"slice_rmsh_output"};
+const KernelSpecName READER{"slice_rmsh_reader"};
+
+}  // namespace
+
+ttnn::device_operation::ProgramSpecArtifacts SliceRmShardedProgramFactory::create_program_spec(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
-    ProgramDescriptor desc;
 
     [[maybe_unused]] uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
     [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
@@ -249,40 +265,64 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // Sharded CBs: total_size and page_size vary with shard shape / element size,
-    // so padded_shape is folded into compute_program_hash() to keep each unique
-    // sizing in its own cache entry.  On cache hit, the framework copies runtime
-    // args and patches dynamic CB addresses (.buffer is set below); CB sizing
-    // itself is not re-applied — it is carried by the cached descriptor.
-    constexpr uint8_t src0_cb_index = 0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height_padded * stick_size_padded,
-        .core_ranges = all_cores_unpadded,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
-            .page_size = stick_size_padded,
-        }}},
-        .buffer = input.buffer(),
-    });
+    // ---- Build the ProgramSpec ----
+    // Both dataflow buffers are borrowed: instead of allocating Program-lifetime L1, the DFB is
+    // built on top of the input/output tensor's L1 buffer (DataflowBufferSpec::borrowed_from binds
+    // to a TensorParameter; the runtime supplies the backing L1 address from the tensor argument).
+    // This expresses the legacy dynamic-CB rebinding (CBDescriptor::buffer set to input/output
+    // buffer). The spec is the program-cache key, so each unique sizing keys its own cache entry.
+    ProgramSpec spec;
+    spec.name = "slice_rm_sharded";
 
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height_unpadded * stick_size_unpadded,
-        .core_ranges = all_cores_unpadded,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = dst_cb_data_format,
-            .page_size = stick_size_unpadded,
-        }}},
-        .buffer = output.buffer(),
-    });
+    // Tensor parameters (the borrowed-DFB backing memory is bound to these).
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+    };
 
-    std::vector<uint32_t> reader_ct_args = {
-        static_cast<uint32_t>(stick_size_padded),
-        static_cast<uint32_t>(stick_size_unpadded),
-        static_cast<uint32_t>(shard_height_unpadded)};
+    // src0 DFB (legacy CB index 0): borrowed onto the input buffer.
+    // entry_size * num_entries == shard_height_padded * stick_size_padded (legacy total_size).
+    DataflowBufferSpec src0_dfb{
+        .unique_id = SRC0,
+        .entry_size = static_cast<uint32_t>(stick_size_padded),
+        .num_entries = shard_height_padded,
+        .data_format_metadata = cb_data_format,
+        .borrowed_from = INPUT,
+    };
 
+    // output DFB (legacy CB index c_16): borrowed onto the output buffer.
+    // entry_size * num_entries == shard_height_unpadded * stick_size_unpadded (legacy total_size).
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT,
+        .entry_size = static_cast<uint32_t>(stick_size_unpadded),
+        .num_entries = shard_height_unpadded,
+        .data_format_metadata = dst_cb_data_format,
+        .borrowed_from = OUTPUT,
+    };
+
+    spec.dataflow_buffers = {src0_dfb, out_dfb};
+
+    // Reader kernel. It reads from the input shard (resident in L1) via raw noc x/y addresses and
+    // writes the unpadded sticks into the borrowed output DFB; there is no writer kernel. The reader
+    // binds NO TensorAccessor (it does not access the tensors via a TensorAccessor). It is a
+    // self-supplied PRODUCER of both borrowed DFBs: it calls get_write_ptr() on cb_in (to find the
+    // input shard's L1 base) and reserve_back/get_write_ptr/push_back on cb_out.
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/slice/device/kernels/dataflow/"
+            "slice_reader_unary_unpad_dims_rm_sharded.cpp",
+        .dfb_bindings =
+            {ProducerOf(SRC0, "cb_in"), ProducerOf(OUT, "cb_out")},
+        // CTAs (legacy compile_time_args {stick_size_padded, stick_size_unpadded, shard_height_unpadded}).
+        .compile_time_args =
+            {{"stick_size_padded", static_cast<uint32_t>(stick_size_padded)},
+             {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)},
+             {"num_sticks_unpadded", shard_height_unpadded}},
+        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+    };
+
+    // Build the variable-length per-core reader args (legacy reader_kernel_args).
     auto all_runtime_args = ttnn::operations::experimental::quasar::get_slice_runtime_args_rm_sharded(
         input,
         output,
@@ -296,16 +336,13 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
         num_cores_x_padded,
         num_cores_y_padded);
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/slice/device/kernels/dataflow/"
-        "slice_reader_unary_unpad_dims_rm_sharded.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores_unpadded;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    reader_desc.runtime_args.reserve(num_cores_unpadded);
+    // The reader's per-core args are a single variable-length blob carried as positional runtime
+    // varargs. Because each core's length differs (num_cores_read, chunk counts and chunk lists all
+    // vary per core), we use the documented per-node-varying vararg-count mechanism
+    // (KernelAdvancedOptions::num_runtime_varargs_per_node, a deprecated-but-purpose-built API for
+    // exactly this case). num_runtime_varargs is the default for any node not in the table.
+    AdvancedKernelRunArgs reader_run_advanced;
+    uint32_t max_vararg_count = 0;
     for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
         CoreCoord core;
         if (row_major) {
@@ -313,12 +350,55 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
         } else {
             core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
         }
-        reader_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].first));
+        auto& core_args = all_runtime_args[i].first;
+        max_vararg_count = std::max(max_vararg_count, static_cast<uint32_t>(core_args.size()));
+        reader_run_advanced.runtime_varargs.emplace(NodeCoord{core}, std::move(core_args));
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    {
+        // Per-node vararg COUNT: required because the reader's vararg length varies per core. This
+        // is the documented mechanism for per-node-varying vararg counts.
+        reader.advanced_options.num_runtime_varargs = max_vararg_count;
+        for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
+            CoreCoord core;
+            if (row_major) {
+                core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
+            } else {
+                core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
+            }
+            reader.advanced_options.num_runtime_varargs_per_node.emplace(
+                Nodes{NodeCoord{core}}, static_cast<uint32_t>(all_runtime_args[i].first.size()));
+        }
+    }
+#pragma GCC diagnostic pop
 
-    return desc;
+    spec.kernels = {reader};
+
+    // Single work unit: the reader runs on every unpadded core.
+    spec.work_units = {WorkUnitSpec{
+        .name = "slice_rm_sharded",
+        .kernels = {READER},
+        .target_nodes = all_cores_unpadded,
+    }};
+
+    // ---- Assemble ProgramRunArgs ----
+    // No named runtime args and no common varargs: every per-core value lives in the variable blob.
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        KernelRunArgs{
+            .kernel = READER,
+            .advanced_options = std::move(reader_run_advanced),
+        },
+    };
+    run_args.tensor_args.emplace(INPUT, TensorArgument{input.mesh_tensor()});
+    run_args.tensor_args.emplace(OUTPUT, TensorArgument{output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramSpecArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim::qsr

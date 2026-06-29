@@ -52,50 +52,43 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Runtime arguments - first get basic parameters
-    uint32_t rt_args_idx = 0;
-    uint32_t src_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
+    // Named runtime arguments - basic per-core scalars.
+    // The input buffer address is now carried by the bound TensorAccessor (tensor::in),
+    // and the DFB is the bound dataflow buffer (dfb::cb_out).
+    uint32_t tensor_rank = get_arg(args::tensor_rank);
+    uint32_t element_size = get_arg(args::element_size);
+    uint32_t num_rows_for_this_core = get_arg(args::num_rows_for_this_core);
+    uint32_t start_row_for_this_core = get_arg(args::row_start_id);
 
-    // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
-
-    // Get dimension arrays from runtime arguments
-    // Layout: input_dims[rank], output_dims[rank], slice_starts[rank], slice_ends[rank], slice_steps[rank]
-    // Read input dimensions
-    volatile tt_l1_ptr uint32_t* input_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
-
-    // Read output dimensions
-    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
-
-    // Read slice parameters
-    volatile tt_l1_ptr uint32_t* slice_starts = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
-
-    volatile tt_l1_ptr uint32_t* slice_ends = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
-
-    volatile tt_l1_ptr uint32_t* slice_steps = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
+    // Get dimension arrays from COMMON runtime varargs (core-invariant; read once).
+    // Common vararg layout: input_dims[rank], output_dims[rank], slice_starts[rank],
+    //                       slice_ends[rank], slice_steps[rank].
+    uint32_t input_dims[16];
+    uint32_t output_dims[16];
+    uint32_t slice_starts[16];
+    uint32_t slice_ends[16];
+    uint32_t slice_steps[16];
+    for (uint32_t i = 0; i < tensor_rank; ++i) {
+        input_dims[i] = get_common_vararg(i);
+        output_dims[i] = get_common_vararg(tensor_rank + i);
+        slice_starts[i] = get_common_vararg(2 * tensor_rank + i);
+        slice_ends[i] = get_common_vararg(3 * tensor_rank + i);
+        slice_steps[i] = get_common_vararg(4 * tensor_rank + i);
+    }
 
     // Calculate sizes - working with rows, not tiles
     uint32_t input_bytes_per_row = input_dims[tensor_rank - 1] * element_size;
     uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
 
     // Set up TensorAccessor for input data - use row size as page size
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::in);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out(cb_id_out);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer cb_out(dfb::cb_out);
 
     // Multi-core work distribution using iterative approach with explicit coordinate tracking
     // Track current position in N-dimensional space

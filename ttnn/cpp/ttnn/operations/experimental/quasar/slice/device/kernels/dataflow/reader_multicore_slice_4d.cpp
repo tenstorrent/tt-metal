@@ -46,51 +46,47 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Runtime arguments for 4D slice support with multi-core work distribution
-    uint32_t rt_args_idx = 0;
-    uint32_t src_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t input_w = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t input_h = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t input_d = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t input_n = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_w = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_h = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_d = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_n = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_start_w = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_end_w = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_step_w = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_start_h = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_end_h = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_step_h = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_start_d = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_end_d = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_step_d = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_start_n = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_end_n = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t slice_step_n = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-
-    // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    // Named runtime arguments for 4D slice support with multi-core work distribution.
+    // The input buffer address is now carried by the bound TensorAccessor (tensor::in),
+    // and the DFB is the bound dataflow buffer (dfb::cb_out).
+    uint32_t tensor_rank = get_arg(args::tensor_rank);
+    uint32_t input_w = get_arg(args::input_w);
+    uint32_t input_h = get_arg(args::input_h);
+    uint32_t input_d = get_arg(args::input_d);
+    uint32_t input_n = get_arg(args::input_n);
+    uint32_t output_w = get_arg(args::output_w);
+    uint32_t output_h = get_arg(args::output_h);
+    uint32_t output_d = get_arg(args::output_d);
+    uint32_t output_n = get_arg(args::output_n);
+    uint32_t slice_start_w = get_arg(args::slice_start_w);
+    uint32_t slice_end_w = get_arg(args::slice_end_w);
+    uint32_t slice_step_w = get_arg(args::slice_step_w);
+    uint32_t slice_start_h = get_arg(args::slice_start_h);
+    uint32_t slice_end_h = get_arg(args::slice_end_h);
+    uint32_t slice_step_h = get_arg(args::slice_step_h);
+    uint32_t slice_start_d = get_arg(args::slice_start_d);
+    uint32_t slice_end_d = get_arg(args::slice_end_d);
+    uint32_t slice_step_d = get_arg(args::slice_step_d);
+    uint32_t slice_start_n = get_arg(args::slice_start_n);
+    uint32_t slice_end_n = get_arg(args::slice_end_n);
+    uint32_t slice_step_n = get_arg(args::slice_step_n);
+    uint32_t element_size = get_arg(args::element_size);
+    uint32_t num_rows_for_this_core = get_arg(args::num_rows_for_this_core);
+    uint32_t start_row_for_this_core = get_arg(args::row_start_id);
 
     // Calculate sizes - working with rows, not tiles
     uint32_t input_bytes_per_row = input_w * element_size;  // Dynamic element size
     uint32_t output_bytes_per_row = output_w * element_size;
 
     // Set up TensorAccessor for input data - use row size as page size
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::in);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out(cb_id_out);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer cb_out(dfb::cb_out);
 
     // Multi-core work distribution: this core processes rows [start_row_for_this_core, start_row_for_this_core +
     // num_rows_for_this_core) We need to map these logical output row indices back to the corresponding (n,d,h)

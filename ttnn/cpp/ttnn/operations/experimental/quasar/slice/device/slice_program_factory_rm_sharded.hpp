@@ -3,21 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation_types.hpp"
 
 namespace ttnn::prim::qsr {
 
 struct SliceRmShardedProgramFactory {
-    // Contract (1): per-coord ProgramDescriptor.  Both CBs are sharded
-    // (CBDescriptor::buffer bound to input/output buffers); the framework
-    // patches the dynamic CB addresses on cache hit via
-    // apply_descriptor_runtime_args.  CB total_size/page_size are NOT patched
-    // — padded_shape is folded into compute_program_hash() so each unique
-    // sizing gets its own cache entry.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Metal 2.0 (ProgramSpecFactoryConcept) factory for the height-sharded ROW_MAJOR
+    // no-step slice path. Both dataflow buffers are *borrowed* (DataflowBufferSpec::borrowed_from
+    // bound to the input/output TensorParameters) — the spec carries their sizing and the framework
+    // re-binds their backing L1 address from the tensor argument on each execution. The reader's
+    // per-core args are variable-length, so they are carried as per-node runtime varargs.
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 

@@ -18,7 +18,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
-ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts SliceTileProgramFactory::create_program_spec(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
     tt::tt_metal::IDevice* device = input.device();
@@ -200,7 +200,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     run_args.tensor_args.emplace(INPUT, input.mesh_tensor());
     run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };

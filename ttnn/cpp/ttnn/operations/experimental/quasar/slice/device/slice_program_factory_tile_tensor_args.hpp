@@ -5,12 +5,12 @@
 
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 
 namespace ttnn::prim::qsr {
 
 struct SliceTileTensorArgsProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 };
 
