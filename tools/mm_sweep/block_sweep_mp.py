@@ -147,6 +147,9 @@ JOINT_SPK = os.environ.get("BSWEEP_JOINT_SPK") == "1"
 
 
 BASELINE = os.environ.get("BSWEEP_BASELINE") == "1"  # main-equivalent: no slicing/K-par, levers off
+AUTO = (
+    os.environ.get("BSWEEP_AUTO") == "1"
+)  # full auto: factory picks (S,Pk) AND blocks (no pins) -> validate heuristic
 CONFIGS_FILE = os.environ.get("BSWEEP_CONFIGS")  # path to a JSON list of exact [S,Pk,M,K,N,mb,kb,nb,sbh,sbw]
 # items: run EXACTLY those (1 config/shape, no block sweep) -- e.g. an mcast on/off A/B at the optimal config.
 
@@ -158,6 +161,8 @@ def build_work(shapes, GX=8, GY=8):
     Default: blocks at the heuristic (S,Pk). BSWEEP_JOINT_SPK=1: blocks at EVERY reasonable (S,Pk) combo.
     BSWEEP_BASELINE=1: force S=1,Pk=1 (no slicing/K-par) -> the 'main' block sweep (levers also disabled
     in the worker), for an optimized-baseline comparison."""
+    if AUTO:  # one item/shape, S=Pk=0 sentinel -> worker leaves (S,Pk) AND blocks to the factory auto path
+        return [[0, 0, M, K, N, 0, 0, 0, 0, 0] for M, K, N in shapes]
     work = []
     for M, K, N in shapes:
         Mt, Nt, Kt = M // 32, N // 32, K // 32
@@ -255,7 +260,10 @@ def worker_main():
     for w in shard:
         S, Pk, M, K, N, mb, kb, nb, sbh, sbw = w
         if (S, Pk) != cur_spk:
-            if not BASELINE:  # baseline keeps slicing env unset (true 'main' non-sliced path)
+            if AUTO:  # leave (S,Pk) to the factory auto heuristic: ensure nothing is pinned
+                for k in ("TT_MM_NUM_SLICES", "TT_MM_K_SLICES", "TT_MM_K_FUSED", "TT_MM_NO_AUTO_KPAR"):
+                    os.environ.pop(k, None)
+            elif not BASELINE:  # baseline keeps slicing env unset (true 'main' non-sliced path)
                 for k in ("TT_MM_NUM_SLICES", "TT_MM_K_SLICES", "TT_MM_K_FUSED", "TT_MM_NO_AUTO_KPAR"):
                     os.environ.pop(k, None)
                 os.environ["TT_MM_NUM_SLICES"] = str(S)
@@ -277,13 +285,17 @@ def worker_main():
         ok, p = True, 0.0
         try:
             d.clear_program_cache()  # bound cache; each config is a distinct program
-            cfg = ttnn.MinimalMatmulConfig(
-                M_block_size=mb,
-                K_block_size=kb,
-                N_block_size=nb,
-                subblock_h=sbh,
-                subblock_w=sbw,
-                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            cfg = (
+                None  # AUTO: no pinned config -> factory's default block sizer (+ auto S,Pk) decides everything
+                if AUTO
+                else ttnn.MinimalMatmulConfig(
+                    M_block_size=mb,
+                    K_block_size=kb,
+                    N_block_size=nb,
+                    subblock_h=sbh,
+                    subblock_w=sbw,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                )
             )
             # PCC on the FIRST invocation only: fused K-par corrupts the output on repeated invocations of
             # the same cached program (call 0 ok, calls 1+ -> garbage), but the device WORK (and timing) is
