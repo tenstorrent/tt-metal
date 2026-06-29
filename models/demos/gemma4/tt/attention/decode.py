@@ -39,6 +39,7 @@ def decode_forward(
     is_kv_shared=False,
     position_idx_cache=None,
     sequential_kv_write=False,
+    rope_presliced=False,
 ):
     """
     Single-token decode attention, fully on device.
@@ -47,6 +48,11 @@ def decode_forward(
         hidden_states: [1, 1, batch, hidden_size] on device
         cos_cache: [max_seq_len, head_dim] 2D cache for embedding lookup, or [1,1,max_seq_len,head_dim] 4D
         sin_cache: same format as cos_cache
+        rope_presliced: if True, cos_cache/sin_cache are already position-gathered
+            [1, 1, batch_pad, head_dim] tensors (one row per user), shared across all
+            layers of this layer_type by the model. The per-layer ttnn.embedding slice
+            is skipped and Q+K are RoPE'd in a single fused call. (Consumed in the
+            fused-RoPE branch.)
         weights: AttentionWeights container
         kv_cache: [k_cache, v_cache] TT tensors (for shared layers, this is the source layer's cache)
         config: Gemma4AttentionConfig
@@ -84,32 +90,44 @@ def decode_forward(
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
     # 4. RoPE — use on-device embedding lookup for trace compatibility
-    use_embedding_rope = len(cos_cache.shape) == 2  # 2D cache = embedding lookup mode
+    # use_embedding_rope: cos/sin are per-position [1,1,batch_pad,head_dim] tensors.
+    #   - rope_presliced: gathered once per layer_type by the model and shared across
+    #     all layers (no per-layer ttnn.embedding here).
+    #   - 2D cache: gather the position rows with ttnn.embedding right here (legacy
+    #     per-layer path, kept for the it-assistant drafter / direct callers).
+    use_embedding_rope = rope_presliced or len(cos_cache.shape) == 2
     if use_embedding_rope:
-        # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
-        # position_idx: [1, 32] uint32 padded tensor for embedding lookup
-        cos_pos = ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT)  # [1, batch_pad, head_dim]
-        sin_pos = ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT)
-        cos_pos = ttnn.unsqueeze_to_4D(cos_pos)  # [1, 1, batch_pad, head_dim]
-        sin_pos = ttnn.unsqueeze_to_4D(sin_pos)
+        if rope_presliced:
+            cos_pos, sin_pos = cos_cache, sin_cache  # [1, 1, batch_pad, head_dim], shared
+        else:
+            # Gather position-specific cos/sin via ttnn.embedding (fully on-device, trace-safe)
+            # position_idx: [1, 32] uint32 padded tensor for embedding lookup
+            cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_cache, layout=ttnn.TILE_LAYOUT))
+            sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT))
         # RoPE. batch=1 uses the fused single-position rotary_embedding (one core
         # but cheap, no slice/tilize churn). batch>1 needs per-user positions,
         # which that op can't express, so fall back to the manual elementwise
         # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
         # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
         batch = tt_q.shape[1]
-        if batch == 1:
-            tt_q = apply_rope(tt_q, cos_pos, sin_pos, token_index=0)
-            if not is_kv_shared:
-                tt_k = apply_rope(tt_k, cos_pos, sin_pos, token_index=0)
-        else:
-            cos_b = ttnn.transpose(cos_pos, 1, 2)  # [1, batch_pad, 1, head_dim]
-            sin_b = ttnn.transpose(sin_pos, 1, 2)
-            cos_b = cos_b[:, :batch, :, :]
-            sin_b = sin_b[:, :batch, :, :]
-            tt_q = apply_rope_decode_peruser(tt_q, cos_b, sin_b)
-            if not is_kv_shared:
-                tt_k = apply_rope_decode_peruser(tt_k, cos_b, sin_b)
+        if batch > 1:
+            cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
+            sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+
+        def _rope(t):
+            if batch == 1:
+                return apply_rope(t, cos_pos, sin_pos, token_index=0)
+            return apply_rope_decode_peruser(t, cos_b, sin_b)
+
+        # Rotate Q (and K, unless this is a KV-shared layer) with the shared
+        # cos/sin. A concat(Q,K)->rope->split "fusion" was tried to collapse the
+        # two rotary_embedding calls into one, but at decode batch=1 under metal
+        # trace replay it regressed throughput (~3%): host dispatch is already
+        # free under replay, so it only added concat+split device kernels while
+        # removing one tiny rope kernel. Keep separate rotations.
+        tt_q = _rope(tt_q)
+        if not is_kv_shared:
+            tt_k = _rope(tt_k)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
@@ -234,12 +252,16 @@ def decode_forward(
     # the SDPA op falls back to the full device grid, which exceeds 64 cores
     # on Blackhole (>=110 cores) when num_kv_heads is small. The struct's
     # default max_cores_per_head_batch=16 caps the per-head reduction tree.
-    if config.head_dim >= 512:
-        # Global layers: smaller grid — head_dim=512 needs more L1 per core.
+    # Batched Q is height-sharded row-major across the device grid (one user per
+    # core), so the SDPA grid must cover those cores — an 8-wide grid would miss
+    # users on columns 8..10 of an 11-wide Blackhole grid and corrupt the output.
+    batch_size = tt_q.shape[1]
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if config.head_dim >= 512 and batch_size == 1:
+        # Single-user global layers: smaller grid — head_dim=512 needs more L1 per core.
         sdpa_grid = ttnn.CoreCoord(8, 4)
     else:
-        # Sliding layers: use the full device compute grid.
-        device_grid = mesh_device.compute_with_storage_grid_size()
+        # Sliding layers, and all batched decode: use the full device compute grid.
         sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
