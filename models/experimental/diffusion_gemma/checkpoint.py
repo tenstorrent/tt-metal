@@ -12,6 +12,7 @@ so this module loads only the required safetensors keys by default.
 from __future__ import annotations
 
 import json
+from numbers import Integral
 from pathlib import Path
 from typing import NamedTuple
 
@@ -53,6 +54,16 @@ def _as_prefix_tuple(prefixes: tuple[str, ...] | list[str] | str) -> tuple[str, 
     return tuple(prefixes)
 
 
+def _validate_num_layers(num_layers: int | None) -> int | None:
+    if num_layers is None:
+        return None
+    if isinstance(num_layers, bool) or not isinstance(num_layers, Integral):
+        raise ValueError("num_layers must be an integer")
+    if num_layers <= 0:
+        raise ValueError("num_layers must be positive")
+    return int(num_layers)
+
+
 def text_generation_prefixes_for_layers(num_layers: int | None = None) -> tuple[str, ...]:
     """Return raw DiffusionGemma prefixes needed for text generation.
 
@@ -61,10 +72,9 @@ def text_generation_prefixes_for_layers(num_layers: int | None = None) -> tuple[
     weights required by embedding, final norm, lm-head tying, and self-conditioning.
     """
 
+    num_layers = _validate_num_layers(num_layers)
     if num_layers is None:
         return TEXT_GENERATION_PREFIXES
-    if num_layers < 0:
-        raise ValueError("num_layers must be non-negative")
     return (
         f"{DG_DECODER_PREFIX}embed_tokens.",
         f"{DG_DECODER_PREFIX}norm.",
@@ -188,6 +198,10 @@ def build_tt_model_from_checkpoint_inputs(
     **model_kwargs,
 ) -> CheckpointModelInputs:
     """Build the reused Gemma4 TT backbone from loaded DiffusionGemma inputs."""
+
+    if "num_layers" in model_kwargs:
+        model_kwargs = dict(model_kwargs)
+        model_kwargs["num_layers"] = _validate_num_layers(model_kwargs["num_layers"])
 
     if remap_fn is None:
         from models.experimental.diffusion_gemma.weight_mapping import remap_state_dict

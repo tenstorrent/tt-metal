@@ -62,6 +62,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--max-seq-len", type=int, default=4096)
     parser.add_argument("--num-layers", type=int, default=None, help="Optional smoke-test layer limit")
+    parser.add_argument("--build-only", action="store_true", help="Build the TT model, then exit before generation")
     parser.add_argument("--local-files-only", action="store_true", help="Do not fetch tokenizer files from HF hub")
     parser.add_argument("--bounded-sliding-kv-cache", action="store_true")
     return parser
@@ -69,7 +70,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    zero_block_run = args.num_blocks == 0 or (args.num_blocks is None and args.max_new_tokens == 0)
+    zero_block_run = not args.build_only and (
+        args.num_blocks == 0 or (args.num_blocks is None and args.max_new_tokens == 0)
+    )
     if zero_block_run:
         from models.experimental.diffusion_gemma.tt.generate import generate_text_from_checkpoint_state
 
@@ -103,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
             num_layers=args.num_layers,
             bounded_sliding_kv_cache=args.bounded_sliding_kv_cache,
         )
+        if args.build_only:
+            return 0
         generation = generate_text_from_checkpoint_model_inputs(
             checkpoint_model_inputs,
             args.prompt,
