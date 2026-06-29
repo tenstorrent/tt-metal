@@ -213,8 +213,7 @@ enum class EnvVarID {
     // LLK SANITIZER
     // For detailed description look at tt-llk/sanitizer/settings.h
     // ========================================
-    TT_METAL_LLK_SANITIZER,         // Enable LLK sanitizer (master switch)
-    TT_METAL_LLK_SANITIZER_METHOD,  // Report method: "assert" or "print"
+    TT_METAL_LLK_SANITIZER,  // Enable LLK sanitizer (master switch)
     TT_METAL_LLK_SANITIZER_PEDANTIC,
     TT_METAL_LLK_SANITIZER_WARN,
     TT_METAL_LLK_SANITIZER_ERROR,
@@ -1475,21 +1474,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
-        // TT_METAL_LLK_SANITIZER_METHOD
-        // Sets the sanitizer report method: "assert" or "print".
-        // Usage: export TT_METAL_LLK_SANITIZER_METHOD=print
-        case EnvVarID::TT_METAL_LLK_SANITIZER_METHOD: {
-            std::string_view method(value);
-            if (method == "assert") {
-                this->sanitizer_settings.method = SanitizerReportMethod::Assert;
-            } else if (method == "print") {
-                this->sanitizer_settings.method = SanitizerReportMethod::Print;
-            } else {
-                TT_THROW("Invalid TT_METAL_LLK_SANITIZER_METHOD: '{}'. Valid values: assert, print", value);
-            }
-            break;
-        }
-
         // TT_METAL_LLK_SANITIZER_PEDANTIC
         // Usage: export TT_METAL_LLK_SANITIZER_PEDANTIC=1
         case EnvVarID::TT_METAL_LLK_SANITIZER_PEDANTIC:
@@ -2140,7 +2124,6 @@ std::string RunTimeOptions::get_sanitizer_hash() const {
     const auto& san = get_sanitizer_settings();
     std::string hash_str;
     hash_str += std::to_string(san.enabled);
-    hash_str += std::to_string(static_cast<int>(san.method));
     hash_str += optional_hash(san.pedantic);
     hash_str += optional_hash(san.warn);
     hash_str += optional_hash(san.error);
