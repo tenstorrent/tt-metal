@@ -60,7 +60,12 @@ def preprocess_tt_text_encoder(
         # embedding). Doing the (un)tilize once here at preprocess removes it from the hot path.
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # Stage the (constant) gather table in L1, interleaved. The embedding sweep
+        # (perf/test_embedding_text_encoder_perf_sweep.py) found an L1-resident table+indices is the
+        # base of every PCC-passing speedup (the op forbids *sharded* weights, so interleaved L1 is the
+        # ceiling). Table is VOCAB×C bf16 (~178×512 ≈ 182 KiB) — a one-time residency cost that removes
+        # a DRAM read from every forward's gather. Pairs with the height-sharded output below.
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     block_params: list[TTTextEncoderConvLNBlockParams] = []
@@ -326,14 +331,17 @@ class TTTextEncoder:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        # The CNN conv runs at HiFi2: a fidelity sweep showed HiFi2 ties HiFi3's PCC (conv inputs are
-        # bf16, so 2 MAC passes already saturate precision — isolated conv PCC 0.99999, full-seq
-        # 0.999953 vs 0.999963) while cutting conv device time ~22% (65.0->50.8µs over the 3 stages).
-        # Kept separate from the main config so the BiLSTM matmuls (whose output feeds the decoder)
-        # stay at HiFi3.
+        # The CNN conv runs at LoFi: a fidelity sweep (perf/test_conv_text_encoder_perf_sweep.py,
+        # KOKORO_CONV_FIDELITY_ONLY=1) swept LoFi->HiFi4 x fp32_dest_acc_en on/off at the production conv
+        # shape (96x2560x512, block-sharded 24c, double-buffered). The conv inputs are bf16, so PCC is
+        # already saturated at LoFi — isolated conv PCC 0.99988 (LoFi) vs 0.99998 (HiFi2/3/4), all far
+        # above the bar — while LoFi is the fastest PCC-passing config: 29.7µs vs HiFi2 33.3µs (-11%) and
+        # HiFi3 41.8µs (-29%) per conv. fp32_dest_acc_en stays True (it costs ~0 here, 29.69 vs 29.90µs,
+        # and keeps the high PCC; fp32acc=False drops LoFi to 0.99965). Kept separate from the main config
+        # so the BiLSTM matmuls (whose output feeds the decoder) stay at HiFi3.
         self.conv_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -383,9 +391,20 @@ class TTTextEncoder:
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=dev,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # L1-resident indices — the second half of the embedding sweep's L1-input/L1-weight win.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        x = ttnn.embedding(tt_ids, self.params.embedding_weight, layout=ttnn.TILE_LAYOUT)  # [1, 1, B*T, C]
+        # Write the gather output to interleaved L1 (not DRAM). The embedding sweep
+        # (perf/test_embedding_text_encoder_perf_sweep.py) found HEIGHT-sharding the output is the
+        # fastest gather *in isolation* (N=512: 2.24µs vs 7.99µs DRAM), but block 0's ttnn.conv1d runs
+        # with the L1_FULL slice config and cannot size its halo CBs from a *sharded* input — it
+        # overflows L1 (5.8 MiB > 1.5 MiB). Re-interleaving the sharded gather before the conv would
+        # add a ShardedToInterleaved, a dispatched op this dispatch-bound model can't amortize (cf. the
+        # rejected width-sharded recurrent matmul). Interleaved L1 keeps the whole gather→conv handoff
+        # L1-resident with zero added ops — the safe, conv-compatible slice of the sweep's win.
+        x = ttnn.embedding(
+            tt_ids, self.params.embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        )  # [1, 1, B*T, C]
         ttnn.deallocate(tt_ids)
 
         # When there's no padding the keep-mask is all-ones and every ``x * mask_keep`` is the
@@ -413,7 +432,9 @@ class TTTextEncoder:
             mask_keep = None
 
         if mask_keep is not None:
-            x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # The mask multiply pairs the gather output with a DRAM-interleaved mask, so re-interleave
+            # the (height-sharded) embedding output first; the conv reshards its input anyway.
+            x = ttnn.multiply(_maybe_interleaved(x), mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Chain the CNN blocks keeping activations block-sharded in L1 between stages: each conv accepts
         # the previous LeakyReLU's sharded output directly, so only the last stage re-interleaves to DRAM
