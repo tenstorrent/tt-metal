@@ -51,7 +51,6 @@
 #include "impl/debug/inspector/inspector.hpp"
 #include "jit_build/build_env_manager.hpp"
 
-using std::flush;
 using std::ofstream;
 using std::ostream;
 using std::string;
@@ -322,6 +321,11 @@ private:
     // stdout, or nothing.
     ostream* get_output_stream(const RiscKey& risc_key);
 
+    // Flushes the shared output stream and any per-risc file streams. print_buffer_data no longer
+    // flushes per line (that turned into millions of write() syscalls under heavy load); both the
+    // DRAM-aggregation path and the L1-fallback path call this once after processing instead.
+    void flush_output_streams();
+
     // Helper functions to init/attach/detach a single device
     void init_device(ChipId device_id);
     void attach_device(ChipId device_id);
@@ -504,7 +508,7 @@ void DPrintServer::Impl::print_buffer_data(
                         // multiple new lines in the message or because we want to prepend line prefix to each line?
                         ostream* output_stream = get_output_stream(risc_key);
                         if (newline_pos == buffer.size() - 1) {
-                            *output_stream << line_prefix << buffer << flush;
+                            *output_stream << line_prefix << buffer;
                             buffer.clear();
                         } else {
                             std::size_t newline_start = 0;
@@ -512,7 +516,7 @@ void DPrintServer::Impl::print_buffer_data(
                             while (newline_pos != std::string::npos) {
                                 std::string_view line =
                                     full_message_view.substr(newline_start, newline_pos - newline_start);
-                                *output_stream << line_prefix << line << std::endl;
+                                *output_stream << line_prefix << line << '\n';
                                 newline_start = newline_pos + 1;
                                 newline_pos = full_message_view.find('\n', newline_start);
                             }
@@ -737,7 +741,8 @@ bool DPrintServer::Impl::poll_device_print_data(
             const uint32_t first = data.buffer_size - rpos;
             payload_vector.resize((first + wpos + sizeof(uint32_t) - 1) / sizeof(uint32_t));
             cluster.read_dram_vec(payload_vector.data(), first, device_id, data.dram_view, data.buffer_address + rpos);
-            cluster.read_dram_vec(payload_vector.data() + first, wpos, device_id, data.dram_view, data.buffer_address);
+            cluster.read_dram_vec(
+                payload_vector.data() + first / sizeof(uint32_t), wpos, device_id, data.dram_view, data.buffer_address);
         }
 
         // Walk the payload as a sequence of {DramStreamMessageHeader, padding, payload}.
@@ -864,6 +869,10 @@ bool DPrintServer::Impl::poll_device_print_data(
             // Each chunk is dram-aligned in the kernel; advance accordingly.
             pos += round_up(chunk_end_bytes, dram_align);
         }
+        // Flush once per drain window instead of per line (see print_buffer_data). This batches the
+        // millions of lines a drain can emit into far fewer write() syscalls, which is what dominated
+        // runtime on a journaled filesystem. Output still appears per drain (every few ms).
+        flush_output_streams();
 
         // Update read pointer in DRAM.
         const uint32_t new_read_pointer = wpos;
@@ -1299,6 +1308,7 @@ bool DPrintServer::Impl::poll_device_print_data_l1(
             // re-throw the exception.
             if (env_.get_rtoptions().get_test_mode_enabled()) {
                 server_killed_due_to_hang_ = true;
+                flush_output_streams();
                 return new_data_this_iter;  // Stop the print loop
             }  // Re-throw for instant exit
             throw e;
@@ -1306,11 +1316,29 @@ bool DPrintServer::Impl::poll_device_print_data_l1(
 
         // If this read detected a print hang, stop processing prints.
         if (server_killed_due_to_hang_) {
+            flush_output_streams();
             return new_data_this_iter;
         }
     }
+    // Flush here too: the L1-fallback path (used when dispatch_s isn't running — early boot,
+    // self-disabled, or after the dispatcher finished) is where prompt, complete output matters
+    // most for hang debugging, and print_buffer_data no longer flushes per line.
+    if (new_data_this_iter) {
+        flush_output_streams();
+    }
     return new_data_this_iter;
 }  // poll_device_print_data_l1
+
+void DPrintServer::Impl::flush_output_streams() {
+    if (stream_ != nullptr) {
+        stream_->flush();
+    }
+    for (auto& [risc_key, risc_stream] : risc_to_file_stream_) {
+        if (risc_stream != nullptr) {
+            risc_stream->flush();
+        }
+    }
+}  // flush_output_streams
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;
