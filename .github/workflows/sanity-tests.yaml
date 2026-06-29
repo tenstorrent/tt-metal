@@ -270,12 +270,14 @@ jobs:
   ttnn-sanity-tests:
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
-    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttnn-sanity-tests == 'true' }}
+    if: ${{ always() && !cancelled() && needs.resolve-artifacts.result == 'success' && (needs.tests-to-run.outputs.ttnn-sanity-tests == 'true' || needs.tests-to-run.outputs.ttsim-tests == 'true') }}
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
-      # sim_* SKUs run ttnn under the ttsim simulator on ubuntu-latest, which can't reach Harbor.
-      # Use the canonical GHCR image from resolve-artifacts (not the Harbor-resolved resolve-docker-pull-refs ref).
-      enabled-skus: "wh_n300_civ2,sim_wormhole_b0,sim_blackhole"
+      # The enabled SKUs are composed from the two selectors: run-ttnn-sanity-tests enables the
+      # wh_n300_civ2 HW SKU; run-ttsim-tests enables the sim_* SKUs. sim_* SKUs run ttnn under the
+      # ttsim simulator on ubuntu-latest, which can't reach Harbor — so they use the canonical GHCR
+      # image from resolve-artifacts (not the Harbor-resolved resolve-docker-pull-refs ref).
+      enabled-skus: ${{ needs.tests-to-run.outputs.ttnn-sanity-tests == 'true' && (needs.tests-to-run.outputs.ttsim-tests == 'true' && 'wh_n300_civ2,sim_wormhole_b0,sim_blackhole' || 'wh_n300_civ2') || (needs.tests-to-run.outputs.ttsim-tests == 'true' && 'sim_wormhole_b0,sim_blackhole' || '') }}
       docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -332,4 +334,4 @@ jobs:
       docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enabled-skus: "sim_blackhole,sim_blackhole_galaxy"
+      enabled-skus: "sim_wormhole_b0,sim_blackhole,sim_wormhole_b0_galaxy,sim_blackhole_galaxy"

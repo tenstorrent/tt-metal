@@ -245,10 +245,7 @@ jobs:
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
-          # Apply the once-loaded TTSim skip list (from load-test-matrix) for this sim SKU's arch.
-          # Via PYTEST_ADDOPTS so the --deselect flags reach every pytest invocation in cmd,
-          # including cmds that chain multiple pytest calls with &&.
-          PYTEST_ADDOPTS: ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}
+          PYTEST_ADDOPTS: "-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
         run: |
           ${{ matrix.test-group.cmd }}
 
