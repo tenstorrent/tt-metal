@@ -1,48 +1,35 @@
+# tt/tst_encoder_layer.py
 # SPDX-License-Identifier: Apache-2.0
-import torch, ttnn
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
-D_MODEL = 26
-NUM_HEADS = 2
-HEAD_DIM = D_MODEL // NUM_HEADS
+import ttnn
 
+from .tst_attention import tst_self_attention
+from .ttnn_utils import layer_norm_padded
 
-def _tw(w):
-    """Weight matrix: was stored transposed for TTNN, un-transpose for torch matmul."""
-    return ttnn.to_torch(w).float().T
+D_MODEL = 26  # the TRUE, unpadded feature width -- this never changes
 
 
-def _tb(w, size=None):
-    """Bias vector."""
-    t = ttnn.to_torch(w).float()
-    return t[:size] if size else t
+def tst_ffn(hidden_states, w):
+    """hidden_states: ttnn tensor [B, T, padded_width]."""
+    ffn = ttnn.linear(hidden_states, w["fc1_weight"], bias=w["fc1_bias"], activation="gelu")
+    return ttnn.linear(ffn, w["fc2_weight"], bias=w["fc2_bias"])
 
 
-def _attn(h, kv, w, pfx):
-    B, tgt = h.shape[:2]; src = kv.shape[1]
-    q = (h  @ _tw(w[pfx+".q_proj.weight"])  + _tb(w[pfx+".q_proj.bias"],  D_MODEL)).view(B,tgt,NUM_HEADS,HEAD_DIM).transpose(1,2)
-    k = (kv @ _tw(w[pfx+".k_proj.weight"])  + _tb(w[pfx+".k_proj.bias"],  D_MODEL)).view(B,src,NUM_HEADS,HEAD_DIM).transpose(1,2)
-    v = (kv @ _tw(w[pfx+".v_proj.weight"])  + _tb(w[pfx+".v_proj.bias"],  D_MODEL)).view(B,src,NUM_HEADS,HEAD_DIM).transpose(1,2)
-    a = torch.softmax((q @ k.transpose(-2,-1)) * HEAD_DIM**-0.5, dim=-1)
-    out = (a @ v).transpose(1,2).contiguous().view(B, tgt, D_MODEL)
-    return out @ _tw(w[pfx+".out_proj.weight"]) + _tb(w[pfx+".out_proj.bias"], D_MODEL)
-
-
-def _ln(x, w, pfx):
-    wt = _tb(w[pfx+".weight"], D_MODEL)
-    wb = _tb(w[pfx+".bias"],   D_MODEL)
-    return torch.nn.functional.layer_norm(x, [D_MODEL], wt, wb)
-
-
-def tst_encoder_layer(device, hidden_states, weights, layer_idx):
+def tst_encoder_layer(hidden_states, weights, layer_idx):
+    """hidden_states: ttnn [B, T, padded_width] where padded_width = NUM_HEADS * 32 = 64."""
     w = weights[f"encoder.layers.{layer_idx}"]
-    h = ttnn.to_torch(hidden_states).float()[..., :D_MODEL]
 
-    h = _ln(h + _attn(h, h, w, "self_attn"), w, "self_attn_layer_norm")
+    attn_out = tst_self_attention(hidden_states, w, causal=False)
+    residual = ttnn.add(hidden_states, attn_out)
+    hidden_states = layer_norm_padded(
+        residual, w["self_attn_layer_norm_weight"], w["self_attn_layer_norm_bias"], orig_dim=D_MODEL
+    )
 
-    fc1w = _tw(w["fc1.weight"]); fc1b = _tb(w["fc1.bias"])
-    fc2w = _tw(w["fc2.weight"]); fc2b = _tb(w["fc2.bias"], D_MODEL)
-    ffn = torch.nn.functional.gelu(h @ fc1w + fc1b)
-    h = _ln(h + (ffn @ fc2w)[..., :D_MODEL] + fc2b, w, "final_layer_norm")
+    ffn_out = tst_ffn(hidden_states, w)
+    residual = ttnn.add(hidden_states, ffn_out)
+    hidden_states = layer_norm_padded(
+        residual, w["final_layer_norm_weight"], w["final_layer_norm_bias"], orig_dim=D_MODEL
+    )
 
-    out = torch.nn.functional.pad(h, (0, (-D_MODEL) % 32))
-    return ttnn.from_torch(out, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return hidden_states
