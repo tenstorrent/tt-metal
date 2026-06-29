@@ -91,7 +91,7 @@
 - name: GPT-OSS 120B seqlen sweep
   cmd: |
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2 MESH_DEVICE=TG
-    pytest --timeout 3600 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
+    pytest --timeout 1200 --timeout-method thread models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
   model: gpt-oss-120b
   skus:
     wh_galaxy:
@@ -103,7 +103,7 @@
 - name: GPT-OSS 20B seqlen sweep
   cmd: |
     export HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/
-    pytest --timeout 3600 models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
+    pytest --timeout 1200 --timeout-method thread models/demos/gpt_oss/demo/text_demo.py -k "seqlen-sweep"
   model: gpt-oss-20b
   skus:
     wh_llmbox_perf:

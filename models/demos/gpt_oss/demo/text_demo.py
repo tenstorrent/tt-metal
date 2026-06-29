@@ -399,24 +399,19 @@ def prepare_gpt_oss_generator_args(
         # Seqlen sweep: 1k-128k context lengths, one step per seqlen (on single-row meshes, >64k steps are skipped)
         (
             [
+                "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",
                 "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
                 "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
-            ],  # input_prompts: list of 8 files, one per sweep step
+            ],  # DIAGNOSTIC: 3 small steps (128/1k/4k) to probe the repeat-batch hang
             1,  # data_parallel
             1,  # batch_size
-            8,  # repeat_batches (one per seqlen step)
+            3,  # repeat_batches (DIAGNOSTIC: 3 small steps)
             128 * 1024,  # max_seq_len (single-row meshes cap at 64k via is_seqlen_sweep guard)
             32,  # max_generated_tokens (minimal decode to verify prefill works)
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params
             True,  # enable_decode_trace
-            False,  # enable_prefill_trace (avoid trace memory issues at 128k)
+            True,  # enable_prefill_trace (DIAGNOSTIC: enabled to probe the hang)
             False,  # warmup_prefill
             False,  # users_row_sharded
             False,  # long_context_mode
@@ -632,10 +627,13 @@ def test_gpt_oss_demo(
         from pathlib import Path
 
         for sweep_file in seqlen_sweep_files:
-            label = Path(sweep_file).stem.split("_")[-1]  # e.g. "16k"
-            if not (label.endswith("k") and label[:-1].isdigit()):
+            label = Path(sweep_file).stem.split("_")[-1]  # e.g. "16k" or "128"
+            if label.endswith("k") and label[:-1].isdigit():
+                step_len = int(label[:-1]) * 1024
+            elif label.isdigit():  # DIAGNOSTIC: plain-int token count (e.g. prefill_128 -> 128)
+                step_len = int(label)
+            else:
                 continue
-            step_len = int(label[:-1]) * 1024
             if step_len > actual_max_seq_len:
                 logger.info(
                     f"Seqlen sweep step ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k"
