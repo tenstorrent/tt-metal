@@ -76,6 +76,7 @@ void kernel_main() {
             constexpr uint32_t logical_K = get_named_compile_time_arg_val("logical_K");
             constexpr uint32_t mask_fp32 = get_named_compile_time_arg_val("mask_fp32");
             constexpr uint32_t tile_w = 32;
+            CircularBuffer cb_col_mask_obj(cb_col_mask);
             const uint32_t core_start_col = (gamma_tile_start_id / block_w) * block_w * tile_w;
             for (uint32_t wt = 0; wt < block_w; wt++) {
                 const uint32_t tile_start_col = core_start_col + wt * tile_w;
@@ -88,9 +89,9 @@ void kernel_main() {
                     mask_w = logical_K - tile_start_col;
                 }
                 if constexpr (mask_fp32 == 1) {
-                    generate_mask_w<uint32_t>(cb_col_mask, mask_w);
+                    generate_mask_w<uint32_t>(cb_col_mask_obj, mask_w);
                 } else {
-                    generate_mask_w<uint16_t>(cb_col_mask, mask_w);
+                    generate_mask_w<uint16_t>(cb_col_mask_obj, mask_w);
                 }
             }
         }
