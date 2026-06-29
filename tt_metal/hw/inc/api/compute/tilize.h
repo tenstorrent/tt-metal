@@ -231,14 +231,6 @@ ALWI void tilize_block(
     }
 }
 
-#ifdef ARCH_QUASAR
-// Quasar regular-tilize uninit. Quasar has no llk_unpack_tilize_uninit, and its tilize_init is
-// lightweight (llk_unpack_tilize_init + generic datacopy init, no PackMode::Tilize / state_configure),
-// so there is no persistent tilize unpack/pack state to undo here <E2><80><94> the next op's init reconfigures
-// srcA.
-ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {}
-#endif
-
 #ifndef ARCH_QUASAR
 
 // clang-format off
@@ -326,13 +318,18 @@ unpack_tilizeA_B_block(
  */
 // clang-format on
 
+#endif  // ifndef ARCH_QUASAR
+
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
+#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_tilize_uninit(icb)));
+#endif
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Uninitializes the tilize operation and reconfigures the unpacker with CB data types.
