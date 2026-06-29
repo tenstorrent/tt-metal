@@ -11,6 +11,7 @@ Gemma4's decode path in ``COMMIT_APPEND`` phase.
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Callable, NamedTuple
 
 import torch
@@ -461,7 +462,7 @@ def _set_q_rope_offset(logits_fn, q_rope_offset: int) -> None:
 def _contains_stop_token(tokens: torch.Tensor, stop_token_ids) -> bool:
     if stop_token_ids is None:
         return False
-    ids = _normalize_eos_token_ids(stop_token_ids)
+    ids = _normalize_eos_token_ids(stop_token_ids, kind="stop_token_ids")
     return any(token_id in ids for token_id in tokens.reshape(-1).tolist())
 
 
@@ -697,12 +698,24 @@ def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGenerati
     return torch.cat([prompt_tokens, generation.generated], dim=1)
 
 
-def _normalize_eos_token_ids(eos_token_id):
+def _normalize_eos_token_ids(eos_token_id, *, kind: str = "eos_token_id"):
     if eos_token_id is None:
         return None
-    if isinstance(eos_token_id, int):
-        return {eos_token_id}
-    return set(eos_token_id)
+    if isinstance(eos_token_id, Integral):
+        return {int(eos_token_id)}
+
+    message = f"{kind} must be an int or iterable of ints"
+    if isinstance(eos_token_id, (str, bytes)):
+        raise ValueError(message)
+
+    try:
+        ids = list(eos_token_id)
+    except TypeError as exc:
+        raise ValueError(message) from exc
+
+    if any(not isinstance(token_id, Integral) for token_id in ids):
+        raise ValueError(message)
+    return {int(token_id) for token_id in ids}
 
 
 def _trim_generated_token_ids(generated: torch.Tensor, *, max_new_tokens: int | None = None, eos_token_id=None):

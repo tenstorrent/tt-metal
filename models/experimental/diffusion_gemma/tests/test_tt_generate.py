@@ -314,6 +314,30 @@ def test_generate_blocks_stops_after_committed_stop_token():
     assert [call for call in calls if call[0] == "init"] == [("init", 0, 4), ("init", 1, 6)]
 
 
+def test_generate_blocks_rejects_non_integer_stop_token_ids():
+    committed = torch.tensor([[1, 2]], dtype=torch.long)
+
+    def fake_block(tt_model, logits_fn, init_canvas, config, **kwargs):
+        trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
+        return GeneratedBlock(
+            committed=committed,
+            next_pos=kwargs["start_pos"] + committed.shape[1],
+            trajectory=trajectory,
+        )
+
+    with pytest.raises(ValueError, match="stop_token_ids"):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=4,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn=lambda *args: "canvas",
+            stop_token_ids="9",
+            block_fn=fake_block,
+        )
+
+
 def test_generate_from_prompt_tokens_prefills_then_runs_blocks():
     calls = []
     prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
@@ -1503,6 +1527,20 @@ def test_generation_token_ids_can_return_full_trimmed_sequences():
     )
 
     assert generation_token_ids(prompt_tokens, generation, skip_prompt=False, eos_token_id=[9]) == [[1, 2, 3, 4, 5, 9]]
+
+
+@pytest.mark.parametrize("eos_token_id", ["9", [9, "bad"]])
+def test_generation_token_ids_rejects_non_integer_eos_token_ids(eos_token_id):
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5, 9, 6]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=7,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match="eos_token_id"):
+        generation_token_ids(prompt_tokens, generation, eos_token_id=eos_token_id)
 
 
 def test_decode_generation_rejects_negative_max_new_tokens():
