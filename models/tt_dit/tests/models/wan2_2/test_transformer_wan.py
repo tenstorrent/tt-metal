@@ -260,7 +260,11 @@ def test_wan_transformer_block(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
     )
+    logger.info(f"Loading TT model from torch state dict...")
+    start = time.time()
     tt_model.load_torch_state_dict(state_dict)
+    end = time.time()
+    logger.info(f"Time taken to load state dict: {end - start} seconds")
 
     # Prepare ROPE embeddings
     if golden is not None:
@@ -419,6 +423,7 @@ def test_wan_transformer_model(
         num_layers=num_layers,
     )
 
+    logger.info(f"Loading TT model from torch state dict...")
     start = time.time()
     tt_model.load_torch_state_dict(state_dict)
     end = time.time()
@@ -520,6 +525,8 @@ def test_wan_transformer_inner_step(
         is_fsdp=is_fsdp,
         num_layers=num_layers,
     )
+
+    logger.info(f"Loading TT model from torch state dict...")
     start = time.time()
     tt_model.load_torch_state_dict(state_dict)
     end = time.time()
