@@ -193,20 +193,20 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             .tile = in0_tile_desc,
         }}},
     });
-    // Two semaphores drive the gather:
-    //   - `gather`: every sender atomically increments it on the coordinator
-    //     (first) core after broadcasting its A slice.  The coordinator waits
-    //     for it to reach num_senders.
-    //   - `done`: the coordinator multicasts it to all cores once every slice
-    //     has arrived, signalling that the full A matrix is available.
+    // Two semaphores drive the two-hub gather-then-broadcast:
+    //   - `stage`: every sender atomically increments it on its owning hub
+    //     after writing its A slice into that hub's full_in0_cb.  Each hub waits
+    //     for it to reach the number of senders in its half.
+    //   - `done`: each hub increments it on every core once it has broadcast its
+    //     half; every core waits for it to reach 2 (both hubs finished).
     // Both live on the full mcast rectangle so they are addressable on every
     // core that references them (including padding cores inside the box).
     const uint32_t num_senders = inputA_core_range_set.num_cores();
-    constexpr uint32_t gather_sem_id = 0;
+    constexpr uint32_t stage_sem_id = 0;
     constexpr uint32_t done_sem_id = 1;
     log_debug(tt::LogOp, "MatmulDecode: num_senders: {}", num_senders);
     desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = gather_sem_id,
+        .id = stage_sem_id,
         .core_ranges = all_compute_cores_with_bbox,
         .initial_value = 0,
     });
@@ -218,17 +218,27 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
 
     // ---- Reader kernel ----
     //
-    // Runs on every core in the mcast rectangle.  Sender cores (those that hold
-    // a K-slice of A) broadcast their slice into `full_in0_cb` on all cores and
-    // increment the coordinator's `gather` semaphore; the coordinator then
-    // broadcasts the `done` semaphore so every core knows A is fully gathered.
+    // Runs on every core in the mcast rectangle.  Two "hub" cores sit at
+    // opposite corners of the rectangle: hub 0 at the start corner (NOC0) and
+    // hub 1 at the end corner (NOC1).  The K-slices are split into two
+    // contiguous halves, one per hub.  Each sender writes its slice into its
+    // owning hub's full_in0_cb (on the hub's NOC) and bumps that hub's `stage`
+    // semaphore; each hub then multicasts its assembled half to all cores and
+    // bumps the `done` semaphore so every core knows A is fully gathered.
     const CoreRange mcast_bbox = all_compute_cores_with_bbox.bounding_box();
-    // The coordinator (gather/broadcast hub) is the first core of the rectangle.
-    const CoreCoord coordinator_logical = mcast_bbox.start_coord;
-    const CoreCoord mcast_start_phys = device->worker_core_from_logical_core(coordinator_logical);
-    const CoreCoord mcast_end_phys = device->worker_core_from_logical_core(mcast_bbox.end_coord);
+    const CoreCoord hub0_logical = mcast_bbox.start_coord;  // start corner -> NOC0
+    const CoreCoord hub1_logical = mcast_bbox.end_coord;    // end corner   -> NOC1
+    const CoreCoord mcast_start_phys = device->worker_core_from_logical_core(hub0_logical);
+    const CoreCoord mcast_end_phys = device->worker_core_from_logical_core(hub1_logical);
     const uint32_t num_receivers = all_compute_cores_with_bbox.num_cores();
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
+    // Hub 0 owns the first split_H slices (contiguous region [0, split_H)),
+    // hub 1 owns the remaining slices.
+    const uint32_t split_H = num_senders / 2;
+
+    TT_FATAL(
+        num_receivers >= 2 && hub0_logical != hub1_logical,
+        "full_width_sharded matmul_decode two-hub broadcast requires a compute rectangle of at least 2 cores");
 
     const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         in0_cb_index,
@@ -241,11 +251,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         static_cast<uint32_t>(mcast_start_phys.y),
         static_cast<uint32_t>(mcast_end_phys.x),
         static_cast<uint32_t>(mcast_end_phys.y),
-        gather_sem_id,
+        stage_sem_id,
         done_sem_id,
-        // Coordinator's physical (worker) coords == rectangle start corner.
+        // Hub 0 == rectangle start corner, hub 1 == rectangle end corner.
         static_cast<uint32_t>(mcast_start_phys.x),
         static_cast<uint32_t>(mcast_start_phys.y),
+        static_cast<uint32_t>(mcast_end_phys.x),
+        static_cast<uint32_t>(mcast_end_phys.y),
+        split_H,
         // in1 (B), already resident in L1.
         in1_cb_index,
         K_tiles * inB_N_tiles_per_core,
@@ -260,8 +273,17 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         sender_id_by_core[sender_cores[id]] = id;
     }
 
-    // Balance the multicasting sender cores across both NoCs; all other cores
-    // stay on the default NoC.
+    // Roles: 1 = hub 0 (start corner, NOC0), 2 = hub 1 (end corner, NOC1), 0 = plain core.
+    auto role_of = [&](const CoreCoord& core) -> uint32_t {
+        if (core == hub0_logical) {
+            return 1;
+        }
+        if (core == hub1_logical) {
+            return 2;
+        }
+        return 0;
+    };
+
     const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
 
     auto build_reader_kernel = [&](const std::vector<CoreCoord>& cores, NOC noc) {
@@ -288,34 +310,54 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             const auto it = sender_id_by_core.find(core);
             const bool is_sender = it != sender_id_by_core.end();
             const uint32_t sender_id = is_sender ? it->second : 0;
-            const bool is_coordinator = (core == coordinator_logical);
             reader_kernel_desc.runtime_args.emplace_back(
-                core,
-                KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(is_sender), sender_id, static_cast<uint32_t>(is_coordinator)});
+                core, KernelDescriptor::CoreRuntimeArgs{static_cast<uint32_t>(is_sender), sender_id, role_of(core)});
         }
         return reader_kernel_desc;
     };
 
-    // Sender cores: split in half across NOC0 / NOC1.
-    const size_t num_noc0_senders = sender_cores.size() / 2;
-    const std::vector<CoreCoord> noc0_sender_cores(sender_cores.begin(), sender_cores.begin() + num_noc0_senders);
-    const std::vector<CoreCoord> noc1_sender_cores(sender_cores.begin() + num_noc0_senders, sender_cores.end());
-
-    // Every remaining (non-sender) core uses the reader's default NoC.
+    // Group cores by the NOC they must run on, picking the NOC whose traffic
+    // direction points the right way for each core's role.  NOC0 flows toward
+    // increasing coords (down/right); NOC1 flows toward decreasing coords
+    // (up/left).
+    //   - Hub 0 (top-left start corner) broadcasts down/right over the whole
+    //     rectangle -> NOC0.
+    //   - Hub 1 (bottom-right end corner) broadcasts up/left -> NOC1.
+    //   - A sender feeding hub 0 must write up/left to reach the top-left corner
+    //     -> NOC1.
+    //   - A sender feeding hub 1 must write down/right to reach the bottom-right
+    //     corner -> NOC0.
+    //   - Pure receiver cores use the default NoC.
+    // Hub assignment takes precedence over slice ownership in the rare case a
+    // hub core is also a sender owned by the other hub.
+    std::vector<CoreCoord> noc0_cores;
+    std::vector<CoreCoord> noc1_cores;
     std::vector<CoreCoord> default_noc_cores;
-    default_noc_cores.reserve(all_reader_cores.size());
     for (const auto& core : all_reader_cores) {
-        if (sender_id_by_core.find(core) == sender_id_by_core.end()) {
+        const uint32_t role = role_of(core);
+        if (role == 1) {
+            noc0_cores.push_back(core);  // hub 0 broadcasts down/right
+            continue;
+        }
+        if (role == 2) {
+            noc1_cores.push_back(core);  // hub 1 broadcasts up/left
+            continue;
+        }
+        const auto it = sender_id_by_core.find(core);
+        if (it == sender_id_by_core.end()) {
             default_noc_cores.push_back(core);
+        } else if (it->second < split_H) {
+            noc1_cores.push_back(core);  // sender -> hub 0 (top-left): write up/left
+        } else {
+            noc0_cores.push_back(core);  // sender -> hub 1 (bottom-right): write down/right
         }
     }
 
-    if (!noc0_sender_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(noc0_sender_cores, NOC::NOC_0));
+    if (!noc0_cores.empty()) {
+        desc.kernels.push_back(build_reader_kernel(noc0_cores, NOC::NOC_0));
     }
-    if (!noc1_sender_cores.empty()) {
-        desc.kernels.push_back(build_reader_kernel(noc1_sender_cores, NOC::NOC_1));
+    if (!noc1_cores.empty()) {
+        desc.kernels.push_back(build_reader_kernel(noc1_cores, NOC::NOC_1));
     }
     if (!default_noc_cores.empty()) {
         desc.kernels.push_back(build_reader_kernel(default_noc_cores, NOC::RISCV_1_default));
