@@ -274,7 +274,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             }
         }
     }
-    if (delivered == 0) {
+    static const bool mdbg = std::getenv("EMULE_DEBUG") != nullptr;
+    if (delivered == 0 && mdbg) {
         fprintf(
             stderr,
             "EMULE WARN: multicast (%u,%u)->(%u,%u) offset=0x%lx size=%u: "

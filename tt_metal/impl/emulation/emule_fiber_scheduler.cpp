@@ -329,7 +329,10 @@ void FiberScheduler::spawn(std::function<void()> entry, std::unique_ptr<ThreadCo
     if (base == MAP_FAILED) {
         throw std::runtime_error("EMULE fiber: stack mmap failed");
     }
-    mprotect(base, pg, PROT_NONE);           // guard page at the low (overflow) end
+    if (mprotect(base, pg, PROT_NONE) != 0) {  // guard page at the low (overflow) end
+        munmap(base, total);
+        throw std::runtime_error("EMULE fiber: stack guard-page mprotect failed");
+    }
     getcontext(&f->ctx);
     f->ctx.uc_stack.ss_sp = static_cast<char*>(base) + pg;
     f->ctx.uc_stack.ss_size = usable;
