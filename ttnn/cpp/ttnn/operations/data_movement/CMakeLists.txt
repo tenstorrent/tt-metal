@@ -22,6 +22,7 @@ file(
     fill_pad/device/kernels/*
     fill_rm/device/kernels/*
     fold/device/kernels/*
+    pixel_unshuffle/device/kernels/*
     gather/device/kernels/*
     copy/device/kernels/*
     indexed_fill/device/kernels/*
@@ -118,6 +119,10 @@ target_sources(
             fold/fold.hpp
             fold/fold_nanobind.hpp
             fold/device/fold_device_op.hpp
+            # pixel_unshuffle/
+            pixel_unshuffle/pixel_unshuffle.hpp
+            pixel_unshuffle/pixel_unshuffle_nanobind.hpp
+            pixel_unshuffle/device/pixel_unshuffle_device_op.hpp
             # gather/
             gather/gather.hpp
             gather/gather_nanobind.hpp

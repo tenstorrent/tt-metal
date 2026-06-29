@@ -110,6 +110,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/fill_pad/fill_pad_nanobind.cpp
     cpp/ttnn/operations/data_movement/fill_rm/fill_rm_nanobind.cpp
     cpp/ttnn/operations/data_movement/fold/fold_nanobind.cpp
+    cpp/ttnn/operations/data_movement/pixel_unshuffle/pixel_unshuffle_nanobind.cpp
     cpp/ttnn/operations/data_movement/indexed_fill/indexed_fill_nanobind.cpp
     cpp/ttnn/operations/data_movement/narrow/narrow_nanobind.cpp
     cpp/ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp

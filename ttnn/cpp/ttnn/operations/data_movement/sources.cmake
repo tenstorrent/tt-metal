@@ -38,6 +38,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     fold/device/fold_multi_core_dram_program_factory.cpp
     fold/device/fold_multi_core_program_factory.cpp
     fold/fold.cpp
+    pixel_unshuffle/device/pixel_unshuffle_device_op.cpp
+    pixel_unshuffle/device/pixel_unshuffle_program_factory.cpp
+    pixel_unshuffle/pixel_unshuffle.cpp
     indexed_fill/device/indexed_fill_device_operation.cpp
     indexed_fill/device/indexed_fill_program_factory.cpp
     indexed_fill/device/indexed_fill_utils.cpp
