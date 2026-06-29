@@ -5043,6 +5043,78 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     }
 }
 
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_PgdPinnings) {
+    // Single BH galaxy (32 ASICs): an exact 4x8 MGD matches PGD 4x8_Mesh (32 ASICs) one-to-one, so the graph
+    // should carry a PGD-derived pinning that maps every logical chip (0..31) to a distinct mesh ASIC.
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with TT_METAL_MOCK_CLUSTER_DESC_PATH=...";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 4, 8 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+    MeshGraphDescriptor mgd{mgd_text_proto};
+
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Exactly one 32-ASIC mesh.
+    ASSERT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
+
+    // The PGD pinning should be present and cover every logical chip exactly once. mesh_pgd_pinnings_ is keyed by
+    // FabricNodeId (mesh_id + row-major chip_id).
+    ASSERT_FALSE(physical_multi_mesh_graph.mesh_pgd_pinnings_.empty())
+        << "Graph built from a PGD should carry a pinning";
+
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& mesh_nodes = adjacency_graph.get_nodes();
+
+        // Collect this mesh's pinning entries (FabricNodeIds whose mesh_id matches).
+        std::set<std::uint32_t> chip_ids;
+        std::set<tt::tt_metal::AsicID> pinned_asics;
+        for (const auto& [fabric_node_id, asic_id] : physical_multi_mesh_graph.mesh_pgd_pinnings_) {
+            if (fabric_node_id.mesh_id != mesh_id) {
+                continue;
+            }
+            EXPECT_TRUE(chip_ids.insert(fabric_node_id.chip_id).second) << "Duplicate logical chip id in pinning";
+            EXPECT_TRUE(pinned_asics.insert(asic_id).second) << "Two logical chips pinned to the same ASIC";
+        }
+
+        EXPECT_EQ(chip_ids.size(), mesh_nodes.size()) << "Pinning should map every logical chip in mesh " << *mesh_id;
+
+        // Logical chip ids must be the contiguous row-major range 0..N-1.
+        for (std::uint32_t c = 0; c < mesh_nodes.size(); ++c) {
+            EXPECT_TRUE(chip_ids.count(c) > 0) << "Logical chip id " << c << " missing from pinning";
+        }
+
+        // Every pinned ASIC must belong to this mesh's footprint, and for an exact match the pinning covers
+        // the full footprint.
+        std::set<tt::tt_metal::AsicID> mesh_asics(mesh_nodes.begin(), mesh_nodes.end());
+        EXPECT_EQ(pinned_asics, mesh_asics) << "Pinned ASICs should be exactly this mesh's ASIC footprint";
+    }
+}
+
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_2x4Pipeline) {
     using namespace ::tt::tt_fabric;
 
