@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
@@ -10,7 +11,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 
 #include "bias_bcast_sfpu.h"
@@ -273,8 +274,8 @@ void kernel_main() {
 
     // Transpose
     cb_s2c_out.wait_front(1);
-    transpose_wh_init_short(cb_s2c_out_id);
-    transpose_wh_tile(cb_s2c_out_id, 0, 0);
+    transpose_init(cb_s2c_out_id);
+    transpose_tile(cb_s2c_out_id, 0, 0);
 
     // Sum the top-2 of the output
     sum_top2_tile_init();
@@ -302,8 +303,8 @@ void kernel_main() {
         tile_regs_acquire();
 
         // Get the adjusted scores
-        transpose_wh_init_short(cb_s2c_out_id);
-        transpose_wh_tile(cb_s2c_out_id, 0, 0);
+        transpose_init(cb_s2c_out_id);
+        transpose_tile(cb_s2c_out_id, 0, 0);
         cb_s2c_out.pop_front(1);
 
         // Get the group masks
@@ -353,8 +354,8 @@ void kernel_main() {
 
         // Get top 8 from adjusted scores, and mask them
         tile_regs_acquire();
-        transpose_wh_init_short(cb_s2c_out_id);
-        transpose_wh_tile(cb_s2c_out_id, 0, 0);
+        transpose_init(cb_s2c_out_id);
+        transpose_tile(cb_s2c_out_id, 0, 0);
         cb_s2c_out.pop_front(1);
 
         copy_tile_init(cb_w2c_in5_id);

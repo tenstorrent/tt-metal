@@ -212,10 +212,38 @@ class ModelArgs:
                 chat.append({"role": "system", "content": system_prompt_text})
             if prompt_text:
                 chat.append({"role": "user", "content": prompt_text})
-            return self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
         else:
             # prompt_text is already a list of chat messages
-            return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+
+        # Normalize whatever apply_chat_template(tokenize=True) returns into a flat List[int].
+        # Across tokenizer/transformers versions this may be a List[int], a tokenizers.Encoding,
+        # a list of Encodings, or a BatchEncoding/dict ({"input_ids": ...}). The GPT-OSS fast
+        # tokenizer in CI returns a non-list form, which made downstream torch.tensor(...) raise
+        # "Could not infer dtype of tokenizers.Encoding".
+        raw_type = type(encoded).__name__
+        # BatchEncoding / dict -> take input_ids
+        if isinstance(encoded, dict) or hasattr(encoded, "input_ids"):
+            encoded = encoded["input_ids"] if "input_ids" in encoded else getattr(encoded, "input_ids")
+
+        def _to_ids(obj):
+            if hasattr(obj, "ids"):  # tokenizers.Encoding
+                return list(obj.ids)
+            if isinstance(obj, (list, tuple)):
+                flat = []
+                for item in obj:
+                    flat.append(item) if isinstance(item, int) else flat.extend(_to_ids(item))
+                return flat
+            return obj
+
+        encoded = _to_ids(encoded)
+        if not (isinstance(encoded, list) and (len(encoded) == 0 or isinstance(encoded[0], int))):
+            logger.warning(
+                f"[gpt-oss encode_prompt] unexpected token container: raw={raw_type}, "
+                f"normalized={type(encoded).__name__}"
+            )
+        return encoded
 
     @staticmethod
     def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):

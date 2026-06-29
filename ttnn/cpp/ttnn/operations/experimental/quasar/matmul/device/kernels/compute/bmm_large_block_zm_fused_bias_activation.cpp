@@ -7,7 +7,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
@@ -53,7 +53,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(block_size);
@@ -71,7 +71,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in
         in0_transpose_cb.wait_front(last_block_size);
         tile_regs_acquire();
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
-            transpose_wh_tile(in0_transpose_cb_id, tile_idx, tile_idx);
+            transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
         in0_transpose_cb.pop_front(last_block_size);
@@ -182,7 +182,7 @@ void kernel_main() {
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
     constexpr uint32_t in0_cb_id = in0_transpose_tile ? get_named_compile_time_arg_val("cb_in0_transposed")
-                                                      : get_named_compile_time_arg_val("cb_in0");
+                                                    : get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t mm_partials_cb_id = get_named_compile_time_arg_val("cb_intermed0");
@@ -208,6 +208,8 @@ void kernel_main() {
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
     CircularBuffer mm_out_cb(mm_out_cb_id);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -281,7 +283,7 @@ void kernel_main() {
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
-                        transpose_wh_init_short(in0_transpose_cb_id);
+                        transpose_init(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -433,7 +435,7 @@ void kernel_main() {
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
                     }
-                    // never reload when with bias, bias uses interm buffer
+                    // never reload when with bias, bias uses intermediate buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer

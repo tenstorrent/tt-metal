@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0: borrowed-memory DFBs (dfb::cb_in resident on the input shard, dfb::cb_out resident
-// on the output shard) + named CTAs. The per-core packed work description (source core NOC coords
-// and per-source stick chunks) is a runtime vararg, read positionally via a running index.
+// Metal 2.0: the resident input/output shards are reached by L1 base address from local
+// TensorAccessors (tensor::input / tensor::output) — no borrowed self-loop CBs — plus named CTAs.
+// The per-core packed work description (source core NOC coords and per-source stick chunks) is a
+// runtime vararg, read positionally via a running index.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -13,12 +14,12 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t stick_size_padded = get_arg(args::stick_size_padded);
     constexpr uint32_t stick_size_unpadded = get_arg(args::stick_size_unpadded);
-    constexpr uint32_t num_sticks_unpadded = get_arg(args::num_sticks_unpadded);
 
     // Per-core packed work description (runtime vararg), positional layout:
     //   [0]                              num_cores_read
@@ -29,13 +30,12 @@ void kernel_main() {
     const uint32_t num_cores_read = get_vararg(vararg_idx++);
 
     Noc noc;
-    // Create borrowed-memory DataflowBuffers for Device 2.0 API
-    DataflowBuffer cb_in(dfb::cb_in);
-    DataflowBuffer cb_out(dfb::cb_out);
-
-    cb_out.reserve_back(num_sticks_unpadded);
-    uint32_t l1_read_addr = cb_in.get_read_ptr();
-    uint32_t l1_write_addr = cb_out.get_write_ptr();
+    // Resident input/output shards, read/written by L1 base address from local TensorAccessors
+    // (no borrowed self-loop CBs).
+    const auto s_in = TensorAccessor(tensor::input);
+    const auto s_out = TensorAccessor(tensor::output);
+    uint32_t l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_in.get_noc_addr(0));
+    uint32_t l1_write_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0));
 
     // The (noc_x, noc_y) pairs occupy [1 .. 1 + 2*num_cores_read); the num_stick_chunks block
     // begins right after, and the (start_id, num_sticks) chunk pairs after that. We read the noc
@@ -70,5 +70,4 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    cb_out.push_back(num_sticks_unpadded);
 }

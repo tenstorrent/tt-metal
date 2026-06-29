@@ -940,6 +940,87 @@ void bind_sigmoid_accurate(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none());
 }
 
+void bind_gelu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            variant (ttnn.GeluVariant, optional): Select GELU implementation. Defaults to `GeluVariant.Accurate`.
+                - `Accurate`: piecewise CDF (BF16) or FP32 erf — matches torch.nn.functional.gelu (exact).
+                - `FastLut`: 6-segment piecewise-linear LUT — fastest, ~1% absolute error.
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) in FP32 — matches torch.nn.functional.gelu(approximate="tanh").
+            fast_and_approximate_mode (bool, optional): Legacy alias. `True` maps to `variant=FastLut`, `False` to `variant=Accurate`. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE, ROW_MAJOR
+        )doc",
+        "gelu",
+        "ttnn.gelu");
+
+    mod.attr("GeluVariant") =
+        nb::enum_<GeluVariant>(mod, "GeluVariant")
+            .value("Accurate", GeluVariant::ACCURATE, "Exact GELU. Matches torch.nn.functional.gelu().")
+            .value(
+                "FastLut",
+                GeluVariant::FAST_LUT,
+                "6-segment piecewise-linear LUT approximation of exact GELU. Fastest, ~1% absolute error.")
+            .value(
+                "Tanh",
+                GeluVariant::TANH,
+                "FP32 Hendrycks tanh approximation. Matches torch.nn.functional.gelu(approximate=\"tanh\").");
+
+    ttnn::bind_function<"gelu">(
+        mod,
+        doc.c_str(),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                GeluVariant,
+                const std::optional<tt::tt_metal::MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::gelu),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("variant") = GeluVariant::ACCURATE,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                bool,
+                const std::optional<tt::tt_metal::MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::gelu),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
+}
+
 void bind_sigmoid(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1850,14 +1931,7 @@ void py_module(nb::module_& mod) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids<"erfc">(mod, &ttnn::erfc, "", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode<"gelu", &ttnn::gelu>(
-        mod,
-        R"doc(Performs the element-wise Gaussian Error Linear Unit activation function on the :attr:`input_tensor`.
-        Each output element is the input value scaled by the standard normal cumulative distribution function evaluated at that value.
-        It results in a smooth, continuous function that is gated between 0 and identity.)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor}}_i \cdot \frac{{1}}{{2}}\left(1 + \mathrm{{erf}}\!\left(\frac{{\mathrm{{input\_tensor}}_i}}{{\sqrt{{2}}}}\right)\right))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_gelu(mod);
     bind_unary_operation_with_fast_and_approximate_mode<"log", &ttnn::log>(
         mod,
         R"doc(Performs the element-wise natural logarithm (base e) operation on the :attr:`input_tensor`.)doc",
