@@ -299,13 +299,21 @@ class Ideogram4Pipeline:
     def __call__(
         self, prompt: str, *, height: int = 512, width: int = 512, preset: str = "V4_TURBO_12", seed: int = 1234
     ):
+        import time as _time
+
+        from loguru import logger as _lg
+
         cfg = self.config
         dev = self.mesh_device
         grid_h, grid_w = height // (self.patch * self.ae), width // (self.patch * self.ae)
         num_img = grid_h * grid_w
         torch.manual_seed(seed)
+        self.timings = {}
 
+        _t0 = _time.perf_counter()
         llm_real, n_text = self._encode(prompt)
+        ttnn.synchronize_device(dev)
+        self.timings["encode"] = _time.perf_counter() - _t0
         cond_b = self._branch(n_text, num_img, grid_h, grid_w, llm_real)
         uncond_b = self._branch(0, num_img, grid_h, grid_w, None)
 
@@ -327,6 +335,7 @@ class Ideogram4Pipeline:
             )
             return tensor.to_torch(out, mesh_axes=[None, None, None])[:, br["seq"] - num_img :].float()
 
+        _td = _time.perf_counter()
         for i in reversed(range(sampler.num_steps)):
             t_val, s_val = sampler.times_for_step(i)
             gw = sampler.guidance_weight(i)
@@ -336,6 +345,18 @@ class Ideogram4Pipeline:
             v_uncond = _v(self.uncond, uncond_b, z.to(torch.bfloat16), t_val)
             v = gw * v_cond + (1.0 - gw) * v_uncond
             z = z + v * (s_val - t_val)
+        ttnn.synchronize_device(dev)
+        self.timings["denoise"] = _time.perf_counter() - _td
+        self.timings["denoise_per_step"] = self.timings["denoise"] / sampler.num_steps
 
+        _tv = _time.perf_counter()
         decoded = self.decode_stage.decode(bf16_tensor(z, device=dev), grid_h=grid_h, grid_w=grid_w)
-        return Ideogram4DecodeStage.to_images(decoded)[0].cpu().numpy()
+        img = Ideogram4DecodeStage.to_images(decoded)[0].cpu().numpy()
+        self.timings["decode"] = _time.perf_counter() - _tv
+        self.timings["total"] = _time.perf_counter() - _t0
+        _lg.info(
+            f"[latency {height}px {preset}] total={self.timings['total']:.2f}s | encode={self.timings['encode']:.2f}s "
+            f"| denoise={self.timings['denoise']:.2f}s ({self.timings['denoise_per_step']*1000:.0f}ms/step x{sampler.num_steps}) "
+            f"| decode={self.timings['decode']:.2f}s"
+        )
+        return img
