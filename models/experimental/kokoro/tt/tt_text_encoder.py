@@ -345,6 +345,13 @@ class TTTextEncoder:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # EXPERIMENT: LoFi for the BiLSTM matmuls (bf16 weights) — PCC measurement only.
+        self.lstm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
         self._cnn_blocks = tuple(
             TTTextEncoderConvLNBlock(
                 device=device,
@@ -457,7 +464,7 @@ class TTTextEncoder:
             x_nlc=x,
             fwd=self.params.lstm_fwd,
             rev=self.params.lstm_rev,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.lstm_compute_kernel_config,
             sequence_lengths=lengths_list,
             w_h_block=self.params.lstm_w_h_block,
             # TextEncoder is the one LSTM that tolerates the gate-sum rounding change; fold the
