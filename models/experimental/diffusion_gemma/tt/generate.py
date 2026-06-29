@@ -58,14 +58,20 @@ def _replicate_mapper(mesh_device):
     return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
 
-def _validate_nonnegative_integer_token_tensor(tokens: torch.Tensor, *, name: str, shape_name: str) -> None:
+def _validate_nonnegative_integer_token_tensor(
+    tokens: torch.Tensor,
+    *,
+    name: str,
+    shape_name: str,
+    allow_empty_length: bool = False,
+) -> None:
     if tokens.dtype == torch.bool or torch.is_floating_point(tokens) or torch.is_complex(tokens):
         raise ValueError(f"{name} must contain integer token ids")
     if tokens.dim() != 2:
         raise ValueError(f"{name} must have shape {shape_name}")
     if tokens.shape[0] <= 0:
         raise ValueError(f"{name} batch size must be positive")
-    if tokens.shape[1] <= 0:
+    if tokens.shape[1] <= 0 and not allow_empty_length:
         raise ValueError(f"{name} length must be positive")
     if torch.any(tokens < 0).item():
         raise ValueError(f"{name} must be non-negative")
@@ -724,10 +730,13 @@ def generate_from_prompt_tokens(
 
 def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGeneration) -> torch.Tensor:
     """Return HF-style ``[prompt, generated]`` token sequences for decode/e2e checks."""
-    if prompt_tokens.dim() != 2:
-        raise ValueError("prompt_tokens must have shape [batch, seq_len]")
-    if generation.generated.dim() != 2:
-        raise ValueError("generation.generated must have shape [batch, seq_len]")
+    _validate_prompt_tokens(prompt_tokens)
+    _validate_nonnegative_integer_token_tensor(
+        generation.generated,
+        name="generation.generated",
+        shape_name="[batch, seq_len]",
+        allow_empty_length=True,
+    )
     if prompt_tokens.shape[0] != generation.generated.shape[0]:
         raise ValueError("prompt_tokens and generation.generated batch sizes must match")
     if prompt_tokens.shape[1] != generation.prompt_len:

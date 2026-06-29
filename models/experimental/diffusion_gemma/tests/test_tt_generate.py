@@ -1583,6 +1583,58 @@ def test_generation_sequences_appends_prompt_and_generated_tokens():
     assert torch.equal(generation_sequences(prompt_tokens, generation), torch.tensor([[1, 2, 3, 4, 5]]))
 
 
+def test_generation_sequences_allows_empty_generated_continuation():
+    prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
+    generation = G.DeviceGeneration(
+        generated=torch.empty((1, 0), dtype=torch.long),
+        prompt_len=3,
+        next_pos=3,
+        trajectories=[],
+    )
+
+    assert torch.equal(generation_sequences(prompt_tokens, generation), prompt_tokens)
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "message"),
+    [
+        (torch.tensor([[1.5, 2.0, 3.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2, 3]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1, 3]], dtype=torch.long), "fit int32"),
+    ],
+)
+def test_generation_sequences_rejects_invalid_prompt_token_ids(prompt_tokens, message):
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match=message):
+        generation_sequences(prompt_tokens, generation)
+
+
+@pytest.mark.parametrize(
+    ("generated", "message"),
+    [
+        (torch.tensor([[4.5, 5.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[4, -5]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[4, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
+    ],
+)
+def test_generation_sequences_rejects_invalid_generated_token_ids(generated, message):
+    generation = G.DeviceGeneration(
+        generated=generated,
+        prompt_len=3,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match=message):
+        generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
+
+
 def test_generation_sequences_rejects_prompt_len_mismatch():
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
