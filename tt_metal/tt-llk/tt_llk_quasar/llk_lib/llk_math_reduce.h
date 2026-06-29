@@ -145,19 +145,28 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
                                                       ? (tensor_shape.total_num_faces() >> 1)
                                                       : tensor_shape.total_num_faces();
 
-    // Constants to keep track of the starting point of segments for different tile shapes and num faces
-    constexpr std::uint32_t pool_two_faces_in_row_start   = 0;
-    constexpr std::uint32_t pool_one_face_in_row_start    = 1 + (NUM_FIDELITY_PHASES);
-    constexpr std::uint32_t intermediate_rwc_update_start = 8 + (2 * NUM_FIDELITY_PHASES);
-    constexpr std::uint32_t final_rwc_update_start        = 10 + (2 * NUM_FIDELITY_PHASES);
+    // minimum 7 instructions + NUM_FIDELITY PHASES
+    //     - if tensor_shape.total_num_faces() > 1, +(NUM_FIDELITY_PHASES + 1)
+    //     - if tensor_shape.total_num_faces() == NUM_FACES, +1
+    //     - if tensor_shape.face_r_dim > ELTWISE_MATH_ROWS, +1
+    // maximum total = 7 + 3 + 4 + 1 + 1 = 16
+    std::uint32_t replay_buf_len = 7 + NUM_FIDELITY_PHASES;
+    if (tensor_shape.total_num_faces() > 1 && tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim)
+    {
+        if (tensor_shape.total_num_faces() == NUM_FACES)
+        {
+            replay_buf_len++;
+        }
+        replay_buf_len += NUM_FIDELITY_PHASES + 1;
+    }
 
-    // Constants to keep track of the length of segments for different tile shapes and num faces
-    constexpr std::uint32_t pool_two_faces_in_row_len   = 8 + (2 * NUM_FIDELITY_PHASES);
-    constexpr std::uint32_t pool_one_face_in_row_len    = 7 + NUM_FIDELITY_PHASES;
-    constexpr std::uint32_t intermediate_rwc_update_len = 2;
-    constexpr std::uint32_t final_rwc_update_len        = 1;
+    if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
+    {
+        replay_buf_len++;
+    }
 
-    constexpr std::uint32_t replay_buf_len = pool_two_faces_in_row_len + intermediate_rwc_update_len + final_rwc_update_len;
+    const std::uint32_t tail_len = 1U + (tensor_shape.total_num_faces() == NUM_FACES ? 1U : 0U);
+    const std::uint32_t main_len = replay_buf_len - tail_len;
 
     load_replay_buf(
         0,
@@ -168,17 +177,18 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
         [tensor_shape]
         {
             // Each face is transposed in the unpacker, and then faces 0 & 1 are pooled together
-            // <<< Starting Point = 0: For num_faces > 1 && !narrow_tile >>> //
-            if constexpr (RUN_FID_LOOPS)
+            if (tensor_shape.total_num_faces() > 1 && tensor_shape.num_faces_c_dim >= tensor_shape.num_faces_r_dim)
             {
-                for (std::uint32_t fid_phase_idx = 0; fid_phase_idx < NUM_FIDELITY_PHASES; fid_phase_idx++)
+                if constexpr (RUN_FID_LOOPS)
                 {
-                    tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0>();
+                    for (std::uint32_t fid_phase_idx = 0; fid_phase_idx < NUM_FIDELITY_PHASES; fid_phase_idx++)
+                    {
+                        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0>();
+                    }
                 }
+                tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
             }
-            tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
 
-            // <<< Starting Point = NUM_FIDELITY_PHASES + 1: For num_faces = 1 || narrow_tile >>> //
             if constexpr (RUN_FID_LOOPS)
             {
                 for (std::uint32_t fid_phase_idx = 0; fid_phase_idx < NUM_FIDELITY_PHASES; fid_phase_idx++)
@@ -203,63 +213,26 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
             TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
 
             // For tiny-tiles, only the first 8 rows matter as they are the densely packed ones. We can skip the second copy in this case.
-            if (tensor_shape.face_r_dim <= ELTWISE_MATH_ROWS)
-            {
-                TTI_NOP;
-            }
-            else
+            if (tensor_shape.face_r_dim > ELTWISE_MATH_ROWS)
             {
                 TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_1, 0x0);
             }
 
-            // <<< Starting Point = (2 * NUM_FIDELITY_PHASES) + 7: For intermediate RWC update >>> //
             // For cases where each face is considered a tile, the dest counter is already aligned to 8 or 16.
             // Need to increment by 32 where all faces are considered a HW tile.
-            if (tensor_shape.total_num_faces() < NUM_FACES)
-            {
-                TTI_NOP;
-            }
-            else
+            if (tensor_shape.total_num_faces() == NUM_FACES)
             {
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 32, p_setrwc::SET_D);
             }
             TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
-
-            // Set counters back to 0
-            // <<< Starting Point = (2 * NUM_FIDELITY_PHASES) + 9: For final RWC update >>> //
-            TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD);
         });
 
-    constexpr std::uint32_t pool_one_face_in_row    = TT_OP_REPLAY(pool_one_face_in_row_start, pool_one_face_in_row_len, 0, 0, 0, 0);
-    constexpr std::uint32_t pool_two_faces_in_row   = TT_OP_REPLAY(pool_two_faces_in_row_start, pool_two_faces_in_row_len, 0, 0, 0, 0);
-    constexpr std::uint32_t intermediate_rwc_update = TT_OP_REPLAY(intermediate_rwc_update_start, intermediate_rwc_update_len, 0, 0, 0, 0);
-    constexpr std::uint32_t final_rwc_update        = TT_OP_REPLAY(final_rwc_update_start, final_rwc_update_len, 0, 0, 0, 0);
+    const std::uint32_t replay           = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
+    const std::uint32_t skip_32_inc_dest = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
 
-    if (tensor_shape.total_num_faces() == 1)
-    {
-        // Ensures only 1 pool instruction is issued for num_faces = 1 case.
-        // Calls pool instruction with final_rwc_update to ensure dest counters are reset at the end of the tile.
-        ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pool_one_face_in_row, final_rwc_update);
-        temp.program_bank0_sw_cntl(instrn_buffer);
-    }
-    else if (tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim)
-    {
-        // If the tensor_shape is narrow, then there are two rows of faces. Both faces should be pooled to the different address.
-        // Since increments of dest_addrs are required, MOP calls pool instruction with intermediate_rwc_update for first loop and changes to
-        // final_rwc_update to ensure dest counters are reset at the end each tile.
-        ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pool_one_face_in_row, intermediate_rwc_update);
-        temp.set_last_inner_loop_instr(final_rwc_update);
-        temp.program_bank0_sw_cntl(instrn_buffer);
-    }
-    else
-    {
-        // In every other case, we should be incrementing dest_addr for every second face.
-        // Since increments of dest_addrs are required, MOP calls pool instruction with intermediate_rwc_update for first loop and changes to
-        // final_rwc_update to ensure dest counters are reset at the end each tile.
-        ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pool_two_faces_in_row, intermediate_rwc_update);
-        temp.set_last_inner_loop_instr(final_rwc_update);
-        temp.program_bank0_sw_cntl(instrn_buffer);
-    }
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, replay, skip_32_inc_dest);
+    temp.set_last_inner_loop_instr(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD));
+    temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
 /**
