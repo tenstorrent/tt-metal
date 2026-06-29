@@ -325,9 +325,21 @@ def main() -> int:
             generate_kwargs["speech_tensors"] = inputs["speech_tensors"]
             generate_kwargs["speech_masks"] = inputs["speech_masks"]
         tt_out = tt_model.generate(**generate_kwargs)
-        print(f"[demo_ttnn] generate wall: {_time.perf_counter() - _t_gen0:.1f}s", flush=True)
+        _generate_wall = _time.perf_counter() - _t_gen0
+        print(f"[demo_ttnn] generate wall: {_generate_wall:.1f}s", flush=True)
         tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
         tt_gen = tt_out.sequences[0, prefill_len:]
+        _ar_tokens = int(tt_gen.numel())
+        _decode_tps = _ar_tokens / tt_out.decode_wall_s if tt_out.decode_wall_s > 0 else 0.0
+        _prefill_tps = prefill_len / tt_out.prefill_wall_s if tt_out.prefill_wall_s > 0 else 0.0
+        print(
+            f"[demo_ttnn] prefill_tokens={prefill_len}  "
+            f"TTFT={tt_out.prefill_wall_s:.2f}s  "
+            f"decode={tt_out.decode_wall_s:.2f}s  "
+            f"decode={_decode_tps:.1f} tok/s  "
+            f"prefill={_prefill_tps:.0f} tok/s",
+            flush=True,
+        )
     finally:
         ttnn.close_device(mesh)
 
@@ -355,6 +367,11 @@ def main() -> int:
         "voice_mapping": voice_mapping,
         "prefill_tokens": prefill_len,
         "ar_tokens_generated": int(tt_gen.numel()),
+        "ttft_s": round(tt_out.prefill_wall_s, 3),
+        "decode_wall_s": round(tt_out.decode_wall_s, 3),
+        "decode_toks_per_s": round(_decode_tps, 2),
+        "prefill_toks_per_s": round(_prefill_tps, 1),
+        "generate_wall_s": round(_generate_wall, 3),
         "max_length_times": args.max_length_times,
         "max_new_tokens": args.max_new_tokens,
         "tt_wav": str(tt_path),
