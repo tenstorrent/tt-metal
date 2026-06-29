@@ -72,6 +72,25 @@ def test_expected_self_conditioning_shapes_use_intermediate_not_moe():
     assert shapes["pre_norm.weight"] == (2816,)
 
 
+def test_unknown_keys_are_not_folded_into_ignored():
+    res = classify_keys(
+        [
+            "model.decoder.layers.0.self_attn.q_proj.weight",
+            "model.encoder.language_model.layers.0.layer_scalar",
+            "model.unexpected.weight",
+        ]
+    )
+
+    assert list(res.backbone) == ["model.decoder.layers.0.self_attn.q_proj.weight"]
+    assert res.ignored == ["model.encoder.language_model.layers.0.layer_scalar"]
+    assert res.unknown == ["model.unexpected.weight"]
+
+
+def test_remap_state_dict_rejects_unknown_keys():
+    with pytest.raises(ValueError, match="unknown DiffusionGemma checkpoint keys"):
+        remap_state_dict({"model.unexpected.weight": object()})
+
+
 # ---------------------------------------------------------------------------
 # index-only: real key coverage
 # ---------------------------------------------------------------------------
@@ -89,7 +108,8 @@ def test_classification_covers_all_keys_no_leftovers():
     dg = _weight_map(DG_DIR)
     res = classify_keys(dg.keys())
     # every key is accounted for exactly once
-    assert res.num_backbone + len(res.self_conditioning) + len(res.ignored) == len(dg)
+    assert res.num_backbone + len(res.self_conditioning) + len(res.ignored) + len(res.unknown) == len(dg)
+    assert not res.unknown
     assert len(res.self_conditioning) == 4
     # the text backbone is the bulk (30 layers; MoE experts are PACKED into one
     # gate_up_proj + one down_proj tensor per layer, so the count is ~657, not ~1000).

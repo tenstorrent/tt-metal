@@ -72,6 +72,7 @@ class RemapResult:
     backbone: Dict[str, str]  # dg_key -> gemma4_key  (text backbone, prefix-swapped)
     self_conditioning: List[str]  # dg self-conditioning keys (net-new)
     ignored: List[str]  # encoder / vision / multimodal keys (not text-first)
+    unknown: List[str]  # unexpected keys that should be investigated
 
     @property
     def num_backbone(self) -> int:
@@ -88,6 +89,7 @@ def classify_keys(keys) -> RemapResult:
     backbone: Dict[str, str] = {}
     self_cond: List[str] = []
     ignored: List[str] = []
+    unknown: List[str] = []
     for k in keys:
         if k.startswith(SELF_CONDITIONING_PREFIX):
             self_cond.append(k)
@@ -97,8 +99,8 @@ def classify_keys(keys) -> RemapResult:
             ignored.append(k)
         else:
             # Unknown top-level key — surface it rather than silently dropping.
-            ignored.append(k)
-    return RemapResult(backbone=backbone, self_conditioning=self_cond, ignored=ignored)
+            unknown.append(k)
+    return RemapResult(backbone=backbone, self_conditioning=self_cond, ignored=ignored, unknown=unknown)
 
 
 def remap_state_dict(dg_state_dict: Dict) -> Tuple[Dict, Dict, List[str]]:
@@ -111,6 +113,8 @@ def remap_state_dict(dg_state_dict: Dict) -> Tuple[Dict, Dict, List[str]]:
     :meth:`SelfConditioning.load_from_state_dict`).
     """
     result = classify_keys(dg_state_dict.keys())
+    if result.unknown:
+        raise ValueError(f"unknown DiffusionGemma checkpoint keys: {sorted(result.unknown)[:10]}")
     backbone_state = {g4_key: dg_state_dict[dg_key] for dg_key, g4_key in result.backbone.items()}
     self_cond_state = {k[len(SELF_CONDITIONING_PREFIX) :]: dg_state_dict[k] for k in result.self_conditioning}
     return backbone_state, self_cond_state, result.ignored
