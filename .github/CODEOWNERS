@@ -492,7 +492,7 @@ models/demos/tg/falcon7b @gwangTT @djordje-tt @uaydonat @tenstorrent/codeowner-b
 models/demos/audio/whisper @atupe-tt @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
 models/demos/vision/classification/resnet50/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 models/demos/vision/classification/resnet50/quasar/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
-models/experimental/ @uaydonat @tenstorrent/codeowner-bypass
+models/experimental/ @uaydonat @mtairum @tenstorrent/codeowner-bypass
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/transfuser/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT @tenstorrent/codeowner-bypass
 models/demos/vision/segmentation/ufld_v2/ @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
