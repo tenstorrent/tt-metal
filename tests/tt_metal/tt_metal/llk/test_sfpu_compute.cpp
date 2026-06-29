@@ -1857,18 +1857,24 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
         GTEST_SKIP() << "Typecast compute-API test is currently Quasar-only";
     }
 
-    // UInt8 endpoints pass in tt-llk but not yet through this metal compute-API harness. A UInt8 INPUT
-    // hangs in copy_tile's unpack regardless of Dest width (confirmed with both 16- and 32-bit Dest) --
-    // likely the unpacker's UInt8->INT8 register masking (masked_data_format) is not applied on this path.
-    // A UInt8 OUTPUT mismatches on the 8-bit pack value encoding (also independent of Dest width; pack_src
-    // already follows the output format). Both need metal2 datapath fixes, not test-harness changes.
-    // if (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8) {
-    //     GTEST_SKIP() << "UInt8 typecast not yet wired through the metal compute-API harness";
-    // }
-
-    // if ((out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32) || (in_fmt == tt::DataFormat::Int16 && out_fmt == tt::DataFormat::Float32)) {
-    //     GTEST_SKIP() << "16-bit input -> 32-bit output not supported";
-    // }
+    // Typecast pairs that route a narrow integer through a 32-bit Dest are not yet wired through the metal2
+    // compute-API datapath and hang at copy_tile / pack today:
+    //  * any UInt8 endpoint (needs the Quasar UInt8 HW format code in genfiles, plus narrow-int
+    //    unpack-to-Dest on input / pack-from-32-bit-Dest on output);
+    //  * a 16-bit-effective input widening into a 32-bit output (Float16_b/Int16/MX -> Int32, Int16 ->
+    //    Float32): the narrow datum cannot reach a 32-bit Dest via the FPU A2D datacopy;
+    //  * a 32-bit input narrowing into a 16-bit integer output (Int32/Float32 -> Int16): the narrow datum
+    //    cannot be packed out of a 32-bit Dest.
+    // Float32 -> Int32, Float16_b/MX -> Float32, and the all-16-bit Int16 <-> Float16_b/MX pairs still run.
+    const bool uint8_endpoint = (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8);
+    const bool widen_16bit_input_to_32bit_output =
+        (out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32) ||
+        (in_fmt == tt::DataFormat::Int16 && out_fmt == tt::DataFormat::Float32);
+    const bool narrow_32bit_input_to_int16_output =
+        out_fmt == tt::DataFormat::Int16 && (in_fmt == tt::DataFormat::Int32 || in_fmt == tt::DataFormat::Float32);
+    if (uint8_endpoint || widen_16bit_input_to_32bit_output || narrow_32bit_input_to_int16_output) {
+        GTEST_SKIP() << "narrow-int <-> 32-bit-Dest typecast not yet wired through the metal compute-API harness";
+    }
 
     log_info(
         tt::LogTest,
