@@ -12,7 +12,7 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# # Wormhole Galaxy e2e tests
+# Wormhole Galaxy e2e tests
 - id: galaxy-ccl
   name: Galaxy CCL tests
   cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
