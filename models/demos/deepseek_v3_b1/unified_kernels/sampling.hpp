@@ -120,8 +120,8 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/cumsum.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -351,7 +351,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         pack_tile(0, probs_cb);
         cb_push_back(probs_cb, 1);
         tile_regs_release();
-        reconfig_data_format_srca(exp_cb, probs_cb);
+        reconfig_data_format_srca<false, true>(exp_cb, probs_cb);
         cb_wait_front(probs_cb, 1);
         cb_wait_front(p_cb, 1);
         tile_regs_acquire();
@@ -453,7 +453,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
     }
-    // Step 19: Compute DST[6] = cumsum * 1/cum_kept (rescaled CDF over the kept set).
+    // Step 19: Compute DST[2] = cumsum * 1/cum_kept (rescaled CDF over the kept set).
     // SrcA reads out_cb (Step 15's T(cumsum)), SrcB scalar comes from
     // DST[0] (Step 18.75's recomputed 1/cum_kept).
     // NOTE: rescaled_cumsum_i = cumsum(softmax_out_i, dim=0) * 1/cum_kept
@@ -467,7 +467,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
             EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
-            /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/6);
+            /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/2);
     }
     // Step 20: DST[1] = rand (column-0 broadcast staged by BRISC into rand_bcast_cb).
     copy_tile_to_dst_init_short(rand_bcast_cb);
@@ -476,7 +476,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-15");
         ge_binary_tile_init();
-        MATH((sampling_ge_binary_tile_first_column(6, 1, 2)));
+        MATH((sampling_ge_binary_tile_first_column(2, 1, 2)));
         tile_regs_commit();
     }
     tile_regs_wait();
@@ -543,6 +543,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     tile_regs_acquire();
 
     uint32_t num_faces = 4;
+    PACK((void)num_faces);
     reconfig_data_format_srca(in_scores_cb);
     UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
     UNPACK((llk_unpack_A_top32_rm(in_scores_cb, 0, num_faces)));
@@ -601,6 +602,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
             num_faces = 4;
         }
 
+        PACK((void)num_faces);
         reconfig_data_format_srca(in_scores_cb);
         UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
         UNPACK((llk_unpack_A_top32_rm(in_scores_cb, i / 64, num_faces)));
@@ -676,12 +678,15 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     // 16 rows (32 elements total) for the topk output, which requires
     // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
     // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    ckernel::pack_reconfig_data_format(out_scores_cb);
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
-
-    ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
+
     ckernel::pack_reconfig_data_format(out_indices_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
+    PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
@@ -691,7 +696,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
     // Phase 1's llk_unpack_A_top32_rm_init modifies four unpacker registers for
-    // row-major mode. transpose_wh_init_short restores Haloize_mode and X counter,
+    // row-major mode. transpose_init restores Haloize_mode and X counter,
     // but Tile_x_dim and Y_stride must be restored explicitly here.
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
@@ -727,12 +732,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
     // Step 1: load first 1024 values/indices chunk with transpose.
     reconfig_data_format_srca(in_scores_cb);
-    transpose_wh_init_short(in_scores_cb);
-    transpose_wh_tile(in_scores_cb, 0, value_offset_tiles);
+    transpose_init(in_scores_cb);
+    transpose_tile(in_scores_cb, 0, value_offset_tiles);
 
     reconfig_data_format_srca(in_indices_cb);
-    transpose_wh_init_short(in_indices_cb);
-    transpose_wh_tile(in_indices_cb, 0, index_offset_tiles);
+    transpose_init(in_indices_cb);
+    transpose_tile(in_indices_cb, 0, index_offset_tiles);
 
     // Step 2: prepare first chunk for pre-sorted combine pipeline.
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
@@ -748,12 +753,12 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     // Steps 3-5: ingest remaining full 1024 chunks and combine.
     for (uint32_t i = 1; i < num_chunks; ++i) {
         reconfig_data_format_srca(in_scores_cb);
-        transpose_wh_init_short(in_scores_cb);
-        transpose_wh_tile(in_scores_cb, i, value_offset_tiles + 1);
+        transpose_init(in_scores_cb);
+        transpose_tile(in_scores_cb, i, value_offset_tiles + 1);
 
         reconfig_data_format_srca(in_indices_cb);
-        transpose_wh_init_short(in_indices_cb);
-        transpose_wh_tile(in_indices_cb, i, index_offset_tiles + 1);
+        transpose_init(in_indices_cb);
+        transpose_tile(in_indices_cb, i, index_offset_tiles + 1);
 
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
@@ -785,6 +790,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
     // Steps 7-9: handle trailing (<1024) values in 64-element chunks.
     uint32_t num_faces = 4;
+    PACK((void)num_faces);
     for (uint32_t i = num_chunks * chunk_size; i < row_elements; i += 64) {
         num_faces = (i + 64 > row_elements) ? 2 : 4;
 
@@ -853,12 +859,15 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     // 16 rows (32 elements total) for the topk output, which requires
     // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
     // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    ckernel::pack_reconfig_data_format(out_scores_cb);
     PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
-
-    ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
+
     ckernel::pack_reconfig_data_format(out_indices_cb);
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
+    PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
 
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));

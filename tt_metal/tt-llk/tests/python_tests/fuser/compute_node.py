@@ -48,6 +48,7 @@ class ComputeNode:
         clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
         acc_to_dest: AccToDest = AccToDest.No,
         unpack_to_dest: UnpackToDest = UnpackToDest.No,
+        reduce_to_tile: bool = False,
     ):
         if fpu is None and sfpu is None:
             raise ValueError("Compute unit needs an fpu or sfpu unit")
@@ -68,6 +69,7 @@ class ComputeNode:
         self.clear_fp32_dst_acc = clear_fp32_dst_acc
         self.acc_to_dest = acc_to_dest
         self.unpack_to_dest = unpack_to_dest
+        self.reduce_to_tile = reduce_to_tile
         self.src_a = src_a
         self.src_b = src_b
 

@@ -25,6 +25,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // cache hits, so their values stay out of the program hash and successive users/chunks reuse one
 // cached program (per layer).
 //
+// Supports TILE and ROW_MAJOR layouts (the op is a pure page copy; the per-chip offset math is
+// expressed in 32-row-aligned page units, identical for both). `cache` and `input` must share
+// layout and dtype: block-float (bfloat8_b/bfloat4_b) is TILE-only; FP8_E4M3 is ROW_MAJOR-only.
+//
 // In-place: returns a handle to `cache`.
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,

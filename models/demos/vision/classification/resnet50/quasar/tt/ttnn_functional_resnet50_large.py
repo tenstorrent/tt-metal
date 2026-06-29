@@ -65,10 +65,10 @@ def _nearest_32(x):
 # TODO: this function is required because conv is preprocessed before in TTNN model preprocessing flow
 # We need to skip conv preprocessing there
 def permute_conv_weights(weight, bias):
-    weight = ttnn.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
+    weight = ttnn.experimental.quasar.to_layout(weight, layout=ttnn.ROW_MAJOR_LAYOUT)
     weight = ttnn.to_torch(weight)
     weight = torch.permute(weight, (2, 3, 0, 1))
-    bias = ttnn.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
+    bias = ttnn.experimental.quasar.to_layout(bias, layout=ttnn.ROW_MAJOR_LAYOUT)
     bias = ttnn.to_torch(bias)
     return weight, bias
 
@@ -156,7 +156,7 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             ttnn.deallocate(x)
-            ds_out = ttnn.reallocate(ds_out)
+            ds_out = ttnn.experimental.quasar.reallocate(ds_out)
         else:
             ds_out = x
         return ds_out
@@ -221,9 +221,9 @@ class resnet50Bottleneck:
         )
 
         if is_wormhole_b0():
-            out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+            out_rm = ttnn.experimental.quasar.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(out)
-            out = ttnn.reallocate(out_rm)
+            out = ttnn.experimental.quasar.reallocate(out_rm)
 
         act_block_h_override = 0
         if is_wormhole_b0():
@@ -273,9 +273,9 @@ class resnet50Bottleneck:
                 (is_wormhole_b0() and batch_size == 1 and input_height == 256)
                 or (input_height == 56 and self.conv1_input_channels == 256)
             ) and self.downsample:
-                x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x_rm = ttnn.experimental.quasar.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 ttnn.deallocate(x)
-                x = ttnn.reallocate(x_rm)
+                x = ttnn.experimental.quasar.reallocate(x_rm)
             ttnn.dump_device_memory_state(device, "before_downsample_")
             ds_out = self.run_downsample_if_req(
                 x,
@@ -403,7 +403,7 @@ class resnet50Bottleneck:
             )  ## TODO: check why not out mem config???
         ttnn.deallocate(ds_out)
         if batch_size == 20 and module_input_height == 56 and self.conv1_input_channels == 64:
-            out = ttnn.reallocate(out)
+            out = ttnn.experimental.quasar.reallocate(out)
         return out, input_height, input_width
 
 
@@ -486,8 +486,8 @@ class resnet50:
         self.layer4_module3 = self.layer4[2]
 
         self.fc = ResnetLinear(
-            weight=ttnn.to_device(parameters.fc.weight, device),
-            bias=ttnn.to_device(parameters.fc.bias, device),
+            weight=ttnn.experimental.quasar.to_device(parameters.fc.weight, device),
+            bias=ttnn.experimental.quasar.to_device(parameters.fc.bias, device),
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             model_config=model_config,
             compute_kernel_config=compute_kernel_config,
@@ -535,7 +535,7 @@ class resnet50:
 
     def first_run(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
         ## copy input to device sharded directly
-        # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
+        # x = ttnn.experimental.quasar.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
         act_block_h_override = 0
         if is_wormhole_b0():
             if batch_size == 16:
@@ -584,14 +584,14 @@ class resnet50:
         # Relu is fused with conv1
 
         if self.batch_size == 20 or self.batch_size == 1:
-            x = ttnn.reallocate(x)
+            x = ttnn.experimental.quasar.reallocate(x)
 
         if is_wormhole_b0() and (self.batch_size == 20 or self.batch_size == 1):
             # TODO: fix the need to do the reshard here
             # x = ttnn.experimental.quasar.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_rm = ttnn.experimental.quasar.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x)
-            x = ttnn.reallocate(x_rm)
+            x = ttnn.experimental.quasar.reallocate(x_rm)
             # x = ttnn.experimental.quasar.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
 
         x = ttnn.experimental.quasar.max_pool2d(
@@ -609,11 +609,11 @@ class resnet50:
         x_height = 256
         x_width = 256
 
-        x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
+        x = ttnn.experimental.quasar.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
         x = ttnn.experimental.quasar.tilize(x, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
         if self.batch_size == 20 and not is_wormhole_b0():
-            x = ttnn.reallocate(x)
+            x = ttnn.experimental.quasar.reallocate(x)
 
         print(f"=================================== layer: 1, module: 1")
         layer1_module1_input_shape = [
@@ -647,7 +647,7 @@ class resnet50:
         print(f"=================================== layer: 1, module: 3")
         x, x_height, x_width = self.layer1_module3(x, device, batch_size, x_height, x_width)
         if self.batch_size == 20 and is_wormhole_b0():
-            x = ttnn.reallocate(x)
+            x = ttnn.experimental.quasar.reallocate(x)
 
         layer2_module1_input_shape = [
             x.padded_shape[0],
@@ -802,7 +802,7 @@ class resnet50:
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        x = ttnn.reshape(
+        x = ttnn.experimental.quasar.reshape(
             x,
             (
                 self.batch_size,
@@ -816,7 +816,7 @@ class resnet50:
 
     def optimized_run(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
         ## copy input to device sharded directly
-        # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
+        # x = ttnn.experimental.quasar.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
         act_block_h_override = 0
         if is_wormhole_b0():
             if batch_size == 16:
@@ -862,14 +862,14 @@ class resnet50:
         # Relu is fused with conv1
 
         if self.batch_size == 20 or self.batch_size == 1:
-            x = ttnn.reallocate(x)
+            x = ttnn.experimental.quasar.reallocate(x)
 
         if is_wormhole_b0() and self.batch_size == 20 or self.batch_size == 1:
             # TODO: fix the need to do the reshard here
             # x = ttnn.experimental.quasar.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_rm = ttnn.experimental.quasar.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x)
-            x = ttnn.reallocate(x_rm)
+            x = ttnn.experimental.quasar.reallocate(x_rm)
             # x = ttnn.experimental.quasar.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
 
         x = ttnn.experimental.quasar.max_pool2d(
@@ -887,11 +887,11 @@ class resnet50:
         x_height = 256
         x_width = 256
 
-        x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
+        x = ttnn.experimental.quasar.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
         x = ttnn.experimental.quasar.tilize(x, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
         if self.batch_size == 20 and not is_wormhole_b0():
-            x = ttnn.reallocate(x)
+            x = ttnn.experimental.quasar.reallocate(x)
 
         if is_wormhole_b0() and batch_size == 20:
             x = ttnn.experimental.quasar.to_memory_config(x, ops_parallel_config["layer1_module1_input"])
@@ -899,7 +899,7 @@ class resnet50:
         x, x_height, x_width = self.layer1_module2(x, device, batch_size, x_height, x_width)
         x, x_height, x_width = self.layer1_module3(x, device, batch_size, x_height, x_width)
         if self.batch_size == 20 and is_wormhole_b0():
-            x = ttnn.reallocate(x)
+            x = ttnn.experimental.quasar.reallocate(x)
             x = ttnn.experimental.quasar.to_memory_config(x, ops_parallel_config["layer2_module1_input"])
 
         x, x_height, x_width = self.layer2_module1(x, device, batch_size, x_height, x_width)
@@ -979,7 +979,7 @@ class resnet50:
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        x = ttnn.reshape(
+        x = ttnn.experimental.quasar.reshape(
             x,
             (
                 self.batch_size,

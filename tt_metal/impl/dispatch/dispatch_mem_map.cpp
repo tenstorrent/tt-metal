@@ -86,10 +86,6 @@ DispatchMemMap::DispatchMemMap(
             // At this point fabric context is not initialized yet
             // Hardcode to 128B (more than enough space) for now
             device_cq_addr_sizes_[dev_addr_idx] = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES * 128;
-        } else if (
-            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
-            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
-            device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
         } else if (dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) {
             // Real-time profiler mailbox: dispatch-core-local L1 region shared between the
             // dispatch cores and the reserved RT-profiler tensix core.
@@ -98,6 +94,12 @@ DispatchMemMap::DispatchMemMap(
                     .size_of<realtime_profiler_msgs::realtime_profiler_msg_t>();
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
             device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_TELEMETRY_SIZE;
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {
+            device_cq_addr_sizes_[dev_addr_idx] = sizeof(DispatchTelemetryControl);
+        } else if (
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
+            device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -115,7 +117,8 @@ DispatchMemMap::DispatchMemMap(
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB ||
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG ||
-            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY) {
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY ||
+            dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }

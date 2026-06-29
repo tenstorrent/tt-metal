@@ -538,7 +538,7 @@ targets:
             seq_len: 712
             status: active
             perf:
-              decode_t/s/u: 55.5
+              decode_t/s/u: 64.0
               prefill_time_to_first_token: 40
             accuracy: {}
       wh_galaxy_perf:
@@ -1140,6 +1140,101 @@ targets:
               decode_t/s: 1920.0
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
+            team: models
+  qwen3.6-27b:
+    aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
+    skus:
+      # bh_quietbox_2 normalizes to canonical p300x2 (2x P300 = 4 dies, labeled P150x4).
+      # TTFT (prefill_time_to_first_token) is in ms; decode is batch_size=1 so t/s == t/s/u.
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 820.0
+              decode_t/s: 18.2
+              decode_t/s/u: 18.2
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          - batch_size: 1
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 2030.0
+              decode_t/s: 18.13
+              decode_t/s/u: 18.13
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          - batch_size: 1
+            seq_len: 8192
+            status: active
+            perf:
+              prefill_time_to_first_token: 4620.0
+              decode_t/s: 18.01
+              decode_t/s/u: 18.01
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          - batch_size: 1
+            seq_len: 16384
+            status: active
+            perf:
+              prefill_time_to_first_token: 9470.0
+              decode_t/s: 17.87
+              decode_t/s/u: 17.87
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          - batch_size: 1
+            seq_len: 32768
+            status: active
+            perf:
+              prefill_time_to_first_token: 19960.0
+              decode_t/s: 17.57
+              decode_t/s/u: 17.57
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          - batch_size: 1
+            seq_len: 65536
+            status: active
+            perf:
+              prefill_time_to_first_token: 44160.0
+              decode_t/s: 17.1
+              decode_t/s/u: 17.1
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          - batch_size: 1
+            seq_len: 131072
+            status: active
+            perf:
+              prefill_time_to_first_token: 77610.0
+              decode_t/s: 16.65
+              decode_t/s/u: 16.65
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
+            team: models
+          - batch_size: 1
+            seq_len: 262144
+            status: active
+            perf:
+              prefill_time_to_first_token: 286340.0
+              decode_t/s: 14.67
+              decode_t/s/u: 14.67
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08HL8X1ECD # Aniruddha Tupe
             team: models
   qwq-32b:
     aliases: ["QwQ-32B", "Qwen/QwQ-32B"]
