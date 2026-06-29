@@ -342,9 +342,9 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
         static_cast<uint8_t>(benchmark_case.num_senders),
         benchmark_case.num_buffers_per_channel,
         channel_buffer_size_bytes,
-        l1_unreserved_base_address);
+        l1_unreserved_base_address,
+        benchmark_case.trid_ring_capacity);
     mux_config.set_forwarder_service_burst_size(benchmark_case.service_burst_size);
-    mux_config.set_forwarder_max_in_flight_trids(benchmark_case.max_in_flight_trids);
 
     StandaloneMuxV2DrainerLayout drainer_layout(
         static_cast<uint8_t>(benchmark_case.num_drainer_buffers),

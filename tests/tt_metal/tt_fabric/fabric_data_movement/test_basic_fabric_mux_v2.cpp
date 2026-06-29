@@ -39,7 +39,7 @@ constexpr char kReceiverKernelSrc[] =
 constexpr uint32_t kTestResultsSizeBytes = 128;
 constexpr uint32_t kSeedStride = 0x9E3779B9u;
 constexpr uint32_t kDefaultForwarderServiceBurstSize = 8;
-constexpr uint32_t kDefaultForwarderMaxInFlightTrids = 8;
+constexpr uint32_t kDefaultTridRingCapacity = tt::tt_fabric::FabricMuxV2Config::kDefaultTridRingCapacity;
 constexpr uint32_t kShortPacketCount = 1'000;
 constexpr uint32_t kMediumPacketCount = 5'000;
 constexpr uint32_t kLongPacketCount = 50'000;
@@ -67,7 +67,7 @@ struct TestCaseConfig {
     uint8_t num_buffers_per_channel = 1;
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
     uint32_t service_burst_size = kDefaultForwarderServiceBurstSize;
-    uint32_t max_in_flight_trids = kDefaultForwarderMaxInFlightTrids;
+    uint32_t trid_ring_capacity = kDefaultTridRingCapacity;
     ChannelBufferSizeKind channel_buffer_size_kind = ChannelBufferSizeKind::ExactFitAligned;
 };
 
@@ -496,9 +496,9 @@ std::optional<MuxDeployment> create_mux_deployment(
         num_channels,
         num_buffers_per_channel,
         channel_buffer_size_bytes,
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        test_case.trid_ring_capacity);
     mux_config->set_forwarder_service_burst_size(test_case.service_burst_size);
-    mux_config->set_forwarder_max_in_flight_trids(test_case.max_in_flight_trids);
 
     tt::tt_fabric::add_fabric_mux_v2_to_program(
         *program,
@@ -819,7 +819,6 @@ constexpr std::array<TestCaseConfig, 7> kTestCases = {{
         .num_packets = kShortPacketCount,
         .num_buffers_per_channel = 4,
         .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
-        .max_in_flight_trids = 4,
     },
     TestCaseConfig{
         .name = "SmallPayload_SteadyState",
@@ -834,7 +833,6 @@ constexpr std::array<TestCaseConfig, 7> kTestCases = {{
         .num_packets = kMediumPacketCount,
         .packet_payload_size_bytes = 128,
         .num_buffers_per_channel = 4,
-        .max_in_flight_trids = 4,
     },
     TestCaseConfig{
         .name = "MultiSender_16Senders",
@@ -855,7 +853,7 @@ constexpr std::array<TestCaseConfig, 7> kTestCases = {{
         .num_packets = kLongPacketCount,
         .num_buffers_per_channel = 8,
         .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
-        .max_in_flight_trids = 2,
+        .trid_ring_capacity = 2,
     },
 }};
 

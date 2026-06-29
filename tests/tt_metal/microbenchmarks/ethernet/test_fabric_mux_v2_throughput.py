@@ -30,7 +30,7 @@ SUMMARY_HEADERS = [
     "Buffers per channel",
     "Forwarder NOC",
     "Service burst size",
-    "Max in-flight TRIDs",
+    "TRID ring capacity",
     "Target payload bytes",
     "Aggregate bytes",
     "Max sender cycles",
@@ -49,7 +49,7 @@ GOLDEN_HEADERS = [
     "Buffers per channel",
     "Forwarder NOC",
     "Service burst size",
-    "Max in-flight TRIDs",
+    "TRID ring capacity",
     "Target payload bytes",
     "Bytes per cycle",
     "Throughput GB/s",
@@ -129,7 +129,7 @@ def normalize_benchmark_row(benchmark: dict) -> dict:
         "Buffers per channel": as_int(benchmark["buffers_per_channel"]),
         "Forwarder NOC": infer_forwarder_noc(case_name),
         "Service burst size": as_int(benchmark["service_burst_size"]),
-        "Max in-flight TRIDs": as_int(benchmark["max_in_flight_trids"]),
+        "TRID ring capacity": as_int(benchmark["trid_ring_capacity"]),
         "Target payload bytes": as_int(benchmark["target_payload_bytes"]),
         "Aggregate bytes": as_int(benchmark["aggregate_case_bytes"]),
         "Max sender cycles": max_sender_cycles,
@@ -162,7 +162,7 @@ def get_family_axis_sort_value(row: dict) -> int:
     if case_name.startswith("sender_sweep"):
         return row["Senders"]
     if case_name.startswith("trid_sweep"):
-        return row["Max in-flight TRIDs"]
+        return row["TRID ring capacity"]
     if case_name.startswith("service_sweep"):
         return row["Service burst size"]
     if case_name.startswith("drainer_sweep"):
@@ -316,7 +316,7 @@ def format_text_table(rows: list[dict], geomean_speedup: float) -> str:
                 str(row["Buffers per channel"]),
                 "r1" if row["Forwarder NOC"] == "RISCV_1_default" else "r0",
                 str(row["Service burst size"]),
-                str(row["Max in-flight TRIDs"]),
+                str(row["TRID ring capacity"]),
                 f"{row['Bytes per cycle']:.3f}",
                 f"{row['Cycles per packet']:.2f}",
                 f"{row['Throughput GB/s']:.3f}",

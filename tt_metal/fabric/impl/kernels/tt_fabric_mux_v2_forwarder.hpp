@@ -12,11 +12,10 @@
 namespace tt::tt_fabric::mux_v2::kernel {
 
 constexpr uint32_t kForwarderServiceBurstSize = ct_args::forwarder_service_burst_size;
-constexpr uint32_t kForwarderMaxInFlightTrids = ct_args::forwarder_max_in_flight_trids;
 
 static_assert(
-    kForwarderMaxInFlightTrids <= (NOC_MAX_TRANSACTION_ID + 1),
-    "Forwarder max in-flight TRIDs exceed available transaction IDs");
+    ct_args::shared_trid_ring_capacity <= (NOC_MAX_TRANSACTION_ID + 1),
+    "Forwarder shared TRID ring capacity exceeds available transaction IDs");
 
 struct ForwarderSharedTridRingPublisher {
     volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingHeader* header_ptr = nullptr;
@@ -31,11 +30,11 @@ struct ForwarderSharedTridRingPublisher {
         write_count = header_ptr->write_count;
     }
 
-    bool has_free_slot() const { return (write_count - cached_read_count) < kForwarderMaxInFlightTrids; }
+    bool has_free_slot() const { return (write_count - cached_read_count) < ct_args::shared_trid_ring_capacity; }
 
     void refresh_read_count() { cached_read_count = header_ptr->read_count; }
 
-    uint32_t get_next_transaction_id() const { return write_count & ct_args::forwarder_in_flight_trid_mask; }
+    uint32_t get_next_transaction_id() const { return write_count & ct_args::shared_trid_ring_mask; }
 
     void publish_logical_channel_id(uint32_t logical_channel_id) {
         entries_ptr[write_count & ct_args::shared_trid_ring_mask] = logical_channel_id;

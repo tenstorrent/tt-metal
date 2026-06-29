@@ -34,18 +34,14 @@ inline void cache_worker_semaphore_address(
         worker_info.worker_semaphore_address);
 }
 
-inline void publish_read_counter_to_worker(ManagerClientState& state) {
-    noc_inline_dw_write<InlineWriteDst::L1, true, true>(
-        state.cached_worker_semaphore_address, state.local_read_counter, 0xf, tt::tt_fabric::worker_handshake_noc);
-    state.published_read_counter = state.local_read_counter;
-}
-
 inline void publish_pending_read_counter_to_worker(ManagerClientState& state) {
     if (state.published_read_counter == state.local_read_counter) {
         return;
     }
 
-    publish_read_counter_to_worker(state);
+    noc_inline_dw_write<InlineWriteDst::L1, true, true>(
+        state.cached_worker_semaphore_address, state.local_read_counter, 0xf, tt::tt_fabric::worker_handshake_noc);
+    state.published_read_counter = state.local_read_counter;
 }
 
 inline void establish_worker_connection(
@@ -53,7 +49,6 @@ inline void establish_worker_connection(
     volatile tt_l1_ptr tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr) {
     state.connection_established = true;
     cache_worker_semaphore_address(state, worker_location_info_ptr);
-    publish_read_counter_to_worker(state);
 }
 
 inline void teardown_worker_connection(
@@ -65,13 +60,7 @@ inline void teardown_worker_connection(
         static_cast<uint32_t>(worker_info.worker_xy.x),
         static_cast<uint32_t>(worker_info.worker_xy.y),
         worker_info.worker_teardown_semaphore_address);
-
-    auto connection_live_semaphore = get_connection_handshake_ptr(logical_channel_id);
-    connection_live_semaphore[0] = tt::tt_fabric::connection_interface::unused_connection_value;
-    worker_location_info_ptr->edm_read_counter = state.local_read_counter;
     noc_semaphore_inc(worker_teardown_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
-    state.connection_established = false;
-    state.published_read_counter = state.local_read_counter;
 }
 
 inline void record_retired_worker_credit(ManagerClientState& state) { state.local_read_counter += 1; }
@@ -85,10 +74,9 @@ inline void retire_published_ring_entries(
     const uint32_t starting_read_count = read_count;
 
     while ((write_count_snapshot - read_count) != 0) {
-        const uint32_t ring_index = read_count & ct_args::shared_trid_ring_mask;
-        const uint32_t logical_channel_id = shared_ring_entries_ptr[ring_index];
-        const uint32_t transaction_id = read_count & ct_args::forwarder_in_flight_trid_mask;
-        if (!ncrisc_noc_nonposted_write_with_transaction_id_sent(get_forwarder_noc(), transaction_id)) {
+        const uint32_t ring_index_and_trid = read_count & ct_args::shared_trid_ring_mask;
+        const uint32_t logical_channel_id = shared_ring_entries_ptr[ring_index_and_trid];
+        if (!ncrisc_noc_nonposted_write_with_transaction_id_sent(get_forwarder_noc(), ring_index_and_trid)) {
             break;
         }
 
@@ -111,10 +99,8 @@ inline void service_client(uint32_t logical_channel_id, ManagerClientState& stat
     const uint32_t connection_state = connection_handshake_ptr[0];
 
     if (connection_state == tt::tt_fabric::connection_interface::close_connection_request_value) {
-        if (!state.finalized) {
-            state.finalized = true;
-            finalized_client_count += 1;
-        }
+        state.finalized = true;
+        finalized_client_count += 1;
 
         teardown_worker_connection(state, logical_channel_id, worker_location_info_ptr);
         return;
@@ -156,12 +142,10 @@ inline void run_manager() {
 
     // Phase 1: Steady state — service clients + opportunistic TRID retirement.
     while (true) {
-        invalidate_l1_cache();
-        const uint32_t ring_write_count_snapshot = shared_ring_header_ptr->write_count;
-
         for (uint32_t logical_channel_id = 0; logical_channel_id < ct_args::num_channels; ++logical_channel_id) {
+            invalidate_l1_cache();
             retire_published_ring_entries(
-                shared_ring_header_ptr, shared_ring_read_count, ring_write_count_snapshot, client_states);
+                shared_ring_header_ptr, shared_ring_read_count, shared_ring_header_ptr->write_count, client_states);
 
             service_client(logical_channel_id, client_states[logical_channel_id], finalized_client_count);
         }

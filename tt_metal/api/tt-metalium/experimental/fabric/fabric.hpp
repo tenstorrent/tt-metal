@@ -300,6 +300,8 @@ private:
 
 class FabricMuxV2Config {
 public:
+    static constexpr uint32_t kDefaultTridRingCapacity = 8;
+
     struct ClientSemaphores {
         uint32_t flow_control_sem_id = 0;
         uint32_t teardown_sem_id = 0;
@@ -309,7 +311,8 @@ public:
         uint8_t num_channels,
         uint8_t num_buffers_per_channel,
         size_t channel_buffer_size_bytes,
-        size_t base_l1_address);
+        size_t base_l1_address,
+        uint32_t trid_ring_capacity = kDefaultTridRingCapacity);
 
     void append_client_connection_rt_args(
         const CoreCoord& mux_virtual_core,
@@ -319,7 +322,6 @@ public:
 
     size_t get_memory_map_end_address() const;
     void set_forwarder_service_burst_size(uint32_t service_burst_size);
-    void set_forwarder_max_in_flight_trids(uint32_t max_in_flight_trids);
 
 private:
     friend void add_fabric_mux_v2_to_program(
@@ -359,7 +361,7 @@ private:
     size_t channel_buffer_size_bytes_ = 0;
     size_t per_channel_scalar_region_stride_bytes_ = 0;
     uint32_t forwarder_service_burst_size_ = 0;
-    uint32_t forwarder_max_in_flight_trids_ = 0;
+    uint32_t trid_ring_capacity_ = 0;
 
     MemoryRegion status_region_{};
     MemoryRegion termination_signal_region_{};

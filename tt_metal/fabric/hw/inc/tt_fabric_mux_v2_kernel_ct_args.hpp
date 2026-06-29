@@ -31,8 +31,6 @@ constexpr uint32_t per_channel_scalar_region_stride_bytes =
     FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_per_channel_scalar_region_stride_bytes");
 constexpr uint32_t forwarder_service_burst_size =
     FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_forwarder_service_burst_size");
-constexpr uint32_t forwarder_max_in_flight_trids =
-    FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_forwarder_max_in_flight_trids");
 constexpr uint32_t shared_trid_ring_capacity = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_shared_trid_ring_capacity");
 constexpr uint32_t forwarder_ready_sem_id = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_forwarder_ready_sem_id");
 constexpr uint32_t manager_init_done_sem_id = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_manager_init_done_sem_id");
@@ -45,21 +43,16 @@ static_assert(
     "FabricMuxV2 per_channel_scalar_region_stride_bytes must be greater than zero");
 static_assert(forwarder_service_burst_size > 0, "FabricMuxV2 forwarder service burst size must be greater than zero");
 static_assert(shared_trid_ring_capacity > 0, "FabricMuxV2 shared TRID ring capacity must be greater than zero");
-static_assert(forwarder_max_in_flight_trids > 0, "FabricMuxV2 forwarder max in-flight TRIDs must be greater than zero");
 static_assert(
     shared_trid_ring_capacity != 0 && (shared_trid_ring_capacity & (shared_trid_ring_capacity - 1)) == 0,
     "Shared TRID ring capacity must be a power of two");
 static_assert(
-    (forwarder_max_in_flight_trids & (forwarder_max_in_flight_trids - 1)) == 0,
-    "FabricMuxV2 forwarder max in-flight TRIDs must be a power of two");
-static_assert(
-    forwarder_max_in_flight_trids <= shared_trid_ring_capacity,
-    "FabricMuxV2 forwarder max in-flight TRIDs must not exceed the shared TRID ring capacity");
+    shared_trid_ring_capacity <= (NOC_MAX_TRANSACTION_ID + 1),
+    "FabricMuxV2 shared TRID ring capacity must not exceed available transaction IDs");
 
 constexpr bool num_buffers_per_channel_is_pow2 = (num_buffers_per_channel & (num_buffers_per_channel - 1)) == 0;
 constexpr uint32_t num_buffers_per_channel_mask = num_buffers_per_channel_is_pow2 ? (num_buffers_per_channel - 1) : 0;
 constexpr uint32_t shared_trid_ring_mask = shared_trid_ring_capacity - 1;
-constexpr uint32_t forwarder_in_flight_trid_mask = forwarder_max_in_flight_trids - 1;
 
 #undef FABRIC_MUX_V2_NAMED_CT_ARG
 

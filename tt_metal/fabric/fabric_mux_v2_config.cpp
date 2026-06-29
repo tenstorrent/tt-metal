@@ -16,9 +16,7 @@ namespace tt::tt_fabric {
 namespace {
 
 constexpr uint32_t kTensixWorkerStreamRegisterCount = 64;
-constexpr uint32_t kSharedTridRingCapacity = 8;
 constexpr uint32_t kDefaultForwarderServiceBurstSize = 8;
-constexpr uint32_t kDefaultForwarderMaxInFlightTrids = kSharedTridRingCapacity;
 constexpr const char* kFabricMuxV2KernelPath = "tt_metal/fabric/impl/kernels/tt_fabric_mux_v2.cpp";
 
 size_t align_up(size_t value, size_t alignment) {
@@ -87,14 +85,17 @@ void validate_forwarder_service_burst_size(uint32_t service_burst_size) {
     TT_FATAL(service_burst_size > 0, "FabricMuxV2 forwarder service burst size must be greater than zero");
 }
 
-void validate_forwarder_max_in_flight_trids(uint32_t max_in_flight_trids, uint32_t shared_trid_ring_capacity) {
-    TT_FATAL(max_in_flight_trids > 0, "FabricMuxV2 forwarder max in-flight TRIDs must be greater than zero");
-    TT_FATAL(is_power_of_two(max_in_flight_trids), "FabricMuxV2 forwarder max in-flight TRIDs must be a power of two");
+void validate_trid_ring_capacity(uint32_t trid_ring_capacity) {
+    TT_FATAL(trid_ring_capacity > 0, "FabricMuxV2 TRID ring capacity must be greater than zero");
+    TT_FATAL(is_power_of_two(trid_ring_capacity), "FabricMuxV2 TRID ring capacity must be a power of two");
+    // NOC_MAX_TRANSACTION_ID is 15 on WH/BH, giving 16 available transaction IDs.
+    // The device-side ct_args header enforces the same limit against the actual hardware constant.
+    constexpr uint32_t kMaxNocTransactionIds = 16;
     TT_FATAL(
-        max_in_flight_trids <= shared_trid_ring_capacity,
-        "FabricMuxV2 forwarder max in-flight TRIDs {} exceed shared ring capacity {}",
-        max_in_flight_trids,
-        shared_trid_ring_capacity);
+        trid_ring_capacity <= kMaxNocTransactionIds,
+        "FabricMuxV2 TRID ring capacity {} exceeds available transaction IDs {}",
+        trid_ring_capacity,
+        kMaxNocTransactionIds);
 }
 
 }  // namespace
@@ -117,16 +118,20 @@ size_t FabricMuxV2Config::MemoryRegion::get_end_address() const { return base_ad
 size_t FabricMuxV2Config::MemoryRegion::get_total_size() const { return unit_size * num_units; }
 
 FabricMuxV2Config::FabricMuxV2Config(
-    uint8_t num_channels, uint8_t num_buffers_per_channel, size_t channel_buffer_size_bytes, size_t base_l1_address) :
+    uint8_t num_channels,
+    uint8_t num_buffers_per_channel,
+    size_t channel_buffer_size_bytes,
+    size_t base_l1_address,
+    uint32_t trid_ring_capacity) :
     num_channels_(num_channels),
     num_buffers_per_channel_(num_buffers_per_channel),
     channel_buffer_size_bytes_(channel_buffer_size_bytes),
     forwarder_service_burst_size_(kDefaultForwarderServiceBurstSize),
-    forwarder_max_in_flight_trids_(kDefaultForwarderMaxInFlightTrids) {
+    trid_ring_capacity_(trid_ring_capacity) {
     TT_FATAL(num_channels_ > 0, "FabricMuxV2Config requires at least one logical channel");
     TT_FATAL(num_buffers_per_channel_ > 0, "FabricMuxV2Config requires at least one buffer per channel");
     validate_forwarder_service_burst_size(forwarder_service_burst_size_);
-    validate_forwarder_max_in_flight_trids(forwarder_max_in_flight_trids_, kSharedTridRingCapacity);
+    validate_trid_ring_capacity(trid_ring_capacity_);
 
     const size_t max_channel_buffer_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
     TT_FATAL(
@@ -169,7 +174,7 @@ FabricMuxV2Config::FabricMuxV2Config(
 
     current_address = align_up(current_address, noc_aligned_address_size_bytes_);
     const size_t shared_ring_region_size_bytes =
-        sizeof(FabricMuxV2SharedTridRingHeader) + (kSharedTridRingCapacity * sizeof(FabricMuxV2SharedTridRingEntry));
+        sizeof(FabricMuxV2SharedTridRingHeader) + (trid_ring_capacity_ * sizeof(FabricMuxV2SharedTridRingEntry));
     shared_ring_region_ = MemoryRegion(current_address, shared_ring_region_size_bytes, 1);
     current_address = shared_ring_region_.get_end_address();
 
@@ -237,15 +242,14 @@ std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_n
          to_uint32_checked(connection_handshake_region_.get_address(), "connection_handshake_region_base_address")},
         {"fabric_mux_v2_shared_ring_region_base_address",
          to_uint32_checked(shared_ring_region_.get_address(), "shared_ring_region_base_address")},
-        {"fabric_mux_v2_shared_trid_ring_capacity", kSharedTridRingCapacity},
+        {"fabric_mux_v2_shared_trid_ring_capacity", trid_ring_capacity_},
         {"fabric_mux_v2_shared_control_region_base_address",
          to_uint32_checked(shared_control_region_.get_address(), "shared_control_region_base_address")},
         {"fabric_mux_v2_channel_buffer_size_bytes",
          to_uint32_checked(channel_buffer_size_bytes_, "channel_buffer_size_bytes")},
         {"fabric_mux_v2_per_channel_scalar_region_stride_bytes",
          to_uint32_checked(per_channel_scalar_region_stride_bytes_, "per_channel_scalar_region_stride_bytes")},
-        {"fabric_mux_v2_forwarder_service_burst_size", forwarder_service_burst_size_},
-        {"fabric_mux_v2_forwarder_max_in_flight_trids", forwarder_max_in_flight_trids_}};
+        {"fabric_mux_v2_forwarder_service_burst_size", forwarder_service_burst_size_}};
 }
 
 void add_fabric_mux_v2_to_program(
@@ -306,11 +310,6 @@ size_t FabricMuxV2Config::get_memory_map_end_address() const { return memory_map
 void FabricMuxV2Config::set_forwarder_service_burst_size(uint32_t service_burst_size) {
     validate_forwarder_service_burst_size(service_burst_size);
     forwarder_service_burst_size_ = service_burst_size;
-}
-
-void FabricMuxV2Config::set_forwarder_max_in_flight_trids(uint32_t max_in_flight_trids) {
-    validate_forwarder_max_in_flight_trids(max_in_flight_trids, kSharedTridRingCapacity);
-    forwarder_max_in_flight_trids_ = max_in_flight_trids;
 }
 
 void FabricMuxV2Config::validate_logical_channel_id(uint8_t logical_channel_id) const {
