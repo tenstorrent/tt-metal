@@ -472,7 +472,9 @@ void kernel_main() {
 
                         dst_stick_id++;
 
-                        noc_async_write_barrier();
+                        // fabric_send_stick already flushed the local writes (source read done), so the
+                        // CB slot is safe to reuse. The receiver only reads after the post-loop
+                        // raise_neighbor_sem, so no per-stick remote-completion barrier is needed here.
                         cb_pop_front(send_cb_id, 1);
                     }
                 }
