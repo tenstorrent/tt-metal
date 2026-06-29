@@ -101,8 +101,8 @@ class Qwen36ForCausalLM(Generator):
 
             # When offline/CI, resolve from the local cache only so snapshot_download
             # reads the cached refs instead of reaching the HF API (refused by HF_HUB_OFFLINE=1).
-            offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
-            name_or_path = snapshot_download(name_or_path, local_files_only=offline)
+            # offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
+            name_or_path = snapshot_download(name_or_path, local_files_only=False)
         args, model, _ = create_tt_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, hf_model=name_or_path
         )
