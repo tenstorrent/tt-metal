@@ -91,9 +91,14 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
+    // Required caller-owned buffer reused as the per-expert extract output and fed straight into
+    // the Unified Routed Expert op. Must be (1, .., max_dispatched_tokens_per_expert, emb),
+    // dispatched_buffer dtype, TILE, DRAM interleaved.
+    const ttnn::Tensor& extracted_tokens,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    // Reserved for overlapping the routed expert with the combine; currently
-    // only propagated through the call chain, not yet wired into the kernels.
+    // Global semaphore used to overlap the routed expert with the combine: each per-expert FFN
+    // increments it once its output is written, and the combine waits on it before consuming
+    // that expert's region.
     const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 

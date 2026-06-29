@@ -600,3 +600,188 @@ def test_extract_subdevice_matches_full_grid(device):
     assert out_sd.shape == out_full.shape, f"{out_sd.shape} vs {out_full.shape}"
     # Sub-device-confined output must be bit-identical to the full-grid output.
     torch.testing.assert_close(out_sd.float(), out_full.float(), atol=0.0, rtol=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Preallocated output (`optional_output_tensor`).
+#
+# When the caller passes a preallocated DRAM buffer, extract writes into it
+# instead of allocating a fresh output. The returned tensor must alias that
+# buffer (same DRAM address), and reusing one buffer across calls must keep the
+# address stable. This is what lets a caller hold the extract-output allocation
+# alive across calls (no per-call free + realloc of the tokens buffer).
+# ---------------------------------------------------------------------------
+
+
+def _make_output_buffer(device, max_tokens, hidden_dim, leading_dims=()):
+    """Preallocated extract-output buffer matching the op's output spec:
+    [*leading_dims, max_tokens, hidden_dim], BFLOAT8_B, TILE, DRAM interleaved."""
+    shape = (*leading_dims, max_tokens, hidden_dim)
+    return ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.float32),
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@pytest.mark.parametrize(
+    "starts, counts, expert_id, max_tokens",
+    [
+        ([0, 32, 64, 96], [32, 32, 32, 32], 0, 32),
+        ([0, 64, 96, 128], [32, 17, 32, 5], 1, 32),  # counts rounds up 17 -> 32 tile-rows
+        ([0, 32, 64, 96], [96, 32, 32, 32], 0, 128),  # full slice, output padded
+    ],
+)
+def test_extract_into_preallocated_output_matches_torch_slice(device, starts, counts, expert_id, max_tokens):
+    """Passing optional_output_tensor produces the same slice as the allocating path,
+    and the op writes into the caller's buffer (returned tensor aliases it)."""
+    hidden_dim = 128
+    global_rows = _ceil_to_tile(max(s + c for s, c in zip(starts, counts)) + TILE)
+
+    torch.manual_seed(0)
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    g = _make_global_from_torch(device, global_torch)
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+    idx_table = _make_identity_idx_table(device)
+
+    out_buf = _make_output_buffer(device, max_tokens, hidden_dim)
+    out = ttnn.experimental.deepseek_prefill.extract(
+        g,
+        s,
+        c,
+        idx_table,
+        local_expert_id=expert_id,
+        max_dispatched_tokens_per_expert=max_tokens,
+        optional_output_tensor=out_buf,
+    )
+
+    # Returned tensor must alias the caller-provided buffer (no fresh allocation).
+    assert out.buffer_address() == out_buf.buffer_address()
+
+    rows = _ceil_to_tile(counts[expert_id])
+    global_quantized = ttnn.to_torch(g)
+    expected = global_quantized[starts[expert_id] : starts[expert_id] + rows, :]
+    # Reading back the PREALLOCATED handle (not the return value) proves the op wrote
+    # into the caller's buffer in place.
+    buf_host = ttnn.to_torch(out_buf)
+    assert buf_host.shape == (max_tokens, hidden_dim)
+    torch.testing.assert_close(buf_host[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+    # And the returned handle reads back identically.
+    out_host = ttnn.to_torch(out)
+    torch.testing.assert_close(out_host[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+
+
+def test_extract_preallocated_output_matches_allocating_path(device):
+    """The preallocated-output path produces the same VALID rows as the default allocating
+    path. Only rows [0, ceil_tile(counts)) are compared — the op leaves the padding rows
+    beyond that uninitialized, so they legitimately differ between a zero-filled preallocated
+    buffer and a freshly-allocated one."""
+    starts, counts, expert_id, max_tokens = [0, 32, 64, 96], [32, 17, 32, 5], 1, 64
+    hidden_dim = 128
+    global_rows = _ceil_to_tile(max(s + c for s, c in zip(starts, counts)) + TILE)
+
+    torch.manual_seed(0)
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    g = _make_global_from_torch(device, global_torch)
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+
+    out_alloc = ttnn.to_torch(_run(g, s, c, global_expert_id=expert_id, max_tokens=max_tokens))
+
+    out_buf = _make_output_buffer(device, max_tokens, hidden_dim)
+    out_pre = ttnn.to_torch(
+        ttnn.experimental.deepseek_prefill.extract(
+            g,
+            s,
+            c,
+            _make_identity_idx_table(device),
+            local_expert_id=expert_id,
+            max_dispatched_tokens_per_expert=max_tokens,
+            optional_output_tensor=out_buf,
+        )
+    )
+    assert out_pre.shape == out_alloc.shape
+    rows = _ceil_to_tile(counts[expert_id])
+    torch.testing.assert_close(out_pre[:rows, :].float(), out_alloc[:rows, :].float(), atol=0.0, rtol=0.0)
+
+
+def test_extract_preallocated_output_reused_across_experts(device):
+    """One preallocated buffer reused across calls for different experts: each call
+    overwrites it with the correct slice, and its DRAM address stays stable (the
+    allocation is never freed/reallocated between calls)."""
+    starts = [0, 32, 64, 96]
+    counts = [32, 17, 32, 5]
+    max_tokens = 64
+    hidden_dim = 128
+    global_rows = _ceil_to_tile(max(s + c for s, c in zip(starts, counts)) + TILE)
+
+    torch.manual_seed(0)
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    g = _make_global_from_torch(device, global_torch)
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+    idx_table = _make_identity_idx_table(device)
+    global_quantized = ttnn.to_torch(g)
+
+    out_buf = _make_output_buffer(device, max_tokens, hidden_dim)
+    base_addr = out_buf.buffer_address()
+
+    for expert_id in [0, 1, 2, 3, 1, 0]:  # revisit experts to exercise repeated overwrite
+        out = ttnn.experimental.deepseek_prefill.extract(
+            g,
+            s,
+            c,
+            idx_table,
+            local_expert_id=expert_id,
+            max_dispatched_tokens_per_expert=max_tokens,
+            optional_output_tensor=out_buf,
+        )
+        # Same buffer every call — address never changes (no realloc).
+        assert out.buffer_address() == base_addr
+        assert out_buf.buffer_address() == base_addr
+
+        rows = _ceil_to_tile(counts[expert_id])
+        expected = global_quantized[starts[expert_id] : starts[expert_id] + rows, :]
+        out_host = ttnn.to_torch(out)
+        torch.testing.assert_close(out_host[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+
+
+@pytest.mark.parametrize("leading_dims", [(1,), (1, 1)])
+def test_extract_preallocated_output_leading_singleton_dims(device, leading_dims):
+    """Preallocated output carrying leading singleton dims (mirroring the global tensor's
+    rank, e.g. (1, 1, max_tokens, hidden)) extracts the correct slice."""
+    hidden_dim = 128
+    starts = [0, 32, 64, 96]
+    counts = [32, 17, 32, 32]
+    expert_id = 1
+    max_tokens = 32
+    global_rows = 128
+
+    torch.manual_seed(0)
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    g = _make_global_from_torch(device, global_torch.reshape(*leading_dims, global_rows, hidden_dim))
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+
+    out_buf = _make_output_buffer(device, max_tokens, hidden_dim, leading_dims=leading_dims)
+    out = ttnn.experimental.deepseek_prefill.extract(
+        g,
+        s,
+        c,
+        _make_identity_idx_table(device),
+        local_expert_id=expert_id,
+        max_dispatched_tokens_per_expert=max_tokens,
+        optional_output_tensor=out_buf,
+    )
+    assert out.buffer_address() == out_buf.buffer_address()
+
+    out_torch = ttnn.to_torch(out)
+    assert out_torch.shape == (*leading_dims, max_tokens, hidden_dim)
+    out_flat = out_torch.reshape(max_tokens, hidden_dim)
+    rows = _ceil_to_tile(counts[expert_id])
+    global_quantized = ttnn.to_torch(g).reshape(global_rows, hidden_dim)
+    expected = global_quantized[starts[expert_id] : starts[expert_id] + rows, :]
+    torch.testing.assert_close(out_flat[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)

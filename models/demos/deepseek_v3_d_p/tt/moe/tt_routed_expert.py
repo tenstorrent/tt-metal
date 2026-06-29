@@ -227,8 +227,7 @@ class TtRoutedExpert(LightweightModule):
                           global ids. Required.
             subdevice_id: Optional SubDeviceId confining the routed expert's core allocation,
                           used to overlap the routed expert with the combine on disjoint cores.
-                          For now it is only propagated to the unified_routed_expert_moe op; it
-                          is not yet consumed by the kernels. Defaults to None (full grid).
+                          Defaults to None (full grid).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -311,6 +310,19 @@ class TtRoutedExpert(LightweightModule):
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
+
+        # Due to determinism issue: pre-allocate ONE long-lived buffer that the unified MoE op
+        # reuses as the per-expert extract output. Holding it on the module keeps the extracted-tokens
+        # DRAM allocation alive and stable across forward() call.
+        #
+        # Note: This should not be needed once the routed expert kernel is fully unified (Issue #41106)
+        self.extracted_tokens = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self.max_tokens, self.emb_dim]),
+            self.activations_dtype,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     @staticmethod
     def shard_expert_token_counts(
@@ -399,9 +411,9 @@ class TtRoutedExpert(LightweightModule):
             expert_region_offsets: Expert region start offsets per expert
                 (shared across source devices in a dispatch group). Produced by
                 offset_cumsum. Shape per device: (1, num_routed_experts).
-            global_semaphore: Optional global semaphore reserved for overlapping the
-                routed expert with the combine. For now it is only propagated to the
-                unified_routed_expert_moe op; it is not yet consumed by the kernels.
+            global_semaphore: Optional global semaphore used to overlap the routed expert with
+                the combine: each per-expert FFN increments it once its output is written, and
+                the combine waits on it before consuming that expert's region.
 
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
@@ -427,6 +439,7 @@ class TtRoutedExpert(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 global_semaphore=global_semaphore,
                 subdevice_id=self.subdevice_id,
+                extracted_tokens=self.extracted_tokens,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

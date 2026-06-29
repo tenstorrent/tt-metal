@@ -89,6 +89,7 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
+    const ttnn::Tensor& extracted_tokens,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
@@ -111,11 +112,10 @@ ttnn::Tensor unified_routed_expert_moe(
     // `num_routed_experts`, and the (mutated) dispatched buffer is returned.
     //
     // In-place is safe across the loop: extract for expert i copies region i out
-    // into a fresh `tokens` tensor before the FFN overwrites region i, and each
-    // expert only touches its own (non-overlapping) region, so a later expert's
-    // extract still reads its original dispatched rows.
-    //
-    // `tokens` from extract is a per-expert (max_dispatched_tokens_per_expert,
+    // into the caller-owned `extracted_tokens` buffer before the FFN overwrites
+    // region i, and each expert only touches its own (non-overlapping) region, so
+    // a later expert's extract still reads its original dispatched rows. The
+    // `extracted_tokens` is a per-expert (max_dispatched_tokens_per_expert,
     // emb) tensor with rows starting at 0. The FFN reads from row 0 of its
     // inputs; passing expert_region_offsets makes the writer add
     // expert_region_offsets[global_expert_id]/TILE tile-rows so the output lands
@@ -129,20 +129,21 @@ ttnn::Tensor unified_routed_expert_moe(
     // dispatched-buffer contents, which are never read by downstream `combine`
     // (bounded per expert to [offset, offset + ceil_tile(count))).
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
-        auto tokens = ttnn::extract(
+        ttnn::extract(
             dispatched_buffer,
             expert_region_offsets,
             expert_token_counts,
             global_expert_idx_table,
             local_expert,
             max_dispatched_tokens_per_expert,
-            subdevice_id);
+            subdevice_id,
+            extracted_tokens);
         // In-place direct-write: output == dispatched_buffer, with
         // expert_region_offsets so the writer offsets into this expert's region
         // of that same buffer. The op mutates dispatched_buffer in place; its
         // return value is unused (the composite returns dispatched_buffer below).
         unified_routed_expert_ffn(
-            tokens,
+            extracted_tokens,
             gate_projs[local_expert],
             up_projs[local_expert],
             down_projs[local_expert],

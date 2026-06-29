@@ -367,7 +367,7 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
-            overlap_routed_expert_with_combine=False,
+            overlap_routed_expert_with_combine=True,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
         )

@@ -121,12 +121,16 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             global_semaphore (ttnn._ttnn.global_semaphore.global_semaphore, optional):
-                Reserved for overlapping the routed expert with the combine. Currently
-                only propagated as an argument; not yet consumed by the device programs.
+                Used to overlap the routed expert with the combine: each per-expert FFN
+                increments it once its output is written, and the combine waits on it before
+                consuming that expert's region.
             subdevice_id (ttnn.SubDeviceId, optional):
-                Reserved for confining the routed expert to a compute sub-device when
-                overlapping with the combine. Currently only propagated as an argument;
-                not yet consumed by the device programs.
+                Confines the routed expert to a compute sub-device so it can overlap the combine
+                (which runs on a disjoint sub-device) on separate worker cores.
+            extracted_tokens (ttnn.Tensor, required):
+                Caller-owned buffer reused as the per-expert extract output and fed straight into
+                the Unified Routed Expert op. Must be (1, .., max_dispatched_tokens_per_expert, emb),
+                dispatched_buffer dtype, TILE, DRAM interleaved.
 
         Returns:
             ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
@@ -141,6 +145,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_projs").noconvert(),
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
+        nb::arg("extracted_tokens").noconvert(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("global_semaphore") = nb::none(),
         nb::arg("subdevice_id") = nb::none());

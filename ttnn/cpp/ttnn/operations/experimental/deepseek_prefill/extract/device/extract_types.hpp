@@ -39,6 +39,10 @@ struct ExtractInputs {
     // 1D (or 2D with first dim == 1) UINT32 DRAM-interleaved tensor mapping
     // local_expert_id -> global_expert_id.
     Tensor global_expert_idx_table;
+    // Optional preallocated output buffer. When set, create_output_tensors returns it
+    // instead of allocating a fresh tensor. Must match the spec from compute_output_specs
+    // (shape [.., max_tokens, hidden], global_tensor dtype, TILE, DRAM interleaved).
+    std::optional<Tensor> optional_output_tensor = std::nullopt;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::extract

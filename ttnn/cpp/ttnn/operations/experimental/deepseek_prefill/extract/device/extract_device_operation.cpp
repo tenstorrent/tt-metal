@@ -175,6 +175,10 @@ ExtractDeviceOperation::spec_return_value_t ExtractDeviceOperation::compute_outp
 
 ExtractDeviceOperation::tensor_return_value_t ExtractDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Reuse the caller-provided buffer when present, otherwise allocate.
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.global_tensor.device());
 }
@@ -190,7 +194,8 @@ ttnn::Tensor prefill_extract(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::extract::ExtractDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -201,7 +206,8 @@ ttnn::Tensor prefill_extract(
             .global_tensor = global_tensor,
             .start = start,
             .counts = counts,
-            .global_expert_idx_table = global_expert_idx_table});
+            .global_expert_idx_table = global_expert_idx_table,
+            .optional_output_tensor = optional_output_tensor});
 }
 
 }  // namespace ttnn::prim

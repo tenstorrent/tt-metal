@@ -42,6 +42,7 @@ ttnn::Tensor prefill_extract(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
