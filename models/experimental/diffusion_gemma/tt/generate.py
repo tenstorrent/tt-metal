@@ -133,17 +133,14 @@ def _as_prompt_token_tensor(input_ids) -> torch.Tensor:
         tokens = input_ids
     else:
         tokens = torch.as_tensor(input_ids)
-    if tokens.dtype == torch.bool or torch.is_floating_point(tokens) or torch.is_complex(tokens):
+    if tokens.numel() > 0 and (
+        tokens.dtype == torch.bool or torch.is_floating_point(tokens) or torch.is_complex(tokens)
+    ):
         raise ValueError("prompt token ids must be integers")
-    tokens = tokens.to(torch.long)
     if tokens.dim() == 1:
         tokens = tokens.unsqueeze(0)
-    if tokens.dim() != 2:
-        raise ValueError("prompt token ids must have shape [batch, seq_len]")
-    if torch.any(tokens < 0).item():
-        raise ValueError("prompt token ids must be non-negative")
-    if torch.any(tokens > torch.iinfo(torch.int32).max).item():
-        raise ValueError("prompt token ids must fit int32 device token buffers")
+    _validate_nonnegative_integer_token_tensor(tokens, name="prompt token ids", shape_name="[batch, seq_len]")
+    tokens = tokens.to(torch.long)
     return tokens
 
 

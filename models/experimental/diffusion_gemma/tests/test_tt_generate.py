@@ -1855,6 +1855,18 @@ def test_tokenize_prompt_accepts_existing_token_tensor():
 @pytest.mark.parametrize(
     ("token_ids", "message"),
     [
+        (torch.empty((0, 3), dtype=torch.long), "batch size"),
+        (torch.empty((1, 0), dtype=torch.long), "length"),
+    ],
+)
+def test_tokenize_prompt_rejects_empty_token_ids(token_ids, message):
+    with pytest.raises(ValueError, match=message):
+        tokenize_prompt(object(), token_ids)
+
+
+@pytest.mark.parametrize(
+    ("token_ids", "message"),
+    [
         (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integers"),
         (torch.tensor([[1, -2]], dtype=torch.int32), "non-negative"),
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
