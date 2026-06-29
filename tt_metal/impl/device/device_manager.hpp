@@ -69,7 +69,10 @@ public:
     void mark_rt_profiler_device_init_complete(ChipId chip_id);
     void clear_rt_profiler_device_init_complete(ChipId chip_id);
 
+    // Registers a shutdown hook that close_devices runs after dispatch teardown, before chips close.
     void set_rt_profiler_shutdown_hook(std::function<void()> hook);
+    // Cleared by ~RealtimeProfilerManager so the hook can't outlive the profiler (guards against a use-after-free).
+    void clear_rt_profiler_shutdown_hook();
 
 private:
     MetalEnv& env_;

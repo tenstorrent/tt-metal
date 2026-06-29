@@ -658,6 +658,8 @@ void DeviceManager::set_rt_profiler_shutdown_hook(std::function<void()> hook) {
     rt_profiler_shutdown_hook_ = std::move(hook);
 }
 
+void DeviceManager::clear_rt_profiler_shutdown_hook() { rt_profiler_shutdown_hook_ = nullptr; }
+
 bool DeviceManager::close_device(ChipId device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
