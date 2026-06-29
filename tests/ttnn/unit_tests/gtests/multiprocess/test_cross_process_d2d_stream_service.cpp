@@ -91,6 +91,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/services/h2d_socket_service.hpp"
+#include "ttnn/services/d2h_socket_service.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -114,6 +115,7 @@ using ::tt::tt_metal::D2DStreamConfig;
 using ::tt::tt_metal::D2DStreamService;
 using ::tt::tt_metal::D2DStreamServiceReceiver;
 using ::tt::tt_metal::D2DStreamServiceSender;
+using ::tt::tt_metal::D2HStreamService;
 using ::tt::tt_metal::DataMovementConfig;
 using ::tt::tt_metal::DataMovementProcessor;
 using ::tt::tt_metal::DataType;
@@ -398,6 +400,92 @@ MeshWorkload make_relay_like_workload(
     return workload;
 }
 
+// Terminal-stage (D2H) relay op (pipeline_relay_d2h_worker) for the LAST stage only.
+// The consumer half is identical to make_relay_like_workload — copies the upstream
+// backing into a dest, spinning the upstream data_ready_sem and incing the upstream
+// consumed_counter — but the producer half targets a D2HStreamService instead of a
+// D2DStreamServiceSender: dest is the D2H backing tensor, and instead of bumping a
+// downstream data_ready_counter the worker bumps the D2H sender's write_ack_counter,
+// so the result streams to a host consumer over a PCIe socket (read_from_tensor)
+// rather than forwarding over fabric. The handshake is the D2H-inverted analog of the
+// D2D one: the persistent D2H sender mcasts transfer_done_sem (drained prev iter), the
+// worker incs write_ack_counter (this iter staged) — vs the D2D data_ready / consumed
+// pair. Upstream stays templated to mirror the relay helper, but in practice it's only
+// ever a D2DStreamServiceReceiver (the terminal stage always has a fabric inbound).
+template <typename Upstream>
+MeshWorkload make_d2h_relay_workload(
+    Upstream* inbound,
+    const std::shared_ptr<MeshDevice>& mesh,
+    D2HStreamService* d2h_service,
+    uint32_t metadata_size_bytes = 0) {
+    const auto& coords = inbound->get_backing_tensor().tensor_topology().mesh_coords();
+    const auto* up_buf = inbound->get_backing_tensor().buffer();
+    const uint32_t page_size = up_buf->aligned_page_size();
+    const uint32_t num_pages = up_buf->num_pages();
+    const CoreRange worker_cores = inbound->get_worker_cores();
+    const uint32_t num_workers = core_range_volume(worker_cores);
+    constexpr auto kScratchCb = CBIndex::c_0;
+
+    const uint32_t dest_addr = static_cast<uint32_t>(d2h_service->get_backing_tensor().buffer()->address());
+    const uint32_t transfer_done_sem_addr = static_cast<uint32_t>(d2h_service->get_transfer_done_sem_addr());
+
+    MeshWorkload workload;
+    for (const auto& coord : coords) {
+        auto program = CreateProgram();
+        auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
+                          .set_page_size(kScratchCb, page_size);
+        CreateCircularBuffer(program, worker_cores, cb_cfg);
+
+        // Inbound backing and downstream dest share the per-shard spec.
+        const auto* up_dbuf = inbound->get_backing_tensor().mesh_buffer().get_device_buffer(coord);
+        auto accessor_ct = TensorAccessorArgs(*up_dbuf).get_compile_time_args();
+        std::vector<uint32_t> ct_args = {
+            static_cast<uint32_t>(inbound->get_data_ready_sem_addr()),
+            static_cast<uint32_t>(up_buf->address()),
+            dest_addr,
+            page_size,
+            /*num_iters=*/1u,
+            static_cast<uint32_t>(kScratchCb),
+            0,  // metadata_enabled == false
+            0,  // metadata_size_bytes == 0
+            0,  // inbound_metadata_l1_addr == 0,
+            transfer_done_sem_addr};
+        ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/pipeline_relay_d2h_worker.cpp",
+            worker_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
+
+        auto* device = mesh->get_device(coord);
+        const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
+
+        const auto d2h_svc_phys = device->worker_core_from_logical_core(d2h_service->get_service_core(coord));
+        const uint32_t write_ack_addr = static_cast<uint32_t>(d2h_service->get_write_ack_counter_addr(coord));
+
+        for (const auto& wc : worker_cores) {
+            const auto [start_page, end_page] =
+                worker_page_range(worker_index(wc, worker_cores), num_workers, num_pages);
+            const std::vector<uint32_t> rt_args = {
+                start_page,
+                end_page,
+                static_cast<uint32_t>(inbound->get_consumed_counter_addr(coord)),
+                static_cast<uint32_t>(up_svc_phys.x),
+                static_cast<uint32_t>(up_svc_phys.y),
+                write_ack_addr,
+                static_cast<uint32_t>(d2h_svc_phys.x),
+                static_cast<uint32_t>(d2h_svc_phys.y),
+                0,  // is_metadata_writer == 0
+                0,  // downstream_metadata_l1_addr == 0
+            };
+            SetRuntimeArgs(program, kernel, wc, rt_args);
+        }
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
 // ForwardChainStress COMPUTE pass (d2d_stress_relay, STRESS_MODE=0): like the relay above
 // but (1) mutates every element by +1 so the end value tracks every hop, (2) FUSES the
 // overwrite-gate (waits the outbound consumed_sem unless skip_gate, or no gate at all on
@@ -788,11 +876,18 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         h2d_feeder = std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, kNumIters); });
     }
 
-    // End stage's output tensor (same per-shard spec/topology as its inbound backing).
-    Tensor output;
+    std::unique_ptr<D2HStreamService> d2h_service;
     if (has_inbound && !has_outbound) {
-        output = create_device_tensor(
-            inbound->get_per_shard_spec(), mesh_device_.get(), inbound->get_backing_tensor().tensor_topology());
+        const auto spec = make_cfg(mesh_device_, global_shape).global_spec;
+        D2HStreamService::Config cfg{
+            .global_spec = spec,
+            .mapper = create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)}),
+            .fifo_size_bytes = fifo_bytes_for(spec),
+            .scratch_cb_size_bytes = fifo_bytes_for(spec),
+            .worker_cores = kWorkerCores,  // worker_cores for stress
+            .metadata_size_bytes = 0,      // kStressMetadataBytes for stress
+        };
+        d2h_service = std::make_unique<D2HStreamService>(mesh_device_, std::move(cfg));
     }
 
     // Op parameters are loop-invariant (backing/output addresses are fixed at allocation):
@@ -800,7 +895,7 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
     // while producing, else the end-stage output tensor.
     const bool produce = has_outbound;
     const uint32_t dest_addr = produce ? static_cast<uint32_t>(outbound->get_backing_tensor().buffer()->address())
-                                       : static_cast<uint32_t>(output.buffer()->address());
+                                       : static_cast<uint32_t>(d2h_service->get_backing_tensor().buffer()->address());
     D2DStreamServiceSender* const downstream = produce ? outbound.get() : nullptr;
 
     // FILL the pipeline: prime the inbound receiver so iter 0's input is received before the
@@ -808,6 +903,11 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
     // (steady-state pipelining), so this priming is the only "extra" release.
     if (has_inbound) {
         inbound->release_fabric_links();
+    }
+
+    std::vector<std::byte> host_buf;
+    if (d2h_service) {
+        host_buf.resize(d2h_service->payload_size_bytes());
     }
 
     auto& cq = mesh_device_->mesh_command_queue();
@@ -826,9 +926,14 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         //     last iter or by the priming release; the H2D feed on stage 0), copies it to
         //     the dest, and owns its handshake signals. Every stage runs the SAME gate-free
         //     relay; only the upstream differs (H2D service on stage 0, D2D receiver else).
-        MeshWorkload op =
-            is_stage0 ? make_relay_like_workload(h2d_service.get(), mesh_device_, dest_addr, produce, downstream)
-                      : make_relay_like_workload(inbound.get(), mesh_device_, dest_addr, produce, downstream);
+        MeshWorkload op;
+        if (is_stage0) {
+            op = make_relay_like_workload(h2d_service.get(), mesh_device_, dest_addr, produce, downstream);
+        } else if (has_outbound) {
+            op = make_relay_like_workload(inbound.get(), mesh_device_, dest_addr, produce, downstream);
+        } else {
+            op = make_d2h_relay_workload(inbound.get(), mesh_device_, d2h_service.get());
+        }
         EnqueueMeshWorkload(cq, op, /*blocking=*/false);
         Finish(cq);
 
@@ -861,6 +966,25 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
         if (has_inbound && iter + 1 < kNumIters) {
             inbound->release_fabric_links();
         }
+
+        if (d2h_service) {
+            // ForwardChain: payload only
+            d2h_service->read_from_tensor(host_buf);
+            d2h_service->barrier();
+            auto expected = make_iota_u32(host_buf.size() / sizeof(uint32_t), kFillBase + iter);
+            std::vector<uint32_t> actual(host_buf.size() / sizeof(uint32_t));
+            std::memcpy(actual.data(), host_buf.data(), host_buf.size());
+            EXPECT_EQ(actual, expected) << "D2H readback mismatch at iter " << iter;
+
+            // ForwardChainStress: also read + verify metadata
+            // std::vector<std::byte> metadata_out(kStressMetadataBytes);
+            // d2h_service->read_from_tensor(host_buf, metadata_out);
+            // const uint32_t delta = seeds[iter];
+            // expected = make_iota_u32(..., kFillBase + iter + world_size * delta);
+            // uint32_t meta_val;
+            // std::memcpy(&meta_val, metadata_out.data(), sizeof(uint32_t));
+            // EXPECT_EQ(meta_val, delta);
+        }
     }
 
     // Stage 0: the feeder has pushed all tokens (its barrier() returns once the device
@@ -868,12 +992,6 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
     // captured by reference.
     if (h2d_feeder.joinable()) {
         h2d_feeder.join();
-    }
-
-    // End stage: the final iter's iota (kFillBase + kNumIters - 1) that the host feed
-    // produced must have survived every fabric hop, copied verbatim at each relay.
-    if (has_inbound && !has_outbound) {
-        expect_output_tensor_iota(output, mesh_device_, kFillBase + kNumIters - 1);
     }
 
     Synchronize(mesh_device_.get(), std::nullopt);
