@@ -55,7 +55,6 @@ Scripts that collect CI/CD metrics and benchmark data for upload to the analytic
 | `utils/validate_perf_targets.py` | Validates model performance benchmark results against targets defined in `models/model_targets.yaml`. Exits non-zero if any metric regresses beyond tolerance. |
 | `utils/validate_golden_csv_columns.sh` | Validates that golden bandwidth CSV files in the perf microbenchmark directory have the expected column headers. |
 | `utils/hang_report.py` | Generates a JUnit XML test report for a hung test (dispatch timeout). Ensures the hung test appears in CI artifacts even if the process is killed before pytest finalizes. Supports a two-phase flow: initial report, then update with triage summary. |
-| `utils/model-charts-sync.py` | Validates that featured models in `tt_metal/README.md` are consistent with the full model list in `tt_metal/models/README.md`. |
 | `utils/extract_allocation_from_sku.py` | Extracts runner allocation configuration for a given SKU name from `.github/sku_config.yaml`. |
 | `utils/generate_tray_mapping.py` | Generates tray-to-PCIe device mapping and TP2 (Tensor Parallel 2) Ethernet-connected device pairs for Galaxy/UBB multi-chip systems. |
 | `utils/multi-user-create-files.py` | Generates `docker-compose.yml` and related files for multi-user container setups on Galaxy/UBB systems, assigning Tenstorrent devices to containers. |
