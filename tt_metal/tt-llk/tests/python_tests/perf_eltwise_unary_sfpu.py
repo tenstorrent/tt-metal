@@ -111,6 +111,20 @@ def _get_stable_sort_modes(mathop):
         MathOperation.TopKLocalSort,
         MathOperation.TopKMerge,
         MathOperation.TopKRebuild,
+        # Additional complex SFPU kernels covered for the optimization effort
+        # (see sources/SFPU_COMPLEX_OPTIMIZATION_OPPORTUNITIES_WH.md). All are
+        # unary ops reachable through call_unary_sfpu_operation in
+        # helpers/include/sfpu_operations.h.
+        MathOperation.Exp2,
+        MathOperation.Log,
+        MathOperation.Log1p,
+        MathOperation.Tanh,
+        MathOperation.Sigmoid,
+        MathOperation.Sin,
+        MathOperation.Cos,
+        MathOperation.Atanh,
+        MathOperation.Asinh,
+        MathOperation.Acosh,
     ],
     dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
     loop_factor=[
