@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 
+from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.checkpoint import (
     build_tt_model_from_checkpoint_inputs,
     generate_text_from_checkpoint_model_inputs,
@@ -42,7 +43,26 @@ def _open_mesh_device(mesh: str):
     import ttnn
 
     rows, cols = _parse_mesh_shape(mesh)
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
+    fabric_enabled = rows * cols > 1
+    if fabric_enabled:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None)
+    try:
+        return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
+    except Exception:
+        if fabric_enabled:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        raise
+
+
+def _close_mesh_device(mesh_device) -> None:
+    import ttnn
+
+    fabric_enabled = mesh_device.get_num_devices() > 1
+    try:
+        ttnn.close_mesh_device(mesh_device)
+    finally:
+        if fabric_enabled:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -55,6 +75,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt", default=os.getenv("DG_PROMPT", "The capital of France is"))
     parser.add_argument("--mesh", default=os.getenv("MESH_DEVICE", "P150x4"), help="Mesh label or ROWSxCOLS")
     parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--canvas-length", type=int, default=256, help="Diffusion canvas length per generated block")
+    parser.add_argument("--max-denoising-steps", type=int, default=48, help="Denoise steps per generated block")
     parser.add_argument("--seed", type=int, default=123, help="Base seed for canvas init and derived noise hooks")
     parser.add_argument(
         "--num-blocks", type=int, default=None, help="Override block count; otherwise derived from max tokens"
@@ -108,18 +130,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.build_only:
             return 0
+        config = DiffusionConfig(canvas_length=args.canvas_length, max_denoise_steps=args.max_denoising_steps)
         generation = generate_text_from_checkpoint_model_inputs(
             checkpoint_model_inputs,
             args.prompt,
+            config=config,
             max_new_tokens=args.max_new_tokens,
             num_blocks=args.num_blocks,
             seed=args.seed,
             batch=args.batch,
         )
     finally:
-        import ttnn
-
-        ttnn.close_mesh_device(mesh_device)
+        _close_mesh_device(mesh_device)
 
     for text in generation.text:
         print(text)
