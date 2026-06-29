@@ -41,7 +41,7 @@
 
 **Verifier notes**: SDPA is TILE-only (no ROW_MAJOR in TARGET), so this is purely about non-aligned dimensions within TILE layout — the reader must zero-pad partial tiles and the writer must mask the valid region. The current kernel assumes all dimensions are tile-aligned; the `B_q_t` divisor logic in the program descriptor only handles tile-aligned S_q. The `/memory-layouts` skill's "non-aligned rule" (last-tile H/W zero-pad / mask done in the reader or compute) applies. Bundles with the multi-core distribution naturally since the reader rewrite is the primary change.
 
-### [ ] Refinement 3 — Causal masking
+### [x] Refinement 3 — Causal masking
 
 **Goal**: add `"causal"` to `SUPPORTED["mask_mode"]`. When `is_causal=True`, the compute kernel generates a triangular -inf mask on-device per (Q-block, KV-block) pair instead of reading an additive mask tensor. Add the `{"mask_mode": "causal", "attention_kind": "cross"}` EXCLUSION (causal masking requires S_q == S_kv). Also add `is_causal=True` to the SUPPORTED path (currently rejected because mask_mode="causal" is not in SUPPORTED).
 

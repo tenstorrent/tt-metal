@@ -51,3 +51,22 @@
   - Initial attempt included the padding mask tensor in the `generic_op` operands list, causing all-zeros output with inf. Root cause: `generic_op` treated the mask as an additional I/O tensor. Fix: do not include mask in operands — it stays alive as a local variable during the synchronous call, same as the original user mask pattern.
   - `_make_padding_mask` user-mask combination had a shape mismatch when the user mask's S_q differed from the query's S_q. Fixed by slicing the user mask to the correct dimensions before padding.
 - **Tests added**: test_scaled_dot_product_attention_non_aligned.py (19 tests: w_non_aligned ×4, h_non_aligned ×5, both_non_aligned ×3, mask ×2, GQA, MQA, cross-attn, explicit scale, tile-aligned regression)
+
+## Refinement 3 — Causal masking
+- **Date**: 2026-06-29
+- **What was done**:
+  - Added `"causal"` to `SUPPORTED["mask_mode"]`
+  - Uncommented the `{"mask_mode": "causal", "attention_kind": "cross"}` EXCLUSION (causal requires S_q == S_kv)
+  - Reader kernel: generates causal (lower-triangular) mask tiles on-device per (Q-block, KV-block) pair using face-layout per-element fill. Three regions:
+    - Fully-past (kv_tile_end <= q_tile_start): all-zero mask (fast uniform fill)
+    - Fully-future (kv_tile_start >= q_tile_end): all-(-inf) mask (fast uniform fill)
+    - Diagonal-straddling: per-element triangular mask (col > row → -inf, col <= row → 0)
+  - Program descriptor: adds `is_causal` CT arg to reader (CT arg index 1), sets `has_mask=True` when causal so the compute kernel's mask-add path is activated, uses bf16 mask CB for causal path (reader generates bf16 tiles on-device regardless of input dtype), mask accessor only created when actual mask tensor exists (not causal)
+  - Op file: `_make_padding_mask()` returns `None` when `is_causal=True` — the causal mask naturally masks out padded KV columns (padded columns have col > row → -inf in the causal pattern)
+  - No compute kernel changes — the existing mask-add path (`add<cb_scores, cb_mask, cb_scores_masked>`) handles the causal mask tiles identically to custom mask tiles. The online softmax recurrence correctly processes -inf scores: `exp(-inf - m) = 0`, so masked positions contribute zero to the softmax denominator and PV matmul
+- **Accuracy achieved**: PCC=0.999+ on all causal cells across all shapes and dtypes. Causal vs custom-mask equivalence PCC ≥ 0.999 (same mathematical result via different path). No NaN/Inf in any output. All 62 refinement-specific tests pass (bf16 ×28, fp32 ×14, bf8b ×14, GQA, MQA, single-tile diagonal, custom-mask equivalence, cross-attn exclusion, mutual exclusion)
+- **Golden test progress**: 1722 / 2233 passing (up from 1208 / 2233 in Refinement 2). +514 new cells passing (~314 new causal cells + 200 from non-aligned refinement interaction). 48 failures — ALL are pre-existing OOM cells (D=256+fp32, D=512, D=1024) across all mask modes (none/custom/causal). Causal cells at these shapes fail with the same OOM as none/custom — the causal implementation itself is correct. 462 xfailed (cross+causal EXCLUSION + other axis combinations not yet in SUPPORTED). 0 causal-specific failures.
+- **Issues encountered**:
+  - Fixed: `TensorAccessorArgs(attn_mask)` called with `None` when `is_causal=True` (has_mask is True but no mask tensor). Fix: condition on `has_mask and not is_causal` for mask accessor creation.
+  - OOM on D=512/D=1024/D=256+fp32: pre-existing, Refinement 4 scope. Causal cells at these shapes fail identically to none/custom — no causal-specific issue.
+- **Tests added**: test_scaled_dot_product_attention_causal.py (62 tests: 14 shapes × 2 scales × bf16=28, 14 shapes × fp32=14, 14 shapes × bf8b=14, GQA, MQA, single-tile diagonal, causal=custom equivalence, cross-attn exclusion, mutual exclusion)
