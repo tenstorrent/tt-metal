@@ -465,6 +465,10 @@ class TTTextEncoder:
             fold_gates_bias=True,
             # Tuned 1D mcast config for the per-step recurrent matmul (interleaved, loop-safe).
             recurrent_program_config=self._recurrent_program_config,
+            # Fuse the per-step cell-state update f*c + tanh(g)*i into one ttnn.mac (one fewer
+            # BinaryNg/step). TextEncoder-only — the shared F0-feeding prosody/duration BiLSTMs
+            # reject the MAC accumulation-rounding change (see _lstm_step_fused).
+            fuse_cell_math=True,
         )
 
         if mask_keep is not None:
