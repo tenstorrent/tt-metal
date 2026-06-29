@@ -549,6 +549,16 @@ TEST(Cluster, TestMeshFullConnectivity) {
                 EXPECT_GE(count, num_target_connections)
                     << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
                     << ", expected at least " << num_target_connections;
+            } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+                // Most BH GLX chip pairs have 2 links. Some cross-tray pairs also have a QSFP path
+                // in addition to linking-board links (4 total), e.g. tray 3 N8 <-> tray 4 N8.
+                static constexpr std::uint32_t max_bh_connections_per_side = 4;
+                EXPECT_GE(count, num_connections_per_side)
+                    << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
+                    << ", expected at least " << num_connections_per_side;
+                EXPECT_LE(count, max_bh_connections_per_side)
+                    << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str()
+                    << ", expected at most " << max_bh_connections_per_side;
             } else {
                 EXPECT_EQ(count, num_connections_per_side)
                     << chip_ss.str() << " has " << count << " connections to " << other_chip_ss.str() << ", expected "
