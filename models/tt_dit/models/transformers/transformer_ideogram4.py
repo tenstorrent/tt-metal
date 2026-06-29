@@ -206,10 +206,21 @@ class Ideogram4TransformerBlock(Module):
             k_chunk_size=self.sdpa_k_chunk_size,
             exp_approx_mode=False,
         )
+        # Real trained weights have a wider dynamic range than random init; over 34 blocks
+        # the default HiFi2 / bf16-accumulate matmuls lose enough precision to drop the
+        # whole-model PCC (~0.956 with real weights). HiFi4 + fp32 accumulation on the
+        # projections, the SwiGLU FFN and SDPA recovers it. Random-init PCC stays high.
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=MATH_FIDELITY_HIFI2,
+            math_fidelity=MATH_FIDELITY_HIFI4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,  # flip True if attention PCC is the culprit
+            fp32_dest_acc_en=True,
+        )
+        self.matmul_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=MATH_FIDELITY_HIFI4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
         # Higher fidelity for the small AdaLN projection (matmul-class but stability matters).
         self.adaln_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -336,7 +347,8 @@ class Ideogram4TransformerBlock(Module):
 
         # ----------------- feed-forward sub-block -----------------
         ff_in = self.ffn_norm1(x) * scale_mlp
-        ff_out = self._all_gather_hidden(self.feed_forward(ff_in))  # fractured -> replicated hidden
+        ff_out = self.feed_forward(ff_in, compute_kernel_config=self.matmul_compute_kernel_config)
+        ff_out = self._all_gather_hidden(ff_out)  # fractured -> replicated hidden
         x = x + gate_mlp * self.ffn_norm2(ff_out)
 
         return x
@@ -352,7 +364,9 @@ class Ideogram4TransformerBlock(Module):
     ) -> ttnn.Tensor:
         # qkv is ColParallel: replicated-hidden input -> output fractured on heads, so
         # the per-device output slice is [q_local | k_local | v_local] for n_local_heads.
-        qkv = self.qkv(x)  # [B, L/sp, 3 * n_local_heads * head_dim]
+        qkv = self.qkv(
+            x, compute_kernel_config=self.matmul_compute_kernel_config
+        )  # [B, L/sp, 3*n_local_heads*head_dim]
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv,
             num_heads=self.n_local_heads,
@@ -425,7 +439,8 @@ class Ideogram4TransformerBlock(Module):
         out = ttnn.transformer.concatenate_heads(out)  # [B, L/sp, n_local_heads * head_dim] (fractured on TP)
         # o is RowParallel: fractured-heads input -> reduce-scatter -> fractured hidden;
         # all-gather restores the replicated-hidden residual stream.
-        return self._all_gather_hidden(self.o(out))
+        out = self.o(out, compute_kernel_config=self.matmul_compute_kernel_config)
+        return self._all_gather_hidden(out)
 
 
 class _EmbedScalarMLP(Module):
