@@ -40,9 +40,32 @@ class Generation(NamedTuple):
     trajectories: List[DenoiseTrajectory]  # one per block
 
 
+def _validate_replay_tensors(tensors, *, kind: str) -> None:
+    if not tensors:
+        return
+    expected_shape = tuple(tensors[0].shape)
+    for tensor in tensors:
+        if tuple(tensor.shape) != expected_shape:
+            raise ValueError(f"{kind} must all have shape {list(expected_shape)}")
+
+
+def _validate_replay_blocks(blocks, *, kind: str) -> None:
+    expected_shape = None
+    for block in blocks:
+        _validate_replay_tensors(block, kind=kind)
+        if not block:
+            continue
+        block_shape = tuple(block[0].shape)
+        if expected_shape is None:
+            expected_shape = block_shape
+        elif block_shape != expected_shape:
+            raise ValueError(f"{kind} must all have shape {list(expected_shape)}")
+
+
 def make_replay_canvas_init_fn(host_canvases) -> BlockCanvasFn:
     """Create an ``init_canvas_fn`` that replays fixed host canvases by block."""
     canvases = [canvas.clone() for canvas in host_canvases]
+    _validate_replay_tensors(canvases, kind="replay canvas")
 
     def init_canvas_fn(block_idx: int, prefix_tokens: torch.Tensor) -> torch.Tensor:
         del prefix_tokens
@@ -56,6 +79,7 @@ def make_replay_canvas_init_fn(host_canvases) -> BlockCanvasFn:
 def make_replay_noise_fn(host_noise) -> BlockNoiseFn:
     """Create a block/step noise hook that replays fixed host tensors."""
     blocks = [[noise.clone() for noise in block] for block in host_noise]
+    _validate_replay_blocks(blocks, kind="replay noise")
 
     def noise_for_block(block_idx: int) -> NoiseFn:
         if block_idx < 0 or block_idx >= len(blocks):

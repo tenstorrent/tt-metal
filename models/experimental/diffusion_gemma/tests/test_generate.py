@@ -250,6 +250,16 @@ def test_replay_canvas_init_fn_rejects_bad_block_index():
         init_canvas_fn(1, torch.zeros(1, 2, dtype=torch.long))
 
 
+def test_replay_canvas_init_fn_rejects_mismatched_shapes():
+    with pytest.raises(ValueError, match="replay canvas must all have shape"):
+        make_replay_canvas_init_fn(
+            [
+                torch.tensor([[4, 5]], dtype=torch.long),
+                torch.tensor([[6, 7, 8]], dtype=torch.long),
+            ]
+        )
+
+
 def test_replay_noise_fn_clones_fixed_block_step_noise():
     noise = [
         [torch.tensor([[1, 2]], dtype=torch.long), torch.tensor([[3, 4]], dtype=torch.long)],
@@ -274,6 +284,15 @@ def test_replay_noise_fn_rejects_bad_block_or_step_index():
         noise_fn(1)
     with pytest.raises(IndexError, match="replay noise step index 1 out of range"):
         noise_fn(0)(1)
+
+
+def test_replay_noise_fn_rejects_mismatched_shapes_within_or_across_blocks():
+    with pytest.raises(ValueError, match="replay noise must all have shape"):
+        make_replay_noise_fn([[torch.tensor([[1, 2]], dtype=torch.long), torch.tensor([[3, 4, 5]], dtype=torch.long)]])
+    with pytest.raises(ValueError, match="replay noise must all have shape"):
+        make_replay_noise_fn(
+            [[torch.tensor([[1, 2]], dtype=torch.long)], [torch.tensor([[3, 4, 5]], dtype=torch.long)]]
+        )
 
 
 def test_generate_blocks_replays_fixed_denoise_noise():
