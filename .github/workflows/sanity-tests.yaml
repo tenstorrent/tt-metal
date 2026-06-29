@@ -28,11 +28,6 @@ on:
         type: boolean
         default: true
         description: "Run TTNN sanity tests"
-      run-profiler-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run profiler regression tests"
       run-t3000-apc-fast-tests:
         required: false
         type: boolean
@@ -123,11 +118,6 @@ on:
         default: true
         type: boolean
         description: "Run TTNN sanity tests"
-      run-profiler-tests:
-        required: false
-        default: true
-        type: boolean
-        description: "Run profiler regression tests"
       run-t3000-apc-fast-tests:
         required: false
         default: true
@@ -259,7 +249,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ttnn-sanity-tests: ${{ steps.set-ttnn-sanity-tests.outputs.should-run }}
-      run-profiler-tests: ${{ steps.set-run-profiler-tests.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
       ttsim-tests: ${{ steps.set-ttsim-tests.outputs.should-run }}
@@ -267,9 +256,6 @@ jobs:
       - id: set-ttnn-sanity-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ttnn-sanity-tests }}" >> "$GITHUB_OUTPUT"
-      - id: set-run-profiler-tests
-        run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-profiler-tests }}" >> "$GITHUB_OUTPUT"
       - id: set-t3000-apc-fast-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-t3000-apc-fast-tests }}" >> "$GITHUB_OUTPUT"

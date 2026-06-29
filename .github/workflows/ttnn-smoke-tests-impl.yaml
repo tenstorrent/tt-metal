@@ -3,10 +3,6 @@ name: "[internal] ttnn smoke tests impl"
 on:
   workflow_call:
     inputs:
-      enabled-skus:
-        required: true
-        type: string
-        description: "Comma-separated SKUs (e.g. wh_n300_civ2, sim_wormhole_b0). Maps to runs_on via .github/sku_config.yaml."
       docker-image:
         required: true
         type: string
