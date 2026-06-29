@@ -406,9 +406,7 @@ def _unwrap_multimodal_config(cfg):
     """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
-    under `text_config`. Dequantization is format-aware (fp8 block-wise vs compressed-tensors
-    INT4) and reads the quantization metadata directly, so no `weight_block_size` stub is
-    needed here for either variant.
+    under `text_config`.
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")

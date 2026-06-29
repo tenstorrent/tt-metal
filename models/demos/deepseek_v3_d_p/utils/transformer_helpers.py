@@ -523,8 +523,7 @@ def load_and_compute_layer_by_layer(
 
     # Create LazyStateDict
     lazy_sd = LazyStateDict(Path(model_path))
-    # Kimi's raw multimodal checkpoint nests the LM under `language_model.`; the dequantized one
-    # and DeepSeek use bare `model.` keys. Detect from the actual keys so either resolves.
+
     prefix = detect_language_model_prefix(lazy_sd)
 
     # Initialize outputs
