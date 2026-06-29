@@ -334,7 +334,8 @@ class Ideogram4Pipeline:
             pos_x[:, n_text:] = z.to(torch.bfloat16)
             v_cond = _v(self.cond, cond_b, pos_x, t_val)
             v_uncond = _v(self.uncond, uncond_b, z.to(torch.bfloat16), t_val)
-            z = z + (gw * v_cond + (1.0 - gw) * v_uncond) * (s_val - t_val)
+            v = gw * v_cond + (1.0 - gw) * v_uncond
+            z = z + v * (s_val - t_val)
 
         decoded = self.decode_stage.decode(bf16_tensor(z, device=dev), grid_h=grid_h, grid_w=grid_w)
         return Ideogram4DecodeStage.to_images(decoded)[0].cpu().numpy()
