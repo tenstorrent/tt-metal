@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from dataclasses import dataclass
 
+import pytest
 import torch
 
 import ttnn
-
+from models.common.utility_functions import is_blackhole, is_llk_assert_enabled
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
 
@@ -168,6 +168,9 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
+    if is_blackhole() and is_llk_assert_enabled() and not use_welford and w == 4096:
+        pytest.skip("Residual layer norm fails numeric checks on Blackhole with LLK asserts enabled. Issue #48065.")
+
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -406,6 +409,11 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
+    if is_blackhole() and is_llk_assert_enabled() and (h, w) in ((32, 3232), (19, 4083), (1001, 4083)):
+        pytest.skip(
+            "Large residual layer norm fails numeric checks on Blackhole with LLK asserts enabled. Issue #48065."
+        )
+
     torch.manual_seed(3333)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -540,11 +548,10 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     assert_output_accuracy(golden_output, output_ttnn)
 
 
-def test_layer_norm_inputs_requires_input_tensor():
+def test_layer_norm_inputs_requires_input_tensor(expect_error):
     """``LayerNormInputs()`` without an input tensor must raise."""
-    import pytest
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "."):
         ttnn.LayerNormInputs()
 
 

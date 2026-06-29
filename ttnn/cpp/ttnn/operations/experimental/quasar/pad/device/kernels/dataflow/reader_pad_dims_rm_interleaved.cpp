@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -65,7 +66,7 @@ void kernel_main() {
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     Noc noc;
 
     // calculate the offset for alignment of padding in rows/sticks
