@@ -8,7 +8,8 @@ gdn_chunk_ops.py) and adapted for the single-device Qwen3.5-9B model.
 Python preprocessing computes (all float32):
   - cheap elementwise ops + two matmuls (kk, intra_attn),
   - L_inv: 4 diagonal block inverses of L_unit via `_solve_lower_triangular_ttnn`
-    (D^{-1} Neumann doubling + 2 Newton-Schulz steps — accurate intra-chunk inverse).
+    (default: stable D^{-1} Horner-form Neumann series; legacy Neumann doubling +
+    Newton-Schulz behind QWEN_GDN_INV_DOUBLING=1 — see that function for why).
 The C++ kernel performs blocked forward substitution + the sequential inter-chunk
 state scan.
 
@@ -136,10 +137,18 @@ def chunk_gated_delta_rule_seq_adapter(
     o = ttnn.permute(o, (0, 2, 1, 3))  # [B,T,H,V]
     o = ttnn.to_layout(o, ttnn.TILE_LAYOUT, memory_config=_DRAM)
 
-    # final_state [BH,K,V] -> [B,H,K,V] bf16 (matches recurrent_state)
+    # final_state [BH,K,V] -> [B,H,K,V]. DEFAULT casts to bf16 (the decode recurrent_state dtype).
+    # QWEN_GDN_FP32_STATE=1: keep the inter-chunk state at full fp32 precision. In chunk-outer prefill
+    # the kernel computes final_state in fp32 but this cast rounds it to bf16 EACH of the ~128 outer
+    # 2048-tok chunks of a 256k prompt, so the carried recurrent state is requantized ~128x. The HF/FLA
+    # reference instead keeps the state in fp32 across the WHOLE sequence in one chunked pass (it upcasts
+    # q/k/v/beta/g to float32 and never round-trips), which is why the reference runs the exact alpha=0
+    # delta rule on-task at 256k. rec_state is already an fp32 buffer by default (tp.py reset_state) and
+    # decode consumes fp32, so keeping fp32 here makes the device carry match the reference end-to-end.
     new_state = ttnn.reshape(final_state, [B, H, K, V])
-    if new_state.dtype != ttnn.bfloat16:
-        new_state = ttnn.typecast(new_state, ttnn.bfloat16, memory_config=_DRAM)
+    _state_dtype = ttnn.float32 if _os.environ.get("QWEN_GDN_FP32_STATE", "0") != "0" else ttnn.bfloat16
+    if new_state.dtype != _state_dtype:
+        new_state = ttnn.typecast(new_state, _state_dtype, memory_config=_DRAM)
 
     return o, new_state
 
@@ -182,12 +191,22 @@ def create_chunk_masks_seq(chunk_size, device):
 
 
 def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
-    """Compute L^{-1} for a batch of lower triangular matrices using Neumann doubling.
+    """Compute L^{-1} for a batch of lower triangular matrices.
 
     Decomposes L = D (I + N) where D = diag(L), N = D^{-1}(L - D) strictly lower triangular.
-    Since N is nilpotent (N^C = 0), the Neumann series is exact:
-      (I + N)^{-1} = sum_{k=0}^{C-1} (-N)^k
-    Computed in ceil(log2(C)) doubling steps, then refined with 2 Newton-Schulz steps.
+    Since N is nilpotent (N^C = 0), the Neumann series is exact: (I + N)^{-1} = sum_{k=0}^{C-1} (-N)^k.
+
+    DEFAULT: evaluate that series in stable HORNER form, R = I + (-N) R (C-1 iterations) — i.e.
+    forward-substitution: each step forms only (-N)@R (intermediates stay O(||N||)), so it is accurate
+    even for large ||N||. This is what the torch/FLA reference effectively does.
+
+    LEGACY (QWEN_GDN_INV_DOUBLING=1): Neumann DOUBLING (square N->N^2->...->N^16 in ceil(log2 C) steps)
+    + 2 Newton-Schulz. Faster (fewer matmuls). This is HALF of the original path: the caller pairs it with
+    the original diagonal-INCLUDED L_mat (damped, D=1+beta), which keeps ||N|| small enough (the 1/(1+beta)
+    damping) that the N^16 intermediate stays within fp32 -> stable, reproducing the ORIGINAL working
+    (coherent, non-torch-equivalent) behavior. Doubling is UNSTABLE only if fed the DEFAULT undamped
+    strictly-lower form (||N|| ~ 19 -> N^16 ~ 1e9-1e10 overflows fp32 -> garbage inverse -> long-context
+    '!!!!') — which is why both halves move together under the one flag, never mixed. A/B only.
 
     Args:
         L: [batch, C, C] float32 lower triangular, positive diagonal
@@ -195,8 +214,9 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     Returns:
         L_inv: [batch, C, C] float32
     """
+    # HiFi4 (full fp32 cross-terms) for the block-inverse matmuls — accurate and validated.
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -221,43 +241,83 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     N = ttnn.multiply(D_inv_row, L_strict, memory_config=mc)
     ttnn.deallocate(L_strict)
 
-    # Neumann doubling: f(2n) = f(n) @ (I + P), P = (-N)^n
-    P = ttnn.neg(N, memory_config=mc)  # P = -N
-    ttnn.deallocate(N)
-    R = ttnn.add(eye_1cc, P, memory_config=mc)  # R = I - N = f(2)
-    P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)  # P = N^2
-    ttnn.deallocate(P)
-    P = P_new
-
-    n_steps = _math.ceil(_math.log2(C)) if C > 1 else 0
-    for _ in range(n_steps - 1):
-        I_plus_P = ttnn.add(eye_1cc, P, memory_config=mc)
-        R_new = ttnn.matmul(R, I_plus_P, memory_config=mc, compute_kernel_config=_hifi_cfg)
-        ttnn.deallocate(I_plus_P)
-        ttnn.deallocate(R)
-        R = R_new
-        P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+    # ====================================================================================
+    # Block inverse (I+N)^{-1}, N strictly-lower (nilpotent: N^C = 0).
+    # DEFAULT = stable Horner-form Neumann series; legacy doubling behind QWEN_GDN_INV_DOUBLING=1.
+    #
+    # WHY (root cause): the legacy Neumann DOUBLING (N->N^2->...->N^16) is the source of the alpha=0
+    # long-context "!!!!" collapse. For real GDN blocks with large strictly-lower norm (||N|| ~ 19 at
+    # e.g. layer 44), the intermediate power N^16 has entries ~1e9-1e10; summing those (alternating
+    # signs) down to the O(1) inverse loses everything in fp32 -> garbage inverse (measured residual
+    # ||L*Linv-I|| ~ 2-6 on 222/256 real blocks) -> garbage v_cor/k_cum -> the scan overflows fp32 ->
+    # degenerate logits. It is NOT a precision tier (HiFi4 doesn't help) and NOT the math: the exact
+    # reference is stable; the torch/FLA reference inverts by direct forward-substitution (no matrix
+    # powers). The legacy D=1+beta / alpha-damping only "worked" by shrinking ||N|| below the overflow
+    # threshold.
+    #
+    # FIX: Horner series  R_k = I + (-N) R_{k-1},  R_0 = I  =>  R_{C-1} = sum_{j=0}^{C-1} (-N)^j = (I+N)^{-1}
+    # (exact since N^C = 0). Each step forms only (-N)@R (bounded ~O(||N||)), never the huge N^16, so it is
+    # accurate even for large ||N|| (unit-test: 4.2e-3 @ ~bf16 on the ||N||=19 blocks where doubling = 4.3).
+    # This is forward-substitution in matmul form, matching the reference, and lets exact alpha=0 run stably.
+    # ====================================================================================
+    if _os.environ.get("QWEN_GDN_INV_DOUBLING", "0") != "0":
+        # ---- LEGACY: Neumann doubling + Newton-Schulz. Stable HERE because the caller also restores the
+        # original damped (diagonal-included) L_mat under this same flag, so ||N|| is small. A/B only. ----
+        P = ttnn.neg(N, memory_config=mc)  # P = -N
+        ttnn.deallocate(N)
+        R = ttnn.add(eye_1cc, P, memory_config=mc)  # R = I - N = f(2)
+        P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)  # P = N^2
         ttnn.deallocate(P)
         P = P_new
 
-    ttnn.deallocate(P)
+        n_steps = _math.ceil(_math.log2(C)) if C > 1 else 0
+        for _ in range(n_steps - 1):
+            I_plus_P = ttnn.add(eye_1cc, P, memory_config=mc)
+            R_new = ttnn.matmul(R, I_plus_P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            ttnn.deallocate(I_plus_P)
+            ttnn.deallocate(R)
+            R = R_new
+            P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            ttnn.deallocate(P)
+            P = P_new
+
+        ttnn.deallocate(P)
+
+        # L_inv = (I+N)^{-1} @ D^{-1} via column scaling
+        L_inv = ttnn.multiply(R, D_inv_col, memory_config=mc)
+        ttnn.deallocate(R)
+        ttnn.deallocate(D_inv_row)
+        ttnn.deallocate(D_inv_col)
+
+        # Newton-Schulz refinement: X <- X(2I - LX). One step squares the residual.
+        for _ in range(2):
+            LX = ttnn.matmul(L, L_inv, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            two_I_minus_LX = ttnn.subtract(ttnn.add(eye_1cc, eye_1cc, memory_config=mc), LX, memory_config=mc)
+            ttnn.deallocate(LX)
+            L_inv_new = ttnn.matmul(L_inv, two_I_minus_LX, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            ttnn.deallocate(two_I_minus_LX)
+            ttnn.deallocate(L_inv)
+            L_inv = L_inv_new
+
+        return L_inv
+
+    # ---- DEFAULT: stable Horner-form Neumann series  R = I + (-N) @ R  (forward-substitution) ----
+    neg_N = ttnn.neg(N, memory_config=mc)  # -N (strictly lower)
+    ttnn.deallocate(N)
+    R = ttnn.add(eye_1cc, neg_N, memory_config=mc)  # R_1 = I - N  ([batch,C,C])
+    for _ in range(C - 2):  # R_1 -> R_{C-1} = sum_{j=0}^{C-1} (-N)^j  (exact: N^C = 0)
+        NR = ttnn.matmul(neg_N, R, memory_config=mc, compute_kernel_config=_hifi_cfg)  # (-N) @ R
+        R_new = ttnn.add(eye_1cc, NR, memory_config=mc)  # I + (-N) @ R
+        ttnn.deallocate(NR)
+        ttnn.deallocate(R)
+        R = R_new
+    ttnn.deallocate(neg_N)
 
     # L_inv = (I+N)^{-1} @ D^{-1} via column scaling
     L_inv = ttnn.multiply(R, D_inv_col, memory_config=mc)
     ttnn.deallocate(R)
     ttnn.deallocate(D_inv_row)
     ttnn.deallocate(D_inv_col)
-
-    # Newton-Schulz refinement: X <- X(2I - LX). One step squares the residual.
-    for _ in range(2):
-        LX = ttnn.matmul(L, L_inv, memory_config=mc, compute_kernel_config=_hifi_cfg)
-        two_I_minus_LX = ttnn.subtract(ttnn.add(eye_1cc, eye_1cc, memory_config=mc), LX, memory_config=mc)
-        ttnn.deallocate(LX)
-        L_inv_new = ttnn.matmul(L_inv, two_I_minus_LX, memory_config=mc, compute_kernel_config=_hifi_cfg)
-        ttnn.deallocate(two_I_minus_LX)
-        ttnn.deallocate(L_inv)
-        L_inv = L_inv_new
-
     return L_inv
 
 
@@ -327,8 +387,10 @@ def chunk_gated_delta_rule_seq(
     first valid_len tokens. This lets a fixed bucket length T serve any real length
     valid_len<=T (one compiled program per bucket) without corrupting the recurrent state.
     """
+    # kk / decay / intra_attn preprocessing matmuls (feed L_unit and the block inverse): HiFi4,
+    # matching the block-inverse fidelity in _solve_lower_triangular_ttnn.
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -346,9 +408,18 @@ def chunk_gated_delta_rule_seq(
     # SHAPE is fixed by the bucket length T (only its values depend on valid_len), so a
     # single program serves all real lengths. Mirrors the zeros concatenated below for
     # pad_len; here it covers the [valid_len, T) region the caller padded.
-    if valid_len is not None and valid_len < T:
+    # valid_len may be a scalar (one length for all BH rows) or a per-row list/tuple of length B
+    # (batched prefill): BH rows are ordered b*H + h, so user b owns rows [b*H, (b+1)*H).
+    _is_per_row = isinstance(valid_len, (list, tuple))
+    if _is_per_row or (valid_len is not None and valid_len < T):
         _m = torch.zeros(BH, T, 1, dtype=torch.float32)
-        _m[:, :valid_len, :] = 1.0
+        if _is_per_row:
+            _Bv = len(valid_len)
+            _H = BH // _Bv
+            for _b in range(_Bv):
+                _m[_b * _H : (_b + 1) * _H, : int(valid_len[_b]), :] = 1.0
+        else:
+            _m[:, :valid_len, :] = 1.0
         _m = ttnn.from_torch(_m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device)
         q = ttnn.multiply(q, _m, memory_config=None)
         k = ttnn.multiply(k, _m, memory_config=None)
@@ -465,9 +536,55 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
-    # ---- L_mat = I + kk * L_mask ----
-    L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
-    ttnn.deallocate(kk)
+    # ---- L_mat: intra-chunk matrix with a tunable diagonal regularization (QWEN_GDN_DIAG_ALPHA) ----
+    #
+    # The intra-chunk system is (I + tril(kk*L_mask))^{-1}. How much of (kk*L_mask)'s DIAGONAL we keep
+    # controls a damping that is load-bearing at long context. With alpha in [0,1]:
+    #       diag(L_mat) = 1 + alpha * diag(kk*L_mask)   (diag(kk*L_mask) = beta_i*|k_i|^2 ~= beta_i)
+    # and the downstream unit-diagonal normalization (L_unit = D^{-1} L_mat, v_beta_sc = D^{-1} v_beta)
+    # folds D^{-1} = 1/(1+alpha*beta) onto BOTH the off-diagonals (-> ||N||) and the value term.
+    #
+    #   alpha = 0  -> EXACT strictly-lower unit-diagonal form == HF/FLA reference (token i reads the
+    #                 recurrent state BEFORE its own write, so the diagonal is masked out). Torch-equivalent
+    #                 / correct <think>+tool dialect, but UNDAMPED (||N|| ~ 19 on real blocks).
+    #   alpha = 1  -> full 1/(1+beta) damping == the ORIGINAL kernel's diagonal-included form.
+    #   0<alpha<1  -> partial damping (regularized).
+    #
+    # WHY a nonzero DEFAULT (0.25): with alpha=0 the undamped per-chunk corrections accumulate into the
+    # finite-capacity GDN recurrent state and saturate it over the ~128 chunks of a full 262144-token
+    # prompt, diluting the most recent tokens (the seeded <think> + instruction) so the model rides the
+    # document's narrative momentum instead of reasoning. CONFIRMED on hw at ISL=256k: alpha=0 continues
+    # the source novel; the damped form enters the <think> reasoning process and identifies the task. The
+    # damping shrinks the corrections enough to preserve the recent-suffix signal. alpha=0.25 keeps the
+    # dialect (validated argmax 'The'->'Thinking', coherent 4k..128k) while restoring long-context behavior.
+    #
+    # The Horner / forward-substitution block inverse (_solve_lower_triangular_ttnn, default) is stable for
+    # ANY alpha, so this is a pure Python lever — no rebuild. (QWEN_GDN_INV_DOUBLING=1 is a separate A/B
+    # that forces the exact original {full-damping diagonal form + Neumann-doubling inverse}; the doubling
+    # inverse only stays within fp32 BECAUSE of that full damping, so it ignores alpha and uses the form
+    # below's alpha=1 limit directly.)
+    if _os.environ.get("QWEN_GDN_INV_DOUBLING", "0") != "0":
+        # ORIGINAL exact-reproduction A/B: full diagonal-included form (alpha=1) + doubling inverse.
+        L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
+        ttnn.deallocate(kk)
+    else:
+        # DEFAULT (Horner inverse): regularized diagonal  L_mat = I + kk*L_mask - (1-alpha)*diag(kk*L_mask).
+        alpha = float(_os.environ.get("QWEN_GDN_DIAG_ALPHA", "0.25"))
+        kk_lmask = ttnn.multiply(kk, L_mask, memory_config=_cmc)
+        ttnn.deallocate(kk)
+        kk_diag = ttnn.multiply(kk_lmask, _eye_1cc, memory_config=_cmc)  # diag(kk*L_mask)
+        if alpha == 0.0:
+            # exact: strip the whole diagonal -> unit diagonal (torch/FLA-equivalent)
+            kk_reg = ttnn.subtract(kk_lmask, kk_diag, memory_config=_cmc)
+        else:
+            # keep alpha*diagonal: drop (1-alpha)*diag so diag(L_mat) = 1 + alpha*beta
+            kk_drop = ttnn.multiply(kk_diag, 1.0 - alpha, memory_config=_cmc)
+            kk_reg = ttnn.subtract(kk_lmask, kk_drop, memory_config=_cmc)
+            ttnn.deallocate(kk_drop)
+        ttnn.deallocate(kk_lmask)
+        ttnn.deallocate(kk_diag)
+        L_mat = ttnn.add(_eye_1cc, kk_reg, memory_config=_cmc)
+        ttnn.deallocate(kk_reg)
     _ck("L_mat", L_mat)
 
     # ---- Normalize to unit-diagonal: L_unit = D^{-1} L_mat ----
@@ -587,7 +704,8 @@ def chunk_gated_delta_rule_seq(
     _ck("k_decay_t", k_decay_t_4d)
     _ck("dl_exp", dl_exp_4d)
 
-    # Diagonal block inverses of L_unit (Neumann + Newton-Schulz).
+    # Diagonal block inverses of L_unit via the stable Horner / forward-substitution solve
+    # (default; legacy Neumann doubling behind QWEN_GDN_INV_DOUBLING — see _solve_lower_triangular_ttnn).
     L_inv_4d = _compute_L_inv_ttnn(L_unit_4d, BH, num_chunks, chunk_size, mesh_device, _cmc, eye_32=_eye_32)
     _ck("L_inv", L_inv_4d)
 
