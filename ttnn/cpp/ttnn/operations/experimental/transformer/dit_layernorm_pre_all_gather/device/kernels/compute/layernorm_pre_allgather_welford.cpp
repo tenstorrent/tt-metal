@@ -101,9 +101,9 @@ void kernel_main() {
         // Transpose mean (dst1) and variance (dst2) tiles in-place in DEST.
         // This avoids a round-trip through intermediate CB c_1 which produces
         // corrupted tile face layout when the CB uses Float32 format.
-        transpose_wh_dest_init_short<fp32_dest>();
-        transpose_wh_dest<fp32_dest>(dst1);
-        transpose_wh_dest<fp32_dest>(dst2);
+        transpose_dest_init<fp32_dest>();
+        transpose_dest<fp32_dest>(dst1);
+        transpose_dest<fp32_dest>(dst2);
 
         pack_reconfig_data_format(cb_out);
         cb_reserve_back(cb_out, 2);
