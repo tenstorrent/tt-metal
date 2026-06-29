@@ -77,6 +77,10 @@ case "$PRECISION" in
   both) PRECISIONS=(bf16 fp32) ;;
   *) echo "ERROR: --precision must be bf16, fp32, or both" >&2; exit 1 ;;
 esac
+if [[ -n "$RUN_DIR" ]]; then
+  mkdir -p "$RUN_DIR"
+  RUN_DIR="$(cd "$RUN_DIR" && pwd)"
+fi
 
 dispatch_local() {
   local n="$1"
