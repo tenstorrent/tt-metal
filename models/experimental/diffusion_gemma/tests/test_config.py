@@ -22,6 +22,7 @@ REPO = os.environ.get("TT_METAL_HOME") or os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
 )
 CFG_26B = os.path.join(REPO, "models/demos/gemma4/configs/gemma-4-26B-A4B-it/config.json")
+CFG_12B = os.path.join(REPO, "models/demos/gemma4/configs/gemma-4-12B-it/config.json")
 
 
 def test_max_context_is_256k():
@@ -57,6 +58,8 @@ def test_from_hf_config_matches_target_26b():
     assert tc.rms_norm_eps == 1e-6
     assert tc.final_logit_softcapping == 30.0
     assert tc.num_experts == 128
+    assert tc.num_experts_per_tok == 8
+    assert tc.num_shared_experts == 1
     assert tc.moe_intermediate_size == 704
     assert (tc.num_global_key_value_heads, tc.global_head_dim) == (2, 512)
     # NB: this reads the gemma-4-26B-A4B *base* config (the backbone we reuse), which
@@ -86,6 +89,8 @@ def test_hand_written_defaults_stay_in_sync_with_config_json():
         "rms_norm_eps",
         "final_logit_softcapping",
         "num_experts",
+        "num_experts_per_tok",
+        "num_shared_experts",
         "moe_intermediate_size",
         "num_global_key_value_heads",
         "global_head_dim",
@@ -93,3 +98,14 @@ def test_hand_written_defaults_stay_in_sync_with_config_json():
         "hidden_activation",
     ]:
         assert getattr(parsed, field) == getattr(defaults, field), f"{field} drift vs config.json"
+
+
+@pytest.mark.skipif(not os.path.exists(CFG_12B), reason="in-repo 12B config not found")
+def test_from_hf_config_preserves_dense_moe_nulls():
+    hf = json.load(open(CFG_12B))
+    tc = TextConfig.from_hf_config(hf)
+
+    assert tc.num_experts is None
+    assert tc.num_experts_per_tok is None
+    assert tc.num_shared_experts is None
+    assert tc.moe_intermediate_size is None
