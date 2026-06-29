@@ -1291,6 +1291,24 @@ def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_gumbel():
         )
 
 
+def test_generate_text_from_checkpoint_state_rejects_nonpositive_gumbel_seed():
+    with pytest.raises(ValueError, match="positive nonzero"):
+        generate_text_from_checkpoint_state(
+            object(),
+            object(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            noise_tokens_fn="noise",
+            vocab_size=99,
+            gumbel_seed=0,
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generation_sequences_appends_prompt_and_generated_tokens():
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
     generation = G.DeviceGeneration(
@@ -1761,3 +1779,9 @@ def test_make_seeded_gumbel_noise_fn_generates_permuted_vocab_block_step_seeds(m
         ((2, 1, 4, 16), "mesh", 32),
         ((2, 1, 4, 16), "mesh", 1_000_034),
     ]
+
+
+@pytest.mark.parametrize("seed", [0, -3])
+def test_make_seeded_gumbel_noise_fn_rejects_nonpositive_seed(seed):
+    with pytest.raises(ValueError, match="positive nonzero"):
+        make_seeded_gumbel_noise_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=seed)

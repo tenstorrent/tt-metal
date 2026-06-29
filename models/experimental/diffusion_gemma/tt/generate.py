@@ -366,6 +366,7 @@ def make_seeded_gumbel_noise_fn(
     correlation path kept only as a diagnostic in ``tt.sampling``.
     """
     _check_random_token_args(batch, canvas_len, vocab_size)
+    seed = TS._validate_ttnn_rand_seed(seed)
 
     def gumbel_noise_for_block(block_idx: int):
         def gumbel_noise_for_step(step: int):
@@ -880,12 +881,14 @@ def generate_text_from_checkpoint_state(
     if num_blocks > 0 and "gumbel_noise_fn" not in generate_kwargs and (seed is not None or gumbel_seed is not None):
         if vocab_size is None:
             raise ValueError("gumbel_noise_fn requires vocab_size or tokenizer/model vocab metadata")
+        gumbel_seed_value = gumbel_seed if gumbel_seed is not None else seed + 2
+        gumbel_seed_value = TS._validate_ttnn_rand_seed(gumbel_seed_value)
         generate_kwargs["gumbel_noise_fn"] = make_seeded_gumbel_noise_fn(
             tt_model.mesh_device,
             batch=batch,
             canvas_len=config.canvas_length,
             vocab_size=vocab_size,
-            seed=gumbel_seed if gumbel_seed is not None else seed + 2,
+            seed=gumbel_seed_value,
         )
     if "eos_token_id" not in generate_kwargs:
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
