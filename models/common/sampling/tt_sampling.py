@@ -456,7 +456,8 @@ class TTSampling(LightweightModule):
         Flexible all-gather that works across different CCL implementations.
 
         - If `tt_ccl` exposes `line_all_gather`, prefer it (enables persistent buffer usage on some stacks).
-        - Otherwise gather via `all_gather_async` with a `barrier_semaphore` (see note below).
+        - Else if a CCL object is available, gather via `all_gather_async` with a `barrier_semaphore`.
+        - Else (no CCL provided) fall back to a plain `ttnn.all_gather`.
         """
         if callable(self._line_all_gather):
             # Some implementations accept `buffer_key` (for persistent buffers), others may not.
@@ -471,6 +472,18 @@ class TTSampling(LightweightModule):
             if self._line_all_gather_supports_dtype and dtype is not None:
                 line_all_gather_kwargs["dtype"] = dtype
             return self._line_all_gather(tensor, **line_all_gather_kwargs)
+
+        if self.tt_ccl is None:
+            # Some callers construct sampling with tt_ccl=None and rely on a plain all-gather that
+            # needs no CCL object / semaphores (e.g. gpt_oss on [4,8] meshes, gemma4). Keep that path.
+            return ttnn.all_gather(
+                tensor,
+                dim=dim,
+                num_links=num_links,
+                memory_config=memory_config,
+                cluster_axis=cluster_axis,
+                topology=ttnn.Topology.Linear,
+            )
 
         # #48222: gather the heavy top-k/top-p candidates with a device-side barrier_semaphore,
         # mirroring the force-argmax path. A plain `ttnn.all_gather` has no barrier, so inside the
