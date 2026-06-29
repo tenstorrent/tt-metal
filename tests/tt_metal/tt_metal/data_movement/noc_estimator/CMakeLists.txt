@@ -35,3 +35,21 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+# CLI wrapper around the estimator: query the measured NoC model from the shell, emit JSON.
+# Backs the perf-roofline-dm skill. Located via .claude/skills/perf-roofline-dm/noc_estimate.sh.
+add_executable(noc_estimate ${CMAKE_CURRENT_SOURCE_DIR}/tools/noc_estimate.cpp)
+
+target_link_libraries(
+    noc_estimate
+    PRIVATE
+        TT::Metalium
+        nlohmann_json::nlohmann_json
+)
+
+set_target_properties(
+    noc_estimate
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
