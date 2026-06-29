@@ -142,7 +142,6 @@ while IFS= read -r FILE; do
             ANY_CODE_CHANGED=true
             ;;
         .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml)
-56c70 (ttsim workflows reorg)
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
