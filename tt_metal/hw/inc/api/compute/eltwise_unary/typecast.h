@@ -20,8 +20,7 @@ namespace detail {
 inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
     return fmt == DataFormat::MxFp8R || fmt == DataFormat::MxFp8P || fmt == DataFormat::MxFp6R ||
            fmt == DataFormat::MxFp6P || fmt == DataFormat::MxFp4 || fmt == DataFormat::MxInt8 ||
-           fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2 || fmt == DataFormat::MxFp4_2x_A ||
-           fmt == DataFormat::MxFp4_2x_B;
+           fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2;
 }
 }  // namespace detail
 #endif
