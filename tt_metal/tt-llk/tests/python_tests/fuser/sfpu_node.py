@@ -20,7 +20,7 @@ class SfpuNode:
     def __init__(self, sfpu: Sfpu):
         self.sfpu = sfpu
 
-    def math_init(
+    def sfpu_init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
@@ -30,7 +30,7 @@ class SfpuNode:
             return ""
         return self.sfpu.init(operation, config, self, block)
 
-    def math_run(
+    def sfpu_run(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
@@ -40,7 +40,7 @@ class SfpuNode:
             return ""
         return self.sfpu.calculate(operation, config, self, block)
 
-    def math_uninit(
+    def sfpu_uninit(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",

@@ -24,7 +24,7 @@ class Sfpu:
     by a prior FPU stage or loaded via datacopy. It has no unpacker — SfpuNode
     has no unpacker field at all.
 
-    The lifecycle called by SfpuNode.math_run() is:
+    The lifecycle called by SfpuNode.sfpu_run() is:
         init() -> calculate() -> uninit()
 
     Entirely skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.

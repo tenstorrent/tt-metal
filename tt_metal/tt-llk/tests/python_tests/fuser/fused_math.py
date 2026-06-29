@@ -291,14 +291,14 @@ class ComputePipeline:
         if hoist_reconfig and fpu_ops:
             init_code += fpu_ops[0].math_reconfig(operation, config)
         if hoist and not fpu_ops[0].fpu.per_block_init:
-            init_code += fpu_ops[0].math_init(operation, config, None)
+            init_code += fpu_ops[0].fpu_init(operation, config, None)
         code += self._zone(config, "INIT", init_code)
 
         init_fn = None
         uninit_fn = None
         if hoist and fpu_ops[0].fpu.per_block_init:
-            init_fn = lambda block: fpu_ops[0].math_init(operation, config, block)
-            uninit_fn = lambda block: fpu_ops[0].math_uninit(operation, config, block)
+            init_fn = lambda block: fpu_ops[0].fpu_init(operation, config, block)
+            uninit_fn = lambda block: fpu_ops[0].fpu_uninit(operation, config, block)
 
         def batch_body(block: BlockData):
             body = self._math_wait_for_dest(operation, config)
@@ -307,14 +307,14 @@ class ComputePipeline:
                     if not hoist_reconfig:
                         body += cu.math_reconfig(operation, config)
                     if not hoist:
-                        body += cu.math_init(operation, config, block)
-                    body += cu.math_run(operation, config, block)
+                        body += cu.fpu_init(operation, config, block)
+                    body += cu.fpu_run(operation, config, block)
                     if not hoist:
-                        body += cu.math_uninit(operation, config, block)
+                        body += cu.fpu_uninit(operation, config, block)
                 elif isinstance(cu, SfpuNode):
-                    body += cu.math_init(operation, config, block)
-                    body += cu.math_run(operation, config, block)
-                    body += cu.math_uninit(operation, config, block)
+                    body += cu.sfpu_init(operation, config, block)
+                    body += cu.sfpu_run(operation, config, block)
+                    body += cu.sfpu_uninit(operation, config, block)
             body += self._math_dest_section_done(operation, config)
             return body
 
@@ -326,7 +326,7 @@ class ComputePipeline:
 
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
-            uninit_code += fpu_ops[0].math_uninit(operation, config, None)
+            uninit_code += fpu_ops[0].fpu_uninit(operation, config, None)
         code += self._zone(config, "INIT", uninit_code)
 
         return code
@@ -414,9 +414,9 @@ class ComputePipeline:
                 if isinstance(pack_node, SfpuNode):
                     if prev_was_pack:
                         body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
-                    body += pack_node.math_init(operation, config, block)
-                    body += pack_node.math_run(operation, config, block)
-                    body += pack_node.math_uninit(operation, config, block)
+                    body += pack_node.sfpu_init(operation, config, block)
+                    body += pack_node.sfpu_run(operation, config, block)
+                    body += pack_node.sfpu_uninit(operation, config, block)
                     prev_was_pack = False
                 elif isinstance(pack_node, PackNode):
                     if not hoist_reconfig:

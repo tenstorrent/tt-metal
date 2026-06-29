@@ -123,7 +123,7 @@ class FpuNode:
             return ""
         return config.sentinel.configure_math(config, operation, self)
 
-    def math_init(
+    def fpu_init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
@@ -133,7 +133,7 @@ class FpuNode:
             return ""
         return self.fpu.init(operation, config, self, block)
 
-    def math_run(
+    def fpu_run(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
@@ -141,7 +141,7 @@ class FpuNode:
     ):
         return self.fpu.loop.math_loop(operation, config, self, block)
 
-    def math_uninit(
+    def fpu_uninit(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
