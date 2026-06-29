@@ -99,7 +99,7 @@ def _manual_ar_bundle(
 
 @pytest.mark.skipif(not HAS_INSTRUCT, reason="Instruct checkpoint required")
 def test_recaption_ar_bundle_text_only_matches_manual(instruct_tok, processor, wte):
-    from hunyuan_image_3.system_prompt import get_system_prompt
+    from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
     system_prompt = get_system_prompt("en_recaption", "recaption")
     manual = _manual_ar_bundle(instruct_tok, PROMPT, processor, wte, bot_task="recaption", system_prompt=system_prompt)
@@ -120,7 +120,7 @@ def test_recaption_ar_bundle_text_only_matches_manual(instruct_tok, processor, w
 
 @pytest.mark.skipif(not HAS_INSTRUCT, reason="Instruct checkpoint required")
 def test_recaption_ar_bundle_i2i_cond_matches_manual(instruct_tok, processor, wte, rgb_image):
-    from hunyuan_image_3.system_prompt import get_system_prompt
+    from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
     system_prompt = get_system_prompt("en_unified", "image")
     cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
@@ -168,7 +168,7 @@ def test_recaption_ar_bundle_ids_match_upstream_preprocess(instruct_tok, process
         sys.path.insert(0, str(UPSTREAM))
     from hunyuan_image_3.configuration_hunyuan_image_3 import HunyuanImage3Config
     from hunyuan_image_3.modeling_hunyuan_image_3 import HunyuanImage3ForCausalMM
-    from hunyuan_image_3.system_prompt import get_system_prompt
+    from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
     system_prompt = get_system_prompt("en_unified", "image")
     cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
