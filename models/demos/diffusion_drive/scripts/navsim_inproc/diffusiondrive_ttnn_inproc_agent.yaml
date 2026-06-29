@@ -5,7 +5,7 @@
 # NavSim hydra agent config for the in-process TTNN agent (single-env path).
 # Copy this into  navsim/planning/script/config/common/agent/  and run
 #   run_pdm_score.py ... agent=diffusiondrive_ttnn_inproc_agent
-# Run in the navsim310 conda env (no separate ttnn server process needed).
+# Run in the navsim conda env (no separate ttnn server process needed).
 # Override paths on the CLI, e.g. agent.checkpoint_path=$CKPT agent.anchors_path=$ANCHORS
 
 _target_: diffusiondrive_ttnn_inproc_agent.DiffusionDriveTtnnInprocAgent

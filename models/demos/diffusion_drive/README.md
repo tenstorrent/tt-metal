@@ -12,7 +12,8 @@
 6. [Setup](#6-setup)
 7. [Running Tests](#7-running-tests)
 8. [Usage](#8-usage)
-9. [Future Work](#9-future-work)
+9. [NavSim PDM Evaluation](#9-navsim-pdm-evaluation)
+10. [Future Work](#10-future-work)
 
 ---
 
@@ -316,7 +317,7 @@ ttnn.close_device(device)
 ```bash
 # 1. Create and activate the project virtual environment
 source python_env/bin/activate
-export PYTHONPATH=/root/tt/tt-metal
+export PYTHONPATH="${TT_METAL_HOME:-$(pwd)}"   # TT_METAL_HOME = your tt-metal checkout
 
 # 2. Verify device access
 python3 -m ttnn.examples.usage.run_op_on_device   # should print a bfloat16 tensor
@@ -369,7 +370,12 @@ python models/demos/diffusion_drive/scripts/prepare_assets.py
 | `data/diffusiondrive_navsim.pth` | Full model checkpoint (`hustvl/DiffusionDrive`) |
 | `data/kmeans_navsim_traj_20.npy` | K-means anchor array, shape (20, 8, 2) |
 
-Tests that require the anchor file skip automatically when it is absent.
+Tests that require the anchor file skip automatically when it is absent. The
+real-checkpoint gates (`test_pcc_checkpoint_accuracy.py`, `test_pcc_trace.py`)
+load the trained checkpoint from `$DD_CHECKPOINT_PATH` (falling back to
+`$DD_DATA_ROOT/weights/…`, default `/mnt/diffusion-drive`) and skip cleanly when
+it is absent. The full eval-asset env-var scheme is in
+[§9 NavSim PDM Evaluation](#9-navsim-pdm-evaluation).
 
 ---
 
@@ -377,7 +383,7 @@ Tests that require the anchor file skip automatically when it is absent.
 
 ```bash
 source python_env/bin/activate
-export PYTHONPATH=/root/tt/tt-metal
+export PYTHONPATH="${TT_METAL_HOME:-$(pwd)}"   # TT_METAL_HOME = your tt-metal checkout
 
 # Full suite (21 PCC + 3 sanity = 24 tests)
 python -m pytest models/demos/diffusion_drive/tests/ -v
@@ -479,7 +485,148 @@ diffusion_drive/
 
 ---
 
-## 9. Future Work
+## 9. NavSim PDM Evaluation
+
+The headline metric for DiffusionDrive is the **NavSim PDM score** (Predictive
+Driver Model), computed by the NavSim devkit's `run_pdm_score.py` over the
+`navtest` split (~12 k scenarios). The TTNN model plugs into that harness as a
+NavSim *agent*. This section is the end-to-end recipe; the per-transport details
+live in two script READMEs:
+
+- [`scripts/navsim_inproc/`](scripts/navsim_inproc/README.md) — **default**:
+  single-env, in-process agent (runs the model in the same process as
+  `run_pdm_score.py`; no socket).
+- [`scripts/navsim_bridge/`](scripts/navsim_bridge/README.md) — fallback:
+  cross-process socket bridge (use only if `ttnn` cannot import in the navsim env).
+
+**Validated result:** TTNN PDM ≈ **0.8789** over the full `navtest` (vs the
+PyTorch baseline 0.8808 and upstream published 88.04) — the bf16 on-device stack
+reproduces the reference PDM within ~0.24 %.
+
+### 9.1 Eval environment (customize to your machine)
+
+Every external eval asset is addressed through an **environment variable** so
+nothing is hard-coded to one machine. The defaults below assume all assets are
+staged under a single `DD_DATA_ROOT` (the reference layout — point each var at
+wherever you actually put each piece):
+
+```bash
+# --- Base dirs -------------------------------------------------------------
+export TT_METAL_HOME=/path/to/tt-metal           # <-- EDIT: your tt-metal checkout
+export DD_DATA_ROOT=/mnt/diffusion-drive         # <-- EDIT: where eval assets live
+                                                 #     (replaces the original /root/02 layout)
+
+# --- Model assets (derived from DD_DATA_ROOT) ------------------------------
+export DD_CHECKPOINT_PATH=$DD_DATA_ROOT/weights/diffusiondrive_navsim_88p1_PDMS.pth
+export DD_ANCHOR_PATH=$DD_DATA_ROOT/resnet34/kmeans_navsim_traj_20.npy
+
+# --- NavSim devkit + data (standard NavSim env vars) -----------------------
+export NAVSIM_DEVKIT_ROOT=$DD_DATA_ROOT/DiffusionDrive    # the NavSim devkit checkout
+export NAVSIM_EXP_ROOT=$DD_DATA_ROOT/exp                  # experiment output + metric cache
+export OPENSCENE_DATA_ROOT=$NAVSIM_DEVKIT_ROOT/download   # OpenScene sensors + navsim_logs
+export NUPLAN_MAPS_ROOT=$DD_DATA_ROOT/dataset/maps        # nuPlan maps
+export NUPLAN_MAP_VERSION=nuplan-maps-v1.0
+```
+
+The eval runs in the `navsim` conda env (Python 3.10 — the navsim stack plus
+`ttnn`); activate it with `conda activate navsim`.
+
+> ⚠️ **Not env-var-driven — you must customize these before the PDM scoring step.**
+> A few things are intrinsically machine-specific and cannot be parameterized away:
+>
+> - **The `navsim` conda env** — the one-time `pip install --no-deps …` step (see
+>   the inproc README) targets *this env's* `pip`; run it inside the activated env
+>   (`conda activate navsim`) rather than hard-coding a
+>   `/…/miniconda3/envs/navsim/bin/pip` path.
+> - **`DD_DATA_ROOT` sub-layout** — `weights/`, `resnet34/`, `DiffusionDrive/`,
+>   `exp/`, `dataset/maps/` are the reference sub-paths. If you staged assets
+>   differently, set `DD_CHECKPOINT_PATH`, `DD_ANCHOR_PATH`, `NAVSIM_DEVKIT_ROOT`,
+>   `NUPLAN_MAPS_ROOT`, etc. **individually** instead of relying on `DD_DATA_ROOT`.
+> - **The NavSim devkit itself is required and not relocatable once installed** —
+>   `navsim` is an *editable* install pointing at `$NAVSIM_DEVKIT_ROOT`.
+
+These same vars are read directly by the code: the scripts default
+`--checkpoint`/`--anchors` to `$DD_CHECKPOINT_PATH`/`$DD_ANCHOR_PATH`, the agent
+YAMLs interpolate them via `${oc.env:…}`, and the PCC gates fall back to
+`$DD_DATA_ROOT/weights/…`.
+
+### 9.2 Assets
+
+| Env var | Reference path | What it is |
+|---|---|---|
+| `DD_CHECKPOINT_PATH` | `$DD_DATA_ROOT/weights/diffusiondrive_navsim_88p1_PDMS.pth` | trained 88.x checkpoint (≈700 MB) |
+| `DD_ANCHOR_PATH` | `$DD_DATA_ROOT/resnet34/kmeans_navsim_traj_20.npy` | K=20 plan anchors (20×8×2) |
+| `NAVSIM_DEVKIT_ROOT` | `$DD_DATA_ROOT/DiffusionDrive` | NavSim devkit (`run_pdm_score.py`, `navsim` pkg, hydra configs) |
+| `OPENSCENE_DATA_ROOT` | `$NAVSIM_DEVKIT_ROOT/download` | OpenScene sensor blobs + `navsim_logs` |
+| `NUPLAN_MAPS_ROOT` | `$DD_DATA_ROOT/dataset/maps` | nuPlan maps |
+| `NAVSIM_EXP_ROOT` | `$DD_DATA_ROOT/exp` | experiment output **and the metric cache** (§9.3) |
+
+The checkpoint + anchors come from `scripts/prepare_assets.py` (see §6) or are
+staged manually; the devkit, OpenScene data, and maps are provisioned per the
+NavSim devkit's own setup instructions.
+
+### 9.3 One-time: build the PDM metric cache  ⚠️ **most-missed first-run step**
+
+`run_pdm_score.py` does **not** compute the PDM metric cache on the fly — it
+expects a **precomputed** cache at `$NAVSIM_EXP_ROOT/metric_cache` (~3.1 GB for
+`navtest`). On a fresh machine this directory does not exist yet, so the eval
+fails with missing-cache errors until you build it **once**:
+
+```bash
+conda activate navsim
+python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_metric_caching.py \
+    train_test_split=navtest \
+    cache.cache_path=$NAVSIM_EXP_ROOT/metric_cache
+# → builds $NAVSIM_EXP_ROOT/metric_cache/  (~3.1 GB; one-time, reused by every eval run)
+```
+
+It reads `OPENSCENE_DATA_ROOT`, `NUPLAN_MAPS_ROOT`, and `NUPLAN_MAP_VERSION` from
+the §9.1 block. Verify before evaluating:
+
+```bash
+du -sh $NAVSIM_EXP_ROOT/metric_cache    # expect ~3.1 GB
+```
+
+<!-- TODO(user-supplied): merge the machine-specific metric-caching notes from
+     CLAUDE.local.md here — the file will be provided separately. The command
+     above is the standard NavSim devkit recipe and is correct as a starting
+     point; refine with the supplied notes (timing, worker choice, gotchas). -->
+
+### 9.4 Run the eval (default: in-process agent)
+
+Full recipe — device-arbitration `worker=…` choices, trace capture (`DD_TRACE`),
+and the one-time "make `ttnn` importable in the navsim env" steps — is in
+[`scripts/navsim_inproc/README.md`](scripts/navsim_inproc/README.md). Short form:
+
+```bash
+conda activate navsim
+BR=$TT_METAL_HOME/models/demos/diffusion_drive/scripts/navsim_inproc
+
+# ttnn must import in the navsim env: one-time deps + the inner-package parent on
+# PYTHONPATH (just $TT_METAL_HOME resolves to an empty namespace pkg — see sub-README).
+export TTNN_PP=$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools
+export PYTHONPATH=$BR:$TTNN_PP:$NAVSIM_DEVKIT_ROOT
+
+# install the agent's hydra config into the devkit (one-time)
+cp $BR/diffusiondrive_ttnn_inproc_agent.yaml \
+   $NAVSIM_DEVKIT_ROOT/navsim/planning/script/config/common/agent/
+
+python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score.py \
+    train_test_split=navtest \
+    agent=diffusiondrive_ttnn_inproc_agent \
+    worker=single_machine_thread_pool \
+    experiment_name=diffusiondrive_ttnn_inproc_eval
+```
+
+The `Final average score of valid results: …` line is the PDM score (expect
+~0.8789). Cap a smoke run with `train_test_split.scene_filter.max_scenes=5`, and
+validate parity first with `scripts/navsim_inproc/check_parity.py` (§0 of the
+sub-README). The agent reads the checkpoint/anchors from the YAML, which
+interpolate `$DD_CHECKPOINT_PATH`/`$DD_ANCHOR_PATH`.
+
+---
+
+## 10. Future Work
 
 | Stage | Scope | Key blocker |
 |---|---|---|
@@ -490,7 +637,7 @@ diffusion_drive/
 
 ---
 
-## 10. Stage-3.1 review fixes (commit `4b07970`)
+## 11. Stage-3.1 review fixes (commit `4b07970`)
 
 Applied after a line-by-line review against upstream
 (`hustvl/DiffusionDrive`).  All 24 tests pass.

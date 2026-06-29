@@ -6,7 +6,7 @@ the NavSim PDM harness. It runs the model **in the same process** as
 unlike `../navsim_bridge/` (kept as a fallback, see the bottom of this file).
 
 ```
- run_pdm_score.py  (navsim310, Python 3.10)
+ run_pdm_score.py  (navsim, Python 3.10)
    └─ DiffusionDriveTtnnInprocAgent.forward ──► TtnnDiffusionDriveModel (on Wormhole)
         (TransfuserFeatureBuilder, in-process)      returns trajectory (1,8,3)
 ```
@@ -17,17 +17,24 @@ Two repos cooperate — `tt-metal` supplies the **model**, the NavSim devkit sup
 the **scorer + data**. "Single env" means one Python **process/interpreter**, not one
 repo:
 
-- **`/root/tt/tt-metal`** — built so `ttnn` imports (provides the model + this agent).
-- **`/root/02/DiffusionDrive`** — the NavSim devkit: the `run_pdm_score.py` harness,
-  the `navsim` package, and the hydra configs. **Required and cannot be moved** —
-  `navsim` is *editable*-installed into `navsim310` pointing here (`import navsim`
-  loads `/root/02/DiffusionDrive/navsim/__init__.py`).
-- **`navsim310` conda env** (Python 3.10) — the navsim stack plus, after the one-time
-  fix below, `ttnn`.
-- **Data** — OpenScene sensors (`/root/02/DiffusionDrive/download`), maps
-  (`/root/02/dataset/maps`), PDM metric cache (`/root/02/exp`), the checkpoint
-  (`/root/02/weights/diffusiondrive_navsim_88p1_PDMS.pth`) and plan anchors
-  (`/root/02/resnet34/kmeans_navsim_traj_20.npy`).
+All machine-specific paths come from environment variables — **export the
+[§9.1 "Eval environment" block from the demo README](../../README.md#9-navsim-pdm-evaluation)
+first** (`$TT_METAL_HOME`, `$DD_DATA_ROOT`, `$DD_CHECKPOINT_PATH`,
+`$DD_ANCHOR_PATH`, `$NAVSIM_*`, `$OPENSCENE_DATA_ROOT`, `$NUPLAN_*`). The
+reference defaults assume everything is staged under `$DD_DATA_ROOT` (default
+`/mnt/diffusion-drive`). The eval runs in the `navsim` conda env.
+
+- **`$TT_METAL_HOME`** — built so `ttnn` imports (provides the model + this agent).
+- **`$NAVSIM_DEVKIT_ROOT`** (default `$DD_DATA_ROOT/DiffusionDrive`) — the NavSim
+  devkit: the `run_pdm_score.py` harness, the `navsim` package, and the hydra
+  configs. **Required and cannot be moved** — `navsim` is *editable*-installed
+  into the `navsim` env pointing here (`import navsim` loads
+  `$NAVSIM_DEVKIT_ROOT/navsim/__init__.py`).
+- **`navsim` conda env** (Python 3.10) — the navsim stack plus, after the
+  one-time fix below, `ttnn`.
+- **Data** — OpenScene sensors (`$OPENSCENE_DATA_ROOT`), maps (`$NUPLAN_MAPS_ROOT`),
+  PDM metric cache (`$NAVSIM_EXP_ROOT/metric_cache` — see demo README §9.3), the
+  checkpoint (`$DD_CHECKPOINT_PATH`) and plan anchors (`$DD_ANCHOR_PATH`).
 
 You run `run_pdm_score.py` *from* the devkit; it imports the TTNN model from
 `tt-metal` via `PYTHONPATH`. PDM is NavSim's metric, so the devkit is intrinsic.
@@ -37,7 +44,7 @@ You run `run_pdm_score.py` *from* the devkit; it imports the TTNN model from
 The bridge existed for two reasons: (a) navsim was Python 3.9 while `ttnn` is
 Python 3.10, and (b) a single Wormhole must be arbitrated across workers.
 
-(a) is solved by the **`navsim310` conda env** (Python 3.10) — the
+(a) is solved by the **`navsim` conda env** (Python 3.10) — the
 materialisation of the upstream DiffusionDrive `python310` branch's dependency
 modernisation (`torch==2.0.1+cpu`, `numpy==1.23.4`, hydra/ray/lightning,
 `diffusers==0.27.2`, `einops==0.8.2`; CPU-only). It has the full navsim stack
@@ -47,50 +54,53 @@ modernisation (`torch==2.0.1+cpu`, `numpy==1.23.4`, hydra/ray/lightning,
 forward serialises on the one device either way, so this costs nothing versus
 the bridge.
 
-## Prerequisite — make `ttnn` importable in `navsim310`
+## Prerequisite — make `ttnn` importable in `navsim`
 
-`navsim310` has the navsim stack but not the tt-metal Python wiring. Two one-time
+`navsim` has the navsim stack but not the tt-metal Python wiring. Two one-time
 fixes (no torch/numpy change needed):
 
-1. **Path.** The real `ttnn` package lives at `/root/tt/tt-metal/ttnn/ttnn/`, so
-   the *inner-package parent* must be on `PYTHONPATH` — just `/root/tt/tt-metal`
+1. **Path.** The real `ttnn` package lives at `$TT_METAL_HOME/ttnn/ttnn/`, so
+   the *inner-package parent* must be on `PYTHONPATH` — just `$TT_METAL_HOME`
    resolves to an empty namespace package (`ttnn.open_device` missing). Every
    command below uses:
    ```bash
-   export TTNN_PP=/root/tt/tt-metal/ttnn:/root/tt/tt-metal:/root/tt/tt-metal/tools
+   export TTNN_PP=$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools
    ```
-2. **Deps.** Install ttnn's pure-Python deps that navsim310 lacks, pinned to the
-   tt-metal venv (`--no-deps` so navsim's numpy/matplotlib pins are untouched):
+2. **Deps.** Install ttnn's pure-Python deps that the navsim env lacks, pinned to
+   the tt-metal venv (`--no-deps` so navsim's numpy/matplotlib pins are untouched).
+   Run pip **inside the activated env** (machine-specific — don't hard-code a
+   `…/miniconda3/envs/<name>/bin/pip` path):
    ```bash
-   /root/02/miniconda3/envs/navsim310/bin/pip install --no-deps \
-     loguru==0.6.0 graphviz==0.21 seaborn==0.13.2 ml_dtypes==0.5.4
+   conda activate navsim
+   pip install --no-deps loguru==0.6.0 graphviz==0.21 seaborn==0.13.2 ml_dtypes==0.5.4
    ```
-   (ttnn declares `numpy>=1.24.4`, but it imports and runs fine on navsim310's
-   pinned `1.23.4` — leave numpy alone.)
+   (ttnn declares `numpy>=1.24.4`, but it imports and runs fine on the navsim
+   env's pinned `1.23.4` — leave numpy alone.)
 
 Verify: `PYTHONPATH=$TTNN_PP python -c "import ttnn; print(ttnn.open_device)"`.
 
 ## 0. One-time: validate parity (recommended before a full run)
 
 Confirm the on-device stack still matches the PyTorch reference **under torch
-2.0.1** (navsim310) — the one thing the env change could perturb:
+2.0.1** (navsim) — the one thing the env change could perturb:
 
 ```bash
-conda activate navsim310
-export TTNN_PP=/root/tt/tt-metal/ttnn:/root/tt/tt-metal:/root/tt/tt-metal/tools
-PYTHONPATH=$TTNN_PP:/root/02/DiffusionDrive \
-  python /root/tt/tt-metal/models/demos/diffusion_drive/scripts/navsim_inproc/check_parity.py \
-    --checkpoint /root/02/weights/diffusiondrive_navsim_88p1_PDMS.pth \
-    --anchors    /root/02/resnet34/kmeans_navsim_traj_20.npy
+conda activate navsim
+export TTNN_PP=$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools
+PYTHONPATH=$TTNN_PP:$NAVSIM_DEVKIT_ROOT \
+  python $TT_METAL_HOME/models/demos/diffusion_drive/scripts/navsim_inproc/check_parity.py \
+    --checkpoint "$DD_CHECKPOINT_PATH" \
+    --anchors    "$DD_ANCHOR_PATH"
 # expect: trajectory PCC ~0.9998, "RESULT: OK"
+# (--checkpoint/--anchors default to $DD_CHECKPOINT_PATH/$DD_ANCHOR_PATH if exported)
 ```
 
-## 1. Install the agent into navsim (navsim310 env)
+## 1. Install the agent into the navsim env
 
 ```bash
-conda activate navsim310
-BR=/root/tt/tt-metal/models/demos/diffusion_drive/scripts/navsim_inproc
-export TTNN_PP=/root/tt/tt-metal/ttnn:/root/tt/tt-metal:/root/tt/tt-metal/tools
+conda activate navsim
+BR=$TT_METAL_HOME/models/demos/diffusion_drive/scripts/navsim_inproc
+export TTNN_PP=$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools
 # (a) agent class on PYTHONPATH (imported as a bare top-level module), plus tt-metal ttnn
 export PYTHONPATH=$BR:$TTNN_PP:$NAVSIM_DEVKIT_ROOT
 # (b) hydra config into the navsim agent config dir
@@ -98,15 +108,19 @@ cp $BR/diffusiondrive_ttnn_inproc_agent.yaml \
    $NAVSIM_DEVKIT_ROOT/navsim/planning/script/config/common/agent/
 ```
 
-## 2. Run the PDM eval (navsim310 env)
+## 2. Run the PDM eval (navsim env)
 
 ```bash
 export HYDRA_FULL_ERROR=1
-export NAVSIM_DEVKIT_ROOT=/root/02/DiffusionDrive
-export NAVSIM_EXP_ROOT=/root/02/exp
-export OPENSCENE_DATA_ROOT=/root/02/DiffusionDrive/download
-export NUPLAN_MAP_VERSION="nuplan-maps-v1.0"
-export NUPLAN_MAPS_ROOT=/root/02/dataset/maps
+# NavSim env vars — canonical block is demo README §9.1 (these derive from
+# $DD_DATA_ROOT, default /mnt/diffusion-drive). Repeated here so this recipe is
+# standalone; each respects an already-exported value:
+export DD_DATA_ROOT="${DD_DATA_ROOT:-/mnt/diffusion-drive}"
+export NAVSIM_DEVKIT_ROOT="${NAVSIM_DEVKIT_ROOT:-$DD_DATA_ROOT/DiffusionDrive}"
+export NAVSIM_EXP_ROOT="${NAVSIM_EXP_ROOT:-$DD_DATA_ROOT/exp}"
+export OPENSCENE_DATA_ROOT="${OPENSCENE_DATA_ROOT:-$NAVSIM_DEVKIT_ROOT/download}"
+export NUPLAN_MAP_VERSION="${NUPLAN_MAP_VERSION:-nuplan-maps-v1.0}"
+export NUPLAN_MAPS_ROOT="${NUPLAN_MAPS_ROOT:-$DD_DATA_ROOT/dataset/maps}"
 export PYTHONPATH=$BR:$TTNN_PP:$NAVSIM_DEVKIT_ROOT
 
 python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score.py \
@@ -156,14 +170,14 @@ For a quick smoke run, cap scenes with `train_test_split.scene_filter.max_scenes
 - **bf16 accuracy.** Trajectory PCC ≈ 0.9998 vs fp32 (parity check). bf16 has been
   shown to hold the PDM near 88.04 in the bridge run (~0.8786); the in-process
   path is numerically identical (same on-device graph), only the transport differs.
-- **torch 2.0.1.** The model now runs under navsim310's torch 2.0.1 (the bridge
+- **torch 2.0.1.** The model now runs under navsim's torch 2.0.1 (the bridge
   server ran it under the venv's 2.11). The parity check (step 0) is the gate; if
-  an API gap appears, bump navsim310's torch toward ttnn's build target and re-pin.
+  an API gap appears, bump navsim's torch toward ttnn's build target and re-pin.
 - **DDIM noise** is drawn fresh (unseeded) per forward, matching the upstream eval.
 - **Trace capture (on by default).** The agent captures the consolidated
   backbone-loop trace once in `initialize()` and replays it per scene via
   `execute_compiled()`. Set `DD_TRACE=0` to disable (eager `__call__`, for A/B).
-  Measured on a 2000-scene navtest A/B (sequential, navsim310): PDM unchanged
+  Measured on a 2000-scene navtest A/B (sequential, navsim): PDM unchanged
   (eager 0.8669 vs traced 0.8676), wall **394→377 s = 1.045×** (−8.5 ms/scene).
   The win is modest because the **in-process per-scene cost is dominated by
   navsim CPU** (feature building + PDM scoring), not the model forward — the
