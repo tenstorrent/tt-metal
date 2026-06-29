@@ -49,7 +49,7 @@ jobs:
       #    The command fetches the diff itself via `gh pr diff`, so a shallow
       #    checkout of the default ref is enough.
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@main   # intentionally floating: always latest
         with:
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -57,7 +57,7 @@ jobs:
       # 2. Fetch the private LLK review knowledge, kept out of the public tree and
       #    pulled at runtime into a scratch dir via a sparse checkout.
       - name: Fetch private LLK review knowledge
-        uses: actions/checkout@v4
+        uses: actions/checkout@main   # intentionally floating: always latest
         with:
           repository: tenstorrent/llk_code_gen
           # Token with read access to the private knowledge repo.
