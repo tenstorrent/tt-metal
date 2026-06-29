@@ -4,11 +4,10 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <cstdint>
-#include <condition_variable>
-#include <functional>
 #include <map>
-#include <memory>
 #include <mutex>
 #include <span>
 #include <string>
@@ -56,7 +55,7 @@ public:
         tt_metal::HalProgrammableCoreType core_type,
         const tt_metal::KernelGroup& kernel_group);
     void RecordProgramRun(uint64_t program_id);
-    void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
+    void RecordProgramMetadata(tt_metal::detail::ProgramImpl& program);
     void RecordProgramSubDevice(
         tt::ChipId device_id,
         uint64_t sub_device_manager_id,
@@ -64,18 +63,20 @@ public:
         SubDeviceId sub_device_id,
         uint32_t num_available_worker_cores = 0);
     std::optional<tt::ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) const;
-    void TieRuntimeIdToProgramId(tt_metal::detail::ProgramImpl& program);
     // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
     // The returned span is valid until MetalContext teardown or reinitialization.
-    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) const;
+    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) const noexcept {
+        const auto* sources = runtime_id_to_kernel_sources_[runtime_id].load(std::memory_order_acquire);
+        return sources != nullptr ? std::span<const std::string_view>(*sources) : std::span<const std::string_view>{};
+    }
     // Register a callback to be invoked when real-time profiler data arrives.
     // Returns a handle that can be used to unregister the callback.
     tt::ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
         tt::ProgramRealtimeProfilerCallback callback);
     // Unregister a previously registered callback by its handle.
     void UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle);
-    // Invoke all registered callbacks with the given record.
-    void InvokeProgramRealtimeProfilerCallbacks(const tt::ProgramRealtimeRecord& record);
+    void AttachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
+    void DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
 
     // Real-time profiler liveness tracking. MeshDevice notifies activation after a
     // successful init+sync handshake and deactivation at close; IsRealtimeProfilerActive()
@@ -87,16 +88,11 @@ public:
     void DumpData();
 
 private:
-    struct RealtimeCallbackState {
-        size_t in_flight_invocations = 0;
-        bool unregistering = false;
-        std::condition_variable drained_cv;
-    };
+    static constexpr size_t kRuntimeIdSlots = 1u << 16;
 
     struct RealtimeCallbackRegistration {
         tt::ProgramRealtimeProfilerCallbackHandle handle;
         tt::ProgramRealtimeProfilerCallback callback;
-        std::shared_ptr<RealtimeCallbackState> state;
     };
 
     struct KernelData {
@@ -115,12 +111,12 @@ private:
     mutable std::mutex kernel_source_mutex_;
     std::unordered_set<std::string> unique_kernel_sources_;
     std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources_;
-    std::unordered_map<uint16_t, uint64_t> runtime_id_to_program_id_;
+    std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdSlots> runtime_id_to_kernel_sources_{};
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;
-    // Registered real-time profiler callbacks (invoked from the receiver thread).
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
     std::vector<RealtimeCallbackRegistration> program_realtime_profiler_callbacks_;
+    std::vector<tt::RealtimeProfilerCallbackListener*> realtime_callback_listeners_;
     tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
 
     // Chip ids whose RT profiler is currently live; shares the callback-list mutex.

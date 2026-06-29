@@ -59,7 +59,9 @@ private:
     std::mutex mutex_;
     std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
+#if defined(TRACY_ENABLE)
     tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
+#endif
 };
 
 }  // namespace tt::tt_metal

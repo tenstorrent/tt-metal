@@ -18,10 +18,11 @@
 // nullified, IOMMU-off on BH, etc.) the test skips gracefully via
 // IsProgramRealtimeProfilerActive().
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <mutex>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -40,6 +41,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include "tt_metal/impl/dispatch/data_collector.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -47,6 +49,7 @@ namespace {
 using tt::tt_metal::experimental::IsProgramRealtimeProfilerActive;
 using tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 using tt::tt_metal::experimental::ProgramRealtimeRecord;
+using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
@@ -60,6 +63,17 @@ constexpr double kMaxDurationNs = 1'000'000'000.0;
 // Per-program marker embedded in the kernel source so the source-correlation
 // assertion can verify each record carries the correct source.
 constexpr const char* kSourceMarkerPrefix = "rt_profiler_marker_";
+
+ProgramRealtimeRecord make_callback_record(uint32_t runtime_id) {
+    return ProgramRealtimeRecord{
+        .runtime_id = runtime_id,
+        .chip_id = 7,
+        .start_timestamp = 100 + runtime_id,
+        .end_timestamp = 200 + runtime_id,
+        .frequency = 1.5,
+        .kernel_sources = {},
+    };
+}
 
 // Inlined kernel source: 200 × 200 = 40K unrolled NOPs. Used for both data
 // movement (BRISC/NCRISC) and compute (TRISC) RISCs. We inline rather than
@@ -116,6 +130,113 @@ void enqueue_sanity_program(
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
 }
 
+TEST(RealtimeProfilerSanity, DataCollectorNotifiesCallbackListeners) {
+    struct Listener : tt::RealtimeProfilerCallbackListener {
+        void on_callback_registered(
+            ProgramRealtimeProfilerCallbackHandle handle, const ProgramRealtimeProfilerCallback& callback) override {
+            added_handle = handle;
+            callback(ProgramRealtimeRecordBatch{std::span<const ProgramRealtimeRecord>(&record, 1), 0});
+            add_count++;
+        }
+        void on_callback_unregistered(ProgramRealtimeProfilerCallbackHandle handle) override {
+            removed_handle = handle;
+            remove_count++;
+        }
+
+        ProgramRealtimeRecord record = make_callback_record(7);
+        ProgramRealtimeProfilerCallbackHandle added_handle = 0;
+        ProgramRealtimeProfilerCallbackHandle removed_handle = 0;
+        uint32_t add_count = 0;
+        uint32_t remove_count = 0;
+    };
+
+    DataCollector collector;
+    std::atomic<uint64_t> received{0};
+    std::atomic<uint64_t> runtime_sum{0};
+    Listener listener;
+    collector.AttachRealtimeProfilerCallbackListener(&listener);
+
+    auto handle = collector.RegisterProgramRealtimeProfilerCallback(
+        [&received, &runtime_sum](const ProgramRealtimeRecordBatch& batch) {
+            uint64_t local_sum = 0;
+            for (const auto& record : batch.records) {
+                local_sum += record.runtime_id;
+            }
+            runtime_sum.fetch_add(local_sum, std::memory_order_relaxed);
+            received.fetch_add(batch.records.size(), std::memory_order_release);
+        });
+
+    EXPECT_EQ(listener.add_count, 1u);
+    EXPECT_EQ(listener.added_handle, handle);
+    EXPECT_EQ(received.load(std::memory_order_acquire), 1u);
+    EXPECT_EQ(runtime_sum.load(std::memory_order_relaxed), 7u);
+    collector.UnregisterProgramRealtimeProfilerCallback(handle);
+    EXPECT_EQ(listener.remove_count, 1u);
+    EXPECT_EQ(listener.removed_handle, handle);
+    collector.DetachRealtimeProfilerCallbackListener(&listener);
+}
+
+TEST(RealtimeProfilerSanity, DataCollectorReplaysExistingCallbacksWhenListenerAttaches) {
+    struct Listener : tt::RealtimeProfilerCallbackListener {
+        void on_callback_registered(
+            ProgramRealtimeProfilerCallbackHandle handle, const ProgramRealtimeProfilerCallback& callback) override {
+            added_handle = handle;
+            callback(ProgramRealtimeRecordBatch{std::span<const ProgramRealtimeRecord>(&record, 1), 0});
+            add_count++;
+        }
+        void on_callback_unregistered(ProgramRealtimeProfilerCallbackHandle handle) override {
+            removed_handle = handle;
+            remove_count++;
+        }
+
+        ProgramRealtimeRecord record = make_callback_record(11);
+        ProgramRealtimeProfilerCallbackHandle added_handle = 0;
+        ProgramRealtimeProfilerCallbackHandle removed_handle = 0;
+        uint32_t add_count = 0;
+        uint32_t remove_count = 0;
+    };
+
+    DataCollector collector;
+    std::atomic<uint64_t> received{0};
+    std::atomic<uint64_t> runtime_sum{0};
+
+    auto handle = collector.RegisterProgramRealtimeProfilerCallback(
+        [&received, &runtime_sum](const ProgramRealtimeRecordBatch& batch) {
+            uint64_t local_sum = 0;
+            for (const auto& record : batch.records) {
+                local_sum += record.runtime_id;
+            }
+            runtime_sum.fetch_add(local_sum, std::memory_order_relaxed);
+            received.fetch_add(batch.records.size(), std::memory_order_release);
+        });
+
+    Listener listener;
+    collector.AttachRealtimeProfilerCallbackListener(&listener);
+
+    EXPECT_EQ(listener.add_count, 1u);
+    EXPECT_EQ(listener.added_handle, handle);
+    EXPECT_EQ(received.load(std::memory_order_acquire), 1u);
+    EXPECT_EQ(runtime_sum.load(std::memory_order_relaxed), 11u);
+
+    collector.DetachRealtimeProfilerCallbackListener(&listener);
+    collector.UnregisterProgramRealtimeProfilerCallback(handle);
+    EXPECT_EQ(listener.remove_count, 0u);
+}
+
+TEST(RealtimeProfilerSanity, DataCollectorTracksRealtimeProfilerActiveChips) {
+    DataCollector collector;
+
+    EXPECT_FALSE(collector.IsRealtimeProfilerActive());
+    collector.NotifyRealtimeProfilerActivated(7);
+    EXPECT_TRUE(collector.IsRealtimeProfilerActive());
+    collector.NotifyRealtimeProfilerActivated(11);
+    EXPECT_TRUE(collector.IsRealtimeProfilerActive());
+    collector.NotifyRealtimeProfilerDeactivated(7);
+    EXPECT_TRUE(collector.IsRealtimeProfilerActive());
+    collector.NotifyRealtimeProfilerDeactivated(11);
+    EXPECT_FALSE(collector.IsRealtimeProfilerActive());
+}
+
 TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     constexpr int kDeviceId = 0;
 
@@ -137,13 +258,20 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
-    std::mutex records_mu;
-    std::vector<ProgramRealtimeRecord> records;
+    std::vector<ProgramRealtimeRecord> records_a;
+    std::vector<ProgramRealtimeRecord> records_b;
+    std::atomic<uint64_t> dropped_a{0};
+    std::atomic<uint64_t> dropped_b{0};
 
-    ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecord& record) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            records.push_back(record);
+    ProgramRealtimeProfilerCallbackHandle handle_a =
+        RegisterProgramRealtimeProfilerCallback([&records_a, &dropped_a](const ProgramRealtimeRecordBatch& batch) {
+            dropped_a.fetch_add(batch.dropped, std::memory_order_relaxed);
+            records_a.insert(records_a.end(), batch.records.begin(), batch.records.end());
+        });
+    ProgramRealtimeProfilerCallbackHandle handle_b =
+        RegisterProgramRealtimeProfilerCallback([&records_b, &dropped_b](const ProgramRealtimeRecordBatch& batch) {
+            dropped_b.fetch_add(batch.dropped, std::memory_order_relaxed);
+            records_b.insert(records_b.end(), batch.records.begin(), batch.records.end());
         });
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
@@ -162,16 +290,18 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     // for small workloads on WH/BH single-chip.
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    UnregisterProgramRealtimeProfilerCallback(handle);
+    UnregisterProgramRealtimeProfilerCallback(handle_a);
+    UnregisterProgramRealtimeProfilerCallback(handle_b);
 
-    std::vector<ProgramRealtimeRecord> collected;
-    {
-        std::lock_guard<std::mutex> lk(records_mu);
-        collected = std::move(records);
-    }
+    std::vector<ProgramRealtimeRecord> collected = std::move(records_a);
+    std::vector<ProgramRealtimeRecord> collected_b = std::move(records_b);
 
     ASSERT_GE(collected.size(), kNumPrograms)
         << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << collected.size();
+    ASSERT_GE(collected_b.size(), kNumPrograms) << "Expected the second callback to receive at least " << kNumPrograms
+                                                << " RT profiler records (one per program), got " << collected_b.size();
+    EXPECT_EQ(dropped_a.load(std::memory_order_relaxed), 0u);
+    EXPECT_EQ(dropped_b.load(std::memory_order_relaxed), 0u);
 
     for (const auto& rec : collected) {
         EXPECT_GT(rec.end_timestamp, rec.start_timestamp)
@@ -213,6 +343,50 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     EXPECT_TRUE(mesh_device->close());
 }
 
+TEST(RealtimeProfilerSanity, CloseDrainsRegisteredCallback) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        /*num_command_queues=*/1,
+        DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::vector<ProgramRealtimeRecord> records;
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
+        });
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+    for (uint32_t i = 0; i < kNumPrograms; ++i) {
+        enqueue_sanity_program(mesh_device, /*runtime_id=*/i + 1, all_cores);
+    }
+
+    mesh_device->quiesce_devices();
+    EXPECT_TRUE(mesh_device->close());
+
+    std::vector<ProgramRealtimeRecord> collected = std::move(records);
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    std::set<uint32_t> observed_runtime_ids;
+    for (const auto& rec : collected) {
+        if (rec.runtime_id >= 1 && rec.runtime_id <= kNumPrograms) {
+            observed_runtime_ids.insert(rec.runtime_id);
+        }
+    }
+    EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
+        << "Mesh close should drain records for callbacks still registered at shutdown";
+}
+
 TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     constexpr int kDeviceId = 0;
     constexpr uint32_t kWarmupRuntimeId = 0x6001;
@@ -228,12 +402,10 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
 
-    std::mutex records_mu;
     std::vector<ProgramRealtimeRecord> records;
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback([&records_mu, &records](const ProgramRealtimeRecord& record) {
-            std::lock_guard<std::mutex> lk(records_mu);
-            records.push_back(record);
+        RegisterProgramRealtimeProfilerCallback([&records](const ProgramRealtimeRecordBatch& batch) {
+            records.insert(records.end(), batch.records.begin(), batch.records.end());
         });
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
@@ -275,11 +447,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     UnregisterProgramRealtimeProfilerCallback(handle);
     mesh_device->release_mesh_trace(trace_id);
 
-    std::vector<ProgramRealtimeRecord> collected;
-    {
-        std::lock_guard<std::mutex> lk(records_mu);
-        collected = std::move(records);
-    }
+    std::vector<ProgramRealtimeRecord> collected = std::move(records);
 
     const std::string expected_marker = kSourceMarkerPrefix + std::to_string(kTraceRuntimeId);
     uint32_t trace_records = 0;

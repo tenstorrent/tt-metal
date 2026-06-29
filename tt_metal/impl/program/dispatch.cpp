@@ -2308,8 +2308,7 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    tt::TieRuntimeIdToProgramId(program);
-    tt::RecordKernelSourceMap(program);
+    RecordProgramMetadata(program);
 
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
@@ -2837,8 +2836,7 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_
         }
     }
 
-    tt::TieRuntimeIdToProgramId(program);
-    tt::RecordKernelSourceMap(program);
+    RecordProgramMetadata(program);
 
     return TraceNode{
         program.shared_from_this(),
