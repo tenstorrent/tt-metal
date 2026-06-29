@@ -1995,7 +1995,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks8x4) {
     EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional skip edges (8 directed Z entries)";
 }
 
-// skip_links expands into 32 Z edges on the 32x4 [RING, RING] descriptor.
+// skip_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
 TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
     const std::filesystem::path desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -2010,9 +2010,22 @@ TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
     const auto& m0 = intra[0];
     ASSERT_EQ(m0.size(), 128u);  // 32x4 = 128 chips
 
-    // axis=ROW (32 rows, RING), start=2 step=4 -> 8 endpoint row pairs (last wraps). chip = row*4 + col.
+    // axis=ROW (32 rows, RING). chip = row*4 + col. Two patterns:
+    //   start=2 step=4 -> 8 row pairs (last wraps)
+    //   start=0 step=8 -> 4 row pairs
     const std::vector<std::pair<int, int>> row_blocks = {
-        {2, 5}, {6, 9}, {10, 13}, {14, 17}, {18, 21}, {22, 25}, {26, 29}, {30, 1}};
+        {2, 5},
+        {6, 9},
+        {10, 13},
+        {14, 17},
+        {18, 21},
+        {22, 25},
+        {26, 29},
+        {30, 1},  // start=2 step=4
+        {0, 7},
+        {8, 15},
+        {16, 23},
+        {24, 31}};  // start=0 step=8
     for (const auto& [ra, rb] : row_blocks) {
         for (int col = 0; col < 4; ++col) {
             const int a = ra * 4 + col;
@@ -2026,7 +2039,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
         }
     }
 
-    // 32 bidirectional skip edges = 64 directed Z entries, no others
+    // (8 + 4) blocks x 4 columns = 48 bidirectional skip edges = 96 directed Z entries, no others
     int z_directed = 0;
     for (int c = 0; c < 128; ++c) {
         for (const auto& [nb, edge] : m0[c]) {
@@ -2035,7 +2048,7 @@ TEST(MeshGraphDescriptorTests, SkipLinks32x4) {
             }
         }
     }
-    EXPECT_EQ(z_directed, 64) << "expected exactly 32 bidirectional skip edges (64 directed Z entries)";
+    EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional skip edges (96 directed Z entries)";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
