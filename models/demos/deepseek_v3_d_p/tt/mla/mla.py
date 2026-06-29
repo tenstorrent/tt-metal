@@ -3,7 +3,7 @@
 
 import math
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -562,12 +562,10 @@ class ttMLA:
         tt_kvpe: ttnn.Tensor,
         kvpe_cache: ttnn.Tensor,
         kv_actual_isl: int,
-        actual_end: Optional[int],
         cache_batch_idx: int,
         cache_layer_idx: int,
         cache_user_id: int,
         seq_len_local: int,
-        on_layer_complete: Optional[Callable[[int], None]],
     ) -> ttnn.Tensor:
         """Chunked-prefill attention via update_padded_kv_cache + ring_mla.
 
@@ -599,27 +597,6 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-
-        # Migration-gated: update_padded_kv_cache wrote full 32-row tiles, so the tokens between the
-        # last real token (actual_end) and the next 128-boundary hold stale data. Zero that pad window
-        # so the decode side reads clean zeros, then fire the per-layer ack. The op handles the window
-        # spilling across a chip border (block-cyclic layout).
-        if on_layer_complete is not None:
-            assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.layer_num,
-                actual_end,
-                chunk_size_global,
-                self.sp_axis,
-            )
-            # on_layer_complete hands this layer's KV to the migration worker, which reads the cache
-            # over NoC out-of-band from the ttnn command queue. Flush the (async) zero op to device
-            # first, else the worker can copy pre-zero (stale pad) data.
-            ttnn.synchronize_device(self.mesh_device)
-            on_layer_complete(self.layer_idx)
 
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
         # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
@@ -667,9 +644,7 @@ class ttMLA:
         rope_tensors: dict,
         kvpe_cache: ttnn.Tensor,
         cache_layer_idx: int = 0,
-        on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_start: Optional[int] = None,
-        actual_end: Optional[int] = None,
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
     ) -> ttnn.Tensor:
@@ -679,9 +654,7 @@ class ttMLA:
                 rope_tensors,
                 kvpe_cache,
                 cache_layer_idx,
-                on_layer_complete,
                 kv_actual_isl=actual_start,
-                actual_end=actual_end,
                 cache_user_id=cache_user_id,
             )
 
@@ -691,17 +664,16 @@ class ttMLA:
 
         # Chunked-prefill mode is fixed at construction: self.is_chunked drives buffer allocation in
         # __init__ and the rope variant, and forward honors that flag — it does not infer the mode from
-        # the arguments. actual_start/actual_end are the chunk parameters, supplied iff chunked:
-        # actual_start is the absolute KV position of this chunk's first real token (cumulative valid
-        # count before it; 0 for the first chunk) — the cache write + rotation offset (the internal
-        # kv_actual_isl); actual_end is the absolute position past the chunk's last real token — the
-        # migration pad-zero boundary. The single-shot and chunked paths share the Q/KV projection +
-        # rope prologue and the nlp_concat_heads + o_proj epilogue; they differ only in cache write,
-        # attention op, and where wkv_b2 is applied. See _chunked_attn for the unified chunked impl.
+        # the arguments. actual_start is the chunk parameter, supplied iff chunked: the absolute KV
+        # position of this chunk's first real token (cumulative valid count before it; 0 for the first
+        # chunk) — the cache write + rotation offset (the internal kv_actual_isl). The single-shot and
+        # chunked paths share the Q/KV projection + rope prologue and the nlp_concat_heads + o_proj
+        # epilogue; they differ only in cache write, attention op, and where wkv_b2 is applied. See
+        # _chunked_attn for the unified chunked impl.
         kv_actual_isl = actual_start
         assert (actual_start is not None) == self.is_chunked, (
             f"actual_start ({'set' if actual_start is not None else 'None'}) does not match construction "
-            f"(self.is_chunked={self.is_chunked}); pass actual_start/actual_end iff built with is_chunked=True"
+            f"(self.is_chunked={self.is_chunked}); pass actual_start iff built with is_chunked=True"
         )
 
         # q_projection
@@ -893,12 +865,10 @@ class ttMLA:
                 tt_kvpe=tt_kvpe,
                 kvpe_cache=kvpe_cache,
                 kv_actual_isl=kv_actual_isl,
-                actual_end=actual_end,
                 cache_batch_idx=cache_batch_idx,
                 cache_layer_idx=cache_layer_idx,
                 cache_user_id=cache_user_id,
                 seq_len_local=seq_len_local,
-                on_layer_complete=on_layer_complete,
             )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -932,9 +902,7 @@ class ttMLA:
         rope_tensors: dict,
         kvpe_cache: ttnn.Tensor,
         cache_layer_idx: int,
-        on_layer_complete: Optional[Callable[[int], None]],
         kv_actual_isl: int,
-        actual_end: Optional[int],
         cache_user_id: int,
     ) -> None:
         """Last-layer fast path: fill the KV cache (which migration consumes) and fire the
@@ -992,7 +960,6 @@ class ttMLA:
 
         # Write the chunk via the SAME chunked path as _chunked_attn (not a single-shot fill):
         # update_padded_kv_cache writes at the per-chip offset derived from kv_actual_global.
-        chunk_size_global = seq_len_local * self.sp_factor
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1002,22 +969,6 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-
-        # Migration-gated: zero the pad window past actual_end so the decode side reads clean zeros,
-        # then fire the per-layer ack (the populated cache is the only output of a kv-only last layer).
-        if on_layer_complete is not None:
-            assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.layer_num,
-                actual_end,
-                chunk_size_global,
-                self.sp_axis,
-            )
-            ttnn.synchronize_device(self.mesh_device)
-            on_layer_complete(self.layer_idx)
 
         signpost(header="MLA_END")
         return None
