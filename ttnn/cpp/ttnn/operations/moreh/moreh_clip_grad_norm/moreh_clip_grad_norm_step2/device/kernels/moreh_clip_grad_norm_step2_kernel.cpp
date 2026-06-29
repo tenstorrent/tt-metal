@@ -20,13 +20,17 @@ void kernel_main() {
     std::uint8_t output_id{16};
     // x^p * exp(log(x) * decimal)
     const auto cb_y = output_id++;  // output(==total_norm)
+    CircularBuffer cb_y_obj(cb_y);
 
     std::uint8_t intermed_id{24};
     const auto cb_x = intermed_id++;
     CircularBuffer cb_x_obj(cb_x);           // Sum[tmp_pow_sum](==x)
     const auto cb_xpow = intermed_id++;      // x^p
+    CircularBuffer cb_xpow_obj(cb_xpow);
     const auto cb_logx = intermed_id++;      // log(x)
+    CircularBuffer cb_logx_obj(cb_logx);
     const auto cb_exp_lxmd = intermed_id++;  // exp(log(x) * decimal)
+    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -74,5 +78,5 @@ void kernel_main() {
         }
     }
     // x^p
-    power_tile_to_cb(cb_x, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_y, p, p_is_negative);
+    power_tile_to_cb(cb_x_obj, cb_xpow_obj, cb_logx_obj, cb_decimal_obj, cb_exp_lxmd_obj, cb_y_obj, p, p_is_negative);
 }
