@@ -172,7 +172,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         if (!scratch_entries.empty()) {
             // The full Scratchpad accessor (NOC-free, so it compiles on both data-movement and
             // compute/TRISC builds), which also pulls in the ScratchpadBindingToken type.
-            content << "#include \"api/scratchpad/scratchpad.h\"\n";
+            content << "#include \"api/scratchpad.h\"\n";
         }
         content << "\n";
 

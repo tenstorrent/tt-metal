@@ -737,7 +737,7 @@ static void emit_metal2_namespaces(
         f << "#include \"api/tensor/tensor_binding_token.h\"\n";
     }
     if (!s.scratch_accessors.empty()) {
-        f << "#include \"api/scratchpad/scratchpad.h\"\n";
+        f << "#include \"api/scratchpad.h\"\n";
     }
 
     if (has_args) {

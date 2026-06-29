@@ -17,7 +17,7 @@
 // fail the test.
 //
 // `Scratchpad` and the `scratch::pad` token are provided by the auto-generated kernel_bindings
-// header (genfiles emits `#include "api/scratchpad/scratchpad.h"` plus the `scratch::` namespace
+// header (genfiles emits `#include "api/scratchpad.h"` plus the `scratch::` namespace
 // when a kernel has a scratchpad binding), so no manual scratchpad include is needed here.
 
 #include "api/dataflow/dataflow_api.h"
