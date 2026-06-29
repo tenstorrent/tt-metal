@@ -33,7 +33,7 @@
 
 **Done when**: `SUPPORTED["dtype"]` contains `[ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b]` and `SUPPORTED["fp32_dest_acc_en"]` contains `[True, False]`, with all cells in the SUPPORTED rectangle passing (except any in EXCLUSIONS).
 
-### [ ] Refinement 2 — Non-tile-aligned shape support
+### [x] Refinement 2 — Non-tile-aligned shape support
 
 **Goal**: add `"w_non_aligned"` and `"h_non_aligned"` to `SUPPORTED["alignment"]` via in-kernel edge-tile handling. `w_non_aligned` (D not divisible by 32) requires zero-padding the last D-tile column in the reader and masking the PV matmul output. `h_non_aligned` (S_q not divisible by 32) requires zero-padding the last Q-tile row and masking the output.
 
