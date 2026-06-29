@@ -27,9 +27,12 @@ def create_program_descriptor(
     k_shape = list(key.shape)
     B, H_q, H_kv = q_shape[0], q_shape[1], k_shape[1]
     S_q, S_kv, D = q_shape[2], k_shape[2], q_shape[-1]
-    D_t = D // TILE_DIM
-    S_q_tiles = S_q // TILE_DIM
-    S_kv_tiles = S_kv // TILE_DIM
+    # Ceiling division for tile counts: non-aligned dims (e.g. D=50, S_q=47)
+    # round UP to the next tile. The tile padding (zeros from from_torch or
+    # -inf mask from _make_padding_mask) is handled at the op level.
+    D_t = (D + TILE_DIM - 1) // TILE_DIM
+    S_q_tiles = (S_q + TILE_DIM - 1) // TILE_DIM
+    S_kv_tiles = (S_kv + TILE_DIM - 1) // TILE_DIM
     B_q_t = min(MAX_B_Q_T, S_q_tiles)
     B_kv_t = min(MAX_B_KV_T, S_kv_tiles)
     # Ensure B_q_t divides S_q_tiles so every Q-block is full (no partial last block).
