@@ -494,6 +494,25 @@ def test_generate_from_prompt_tokens_rejects_bad_prompt_shape_before_zero_block_
         )
 
 
+@pytest.mark.parametrize(
+    ("prompt_tokens", "message"),
+    [
+        (torch.empty((0, 3), dtype=torch.long), "batch size"),
+        (torch.empty((1, 0), dtype=torch.long), "length"),
+    ],
+)
+def test_generate_from_prompt_tokens_rejects_empty_prompt_tokens_before_zero_block_fast_path(prompt_tokens, message):
+    with pytest.raises(ValueError, match=message):
+        generate_from_prompt_tokens(
+            "model",
+            None,
+            prompt_tokens,
+            num_blocks=0,
+            config=DiffusionConfig(canvas_length=4),
+            prefill_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
     with pytest.raises(ValueError, match="either logits_fn or logits_fn_builder"):
         generate_from_prompt_tokens(

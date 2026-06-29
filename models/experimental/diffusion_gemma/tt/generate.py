@@ -159,8 +159,7 @@ def embed_host_tokens(tt_model, tokens: torch.Tensor):
 
 def prefill_prompt_tokens(tt_model, prompt_tokens: torch.Tensor, *, page_table=None, page_tables_per_layer=None) -> int:
     """Write prompt token K/V into the frozen cache and return prompt length."""
-    if prompt_tokens.dim() != 2:
-        raise ValueError("prompt_tokens must have shape [batch, seq_len]")
+    _validate_prompt_tokens(prompt_tokens)
     if prompt_tokens.shape[0] != 1:
         raise NotImplementedError("prefill_prompt_tokens currently supports batch=1")
     prompt_embeds = embed_host_tokens(tt_model, prompt_tokens)
@@ -493,6 +492,10 @@ def _validate_batch_size(batch_size: int) -> None:
 def _validate_prompt_tokens(prompt_tokens: torch.Tensor) -> None:
     if prompt_tokens.dim() != 2:
         raise ValueError("prompt_tokens must have shape [batch, seq_len]")
+    if prompt_tokens.shape[0] <= 0:
+        raise ValueError("prompt_tokens batch size must be positive")
+    if prompt_tokens.shape[1] <= 0:
+        raise ValueError("prompt_tokens length must be positive")
 
 
 def _validate_committed_block_shape(committed: torch.Tensor, *, batch_size: int, canvas_length: int) -> None:
