@@ -259,7 +259,6 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
-      use-artifacts-from-run: 28221371372
 
   resolve-artifacts:
     runs-on: ubuntu-latest
