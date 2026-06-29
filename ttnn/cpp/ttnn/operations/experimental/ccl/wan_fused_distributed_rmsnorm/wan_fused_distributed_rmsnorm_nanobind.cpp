@@ -58,7 +58,8 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("use_device_op") = false,
-        nb::arg("norm_type") = ttnn::experimental::WanFusedNormType::RMS);
+        nb::arg("norm_type") = ttnn::experimental::WanFusedNormType::RMS,
+        nb::arg("reciprocals") = nb::none());
 
     ttnn::bind_function<"wan_fused_distributed_rmsnorm_create_stats_buffer", "ttnn.experimental.">(
         mod,

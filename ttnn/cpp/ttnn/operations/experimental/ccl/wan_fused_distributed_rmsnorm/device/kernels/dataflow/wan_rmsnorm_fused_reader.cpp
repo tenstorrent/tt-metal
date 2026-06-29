@@ -69,13 +69,20 @@ void kernel_main() {
     constexpr uint32_t SCHED_INPUT_FIRST = 0u;
     constexpr uint32_t SCHED_DEFER_ALL = 1u;
     constexpr uint32_t SCHED_SPLIT = 2u;
+    // Welford reciprocal LUT (LayerNorm). When use_recip_lut, read the reciprocals DRAM
+    // tensor once into recip_lut_cb at the top so compute reads it as the LLK's
+    // reciprocal_lut (array load vs soft-float 1/(N+1) per sample). recip accessor is the
+    // last TensorAccessorArgs; recip DRAM addr is reader RT arg 7.
+    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(18);
+    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(19);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
-    constexpr auto input_args = TensorAccessorArgs<18>();
+    constexpr auto input_args = TensorAccessorArgs<20>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
+    constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
 
     uint32_t arg_idx = 0;
     const uint32_t input_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -85,6 +92,7 @@ void kernel_main() {
     const uint32_t rope_sin_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t recip_addr = get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
     const uint32_t weight_tile_bytes = get_tile_size(weight_cb);
@@ -97,6 +105,19 @@ void kernel_main() {
     const auto bias_accessor = TensorAccessor(bias_args, bias_addr);
     const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr);
     const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr);
+
+    // Welford reciprocal LUT: read the whole [1, reduce_width] fp32 page (one DRAM page,
+    // reduce_width == num_tile_cols * 32 -> num_tile_cols * 128 bytes) into recip_lut_cb
+    // ONCE, before any row work, so compute's first welford_update has it. Compute reads
+    // it as std::array<uint32_t, reduce_width>; absent -> compute uses runtime division.
+    if constexpr (use_recip_lut) {
+        const auto recip_accessor = TensorAccessor(recip_args, recip_addr);
+        constexpr uint32_t recip_bytes = num_tile_cols * 128u;  // reduce_width * sizeof(float)
+        cb_reserve_back(recip_lut_cb, 1);
+        noc_async_read(get_noc_addr(0, recip_accessor), get_write_ptr(recip_lut_cb), recip_bytes);
+        noc_async_read_barrier();
+        cb_push_back(recip_lut_cb, 1);
+    }
 
     // Row-broadcast weight / bias live in a TILE-layout [1, H] tensor where
     // only the first face-row of each face carries data — the rest is zero.

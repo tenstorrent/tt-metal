@@ -129,7 +129,8 @@ bool decide_streaming_low_l1(
     uint32_t intermediate_tile_bytes,
     uint32_t output_tile_bytes,
     bool has_weight,
-    bool per_head_norm) {
+    bool per_head_norm,
+    uint32_t extra_resident_bytes = 0u) {
     // per_head_norm uses head-block reduces over small head_dim shards; its L1
     // profile never overflows and the streamed compute path only handles the
     // whole-row reduce, so never auto-enable streaming for it.
@@ -148,7 +149,12 @@ bool decide_streaming_low_l1(
     const uint64_t weight_bytes = has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;
     constexpr uint64_t kFixedOverheadBytes = 196608ull;      // ~192 KB of small CBs
     constexpr uint64_t kResidentL1BudgetBytes = 1572864ull;  // static-CB cap per core
-    const uint64_t total = input_bytes + intermediate_bytes + output_bytes + weight_bytes + kFixedOverheadBytes;
+    // extra_resident_bytes: CBs the resident layout adds beyond the above (e.g. the
+    // Welford recip LUT, reduce_width*4 B). Counting them here lets a borderline-resident
+    // shard (e.g. LTX TP2 at 64 tiles) correctly fall to the streaming/block-major layout
+    // instead of overflowing L1 with the extra CB.
+    const uint64_t total =
+        input_bytes + intermediate_bytes + output_bytes + weight_bytes + kFixedOverheadBytes + extra_resident_bytes;
     return total > kResidentL1BudgetBytes;
 }
 // Block-major POST fallback. Streaming input_cb alone (decide_streaming_low_l1)
@@ -304,6 +310,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const auto& trans_mat = tensor_args.transformation_mat;
     const auto& rope_cos = tensor_args.rope_cos;
     const auto& rope_sin = tensor_args.rope_sin;
+    const auto& reciprocals = tensor_args.reciprocals;
 
     Program program = CreateProgram();
 
@@ -504,6 +511,17 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const tt::DataFormat intermediate_format = fp32_dest_acc_en ? fp32_format : bf16_format;
     const uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
 
+    // Welford reciprocal LUT (LayerNorm only): a caller-provided fp32 [.., reduce_width]
+    // DRAM tensor of [1/1..1/reduce_width]. The reader NoC-reads it once into a CB so the
+    // Welford LLK does an array load instead of a soft-float 1/(N+1) per sample (PRE is
+    // ~90% of LN compute; the division is ~15-30% of PRE). Absent -> runtime-division
+    // fallback. reduce_width == feat_local == num_tile_cols * 32; the LUT is one row-major
+    // page of reduce_width * sizeof(float) bytes (== num_tile_cols * 128). Defined here
+    // (before the streaming decision) so its resident CB cost is accounted for.
+    const bool is_layernorm = (args.norm_type == WanFusedNormType::LAYERNORM);
+    const bool use_recip_lut = is_layernorm && reciprocals.has_value();
+    const uint32_t recip_lut_bytes = num_tile_cols * 128u;
+
     // Streaming low-L1 fallback: when the resident input_cb + row-sized
     // intermediate/rotated/output CBs would overflow L1, stream input_cb in
     // block_size chunks for PRE + a POST re-read pass instead. See
@@ -516,7 +534,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         intermediate_tile_size,
         output_tile_size,
         has_weight,
-        args.per_head_norm);
+        args.per_head_norm,
+        use_recip_lut ? recip_lut_bytes : 0u);
     // Block-major POST: even input-streaming leaves intermediate/rotated/output
     // whole-row, which overflows L1 on wide low-TP shards. When so, shrink those
     // CBs to block-local + run the fused per-block POST. Margin below l1_size_per_core
@@ -534,11 +553,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // streaming-input (Welford PRE re-reads the row) + block-major POST machinery
     // as RMS; the reader's defer_input (block_major && is_tp_1 && streaming) keeps
     // the no-AG path from deadlocking. per_head_norm LayerNorm is not supported.
-    const bool is_layernorm = (args.norm_type == WanFusedNormType::LAYERNORM);
     if (is_layernorm) {
         TT_FATAL(!args.per_head_norm, "LayerNorm does not support per_head_norm (block-major head-major path)");
     }
-    const uint64_t l1_cap_bytes = static_cast<uint64_t>(device->l1_size_per_core()) - 112640ull;
+    // is_layernorm / use_recip_lut / recip_lut_bytes are defined above (before the
+    // streaming decision, so the recip CB's resident cost is accounted for there).
+    uint64_t l1_cap_bytes = static_cast<uint64_t>(device->l1_size_per_core()) - 112640ull;
+    if (use_recip_lut) {
+        // Account for the resident recip CB so the block-major decision still fits L1.
+        l1_cap_bytes -= recip_lut_bytes;
+    }
     const bool overflows_resident_post = decide_block_major_post(
         num_tile_cols,
         block_size,
@@ -552,8 +576,19 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // When the resident POST overflows, the whole-row path MUST stream (block-major
     // re-reads input pass 1), so force streaming even if the input alone would fit
     // (decide_streaming_low_l1 false). Then block-major engages on the overflow.
-    const bool streaming_low_l1 = streaming_input || (overflows_resident_post && !args.per_head_norm);
-    const bool block_major_post = overflows_resident_post && (streaming_low_l1 || args.per_head_norm);
+    // The recip CB (reduce_width*4 B) pushes a borderline-resident AG LayerNorm shard
+    // (e.g. LTX TP2 at 64 tiles, only ~6.7 KB resident headroom) over L1. The resident-fit
+    // heuristics are intentionally loose (they undercount the AG stats/packet CBs by
+    // ~100 KB; see the decide_streaming accounting TODO), so neither catches the ~1.5 KB
+    // overflow. Force the streaming + block-major layout for wide-ish AG LN-with-recip
+    // shards: block-major makes the whole-row POST CBs block-local, freeing far more than
+    // the recip CB costs. The 56-tile threshold keeps the smaller AG configs resident
+    // (WAN TP4=40, FLUX TP2=48 fit the recip CB) while catching LTX TP2 (64).
+    const bool force_recip_stream = use_recip_lut && use_mux && (num_tile_cols >= 56u);
+    const bool streaming_low_l1 =
+        streaming_input || force_recip_stream || (overflows_resident_post && !args.per_head_norm);
+    const bool block_major_post =
+        (overflows_resident_post || force_recip_stream) && (streaming_low_l1 || args.per_head_norm);
     // TP>1 wide (streaming input 2-pass + block-major POST + fabric AG) uses the
     // reader's SPLIT input schedule: the PRE pass is read first so the local stats /
     // ring gather start ASAP, then the side inputs, then the POST re-read pass (weight
@@ -649,6 +684,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     constexpr uint32_t packet_cb_id = tt::CBIndex::c_17;  // forwarder coalesced packet (grid-wide, depth 2)
     constexpr uint32_t stats_transposed_gathered_cb_id = tt::CBIndex::c_19;
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_20;
+    // Welford reciprocal LUT CB (LayerNorm; c_18 is otherwise free). One contiguous page
+    // of reduce_width fp32 reciprocals; the reader fills it once, compute reads it as a
+    // std::array<uint32_t, reduce_width>. A tiny stub when the LUT is unused.
+    constexpr uint32_t recip_lut_cb_id = tt::CBIndex::c_18;
 
     // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
     // chunk N's post phase. The cumulative cb_wait_front in compute pairs
@@ -728,6 +767,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     create_cb(weight_cb_id, program, worker_core_set, bf16_tile_size, weight_cb_tiles, bf16_format);
     const uint32_t bias_cb_tiles = has_bias ? (per_token_bias ? chunk_size_rows * num_tile_cols : num_tile_cols) : 1;
     create_cb(bias_cb_id, program, worker_core_set, bf16_tile_size, bias_cb_tiles, bf16_format);
+    // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
+    // stub when unused (the reader/compute gate on use_recip and never touch it).
+    create_cb(recip_lut_cb_id, program, worker_core_set, use_recip_lut ? recip_lut_bytes : 4u, 1u, fp32_format);
 
     create_cb(reduce_scalar_sum_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
     create_cb(reduce_scalar_avg_cb_id, program, worker_core_set, fp32_tile_size, 1, fp32_format);
@@ -893,6 +935,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // the AG (ring>1) block-major path — fixes the deadlock without delaying the AG).
         static_cast<uint32_t>(
             (block_major_post && streaming_low_l1) ? (is_tp_1 ? 1u /*DEFER_ALL*/ : 2u /*SPLIT*/) : 0u /*INPUT_FIRST*/),
+        // CT 18/19: recip LUT (LayerNorm). use_recip gates a one-time DRAM read of the
+        // reciprocals tensor into recip_lut_cb at the top of the reader; compute then
+        // reads the CB as the Welford reciprocal_lut. recip accessor is appended last.
+        static_cast<uint32_t>(use_recip_lut),
+        recip_lut_cb_id,
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -911,6 +958,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     } else {
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+    }
+    // Recip LUT accessor (last). Dummy=input when the LUT is unused.
+    if (use_recip_lut) {
+        TensorAccessorArgs(reciprocals.value().buffer()).append_to(reader_compile_args);
+    } else {
+        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -1098,6 +1151,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
         static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
         static_cast<uint32_t>(args.norm_type),    // 0=RMS (sum-of-squares), 1=Welford LayerNorm (mean/variance)
+        // CT 39/40: recip LUT (LayerNorm). When use_recip the LN kernel reads recip_lut_cb
+        // as a std::array<uint32_t, reduce_width> and passes it to welford_update/finalize
+        // (array load vs soft-float 1/(N+1)); else it uses the runtime-division fallback.
+        recip_lut_cb_id,
+        static_cast<uint32_t>(use_recip_lut),
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
@@ -1140,6 +1198,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
     const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
     const uint32_t trans_mat_addr_rt = fuse_rope ? trans_mat.value().buffer()->address() : 0u;
+    const uint32_t recip_addr_rt = use_recip_lut ? reciprocals.value().buffer()->address() : 0u;
     const uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
 
     uint32_t out_ready_sem_bank_addr = 0;
@@ -1172,7 +1231,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         const uint32_t this_core_rows = tile_row_end - tile_row_start;
 
         std::vector<uint32_t> reader_rt_args = {
-            input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, tile_row_start, tile_row_end};
+            input_addr,
+            weight_addr,
+            bias_addr,
+            rope_cos_addr,
+            rope_sin_addr,
+            tile_row_start,
+            tile_row_end,
+            recip_addr_rt};  // RT 7: recip LUT DRAM addr (0 when unused; refreshed on cache hit)
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         std::vector<uint32_t> writer_rt_args;
@@ -1288,6 +1354,9 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
     // index is captured in shared.stats_dram_addr_writer_arg_idx (set at
     // create_at time, only on the all-gather path).
     const uint32_t stats_dram_addr = tensor_return_value.size() > 1 ? tensor_return_value[1].buffer()->address() : 0u;
+    // Recip LUT tensor is also a regular (caller-owned) device tensor; refresh its addr.
+    const uint32_t recip_addr =
+        tensor_args.reciprocals.has_value() ? tensor_args.reciprocals.value().buffer()->address() : 0u;
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared = cached_workload.shared_variables.at(range);
@@ -1304,6 +1373,7 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
             reader_args[2] = bias_addr;
             reader_args[3] = rope_cos_addr;
             reader_args[4] = rope_sin_addr;
+            reader_args[7] = recip_addr;  // RT 7: recip LUT DRAM addr
 
             auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
             writer_args[0] = output_addr;
