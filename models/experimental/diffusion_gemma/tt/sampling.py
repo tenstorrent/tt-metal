@@ -220,6 +220,6 @@ def softmax(logits, temperature: float = 1.0, *, compute_kernel_config: Optional
     if compute_kernel_config is not None:
         probs = ttnn.softmax(z, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config)
     else:
-        probs = ttnn.softmax(z, dim=-1)
+        probs = ttnn.softmax(z, dim=-1, numeric_stable=True)
     _deallocate_scaled_if_temporary(z, logits)
     return probs

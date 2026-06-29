@@ -56,3 +56,21 @@ def test_ttnn_gumbel_noise_helpers_reject_nonpositive_seed(seed):
         TS.sample_gumbel_noise_with_permuted_vocab((1, 1, 32, 32), device=device, seed=seed)
     with pytest.raises(ValueError, match="positive nonzero"):
         TS.sample_gumbel_noise_by_vocab_chunks((1, 1, 32, 32), device=device, seed=seed)
+
+
+def test_softmax_uses_numeric_stable_default(monkeypatch):
+    calls = {}
+    logits = object()
+
+    def fake_softmax(tensor, **kwargs):
+        calls["tensor"] = tensor
+        calls["kwargs"] = kwargs
+        return "probs"
+
+    monkeypatch.setattr(TS.ttnn, "softmax", fake_softmax)
+
+    assert TS.softmax(logits) == "probs"
+    assert calls == {
+        "tensor": logits,
+        "kwargs": {"dim": -1, "numeric_stable": True},
+    }
