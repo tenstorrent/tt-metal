@@ -1,23 +1,29 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Guards for the DiffusionGemma-local denoise attention + model.
+
+These RoPE-offset / cache-slice guards used to live in the shared Gemma4 prefill
+op; they now belong to DiffusionGemma so the backbone stays untouched. The
+denoise pass is single-user, so ``validate_q_rope_offset`` only enforces tile
+alignment (no batched-prefill case).
+"""
+
 import pytest
 import torch
 from types import SimpleNamespace
 
-from models.demos.gemma4.tt.attention.prefill import _slice_rope_cache, _validate_q_rope_offset
-from models.demos.gemma4.tt.model import Gemma4Model
+from models.experimental.diffusion_gemma.tt.diffusion_attention import _slice_rope_cache, validate_q_rope_offset
+from models.experimental.diffusion_gemma.tt.model import DiffusionGemma4Model
 
 
 def test_q_rope_offset_must_be_tile_aligned():
-    _validate_q_rope_offset(32, batch_size=1)
+    validate_q_rope_offset(32)
+    validate_q_rope_offset(0)
     with pytest.raises(ValueError, match="q_rope_offset must be a multiple of 32"):
-        _validate_q_rope_offset(1, batch_size=1)
+        validate_q_rope_offset(1)
     with pytest.raises(ValueError, match="RoPE cache start must be a multiple of 32"):
         _slice_rope_cache(None, 1, 32)
-
-
-def test_batched_prefill_rejects_nonzero_q_rope_offset():
-    _validate_q_rope_offset(0, batch_size=2)
-    with pytest.raises(ValueError, match="nonzero q_rope_offset is only supported for single-user prefill"):
-        _validate_q_rope_offset(32, batch_size=2)
 
 
 def test_get_rope_mats_reaches_256k_and_rejects_overflow():
@@ -32,11 +38,11 @@ def test_get_rope_mats_reaches_256k_and_rejects_overflow():
         },
     )
 
-    cos, sin = Gemma4Model._get_rope_mats(model, 0, seq_len=cache_len)
+    cos, sin = DiffusionGemma4Model._get_rope_mats(model, 0, seq_len=cache_len)
     assert cos.shape[-2] == cache_len
     assert sin.shape[-2] == cache_len
     with pytest.raises(ValueError, match="requested RoPE seq_len 262176 exceeds cache length 262144"):
-        Gemma4Model._get_rope_mats(model, 0, seq_len=cache_len + 32)
+        DiffusionGemma4Model._get_rope_mats(model, 0, seq_len=cache_len + 32)
 
 
 def test_slice_rope_cache_rejects_overflow():

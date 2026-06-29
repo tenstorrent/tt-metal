@@ -211,11 +211,6 @@ class Gemma4DecoderLayer:
         user_id=0,
         valid_seq_len=None,
         sequential_kv_write=False,
-        kv_phase=None,
-        attn_mask=None,
-        kv_hidden_states=None,
-        prefix_kv=None,
-        q_rope_offset=0,
     ):
         """
         Decoder layer forward pass.
@@ -257,11 +252,6 @@ class Gemma4DecoderLayer:
             user_id=user_id,
             valid_seq_len=valid_seq_len,
             sequential_kv_write=sequential_kv_write,
-            kv_phase=kv_phase,
-            attn_mask=attn_mask,
-            kv_hidden_states=kv_hidden_states,
-            prefix_kv=prefix_kv,
-            q_rope_offset=q_rope_offset,
         )
 
         if isinstance(attn_output, torch.Tensor):

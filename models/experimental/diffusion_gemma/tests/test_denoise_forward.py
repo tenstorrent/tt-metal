@@ -3,9 +3,9 @@
 
 from types import SimpleNamespace
 
-from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 import pytest
 
+from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
     _build_denoise_attn_mask_for_layer,
@@ -26,17 +26,23 @@ class _FakeTensor:
 
 
 class _FakeAttention:
-    def __init__(self):
-        self.kwargs = None
-
-    def __call__(self, hidden_states, **kwargs):
-        self.kwargs = kwargs
-        return hidden_states
+    """Stand-in for a Gemma4Attention instance (identity marker)."""
 
 
 class _FakeLayer:
     def __init__(self):
         self.self_attn = _FakeAttention()
+
+
+class _RecordingDenoiseAttention:
+    """Records the args ``denoise_attention`` is called with and echoes hidden."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, attn, hidden_states, **kwargs):
+        self.calls.append((attn, hidden_states, kwargs))
+        return hidden_states
 
 
 class _FakeModel:
@@ -53,8 +59,10 @@ class _FakeModel:
         return ("cos", "sin")
 
 
-def test_denoise_attention_defaults_to_maskless_noncausal_prefix_kv():
+def test_denoise_attention_defaults_to_maskless_noncausal_prefix_kv(monkeypatch):
     model = _FakeModel()
+    recorder = _RecordingDenoiseAttention()
+    monkeypatch.setattr(DF, "denoise_attention", recorder)
     prompt_kv = (_FakeTensor([1, 1, 64, 16]), _FakeTensor([1, 1, 64, 16]))
     canvas_hidden = _FakeTensor([1, 1, 256, 32])
 
@@ -66,18 +74,20 @@ def test_denoise_attention_defaults_to_maskless_noncausal_prefix_kv():
     )
 
     assert out is canvas_hidden
-    kwargs = model.layers[0].self_attn.kwargs
-    assert kwargs["is_decode"] is False
-    assert kwargs["is_causal"] is False
-    assert kwargs["kv_phase"] is KVCachePhase.DENOISE_READONLY
+    attn, hidden, kwargs = recorder.calls[0]
+    assert attn is model.layers[0].self_attn
+    assert hidden is canvas_hidden
     assert kwargs["attn_mask"] is None
+    assert kwargs["kv_hidden_states"] is None
     assert kwargs["prefix_kv"] is prompt_kv
     assert kwargs["q_rope_offset"] == 64
     assert model.rope_requests == [(0, 320)]
 
 
-def test_denoise_attention_accepts_explicit_canvas_rope_offset_for_later_blocks():
+def test_denoise_attention_accepts_explicit_canvas_rope_offset_for_later_blocks(monkeypatch):
     model = _FakeModel()
+    recorder = _RecordingDenoiseAttention()
+    monkeypatch.setattr(DF, "denoise_attention", recorder)
     prompt_kv = (_FakeTensor([1, 1, 64, 16]), _FakeTensor([1, 1, 64, 16]))
     canvas_hidden = _FakeTensor([1, 1, 256, 32])
 
@@ -89,7 +99,7 @@ def test_denoise_attention_accepts_explicit_canvas_rope_offset_for_later_blocks(
         q_rope_offset=64 + 2 * 256,
     )
 
-    kwargs = model.layers[0].self_attn.kwargs
+    _, _, kwargs = recorder.calls[0]
     assert kwargs["q_rope_offset"] == 576
     assert model.rope_requests == [(0, 832)]
 

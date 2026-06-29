@@ -17,7 +17,6 @@ from typing import Callable, NamedTuple
 import torch
 import ttnn
 
-from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
@@ -221,7 +220,6 @@ def prefill_prompt_tokens(tt_model, prompt_tokens: torch.Tensor, *, page_table=N
         get_last_token=((prompt_len - 1) // 32) * 32,
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
-        kv_phase=KVCachePhase.PREFILL_WRITE,
     )
     logits.deallocate(True)
     return prompt_len
@@ -528,7 +526,6 @@ def commit_canvas_tokens(
             device_inputs[2],
             device_inputs[3],
             page_tables_per_layer=page_tables_per_layer,
-            kv_phase=KVCachePhase.COMMIT_APPEND,
         )
         logits.deallocate(True)
         _deallocate_decode_inputs(device_inputs)

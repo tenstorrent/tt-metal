@@ -22,7 +22,6 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
-from models.demos.gemma4.tt.attention.kv_phase import coerce_kv_cache_phase
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -52,9 +51,7 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
-    # Gemma4TextRotaryEmbedding uses x only for dtype/device, not hidden width.
-    # Keep this tiny so 256K RoPE caches do not allocate a multi-GB dummy.
-    x_dummy = torch.empty(1, max_seq_len, 1)
+    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}
@@ -475,8 +472,6 @@ class Gemma4Model:
             return self.rope_caches_2d[layer_type]
         cos, sin = self.rope_caches[layer_type]
         if seq_len is not None:
-            if seq_len > cos.shape[-2]:
-                raise ValueError(f"requested RoPE seq_len {seq_len} exceeds cache length {cos.shape[-2]}")
             cos = cos[:, :, :seq_len, :]
             sin = sin[:, :, :seq_len, :]
         return (cos, sin)
@@ -501,11 +496,6 @@ class Gemma4Model:
         user_id=0,
         return_hidden=False,
         sequential_kv_write=False,
-        kv_phase=None,
-        attn_mask=None,
-        kv_hidden_states=None,
-        prefix_kv_by_layer=None,
-        q_rope_offset=0,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -535,14 +525,10 @@ class Gemma4Model:
                 The vLLM hybrid kv-cache manager produces this list so
                 sliding-window layers can index a smaller paged pool than
                 full-attention layers (KV cache groups).
-            kv_phase: optional explicit KV write discipline. Defaults preserve
-                existing Gemma4 behavior; ``DENOISE_READONLY`` forbids writes
-                into the frozen prompt/committed cache.
         """
         seq_len = hidden_states.shape[2]
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
-        kv_phase = coerce_kv_cache_phase(kv_phase, is_decode=is_decode)
 
         # Real (unpadded) prefill length: the prompt is padded up to a power of 2
         # for the single prefill chunk, and bounded sliding layers must NOT write
@@ -557,15 +543,6 @@ class Gemma4Model:
             raise ValueError(
                 f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
                 f"but model has {len(self.layers)} layers"
-            )
-        if prefix_kv_by_layer is not None and len(prefix_kv_by_layer) != len(self.layers):
-            raise ValueError(
-                f"prefix_kv_by_layer has {len(prefix_kv_by_layer)} entries but model has {len(self.layers)} layers"
-            )
-        if len(self.layers) != 1 and (kv_hidden_states is not None or q_rope_offset != 0):
-            raise ValueError(
-                "model-level kv_hidden_states/q_rope_offset are only supported for single-layer calls; "
-                "use per-layer denoise helpers with prefix_kv_by_layer for multi-layer models"
             )
 
         # Compute per-layer inputs (E2B/E4B)
@@ -637,7 +614,6 @@ class Gemma4Model:
                 keep_kv = True
 
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
-            prefix_kv = prefix_kv_by_layer[i] if prefix_kv_by_layer is not None else None
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
@@ -655,11 +631,6 @@ class Gemma4Model:
                 user_id=user_id,
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
-                kv_phase=kv_phase,
-                attn_mask=attn_mask,
-                kv_hidden_states=kv_hidden_states,
-                prefix_kv=prefix_kv,
-                q_rope_offset=q_rope_offset,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -806,14 +777,7 @@ class Gemma4Model:
         return {lt: self.tt_kv_cache[idx] for lt, idx in self.last_kv_layer_by_type.items()}
 
     def ttnn_verify_forward(
-        self,
-        x,
-        current_pos,
-        current_pos_cache=None,
-        page_table=None,
-        kv_cache=None,
-        page_tables_per_layer=None,
-        kv_phase=None,
+        self, x, current_pos, current_pos_cache=None, page_table=None, kv_cache=None, page_tables_per_layer=None
     ):
         """Multi-token speculative *verify* forward (batch holds the candidates).
 
@@ -865,7 +829,6 @@ class Gemma4Model:
             # `_verify_seq_kv_write=False` to measure the cost of the per-candidate
             # serialized KV-write loop (KV is corrupted when False — timing only).
             sequential_kv_write=getattr(self, "_verify_seq_kv_write", True),
-            kv_phase=kv_phase,
         )
 
     def compute_host_pli(self, token_id):
@@ -1138,11 +1101,6 @@ class Gemma4Model:
         input_ids_torch=None,
         embeds_torch=None,
         page_tables_per_layer=None,
-        kv_phase=None,
-        attn_mask=None,
-        kv_hidden_states=None,
-        prefix_kv_by_layer=None,
-        q_rope_offset=0,
         **kwargs,
     ):
         """Prefill forward — Generator-compatible signature.
@@ -1186,11 +1144,6 @@ class Gemma4Model:
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
             user_id=user_id,
-            kv_phase=kv_phase,
-            attn_mask=attn_mask,
-            kv_hidden_states=kv_hidden_states,
-            prefix_kv_by_layer=prefix_kv_by_layer,
-            q_rope_offset=q_rope_offset,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -1332,7 +1285,6 @@ class Gemma4Model:
         on_device_logits=False,
         pli_combined=None,
         page_tables_per_layer=None,
-        kv_phase=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -1392,7 +1344,6 @@ class Gemma4Model:
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
             page_tables_per_layer=page_tables_per_layer,
-            kv_phase=kv_phase,
         )
 
         if on_device_logits:

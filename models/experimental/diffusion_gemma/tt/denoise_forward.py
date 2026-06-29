@@ -15,8 +15,8 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
+from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
     build_self_conditioning,
     build_self_conditioning_embedding_weight,
@@ -143,12 +143,10 @@ def denoise_attention_forward(
     canvas_len = canvas_hidden.shape[-2]
     q_rope_offset = prompt_len if q_rope_offset is None else q_rope_offset
     kv_hidden = None if prompt_kv is not None else ttnn.concat([prompt_hidden, canvas_hidden], dim=2)
-    out = tt_model.layers[layer_idx].self_attn(
+    out = denoise_attention(
+        tt_model.layers[layer_idx].self_attn,
         canvas_hidden,
         rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=q_rope_offset + canvas_len),
-        is_decode=False,
-        is_causal=False,
-        kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
         prefix_kv=prompt_kv,
@@ -169,12 +167,10 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, at
     normed = layer.input_layernorm.forward(hidden_states)
     prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list)) else None
     kv_hidden = None if prefix_kv is not None else ttnn.concat([prompt_source, normed], dim=2)
-    attn_output = layer.self_attn(
+    attn_output = denoise_attention(
+        layer.self_attn,
         normed,
         rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=q_rope_offset + hidden_states.shape[-2]),
-        is_decode=False,
-        is_causal=False,
-        kv_phase=KVCachePhase.DENOISE_READONLY,
         attn_mask=attn_mask,
         kv_hidden_states=kv_hidden,
         prefix_kv=prefix_kv,
@@ -302,7 +298,6 @@ def collect_prompt_hidden_by_layer(tt_model, prompt_hidden):
             page_table=None,
             kv_cache=None,
             is_decode=False,
-            kv_phase=KVCachePhase.DENOISE_READONLY,
         )
     hidden_states.deallocate(True)
     return prompt_hidden_by_layer
@@ -327,7 +322,6 @@ def collect_prompt_kv_by_layer(tt_model, prompt_hidden):
             kv_cache=None,
             is_decode=False,
             keep_kv=True,
-            kv_phase=KVCachePhase.DENOISE_READONLY,
         )
         prompt_kv_by_layer.append(layer.self_attn._last_kv)
     hidden_states.deallocate(True)

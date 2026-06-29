@@ -29,10 +29,12 @@ from transformers.models.gemma4.modeling_gemma4 import (
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
-from models.demos.gemma4.tt.attention.prefill import _slice_rope_cache
-from models.demos.gemma4.tt.attention.operations import prefill_sdpa_program_config
+from models.experimental.diffusion_gemma.tt.diffusion_attention import (
+    _denoise_sdpa_program_config,
+    _slice_rope_cache,
+)
 from models.demos.gemma4.tt.ccl import CCLManager
-from models.demos.gemma4.tt.model import Gemma4Model
+from models.experimental.diffusion_gemma.tt.model import DiffusionGemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.experimental.diffusion_gemma.tt.denoise_forward import denoise_attention_forward
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -236,7 +238,7 @@ def _run_long_noncausal_sdpa(device, *, sk, head_dim, masked, pcc=0.99):
         tt_v,
         attn_mask=tt_mask,
         is_causal=False,
-        program_config=prefill_sdpa_program_config(head_dim, CANVAS_LEN, sk),
+        program_config=_denoise_sdpa_program_config(head_dim, CANVAS_LEN, sk),
         compute_kernel_config=compute_kernel_config,
     )
     out = ttnn.to_torch(tt_out)[:, :, :CANVAS_LEN, :]
@@ -297,7 +299,7 @@ def test_w2b_integrated_long_prompt_denoise_attention(device, layer_type, prompt
     model_args._hf_text_config = config
     tp = device.shape[1] if hasattr(device, "shape") else 1
     mesh_config = MeshConfig(device.shape, decode=ModeConfig(tp=tp))
-    tt_model = Gemma4Model(
+    tt_model = DiffusionGemma4Model(
         mesh_device=device,
         hf_config=model_args,
         state_dict=_to_tt_state(hf_model),

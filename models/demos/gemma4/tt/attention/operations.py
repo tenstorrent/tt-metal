@@ -124,14 +124,16 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None):
         token_index: int or None. If int (decode), slices into cache at that position.
                      If None (prefill), applies to full sequence.
 
-    Note: rotary_embedding can pad dim 2 to TILE_HEIGHT (32). Restore the
-    original logical shape so Q/K sequence lengths keep matching non-RoPE V.
+    Note: rotary_embedding pads dim 2 to TILE_HEIGHT (32) in decode mode.
+    We reshape+slice to restore the original logical shape, following the
+    tt_transformers _hf_rope_decode pattern.
     """
     orig_shape = tensor.shape
     result = ttnn.experimental.rotary_embedding(tensor, cos_cache, sin_cache, token_index)
 
+    # In decode mode (token_index provided), dim 2 gets padded to 32.
     # Reshape to indicate logical vs padded size, then slice back.
-    if result.shape[2] != orig_shape[2]:
+    if token_index is not None and result.shape[2] != orig_shape[2]:
         result = ttnn.reshape(
             result,
             (orig_shape[0], orig_shape[1], orig_shape[2], orig_shape[3]),
@@ -171,16 +173,7 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b):
     return ttnn.add(ttnn.mul(tensor, cos_b), ttnn.mul(_rotate_half(tensor), sin_b))
 
 
-def _largest_tile_divisor(length, preferred):
-    """Pick a tile-multiple chunk size that divides ``length``."""
-    start = (min(preferred, length) // 32) * 32
-    for candidate in range(start, 31, -32):
-        if length % candidate == 0:
-            return candidate
-    return 32
-
-
-def prefill_sdpa_program_config(head_dim, seq_len, k_seq_len=None):
+def prefill_sdpa_program_config(head_dim, seq_len):
     """Tuned SDPAProgramConfig for the non-chunked prefill path (seq <= 32768).
 
     The op defaults to small auto-picked q/k chunks; explicit larger chunks cut
@@ -204,9 +197,8 @@ def prefill_sdpa_program_config(head_dim, seq_len, k_seq_len=None):
     q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
     k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
     # Chunk sizes must be a multiple of 32 and not exceed the (padded) seq_len.
-    k_seq_len = seq_len if k_seq_len is None else k_seq_len
-    q_chunk = _largest_tile_divisor(seq_len, q_chunk)
-    k_chunk = _largest_tile_divisor(k_seq_len, k_chunk)
+    q_chunk = max(32, min(q_chunk, seq_len))
+    k_chunk = max(32, min(k_chunk, seq_len))
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid,
         q_chunk_size=q_chunk,

@@ -39,7 +39,6 @@ def decode_forward(
     is_kv_shared=False,
     position_idx_cache=None,
     sequential_kv_write=False,
-    write_kv_cache=True,
 ):
     """
     Single-token decode attention, fully on device.
@@ -130,7 +129,7 @@ def decode_forward(
     )
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
-        if write_kv_cache and not is_kv_shared:
+        if not is_kv_shared:
             # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update.
             tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
             tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
@@ -281,9 +280,6 @@ def decode_forward(
             program_config=sdpa_program_config,
         )
     tt_q.deallocate(True)
-    if kv_cache is not None and not write_kv_cache and not is_kv_shared:
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
 
     # 7. Concat heads + output projection + allreduce
     num_local_heads = config.num_attention_heads // tp

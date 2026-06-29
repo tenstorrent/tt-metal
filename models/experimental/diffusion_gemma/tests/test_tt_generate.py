@@ -2520,7 +2520,8 @@ def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
     assert torch.equal(kwargs["input_ids_torch"][:, :3], prompt_tokens)
     assert torch.equal(kwargs["input_ids_torch"][:, 3:], torch.zeros((1, 29), dtype=prompt_tokens.dtype))
     assert kwargs["get_last_token"] == 0
-    assert kwargs["kv_phase"] is G.KVCachePhase.PREFILL_WRITE
+    # prefill writes the prompt KV via stock Gemma4 defaults (no diffusion kv_phase kwarg).
+    assert "kv_phase" not in kwargs
     assert kwargs["page_tables_per_layer"] == ["pages"]
 
 
