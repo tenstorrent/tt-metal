@@ -8,6 +8,8 @@ dispatch/combine reused verbatim + M3's clamped-swigluoai CompositeRoutedExpert)
 Needs multi-device + fabric. The single-device / non-EP expert backends were removed in the
 prefill cleanup; this mirrors deepseek_v3_d_p's EP-only MoE.
 """
+import os
+
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
@@ -104,27 +106,48 @@ class MLP:
             }
             for e in range(E)
         ]
-        self.experts = TtMiniMaxMoE(
-            mesh_device=mesh_device,
-            dispatch_group_size=dgs,
-            num_dispatch_groups=ndg,
-            experts_per_chip=experts_per_chip,
-            num_routed_experts=E,
-            num_experts_per_tok=hf_config.num_experts_per_tok,
-            metadata_len=metadata_len,
-            max_dispatched_tokens_per_expert=max_tok,
-            max_dispatch_buffer_token_size=max_buf,
-            seq_len_per_chip=ep_seq_len_per_chip,
-            emb_dim=hf_config.hidden_size,
-            hidden_dim=hf_config.intermediate_size,
-            gate_weights=router_state_dict,
-            routed_expert_weights=routed_w,
-            num_links=ccl_manager.num_links,
-            routed_expert_weights_dtype=expert_weight_dtype,
-            weight_cache_path=_ep_cache_dir(tensor_cache_path),
-            swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
-            alpha=getattr(hf_config, "swiglu_alpha", 1.702),
-        )
+        # M3_COMPOSITE_MOE=1 -> self-owned composite EP-MoE (AllGather tokens -> per-device weighted experts
+        # -> sum), which is CORRECT for M3's real-gate skewed routing. The DeepSeek dispatch/combine path is
+        # wrong for it (random routing PCC 0.998, real routing 0.607 — the DS all-to-all, not bf4/experts/
+        # capacity). Composite validated at SP=8xTP=4xEP=32 real weights = PCC 0.9998 (test_composite_moe_sp).
+        self.composite_moe = os.getenv("M3_COMPOSITE_MOE") == "1"
+        if self.composite_moe:
+            from .experts_throughput.composite_moe import CompositeEPMoE
+
+            self.experts = CompositeEPMoE(
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                mesh_config=mesh_config,
+                routed_expert_weights=routed_w,
+                emb_dim=hf_config.hidden_size,
+                hidden_dim=hf_config.intermediate_size,
+                num_experts=E,
+                weights_dtype=expert_weight_dtype,
+                swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
+                alpha=getattr(hf_config, "swiglu_alpha", 1.702),
+            )
+        else:
+            self.experts = TtMiniMaxMoE(
+                mesh_device=mesh_device,
+                dispatch_group_size=dgs,
+                num_dispatch_groups=ndg,
+                experts_per_chip=experts_per_chip,
+                num_routed_experts=E,
+                num_experts_per_tok=hf_config.num_experts_per_tok,
+                metadata_len=metadata_len,
+                max_dispatched_tokens_per_expert=max_tok,
+                max_dispatch_buffer_token_size=max_buf,
+                seq_len_per_chip=ep_seq_len_per_chip,
+                emb_dim=hf_config.hidden_size,
+                hidden_dim=hf_config.intermediate_size,
+                gate_weights=router_state_dict,
+                routed_expert_weights=routed_w,
+                num_links=ccl_manager.num_links,
+                routed_expert_weights_dtype=expert_weight_dtype,
+                weight_cache_path=_ep_cache_dir(tensor_cache_path),
+                swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
+                alpha=getattr(hf_config, "swiglu_alpha", 1.702),
+            )
         self.ep_num_links = ccl_manager.num_links
 
     def __call__(self, hidden_states):
