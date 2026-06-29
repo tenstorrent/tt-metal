@@ -77,6 +77,7 @@ def test_tt_env_snapshot_and_restore(monkeypatch):
         assert snapshot["AUDIOX_TT_OUT_CONV_STREAM_THRESHOLD"] == "1000000"
         assert snapshot["AUDIOX_TT_RESIDUAL_STREAM_STRIDE4_THRESHOLD"] == "999999999"
         assert snapshot["AUDIOX_TT_RESIDUAL_STREAM_STRIDE2_THRESHOLD"] == "220672"
+        assert snapshot["AUDIOX_TT_CPU_DECODE"] == "0"
     finally:
         stage3_profile_mod._restore_tt_env(previous)
 
@@ -198,12 +199,64 @@ def test_main_writes_stage3_profile_summary(tmp_path, monkeypatch):
     assert summary["tt_env"]["AUDIOX_TT_TRACE_REGION_SIZE"] == "1024"
     assert summary["tt_env"]["AUDIOX_TT_NUM_COMMAND_QUEUES"] == "2"
     assert summary["tt_env"]["AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK"] == "65536"
+    assert summary["tt_env"]["AUDIOX_TT_CPU_DECODE"] == "0"
     assert summary["perf_summary"]["generation_seconds"] == 9.5
     assert summary["perf_summary"]["decode_backend"] == "tt"
     assert summary["perf_summary"]["decoder_profile"]["blocks"][0]["seconds"] == 31.5
     assert summary["perf_summary"]["tt_timings"]["decode_seconds"] == 7.0
     assert summary["perf_summary"]["stage3_checks"]["diffusion_tps_ge_50"] is True
     assert summary["perf_summary"]["stage3_checks"]["generation_time_lt_10s"] is True
+    assert summary["perf_summary"]["stage3_checks"]["decode_backend_is_tt"] is True
+
+
+def test_main_rejects_cpu_decode_stage3_summary(tmp_path, monkeypatch):
+    def fake_validate_main(argv):
+        report_arg = Path(argv[argv.index("--report-json") + 1])
+        report_arg.write_text(
+            json.dumps(
+                {
+                    "conditioning_mode": "text-to-audio",
+                    "duration_seconds": 10,
+                    "steps": 1,
+                    "tt": {
+                        "valid_16khz": True,
+                        "generation_seconds": 7.0,
+                        "diffusion_tokens_per_second": 60.0,
+                        "sampling_seconds": 1.0,
+                        "timings": {
+                            "decode_seconds": 5.0,
+                            "conditioning_seconds": 0.5,
+                            "decode_backend": "cpu",
+                        },
+                    },
+                }
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(stage3_profile_mod.validate_mod, "main", fake_validate_main)
+    monkeypatch.setattr(stage3_profile_mod, "_register_rt_profiler", lambda _path: ("reg", []))
+    monkeypatch.setattr(stage3_profile_mod, "_unregister_rt_profiler", lambda _reg: None)
+
+    exit_code = stage3_profile_mod.main(
+        [
+            "--checkpoint",
+            "/tmp/audiox.ckpt",
+            "--prompt",
+            "rain",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    summary = json.loads((tmp_path / "stage3_profile_summary.json").read_text())
+    assert exit_code == 1
+    assert summary["perf_summary"]["decode_backend"] == "cpu"
+    assert summary["perf_summary"]["stage3_checks"]["decode_backend_is_tt"] is False
+    assert summary["error"] == {
+        "type": "Stage3ValidationError",
+        "message": "Stage 3 validation requires decode_backend == 'tt'",
+    }
 
 
 def test_main_writes_summary_when_validate_fails(tmp_path, monkeypatch):

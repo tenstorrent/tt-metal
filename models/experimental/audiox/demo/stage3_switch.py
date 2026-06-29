@@ -167,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         conv_transpose_height_slices=args.tt_conv_transpose_height_slices,
         conv_transpose_stride2_act_block_h=args.tt_conv_transpose_stride2_act_block_h,
         conv_transpose_stride4_act_block_h=args.tt_conv_transpose_stride4_act_block_h,
+        cpu_decode=False,
     )
     setup_started_at = time.perf_counter()
     device = _open_tt_device(device_id=args.tt_device_id)
@@ -244,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     summary_path = args.output_dir / "stage3_switch_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2) + "\n")
     print(f"stage3_switch_summary: {summary_path}")
-    return 0
+    return 0 if summary["stage3_checks"]["all_tt_decode"] else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

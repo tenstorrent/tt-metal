@@ -34,6 +34,7 @@ _TT_ENV_KEYS = (
     "AUDIOX_TT_OUT_CONV_STREAM_THRESHOLD",
     "AUDIOX_TT_RESIDUAL_STREAM_STRIDE4_THRESHOLD",
     "AUDIOX_TT_RESIDUAL_STREAM_STRIDE2_THRESHOLD",
+    "AUDIOX_TT_CPU_DECODE",
 )
 
 
@@ -81,7 +82,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.synthetic_video and (args.video is not None or args.image is not None):
         p.error("pass at most one of --synthetic-video, --video, or --image")
-    if not args.prompt and args.video is None and args.image is None and args.audio is None and not args.synthetic_video:
+    if (
+        not args.prompt
+        and args.video is None
+        and args.image is None
+        and args.audio is None
+        and not args.synthetic_video
+    ):
         p.error("at least one of --prompt, --video, --image, or --audio is required")
     return args
 
@@ -223,6 +230,7 @@ def _build_perf_summary(report: dict) -> dict:
     decode_seconds = timings.get("decode_seconds")
     conditioning_seconds = timings.get("conditioning_seconds")
     sampling_seconds = tt_summary.get("sampling_seconds")
+    decode_backend = timings.get("decode_backend")
 
     return {
         "model": "audiox",
@@ -234,16 +242,19 @@ def _build_perf_summary(report: dict) -> dict:
         "sampling_seconds": sampling_seconds,
         "decode_seconds": decode_seconds,
         "conditioning_seconds": conditioning_seconds,
-        "decoder_share_of_generation": None if not decode_seconds or generation_seconds == 0 else decode_seconds / generation_seconds,
+        "decoder_share_of_generation": None
+        if not decode_seconds or generation_seconds == 0
+        else decode_seconds / generation_seconds,
         "stage3_checks": {
             "valid_16khz": bool(tt_summary["valid_16khz"]),
             "tt_runs_without_error": True,
             "diffusion_tps_ge_50": tt_summary["diffusion_tokens_per_second"] >= 50.0,
             "generation_time_lt_10s": generation_seconds < 10.0,
             "long_audio_ge_30s": report["duration_seconds"] >= 30,
+            "decode_backend_is_tt": decode_backend == "tt",
         },
         "tt_timings": timings,
-        "decode_backend": timings.get("decode_backend"),
+        "decode_backend": decode_backend,
         "decoder_profile": timings.get("decoder_profile"),
     }
 
@@ -274,6 +285,7 @@ def _apply_tt_env_overrides(args: argparse.Namespace) -> dict:
         out_conv_stream_threshold=args.tt_out_conv_stream_threshold,
         residual_stream_stride4_threshold=args.tt_residual_stream_stride4_threshold,
         residual_stream_stride2_threshold=args.tt_residual_stream_stride2_threshold,
+        cpu_decode=False,
     )
 
 
@@ -304,12 +316,24 @@ def main(argv: list[str] | None = None) -> int:
         _restore_tt_env(previous_tt_env)
 
     report = json.loads(report_json.read_text()) if report_json.exists() else None
+    perf_summary = None if report is None else _build_perf_summary(report)
+    if (
+        error_summary is None
+        and exit_code == 0
+        and perf_summary is not None
+        and not perf_summary["stage3_checks"]["decode_backend_is_tt"]
+    ):
+        exit_code = 1
+        error_summary = {
+            "type": "Stage3ValidationError",
+            "message": "Stage 3 validation requires decode_backend == 'tt'",
+        }
     summary = {
         "report_json": str(report_json),
         "report_present": report is not None,
         "rt_profiler_jsonl": None if args.rt_profiler_jsonl is None else str(args.rt_profiler_jsonl),
         "tt_env": tt_env,
-        "perf_summary": None if report is None else _build_perf_summary(report),
+        "perf_summary": perf_summary,
         "realtime_profiler": _summarize_realtime_records(rows) if rows else None,
         "error": error_summary,
     }
