@@ -70,6 +70,7 @@ from models.common.utility_functions import skip_for_blackhole
     ids=["dram_in_l1_out_axis0"],
 )
 def test_all_to_all_combine_fabric_manager_8x4(
+    request,
     mesh_device,
     trace_mode,
     mesh_shape,
@@ -88,6 +89,8 @@ def test_all_to_all_combine_fabric_manager_8x4(
     output_memory_config,
 ):
     """Test all-to-all combine with fabric manager enabled on 8x4 grid."""
+    if "fabric_manager_enabled_2d" in request.node.name:
+        pytest.skip("Skipping fabric_manager_enabled_2d parametrization on Wormhole Galaxy due to ETH core heartbeat failures, refs #45740")
     batch = batches_per_device * mesh_shape[axis]
 
     run_all_to_all_combine_test(
