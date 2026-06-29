@@ -81,6 +81,17 @@ class TT_CCL:
             )
         self.weight_cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
         self.num_cbs = 2
+        # When a persistent output buffer is reused across non-blocking decode
+        # trace replays, line_all_gather normally drops the barrier semaphore
+        # (persistent buffer treated as a substitute for barrier syncing). That
+        # is unsafe for the sampling gathers (SAMPLING_VALUES/SAMPLING_INDICES):
+        # their consumers (ttnn.add offset / ttnn.sampling) run on the sampling
+        # sub-core grid, a different sub-device than the gather worker, so without
+        # a barrier the next step's gather can overwrite the buffer before the
+        # current step finishes reading it -> a few of 32 slots get stale
+        # candidates -> non-deterministic first decode token (flaky for months).
+        # Keep the barrier for these gathers even with a persistent buffer.
+        self._barrier_buffer_keys = {"SAMPLING_VALUES", "SAMPLING_INDICES", "SAMPLING"}
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
         self.cluster_shape = model_args.cluster_shape
@@ -1255,7 +1266,11 @@ class TT_CCL:
             # Wormhole / prefetcher path uses the experimental async all-gather (identical to main).
             # The Blackhole no-prefetcher bring-up uses the stable public all_gather below.
             barrier_semaphore = None
-            if persistent_buffer is None:
+            if persistent_buffer is None or buffer_key in self._barrier_buffer_keys:
+                # persistent_buffer is None -> normal barrier. buffer_key in the
+                # sampling set -> persistent buffer present but reused cross-step by a
+                # different sub-device consumer, so keep the barrier to enforce
+                # consume-before-overwrite ordering and restore deterministic sampling.
                 barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
             semaphores = (
                 self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][0]
