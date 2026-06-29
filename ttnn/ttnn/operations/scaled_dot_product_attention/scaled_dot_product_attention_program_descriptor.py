@@ -56,14 +56,19 @@ def create_program_descriptor(
     num_score_tiles = B_q_t * B_kv_t
 
     # Intermediate CB format: fp32 when fp32_dest_acc_en=True (accumulation crosses
-    # the CB between phases — running max/sum/output are parked there), input dtype
-    # when fp32_dest_acc_en=False.  See /numeric-formats-metal §4.
+    # the CB between phases — running max/sum/output are parked there), Float16_b
+    # (bf16) when fp32_dest_acc_en=False.  We use bf16 — NOT the input dtype —
+    # because bf8b is a block-float *storage* format whose shared-exponent grid
+    # cannot represent the dynamic range of accumulated values (scores, running
+    # max/sum, O).  bf16 is the 16-bit DEST-register format; matching it keeps
+    # the pack→unpack round-trip lossless at the phase boundary.  See
+    # /numeric-formats-metal §4.
     if fp32_dest_acc_en:
         interm_dtype = ttnn.float32
         interm_tile_size = fp32_tile_size
     else:
-        interm_dtype = query.dtype
-        interm_tile_size = tile_size
+        interm_dtype = ttnn.bfloat16
+        interm_tile_size = bf16_tile_size
 
     def cb(idx, pages):
         return ttnn.CBDescriptor(
