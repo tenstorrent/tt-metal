@@ -98,7 +98,7 @@ class FusedGolden:
         """
         sources = []
         seen = set()
-        for node in operation.math.operations:
+        for node in operation.math.math_nodes:
             if not hasattr(node, "src_a"):
                 continue
             for src in (node.src_a, node.src_b):

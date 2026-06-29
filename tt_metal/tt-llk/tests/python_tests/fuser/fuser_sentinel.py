@@ -80,7 +80,7 @@ class FuserSentinel:
         """
         from .fpu_node import FpuNode
 
-        for node in operation.math.operations:
+        for node in operation.math.math_nodes:
             if isinstance(node, FpuNode):
                 return node
         return None
