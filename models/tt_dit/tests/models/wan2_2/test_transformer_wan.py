@@ -20,7 +20,7 @@ from ....utils.golden import load_golden, save_golden
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params_req_exact_num_devices, ring_params_req_exact_num_devices
 
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
@@ -118,14 +118,44 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+        pytest.param(
+            (2, 2), (2, 2), 0, 1, 2, line_params_req_exact_num_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1"
+        ),
+        pytest.param(
+            (2, 4), (2, 4), 0, 1, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1"
+        ),
+        pytest.param(
+            (2, 4), (2, 4), 1, 0, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0"
+        ),
         # WH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
-        pytest.param((4, 32), (4, 32), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
+        pytest.param(
+            (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
+        ),
+        pytest.param(
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            2,
+            ring_params_req_exact_num_devices,
+            ttnn.Topology.Ring,
+            False,
+            id="ring_bh_4x8sp1tp0",
+        ),
+        pytest.param(
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            2,
+            line_params_req_exact_num_devices,
+            ttnn.Topology.Linear,
+            False,
+            id="line_bh_4x8sp1tp0",
+        ),
+        pytest.param(
+            (4, 32), (4, 32), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -289,14 +319,34 @@ def test_wan_transformer_block(
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+        pytest.param(
+            (2, 2), (2, 2), 0, 1, 2, line_params_req_exact_num_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1"
+        ),
+        pytest.param(
+            (2, 4), (2, 4), 0, 1, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1"
+        ),
+        pytest.param(
+            (2, 4), (2, 4), 1, 0, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0"
+        ),
         # WH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+        pytest.param(
+            (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
+        ),
         # BH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
+        pytest.param(
+            (4, 8), (4, 8), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"
+        ),
+        pytest.param(
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            2,
+            line_params_req_exact_num_devices,
+            ttnn.Topology.Linear,
+            False,
+            id="line_bh_4x8sp1tp0",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -416,13 +466,23 @@ def test_wan_transformer_model(
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((2, 2), (2, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
+        pytest.param(
+            (2, 2), (2, 2), 0, 1, 2, line_params_req_exact_num_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1"
+        ),
+        pytest.param(
+            (2, 4), (2, 4), 0, 1, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1"
+        ),
+        pytest.param(
+            (2, 4), (2, 4), 1, 0, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0"
+        ),
         # WH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
+        pytest.param(
+            (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
+        ),
         # BH (ring) on 4x8
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+        pytest.param(
+            (4, 8), (4, 8), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
