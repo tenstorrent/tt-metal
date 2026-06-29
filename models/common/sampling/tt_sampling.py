@@ -420,6 +420,7 @@ class TTSampling(LightweightModule):
             [valid_logits, masked_tail_logits],
             dim=3,
             memory_config=logits.memory_config(),
+            sub_core_grids=self.sub_core_grids,
         )
         ttnn.deallocate(valid_logits)
         ttnn.deallocate(tail_logits)
