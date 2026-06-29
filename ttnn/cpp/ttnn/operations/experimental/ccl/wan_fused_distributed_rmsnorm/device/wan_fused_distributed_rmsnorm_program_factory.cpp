@@ -1056,6 +1056,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(streaming_low_l1),
         static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
         static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
+        static_cast<uint32_t>(args.norm_type),    // 0=RMS (sum-of-squares), 1=Welford LayerNorm (mean/variance)
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32

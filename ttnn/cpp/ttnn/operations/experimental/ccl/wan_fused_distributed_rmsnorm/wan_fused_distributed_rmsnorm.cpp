@@ -35,7 +35,8 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     const std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    const bool use_device_op) {
+    const bool use_device_op,
+    const WanFusedNormType norm_type) {
     if (use_device_op) {
         // Dispatch to the new fused device op. Currently supports TP=1 only.
         return ttnn::prim::wan_fused_distributed_rmsnorm(
@@ -57,9 +58,13 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
             num_preferred_links,
             subdevice_id,
             memory_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            norm_type);
     }
 
+    // LayerNorm is only implemented on the fused device-op path (it needs the
+    // Welford pre/merge that the composite pre/post-allgather ops don't provide).
+    TT_FATAL(norm_type == WanFusedNormType::RMS, "norm_type=LAYERNORM is only supported with use_device_op=true");
     TT_FATAL(!bias.has_value(), "bias is only supported with use_device_op=true");
     TT_FATAL(!per_head_norm, "per_head_norm is only supported with use_device_op=true");
 

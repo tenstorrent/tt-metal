@@ -13,9 +13,12 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/wan_fused_distributed_rmsnorm.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
+
+using ttnn::experimental::WanFusedNormType;
 
 // Attributes for the fused Wan2.2 distributed RMSNorm device op.
 // Combines: per-row RMSNorm pre stats, ring all-gather of stats across the TP
@@ -28,6 +31,10 @@ struct WanFusedDistributedRmsnormParams {
     // (token, head) instead of the full row. When true, AG is skipped
     // entirely — each head is assumed local to chip.
     bool per_head_norm;
+
+    // Selects RMSNorm (sum-of-squares) vs Welford LayerNorm (mean/variance).
+    // Defaults to RMS so all existing call sites are unchanged.
+    WanFusedNormType norm_type;
 
     // Output dtype override (defaults to input dtype if unset).
     std::optional<DataType> dtype;
@@ -55,10 +62,12 @@ struct WanFusedDistributedRmsnormParams {
         ttnn::ccl::Topology topology,
         std::vector<GlobalSemaphore> multi_device_global_semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-        DeviceComputeKernelConfig compute_kernel_config) :
+        DeviceComputeKernelConfig compute_kernel_config,
+        WanFusedNormType norm_type = WanFusedNormType::RMS) :
         epsilon(epsilon),
         num_heads_per_device(num_heads_per_device),
         per_head_norm(per_head_norm),
+        norm_type(norm_type),
         dtype(dtype),
         output_mem_config(std::move(output_mem_config)),
         cluster_axis(cluster_axis),
@@ -75,6 +84,7 @@ struct WanFusedDistributedRmsnormParams {
         attrs.emplace_back("epsilon", epsilon);
         attrs.emplace_back("num_heads_per_device", num_heads_per_device);
         attrs.emplace_back("per_head_norm", per_head_norm);
+        attrs.emplace_back("norm_type", static_cast<uint8_t>(norm_type));
         attrs.emplace_back("dtype", dtype);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("cluster_axis", cluster_axis);

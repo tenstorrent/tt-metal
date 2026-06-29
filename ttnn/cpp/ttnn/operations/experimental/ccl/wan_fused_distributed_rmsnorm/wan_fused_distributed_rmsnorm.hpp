@@ -14,6 +14,14 @@
 
 namespace ttnn::experimental {
 
+// Which normalization the fused op computes. RMS keeps the original sum-of-squares
+// path (x * rsqrt(E[x^2] + eps)). LAYERNORM computes a numerically-stable Welford
+// mean/variance and applies (x - mean) * rsqrt(var + eps), with bias support. The
+// fabric all-gather, weight/bias, RoPE, and output plumbing are shared between the
+// two; see WELFORD_LAYERNORM_DESIGN.md. (LAYERNORM is being brought up incrementally;
+// only RMS is functional on every path today.)
+enum class WanFusedNormType : uint8_t { RMS = 0, LAYERNORM = 1 };
+
 // Composite fused op: pre-allgather RMSNorm stats + all-gather of stats + post-allgather
 // RMSNorm (with optional head split / RoPE / dtype cast). Wan2.2 attention path.
 //
@@ -39,7 +47,8 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    bool use_device_op = false);
+    bool use_device_op = false,
+    WanFusedNormType norm_type = WanFusedNormType::RMS);
 
 // Allocate the persistent stats DRAM scratch buffer required by the all-gather
 // path (TP>1, whole-row norm). Returns std::nullopt for shapes that don't

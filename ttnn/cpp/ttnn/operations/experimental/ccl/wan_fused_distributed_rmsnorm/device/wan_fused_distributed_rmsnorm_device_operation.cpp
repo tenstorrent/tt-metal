@@ -27,6 +27,12 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     const auto& rope_cos = tensor_args.rope_cos;
     const auto& rope_sin = tensor_args.rope_sin;
 
+    // Phase 1: norm_type is plumbed end-to-end but the Welford LayerNorm compute
+    // path is not implemented yet. Fail clearly at the host rather than at JIT.
+    TT_FATAL(
+        args.norm_type == ttnn::experimental::WanFusedNormType::RMS,
+        "norm_type=LAYERNORM is plumbed but not yet implemented in the fused op compute kernel");
+
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Input must be allocated");
     TT_FATAL(input.layout() == Layout::TILE, "Input layout must be TILE, got {}", input.layout());
@@ -251,6 +257,7 @@ ttsl::hash::hash_t WanFusedDistributedRmsnormDeviceOperation::compute_program_ha
         args.ring_size,
         args.topology,
         args.compute_kernel_config,
+        static_cast<uint8_t>(args.norm_type),
         subdevice_core_range_set,
         tensor_args);
 }
@@ -278,7 +285,8 @@ Tensor wan_fused_distributed_rmsnorm(
     std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+    ttnn::experimental::WanFusedNormType norm_type) {
     using OperationType = ttnn::experimental::prim::WanFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -305,7 +313,8 @@ Tensor wan_fused_distributed_rmsnorm(
         topology_,
         multi_device_global_semaphore,
         subdevice_id,
-        kernel_config_val);
+        kernel_config_val,
+        norm_type);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
