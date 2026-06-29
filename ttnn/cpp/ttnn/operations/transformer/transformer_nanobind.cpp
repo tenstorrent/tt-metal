@@ -13,10 +13,10 @@
 
 #include "attention_softmax/attention_softmax_nanobind.hpp"
 #include "concatenate_heads/concatenate_heads_nanobind.hpp"
+#include "gated_delta_attn/gated_delta_attn_nanobind.hpp"
 #include "sdpa/sdpa_nanobind.hpp"
 #include "sdpa_config.hpp"
 #include "sdpa_decode/sdpa_decode_nanobind.hpp"
-#include "sdpa_windowed/sdpa_windowed_nanobind.hpp"
 #include "split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
 
 namespace ttnn::operations::transformer {
@@ -56,7 +56,7 @@ void py_module(nb::module_& mod) {
 
     bind_sdpa(mod);
     bind_sdpa_decode(mod);
-    bind_sdpa_windowed(mod);
+    bind_gated_delta_attn_seq(mod);
 }
 
 }  // namespace ttnn::operations::transformer

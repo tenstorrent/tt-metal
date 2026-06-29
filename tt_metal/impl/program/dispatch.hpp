@@ -9,6 +9,7 @@
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
+#include <tt_stl/span.hpp>
 #include <array>
 #include <memory>
 #include <unordered_map>
@@ -183,7 +184,11 @@ void reset_worker_dispatch_state_on_device(
     bool reset_launch_msg_state);
 
 void set_num_worker_sems_on_dispatch(
-    IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
+    IDevice* device,
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint32_t num_worker_sems,
+    tt::stl::Span<const uint32_t> workers_per_sub_device);
 
 void set_go_signal_noc_data_on_dispatch(
     IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);

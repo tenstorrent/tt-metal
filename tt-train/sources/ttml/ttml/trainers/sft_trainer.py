@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import sys
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -354,7 +355,8 @@ class SFTTrainer:
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
             actual = float(mask_np.sum())
-            if abs(actual - expected) > 1e-3:
+            # use relative tolerance to avoid BF16 precision issues
+            if abs(actual - expected) / expected > 0.01:
                 logger.warning(
                     "loss_mask sum (%.2f) differs from expected B*T (%d). "
                     "If you are using a custom collate function, make sure "
@@ -407,7 +409,22 @@ class SFTTrainer:
         state = {}
         for name, param in self.model.parameters().items():
             tensor = param.tensor if hasattr(param, "tensor") else param
-            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32)
+            # In multi-device (DDP) setups parameter tensors are distributed across
+            # the mesh, so the underlying host storage carries the full mesh shape
+            # (e.g. [1, 64]) and ``to_numpy()`` without a composer trips the
+            # single-buffer assertion in ``host_buffer::get_host_buffer``.
+            # ``ttnn.get_device_tensors(device_tensor)[0]`` does not help: the
+            # returned tensor still references the parent mesh storage and hits
+            # the same error once moved to host.
+            #
+            # Aggregate via the loss composer (concat along tensor dim 0). Since
+            # DDP replicates weights, every device holds an identical copy, so
+            # the first ``per_replica_dim0`` rows of the concatenated array are
+            # exactly one replica.
+            # TODO: support TP / sharded parameters with a model-aware composer.
+            param_np = tensor.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer)
+            per_replica_dim0 = tensor.shape()[0]
+            state[name] = param_np[:per_replica_dim0]
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)

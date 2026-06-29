@@ -103,6 +103,13 @@ void kernel_main() {
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto dispatch_table_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
 
+#ifdef HAS_PADDING_CONFIG
+    // padding_config accessor + scratch CB id are appended LAST so the existing index layout is unchanged.
+    constexpr auto padding_cfg_args = TensorAccessorArgs<dispatch_table_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_padding_config_id =
+        get_compile_time_arg_val(padding_cfg_args.next_compile_time_args_offset());
+#endif
+
     constexpr uint32_t tiles_per_row = hidden_size / 32;
     constexpr uint32_t num_tile_blocks = tiles_per_row / block_ct_dim;
 
@@ -135,6 +142,10 @@ void kernel_main() {
     uint32_t next_noc_x = get_arg_val<uint32_t>(rt_idx++);
     uint32_t next_noc_y = get_arg_val<uint32_t>(rt_idx++);
     uint32_t turn_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+#ifdef HAS_PADDING_CONFIG
+    // padding_config base address appended after the 12 base runtime args.
+    uint32_t padding_config_address = get_arg_val<uint32_t>(rt_idx++);
+#endif
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
@@ -192,8 +203,32 @@ void kernel_main() {
     cb_reserve_back(cb_weights_id, read_batch_size);
     uint32_t weights_base = get_write_ptr(cb_weights_id);
 
+    // Shrink the batch loop to this device's real (unpadded) tokens when right-padded (pad_side == 0).
+    // The writer applies the same reduction so they agree on the end-of-plan handshake. Padded tokens
+    // in the trailing batch keep their sentinel expert index, so expert_dispatch_table[sentinel] == -1
+    // drops them — making a coarse ceil(real/32) batch bound safe.
+    uint32_t effective_total_batches = total_batches;
+#ifdef HAS_PADDING_CONFIG
+    {
+        const auto padding_cfg_gen = TensorAccessor(padding_cfg_args, padding_config_address);
+        cb_reserve_back(cb_padding_config_id, 1);
+        uint32_t pc_l1 = get_write_ptr(cb_padding_config_id);
+        noc_async_read_page(0, padding_cfg_gen, pc_l1);
+        noc_async_read_barrier();
+        tt_l1_ptr uint32_t* pc = reinterpret_cast<tt_l1_ptr uint32_t*>(pc_l1);
+        uint32_t real_count = pc[0];
+        uint32_t pad_side = pc[1];
+        if (pad_side == 0) {
+            uint32_t real_batches = (real_count + read_batch_size - 1) / read_batch_size;
+            if (real_batches < effective_total_batches) {
+                effective_total_batches = real_batches;
+            }
+        }
+    }
+#endif
+
     // ===== Per-batch loop — this core handles batches core_id, core_id+total_workers, ... =====
-    for (uint32_t batch_idx = core_id; batch_idx < total_batches; batch_idx += total_workers) {
+    for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
         uint32_t tile_base_page = batch_idx * tiles_per_row;
         uint32_t batch_start = batch_idx * read_batch_size;
         uint32_t batch_end =
@@ -325,7 +360,7 @@ void kernel_main() {
             noc_async_write(offsets_base_addr, owner_offsets_noc_addr, offsets_bytes);
             noc_async_write_barrier();
         }
-        if (batch_idx + 1 < total_batches) {
+        if (batch_idx + 1 < effective_total_batches) {
             noc_semaphore_inc(next_turn_sem_noc_addr, 1);
             DPRINT_DISPATCH(
                 "[R s={} c={}] b={} RELEASE baton -> signaled next (entries={})\n",

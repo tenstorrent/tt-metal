@@ -711,3 +711,4 @@ jobs:
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-type: ${{ inputs.build-type || 'Release' }}
+      runs-on: ${{ inputs['runs-on'] }}

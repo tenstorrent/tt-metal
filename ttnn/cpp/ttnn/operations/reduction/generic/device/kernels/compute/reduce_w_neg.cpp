@@ -103,6 +103,9 @@ void kernel_main() {
         }
 
         PACK((llk_pack_reduce_mask_clear()));
+        // The scaler tile is waited once and reused for the whole reduction; pop it at the
+        // end so the CB is left balanced.
+        cb_pop_front(cb_scaler, onetile);
         return;
     }
 
@@ -184,4 +187,7 @@ void kernel_main() {
             cb_output_obj.push_back(onetile);
         }  // ht
     }  // nc
+    // The scaler tile is waited once and reused for the whole reduction; pop it at the
+    // end so the CB is left balanced.
+    cb_scaler_obj.pop_front(onetile);
 }

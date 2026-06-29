@@ -168,7 +168,7 @@ def test_linear_with_core_grid(
 @pytest.mark.parametrize("m_size", [32, 64])
 @pytest.mark.parametrize("k_size", [1024])
 @pytest.mark.parametrize("n_size", [1024])
-@pytest.mark.parametrize("activation", [None, "relu", "silu", "gelu", "gelu_approx", "relu6"])
+@pytest.mark.parametrize("activation", [None, "relu", "silu", "gelu", "gelu_approx", "gelu_tanh", "relu6"])
 def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     device, batch_size, m_size, k_size, n_size, activation
 ):
@@ -214,6 +214,7 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
         "mish",
         ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH),
     ],
 )
 def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_size, activation):
