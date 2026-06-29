@@ -199,22 +199,28 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
     // Dual-NoC K gather: reader + writer each gather half the rows on their own NoC. The new CB ids are
     // passed as defines (kept off the positional compile-arg blocks, which the kernels index tightly).
+    // Gate the natural->block-cyclic page-id remap (see sparse_sdpa_gather.hpp). The reader and writer take the
+    // SAME defines, so one helper populates both to keep them in lockstep. ALL constants are compile-time (the
+    // cache length T is folded into the program hash for this path), so the remap is one mul+shift divide +
+    // shift/mask. Stride gaps: BC_SHARD_STRIDE_GAP = T/sp - chunk_local (= shard_len - chunk_local);
+    // BC_SLAB_STRIDE_GAP = chunk_local*(sp-1).
+    const auto add_bc_defines = [&](std::map<std::string, std::string>& defs) {
+        if (!attrs.has_block_cyclic()) {
+            return;
+        }
+        const uint32_t bc_sp = attrs.block_cyclic->sp;
+        const uint32_t bc_chunk_local = attrs.block_cyclic->chunk_local;
+        const uint32_t bc_seq_len_local = t.kv.logical_shape()[2] / bc_sp;
+        defs["BC_ENABLE"] = "1";
+        defs["BC_CHUNK_LOCAL"] = std::to_string(bc_chunk_local);
+        defs["BC_SP"] = std::to_string(bc_sp);
+        defs["BC_SLAB_STRIDE_GAP"] = std::to_string(bc_chunk_local * (bc_sp - 1));
+        defs["BC_SHARD_STRIDE_GAP"] = std::to_string(bc_seq_len_local - bc_chunk_local);
+    };
     {
         std::map<std::string, std::string> rdefs{
             {"CB_KREQ", std::to_string(cb_kreq)}, {"CB_KACK", std::to_string(cb_kack)}};
-        if (attrs.has_block_cyclic()) {
-            // Gate the natural->block-cyclic page-id remap (see sparse_sdpa_gather.hpp). ALL constants are
-            // compile-time (the cache length T is folded into the program hash for this path), so the remap is
-            // one mul+shift divide + shift/mask. BC_SHARD_STRIDE_GAP = T/sp - chunk_local (= shard_len - chunk_local).
-            const uint32_t bc_sp = attrs.block_cyclic->sp;
-            const uint32_t bc_chunk_local = attrs.block_cyclic->chunk_local;
-            const uint32_t bc_seq_len_local = t.kv.logical_shape()[2] / bc_sp;
-            rdefs["BC_ENABLE"] = "1";
-            rdefs["BC_CHUNK_LOCAL"] = std::to_string(bc_chunk_local);
-            rdefs["BC_SP"] = std::to_string(bc_sp);
-            rdefs["BC_SLAB_STRIDE_GAP"] = std::to_string(bc_chunk_local * (bc_sp - 1));
-            rdefs["BC_SHARD_STRIDE_GAP"] = std::to_string(bc_seq_len_local - bc_chunk_local);
-        }
+        add_bc_defines(rdefs);
         reader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(rdefs.begin(), rdefs.end());
     }
 
@@ -233,16 +239,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             {"CB_IDX", std::to_string(cb_idx)},
             {"K_DIM", std::to_string(k_dim)},
             {"KV_ELEM_BYTES", std::to_string(kv_elem_bytes)}};
-        if (attrs.has_block_cyclic()) {
-            const uint32_t bc_sp = attrs.block_cyclic->sp;
-            const uint32_t bc_chunk_local = attrs.block_cyclic->chunk_local;
-            const uint32_t bc_seq_len_local = t.kv.logical_shape()[2] / bc_sp;
-            wdefs["BC_ENABLE"] = "1";  // see reader defines: all remap constants are compile-time (T hashed)
-            wdefs["BC_CHUNK_LOCAL"] = std::to_string(bc_chunk_local);
-            wdefs["BC_SP"] = std::to_string(bc_sp);
-            wdefs["BC_SLAB_STRIDE_GAP"] = std::to_string(bc_chunk_local * (bc_sp - 1));
-            wdefs["BC_SHARD_STRIDE_GAP"] = std::to_string(bc_seq_len_local - bc_chunk_local);
-        }
+        add_bc_defines(wdefs);  // same block-cyclic remap defines as the reader
         writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(wdefs.begin(), wdefs.end());
     }
 

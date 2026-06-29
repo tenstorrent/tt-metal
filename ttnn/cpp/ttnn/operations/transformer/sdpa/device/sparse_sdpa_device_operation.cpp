@@ -105,6 +105,8 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // Block-cyclic remap: indices are natural positions; the kernel maps them to physical pages with sp and
     // chunk_local. seq_len_local = T/sp and slabs = seq_len_local/chunk_local must be integral. (sp and
     // chunk_local were already resolved+cross-checked at the ttnn entry; these are the device-side backstops.)
+    // Miss-only is sufficient: sp, chunk_local AND T are all folded into the program hash (see
+    // compute_program_hash), so a cache HIT has identical values already validated by the miss that built it.
     if (attrs.has_block_cyclic()) {
         const auto& bc = attrs.block_cyclic.value();
         const uint32_t T = kv.logical_shape()[2];

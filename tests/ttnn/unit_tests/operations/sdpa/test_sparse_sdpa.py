@@ -124,9 +124,9 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
 
 # ---- block-cyclic remap: indices are NATURAL token positions but the kv cache is stored block-cyclic. `sp` is
 # ---- DERIVED from the mesh (block_cyclic_sp_axis = the mesh axis the cache was striped over). On ONE device the
-# ---- mesh is 1x1 so sp=1 and the remap reduces to identity (BC_K=0, c=0 => page=n) — enough to smoke the whole
-# ---- BC path here (API, the chunk_local cross-check, the BC_ENABLE kernel branch). All remap constants incl.
-# ---- BC_DELTA (= T/sp - chunk_local) are compile-time, with the cache length T folded into the program hash, so
+# ---- mesh is 1x1 so sp=1 and the remap reduces to identity (shard=0 and BC_SLAB_STRIDE_GAP=0 => page=n) — enough
+# ---- to smoke the whole BC path here (API, the chunk_local cross-check, the BC_ENABLE kernel branch). All remap
+# ---- constants incl. BC_SHARD_STRIDE_GAP (= T/sp - chunk_local) are compile-time, with cache length T folded into the program hash, so
 # ---- each DISTINCT cache size T is its own program (the cache is expected to be a consistent-size prealloc).
 # ---- The sp>1 PERMUTATION arithmetic needs a real SP mesh (e.g. a 2-device p300); that multi-device coverage is
 # ---- a planned follow-up (it must live in its own module — a mesh_device fixture can't share this single-device
@@ -134,8 +134,8 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
 @run_for_blackhole()
 def test_sparse_sdpa_block_cyclic_sp1_identity(device):
     """sp=1 (read from the 1x1 device-mesh): block-cyclic == natural, so the op must reproduce the natural golden
-    while exercising the BC_ENABLE path, across cache sizes T. Since T is hashed for this path (BC_DELTA is a
-    compile-time define), each distinct T is a DISTINCT program — asserted below."""
+    while exercising the BC_ENABLE path, across cache sizes T. Since T is hashed for this path (BC_SHARD_STRIDE_GAP
+    is a compile-time define), each distinct T is a DISTINCT program — asserted below."""
     H, S, TOPK, kc = 32, 64, 64, 32
     Ts = (256, 512, 1024)
     device.clear_program_cache()
@@ -153,7 +153,7 @@ def test_sparse_sdpa_block_cyclic_sp1_identity(device):
         )
         p = pcc(ttnn.to_torch(out), golden(q, kv, indices, K_DIM**-0.5, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (sp=1 identity block-cyclic, T={T})"
-    # T is hashed for the block-cyclic path (compile-time BC_DELTA), so each distinct cache size is its own program.
+    # T is hashed for the block-cyclic path (compile-time BC_SHARD_STRIDE_GAP), so each distinct cache size is its own program.
     n = device.num_program_cache_entries()
     assert n == len(Ts), f"block-cyclic should hash cache size T: got {n} program-cache entries (expected {len(Ts)})"
 
