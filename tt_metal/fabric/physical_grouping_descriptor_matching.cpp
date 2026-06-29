@@ -956,7 +956,13 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             // own adjacency directly rather than rebuilding it from the MGD device topology. Keeping the PGD
             // (tray_id, asic_location) slot labels is intentional so find_all_in_psd places on the same graph.
             auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
-                return mesh_flat_groupings.at(match.name)[match.idx];
+                GroupingInfo committed = mesh_flat_groupings.at(match.name)[match.idx];
+                // Save the MGD<->PGD pairing discovered during topology matching: the solve used the MGD mesh
+                // adjacency as target and this committed variant's adjacency as global, so target_to_global is
+                // exactly MGD-node -> this grouping's node id. Persisting it here (at match time) lets the
+                // logical layout follow the PGD pinning later instead of re-deriving it.
+                committed.mgd_node_to_grouping_node = match.mapping.target_to_global;
+                return committed;
             };
 
             // Prefer the simplest topology that fits: order variants MESH -> TORUSX -> TORUSY -> TORUSXY so the
@@ -1755,14 +1761,40 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
     return asic_ids;
 }
 
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+namespace {
+// Compose the logical pinning for a placement: MGD mesh node (row-major chip_id) -> AsicID. Combines the
+// grouping's MGD<->PGD pairing (grouping.mgd_node_to_grouping_node) with the grouping-node -> AsicID solve.
+// When the grouping has no MGD pairing, returns grouping_node_to_asic directly (row-major identity assumed).
+// File-local helper so find_all_in_psd can populate PsdPlacement::mesh_node_to_asic without bloating itself.
+std::map<ChipId, tt::tt_metal::AsicID> compose_mesh_node_to_asic(
+    const GroupingInfo& grouping, const std::map<uint32_t, tt::tt_metal::AsicID>& grouping_node_to_asic) {
+    std::map<ChipId, tt::tt_metal::AsicID> node_to_asic;
+    if (grouping.mgd_node_to_grouping_node.has_value()) {
+        // MGD-node -> grouping-node (from the PGD<->MGD match) composed with grouping-node -> AsicID.
+        for (const auto& [mgd_node, grouping_node] : *grouping.mgd_node_to_grouping_node) {
+            auto asic_it = grouping_node_to_asic.find(grouping_node);
+            if (asic_it != grouping_node_to_asic.end()) {
+                node_to_asic.emplace(mgd_node, asic_it->second);
+            }
+        }
+    } else {
+        // No MGD pairing: assume the grouping node ids are already the row-major logical chip ids.
+        node_to_asic.insert(grouping_node_to_asic.begin(), grouping_node_to_asic.end());
+    }
+    return node_to_asic;
+}
+}  // namespace
+
+std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
     std::vector<std::string> errors;
-    return find_all_in_psd(groupings, physical_system_descriptor, errors);
+    PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
+    AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
+    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors);
 }
 
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const AdjacencyGraph<AsicID>& physical_graph) const {
@@ -1770,17 +1802,8 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
     return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors);
 }
 
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
-    const std::vector<GroupingInfo>& groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    std::vector<std::string>& errors_out) const {
-    PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
-    AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
-    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors_out);
-}
-
 // NOTE this only works on flattenable meshes right now
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -1797,7 +1820,7 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
         }
     }
 
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> all_asic_id_sets;
+    std::vector<PsdPlacement> placements;
     if (!flat_meshes.empty()) {
         auto heterogeneous_results =
             solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph, physical_system_descriptor);
@@ -1809,18 +1832,25 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
             }
             for (const auto& result : it->second) {
                 if (result.success) {
-                    std::unordered_set<tt::tt_metal::AsicID> asic_set;
-                    for (const auto& [target_node, asic_id] : result.target_to_global) {
-                        asic_set.insert(asic_id);
+                    PsdPlacement placement;
+                    placement.grouping = grouping;
+                    // result.target_to_global is this grouping's node id -> AsicID.
+                    const std::map<uint32_t, tt::tt_metal::AsicID> grouping_node_to_asic(
+                        result.target_to_global.begin(), result.target_to_global.end());
+                    for (const auto& [grouping_node, asic_id] : grouping_node_to_asic) {
+                        placement.asics.insert(asic_id);
                     }
-                    all_asic_id_sets.push_back(std::move(asic_set));
+                    // Compose the logical chip_id -> AsicID pinning now so callers get it directly off the
+                    // placement; the composition lives in a separate helper to keep this function short.
+                    placement.mesh_node_to_asic = compose_mesh_node_to_asic(placement.grouping, grouping_node_to_asic);
+                    placements.push_back(std::move(placement));
                 }
             }
         }
     }
 
     // If no mappings found, populate errors
-    if (all_asic_id_sets.empty()) {
+    if (placements.empty()) {
         if (flat_meshes.empty()) {
             errors_out.push_back("No valid groupings found for PSD");
         } else {
@@ -1830,5 +1860,5 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
         }
     }
 
-    return all_asic_id_sets;
+    return placements;
 }

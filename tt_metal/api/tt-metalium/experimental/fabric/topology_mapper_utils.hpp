@@ -362,6 +362,13 @@ struct PhysicalMultiMeshGraph {
     // mesh_id (which mesh it belongs to) and asic_id (the ASIC identifier). Multiple channels between the same pair are
     // represented by duplicate entries.
     std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
+
+    // PGD-derived intra-mesh pinning: FabricNodeId (mesh_id + row-major chip id) -> AsicID. Captured from the
+    // PGD<->MGD match during grouping selection and carried through PSD placement, so later intra-mesh mapping
+    // can follow the PGD layout instead of re-solving it. The MeshId half is the logical MeshId the multi-mesh
+    // solve assigned to each placement. Only populated when the graph was built from a PhysicalGroupingDescriptor;
+    // empty otherwise.
+    std::map<FabricNodeId, tt::tt_metal::AsicID> mesh_pgd_pinnings_;
 };
 
 /**

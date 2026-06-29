@@ -1687,9 +1687,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
         auto mesh_groupings = pgd.get_groupings_by_name("4x32_Mesh");
         ASSERT_FALSE(mesh_groupings.empty()) << "4x32_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         EXPECT_EQ(asic_ids.size(), 4u)
             << "Expected validation to pass: 4x32_Mesh (32x4) should map to mock cluster PSD (4 placements on SP4)";
@@ -1700,9 +1698,7 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
         auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh");
         ASSERT_EQ(mesh_groupings.size(), 1u) << "4x4_Mesh grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         // SP4 GLX mock: 16 hosts × 32 ASICs = 512 ASICs; a 4x4_Mesh (16 ASICs) tiles disjointly → 32 placements.
         EXPECT_EQ(asic_ids.size(), 32u)
@@ -1723,16 +1719,15 @@ TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupi
         auto mesh_groupings = pgd.get_groupings_by_name("2x2_Mesh_t3k");
         ASSERT_FALSE(mesh_groupings.empty()) << "2x2_Mesh_t3k grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         // Should find 4 of them, each of them on a single host
         EXPECT_EQ(asic_ids.size(), 4u)
             << "Expected validation to pass: 2x2_Mesh_t3k grouping should map to mock cluster PSD";
 
         // Each should have their own host name
-        for (const auto& asic_id_set : asic_ids) {
+        for (const auto& placement : asic_ids) {
+            const auto& asic_id_set = placement.asics;
             ASSERT_FALSE(asic_id_set.empty()) << "Each 2x2_Mesh_t3k mapping should contain at least one ASIC";
             std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
             for (const auto& asic_id : asic_id_set) {
@@ -1746,15 +1741,14 @@ TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupi
         auto mesh_groupings = pgd.get_groupings_by_name("2x4_Mesh_t3k");
         ASSERT_FALSE(mesh_groupings.empty()) << "2x4_Mesh_t3k grouping not found";
 
-        std::vector<std::string> errors;
-
-        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
 
         ASSERT_EQ(asic_ids.size(), 2u)
             << "Expected validation to pass: 2x4_Mesh_t3k grouping should map to mock cluster PSD";
 
         // Each should have their own host name
-        for (const auto& asic_id_set : asic_ids) {
+        for (const auto& placement : asic_ids) {
+            const auto& asic_id_set = placement.asics;
             ASSERT_FALSE(asic_id_set.empty()) << "Each 2x4_Mesh_t3k mapping should contain at least one ASIC";
             std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
             for (const auto& asic_id : asic_id_set) {
@@ -2574,11 +2568,89 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
     const auto placements = pgd.find_all_in_psd(committed_groupings, psd);
     ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
-    for (const auto& asic_set : placements) {
-        EXPECT_EQ(asic_set.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
-        EXPECT_EQ(count_distinct_hosts_for_asics(psd, asic_set), 1u)
-            << "Set-packing should prefer single-host placements when host_topology is [1,1]";
+
+    std::cout << "find_all_in_psd returned " << placements.size() << " placement(s):\n";
+    for (std::size_t i = 0; i < placements.size(); ++i) {
+        const auto& placement = placements[i];
+        std::cout << "  [" << i << "] grouping='" << placement.grouping.name << "'"
+                  << " asic_count=" << placement.asics.size() << "\n";
+        std::cout << "      mesh_node_to_asic (chip_id -> asic):";
+        for (const auto& [chip_id, asic_id] : placement.mesh_node_to_asic) {
+            std::cout << " " << chip_id << "->" << asic_id.get();
+        }
+        std::cout << std::endl;
     }
+
+    for (const auto& placement : placements) {
+        EXPECT_EQ(placement.asics.size(), 16u) << "Each 4x4 placement should cover 16 ASICs";
+        EXPECT_EQ(count_distinct_hosts_for_asics(psd, placement.asics), 1u)
+            << "Set-packing should prefer single-host placements when host_topology is [1,1]";
+
+        // find_all_in_psd reports the grouping that matched.
+        EXPECT_EQ(placement.grouping.name.empty(), false) << "Placement should name the grouping that matched";
+
+        // find_all_in_psd populates the composed chip_id -> AsicID pinning over the same footprint.
+        EXPECT_EQ(placement.mesh_node_to_asic.size(), 16u) << "Composed pinning should cover all 16 logical chips";
+        std::unordered_set<tt::tt_metal::AsicID> composed_asics;
+        for (const auto& [chip_id, asic_id] : placement.mesh_node_to_asic) {
+            composed_asics.insert(asic_id);
+        }
+        EXPECT_EQ(composed_asics, placement.asics) << "Composed pinning should pin exactly the footprint ASICs";
+    }
+}
+
+// get_valid_groupings_for_mgd should persist the MGD<->PGD pairing on every committed MESH grouping
+// (mgd_node_to_grouping_node), so the PGD pinning discovered during matching is available downstream.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PopulatesMgdNodeMapping) {
+    const std::filesystem::path pgd_file_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    const std::filesystem::path mgd_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_pod_4x4_line_line_mesh_graph_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_file_path)) << "PGD file not found: " << pgd_file_path;
+    ASSERT_TRUE(std::filesystem::exists(mgd_file_path)) << "MGD file not found: " << mgd_file_path;
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with bh_galaxy_xyz_cluster_desc.yaml";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd(pgd_file_path);
+    MeshGraphDescriptor mgd(mgd_file_path);
+
+    auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    ASSERT_TRUE(valid_groupings.contains("MESH"));
+    ASSERT_TRUE(valid_groupings.at("MESH").contains("M0"));
+    const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
+    ASSERT_FALSE(committed_groupings.empty());
+
+    constexpr size_t kMgdNodeCount = 16;  // single_pod_4x4 is a 4x4 mesh => 16 logical chips (row-major 0..15)
+    size_t groupings_with_mapping = 0;
+    for (const auto& grouping : committed_groupings) {
+        ASSERT_TRUE(grouping.mgd_node_to_grouping_node.has_value())
+            << "Committed PGD grouping '" << grouping.name << "' should carry the MGD<->PGD pairing";
+        const auto& mapping = *grouping.mgd_node_to_grouping_node;
+        ++groupings_with_mapping;
+
+        EXPECT_EQ(mapping.size(), kMgdNodeCount)
+            << "Mapping for '" << grouping.name << "' should cover every MGD mesh node";
+
+        const auto& grouping_nodes = grouping.adjacency_graph.get_nodes();
+        std::set<uint32_t> grouping_node_set(grouping_nodes.begin(), grouping_nodes.end());
+
+        std::set<uint32_t> seen_mgd_nodes;
+        std::set<uint32_t> seen_grouping_nodes;
+        for (const auto& [mgd_node, grouping_node] : mapping) {
+            EXPECT_LT(mgd_node, kMgdNodeCount) << "MGD node id out of range for '" << grouping.name << "'";
+            EXPECT_TRUE(grouping_node_set.count(grouping_node) > 0)
+                << "Mapped grouping node " << grouping_node << " not present in '" << grouping.name << "' graph";
+            EXPECT_TRUE(seen_mgd_nodes.insert(mgd_node).second) << "Duplicate MGD node key in mapping";
+            EXPECT_TRUE(seen_grouping_nodes.insert(grouping_node).second)
+                << "Mapping is not injective for '" << grouping.name << "'";
+        }
+    }
+    EXPECT_GT(groupings_with_mapping, 0u) << "At least one committed grouping should carry the MGD<->PGD pairing";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
