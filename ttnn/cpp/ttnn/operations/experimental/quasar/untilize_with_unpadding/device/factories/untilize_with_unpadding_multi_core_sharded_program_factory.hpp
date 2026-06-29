@@ -6,12 +6,12 @@
 
 #include "ttnn/operations/experimental/quasar/untilize_with_unpadding/device/untilize_with_unpadding_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 
 namespace ttnn::prim::qsr {
 
 struct UntilizeWithUnpaddingMultiCoreShardedProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
         const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output);
 };
 

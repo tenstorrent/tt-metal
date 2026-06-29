@@ -2,19 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/dprint.h"
+// Metal 2.0 port. Identical compute logic to the legacy untilize_w; the CB indices and
+// loop counts are sourced from Metal 2.0 named bindings (dfb::in / dfb::out) and named
+// compile-time args (args::*) instead of positional CTAs.
+
+#include <cstdint>
+
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
-    uint32_t third_dim = get_compile_time_arg_val(2);
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
+    constexpr uint32_t third_dim = get_arg(args::third_dim);
 
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
     compute_kernel_lib::untilize<
         1,
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_16,
+        dfb::in,
+        dfb::out,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(

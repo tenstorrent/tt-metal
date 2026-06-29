@@ -19,7 +19,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
-ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts UntilizeWithUnpaddingSingleCoreProgramFactory::create_program_spec(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
     const auto& input_mesh_tensor = input.mesh_tensor();
@@ -231,7 +231,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingSingleCoreProgramF
     };
     run_args.tensor_args = {{INPUT, input_mesh_tensor}, {OUTPUT, output_mesh_tensor}};
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

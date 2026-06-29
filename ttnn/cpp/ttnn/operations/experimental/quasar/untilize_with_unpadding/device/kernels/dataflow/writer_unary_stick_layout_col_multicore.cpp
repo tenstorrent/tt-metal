@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 port. Identical write pattern to the legacy col-multicore writer; the CB,
+// tensor accessor, and arguments are sourced from Metal 2.0 named bindings (dfb::out /
+// tensor::output) and named args (args::*) instead of positional CTAs/RTAs.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -9,24 +13,21 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t total_num_rows = get_arg(args::total_num_rows);
+    constexpr uint32_t ncores = get_arg(args::ncores);
+    constexpr uint32_t third_dim = get_arg(args::third_dim);
+    constexpr uint32_t tile_width = get_arg(args::tile_width);
+    constexpr uint32_t unpadded_X_size = get_arg(args::unpadded_X_size);
 
-    constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
-    constexpr uint32_t ncores = get_compile_time_arg_val(1);
-    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(3);
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(4);
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    const uint32_t core_number = get_arg(args::core_number);
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t core_number = get_arg_val<uint32_t>(1);
-
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::output);
 
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
+    DataflowBuffer cb_out0(dfb::out);
 
     auto write_block = [&](uint32_t num_rows,
                            uint32_t mul,
@@ -69,9 +70,9 @@ void kernel_main() {
         cb_out0.pop_front(onetile * has_rows);
     };
 
-    const uint32_t size_per_row_per_block = get_arg_val<uint32_t>(3);
-    const uint32_t blocks_per_core = get_arg_val<uint32_t>(4);
-    const uint32_t width_size = get_arg_val<uint32_t>(5);
+    const uint32_t size_per_row_per_block = get_arg(args::size_per_row_per_block);
+    const uint32_t blocks_per_core = get_arg(args::blocks_per_core);
+    const uint32_t width_size = get_arg(args::width_size);
 
     uint32_t size_2d = 0;
     for (uint32_t dim3 = 0; dim3 < third_dim; dim3++) {

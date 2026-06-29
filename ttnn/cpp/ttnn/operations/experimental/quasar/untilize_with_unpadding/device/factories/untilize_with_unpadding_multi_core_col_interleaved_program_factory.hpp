@@ -6,12 +6,13 @@
 
 #include "ttnn/operations/experimental/quasar/untilize_with_unpadding/device/untilize_with_unpadding_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/program_spec_artifacts.hpp"
 
 namespace ttnn::prim::qsr {
 
+// ProgramSpecFactoryConcept factory for the column-interleaved untilize-with-unpadding path.
 struct UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
         const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output);
 };
 
