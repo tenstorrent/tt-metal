@@ -19,7 +19,7 @@ from ....utils.golden import load_golden, save_golden
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
-from ....utils.test import line_params_req_exact_num_devices, ring_params_req_exact_num_devices
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
 
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
@@ -115,44 +115,31 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
 # Tests
 # ---------------------------------------------------------------------------
 COMMON_MESH_PARAMS = [
-    pytest.param(
-        (2, 2), (2, 2), 0, 1, 2, line_params_req_exact_num_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1"
-    ),
-    pytest.param(
-        (2, 4), (2, 4), 0, 1, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1"
-    ),
-    pytest.param(
-        (2, 4), (2, 4), 1, 0, 1, line_params_req_exact_num_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0"
-    ),
+    pytest.param((2, 2), 0, 1, 2, line_params_req_exact_devices, ttnn.Topology.Linear, False, id="2x2sp0tp1"),
+    pytest.param((2, 4), 0, 1, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
+    pytest.param((2, 4), 1, 0, 1, line_params_req_exact_devices, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
     # WH (ring) on 4x8
-    pytest.param(
-        (4, 8), (4, 8), 1, 0, 4, ring_params_req_exact_num_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"
-    ),
+    pytest.param((4, 8), 1, 0, 4, ring_params_req_exact_devices, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
     # BH (ring) on 4x8
-    pytest.param(
-        (4, 8), (4, 8), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"
-    ),
+    pytest.param((4, 8), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
 ]
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     COMMON_MESH_PARAMS
     + [
         pytest.param(
             (4, 8),
-            (4, 8),
             1,
             0,
             2,
-            line_params_req_exact_num_devices,
+            line_params_req_exact_devices,
             ttnn.Topology.Linear,
             False,
             id="line_bh_4x8sp1tp0",
         ),
-        pytest.param(
-            (4, 32), (4, 32), 1, 0, 2, ring_params_req_exact_num_devices, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"
-        ),
+        pytest.param((4, 32), 1, 0, 2, ring_params_req_exact_devices, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -166,7 +153,6 @@ COMMON_MESH_PARAMS = [
 )
 def test_wan_transformer_block(
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
@@ -182,9 +168,6 @@ def test_wan_transformer_block(
 ) -> None:
     MIN_PCC = 0.999_500
     MAX_RMSE = 0.032
-
-    parent_mesh_device = mesh_device
-    mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
@@ -314,16 +297,15 @@ def test_wan_transformer_block(
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     COMMON_MESH_PARAMS
     + [
         pytest.param(
             (4, 8),
-            (4, 8),
             1,
             0,
             2,
-            line_params_req_exact_num_devices,
+            line_params_req_exact_devices,
             ttnn.Topology.Linear,
             False,
             id="line_bh_4x8sp1tp0",
@@ -342,7 +324,6 @@ def test_wan_transformer_block(
 )
 def test_wan_transformer_model(
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
@@ -444,13 +425,12 @@ def test_wan_transformer_model(
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     COMMON_MESH_PARAMS,
     indirect=["mesh_device", "device_params"],
 )
 def test_wan_transformer_inner_step(
     mesh_device: ttnn.MeshDevice,
-    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
