@@ -228,10 +228,9 @@ class TPGatedDeltaNet:
         capture_state: when True, store the final recurrent state + the last K-1
         real conv inputs into self.rec_state / self.conv_states so decode continues.
         return_state: when True (per-user batched prefill), return
-        ``(output, final_state, conv_new_state)`` for ONE user's from-scratch B=1
-        pass and skip ALL self.* writeback — the caller stitches the per-user states
-        into the batched decode buffers via assemble_batched_state(). The shared
-        single-sequence carry/capture behavior is untouched when return_state=False.
+        ``(output, final_state, conv_new_state)`` for one user's from-scratch B=1
+        pass and skip all self.* writeback; the caller stitches per-user states via
+        assemble_batched_state(). Single-sequence behavior is unchanged when False.
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
@@ -249,8 +248,8 @@ class TPGatedDeltaNet:
         # state continue from the persistent buffers (zeroed at sequence start by
         # reset_state_inplace, so a from-scratch single pass reads zeros == None). The demo
         # path (_stable_state False) is unchanged: no carry, reassign state.
-        # Per-user prefill (return_state) is always from scratch: it must NOT carry the shared
-        # batched buffer (which holds other users' state) as its initial recurrent/conv state.
+        # Per-user prefill (return_state) is always from scratch: must not carry the shared
+        # batched buffer (other users' state) as its initial recurrent/conv state.
         carry = self._stable_state and not return_state
         if carry and self.conv_carry is None:
             self.reset_state()
@@ -311,9 +310,8 @@ class TPGatedDeltaNet:
         B, D = 1, self.qkv_dim_tp
         captured = None
         if return_state:
-            # Per-user prefill: hand this user's from-scratch B=1 state back to the caller
-            # (assemble_batched_state stitches it into row `user_id` of the batched buffers).
-            # No self.* writeback — final_state/conv_new_state are NOT deallocated here.
+            # Per-user prefill: return this user's state for assemble_batched_state to stitch
+            # into the batched buffers. No self.* writeback; tensors are not deallocated here.
             captured = (final_state, conv_new_state)
         else:
             # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
@@ -372,11 +370,10 @@ class TPGatedDeltaNet:
         return out
 
     def forward_prefill_collect(self, x, chunk_size=128, valid_len=None):
-        """Per-user prefill that stashes this user's from-scratch B=1 state for later assembly.
+        """Per-user prefill that stashes this user's B=1 state for later assembly.
 
-        The model's batched per-user prefill loop calls this once per user; finalize_pending()
-        then stitches every collected per-user state into the batched decode buffers. Returns
-        the user's prefill output (the layer still needs it for the residual + MLP)."""
+        Called once per user; finalize_pending() then stitches the collected states into the
+        batched decode buffers. Returns the user's prefill output (needed for residual + MLP)."""
         out, rec, conv = self.forward_prefill(x, chunk_size=chunk_size, valid_len=valid_len, return_state=True)
         self._pending.append((rec, conv))
         return out
@@ -391,18 +388,16 @@ class TPGatedDeltaNet:
         self._pending = []
 
     def assemble_batched_state(self, rec_list, conv_new_list):
-        """Stitch B per-user prefill states into the batched decode buffers.
+        """Stitch B per-user prefill states (from forward_prefill(return_state=True)) into the
+        batched decode buffers.
 
-        Inputs are the per-user returns of ``forward_prefill(return_state=True)``:
-        ``rec_list[u]``: [1, Nv, Dk, Dv] final recurrent state; ``conv_new_list[u]``:
-        [1, K-1, qkv_dim_tp] last-(K-1) conv inputs. Row ``u`` of ``rec_state`` and of
-        ``conv_states[1..K-1]`` becomes user ``u``'s state; ``conv_states[0]`` is zeroed
-        (the shifted-out tap). ttnn has no in-place row write, so the batched buffers are
-        built by concatenating along the batch dim (rec: dim 0; conv: dim 1) — matching the
-        single-user writeback (conv_states[m] row = conv_new_state[:, m-1]).
+        rec_list[u]: [1, Nv, Dk, Dv] recurrent state; conv_new_list[u]: [1, K-1, qkv_dim_tp]
+        last-(K-1) conv inputs. Row u of rec_state and conv_states[1..K-1] becomes user u's state;
+        conv_states[0] is zeroed (shifted-out tap). ttnn has no in-place row write, so buffers are
+        built by concat along the batch dim (rec: dim 0; conv: dim 1).
 
-        When ``_stable_state`` (model decode-trace path) the assembled tensors are copied into
-        the pre-allocated fixed-address buffers; otherwise (demo/standalone) they are assigned.
+        Under _stable_state (decode-trace path) the result is copied into the fixed-address
+        buffers; otherwise (demo/standalone) it is assigned.
         """
         assert len(rec_list) == self.B and len(conv_new_list) == self.B, "need one state per batch row"
         D = self.qkv_dim_tp
@@ -447,26 +442,23 @@ class TPGatedDeltaNet:
             ttnn.deallocate(t)
 
     def forward_prefill_batched(self, x, chunk_size=128, valid_lens=None):
-        """TRUE batched prefill: all B users in ONE pass (no per-user Python loop).
+        """Batched prefill: all B users in one pass (no per-user Python loop).
 
-        The chunk-seq GDN kernel already scans a leading BH = B*H batch dim with each (user, head)
-        row an independent causal scan, so B is a genuine batch dimension (NOT a time concat) —
-        exactly like softmax SDPA keeps batch separate. This runs the projection / conv-FIR /
-        chunk-parallel recurrence over [B, T, *] in one shot and writes the result straight into the
-        batched decode buffers (rec_state[B,Nv,Dk,Dv] and conv_states[*][1,B,D]) — row u == user u.
+        The chunk-seq GDN kernel scans a leading BH = B*H batch dim, each (user, head) row an
+        independent causal scan, so B is a true batch dim (not a time concat). Runs projection /
+        conv-FIR / chunk-parallel recurrence over [B, T, *] and writes straight into the batched
+        decode buffers (rec_state[B,Nv,Dk,Dv], conv_states[*][1,B,D]); row u == user u.
 
         x:          [B, T, dim] replicated (all users padded to a common bucket length T).
         valid_lens: optional list of B real token counts (< T => right-padding masked per row);
                     None => every row is full length T.
-        Always from scratch (zero initial state), so it is the batched analog of B independent
-        forward_prefill(return_state=True) calls + assemble_batched_state.
+        Always from scratch, so it is the batched analog of B forward_prefill(return_state=True)
+        calls + assemble_batched_state.
 
         KERNEL CAP: gated_delta_attn_seq maps one BH = B*Nv_tp row per core and is L1-bound, so BH
         must stay <= ~32 (at TP=4, Nv_tp=8 => B <= 4). Larger B trips an L1 clash (B=8) or the
-        kernel's `BH <= compute_grid` assert (B=32). Serving B>4 would require GROUPED launches
-        (groups of <=4); the model currently prefills per-user instead (see prefill_paged_peruser).
-        Validated bit-exact (PCC 1.0) vs the per-user path by test_gdn_tp_batched_prefill; not yet
-        wired into the model.
+        kernel's `BH <= compute_grid` assert (B=32); B>4 would need grouped launches (groups <=4).
+        The model currently prefills per-user instead (see prefill_paged_peruser).
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:

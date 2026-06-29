@@ -53,12 +53,9 @@ def _rope_torch(x, rope_dim, theta):  # x: [S, H, HD]
     return torch.cat([xr * cos + xrot * sin, xp], dim=-1)
 
 
-# B=1 is intentionally excluded from this NON-paged standalone decode sweep: the
-# internal-KV-cache SDPA-decode path decorrelates only in the degenerate B=1 +
-# position-0 case (single user, single key). It is not a production path — B=1
-# decode in the model uses the PAGED path, which is validated at PCC 1.0 by
-# test_attention_tp_paged (whose non-paged oracle also runs B=1 fine at pos>0).
-# The higher-batch feature targets B in {8, 32}; both pass here at PCC ~0.9999.
+# B=1 excluded: the non-paged SDPA-decode path decorrelates only in the degenerate
+# B=1 + pos-0 case. B=1 decode uses the paged path (validated at PCC 1.0 by
+# test_attention_tp_paged); this sweep targets the batched feature (B in {8, 32}).
 @torch.no_grad()
 @parametrize_mesh_tp()
 @parametrize_batch(batches=(8, 32))
@@ -254,15 +251,12 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
 @parametrize_mesh_tp()
 @parametrize_batch(batches=(8, 32))
 def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, request):
-    """Per-user batched paged decode — the real serving contract.
+    """Per-user batched paged decode (the serving contract).
 
-    B users are prefilled into their OWN blocks of one shared paged KV cache at
-    distinct sequence lengths, then a SINGLE batched decode step with a per-user
-    ``cur_pos`` vector must reproduce, row-by-row, B independent B=1 paged decodes.
-    Proves per-user page-table rows + per-user ``cur_pos`` + ``paged_fill_cache``
-    batch_idx compose with no cross-user contamination. Each per-user prefill is
-    byte-identical to the model's B=1 contract (a [1, bpu] page table + user_id=0),
-    just pointing at different physical blocks of the shared cache.
+    B users are prefilled into their own blocks of one shared paged KV cache at
+    distinct lengths; a single batched decode with a per-user cur_pos must reproduce,
+    row-by-row, B independent B=1 paged decodes. Proves per-user page-table rows,
+    cur_pos, and paged_fill_cache batch_idx compose with no cross-user contamination.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
@@ -273,9 +267,8 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     block_size, bpu = 64, 4  # 4 blocks/user => up to 256 cached tokens
     logger.info(f"devices={nd} layer={li} B={B} NKV_local={NKV} HD={HD} blocks/user={bpu}")
 
-    # TPAttention.forward_decode keys all shapes off self.B (== args.max_batch_size), not the
-    # input batch, so the B=1 reference needs its own max_batch_size=1 args (weights are shared —
-    # tw is batch-independent). This mirrors the model invariant: decode input batch == max_batch_size.
+    # forward_decode keys all shapes off self.B (== max_batch_size), so the B=1 reference
+    # needs its own max_batch_size=1 args (weights tw are batch-independent and shared).
     args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
 
     sd = load_attn_layer(args.CKPT_DIR, li)
@@ -352,10 +345,9 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
 
     # ---- per-row comparison (a flattened PCC would mask a single bad user) ----
-    # NOTE: the reference is a B=1 paged decode and the path under test is B-wide; the SDPA-decode
-    # op's reduction tree differs with batch size (documented batch-variance), so per-user PCC sits
-    # slightly below the 0.99 single-run bar. The point of this test is per-user CORRECTNESS / no
-    # cross-user contamination, so the threshold is relaxed accordingly via pcc_thresholds.json.
+    # The SDPA-decode reduction tree differs between the B=1 reference and the B-wide path,
+    # so per-user PCC sits slightly below the single-run bar; threshold is relaxed accordingly
+    # in pcc_thresholds.json since this test targets per-user correctness, not bit-exactness.
     thr = get_pcc_threshold(request)
     pccs = [compute_pcc(ref_rows[u], out_t[0, 0, u].float()) for u in range(B)]
     worst = min(pccs)

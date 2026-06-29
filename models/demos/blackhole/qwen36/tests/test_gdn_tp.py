@@ -110,15 +110,15 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
 def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     """Per-user GDN prefill stitched into the batched decode state.
 
-    B users are prefilled INDEPENDENTLY (distinct content) via forward_prefill(return_state=True);
-    assemble_batched_state stitches each user's recurrent + conv state into row u of the batched
-    buffers. A single batched decode step must then match, row-by-row, B independent B=1
-    prefill+decode runs — proving the row assembly is correct with no cross-user contamination.
+    B users are prefilled independently via forward_prefill(return_state=True);
+    assemble_batched_state stitches each user's recurrent + conv state into row u of the
+    batched buffers. A single batched decode must then match, row-by-row, B independent B=1
+    prefill+decode runs, proving correct row assembly with no cross-user contamination.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
-    # forward_decode keys all shapes off self.B; the B=1 reference needs its own max_batch_size=1
-    # args (weights tw are batch-independent and shared).
+    # forward_decode keys all shapes off self.B, so the B=1 reference needs its own
+    # max_batch_size=1 args (weights tw are batch-independent and shared).
     args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
@@ -130,7 +130,7 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
-    T = 128  # one prefill chunk (gated_delta_attn_seq kernel chunk_size); distinct CONTENT per user
+    T = 128  # one prefill chunk (gated_delta_attn_seq kernel chunk_size)
 
     xp = [torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16) for _ in range(B)]
     xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]
@@ -168,22 +168,19 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-# NOTE: batches capped at (2, 4) on purpose. forward_prefill_batched is bit-exact (PCC 1.0), but the
-# gated_delta_attn_seq kernel maps ONE BH = B*Nv_tp row per core and is L1-bound, so BH must stay
-# <= ~32. At TP=4 (Nv_tp=8): B=4 -> BH=32 fits; B=8 -> BH=64 L1-clashes; B=32 -> BH=256 trips the
-# kernel's `BH <= compute_grid` assert. So true batched GDN prefill works only for small B; serving
-# B=32 would need GROUPED launches (groups of <=4). This test is kept as validated evidence that the
-# batching math is correct and capped; the model still prefills per-user (prefill_paged_peruser).
+# Batches capped at (2, 4): the gated_delta_attn_seq kernel maps one BH = B*Nv_tp row per
+# core and is L1-bound, so BH must stay <= ~32 (at TP=4/Nv_tp=8, B=4 -> BH=32 fits; B>=8
+# clashes/trips the BH <= compute_grid assert). Batched prefill itself is bit-exact (PCC 1.0);
+# serving B=32 would need grouped launches, so the model still prefills per-user.
 @parametrize_batch(batches=(2, 4))
 def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request):
-    """TRUE batched GDN prefill (one pass over all B users) vs B independent B=1 prefills.
+    """True batched GDN prefill (one pass over all B users) vs B independent B=1 prefills.
 
-    Each user has a DISTINCT length (padded to a common bucket + per-row valid_len) and distinct
+    Each user has a distinct length (padded to a common bucket + per-row valid_len) and distinct
     content. forward_prefill_batched runs the projection / conv-FIR / chunk-parallel recurrence over
-    the whole [B,T] batch in one shot (BH = B*Nv independent scans) and writes the batched decode
-    state directly. A batched decode step must then match, row-by-row, B independent B=1
-    prefill+decode runs — proving the chunk-seq kernel batches correctly with per-row masking.
-    B is capped at <=4 (see the module note above on the kernel's BH <= ~32 core/L1 limit).
+    the whole [B,T] batch in one shot and writes the batched decode state directly. A batched decode
+    must then match, row-by-row, B independent B=1 prefill+decode runs, proving the chunk-seq kernel
+    batches correctly with per-row masking. B capped at <=4 (see kernel BH limit note above).
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)

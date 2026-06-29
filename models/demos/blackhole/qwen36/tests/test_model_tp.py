@@ -180,13 +180,13 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
 @parametrize_mesh_tp()
 @pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
 def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
-    """Batched per-user decode contract (TP) — the higher-batch serving acceptance test.
+    """Batched per-user decode contract (TP): higher-batch serving acceptance test.
 
-    B users with DISTINCT prompt lengths are prefilled into ONE shared paged KV cache + the batched
-    GDN state (prefill_paged_peruser), then N batched decode steps at per-user (diverging) positions
-    must match, row-by-row, B independent B=1 bespoke runs. The bespoke concat path is the oracle
-    (as in test_model_tp_contract); per-step logits PCC is compared per user (a flattened PCC would
-    hide a single contaminated row). Sub-0.99 is the documented SDPA-decode batch-variance, not a bug.
+    B users with distinct prompt lengths share one paged KV cache + batched GDN state
+    (prefill_paged_peruser); batched decode steps at diverging positions must match B
+    independent B=1 bespoke runs (the concat-path oracle). PCC is compared per user, not
+    flattened, so a single contaminated row is not hidden. Sub-0.99 is expected SDPA-decode
+    batch-variance, not a bug.
     """
     import gc
 
@@ -195,8 +195,8 @@ def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
     N_DEC = 3
     torch.manual_seed(0)
 
-    # ---- B=1 bespoke oracle FIRST (concat KV); collect per-user logits + argmax chains, then free
-    # it before allocating the batched model so only one model is resident at a time. ----
+    # ---- B=1 bespoke oracle (concat KV); collect per-user logits + argmax chains, then free
+    # before allocating the batched model so only one model is resident at a time. ----
     model1 = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8)
     vocab = model1.args.vocab_size
     prompt_lens = [128 + 32 * (u % 4) for u in range(B)]  # {128,160,192,224}, distinct lengths
@@ -263,16 +263,13 @@ def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
 @parametrize_mesh_tp()
 @pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
 def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, request):
-    """Traced batched short-prompt prefill (TP) — the traced-bucket-prefill acceptance test.
+    """Traced batched short-prompt prefill (TP): traced-bucket-prefill acceptance test.
 
-    Mirrors test_model_tp_decode_batched but isolates the traced bucket prefill
-    (capture_prefill_trace_bucket + prefill_traced_bucket_batched) against the eager
-    per-user prefill (prefill_paged_peruser), which is the validated serving contract and
-    the path being replaced. B users (distinct lengths, all <= 128) are prefilled BOTH ways
-    on the SAME batched model (free + re-allocate between runs); per-user prefill logits PCC
-    and per-user post-prefill GDN recurrent-state PCC must match, then a few traced decode
-    steps confirm the assembled batched state drives decode correctly. The traced path must
-    never regress vs the eager path it replaces.
+    Validates the traced bucket prefill (capture_prefill_trace_bucket +
+    prefill_traced_bucket_batched) against the eager path it replaces (prefill_paged_peruser).
+    B users are prefilled both ways on the same batched model (free + re-allocate between runs);
+    per-user prefill logits, post-prefill GDN recurrent state, and a few decode steps must all
+    match, so the traced path never regresses vs eager.
     """
     import gc
 
@@ -281,13 +278,11 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
     N_DEC = 2
     torch.manual_seed(0)
 
-    # All prompts are exactly the bucket length (128) — the ONLY length the traced path serves.
-    # It runs the full bucket with valid_len=None (numerically identical to the eager path's
-    # valid_len=128, per the GDN kernel's full-chunk equivalence). Short prompts (actual_len <
-    # bucket) are NOT served by the traced path (they would corrupt the GDN decode state if
-    # padded through the recurrence); the caller routes them to eager prefill_paged_peruser, so
-    # there is no sub-bucket traced case to test. Distinct CONTENT per user still exercises
-    # per-user page-table routing.
+    # All prompts are exactly the bucket length (128) — the only length the traced path serves
+    # (full bucket, valid_len=None, numerically identical to eager valid_len=128 by GDN full-chunk
+    # equivalence). Sub-bucket prompts would corrupt the GDN decode state through the recurrence,
+    # so the caller routes them to eager prefill instead; there is no sub-bucket traced case.
+    # Distinct content per user still exercises per-user page-table routing.
     bucket = 128
     prompt_lens = [bucket] * B
     block_size = 64
@@ -356,8 +351,7 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
         for la in model.layers
         if not la.is_full_attention
     ]
-    # Decode continues from the assembled batched state (release_prefill_trace_bucket restores
-    # the batched GDN bindings the decode trace reads).
+    # release_prefill_trace_bucket restores the batched GDN bindings the decode trace reads.
     model.release_prefill_trace_bucket()
     traced_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
@@ -406,19 +400,17 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
 @pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
 @pytest.mark.parametrize("seqlen", [2048, 4096, "mixed"], ids=["isl2048", "isl4096", "mixed"])
 def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, ensure_gc, request):
-    """Batched per-user LONG prefill (TP) — the chunked-batched-prefill acceptance test.
+    """Batched per-user long prefill (TP): chunked-batched-prefill acceptance test.
 
-    Validates prefill_chunked_peruser (the batched long-prompt path: per-user chunk-outer
-    prefill into a B=1 GDN scratch, assembled into the batched [B,...] decode buffers) against
-    the PROVEN single-user chunk-outer path (prefill_traced_chunked, B=1), which is itself
-    validated against the bespoke single-pass oracle by test_model_tp_long_prefill. This isolates
-    the batch scratch-swap + state assembly + batched-decode routing as the only delta.
+    Validates prefill_chunked_peruser (batched long-prompt path) against the proven B=1
+    chunk-outer path (prefill_traced_chunked, itself validated vs the bespoke oracle by
+    test_model_tp_long_prefill), isolating the batch scratch-swap + state assembly +
+    batched-decode routing as the only delta.
 
-    Three regimes: isl2048 (1 full chunk, no tail), isl4096 (2 full chunks, no tail), and "mixed"
-    (lengths cycled over {128, 1024, 2048, 4096} across users — exercises short-via-masked-bucket
-    + long-via-chunked unification in ONE batch, and per-user diverging decode positions). Per-user
-    prefill logits, post-prefill GDN recurrent state, and a few decode steps must all match the B=1
-    reference.
+    Regimes: isl2048 (1 full chunk), isl4096 (2 full chunks), and "mixed" (lengths cycled
+    over {128, 1024, 2048, 4096}, exercising short-via-masked-bucket + long-via-chunked in one
+    batch with diverging decode positions). Per-user prefill logits, post-prefill GDN recurrent
+    state, and a few decode steps must all match the B=1 reference.
     """
     import gc
 
@@ -434,7 +426,7 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     else:
         prompt_lens = [int(seqlen)] * B
     max_len = max(prompt_lens)
-    # bpu covers the LONGEST prompt + decode; %8 so the flexible-SDPA page-table stick is 32B-aligned.
+    # bpu covers the longest prompt + decode; %8 keeps the flexible-SDPA page-table stick 32B-aligned.
     bpu = max(8, -(-(max_len + N_DEC + 4) // block_size))
     bpu = ((bpu + 7) // 8) * 8
 
@@ -450,9 +442,8 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     # ---- per-user B=1 reference: prefill_traced_chunked (eager) + B=1 decode ----
-    # One shared B=1 model; each user reuses blocks [0, bpu) (overwritten per user, processed
-    # sequentially). prefill_traced_chunked resets the GDN state at sequence start, so users
-    # don't bleed into each other.
+    # Shared B=1 model; users reuse blocks [0, bpu) sequentially. prefill_traced_chunked resets
+    # the GDN state at sequence start, so users don't bleed into each other.
     omodel, args, opt = _build(1)
     vocab = args.vocab_size
     prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
