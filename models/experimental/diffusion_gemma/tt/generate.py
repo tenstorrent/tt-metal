@@ -136,6 +136,10 @@ def host_tokens_to_device(mesh_device, tokens: torch.Tensor):
 def _as_prompt_token_tensor(input_ids) -> torch.Tensor:
     if isinstance(input_ids, dict):
         input_ids = input_ids["input_ids"]
+    elif hasattr(input_ids, "input_ids"):
+        input_ids = input_ids.input_ids
+    elif hasattr(input_ids, "ids"):
+        input_ids = input_ids.ids
     if isinstance(input_ids, torch.Tensor):
         tokens = input_ids
     else:
