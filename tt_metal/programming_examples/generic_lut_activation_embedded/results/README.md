@@ -30,6 +30,9 @@ results/
 
 `frontier/<dtype>/data/csv/` contains the shard CSVs from the frontier sweep,
 Pareto winner manifests, and any TTNN reference CSVs available for that dtype.
+Fresh `frontier_sweep.sh` runs also write
+`frontier/<dtype>/data/csv/frontier_gbdt_training.tsv`, a CRAQ-friendly table
+with measured Tracy runtime targets plus numeric kernel-generation features.
 `frontier/<dtype>/data/dumps/` contains raw Pareto IO dumps when those have been
 materialized. `logs/` contains worker, plotting, TTNN reference, and failure
 logs where those artifacts exist. `plots/` contains generated PNGs.
@@ -83,3 +86,43 @@ part of the canonical result set above:
 
 When adding a new plot family, document the exact required inputs here before
 publishing generated PNGs.
+
+## Frontier Runtime Model Dataset
+
+To refresh BF16 frontier timing data and build a GBDT training table:
+
+```bash
+TT_POLY_FIT_DIR=/home/ttuser/tt-polynomial-fitter \
+  tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_sweep.sh \
+    --dispatch-local 4 \
+    --precision bf16 \
+    --fresh
+```
+
+The dispatch path creates one worktree per chip, runs one worker per device, and
+then emits the deterministic training TSV:
+
+```text
+results/frontier/bf16/data/csv/frontier_gbdt_training.tsv
+```
+
+To regenerate the TSV from existing shard CSVs, or to train a CRAQ-compatible
+XGBoost model immediately:
+
+```bash
+python3 tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_gbdt_dataset.py \
+  tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/frontier_chip*.csv \
+  --out tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/frontier_gbdt_training.tsv \
+  --train \
+  --craq-sim /home/ttuser/craq-sim \
+  --train-out tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/frontier_gbdt_model \
+  --cv-folds 5
+```
+
+The training target is `target_runtime_ns`. The table keeps activation/config
+identity columns for auditability, but the CRAQ `scripts/perf/fit.py` feature
+transform drops those identity strings and trains from numeric structural
+features such as degree, segment count, rational/lowering/range-reduction flags,
+range width, and coefficient statistics. The trainer writes CRAQ's standard
+`gbt_summary.json`/model artifacts and a frontier-specific
+`frontier_gbdt_cv.json` K-fold cross-validation report.

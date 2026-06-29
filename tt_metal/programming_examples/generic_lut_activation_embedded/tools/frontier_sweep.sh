@@ -53,7 +53,7 @@ RUN_CSV="$TT_METAL_HOME/tt_metal/programming_examples/generic_lut_activation_emb
 COEFFS="$FIT_DIR/data/coefficients"
 ACTS="$FIT_DIR/activations"
 
-SHARD=0 NUM_SHARDS=1 OUT="" CACHE="" FILTER="" PRECISION="bf16" PER_CFG_TIMEOUT=240 RUN_DIR="" FRESH=0
+SHARD=0 NUM_SHARDS=1 OUT="" CACHE="" FILTER="" PRECISION="bf16" PER_CFG_TIMEOUT=240 RUN_DIR="" FRESH=0 GBDT_OUT=""
 DISPATCH_LOCAL=0 WORKTREE_PREFIX=""
 while [[ $# -gt 0 ]]; do case "$1" in
   --shard) SHARD="$2"; shift 2 ;;
@@ -62,12 +62,13 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --worktree-prefix) WORKTREE_PREFIX="$2"; shift 2 ;;
   --run-dir) RUN_DIR="$2"; shift 2 ;;
   --out) OUT="$2"; shift 2 ;;
+  --gbdt-out) GBDT_OUT="$2"; shift 2 ;;
   --cache) CACHE="$2"; shift 2 ;;
   --fresh) FRESH=1; shift ;;
   --activations) FILTER="$2"; shift 2 ;;   # comma or space separated; default = all
   --precision|-p) PRECISION="$2"; shift 2 ;;
   --timeout) PER_CFG_TIMEOUT="$2"; shift 2 ;;
-  -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,41p' "$0"; exit 0 ;;
   *) echo "Unknown arg: $1" >&2; exit 1 ;;
 esac; done
 case "$PRECISION" in
@@ -177,6 +178,26 @@ dispatch_local() {
   done
   [[ "$failures" -eq 0 ]] || exit 1
   echo "frontier_sweep dispatch DONE: ${n} workers completed" >&2
+  local gbdt_out
+  if [[ -n "$GBDT_OUT" ]]; then
+    gbdt_out="$GBDT_OUT"
+  elif [[ -n "$RUN_DIR" ]]; then
+    gbdt_out="$RUN_DIR/data/csv/frontier_gbdt_training.tsv"
+  else
+    gbdt_out="$WORK_DIR/results/frontier/${PRECISION}/data/csv/frontier_gbdt_training.tsv"
+  fi
+  local -a gbdt_shards
+  local gbdt_root
+  gbdt_root="$([[ -n "$RUN_DIR" ]] && printf '%s' "$RUN_DIR" || printf '%s' "$WORK_DIR/results/frontier/${PRECISION}")"
+  gbdt_shards=()
+  for ((chip=0; chip<n; chip++)); do
+    gbdt_shards+=("$gbdt_root/data/csv/frontier_chip${chip}.csv")
+  done
+  python3 "$WORK_DIR/tools/frontier_gbdt_dataset.py" \
+    "${gbdt_shards[@]}" \
+    --coeff-dir "$COEFFS" \
+    --out "$gbdt_out" >&2
+  echo "frontier_sweep dispatch GBDT table -> ${gbdt_out}" >&2
 }
 
 if [[ "$DISPATCH_LOCAL" -gt 0 ]]; then
@@ -240,7 +261,7 @@ mapfile -t WORK < <(build_worklist)
 export TT_METAL_CACHE="$CACHE"   # per-worker JIT cache (isolation)
 mkdir -p "$(dirname "$OUT")"
 if [[ "$FRESH" -eq 1 || ! -f "$OUT" ]]; then
-  echo "csv,activation,method,degree,segments,metric,precision,bf16_maxulp,runtime_us,compiles,range" > "$OUT"
+  echo "csv,activation,method,degree,segments,metric,precision,bf16_maxulp,runtime_us,compiles,range,target_runtime_us,target_runtime_ns,target_cycles_1350mhz,tile_count,range_min,range_max,range_width,num_degree,den_degree,is_rational,is_polynomial,is_lowering,has_range_reduction,coeff_count,nonzero_coeff_count,max_abs_coeff,sum_abs_coeff,avg_effective_degree,max_effective_degree" > "$OUT"
 fi
 
 echo "frontier_sweep: shard $SHARD/$NUM_SHARDS, $(( ${#WORK[@]} )) candidate configs (precision=$PRECISION, filter='${FILTER:-all}'), chip TT_VISIBLE_DEVICES=${TT_VISIBLE_DEVICES:-unset}, cache=$CACHE, out=$OUT" >&2
@@ -276,7 +297,100 @@ for work_item in "${WORK[@]}"; do
       mkdir -p "$fail_dir"
       printf '%s\n' "$out" > "$fail_dir/${prec}_${base}.log"
     fi
-    echo "${base},${act},${method},${deg},${segs},${metric},${prec},${ulp},${us},${ok},\"[${lo},${hi}]\"" >> "$OUT"
+    gbdt_features=$(PYTHONPATH="$FIT_DIR${PYTHONPATH:+:$PYTHONPATH}" /usr/bin/python3 - "$f" "$us" "$ok" "$lo" "$hi" <<'PY'
+import csv
+import math
+import sys
+
+try:
+    from ttpoly.spec.csv_io import parse_csv_artifact
+except Exception:  # pragma: no cover - frontier worker prints the hard failure elsewhere.
+    parse_csv_artifact = None
+
+path, runtime_us_s, ok_s, lo_s, hi_s = sys.argv[1:6]
+
+def fnum(value):
+    try:
+        v = float(value)
+        return v if math.isfinite(v) else None
+    except Exception:
+        return None
+
+identity = parse_csv_artifact(path) if parse_csv_artifact else {}
+num_degree = identity.get("num_degree", "")
+den_degree = identity.get("den_degree", "")
+approx_type = str(identity.get("approximation_type", "")).lower()
+rr = str(identity.get("range_reduction_method", "") or "none").lower()
+method = str(identity.get("eval_method", "") or "")
+
+coeff_count = nonzero = 0
+sum_abs = 0.0
+max_abs = 0.0
+effective = []
+with open(path, newline="") as f:
+    reader = csv.DictReader(f)
+    fields = reader.fieldnames or []
+    coeff_cols = [
+        c for c in fields
+        if (len(c) > 1 and c[0] in ("c", "n", "d") and c[1:].isdigit())
+    ]
+    for row in reader:
+        if str(row.get("segment_id", "")).upper() == "METADATA":
+            continue
+        seg_eff = 0
+        for col in coeff_cols:
+            v = fnum(row.get(col))
+            if v is None:
+                continue
+            coeff_count += 1
+            av = abs(v)
+            sum_abs += av
+            max_abs = max(max_abs, av)
+            if av != 0.0:
+                nonzero += 1
+                try:
+                    seg_eff = max(seg_eff, int(col[1:]))
+                except ValueError:
+                    pass
+        effective.append(seg_eff)
+
+runtime_us = fnum(runtime_us_s)
+target_us = runtime_us if ok_s == "1" and runtime_us is not None else ""
+lo = fnum(lo_s)
+hi = fnum(hi_s)
+width = (hi - lo) if lo is not None and hi is not None else ""
+avg_eff = (sum(effective) / len(effective)) if effective else ""
+max_eff = max(effective) if effective else ""
+is_rational = 1 if (approx_type == "rational" or den_degree not in ("", None, 0, "0")) else 0
+is_poly = 1 if not is_rational else 0
+is_lowering = 1 if method in {"identity", "clamped_affine", "threshold_identity", "algebraic_lowering"} else 0
+has_rr = 0 if rr in {"", "none"} else 1
+
+vals = [
+    target_us,
+    (target_us * 1000.0) if target_us != "" else "",
+    (target_us * 1350.0) if target_us != "" else "",
+    256,
+    lo if lo is not None else "",
+    hi if hi is not None else "",
+    width,
+    num_degree,
+    den_degree,
+    is_rational,
+    is_poly,
+    is_lowering,
+    has_rr,
+    coeff_count,
+    nonzero,
+    max_abs,
+    sum_abs,
+    avg_eff,
+    max_eff,
+]
+print(",".join("" if v == "" else f"{float(v):.12g}" if isinstance(v, float) else str(v) for v in vals))
+PY
+)
+    echo "${base},${act},${method},${deg},${segs},${metric},${prec},${ulp},${us},${ok},\"[${lo},${hi}]\",${gbdt_features}" >> "$OUT"
     new_n=$((new_n+1))
     [[ $(( new_n % 25 )) -eq 0 ]] && echo "  [shard $SHARD] $new_n new (${done_n} resumed-skip) — last: $act $base precision=$prec ulp=$ulp us=$us ok=$ok" >&2
   done
