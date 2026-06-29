@@ -130,7 +130,7 @@ def run_conv(
         pcc = 0.998
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    assert passing, pcc_msg
+    assert passing
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

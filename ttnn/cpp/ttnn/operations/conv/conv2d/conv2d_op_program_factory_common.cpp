@@ -257,8 +257,8 @@ std::vector<CBInfo> get_cb_info(
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::ACT_TILIZED,
         .num_pages = tilized_act_block_num_tiles,
-        .page_size = input_tile_size,
-        .data_format = conv_input_df});
+        .page_size = output_tile_size,
+        .data_format = output_df});
 
     // Bias CB
     cb_info.emplace_back(CBInfo{
