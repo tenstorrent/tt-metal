@@ -257,8 +257,16 @@ def run_throughput_experts_component(
     )
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
+    # transformers 5.x GptOssExperts.forward indexes `hidden_states[token_idx]` over a flattened
+    # [num_tokens, hidden] token axis and `routing_weights[token_idx, top_k_pos]` over a by-position
+    # [num_tokens, top_k] layout. Passing the unflattened 4-D `hidden_states` ([1,1,num_tokens,hidden])
+    # or the dense [num_tokens, num_experts] `routing_weights` raises
+    # "IndexError: index N out of bounds for dimension 0 with size 1" at modeling_gpt_oss.py. Flatten the
+    # hidden states and pass the by-position weights (`topk_weights_dense`), matching run_experts_component.
     reference_output = reference_experts(
-        hidden_states, router_indices=router_indices.squeeze(), routing_weights=routing_weights.squeeze()
+        hidden_states.reshape(-1, hidden_size),
+        router_indices=router_indices.squeeze(),
+        routing_weights=topk_weights_dense,
     )
 
     # Convert to TTNN tensors
