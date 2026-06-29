@@ -82,14 +82,16 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED
 # ---------------------------------------------------------------------------
 #
-# Phase 0 baseline: bfloat16, TILE_LAYOUT, tile_aligned, fp32_dest_acc_en=True.
-# mask_mode: none + custom (causal is a refinement). scale_mode: auto + explicit.
-# attention_kind / kv_heads_mode: all three values are accepted by the kernel
-# (the reader handles GQA/MQA head replication), so all are in SUPPORTED.
+# Refinement 1: dtype expanded to [bfloat16, float32, bfloat8_b] and
+# fp32_dest_acc_en expanded to [True, False].
+# Intermediate CB formats are fp32 when fp32_dest_acc_en=True (accumulation
+# crosses the CB), input dtype when False.  See /numeric-formats-metal.
+# The {dtype: float32, fp32_dest_acc_en: False} cell is in EXCLUSIONS
+# (maxed input + non-maxed acc is rejected — mirrors softmax convention).
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
@@ -104,12 +106,18 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 #
 # Cells inside the SUPPORTED rectangle that are refused for now:
+# - {dtype: float32, fp32_dest_acc_en: False}: maxed input + non-maxed acc
+#   is rejected. fp32 input through the 16-bit DEST path loses 13 mantissa
+#   bits at every FPU phase (matmul, mul, add), eroding the precision that
+#   float32 input was chosen to provide. Mirrors softmax convention per
+#   feature_spec.py.
 # - is_causal + cross-attention: causal masking requires S_q == S_kv.
 #   (causal mask_mode is not yet in SUPPORTED; this exclusion is listed
 #   forward-looking for when causal lands via refinement. For Phase 0 it
 #   is inert since "causal" ∉ SUPPORTED["mask_mode"].)
 
 EXCLUSIONS = [
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
     # causal + cross-attention is structurally invalid for the triangular mask.
     # Kept commented until causal mask_mode enters SUPPORTED via refinement.
     # {"mask_mode": "causal", "attention_kind": "cross"},

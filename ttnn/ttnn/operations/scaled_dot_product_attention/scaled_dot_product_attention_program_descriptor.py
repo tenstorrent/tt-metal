@@ -42,6 +42,7 @@ def create_program_descriptor(
         B_kv_t -= 1
     tile_size = ttnn.tile_size(query.dtype)
     fp32_tile_size = ttnn.tile_size(ttnn.float32)
+    bf16_tile_size = ttnn.tile_size(ttnn.bfloat16)
     resolved_scale = scale if scale is not None else (1.0 / math.sqrt(D))
     scale_bits = struct.unpack("I", struct.pack("f", resolved_scale))[0]
     num_work_units = B * H_q
@@ -54,6 +55,16 @@ def create_program_descriptor(
     num_o_tiles = B_q_t * D_t
     num_score_tiles = B_q_t * B_kv_t
 
+    # Intermediate CB format: fp32 when fp32_dest_acc_en=True (accumulation crosses
+    # the CB between phases — running max/sum/output are parked there), input dtype
+    # when fp32_dest_acc_en=False.  See /numeric-formats-metal §4.
+    if fp32_dest_acc_en:
+        interm_dtype = ttnn.float32
+        interm_tile_size = fp32_tile_size
+    else:
+        interm_dtype = query.dtype
+        interm_tile_size = tile_size
+
     def cb(idx, pages):
         return ttnn.CBDescriptor(
             total_size=pages * tile_size,
@@ -63,34 +74,48 @@ def create_program_descriptor(
             ],
         )
 
-    def cb_fp32(idx, pages):
+    def cb_bf16(idx, pages):
         return ttnn.CBDescriptor(
-            total_size=pages * fp32_tile_size,
+            total_size=pages * bf16_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=fp32_tile_size)
+                ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.bfloat16, page_size=bf16_tile_size)
+            ],
+        )
+
+    def cb_interm(idx, pages):
+        return ttnn.CBDescriptor(
+            total_size=pages * interm_tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=idx, data_format=interm_dtype, page_size=interm_tile_size)
             ],
         )
 
     cbs = [
-        cb(0, num_o_tiles),  # cb_q (bf16)
-        cb(1, 2 * B_kv_t * D_t),  # cb_k (bf16)
-        cb(2, 2 * B_kv_t * D_t),  # cb_v (bf16)
-        cb(3, 2 * num_score_tiles),  # cb_mask (bf16)
-        cb(6, 1),  # cb_scaler_max (bf16)
-        cb(7, 1),  # cb_scaler_sum (bf16)
-        cb(5, 1),  # cb_scale_factor (bf16)
-        cb_fp32(8, B_q_t),  # cb_alpha (fp32 — running state)
-        cb_fp32(16, num_o_tiles),  # cb_o (fp32 — running accumulator)
-        cb(17, 2 * num_o_tiles),  # cb_out (bf16, double-buffered)
-        cb_fp32(24, num_score_tiles),  # cb_scores (fp32 — precision)
-        cb_fp32(25, num_score_tiles),  # cb_scores_masked (fp32)
-        cb_fp32(26, B_q_t),  # cb_max_new (fp32 — running state)
-        cb_fp32(27, B_q_t),  # cb_max_old (fp32 — running state)
-        cb_fp32(28, num_score_tiles),  # cb_exp_scores (fp32)
-        cb_fp32(29, B_q_t),  # cb_sum_new (fp32)
-        cb_fp32(30, B_q_t),  # cb_sum_old (fp32 — running state)
-        cb_fp32(31, num_o_tiles),  # cb_o_accum (fp32)
+        cb(0, num_o_tiles),  # cb_q (input dtype)
+        cb(1, 2 * B_kv_t * D_t),  # cb_k (input dtype)
+        cb(2, 2 * B_kv_t * D_t),  # cb_v (input dtype)
+        cb(3, 2 * num_score_tiles),  # cb_mask (input dtype)
+        # Constants: always bf16. The reader fills scale_factor with bf16 bits,
+        # and calculate_and_prepare_reduce_scaler fills scalers in the CB's format.
+        # The FPU reads these through srcA/srcB (TF32) — bf16 is lossless for 1.0
+        # and sufficient precision for the scale value.
+        cb_bf16(6, 1),  # cb_scaler_max (bf16 — constant 1.0)
+        cb_bf16(7, 1),  # cb_scaler_sum (bf16 — constant 1.0)
+        cb_bf16(5, 1),  # cb_scale_factor (bf16 — reader writes bf16 bits)
+        # Intermediates: fp32 when fp32_dest_acc_en=True, input dtype when False.
+        cb_interm(8, B_q_t),  # cb_alpha (running state)
+        cb_interm(16, num_o_tiles),  # cb_o (running accumulator)
+        cb(17, 2 * num_o_tiles),  # cb_out (input dtype, double-buffered)
+        cb_interm(24, num_score_tiles),  # cb_scores
+        cb_interm(25, num_score_tiles),  # cb_scores_masked
+        cb_interm(26, B_q_t),  # cb_max_new (running state)
+        cb_interm(27, B_q_t),  # cb_max_old (running state)
+        cb_interm(28, num_score_tiles),  # cb_exp_scores
+        cb_interm(29, B_q_t),  # cb_sum_new (running state)
+        cb_interm(30, B_q_t),  # cb_sum_old (running state)
+        cb_interm(31, num_o_tiles),  # cb_o_accum (PV matmul scratch)
     ]
 
     # Reader CT args: [has_mask, H_q, H_kv, mask_is_per_head, ...Q_acc, ...K_acc, ...V_acc, ...mask_acc]
