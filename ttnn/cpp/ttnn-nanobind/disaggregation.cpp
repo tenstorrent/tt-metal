@@ -8,23 +8,23 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp>
+#include <internal/disaggregation/kv_chunk_address_table.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 #include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
 
-namespace tt::tt_metal::experimental::disaggregation {
+namespace tt::tt_metal::internal::disaggregation {
 // Protobuf serializer free-functions. Declared in impl/.../kv_chunk_address_table_protobuf.hpp,
 // which is not on ttnn's include path; the definitions link from libtt_metal (the .cpp is
 // compiled into the `impl` target). Forward-declared here to bind without the impl header.
 std::string export_to_protobuf(const KvChunkAddressTable& table);
 void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path);
-}  // namespace tt::tt_metal::experimental::disaggregation
+}  // namespace tt::tt_metal::internal::disaggregation
 
 namespace ttnn::disaggregation {
 
 void bind_disaggregation_api(nb::module_& mod) {
-    using namespace tt::tt_metal::experimental::disaggregation;
+    using namespace tt::tt_metal::internal::disaggregation;
 
     // DeviceGroupIndex - StrongType wrapper around uint32_t
     nb::class_<DeviceGroupIndex>(mod, "DeviceGroupIndex", R"(
