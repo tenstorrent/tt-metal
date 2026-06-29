@@ -2,15 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer for per_token_cast_to_fp8. Mirror of the reader: the compute produces, per block, tile_h
-// output_e4m3 block-rows plus one fp32 scale tile whose column 0
-// holds the tile_h per-block scales. The writer walks the same block stream and:
-//   - writes each bank-contiguous run of output_e4m3 blocks back to its row at the current block
-//     column offset (one NoC async write per run, mirroring the reader's contiguous reads);
-//   - accumulates per-block scales into a persistent per-token scale-row scratch and flushes the
-//     full row (page-aligned source -> aligned DRAM page) when the token's last block is emitted.
-//     A block may straddle tokens and a token may straddle blocks, so the scratch and the
-//     (current_row, current_col) cursor persist across blocks.
+// Writer for per_token_cast_to_fp8. Outputs are ROW_MAJOR for both input layouts. Per block the compute
+// produces tile_h e4m3 block-rows plus one fp32 scale tile whose column 0 holds the tile_h per-block
+// scales (pulled out by extract_first_column).
+//
+// ROW_MAJOR input: walks the same flat block stream as the reader with a (current_row, current_col)
+// cursor; e4m3 runs are written back per bank-contiguous span and each token's full scale row is flushed
+// when its last block is emitted.
+//
+// INPUT_TILE_LAYOUT: work is split over 128-wide blocks; a core owns a contiguous global block range, so
+// each block g maps to (row-tile g/spr, column-block g%spr) and the row-tiles it touches are consecutive,
+// each owning a contiguous column-block range. e4m3 rows go to their folded RM output rows (tile-padding
+// rows skipped); scales for a row-tile are staged and flushed as one contiguous run per row.
 
 #include <cstdint>
 
@@ -37,20 +40,28 @@ static inline void extract_first_column(volatile tt_l1_ptr uint32_t* tile, uint3
 }
 
 void kernel_main() {
+#ifdef INPUT_TILE_LAYOUT
+    uint32_t output_e4m3_addr = get_arg_val<uint32_t>(0);
+    uint32_t scale_addr = get_arg_val<uint32_t>(1);
+    uint32_t block_offset = get_arg_val<uint32_t>(2);         // first global block of this core
+    uint32_t num_blocks = get_arg_val<uint32_t>(3);           // blocks owned by this core
+    uint32_t rows_per_batch = get_arg_val<uint32_t>(4);       // R = logical rows per batch (dim -2)
+    uint32_t row_tiles_per_batch = get_arg_val<uint32_t>(5);  // ceil(R / tile_h)
+#else
     uint32_t output_e4m3_addr = get_arg_val<uint32_t>(0);
     uint32_t scale_addr = get_arg_val<uint32_t>(1);
     uint32_t num_blocks = get_arg_val<uint32_t>(2);
     uint32_t start_row = get_arg_val<uint32_t>(3);  // absolute first row of this core's stream
     uint32_t num_rows = get_arg_val<uint32_t>(4);   // rows owned by this core
     uint32_t width = get_arg_val<uint32_t>(5);      // H (elements per row)
+#endif
 
     constexpr uint32_t cb_output_e4m3 = get_compile_time_arg_val(0);
     constexpr uint32_t output_e4m3_block_bytes = get_compile_time_arg_val(1);  // 128 (1 byte/elem)
     constexpr uint32_t cb_scale_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(3);
-    constexpr uint32_t scale_blocks_per_row = get_compile_time_arg_val(4);      // H / 128 (full row width)
+    constexpr uint32_t scale_blocks_per_row = get_compile_time_arg_val(4);      // spr = H / 128
     constexpr uint32_t scale_aligned_page_bytes = get_compile_time_arg_val(5);  // per-row scratch footprint
-    // Tile / face dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t face_h = get_compile_time_arg_val(8);
@@ -61,7 +72,6 @@ void kernel_main() {
     constexpr uint32_t faces_per_row = tile_w / face_w;               // face columns per tile
     constexpr uint32_t FACE_ROWS = tile_h / face_h;                   // face rows per tile
     constexpr uint32_t FACE_ROW_STRIDE = faces_per_row * face_elems;  // fp32 stride per face row
-    constexpr uint32_t scale_row_bytes = scale_blocks_per_row * 4;
 
     constexpr auto output_e4m3_accessor_args = TensorAccessorArgs<10>();
     constexpr auto scale_args = TensorAccessorArgs<output_e4m3_accessor_args.next_compile_time_args_offset()>();
@@ -72,10 +82,75 @@ void kernel_main() {
     CircularBuffer cb_scale_tiles_obj(cb_scale_tiles);
     CircularBuffer cb_scale_scratch_obj(cb_scale_scratch);
 
-    // Persistent per-token scale-row scratch (page-aligned), reused across blocks.
+    // Persistent scale scratch (writer-private), reused across blocks / row-tiles.
     CoreLocalMem<volatile uint32_t> tok(cb_scale_scratch_obj.get_write_ptr());
-
     uint32_t block_scales[tile_h];  // tile_h is compile-time constant
+
+#ifdef INPUT_TILE_LAYOUT
+    constexpr uint32_t scale_page_words = scale_aligned_page_bytes / 4;
+
+    // Flush the accumulated scale rows for a row-tile over its owned column range [lo, hi].
+    auto flush_scale = [&](uint32_t row_base, uint32_t real_rows, uint32_t lo, uint32_t hi) {
+        const uint32_t run_bytes = (hi - lo + 1) * 4;
+        for (uint32_t i = 0; i < real_rows; ++i) {
+            noc.async_write(
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
+                scale,
+                run_bytes,
+                {.offset_bytes = i * scale_aligned_page_bytes + lo * 4},
+                {.page_id = row_base + i, .offset_bytes = lo * 4});
+        }
+        noc.async_write_barrier();  // scratch is reused by the next row-tile
+    };
+
+    const uint32_t end_block = block_offset + num_blocks;
+    uint32_t cur_rt = 0xFFFFFFFFu;  // sentinel: no row-tile open yet
+    uint32_t cur_row_base = 0, cur_real_rows = 0, seg_lo = 0, seg_hi = 0;
+
+    for (uint32_t g = block_offset; g < end_block; ++g) {
+        const uint32_t rt = g / scale_blocks_per_row;
+        const uint32_t cb = g % scale_blocks_per_row;
+
+        if (rt != cur_rt) {
+            if (cur_rt != 0xFFFFFFFFu) {
+                flush_scale(cur_row_base, cur_real_rows, seg_lo, seg_hi);
+            }
+            // Map the row-tile to its batch and folded RM output rows (tile-padding rows skipped).
+            const uint32_t batch = rt / row_tiles_per_batch;
+            const uint32_t local_row_base = (rt % row_tiles_per_batch) * tile_h;
+            cur_row_base = batch * rows_per_batch + local_row_base;
+            const uint32_t rows_left = rows_per_batch - local_row_base;
+            cur_real_rows = rows_left < tile_h ? rows_left : tile_h;
+            cur_rt = rt;
+            seg_lo = cb;
+        }
+        seg_hi = cb;
+
+        cb_output_e4m3_obj.wait_front(tiles_per_block);
+        cb_scale_tiles_obj.wait_front(1);
+        extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_tiles_obj.get_read_ptr()), block_scales);
+
+        const uint32_t col_offset = cb * block_w;
+        for (uint32_t i = 0; i < cur_real_rows; ++i) {
+            noc.async_write(
+                cb_output_e4m3_obj,
+                output_e4m3,
+                output_e4m3_block_bytes,
+                {.offset_bytes = i * output_e4m3_block_bytes},
+                {.page_id = cur_row_base + i, .offset_bytes = col_offset});
+            tok[i * scale_page_words + cb] = block_scales[i];
+        }
+        noc.async_write_barrier();  // drain e4m3 writes before the CB page is reused
+        cb_output_e4m3_obj.pop_front(tiles_per_block);
+        cb_scale_tiles_obj.pop_front(1);
+    }
+
+    if (cur_rt != 0xFFFFFFFFu) {
+        flush_scale(cur_row_base, cur_real_rows, seg_lo, seg_hi);
+    }
+#else
+    constexpr uint32_t scale_row_bytes = scale_blocks_per_row * 4;
 
     const uint32_t blocks_per_row = width >> 7;  // H / 128 (block_w = 128)
     const uint32_t total_blocks = num_rows * blocks_per_row;
@@ -129,4 +204,5 @@ void kernel_main() {
         cb_output_e4m3_obj.pop_front(tiles_per_block);
         cb_scale_tiles_obj.pop_front(1);
     }
+#endif
 }

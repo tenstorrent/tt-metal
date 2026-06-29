@@ -5,6 +5,8 @@
 #include "per_token_cast_to_fp8_program_factory.hpp"
 
 #include <bit>
+#include <map>
+#include <string>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -296,6 +298,7 @@ PerTokenCastToFp8TileProgramFactory::cached_program_t PerTokenCastToFp8TileProgr
     const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128, also column-blocks per row-tile
     const uint32_t num_w_tiles = H / tile_w;                 // input tiles across the row
     const uint32_t in_elem_bytes = input.element_size();
+    const uint32_t input_block_bytes = block_w * in_elem_bytes;      // reader CT[1], ROW_MAJOR-only; passed for parity
     const uint32_t output_e4m3_block_bytes = block_w;                // one 128-element row, 1 byte/elem
     const uint32_t in_tile_bytes = tile_h * tile_w * in_elem_bytes;  // cb_in page = one input tile
     const uint32_t output_e4m3_page_bytes = tile_h * tile_w;         // cb_output_e4m3 page = one tile
@@ -369,15 +372,24 @@ PerTokenCastToFp8TileProgramFactory::cached_program_t PerTokenCastToFp8TileProgr
             .set_page_size(cb_scale_scratch_idx, scale_scratch_bytes);
     CreateCircularBuffer(program, all_cores, cb_scale_scratch_cfg);
 
-    std::vector<uint32_t> reader_ct_args = {cb_in_idx, cb_scaler_idx, tile_h, tile_w, face_h, face_w, tiles_per_block};
+    // Reader/compute/writer are shared with the ROW_MAJOR path; INPUT_TILE_LAYOUT selects the tile branch.
+    const std::map<std::string, std::string> tile_defines = {{"INPUT_TILE_LAYOUT", "1"}};
+
+    // Reader CT layout matches the ROW_MAJOR kernel (cb_in, input_block_bytes, cb_scaler, tile/face dims);
+    // input_block_bytes is unused on the tile branch but kept for index parity.
+    std::vector<uint32_t> reader_ct_args = {
+        cb_in_idx, input_block_bytes, cb_scaler_idx, tile_h, tile_w, face_h, face_w};
     TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
-        "reader_per_token_cast_to_fp8_tile.cpp",
+        "reader_per_token_cast_to_fp8.cpp",
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_ct_args,
+            .defines = tile_defines});
 
     std::vector<uint32_t> writer_ct_args = {
         cb_output_e4m3_idx,
@@ -395,10 +407,13 @@ PerTokenCastToFp8TileProgramFactory::cached_program_t PerTokenCastToFp8TileProgr
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
-        "writer_per_token_cast_to_fp8_tile.cpp",
+        "writer_per_token_cast_to_fp8.cpp",
         all_cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_ct_args});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_ct_args,
+            .defines = tile_defines});
 
     const uint32_t clamp_min_bits = std::bit_cast<uint32_t>(fp8::SCALE_CLAMP_MIN);
     const uint32_t clamp_max_bits = std::bit_cast<uint32_t>(3.0e38f);
@@ -419,9 +434,9 @@ PerTokenCastToFp8TileProgramFactory::cached_program_t PerTokenCastToFp8TileProgr
     KernelHandle compute_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/"
-        "compute_per_token_cast_to_fp8_tile.cpp",
+        "compute_per_token_cast_to_fp8.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args});
+        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args, .defines = tile_defines});
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t block_offset = 0;
