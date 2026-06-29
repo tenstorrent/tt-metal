@@ -13,6 +13,7 @@ from math import prod
 from typing import Optional
 
 import torch
+import ttnn
 
 from models.experimental.vibevoice.tt.vibevoice_config import (
     load_vibevoice_model_config,
@@ -133,6 +134,21 @@ class TTVibeVoiceModel:
         sem_tok_weights = preprocess_semantic_tokenizer_weights(sem_tok_state, mesh_device, config.semantic_tokenizer)
         acoustic_tokenizer = TTAcousticTokenizer(ac_tok_weights, mesh_device)
         semantic_tokenizer = TTSemanticTokenizer(sem_tok_weights, mesh_device)
+
+        # Warm up the post-diffusion conv path on a dummy latent so the conv2d weights prep runs now (at load) instead of on the first decode frame.
+        # Reset the streaming caches afterwards to ensure the first real frame is clean.
+        vae_dim = config.acoustic_tokenizer.vae_dim
+        dummy_latent = ttnn.zeros(
+            [1, 1, 1, vae_dim],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        dummy_audio = acoustic_tokenizer.decode(dummy_latent, use_cache=True)
+        semantic_tokenizer.forward(dummy_audio, use_cache=True)
+        acoustic_tokenizer.reset_decode_cache()
+        semantic_tokenizer.reset_cache()
 
         return cls(
             lm=lm,
