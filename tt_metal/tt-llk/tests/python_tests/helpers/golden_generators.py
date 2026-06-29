@@ -2145,6 +2145,7 @@ class UnarySFPUGolden:
             MathOperation.Celu: self._celu,
             MathOperation.Silu: self._silu,
             MathOperation.Gelu: self._gelu,
+            MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
@@ -2470,6 +2471,16 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.gelu(input_tensor).item()
+
+    def _gelu_tanh(self, x):
+        # Matches calculate_gelu_tanh: the tanh approximation of GELU,
+        # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
 
     def _fill(self, x, const_value=5):
         input_tensor = (
@@ -3195,6 +3206,8 @@ class ReduceGolden:
             return _bfp8b_to_float16b(tensor.to(torch.bfloat16))
         elif data_format.is_mx_format():
             return quantize_mx_tensor_chunked(tensor.to(torch.bfloat16), data_format)
+        elif data_format.is_integer():
+            return saturate_integer(tensor, data_format, format_dict[data_format])
         else:
             return to_tensor(tensor, data_format)
 
@@ -3229,6 +3242,12 @@ class ReduceGolden:
         # Convert back to target data format at the end (same as eltwise output path)
         return self._quantize_reduce_output(accumulated, data_format)
 
+    def _make_tile_result(self, data_format, tile_shape):
+        """Create a zero-filled tile result in a dtype wide enough to avoid integer overflow."""
+        torch_format = format_dict[data_format]
+        dtype = torch.int64 if data_format.is_integer() else torch_format
+        return torch.zeros(tile_shape.total_tile_size(), dtype=dtype)
+
     def _process_tile(
         self, operand, reduce_dim, pool_type, data_format, tile_idx, tile_shape
     ):
@@ -3244,10 +3263,7 @@ class ReduceGolden:
         return self.dim_handlers[reduce_dim](faces, pool_type, data_format, tile_shape)
 
     def _reduce_column(self, faces, pool_type, data_format, tile_shape):
-        # Pool together columns: reduce along rows (dim=0) for each column
-        result = torch.zeros(
-            tile_shape.total_tile_size(), dtype=format_dict[data_format]
-        )
+        result = self._make_tile_result(data_format, tile_shape)
 
         # For each column of faces, concatenate vertically and pool along rows
         for col_idx in range(tile_shape.num_faces_c_dim):
@@ -3269,10 +3285,7 @@ class ReduceGolden:
         return result
 
     def _reduce_row(self, faces, pool_type, data_format, tile_shape):
-        # Pool together rows: reduce along columns (dim=1) for each row
-        result = torch.zeros(
-            tile_shape.total_tile_size(), dtype=format_dict[data_format]
-        )
+        result = self._make_tile_result(data_format, tile_shape)
 
         # For each row of faces, concatenate horizontally and pool along columns
         for row_idx in range(tile_shape.num_faces_r_dim):
@@ -3301,10 +3314,7 @@ class ReduceGolden:
         return result
 
     def _reduce_scalar(self, faces, pool_type, data_format, tile_shape):
-        # Pool together all faces → single scalar at [0]
-        result = torch.zeros(
-            tile_shape.total_tile_size(), dtype=format_dict[data_format]
-        )
+        result = self._make_tile_result(data_format, tile_shape)
         result[0] = self._apply_pooling(faces.flatten(), pool_type, dim=0)
         return result
 
@@ -3312,7 +3322,7 @@ class ReduceGolden:
         if pool_type == ReducePool.Max:
             return torch.max(tensor, dim=dim).values
         elif pool_type == ReducePool.Average:
-            return torch.mean(tensor, dim=dim)
+            return torch.mean(tensor.float(), dim=dim)
         elif pool_type == ReducePool.Sum:
             return torch.sum(tensor, dim=dim)
         else:

@@ -228,12 +228,19 @@ class ResNet50TestInfra:
         n, c, h, w = torch_input_tensor.shape
         n = n // self.num_devices
 
+        # Tie the shard count to the device's real compute-core count. The per-batch `core_grid`
+        # above targets a full silicon part; Quasar has at most 32 Tensix neo clusters and the
+        # emulator 1-2, so requesting e.g. 48 (8x6) shards overflows the available L1 banks
+        # (TT_FATAL: num_shards <= num_compute_banks). Cap the requested cores to the device's
+        # compute grid (and to the number of shardable rows), then lay them out row-wise within
+        # that grid. On a full part this is a no-op when core_grid already fits.
+        compute_grid = device.compute_with_storage_grid_size()
+        max_num_cores = compute_grid.x * compute_grid.y
+        num_cores = min(core_grid.x * core_grid.y, max_num_cores, n * c * h)
+
         # sharded mem config for fold input
-        num_cores = core_grid.x * core_grid.y
         shard_h = (n * c * h + num_cores - 1) // num_cores
-        grid_size = core_grid
-        grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, row_wise=True)
         shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec

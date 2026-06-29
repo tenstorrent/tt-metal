@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 
@@ -33,7 +34,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_out(cb_id_out);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_out);
