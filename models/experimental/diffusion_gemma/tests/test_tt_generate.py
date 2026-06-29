@@ -2294,6 +2294,14 @@ def test_make_host_canvas_init_fn_rejects_bad_block_index():
         init_fn(1, 32)
 
 
+@pytest.mark.parametrize("block_idx", [0.5, True])
+def test_make_host_canvas_init_fn_rejects_non_integer_block_index(block_idx):
+    init_fn = make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]])])
+
+    with pytest.raises(IndexError, match="host canvas replay block index must be an integer"):
+        init_fn(block_idx, 32)
+
+
 def test_make_seeded_host_canvas_init_fn_generates_reproducible_tokens(monkeypatch):
     calls = []
 
@@ -2448,6 +2456,22 @@ def test_make_host_noise_tokens_fn_rejects_bad_block_or_step_index():
         noise_fn(0)(1)
 
 
+@pytest.mark.parametrize("block_idx", [0.5, True])
+def test_make_host_noise_tokens_fn_rejects_non_integer_block_index(block_idx):
+    noise_fn = make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])]])
+
+    with pytest.raises(IndexError, match="host noise-token replay block index must be an integer"):
+        noise_fn(block_idx)
+
+
+@pytest.mark.parametrize("step", [0.5, True])
+def test_make_host_noise_tokens_fn_rejects_non_integer_step_index(step):
+    noise_fn = make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])]])
+
+    with pytest.raises(IndexError, match="host noise-token replay step index must be an integer"):
+        noise_fn(0)(step)
+
+
 def test_make_host_gumbel_noise_fn_replays_fixed_noise(monkeypatch):
     calls = []
 
@@ -2503,6 +2527,22 @@ def test_make_host_gumbel_noise_fn_rejects_bad_block_or_step_index():
         noise_fn(1)
     with pytest.raises(IndexError, match="host gumbel replay step index 1 out of range for block 0 with 1 steps"):
         noise_fn(0)(1)
+
+
+@pytest.mark.parametrize("block_idx", [0.5, True])
+def test_make_host_gumbel_noise_fn_rejects_non_integer_block_index(block_idx):
+    noise_fn = make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3)]])
+
+    with pytest.raises(IndexError, match="host gumbel replay block index must be an integer"):
+        noise_fn(block_idx)
+
+
+@pytest.mark.parametrize("step", [0.5, True])
+def test_make_host_gumbel_noise_fn_rejects_non_integer_step_index(step):
+    noise_fn = make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3)]])
+
+    with pytest.raises(IndexError, match="host gumbel replay step index must be an integer"):
+        noise_fn(0)(step)
 
 
 def test_make_seeded_gumbel_noise_fn_generates_permuted_vocab_block_step_seeds(monkeypatch):

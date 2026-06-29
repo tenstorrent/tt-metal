@@ -268,11 +268,15 @@ def _validate_replay_canvas_blocks(blocks, *, kind: str) -> None:
 
 
 def _check_replay_block_index(block_idx: int, num_blocks: int, *, kind: str) -> None:
+    if isinstance(block_idx, bool) or not isinstance(block_idx, Integral):
+        raise IndexError(f"{kind} block index must be an integer")
     if block_idx < 0 or block_idx >= num_blocks:
         raise IndexError(f"{kind} block index {block_idx} out of range for {num_blocks} blocks")
 
 
 def _check_replay_step_index(step: int, num_steps: int, *, block_idx: int, kind: str) -> None:
+    if isinstance(step, bool) or not isinstance(step, Integral):
+        raise IndexError(f"{kind} step index must be an integer")
     if step < 0 or step >= num_steps:
         raise IndexError(f"{kind} step index {step} out of range for block {block_idx} with {num_steps} steps")
 
