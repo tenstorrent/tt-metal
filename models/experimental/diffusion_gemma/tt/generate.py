@@ -517,13 +517,23 @@ def _validate_canvas_length(config: DiffusionConfig) -> None:
         raise ValueError("config.canvas_length must be positive")
 
 
-def _validate_max_new_tokens_capacity(num_blocks: int, canvas_length: int, max_new_tokens: int | None) -> None:
+def _validate_max_new_tokens(max_new_tokens: int | None) -> int | None:
     if max_new_tokens is None:
-        return
+        return None
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, Integral):
+        raise ValueError("max_new_tokens must be an integer")
     if max_new_tokens < 0:
         raise ValueError("max_new_tokens must be non-negative")
+    return int(max_new_tokens)
+
+
+def _validate_max_new_tokens_capacity(num_blocks: int, canvas_length: int, max_new_tokens: int | None) -> int | None:
+    max_new_tokens = _validate_max_new_tokens(max_new_tokens)
+    if max_new_tokens is None:
+        return None
     if max_new_tokens > num_blocks * canvas_length:
         raise ValueError("num_blocks is too small for max_new_tokens")
+    return max_new_tokens
 
 
 def _validate_batch_size(batch_size: int) -> None:
@@ -777,8 +787,7 @@ def _normalize_eos_token_ids(eos_token_id, *, kind: str = "eos_token_id"):
 
 
 def _trim_generated_token_ids(generated: torch.Tensor, *, max_new_tokens: int | None = None, eos_token_id=None):
-    if max_new_tokens is not None and max_new_tokens < 0:
-        raise ValueError("max_new_tokens must be non-negative")
+    max_new_tokens = _validate_max_new_tokens(max_new_tokens)
 
     eos_ids = _normalize_eos_token_ids(eos_token_id)
     rows = []
@@ -898,7 +907,7 @@ def generate_text(
     """Tokenize a prompt, run device generation, and decode host-visible text."""
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
-    _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, max_new_tokens)
+    max_new_tokens = _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, max_new_tokens)
     init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     prompt_tokens = tokenize_prompt(
         tokenizer,
@@ -961,15 +970,17 @@ def generate_text_from_checkpoint_state(
     """Run prompt-to-text generation using raw DiffusionGemma checkpoint state."""
     config = DiffusionConfig() if config is None else config
     _validate_canvas_length(config)
+    max_new_tokens = generate_kwargs.get("max_new_tokens")
     if num_blocks is None:
-        max_new_tokens = generate_kwargs.get("max_new_tokens")
         if max_new_tokens is None:
             raise ValueError("num_blocks is required unless max_new_tokens is provided")
-        if max_new_tokens < 0:
-            raise ValueError("max_new_tokens must be non-negative")
+        max_new_tokens = _validate_max_new_tokens(max_new_tokens)
+        generate_kwargs["max_new_tokens"] = max_new_tokens
         num_blocks = (max_new_tokens + config.canvas_length - 1) // config.canvas_length
     _validate_num_blocks(num_blocks)
-    _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, generate_kwargs.get("max_new_tokens"))
+    max_new_tokens = _validate_max_new_tokens_capacity(num_blocks, config.canvas_length, max_new_tokens)
+    if "max_new_tokens" in generate_kwargs:
+        generate_kwargs["max_new_tokens"] = max_new_tokens
     if num_blocks > 0:
         _validate_batch_size(batch)
     if vocab_size is None and num_blocks > 0:

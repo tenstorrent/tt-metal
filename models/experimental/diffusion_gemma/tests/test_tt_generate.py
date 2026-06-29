@@ -794,6 +794,32 @@ def test_generate_text_rejects_max_new_tokens_beyond_block_capacity_before_token
         )
 
 
+@pytest.mark.parametrize(
+    ("max_new_tokens", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_text_rejects_non_integer_max_new_tokens_before_tokenize(max_new_tokens, message):
+    class _FailTokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            raise AssertionError("tokenizer should not run for invalid max_new_tokens")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text(
+            "model",
+            "logits",
+            _FailTokenizer(),
+            "hello",
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            max_new_tokens=max_new_tokens,
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_allows_zero_blocks_without_init_canvas():
     tokenizer = _FakeChatTokenizer()
 
@@ -979,6 +1005,31 @@ def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tok
     assert out == "result"
     assert calls["generate"]["num_blocks"] == 3
     assert calls["generate"]["max_new_tokens"] == 9
+
+
+@pytest.mark.parametrize(
+    ("max_new_tokens", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_non_integer_max_new_tokens(max_new_tokens, message):
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid max_new_tokens")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            max_new_tokens=max_new_tokens,
+            logits_fn_builder_factory=fail_builder_factory,
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
 
 
 def test_generate_text_from_checkpoint_state_allows_zero_new_tokens_without_canvas_or_logits():
@@ -1749,7 +1800,15 @@ def test_generation_token_ids_rejects_invalid_eos_token_ids(eos_token_id, messag
         generation_token_ids(prompt_tokens, generation, eos_token_id=eos_token_id)
 
 
-def test_decode_generation_rejects_negative_max_new_tokens():
+@pytest.mark.parametrize(
+    ("max_new_tokens", "message"),
+    [
+        (-1, "non-negative"),
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_decode_generation_rejects_invalid_max_new_tokens(max_new_tokens, message):
     tokenizer = _FakeTokenizer()
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
     generation = G.DeviceGeneration(
@@ -1759,8 +1818,8 @@ def test_decode_generation_rejects_negative_max_new_tokens():
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match="max_new_tokens"):
-        decode_generation(tokenizer, prompt_tokens, generation, max_new_tokens=-1)
+    with pytest.raises(ValueError, match=message):
+        decode_generation(tokenizer, prompt_tokens, generation, max_new_tokens=max_new_tokens)
 
 
 def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
