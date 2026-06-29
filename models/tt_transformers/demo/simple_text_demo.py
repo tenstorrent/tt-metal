@@ -1013,15 +1013,23 @@ def test_demo_text(
     # pool and OOM. Shrink the pool to the swept context so the cache fits smaller-DRAM SKUs. min() only
     # ever reduces it, so multi-device SKUs running the full 128k keep their original pool.
     if is_seqlen_sweep:
-        blocks_needed = -(-(max_seq_len + max_generated_tokens) // page_params["page_block_size"])  # ceil div
-        page_params = {
-            **page_params,
-            "page_max_num_blocks_per_dp": min(page_params["page_max_num_blocks_per_dp"], blocks_needed),
-        }
-        logger.info(
-            f"Seqlen sweep: page_max_num_blocks_per_dp capped to {page_params['page_max_num_blocks_per_dp']} "
-            f"(max_seq_len={max_seq_len}, block_size={page_params['page_block_size']})"
-        )
+        block_size = page_params["page_block_size"]
+        blocks_needed = -(-(max_seq_len + max_generated_tokens) // block_size)  # ceil div
+        if blocks_needed < page_params["page_max_num_blocks_per_dp"]:
+            # Capped sweep (small-DRAM single-device SKU, e.g. N150). Mirror the proven N150 config
+            # (block_size=32): the larger block_size=64 inflates the prefill circular buffers and clashes
+            # with L1 at prefill. Smaller blocks keep CBs within L1; size the pool to the swept context.
+            block_size = 32
+            blocks_needed = -(-(max_seq_len + max_generated_tokens) // block_size)
+            page_params = {
+                **page_params,
+                "page_block_size": block_size,
+                "page_max_num_blocks_per_dp": blocks_needed,
+            }
+            logger.info(
+                f"Seqlen sweep: capped page params for small SKU — block_size={block_size}, "
+                f"page_max_num_blocks_per_dp={blocks_needed} (max_seq_len={max_seq_len})"
+            )
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
