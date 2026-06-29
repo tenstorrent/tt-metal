@@ -424,7 +424,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_KERNEL_PATH
         // Path to kernel source files.
-        // Default: Uses TT_METAL_RUNTIME_ROOT/tt_metal/kernels if not set
+        // Default: resolved relative to TT_METAL_RUNTIME_ROOT if not set
         // Usage: export TT_METAL_KERNEL_PATH=/path/to/kernels
         case EnvVarID::TT_METAL_KERNEL_PATH:
             this->is_kernel_dir_env_var_set = true;
