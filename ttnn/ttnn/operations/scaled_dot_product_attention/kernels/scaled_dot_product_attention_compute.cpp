@@ -18,6 +18,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -102,7 +103,25 @@ void kernel_main() {
             reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_scores_masked, cb_scaler_max, cb_max_new,
                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(B_q_t, B_kv_t, 1));
 
+            // Phase 4b: Compute running max: m_new = max(m_old, m_blk)
+            // The online softmax recurrence requires the RUNNING max (not just the
+            // current block's max) for correct alpha and score rescaling. Without
+            // this step, a fully-masked KV-block (m_blk = -inf) causes
+            // alpha = exp(m_old - (-inf)) = inf, corrupting O and l.
+            eltwise_chain(
+                B_q_t,
+                CopyTile<cb_max_old, Dst::D0, InputLifecycle::HeldBulk, CopyTileReconfig::Input, OperandKind::Block>{},
+                CopyTile<
+                    cb_max_new,
+                    Dst::D1,
+                    InputLifecycle::Streaming,
+                    CopyTileReconfig::Input,
+                    OperandKind::Scalar>{},
+                BinaryMax<Dst::D0, Dst::D1, Dst::D0>{},
+                PackTile<cb_max_new, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+
             // Phase 5: Compute alpha = exp(m_old - m_new)
+            // cb_max_new now holds the running max = max(m_old, m_blk).
             eltwise_chain(B_q_t,
                 BinaryFpu<cb_max_old, cb_max_new, BinaryFpuOp::Sub, BroadcastDim::None,
                           InputLifecycle::Bulk, InputLifecycle::HeldBulk,

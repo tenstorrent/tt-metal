@@ -32,6 +32,14 @@ def create_program_descriptor(
     S_kv_tiles = S_kv // TILE_DIM
     B_q_t = min(MAX_B_Q_T, S_q_tiles)
     B_kv_t = min(MAX_B_KV_T, S_kv_tiles)
+    # Ensure B_q_t divides S_q_tiles so every Q-block is full (no partial last block).
+    # The kernel uses B_q_t as a compile-time constant for CB sizing and loop bounds,
+    # so a partial last block would read/write out-of-bounds tiles. Reduce B_q_t to
+    # the largest divisor of S_q_tiles that is <= MAX_B_Q_T.
+    while S_q_tiles % B_q_t != 0 and B_q_t > 1:
+        B_q_t -= 1
+    while S_kv_tiles % B_kv_t != 0 and B_kv_t > 1:
+        B_kv_t -= 1
     tile_size = ttnn.tile_size(query.dtype)
     fp32_tile_size = ttnn.tile_size(ttnn.float32)
     resolved_scale = scale if scale is not None else (1.0 / math.sqrt(D))
