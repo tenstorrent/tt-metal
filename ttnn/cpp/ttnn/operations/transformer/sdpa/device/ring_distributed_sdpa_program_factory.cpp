@@ -312,8 +312,21 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
-        B,          NQH,          NKH,        Sqt,          valid_Sqt * 2,          Sk,           DHt,       vDHt,
-        Sq_chunk_t, q_num_chunks, Sk_chunk_t, k_num_chunks, packed_identity_scalar, scale_packed, num_cores,
+        B,
+        NQH,
+        NKH,
+        Sqt,
+        valid_Sqt * 2,
+        Sk,
+        DHt,
+        vDHt,
+        Sq_chunk_t,
+        q_num_chunks,
+        Sk_chunk_t,
+        k_num_chunks,
+        packed_identity_scalar,
+        scale_packed,
+        num_cores,
         true,   //(std::uint32_t)is_causal,
         false,  //(std::uint32_t)use_provided_mask,
         false,  //(std::uint32_t)use_padded_mask,
@@ -324,8 +337,12 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,      // arg 22: out_subblock_h — unused when streaming is off
         0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
+        0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
     };
+    // out accessor, then the cu_window accessor chained right after it (mirrors the regular factory so the
+    // writer's accessor offset chain stays intact). Ring is never windowed → nullptr placeholder accessor.
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs().append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -421,6 +438,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     };
 
     cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
+    // Ring is never windowed, but the writer's windowed block (gated by `if constexpr`) is still compiled
+    // in a non-template function, so get_tile_size(cb_cu_window_in) must resolve to a valid CB id rather
+    // than the `inactive` sentinel (which constexpr-faults on unpack_tile_size[-1]). Mirror the regular
+    // factory and point it at q_in.
+    cb_ids.cu_window_seqlens = cb_ids.q_in;
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
     cb_ids.mask_in = allocate_tile_cb(mask_tiles, mask_tile_size, mask_df);
@@ -539,7 +561,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
              chunked_q_chunk_offset_phase_2,
              write_offset_phase_2,
              global_q_start,
-             global_q_count});
+             global_q_count,
+             0u,    // arg 10: cu_window_seqlens_addr — unused (ring is never windowed)
+             0u});  // arg 11: cu_window_seqlens_eles — unused (ring is never windowed)
 
         compute_desc.emplace_runtime_args(
             core,

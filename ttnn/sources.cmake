@@ -335,7 +335,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
     cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp
     cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_nanobind.cpp
-    cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed_nanobind.cpp
     cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     cpp/ttnn/operations/transformer/gated_delta_attn/gated_delta_attn_nanobind.cpp
     cpp/ttnn/operations/transformer/transformer_nanobind.cpp
