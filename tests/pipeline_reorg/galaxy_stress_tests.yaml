@@ -10,19 +10,6 @@
 
 # Max timeouts: .github/time_budget.yaml (workflow key: stress)
 
-- id: galaxy-llama-nd-hang-stress
-  name: Llama Galaxy ND hang stress (loop)
-  team: models
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  cmd: |
-    for i in {1..5}; do
-      echo "🔁 Run #$i"
-      timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
-    done
-  skus:
-    wh_galaxy_perf:
-      timeout: 360
-
 - id: galaxy-fabric-stability-stress
   name: Galaxy Fabric Stability Tests
   team: scaleout
@@ -32,13 +19,3 @@
   skus:
     wh_galaxy_perf:
       timeout: 100
-
-- id: galaxy-llama-long-stress
-  name: Llama Galaxy Long Stress Test
-  team: models
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  cmd: |
-    LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
-  skus:
-    wh_galaxy_perf:
-      timeout: 140

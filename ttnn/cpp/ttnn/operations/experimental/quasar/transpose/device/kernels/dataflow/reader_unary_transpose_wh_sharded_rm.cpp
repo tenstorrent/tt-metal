@@ -4,8 +4,8 @@
 
 // Metal 2.0 conversion (in place; this kernel is transpose-owned). The device-side NoC + local-copy
 // logic is unchanged; only the resource bindings move to the Metal 2.0 namespaces (dfb::/args::).
-// cb_src (dfb::cb_src) is the borrowed input shard — read by L1 address (get_read_ptr); cb_dst
-// (dfb::cb_dst) is the row-gathered tile-staging buffer produced for the compute kernel.
+// The input shard is read by L1 address obtained from tensor::input (a local TensorAccessor over the
+// resident shard); cb_dst (dfb::cb_dst) is the row-gathered tile-staging buffer for the compute kernel.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -14,6 +14,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 // get_arg lives in `namespace experimental` and is normally found via ADL on the args:: accessor
@@ -33,10 +34,11 @@ void kernel_main() {
     const uint32_t stick_size_bytes = W_size_bytes;
 
     Noc noc;
-    DataflowBuffer cb_src(dfb::cb_src);
     DataflowBuffer cb_dst(dfb::cb_dst);
 
-    uint32_t src_addr = cb_src.get_read_ptr();
+    // Local input-shard base L1 address from the resident input TensorAccessor (no borrowed self-loop CB).
+    const auto s = TensorAccessor(tensor::input);
+    uint32_t src_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0));
 
     noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},

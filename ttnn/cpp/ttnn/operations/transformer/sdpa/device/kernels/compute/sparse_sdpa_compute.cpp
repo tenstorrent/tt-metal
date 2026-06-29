@@ -176,7 +176,6 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/DHt,
                             /*matmul_stride=*/DHt,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
                     // Publish the band to UNPACK while holding wr_ptr (for the in-place mask/sub_exp).
@@ -262,7 +261,6 @@ void kernel_main() {
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/Skt,
                             /*matmul_stride=*/KT_stride,
-                            /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
                     pack_to_unpack_sync();                // flush PV's HELD out_cur packs (push_back deferred to

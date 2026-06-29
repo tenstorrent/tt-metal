@@ -29,6 +29,7 @@ struct TensorAccessorArgs {
     static constexpr bool tensor_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape);
     static constexpr bool shard_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape);
     static constexpr bool bank_coords_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords);
+    static constexpr bool page_size_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimePageSize);
 
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time
@@ -38,13 +39,32 @@ struct TensorAccessorArgs {
     static_assert(
         !is_sharded || !num_banks_is_crta || (num_banks_is_crta && bank_coords_is_crta),
         "If num_banks is runtime, bank_coords must also be runtime");
+    // A runtime (CRTA) page size is required for an interleaved-row-major tensor with dynamic shape.
+    // (Because in that configuration, page size = last_dim_width * element_size)
+    // For a sharded tensor, or interleaved-tiled tensor, page size is static.
+    static_assert(
+        !is_sharded || !page_size_is_crta,
+        "RuntimePageSize (the runtime page-size relaxation) is not supported on sharded tensors");
 
-    // aligned_page_size is always at CTA_OFFSET + 1
+    // aligned_page_size comes from one of two places depending on the configuration:
+    //  - static case:  AlignedPageSize = CTA_OFFSET + 1
+    //  - dynamic case: AlignedPageSize is IGNORED (handled by the getter; see below)
+    // (The conditional lambda keeps the CTA read from being instantiated when the slot doesn't exist.)
     static constexpr uint32_t AlignedPageSizeCTAOffset = CTA_OFFSET + 1;
-    static constexpr uint32_t AlignedPageSize = get_compile_time_arg_val(AlignedPageSizeCTAOffset);
+    static constexpr uint32_t AlignedPageSize = [] {
+        if constexpr (page_size_is_crta) {
+            return 0;  // ignored, getter uses the CRTA value instead
+        } else {
+            return get_compile_time_arg_val(AlignedPageSizeCTAOffset);
+        }
+    }();
 
-    // Calculate offsets for compile-time arguments
-    static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 2;
+    // Calculate offsets for compile-time arguments.
+    // When the page size is a runtime field, its CTA slot is omitted, so the words after the config
+    // word shift down by one.
+    // (RuntimePageSize + sharded tensor is a forbidden combo, so page_size_is_crta is always false
+    // for a sharded accessor. Then this stays CTA_OFFSET + 2.)
+    static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 2 - (page_size_is_crta ? 1 : 0);
     static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (rank_is_crta ? 0 : 1);
 
     static constexpr uint32_t RankCT = [] {
@@ -72,8 +92,11 @@ struct TensorAccessorArgs {
     static constexpr uint32_t ShardShapeCTAOffset = TensorShapeCTAOffset + (tensor_shape_is_crta ? 0 : RankCT);
     static constexpr uint32_t BankCoordsCTAOffset = ShardShapeCTAOffset + (shard_shape_is_crta ? 0 : RankCT);
 
+    // Non-sharded payload is the config word + the aligned_page_size word, or just the config word
+    // when the page size is a runtime field. Sharded derives from the offset chain above.
     static constexpr uint32_t NumArgsCT =
-        is_sharded ? (BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET) : 2;
+        is_sharded ? (BankCoordsCTAOffset + (bank_coords_is_crta ? 0 : PhysicalNumBanksCT) - CTA_OFFSET)
+                   : (page_size_is_crta ? 1 : 2);
 
 private:
     uint32_t crta_offset_rt_;
@@ -91,7 +114,18 @@ public:
         }
     }
 
-    static constexpr uint32_t get_aligned_page_size() { return AlignedPageSize; }
+    // Getter for aligned page size
+    // The aligned page size can come from one of two places, depending on the configuration:
+    // - static case:  AlignedPageSize (previously retrieved CTA value)
+    // - dynamic case: Read the TensorAccessorArgs' first CRTA word (at runtime)
+    constexpr uint32_t get_aligned_page_size() const {
+        if constexpr (!page_size_is_crta) {
+            return AlignedPageSize;
+        } else {
+            // In the dynamic case, the aligned page size lives in the first args CRTA slot
+            return get_common_arg_val<uint32_t>(crta_offset());
+        }
+    }
 
     constexpr uint32_t rank_crta_offset() const { return crta_offset(); }
     constexpr uint32_t num_banks_crta_offset() const { return crta_offset() + rank_is_crta; }
@@ -145,7 +179,9 @@ public:
      */
     constexpr uint32_t num_common_runtime_args() const {
         if constexpr (!is_sharded) {
-            return 0;
+            // Interleaved carries one common runtime arg only under the RuntimePageSize relaxation
+            // (the page-size word); otherwise none.
+            return page_size_is_crta ? 1 : 0;
         }
         return bank_coords_crta_offset() + (bank_coords_is_crta ? get_physical_num_banks() : 0) - crta_offset();
     }

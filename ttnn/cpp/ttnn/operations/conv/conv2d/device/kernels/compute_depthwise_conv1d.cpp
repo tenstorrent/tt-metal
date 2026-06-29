@@ -138,7 +138,11 @@ void kernel_main() {
 
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
-            compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_num_subblocks);
+            // Tilize the full activation block height. The number of tile-rows is
+            // in0_block_num_tiles / in0_block_w (== act_block_h_ntiles); this must match the tile
+            // count mul_and_accumulate_block(_coalesced) consumes below. Using in0_num_subblocks
+            // here under-produces by out_subblock_h_ntiles when it is > 1, deadlocking the CB.
+            compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_block_num_tiles / in0_block_w);
             reconfig_data_format_srca(tilized_in0_cb_id);
             if constexpr (coalesce_kw_reads) {
                 mul_and_accumulate_coalesced_block<in0_block_w, kernel_width, in0_block_num_tiles>(

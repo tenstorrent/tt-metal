@@ -23,6 +23,8 @@ set(HW_JIT_API_HEADERS
     inc/api/kernel_thread_globals.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
+    inc/api/tensor/tensor_binding_token.h
+    inc/api/tensor/local_tensor_accessor.h
     inc/api/tensor/shard_pages_address_iterator.h
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
@@ -127,6 +129,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sub_int_sfpu.h
     inc/api/compute/tile_move_copy.h
     inc/api/compute/tilize.h
+    inc/api/compute/transpose.h
+    inc/api/compute/transpose_dest.h
     inc/api/compute/transpose_wh.h
     inc/api/compute/transpose_wh_dest.h
     inc/api/compute/untilize.h

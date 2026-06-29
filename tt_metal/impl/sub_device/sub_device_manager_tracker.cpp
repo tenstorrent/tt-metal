@@ -26,8 +26,9 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "mesh_command_queue.hpp"
 #include "mesh_device.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -63,17 +64,27 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
+    std::vector<uint32_t> workers_per_sub_device;
+    workers_per_sub_device.reserve(num_sub_devices);
+    for (uint8_t i = 0; i < num_sub_devices; ++i) {
+        const auto sub_device_id = SubDeviceId{i};
+        const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
+        workers_per_sub_device.push_back(
+            sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() +
+            sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
+    }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
     if (dynamic_cast<distributed::MeshDevice*>(device_)) {
         // Multi CQ support for MeshDevice is not currently available
         distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_);
         for (uint8_t cq_id = 0; cq_id < mesh_device->num_hw_cqs(); ++cq_id) {
-            mesh_device->mesh_command_queue(cq_id).reset_worker_state(
+            mesh_device->impl().mesh_command_queue_base(cq_id).reset_worker_state(
                 cq_id == 0,
                 num_sub_devices,
                 sub_device_manager->noc_mcast_unicast_data(),
-                sub_device_manager->get_core_go_message_mapping());
+                sub_device_manager->get_core_go_message_mapping(),
+                tt::stl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
         }
     } else {
         TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");
