@@ -97,19 +97,37 @@ class Qwen36Model:
 
             self.norm = DistributedNorm(self.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy)
 
-        # LM Head — 2D [in, out] for ttnn.linear. On a single device the weight
-        # is placed as-is; on a mesh it is REPLICATED (full vocab on every device)
-        # so the full-dim norm output produces full logits without a gather. (A
-        # vocab-sharded LM head + ConcatMeshToTensor is a later memory optimization.)
+        # LM Head — 2D [in, out] for ttnn.linear. On a single device the weight is
+        # placed as-is. On a mesh it is VOCAB-SHARDED column-parallel (dim=-1): each
+        # device computes vocab/num_devices logits which _lm_head all-gathers back to
+        # full, replicated logits. The LM-head matmul is weight-read-bound at M=1
+        # (reading the full ~1.3GB bf8 weight every token), so sharding the read
+        # num_devices-ways is a large decode win while the gather moves only the tiny
+        # logit row. Falls back to REPLICATED if the vocab can't split evenly.
         lm_head_weight = state_dict["output.weight"].T.contiguous()  # [dim, vocab_size]
+        self._lmhead_vocab_sharded = self.num_devices > 1 and lm_head_weight.shape[-1] % self.num_devices == 0
+        if self.num_devices > 1 and not self._lmhead_vocab_sharded:
+            logger.warning(
+                f"LM-head vocab {lm_head_weight.shape[-1]} not divisible by num_devices "
+                f"{self.num_devices}; falling back to replicated LM head."
+            )
+        if self._lmhead_vocab_sharded:
+            # Distinct cache name: ttnn.as_tensor reloads a cache file as-is and
+            # IGNORES the mesh_mapper, so a stale replicated "output.weight" cache
+            # would poison the shard. Keep the two layouts in separate files.
+            lm_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+            lm_cache = tensor_cache_path / "output.weight.vshard" if tensor_cache_path else None
+        else:
+            lm_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.num_devices > 1 else None
+            lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=tensor_cache_path / "output.weight" if tensor_cache_path else None,
-            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)) if self.num_devices > 1 else {}),
+            cache_file_name=lm_cache,
+            **(dict(mesh_mapper=lm_mapper) if lm_mapper is not None else {}),
         )
 
         self.vocab_size = args.vocab_size
@@ -135,6 +153,27 @@ class Qwen36Model:
     def switch_mode(self, mode):
         """Generator calls this on mode change; Qwen has no prefetcher, so no-op."""
         return None
+
+    def _lm_head(self, x):
+        """LM-head projection. On a mesh (vocab-sharded) each device holds a
+        vocab/num_devices column slice of the weight, so the matmul produces a
+        partial-vocab logit tile; we all-gather along the vocab dim to reconstruct the
+        full, replicated logits — identical in shape/value to a replicated LM head, so
+        every downstream consumer is unchanged. The gather mirrors DistributedNorm's
+        dim-3 all-gather on the (1,4) mesh. On a single device this is a plain matmul."""
+        logits = ttnn.linear(x, self.lm_head_weight)
+        if self._lmhead_vocab_sharded:
+            from models.tt_transformers.tt.ccl import tt_all_gather
+
+            logits = tt_all_gather(
+                logits,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=None,
+                dim=len(logits.shape) - 1,
+                topology=self.args.ccl_topology(),
+            )
+        return logits
 
     @classmethod
     def from_pretrained(cls, device, max_batch_size=1, max_seq_len=2048, n_layers=None, hf_model=None):
@@ -207,7 +246,7 @@ class Qwen36Model:
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)  # DistributedNorm on the single selected row
-        logits = ttnn.linear(x_last, self.lm_head_weight)  # replicated lm_head → full vocab (same on all devices)
+        logits = self._lm_head(x_last)  # replicated lm_head → full vocab (same on all devices)
         # Logits are replicated across the mesh; take one replica → torch [vocab_size].
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
@@ -247,7 +286,7 @@ class Qwen36Model:
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
         x = self.norm(x, mode=Mode.DECODE)
-        logits = ttnn.linear(x, self.lm_head_weight)
+        logits = self._lm_head(x)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
 
@@ -290,7 +329,7 @@ class Qwen36Model:
         x = self.norm(x, mode=Mode.PREFILL)
 
         x_last = x[:, -1:, :]
-        logits = ttnn.linear(x_last, self.lm_head_weight)
+        logits = self._lm_head(x_last)
 
         return logits
 
@@ -400,7 +439,7 @@ class Qwen36Model:
             x = x_new
 
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight)
+        logits = self._lm_head(x_last)
         ttnn.deallocate(x)
 
         return logits
@@ -429,7 +468,7 @@ class Qwen36Model:
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tensor)
 
         x = self.norm(x, mode=Mode.DECODE)
-        logits = ttnn.linear(x, self.lm_head_weight)
+        logits = self._lm_head(x)
         ttnn.deallocate(x)
 
         return logits
@@ -448,7 +487,7 @@ class Qwen36Model:
             else:
                 x = layer.forward(x, mode="decode")
         x = self.norm(x, mode=Mode.DECODE)
-        logits = ttnn.linear(x, self.lm_head_weight)
+        logits = self._lm_head(x)
         ttnn.deallocate(x)
         return logits
 
@@ -1019,7 +1058,7 @@ class Qwen36Model:
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight)
+        logits = self._lm_head(x_last)
         return logits.cpu()
 
     def _masked_bucket_logits_tp(self, hidden, actual_len, bucket):
@@ -1043,7 +1082,7 @@ class Qwen36Model:
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight)
+        logits = self._lm_head(x_last)
         return ttnn.reshape(logits, (1, 1, logits.shape[-1]))
 
     def warmup_prefill_masked_buckets(self, page_table, buckets=None):
@@ -1207,7 +1246,7 @@ class Qwen36Model:
         x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight)
+        logits = self._lm_head(x_last)
         return logits.cpu()
 
     def _prefill_chunked_eager_tp(
@@ -1578,7 +1617,7 @@ class Qwen36Model:
             )
         x = self.norm(x, mode=Mode.PREFILL)
         x_last = x[:, :, vlen - 1 : vlen, :]
-        logits = ttnn.linear(x_last, self.lm_head_weight)
+        logits = self._lm_head(x_last)
         ttnn.deallocate(x)
         return ttnn.reshape(logits, (1, 1, logits.shape[-1]))
 
@@ -1636,7 +1675,7 @@ class Qwen36Model:
 
             x = self.norm(x, mode=Mode.PREFILL)
             x_last = x[:, -1:, :]
-            logits = ttnn.linear(x_last, self.lm_head_weight)
+            logits = self._lm_head(x_last)
             ttnn.deallocate(x)
 
         # Post-prefill housekeeping. Paged-fill is a no-op when prefill_layer_chunked already
@@ -1713,7 +1752,7 @@ class Qwen36Model:
                 x = layer.forward(x, cos=cos, sin=sin, mode="decode")
 
         x = self.norm(x, mode=Mode.DECODE)
-        logits = ttnn.linear(x, self.lm_head_weight)
+        logits = self._lm_head(x)
         ttnn.deallocate(x)
 
         return logits
