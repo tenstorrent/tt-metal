@@ -12,16 +12,6 @@
 
 namespace ckernel {
 
-namespace detail {
-template <DataFormat data_format>
-constexpr InstrModLoadStore unary_shift_instr_mode() {
-    static_assert(
-        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
-        "Unsupported data format for shift operation. Supported data formats are: Int32, UInt32, UInt16");
-    return data_format == DataFormat::UInt16 ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-}
-}  // namespace detail
-
 // clang-format off
 /**
  * Performs element-wise left_shift computation on input x by param0 bits, where x is each element of a tile
@@ -41,9 +31,8 @@ constexpr InstrModLoadStore unary_shift_instr_mode() {
 // clang-format on
 template <DataFormat data_format>
 ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
-    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_shift_instr_mode<data_format>();
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, INSTRUCTION_MODE), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
 
 // clang-format off
@@ -54,7 +43,7 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
  * buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the compute
  * engine.
  *
- * A shift amount outside [0, 31] produces 0 for non-negative inputs and -1 (all 1s) for negative inputs.
+ * A shift amount outside [0, 31] produces 0 for non-negative inputs and -1 for negative inputs.
  *
  * Return value: None
  *
@@ -66,15 +55,8 @@ ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
-    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_shift_instr_mode<data_format>();
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_right_shift,
-        (APPROX, INSTRUCTION_MODE),
-        idst,
-        VectorMode::RC,
-        param0));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
 
 /**

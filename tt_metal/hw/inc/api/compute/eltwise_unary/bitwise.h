@@ -12,16 +12,6 @@
 
 namespace ckernel {
 
-namespace detail {
-template <DataFormat data_format>
-constexpr InstrModLoadStore unary_bitwise_instr_mode() {
-    static_assert(
-        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
-        "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt32, UInt16");
-    return data_format == DataFormat::UInt16 ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-}
-}  // namespace detail
-
 // clang-format off
 /**
  * Performs an element-wise bitwise AND between each element of a tile in the DST register at index idst and an
@@ -39,12 +29,11 @@ constexpr InstrModLoadStore unary_bitwise_instr_mode() {
 // clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
-    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_bitwise_instr_mode<data_format>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
-        (APPROX, sfpu::UnaryBitwiseOp::AND, INSTRUCTION_MODE),
+        (APPROX, sfpu::UnaryBitwiseOp::AND, data_format),
         idst,
         VectorMode::RC,
         param0));
@@ -67,12 +56,11 @@ ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
-    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_bitwise_instr_mode<data_format>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
-        (APPROX, sfpu::UnaryBitwiseOp::OR, INSTRUCTION_MODE),
+        (APPROX, sfpu::UnaryBitwiseOp::OR, data_format),
         idst,
         VectorMode::RC,
         param0));
@@ -95,12 +83,11 @@ ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
-    constexpr InstrModLoadStore INSTRUCTION_MODE = detail::unary_bitwise_instr_mode<data_format>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_unary_bitwise,
-        (APPROX, sfpu::UnaryBitwiseOp::XOR, INSTRUCTION_MODE),
+        (APPROX, sfpu::UnaryBitwiseOp::XOR, data_format),
         idst,
         VectorMode::RC,
         param0));

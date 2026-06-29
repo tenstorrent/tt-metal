@@ -6,61 +6,57 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_ops.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-// Left shift by an immediate scalar amount.
-template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32, int ITERATIONS = 8>
+// Left shift by an immediate scalar amount. If shift amount is >= 32, the result is 0.
+template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
 inline void calculate_left_shift(const uint shift_amt) {
-    sfpi::vConstIntPrgm0 = shift_amt;  // LREG12 = shift amount
-#pragma GCC unroll 0
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format for shift operation. Supported data formats are: Int32, UInt32, UInt16");
+    const bool out_of_range = shift_amt >= 32;
+    // SFPI overloads both `vInt << unsigned` and `vUInt << unsigned`, so the shift amount's type is
+    // independent of the element type being shifted. Cast to a 32-bit `unsigned` so shift is chosen exactly.
+    const unsigned amt = static_cast<unsigned>(shift_amt);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);  // LREG1 = shift amount
-        // if (shift_amount < 0 OR shift_amount >= 32) -> result should be 0
-        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0xFE0, p_sfpu::LREG1, p_sfpu::LREG2, 1);  // 0xFE0 = -32
-        TTI_SFPCOMPC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        // shift left
-        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+        if constexpr (DATA_FORMAT == DataFormat::UInt16) {
+            sfpi::vUInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>();
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>() = out_of_range ? sfpi::vUInt(0u) : (v << amt);
+        } else {
+            sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = out_of_range ? sfpi::vInt(0) : (v << amt);
+        }
         sfpi::dst_reg++;
     }
 }
 
-// Arithmetic right shift by an immediate scalar amount
-template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32, int ITERATIONS = 8>
+// Arithmetic right shift by an immediate scalar amount.
+// A shift amount >= 32 saturates to the sign (non-negative -> 0, negative -> -1).
+template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
 inline void calculate_right_shift(const uint shift_amt) {
-    sfpi::vConstIntPrgm0 = shift_amt;  // LREG12 - shift amount
-#pragma GCC unroll 0
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format for shift operation. Supported data formats are: Int32, UInt32, UInt16");
+    // SFPI overloads both `vInt << unsigned` and `vUInt << unsigned`, so the shift amount's type is
+    // independent of the element type being shifted. Cast to a 32-bit `unsigned` so shift is chosen exactly.
+    const unsigned eff = (shift_amt >= 32) ? 31u : static_cast<unsigned>(shift_amt);
+    const unsigned sign_mask = (eff > 0) ? (~0u << (32 - eff)) : 0u;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);   // save value for sign check
-        // if (shift_amount < 0 OR shift_amount >= 32) -> result should be 0
-        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0xFE0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0);  // 0xFE0 = -32
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 6);  // negate shift_amount to shift right
-        // shift right
-        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        // if value was negative, shift in 1's manually (arithmetic shift)
-        TTI_SFPSETCC(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);     // only run if value is negative
-        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 2);     // only needed if shift_amount>0
-        TTI_SFPIADD(0x020, p_sfpu::LREG1, p_sfpu::LREG2, 5);  // 32-shift_amount (0x020 = 32)
-        TTI_SFPNOT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);    // all 1's into LREG3
-        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);      // shift all 1's by 32-shift_amount
-        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);        // OR in the 1's
-        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+        if constexpr (DATA_FORMAT == DataFormat::UInt16) {
+            sfpi::vUInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>();
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>() = v >> eff;
+        } else {
+            sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            sfpi::vUInt res = sfpi::as<sfpi::vUInt>(v) >> eff;
+            v_if(v < 0) { res = res | sign_mask; }
+            v_endif;
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::as<sfpi::vInt>(res);
+        }
         sfpi::dst_reg++;
     }
 }
