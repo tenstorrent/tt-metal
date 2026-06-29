@@ -606,6 +606,20 @@ class VectorExportSource(VectorSource):
                                     machine_mismatch_count += 1
                                     continue
 
+                            # Explicit MESH_DEVICE_SHAPE filter: when set by mesh-split
+                            # batches, reject vectors whose traced mesh doesn't match.
+                            _mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+                            if _mesh_env and "x" in _mesh_env and traced_machine_entries:
+                                _target = tuple(int(x) for x in _mesh_env.split("x"))
+                                _has_mesh_match = any(
+                                    tuple(e.get("mesh_device_shape", [])) == _target
+                                    for e in traced_machine_entries
+                                    if isinstance(e.get("mesh_device_shape"), (list, tuple))
+                                )
+                                if not _has_mesh_match:
+                                    filtered_count += 1
+                                    continue
+
                             # Apply mesh filtering when manifest grouping mode says ownership is by mesh.
                             if filter_policy["enforce_mesh_capability"] and (
                                 allowed_mesh_shapes or strict_ci_mesh_ownership

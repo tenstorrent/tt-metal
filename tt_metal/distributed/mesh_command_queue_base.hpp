@@ -136,6 +136,13 @@ public:
     // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
 
+    virtual void reset_worker_state(
+        bool reset_launch_msg_state,
+        uint32_t num_sub_devices,
+        const vector_aligned<uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+        tt::stl::Span<const uint32_t> workers_per_sub_device) = 0;
+
     // Write `value` (a uint32 counter) to one L1 address on each of `targets`,
     // ordered after prior worker programs / buffer writes on this queue. Each
     // target's `address` is the full device destination. Must be called with the

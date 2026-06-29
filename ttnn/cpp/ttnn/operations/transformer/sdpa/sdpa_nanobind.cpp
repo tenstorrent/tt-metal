@@ -16,6 +16,7 @@
 
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
+#include "sparse_sdpa_msa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -297,6 +298,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
+            cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
 
 
         Returns:
@@ -319,7 +321,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("cu_window_seqlens") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
@@ -354,6 +357,46 @@ void bind_sdpa(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("scale") = nb::none(),
         nb::arg("k_chunk_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none());
+
+    ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        MSA block-sparse prefill (MiniMax Sparse Attention), Blackhole single-chip.
+        Attends the block_size-token K/V blocks named in `indices`; -1 (0xFFFFFFFF) sentinels mask a contiguous
+        tail. The op has no causal flag; causal behavior must be encoded by the selected blocks. RoPE and
+        QK-norm are applied upstream.
+
+        Args:
+            q (ttnn.Tensor):       [1, H, S, d] bf16 | fp8_e4m3 ROW_MAJOR.
+                                   H must be divisible by n_kv; H/n_kv may be 16 or a multiple of 32.
+            k (ttnn.Tensor):       [B, n_kv, T, d] TILE bf16|bfloat8_b (B>1 only when indexed)
+            v (ttnn.Tensor):       [B, n_kv, T, v_dim] TILE bf16|bfloat8_b
+            indices (ttnn.Tensor): [1, n_kv, S, TOPK] uint32 block-ids (-1 = sentinel, contiguous tail).
+                                   Each row must contain a valid block, and valid block ids must be < T / block_size.
+
+        Keyword args:
+            scale (float, optional): defaults to d to the power of -0.5.
+            block_size (int): KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional). fp8 q requires fp32_dest_acc_en.
+            cache_batch_idx (int, optional): select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
+                It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+
+        Returns:
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
+
+        Additional preconditions: d and v_dim must be multiples of 32; TOPK times 4 and output row bytes must meet
+        device DRAM alignment.
+        )doc",
+        &ttnn::transformer::sparse_sdpa_msa,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("block_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none());
 
