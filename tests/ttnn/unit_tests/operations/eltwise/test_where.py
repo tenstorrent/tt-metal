@@ -90,9 +90,9 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
-        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
-        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
-        ((256,), (256,), (256,)),  # LLK
+        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # multi-batch, tile-aligned
+        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # 5D tensor
+        ((256,), (256,), (256,)),  # 1D flat
     ],
 )
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
