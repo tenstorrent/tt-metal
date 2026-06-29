@@ -198,22 +198,33 @@ def embed_host_tokens(tt_model, tokens: torch.Tensor):
     return ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
 
 
+def _pad_prompt_tokens_for_prefill(prompt_tokens: torch.Tensor, *, multiple: int = 32) -> torch.Tensor:
+    pad = (-prompt_tokens.shape[1]) % multiple
+    if pad == 0:
+        return prompt_tokens
+    padding = torch.zeros((prompt_tokens.shape[0], pad), dtype=prompt_tokens.dtype, device=prompt_tokens.device)
+    return torch.cat([prompt_tokens, padding], dim=1)
+
+
 def prefill_prompt_tokens(tt_model, prompt_tokens: torch.Tensor, *, page_table=None, page_tables_per_layer=None) -> int:
     """Write prompt token K/V into the frozen cache and return prompt length."""
     _validate_prompt_tokens(prompt_tokens)
     if prompt_tokens.shape[0] != 1:
         raise NotImplementedError("prefill_prompt_tokens currently supports batch=1")
-    prompt_embeds = embed_host_tokens(tt_model, prompt_tokens)
+    prompt_len = prompt_tokens.shape[1]
+    prefill_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
+    prompt_embeds = embed_host_tokens(tt_model, prefill_tokens)
     logits = tt_model(
         prompt_embeds,
         is_decode=False,
-        input_ids_torch=prompt_tokens,
+        input_ids_torch=prefill_tokens,
+        get_last_token=((prompt_len - 1) // 32) * 32,
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
         kv_phase=KVCachePhase.PREFILL_WRITE,
     )
     logits.deallocate(True)
-    return prompt_tokens.shape[1]
+    return prompt_len
 
 
 def _resolve_generation_logits_fn(

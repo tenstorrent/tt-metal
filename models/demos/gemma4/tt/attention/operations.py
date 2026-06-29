@@ -124,16 +124,14 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None):
         token_index: int or None. If int (decode), slices into cache at that position.
                      If None (prefill), applies to full sequence.
 
-    Note: rotary_embedding pads dim 2 to TILE_HEIGHT (32) in decode mode.
-    We reshape+slice to restore the original logical shape, following the
-    tt_transformers _hf_rope_decode pattern.
+    Note: rotary_embedding can pad dim 2 to TILE_HEIGHT (32). Restore the
+    original logical shape so Q/K sequence lengths keep matching non-RoPE V.
     """
     orig_shape = tensor.shape
     result = ttnn.experimental.rotary_embedding(tensor, cos_cache, sin_cache, token_index)
 
-    # In decode mode (token_index provided), dim 2 gets padded to 32.
     # Reshape to indicate logical vs padded size, then slice back.
-    if token_index is not None and result.shape[2] != orig_shape[2]:
+    if result.shape[2] != orig_shape[2]:
         result = ttnn.reshape(
             result,
             (orig_shape[0], orig_shape[1], orig_shape[2], orig_shape[3]),

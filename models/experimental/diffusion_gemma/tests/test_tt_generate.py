@@ -2512,11 +2512,14 @@ def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):
 
     assert out == 3
     assert calls["embed_tokens"].deallocated is True
-    assert calls["reshape"][1] == (1, 1, 3, 16)
+    assert calls["reshape"][1] == (1, 1, 32, 16)
     hidden_states, kwargs = calls["model"]
     assert hidden_states.name == "tile-embeds"
     assert kwargs["is_decode"] is False
-    assert kwargs["input_ids_torch"] is prompt_tokens
+    assert kwargs["input_ids_torch"].shape == (1, 32)
+    assert torch.equal(kwargs["input_ids_torch"][:, :3], prompt_tokens)
+    assert torch.equal(kwargs["input_ids_torch"][:, 3:], torch.zeros((1, 29), dtype=prompt_tokens.dtype))
+    assert kwargs["get_last_token"] == 0
     assert kwargs["kv_phase"] is G.KVCachePhase.PREFILL_WRITE
     assert kwargs["page_tables_per_layer"] == ["pages"]
 

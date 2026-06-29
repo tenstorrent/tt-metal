@@ -417,6 +417,12 @@ and marked `TODO(env)`. **HW + env + checkpoints are no longer blockers — QB2 
 
 Legend: ✅ done · 🚧 in progress · ⛔ blocked on environment · ⬜ not started
 
+## Session 2026-06-29 — #47464 generated-token demo smoke
+
+Tick 86 advanced the real-checkpoint tiny generated-token demo:
+`text_demo --checkpoint /home/zni/dg_models/diffusiongemma-26B-A4B-it --local-files-only --mesh P150x4 --num-layers 1 --max-seq-len 512 --canvas-length 32 --max-denoising-steps 1 --max-new-tokens 1`.
+Two prefill blockers were fixed: Gemma4 prefill RoPE outputs are restored to their logical sequence length so K/V lengths stay consistent, and DiffusionGemma prompt prefill pads device input tokens to a 32-token tile while preserving the real prompt length for block positions. Host validation passed (`test_prefill_prompt_tokens_embeds_and_writes_kv`), and the QB2 smoke now reaches denoise adapter construction. The next blocker is non-32-aligned prompt KV extraction: `read_prompt_kv_cache_slice(prompt_len=18)` rejects non-tile-aligned bounds.
+
 ## Code review — 2026-06-26 (multi-agent review of the 2026-06-25 branch)
 
 Adversarial multi-agent review of the 48 commits `d13c3ad0c91..HEAD` (~3834 LOC) across #47474/#47462/#47463/#47472/#47464, plus a gemma4-regression sentinel and a test-rigor pass. **27 findings confirmed, 3 dismissed as false positives** (listed at the end so they are not re-raised). Each finding was independently re-verified against the code before landing here.
