@@ -177,6 +177,9 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     if vis is not None:
         env["TT_VISIBLE_DEVICES"] = vis
         env["TT_METAL_VISIBLE_DEVICES"] = vis
+    _seq = os.environ.get("TT_PERF_SEQ_LEN")
+    if _seq:
+        env["TT_PERF_SEQ_LEN"] = _seq
     return {
         "mcpServers": {
             "perf-mcp": {
@@ -441,6 +444,10 @@ def run_cc_optimize(
     if not manifest:
         print("  [optimize/cc] discovery failed (before_loop produced no manifest).")
         return None
+    _seq = (manifest.get("config") or {}).get("perf_seq_len")
+    if _seq:
+        os.environ["TT_PERF_SEQ_LEN"] = str(_seq)
+        print(f"  [optimize/cc] perf workload seq pinned to {_seq} (baseline shape-retry); propagated to loop")
     perf_dir = repo_root / PERF_DIR
     manifest_path = str(_latest_manifest(perf_dir))
     model_rel = os.path.relpath(demo_dir, repo_root)

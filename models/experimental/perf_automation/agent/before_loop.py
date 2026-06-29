@@ -485,6 +485,10 @@ def before_loop(
                 continue
         if profile is None:
             raise
+    _seq_env = os.environ.get("TT_PERF_SEQ_LEN")
+    if _seq_env:
+        manifest.setdefault("config", {})["perf_seq_len"] = _seq_env
+        run.manifest.write(manifest)
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
     _bk = {b.get("id"): int(b.get("count", 0)) for b in (profile.get("buckets") or [])}
