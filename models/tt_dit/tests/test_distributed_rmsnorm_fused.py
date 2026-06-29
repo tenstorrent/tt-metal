@@ -126,6 +126,7 @@ class Cfg:
     # (per-token [N,D] weight/bias not yet built — see test_sweep notes.)
     weight_mode: str = "auto"  # "auto" | "none" | "bcast"
     bias_mode: str = "auto"  # "auto" | "none" | "bcast"
+    norm: str = "rms"  # "rms" | "layernorm" (Welford LayerNorm: (x-mean)/sqrt(var+eps))
 
     @property
     def is_block(self) -> bool:
@@ -277,6 +278,12 @@ def _torch_ref(cfg: Cfg) -> torch.Tensor:
         h, hd = cfg.full_heads, cfg.head_dim
         xh = xf.reshape(cfg.rows, h, hd)
         y = (xh * (xh.pow(2).mean(-1, keepdim=True) + NORM_EPS).rsqrt()).reshape(cfg.rows, cfg.dim)
+    elif cfg.norm == "layernorm":
+        # Welford LayerNorm: (x - mean) / sqrt(var + eps) over the full feature row.
+        # Population variance (unbiased=False) matches welford_finalize scale = 1/W.
+        mean = xf.mean(-1, keepdim=True)
+        var = xf.var(-1, unbiased=False, keepdim=True)
+        y = (xf - mean) * (var + NORM_EPS).rsqrt()
     else:
         y = xf * (xf.pow(2).mean(-1, keepdim=True) + NORM_EPS).rsqrt()
 
@@ -356,6 +363,11 @@ def _call_op(
 ):
     if per_head_norm is None:
         per_head_norm = cfg.per_head_norm
+    norm_type = (
+        ttnn.experimental.WanFusedNormType.LAYERNORM
+        if cfg.norm == "layernorm"
+        else ttnn.experimental.WanFusedNormType.RMS
+    )
     return ttnn.experimental.wan_fused_distributed_rmsnorm(
         inp["x"],
         tp_axis,
@@ -374,6 +386,7 @@ def _call_op(
         num_preferred_links=num_links,
         use_device_op=use_device_op,
         per_head_norm=per_head_norm,
+        norm_type=norm_type,
     )
 
 
@@ -773,6 +786,72 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             flagged.append(cfg.cid)
             logger.warning(f"RMSCORR {cfg.cid:<22} CONFIG FAILED: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"RMSCORR [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
+
+
+_LN_PARAMS = [
+    ((4, 8), _DP_GAL, WAN, 1, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+]
+_LN_IDS = ["ln_tp1"]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LN_PARAMS, _LN_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_layernorm_corr(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
+    """Phase 2 Welford LayerNorm bringup: TP=1 (is_tp_1) whole-row block adaLN
+    LayerNorm vs fp32-PyTorch reference, plus a 3x bit-exact determinism check.
+    A block config (head_dim=None) makes _build supply weight=(1+scale) and
+    bias=shift, i.e. the adaLN affine every LayerNorm caller uses. dim=1024 (32
+    tiles) fits the resident layout (no streaming / block-major)."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    links = _fused_links(op_override)
+    cfgs = [
+        Cfg(
+            "ln_block_N128_D1024",
+            model,
+            tp,
+            rows=128,
+            dim=1024,
+            head_dim=None,
+            rope=False,
+            full_heads=1,
+            broadcast_rope=True,
+            norm="layernorm",
+        ),
+    ]
+    flagged = []
+    for cfg in cfgs:
+        logger.info(f"=== [LN] {cfg.cid} rows={cfg.rows} dim={cfg.dim} ===")
+        ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
+        inp = _build(submesh, cfg, tp_axis)
+        sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+        pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
+        ref = _torch_ref(cfg)
+
+        def _fused(k, _inp=inp, _sems=sems, _pobs=pobs, _cfg=cfg):
+            s = _sems[k % _PINGPONG]
+            return _gather(
+                _run_fused(_inp, submesh, s, _cfg, topology, tp_axis, _pobs[k % _PINGPONG], op_override), tp_axis
+            )
+
+        out0 = _fused(0)
+        ndiff = 0
+        for j in range(3):  # same input -> must be bit-exact
+            if (_fused(j + 1) - out0).abs().max().item() > 0.0:
+                ndiff += 1
+        det = ndiff == 0
+        pcc = _pcc(out0, ref)
+        maxabs = (out0 - ref).abs().max().item()
+        susp = (pcc < 0.999) or (not det)
+        if susp:
+            flagged.append(cfg.cid)
+        logger.info(
+            f"LNCORR {cfg.cid:<22} det={'OK' if det else 'FAIL'} pcc(F:torch)={pcc * 100:.4f}% "
+            f"maxabs={maxabs:.4f} det_ndiff={ndiff}/3{'  <-- SUSPICIOUS' if susp else ''}"
+        )
+    assert not flagged, f"LayerNorm flagged: {flagged}"
 
 
 @pytest.mark.parametrize(

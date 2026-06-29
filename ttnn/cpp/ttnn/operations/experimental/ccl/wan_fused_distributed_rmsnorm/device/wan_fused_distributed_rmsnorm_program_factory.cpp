@@ -528,6 +528,19 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const bool block_major_post = overflows_resident_post && (streaming_input || args.per_head_norm);
     // Whole-row block-major streams input; per_head_norm block-major keeps it resident.
     const bool streaming_low_l1 = streaming_input;
+
+    // Welford LayerNorm (Phase 2) runs a dedicated compute kernel and only
+    // supports the resident layout: the whole row stays L1-resident for the
+    // Welford pass + the (x-mean)*1/std re-read. Wide shards that would need
+    // streaming / block-major POST are a later phase.
+    const bool is_layernorm = (args.norm_type == WanFusedNormType::LAYERNORM);
+    if (is_layernorm) {
+        TT_FATAL(
+            !streaming_low_l1 && !block_major_post,
+            "LayerNorm requires the resident layout (shard must fit L1); wide-shard LayerNorm "
+            "(streaming / block-major) is not implemented yet. num_tile_cols={}",
+            num_tile_cols);
+    }
     // Clamp to a single resident row for (a) per-head RoPE — its cos/sin CBs are
     // chunk*num_tile_cols fp32 tiles (overflow L1 at feat>=1024) and the compute
     // deadlocks at chunk>=2 with many rows; and (b) the streaming-low-L1 path,
@@ -1075,10 +1088,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         "wan_fused_distributed_rmsnorm requires fp32_dest_acc_en=true in the compute kernel config "
         "(internals are always fp32); got fp32_dest_acc_en=false.");
 
+    const std::string compute_kernel_path =
+        "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/compute/" +
+        std::string(is_layernorm ? "wan_layernorm_fused_compute.cpp" : "wan_rmsnorm_fused_compute.cpp");
     KernelHandle compute_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/compute/"
-        "wan_rmsnorm_fused_compute.cpp",
+        compute_kernel_path,
         worker_core_set,
         ComputeConfig{
             .math_fidelity = math_fidelity,
