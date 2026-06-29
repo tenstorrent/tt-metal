@@ -486,10 +486,13 @@ class TTSampling(LightweightModule):
             )
 
         # #48222: gather the heavy top-k/top-p candidates with a device-side barrier_semaphore,
-        # mirroring the force-argmax path. A plain `ttnn.all_gather` has no barrier, so inside the
-        # traced decode it can read the (async) upstream top-k output before it lands; at batch-32
-        # (more data in flight) this yields partial/stale candidates -> wrong tokens -> garbage.
-        # The barrier'd async gather is exactly what force-argmax uses and is correct at batch-32.
+        # mirroring the force-argmax path. `ttnn.all_gather` does barrier, but it sets that barrier
+        # up in its program factory (a freshly-created semaphore + a host-side `Synchronize`), which
+        # only runs at trace-capture time; on trace replay the host sync is gone and the one-shot
+        # semaphore is never reset, so the barrier is effectively a no-op and the gather can read the
+        # upstream top-k output before it lands -> partial/stale candidates at batch-32 -> garbage.
+        # `all_gather_async` with the model's persistent get_and_cycle_* semaphores is trace-safe (the
+        # barrier holds on every replay), which is exactly what force-argmax uses. See #48469.
         topology = self.ag_topology if self.mesh_device.get_num_devices() >= 8 else ttnn.Topology.Linear
         return ttnn.experimental.all_gather_async(
             tensor,
