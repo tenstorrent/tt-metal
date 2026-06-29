@@ -47,9 +47,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     Program program{};
 
     // Distribute work across core grid
-    auto num_rows = input.physical_volume() / input.padded_shape()[-1];
+    uint32_t num_rows = static_cast<uint32_t>(input.physical_volume() / input.padded_shape()[-1]);
 
-    uint32_t num_cores{};
     CoreRangeSet all_cores{};
     CoreRangeSet core_group_1{};
     CoreRangeSet core_group_2{};
@@ -67,16 +66,20 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     };
     std::vector<CoreShardInfo> core_shard_infos;
 
+    // Ordering used to enumerate cores in the runtime-args loop below. For WIDTH/BLOCK the
+    // per-core shard info is generated in shard-orientation order, so the runtime loop must
+    // enumerate cores in the same order to pair each core with its own shard parameters.
+    bool cores_row_wise = false;
+
     if (input_mem_layout == TensorMemoryLayout::INTERLEAVED) {
         auto compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
         std::tie(
-            num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
+            std::ignore, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
         // col_shard_id=0, row_page_stride=1 for all cores — filled below
     } else if (input_mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& shard_spec = input.shard_spec().value();
         all_cores = shard_spec.grid;
-        num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_rows_per_core_group_1 = shard_spec.shape[0];
         num_rows_per_core_group_2 = 0;
@@ -84,12 +87,12 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     } else if (input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         const auto& shard_spec = input.shard_spec().value();
         all_cores = shard_spec.grid;
-        num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_rows_per_core_group_1 = 0;  // unused for WIDTH_SHARDED — per-core infos set below
         num_rows_per_core_group_2 = 0;
 
         bool rm_orientation = (shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+        cores_row_wise = rm_orientation;
         auto cores_vec = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
         uint32_t KW = cores_vec.size();
         core_shard_infos.reserve(KW);
@@ -100,12 +103,12 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         // BLOCK_SHARDED
         const auto& shard_spec = input.shard_spec().value();
         all_cores = shard_spec.grid;
-        num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_rows_per_core_group_1 = 0;  // unused — per-core infos set below
         num_rows_per_core_group_2 = 0;
 
         bool rm_orientation = (shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+        cores_row_wise = rm_orientation;
         auto cores_vec = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
 
         uint32_t shard_h = shard_spec.shape[0];
@@ -118,7 +121,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
             uint32_t kh = rm_orientation ? (i / KW) : (i % KH);
             uint32_t kw = rm_orientation ? (i % KW) : (i / KH);
             uint32_t row_start = kh * shard_h;
-            uint32_t row_end = std::min(row_start + shard_h, static_cast<uint32_t>(num_rows));
+            uint32_t row_end = std::min(row_start + shard_h, num_rows);
             core_shard_infos.push_back({row_start, row_end, kw, KW});
         }
     }
@@ -174,14 +177,23 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     // Compute output write parameters (independent of input sharding).
     // For same-layout cases these equal the input params; for cross-layout they differ.
+    // These are all loop-invariant, so they are computed once here rather than per-core.
     auto out_mem_layout = output.memory_config().memory_layout();
     bool out_is_col_sharded =
         (out_mem_layout == TensorMemoryLayout::WIDTH_SHARDED || out_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    bool input_is_col_sharded =
+        (input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+         input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    bool col_sharded_to_col_sharded = input_is_col_sharded && out_is_col_sharded;
 
     uint32_t out_write_size{};  // bytes written per NOC write to output
     uint32_t out_KW{};          // number of column writes per input row (1 unless splitting into WIDTH/BLOCK)
 
     if (out_is_col_sharded) {
+        // NOTE: assumes the input shard page is tightly packed (page_size == shard_width *
+        // element_size, no extra NOC-alignment padding), so that the WIDTH/BLOCK→INTERLEAVED/HEIGHT
+        // byte offset (col_shard_id * input_page_size) and the row-splitting write size line up.
+        // This holds for row-major L1 sharded buffers used here; revisit if padded page sizes are introduced.
         out_write_size = output.buffer()->aligned_page_size();
         out_KW = (input.padded_shape()[-1] * input.element_size()) / out_write_size;
     } else {
@@ -205,8 +217,9 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    // Set runtime args for each core
-    auto cores = corerange_to_cores(all_cores);
+    // Set runtime args for each core. Enumerate in the same order used to build
+    // core_shard_infos so each core is paired with its own shard parameters.
+    auto cores = corerange_to_cores(all_cores, std::nullopt, cores_row_wise);
     bool use_per_core_shard_infos = !core_shard_infos.empty();
 
     uint32_t start_row_id = 0;
@@ -268,15 +281,14 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         uint32_t out_col_byte_offset{};
         uint32_t out_num_col_shards{};  // writer loop count: 1 except INTERLEAVED/HEIGHT → WIDTH/BLOCK
 
-        bool input_is_col_sharded =
-            (input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-             input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
-        bool same_layout_col_sharded = input_is_col_sharded && out_is_col_sharded;
-
-        if (same_layout_col_sharded) {
-            // Same WIDTH/BLOCK shard spec: one write per row to this core's own output shard.
-            out_row_page_stride = row_page_stride;  // = KW
-            out_col_shard_id = col_shard_id;        // same shard index
+        if (col_sharded_to_col_sharded) {
+            // Column-sharded → column-sharded (WIDTH↔WIDTH, BLOCK↔BLOCK, WIDTH↔BLOCK).
+            // Validation guarantees matching column shard width, so input KW == output KW and
+            // the page formula row*KW+col is identical on both sides. One write per row; the
+            // output TensorAccessor routes each page to the physically-owning core (which may
+            // differ from the executing core when converting between WIDTH and BLOCK row layouts).
+            out_row_page_stride = row_page_stride;  // = KW (same for input and output)
+            out_col_shard_id = col_shard_id;        // same column shard index
             out_col_byte_offset = 0;
             out_num_col_shards = 1;
         } else if (out_is_col_sharded) {
