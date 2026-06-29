@@ -1344,17 +1344,19 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 handle.allocated_address = static_cast<uint32_t>(addr);
 
                 // Patch the allocated address into the kernel's CRTA buffer. This runs at program-compile
-                // time, which (in the fast/mesh path) is upstream of dispatch-command assembly, so the
-                // value is snapshotted into the command stream. SetProgramRunArgs reserved the slot (with
-                // this handle's then-zero allocated_address); fill it now. The common_runtime_args_data
-                // pointer is the forward-compatible write path: pre-assembly it aliases the host vector,
-                // post-assembly (a re-allocation cycle) it points into the live command stream.
+                // time, upstream of where each dispatch path delivers runtime args to the device: the
+                // fast/mesh path snapshots the CRTA buffer into the command stream; the slow-dispatch path
+                // writes it via WriteRuntimeArgsToDevice (reordered after Configure so this patch lands
+                // first). SetProgramRunArgs reserved the slot (with this handle's then-zero
+                // allocated_address); fill it now. The common_runtime_args_data pointer is the
+                // forward-compatible write path: pre-assembly it aliases the host vector, post-assembly
+                // (a re-allocation cycle) it points into the live command stream.
                 //
-                // The guard is defensive: in the supported fast/mesh flow SetProgramRunArgs runs before
-                // compile and always installs a CRTA buffer for a scratchpad-bearing kernel (its second
-                // pass sizes the scratchpad section even when the kernel has no user args), so the slot
-                // exists. If allocate_scratchpads were ever reached without a prior SetProgramRunArgs, the
-                // address would be computed but not delivered — a reorder hazard, not a path that exists today.
+                // The guard is defensive: in every supported flow SetProgramRunArgs runs before compile
+                // and always installs a CRTA buffer for a scratchpad-bearing kernel (its second pass sizes
+                // the scratchpad section even when the kernel has no user args), so the slot exists. If
+                // allocate_scratchpads were ever reached without a prior SetProgramRunArgs, the address
+                // would be computed but not delivered — a reorder hazard, not a path that exists today.
                 if (!kernel->common_runtime_args().empty()) {
                     RuntimeArgsData& crta = kernel->common_runtime_args_data();
                     crta.data()[handle.addr_crta_offset / sizeof(uint32_t)] = handle.allocated_address;

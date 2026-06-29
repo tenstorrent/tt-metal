@@ -5,10 +5,9 @@
 // Fast-dispatch real-hardware test for the Metal 2.0 kernel-scratchpad feature (WH/BH).
 //
 // A kernel scratchpad is a private, blank, node-local L1 region bound to exactly one kernel for the
-// program's execution lifetime. It is FAST/MESH-dispatch only (the slow-dispatch reject is covered
-// by ProgramSpecHWTest.ScratchpadRejectedUnderSlowDispatch in test_program_spec_hw.cpp), so this
-// test uses the fast-dispatch UnitMeshCQSingleCardFixture and the MeshWorkload enqueue path (mirror
-// of test_single_dm_l1_write.cpp).
+// program's execution lifetime. This test uses the fast-dispatch UnitMeshCQSingleCardFixture and the
+// MeshWorkload enqueue path (mirror of test_single_dm_l1_write.cpp); the slow-dispatch LaunchProgram
+// counterpart is ProgramSpecHWTest.ScratchpadWriteReadback in test_program_spec_hw.cpp.
 //
 // What this proves end-to-end:
 //   (a) the scratchpad is real, writable, node-local L1, and

@@ -876,42 +876,93 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
 }
 
 // ============================================================================
-// Kernel Scratchpad Legality: slow dispatch is rejected
+// Kernel Scratchpad: write / readback under slow dispatch
 // ============================================================================
 //
-// A kernel scratchpad is fast/mesh-dispatch only. Its framework-allocated L1 base address is
-// delivered as a common runtime arg, and on the slow-dispatch LaunchProgram path the CRTA buffer is
-// written to the device BEFORE the ephemeral scratchpad L1 is allocated — so the address would never
-// reach the kernel. The runtime rejects a scratchpad-bearing program up front rather than silently
-// shipping a 0 / stale base address (see LaunchProgram in tt_metal/impl/host_api/tt_metal.cpp).
+// The slow-dispatch counterpart of test_scratchpad_hw.cpp's fast-dispatch ScratchpadWriteReadback. A
+// scratchpad's framework-allocated L1 base address rides a common runtime arg; on the slow-dispatch
+// LaunchProgram path it reaches the kernel because ConfigureDeviceWithProgram — which allocates the
+// scratchpad and patches its base address into the CRTA buffer — now runs BEFORE WriteRuntimeArgsToDevice
+// commits the CRTAs to the device. This fixture (ProgramSpecHWTest, on MeshDeviceFixture,
+// TT_METAL_SLOW_DISPATCH_MODE=1) exercises exactly that path.
 //
-// This fixture (ProgramSpecHWTest, on MeshDeviceFixture) is the slow-dispatch path, so it is the
-// right place to pin the reject. The spec is otherwise valid: one Gen1 DM kernel binding one
-// scratchpad. The legality TT_FATAL is the very first statement in LaunchProgram, so it fires before
-// any kernel compilation — the minimal kernel source need not actually use the scratchpad.
-TEST_F(ProgramSpecHWTest, ScratchpadRejectedUnderSlowDispatch) {
+// One Gen1 DM kernel binds a 64-byte scratchpad, writes a known pattern into it, and reports its
+// Scratchpad::get_base_address() to a host-known L1 address. The host reads the reported base, then
+// reads the scratchpad L1 and confirms the pattern landed — closing the loop on both "the scratchpad is
+// real, writable, node-local L1" and "the framework delivered its base address to the kernel".
+TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
     IDevice* device = mesh_device->get_devices()[0];
 
+    constexpr uint32_t kScratchpadBytes = 64;                            // 16 x uint32_t
+    constexpr uint32_t kNumElems = kScratchpadBytes / sizeof(uint32_t);  // 16
+    constexpr uint32_t kReportAddr = 100 * 1024;                         // host-known fixed L1 addr
+    constexpr uint32_t kPatternBase = 0xC0DE0000u;                       // must match the kernel
+
     const NodeCoord node{0, 0};
 
-    auto kernel = MakeMinimalGen1DMKernel("dm_kernel", DataMovementProcessor::RISCV_0);
-    kernel.scratchpad_bindings.push_back(
-        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"});
+    KernelSpec dm_kernel{
+        .unique_id = KernelSpecName{"scratch_kernel"},
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scratchpad_write_pattern.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"report_addr"},
+            },
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config =
+                    DataMovementHardwareConfig::Gen1Config{
+                        .processor = DataMovementProcessor::RISCV_0,
+                    },
+            },
+    };
+    dm_kernel.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
     ProgramSpec spec;
-    spec.name = "scratchpad_slow_dispatch_reject";
-    spec.kernels = {kernel};
-    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 64}};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"dm_kernel"})};
+    spec.name = "scratchpad_write_readback_slow_dispatch";
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
+    spec.work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+        .name = "work_unit_0",
+        .kernels = {KernelSpecName{"scratch_kernel"}},
+        .target_nodes = node,
+    }};
 
-    // MakeProgramFromSpec succeeds (the spec is legal); the rejection happens at the slow-dispatch
-    // launch.
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    EXPECT_THAT(
-        [&] { detail::LaunchProgram(device, program); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("require fast/mesh dispatch")));
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"scratch_kernel"},
+        .runtime_arg_values = {{node, {{"report_addr", kReportAddr}}}},
+    }};
+    SetProgramRunArgs(program, params);
+
+    // Pre-zero the report location so a kernel that never wrote it would be caught (the readback base
+    // address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
+    std::vector<uint32_t> zero_report(1, 0u);
+    detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
+
+    // Dispatch via the slow-dispatch path (blocking — wait_until_cores_done defaults to true).
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> reported;
+    detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), 1u);
+    const uint32_t scratch_base = reported[0];
+    EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
+
+    std::vector<uint32_t> scratch_contents;
+    detail::ReadFromDeviceL1(device, node, scratch_base, kScratchpadBytes, scratch_contents);
+    ASSERT_EQ(scratch_contents.size(), kNumElems);
+
+    std::vector<uint32_t> expected(kNumElems);
+    for (uint32_t i = 0; i < kNumElems; i++) {
+        expected[i] = kPatternBase + i;
+    }
+    EXPECT_EQ(scratch_contents, expected) << "Scratchpad L1 at reported base 0x" << std::hex << scratch_base
+                                          << " did not contain the pattern the kernel wrote";
 }
 
 }  // namespace
