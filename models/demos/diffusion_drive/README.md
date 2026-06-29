@@ -13,7 +13,6 @@
 7. [Running Tests](#7-running-tests)
 8. [Usage](#8-usage)
 9. [NavSim PDM Evaluation](#9-navsim-pdm-evaluation)
-10. [Future Work](#10-future-work)
 
 ---
 
@@ -219,7 +218,7 @@ new full-model tests.
 weight-bearing op runs on TTNN; `test_pcc_stage3_6.py` validates the whole
 on-device model at production resolution (trajectory PCC 1.0 random / 0.9998
 real-checkpoint).  Remaining host code is non-weight scalar glue (enumerated in
-the §2 submodule table).  See §11 for the Stage-3.1 fixes.
+the §2 submodule table).
 
 ### TTNN ops on-device at Stage 3
 
@@ -593,49 +592,3 @@ The `Final average score of valid results: …` line is the PDM score (expect
 validate parity first with `scripts/navsim_inproc/check_parity.py` (§0 of the
 sub-README). The agent reads the checkpoint/anchors from the YAML, which
 interpolate `$DD_CHECKPOINT_PATH`/`$DD_ANCHOR_PATH`.
-
----
-
-## 10. Future Work
-
-| Stage | Scope | Key blocker |
-|---|---|---|
-| 3.4 | Perception stack: `_bev_downscale` (1×1 conv), `bev_proj` (Linear+ReLU+LN), `_tf_decoder` (3-layer SDPA+FFN) | TTNN SDPA API validation at d=256, 8 heads, 31×65 tokens |
-| 3.5 | TrajectoryHead DDIM denoiser (linear layers and noise schedule) | `ttnn.grid_sample` (bilinear/zeros/align_corners=False) is validated as a drop-in (PCC ≥ 0.99) in `tt/ttnn_grid_sample_attention.py`; remaining work is porting the surrounding Linear/SDPA/Mish layers and the DDIM scheduler arithmetic |
-| 3.6 | GPT cross-modal fusion (2-layer transformer ×4 scales) | `AdaptiveAvgPool2d` + `F.interpolate` interleaved with attention; complex mixed-mode migration |
-| 3.7 | Full-stack trace capture | Requires all forward ops on-device to eliminate PCIe round-trips |
-
----
-
-## 11. Stage-3.1 review fixes (commit `4b07970`)
-
-Applied after a line-by-line review against upstream
-(`hustvl/DiffusionDrive`).  All 24 tests pass.
-
-1. **DDIM noise channel — correctness vs upstream.**
-   `TrajectoryHead._forward_test` now diffuses the 2 `(x, y)` channels only,
-   matching upstream `forward_test`.  The previous code padded a zero heading
-   column, making `noise = randn(img.shape)` `(B,K,T,3)` instead of `(B,K,T,2)`;
-   because `randn` fills row-major, that shifted the x/y noise and broke
-   bit-for-bit reproduction of the upstream PDMS-88.04 behaviour.  Locked in by
-   `tests/pcc/test_noise_channels.py`.
-
-2. **FPN bilinear upsample on TTNN.**  `TtnnFPN` now runs both upsamples via
-   `ttnn.upsample(mode="bilinear")` instead of `F.interpolate` (see §3.4).
-
-3. **`ttnn.grid_sample` validated.**  `tt/ttnn_grid_sample_attention.py` ports
-   `GridSampleCrossBEVAttention` with the deformable sampling on-device
-   (PCC ≥ 0.99); `tests/pcc/test_pcc_grid_sample.py`.  Removes the Stage-3.5
-   "no TTNN equivalent" blocker.
-
-4. **Conv-weight caching.**  `ttnn.conv2d` weights are pre-converted to TTNN
-   host tensors once at build time (`prep_conv_weights`) and `TtnnBasicBlock`
-   objects are built once, instead of re-tilizing weights on every forward.
-
-5. **`_keyval_embedding` formula.**  Uses `lidar_vert_anchors *
-   lidar_horz_anchors + 1` (the semantically correct token count) instead of
-   `img_vert_anchors**2 + 1` (coincidentally equal at 8).
-
-**Still PyTorch (open fallbacks):** ResNet stems, GPT cross-modal fusion,
-perception `_tf_decoder`, the rest of the TrajectoryHead denoiser, and all the
-Linear/LayerNorm/SDPA host ops.
