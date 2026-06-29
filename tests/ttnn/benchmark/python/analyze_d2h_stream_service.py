@@ -8,11 +8,12 @@ Input: Google Benchmark JSON emitted by benchmark_d2h_stream_service
   (--benchmark_out=results.json --benchmark_out_format=json)
 
 Benchmark name grammar:
-  BM_D2HStreamService/<payload_regime>/<mode>/bytes<per_device_bytes>/pages<tensor_num_pages>/fifo_socket_pages<N>
+  BM_D2HStreamService/<payload_regime>/<mode>/<host<serial|parallel>|threads<N>>/bytes<per_device_bytes>/pages<tensor_num_pages>/fifo_socket_pages<N>
 
 The initial benchmark modes are:
-  - size: throughput vs per-device payload size
+  - size: throughput vs per-device payload size (serial + parallel host read)
   - page_granularity: throughput vs tensor page count for fixed payload sizes
+  - host_threads: throughput vs host read thread count for fixed payload sizes
 
 Usage:
   python3 analyze_d2h_stream_service.py run results.json
@@ -56,12 +57,15 @@ BENCHMARK_PREFIX = "BM_D2HStreamService"
 MODE_AXIS = {
     "size": ("per_device_bytes", "per-device payload"),
     "page_granularity": ("tensor_num_pages", "tensor pages per device"),
+    "host_threads": ("host_threads", "host read threads"),
 }
-INTEGER_SWEEP_AXES = ("tensor_num_pages", "fifo_socket_pages", "fifo_socket_pages_configured")
+INTEGER_SWEEP_AXES = ("tensor_num_pages", "fifo_socket_pages", "fifo_socket_pages_configured", "host_threads")
 
 CASE_KEY = [
     "family",
     "mode",
+    "host_read",
+    "host_threads",
     "per_device_bytes",
     "tensor_num_pages",
     "fifo_socket_pages_configured",
@@ -80,6 +84,8 @@ AXIS_SHORT = {
     "tensor_num_pages": "pages",
     "tensor_page_bytes": "page_bytes",
     "fifo_socket_pages_configured": "fifo_socket_pages",
+    "host_read": "host",
+    "host_threads": "threads",
 }
 
 NUMERIC_COLUMNS = [
@@ -101,6 +107,7 @@ NUMERIC_COLUMNS = [
     "parallel_host_read",
     "host_read_thread_count",
     "effective_host_read_thread_count",
+    "host_threads",
     "per_shard_bytes",
     "socket_page_size",
     "num_socket_pages",
@@ -123,6 +130,12 @@ NUMERIC_COLUMNS = [
 
 _NAME_RE = re.compile(
     rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/"
+    r"(?:(?:host(?P<host>serial|parallel))|(?:threads(?P<threads>\d+)))/"
+    r"bytes(?P<bytes>\d+)/pages(?P<pages>\d+)/fifo_socket_pages(?P<fifo_socket_pages>\d+)"
+)
+
+_OLD_NAME_RE = re.compile(
+    rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/"
     r"bytes(?P<bytes>\d+)/pages(?P<pages>\d+)/fifo_socket_pages(?P<fifo_socket_pages>\d+)"
 )
 
@@ -131,7 +144,9 @@ def held_cols(mode: str, xcol: str) -> list[str]:
     if mode == "page_granularity":
         candidates = ("per_device_bytes", "fifo_socket_pages_configured")
     elif mode == "size":
-        candidates = ("fifo_socket_pages_configured",)
+        candidates = ("fifo_socket_pages_configured", "host_read")
+    elif mode == "host_threads":
+        candidates = ("per_device_bytes", "fifo_socket_pages_configured")
     else:
         candidates = (
             "per_device_bytes",
@@ -199,11 +214,25 @@ def load_gbench_results(path: str | Path) -> pd.DataFrame:
 
 def parse_name(name: str) -> dict[str, str | int] | None:
     match = _NAME_RE.match(name)
+    if match:
+        host_threads = int(match.group("threads")) if match.group("threads") is not None else 0
+        return {
+            "family": match.group("family"),
+            "mode": match.group("mode"),
+            "host_read": match.group("host") or "threads",
+            "host_threads": host_threads,
+            "per_device_bytes": int(match.group("bytes")),
+            "tensor_num_pages": int(match.group("pages")),
+            "fifo_socket_pages_configured": int(match.group("fifo_socket_pages")),
+        }
+    match = _OLD_NAME_RE.match(name)
     if not match:
         return None
     return {
         "family": match.group("family"),
         "mode": match.group("mode"),
+        "host_read": "parallel",
+        "host_threads": 0,
         "per_device_bytes": int(match.group("bytes")),
         "tensor_num_pages": int(match.group("pages")),
         "fifo_socket_pages_configured": int(match.group("fifo_socket_pages")),
@@ -438,8 +467,9 @@ def plot_compare_latency_stat_lines(merged: pd.DataFrame, out_dir: Path, prefix:
 
 
 def _case_id(row) -> str:
+    host_part = f"threads={int(row.host_threads)}" if row.host_read == "threads" else f"host={row.host_read}"
     return (
-        f"{row.family}/{row.mode}/size={format_payload_bytes(row.per_device_bytes)}/"
+        f"{row.family}/{row.mode}/{host_part}/size={format_payload_bytes(row.per_device_bytes)}/"
         f"pages={int(row.tensor_num_pages)}/fifo_socket_pages={int(row.fifo_socket_pages_configured)}"
     )
 

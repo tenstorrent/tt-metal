@@ -140,6 +140,15 @@ uint32_t effective_host_read_thread_count(
     return static_cast<uint32_t>(worker_count);
 }
 
+std::string host_read_mode_name(bool parallel_host_read) { return parallel_host_read ? "parallel" : "serial"; }
+
+std::string host_read_label(bool parallel_host_read, uint32_t host_read_thread_count) {
+    if (host_read_thread_count > 0) {
+        return "threads" + std::to_string(host_read_thread_count);
+    }
+    return "host" + host_read_mode_name(parallel_host_read);
+}
+
 ttsl::SmallVector<MeshMapperConfig::Placement> full_shard_2d_placements() {
     // Shard tensor dim 2 (height) across mesh rows, dim 3 (width) across mesh cols.
     return {MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{3}};
@@ -562,7 +571,9 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
                         const std::string& mode,
                         uint32_t per_device_bytes,
                         uint32_t tensor_num_pages,
-                        uint32_t fifo_socket_pages = kDefaultFifoSocketPages) {
+                        uint32_t fifo_socket_pages = kDefaultFifoSocketPages,
+                        bool parallel_host_read = true,
+                        uint32_t host_read_thread_count = 0) {
         TT_FATAL(per_device_bytes > 0, "per_device_bytes must be > 0");
         TT_FATAL(tensor_num_pages > 0, "tensor_num_pages must be > 0");
         if (per_device_bytes % tensor_num_pages != 0) {
@@ -573,20 +584,39 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
             return;
         }
         cases.push_back(BenchmarkCase{
-            .label = regime + "/" + mode + "/bytes" + std::to_string(per_device_bytes) + "/pages" +
-                     std::to_string(tensor_num_pages) + "/fifo_socket_pages" + std::to_string(fifo_socket_pages),
+            .label = regime + "/" + mode + "/" + host_read_label(parallel_host_read, host_read_thread_count) +
+                     "/bytes" + std::to_string(per_device_bytes) + "/pages" + std::to_string(tensor_num_pages) +
+                     "/fifo_socket_pages" + std::to_string(fifo_socket_pages),
             .regime = regime,
             .mode = mode,
             .placement = PlacementPattern::FullShard2D,
             .per_device_bytes = per_device_bytes,
             .tensor_num_pages = tensor_num_pages,
             .fifo_socket_pages = fifo_socket_pages,
+            .parallel_host_read = parallel_host_read,
+            .host_read_thread_count = host_read_thread_count,
         });
     };
 
     auto add_size_case = [&](const std::string& regime, uint32_t per_device_bytes) {
         const uint32_t tensor_num_pages = std::max<uint32_t>(1, per_device_bytes / (4 * 1024));
-        add_case(regime, "size", per_device_bytes, tensor_num_pages);
+        for (bool parallel_host_read : {false, true}) {
+            add_case(regime, "size", per_device_bytes, tensor_num_pages, kDefaultFifoSocketPages, parallel_host_read);
+        }
+    };
+
+    auto add_host_thread_sweep_cases = [&](const std::string& regime, uint32_t per_device_bytes) {
+        const uint32_t tensor_num_pages = std::max<uint32_t>(1, per_device_bytes / (4 * 1024));
+        for (uint32_t host_threads : {1u, 2u, 4u, 8u, 16u, 32u}) {
+            add_case(
+                regime,
+                "host_threads",
+                per_device_bytes,
+                tensor_num_pages,
+                kDefaultFifoSocketPages,
+                /*parallel_host_read=*/true,
+                host_threads);
+        }
     };
 
     auto add_page_granularity_cases = [&](const std::string& regime,
@@ -606,12 +636,15 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
 
     for (uint32_t bytes : small_payload_bytes) {
         add_size_case("small_payload", bytes);
+        add_host_thread_sweep_cases("small_payload", bytes);
     }
     for (uint32_t bytes : medium_payload_bytes) {
         add_size_case("medium_payload", bytes);
+        add_host_thread_sweep_cases("medium_payload", bytes);
     }
     for (uint32_t bytes : large_payload_bytes) {
         add_size_case("large_payload", bytes);
+        add_host_thread_sweep_cases("large_payload", bytes);
     }
 
     add_page_granularity_cases("small_payload", small_payload_bytes, {1u, 2u, 4u, 8u, 16u});
