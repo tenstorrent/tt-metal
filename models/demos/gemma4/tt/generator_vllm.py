@@ -109,29 +109,39 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         "supports_sample_on_device": True,
     }
 
-    # Gemma4 opts back into vLLM's hybrid kv-cache groups (issue #46432).
-    # Unlike the base class — which emits ``FullAttentionSpec`` for every
-    # layer and keeps warmup/runtime on the single-page-table path because the
-    # generic decode zero-pads the sliding page_table and corrupts the cache —
-    # Gemma4 ships the bounded sliding-window fix end to end:
-    #   * ``cache_position_modulo`` wraps writes/reads inside the window
-    #     (set on sliding layers via ``bounded_sliding_kv_cache``), and
-    #   * :meth:`_pad_sliding_page_tables_for_bounded` repeats the last valid
-    #     page_table column instead of zero-padding.
-    # That makes ``SlidingWindowSpec`` safe here, so the sliding/full layers
-    # form multiple kv_cache_groups and upstream HMA tensor-sharing packs them
-    # into far fewer DRAM buffers (fitting full ISL on T3K without capping
-    # ``max_model_len``). The flag is overridden per-class so Gemma3 / GPT-OSS
-    # stay on their working FullAttentionSpec path.
-    _HYBRID_KV_CACHE_GROUPS_ENABLED = True
+    # Gemma4 keeps vLLM's hybrid kv-cache groups DISABLED.
+    #
+    # With the hybrid path on, ``get_kv_cache_spec`` emits ``SlidingWindowSpec``
+    # for the 40 sliding layers and ``FullAttentionSpec`` for the 8 full layers,
+    # which vLLM places into 6 kv_cache_groups. vLLM then splits the total block
+    # pool evenly across those groups and reports per-group capacity, so a single
+    # request can only be admitted up to ``num_blocks // num_groups`` tokens
+    # (~23K on a P300x2 12B build) — the full-attention group, which needs the
+    # entire sequence, is starved by the even split. Requests longer than that
+    # ceiling sit unschedulable in ``Waiting`` even though the device has plenty
+    # of KV DRAM. Additionally, ``SlidingWindowSpec.max_memory_usage_bytes`` is
+    # coupled to ``max_num_batched_tokens``, which (since the TT backend has no
+    # chunked prefill) equals ``max_model_len`` and over-charges the sliding
+    # groups at full length anyway.
+    #
+    # Emitting ``FullAttentionSpec`` for *every* layer (see
+    # ``get_kv_cache_spec`` below) collapses them into a single
+    # ``UniformTypeKVCacheSpecs`` group, so the whole block pool backs each
+    # request and the full ``max_model_len`` becomes admissible (verified up to
+    # ~100K ISL). This mirrors the Gemma3 / GPT-OSS single-pool path. It does
+    # require the legacy unbounded sliding KV path on the device (bounded sliding
+    # assumes a windowed ``SlidingWindowSpec``), so ``bounded_sliding_kv_cache``
+    # defaults off below.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Mirrors the env-var check in :meth:`initialize_vllm_model` so the
-        # forward-side padding logic doesn't need to re-read the environment
-        # on every step. Defaults to on; flip ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0``
-        # to fall back to the legacy unbounded path through the paged ops.
-        self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
+        # Mirrors the env-var check in :meth:`initialize_vllm_model`. With hybrid
+        # kv-cache groups disabled all layers use ``FullAttentionSpec`` and the
+        # device must allocate/read full-length KV, so bounded sliding defaults
+        # OFF. Set ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=1`` only alongside the
+        # hybrid ``SlidingWindowSpec`` path.
+        self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "0") != "0"
 
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
@@ -399,7 +409,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         between groups is the spec — block_size stays uniform.
         """
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
-        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+        from vllm.v1.kv_cache_interface import FullAttentionSpec
 
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -441,12 +451,20 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
                         f"layer_types[{i}] is 'sliding_attention' but "
                         f"hf_config.sliding_window is None on {cls.__name__}"
                     )
-                spec_per_layer[name] = SlidingWindowSpec(
+                # Hybrid kv-cache groups are disabled
+                # (``_HYBRID_KV_CACHE_GROUPS_ENABLED = False``): emit
+                # ``FullAttentionSpec`` for sliding layers too, keeping their
+                # own (sliding) num_kv_heads/head_size. vLLM then merges all
+                # same-type specs into one ``UniformTypeKVCacheSpecs`` group, so
+                # the full block pool backs every request instead of being split
+                # across 6 groups and capped at ~23K tokens. The device runs the
+                # legacy unbounded sliding path (bounded sliding defaults off),
+                # which matches this full-length allocation.
+                spec_per_layer[name] = FullAttentionSpec(
                     block_size=block_size,
                     num_kv_heads=sliding_kv_heads_per_dev,
                     head_size=sliding_head_dim,
                     dtype=dtype,
-                    sliding_window=sliding_window,
                 )
             elif lt == "full_attention":
                 spec_per_layer[name] = FullAttentionSpec(
@@ -480,16 +498,14 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         model_path = hf_config._name_or_path
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
-        # Opt into the bounded sliding-window KV cache path on sliding layers.
-        # vLLM's hybrid manager already produces SlidingWindowSpec-shaped page
-        # tables for sliding layers; the flag makes Gemma4Attention pass
-        # ``cache_position_modulo=sliding_window`` to the three paged ops so
-        # they correctly address the bounded physical pool. Default-off in
-        # ``create_tt_model``; flipped on here because the bridge is the
-        # path that actually receives bounded buffers from vLLM. Env-var
-        # override ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0`` lets the legacy
-        # unbounded path back in if a regression appears.
-        bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
+        # Bounded sliding-window KV cache defaults OFF, consistent with hybrid
+        # kv-cache groups being disabled: ``get_kv_cache_spec`` emits
+        # ``FullAttentionSpec`` for every layer, so vLLM hands full-length
+        # (non-windowed) page tables and the device must allocate/read the full
+        # pool. The bounded path (``cache_position_modulo=sliding_window``) is
+        # only correct alongside the hybrid ``SlidingWindowSpec`` layout; set
+        # ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=1`` to re-enable it in that mode.
+        bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "0") != "0"
 
         model_args = []
         model = []

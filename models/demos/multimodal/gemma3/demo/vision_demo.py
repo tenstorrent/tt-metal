@@ -528,7 +528,7 @@ def test_multimodal_demo_text(
             benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
             benchmark_data.save_partial_run_json(
                 profiler,
-                run_type=f"{tt_device_name}-demo",
+                run_type="demo_perf",
                 ml_model_name=f"{base_model_name}-Vision",
                 ml_model_type="vlm",
                 num_layers=model_args[0].n_layers,
