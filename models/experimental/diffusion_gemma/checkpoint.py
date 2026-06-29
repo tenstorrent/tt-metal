@@ -29,6 +29,23 @@ class CheckpointInputs(NamedTuple):
     state_dict: dict
 
 
+class CheckpointModelInputs(NamedTuple):
+    """Loaded checkpoint inputs plus a Gemma4-backed TT model."""
+
+    tokenizer: object
+    state_dict: dict
+    model_args: object
+    tt_model: object
+    tt_kv_cache: object
+
+
+def default_backbone_config_dir() -> Path:
+    """Return the in-repo Gemma4 26B-A4B config used by the TT backbone."""
+
+    repo_root = Path(__file__).resolve().parents[3]
+    return repo_root / "models/demos/gemma4/configs/gemma-4-26B-A4B-it"
+
+
 def _as_prefix_tuple(prefixes: tuple[str, ...] | list[str] | str) -> tuple[str, ...]:
     if isinstance(prefixes, str):
         return (prefixes,)
@@ -106,6 +123,63 @@ def load_checkpoint_inputs(
     tokenizer = load_tokenizer(checkpoint_dir, **(tokenizer_kwargs or {}))
     state_dict = load_text_generation_state_dict(checkpoint_dir, prefixes=state_prefixes, device=device)
     return CheckpointInputs(tokenizer=tokenizer, state_dict=state_dict)
+
+
+def build_tt_model_from_checkpoint_inputs(
+    mesh_device,
+    checkpoint_inputs: CheckpointInputs,
+    *,
+    backbone_config_dir: str | Path | None = None,
+    remap_fn=None,
+    create_model_fn=None,
+    **model_kwargs,
+) -> CheckpointModelInputs:
+    """Build the reused Gemma4 TT backbone from loaded DiffusionGemma inputs."""
+
+    if remap_fn is None:
+        from models.experimental.diffusion_gemma.weight_mapping import remap_state_dict
+
+        remap_fn = remap_state_dict
+    if create_model_fn is None:
+        from models.demos.gemma4.tt.common import create_tt_model
+
+        create_model_fn = create_tt_model
+
+    backbone_state, _self_conditioning_state, _ignored = remap_fn(checkpoint_inputs.state_dict)
+    model_args, tt_model, tt_kv_cache, _loaded_state = create_model_fn(
+        mesh_device,
+        state_dict=backbone_state,
+        model_path=str(backbone_config_dir or default_backbone_config_dir()),
+        **model_kwargs,
+    )
+    return CheckpointModelInputs(
+        tokenizer=checkpoint_inputs.tokenizer,
+        state_dict=checkpoint_inputs.state_dict,
+        model_args=model_args,
+        tt_model=tt_model,
+        tt_kv_cache=tt_kv_cache,
+    )
+
+
+def build_tt_model_from_checkpoint_dir(
+    mesh_device,
+    checkpoint_dir: str | Path,
+    *,
+    tokenizer_kwargs: dict | None = None,
+    state_prefixes: tuple[str, ...] | list[str] | str = TEXT_GENERATION_PREFIXES,
+    state_device: str = "cpu",
+    checkpoint_loader=load_checkpoint_inputs,
+    **model_kwargs,
+) -> CheckpointModelInputs:
+    """Load a DiffusionGemma checkpoint directory and build the TT text model."""
+
+    inputs = checkpoint_loader(
+        checkpoint_dir,
+        tokenizer_kwargs=tokenizer_kwargs,
+        state_prefixes=state_prefixes,
+        device=state_device,
+    )
+    return build_tt_model_from_checkpoint_inputs(mesh_device, inputs, **model_kwargs)
 
 
 def generate_text_from_checkpoint_dir(
