@@ -444,12 +444,14 @@ def run_cc_optimize(
     if not manifest:
         print("  [optimize/cc] discovery failed (before_loop produced no manifest).")
         return None
-    _seq = (manifest.get("config") or {}).get("perf_seq_len")
-    if _seq:
-        os.environ["TT_PERF_SEQ_LEN"] = str(_seq)
-        print(f"  [optimize/cc] perf workload seq pinned to {_seq} (baseline shape-retry); propagated to loop")
     perf_dir = repo_root / PERF_DIR
     manifest_path = str(_latest_manifest(perf_dir))
+    _seqf = Path(manifest_path).parent / "perf_seq_len"
+    if _seqf.is_file():
+        _seq = _seqf.read_text().strip()
+        if _seq:
+            os.environ["TT_PERF_SEQ_LEN"] = _seq
+            print(f"  [optimize/cc] perf workload seq pinned to {_seq} (baseline shape-retry); propagated to loop")
     model_rel = os.path.relpath(demo_dir, repo_root)
     model_name = Path(demo_dir).name
     pipes = pipelines_from_manifest(manifest, model_rel)
