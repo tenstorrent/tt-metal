@@ -79,7 +79,7 @@ from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseSt
 from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
 
-from hunyuan_image_3.system_prompt import get_system_prompt
+from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
 STEPS_ENV = os.environ.get("HY_STEPS")
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))

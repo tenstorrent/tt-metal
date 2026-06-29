@@ -3,12 +3,21 @@
 #
 # End-to-end HunyuanImage-3.0 text-to-image on Tenstorrent.
 #
-#   prompt --HunyuanTokenizer--> input_ids
+#   prompt --[ optional AR recaption: text-sampling loop on the resident backbone +
+#              LM head -> <recaption>...</recaption> cot_text ]
+#          --HunyuanTokenizer (cot_text injected as the assistant turn)--> input_ids
 #          --wte--> text embeddings (cond / uncond rows for CFG)
 #   noise latent --[ patch_embed -> RESIDENT bf8 sharded backbone -> final_layer ]
 #                  x N scheduler steps with CFG (denoise_loop on the 2x2 sp0tp1 mesh)
 #          --> denoised latent
 #          --VAE decode (TTNN, on device, 2x2 H/W-spatial-parallel)--> RGB image
+#
+# The recaption stage reuses the shared text-sampling loop (ref/generate.py, re-exported
+# by tt/generate.py): repetition penalty -> temperature -> top-k -> top-p -> sample, via
+# run_recaption_on_device. It is ON by default (HY_RECAPTION=0 to skip) and rewrites the
+# user prompt into a detailed caption before image generation, mirroring upstream base
+# generate_image. The sampling knobs (temperature/top-k/top-p/repetition penalty) are
+# exposed as env vars below.
 #
 # The whole pipeline runs on the TT mesh: the backbone with the model that fits
 # DRAM (bf8 + 4-way expert sharding, first/last 4 layers bf16), and the VAE decode
@@ -19,14 +28,19 @@
 # Run:
 #   HY_STEPS=8 HY_NUM_LAYERS=32 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/demo/demo.py "a photo of a cat"
+#
+# Skip the recaption stage (prompt used verbatim, original fast path):
+#   HY_RECAPTION=0 HY_STEPS=8 python_env/bin/python \
+#     models/experimental/hunyuan_image_3_0/demo/demo.py "a photo of a cat"
 
-import os, sys, json, glob
+import os, sys, json, glob, time
+from pathlib import Path
 import torch
 from safetensors import safe_open
 
-ROOT = "/home/iguser/Christy/tt-metal"
-HUNYUAN = "/home/iguser/Christy/tt-metal/HunyuanImage-3.0"
-WEIGHTS = "/home/iguser/Christy/HunyuanImage-3"
+ROOT = str(Path(__file__).resolve().parents[4])  # tt-metal repo root (robust to checkout location)
+HUNYUAN = os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/christy/HunyuanImage-3.0")
+WEIGHTS = os.environ.get("HUNYUAN_MODEL_DIR", "/home/iguser/christy/HunyuanImage-3")
 for p in (ROOT, HUNYUAN):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -34,12 +48,24 @@ for p in (ROOT, HUNYUAN):
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer
-from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import prepare_gen_image_inputs
-from models.experimental.hunyuan_image_3_0.ref.attention.mask import build_attention_mask, to_additive
+from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
+    prepare_gen_image_inputs,
+    prepare_recaption_ar_bundle,
+)
+from models.experimental.hunyuan_image_3_0.ref.generate import SamplingConfig
+from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
+from models.experimental.hunyuan_image_3_0.ref.recaption import (
+    default_recaption_sampling_config,
+    system_prompt_for_bot_task,
+)
+from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
+from models.experimental.hunyuan_image_3_0.tt.attention.mask import build_attention_mask_tt
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
+from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
+from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
 
 PROMPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HY_PROMPT", "a photo of a cat, studio lighting")
@@ -49,6 +75,19 @@ GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
 SEED = int(os.environ.get("HY_SEED", "0"))
 SCALING = 0.562679178327931
 OUT_PNG = os.environ.get("HY_OUT", "/home/iguser/Christy/tt-metal/hy_t2i.png")
+
+# AR recaption (text-sampling loop) — ON by default; rewrites the prompt before gen.
+RECAPTION = os.environ.get("HY_RECAPTION", "1") != "0"
+BOT_TASK = os.environ.get("HY_BOT_TASK", "recaption")  # recaption | think | think_recaption
+RECAPTION_LAYERS = int(os.environ.get("HY_RECAPTION_LAYERS", str(NUM_LAYERS)))
+MAX_NEW_TOKENS = int(os.environ.get("HY_MAX_NEW_TOKENS", "512"))
+# Sampling knobs (defaults match Instruct generation_config: temp 0.6 / top-k 1024 / top-p 0.95).
+_SAMPLE_DEFAULTS = default_recaption_sampling_config()
+DO_SAMPLE = os.environ.get("HY_DO_SAMPLE", "1") != "0"
+TEMPERATURE = float(os.environ.get("HY_TEMPERATURE", str(_SAMPLE_DEFAULTS.temperature)))
+TOP_K = int(os.environ.get("HY_TOP_K", str(_SAMPLE_DEFAULTS.top_k)))
+TOP_P = float(os.environ.get("HY_TOP_P", str(_SAMPLE_DEFAULTS.top_p)))
+REP_PENALTY = float(os.environ.get("HY_REP_PENALTY", str(_SAMPLE_DEFAULTS.repetition_penalty)))
 
 _WMAP = json.load(open(glob.glob(f"{WEIGHTS}/*.index.json")[0]))["weight_map"]
 _OPEN = {}
@@ -87,16 +126,149 @@ def _pe_dims(down_sd):
     return int(latent), int(hid), int(hsz)
 
 
+def _build_backbone(mesh_device, ccl, c, *, num_layers, apply_final_norm, embed_sd=None, norm_sd=None):
+    """Resident bf8 backbone on the 2x2 mesh (4-way expert shard, first/last 4 layers bf16).
+
+    ``apply_final_norm=True`` + ``embed_sd``/``norm_sd`` builds the LM-backbone variant
+    (device wte embed + ln_f) the AR recaption stage needs; the denoise path passes
+    ``apply_final_norm=False`` and feeds pre-embedded hidden states instead.
+    """
+    layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in _load_prefix(f"model.layers.{i}").items()}
+    bf16_layers = {0, 1, 2, 3, num_layers - 4, num_layers - 3, num_layers - 2, num_layers - 1}
+    print(f"[demo] building resident backbone ({num_layers} layers, bf8 + bf16 layers {sorted(bf16_layers)}) ...")
+    return HunyuanTtModel(
+        mesh_device,
+        num_layers=num_layers,
+        hidden_size=c["H"],
+        num_heads=c["HEADS"],
+        num_kv_heads=c["KV"],
+        head_dim=c["HD"],
+        num_experts=c["E"],
+        moe_topk=c["K"],
+        use_qk_norm=c["QKN"],
+        use_mixed_mlp_moe=c["MIXED"],
+        norm_topk_prob=c["NORM"],
+        rms_norm_eps=c["EPS"],
+        stream_experts=False,
+        layer_loader=layer_loader,
+        embed_state_dict=embed_sd,
+        norm_state_dict=norm_sd,
+        apply_final_norm=apply_final_norm,
+        weight_dtype=ttnn.bfloat8_b,
+        ccl_manager=ccl,
+        expert_mesh_axis=1,
+        tp_axis=1,  # TP=2 on axis 1: column-parallel qkv, row-parallel o_proj
+        tp_factor=2,
+        sp_axis=0,  # SP=2 on axis 0: sequence sharded across rows (gather-KV attn)
+        sp_factor=2,
+        bf16_layers=bf16_layers,
+    )
+
+
+def _run_recaption(c, tok, proc, wte, prompt, generator):
+    """AR recaption: rewrite the prompt with the text-sampling loop on a resident backbone.
+
+    Opens its own 2x2 mesh (LM backbone + head are freed before the denoise backbone is
+    built, mirroring demo_i2i.py). Returns ``(cot_text, image_size)``.
+    """
+    sp_key, sp_sub = system_prompt_for_bot_task(BOT_TASK)
+    recap_system = get_system_prompt(sp_key, sp_sub)
+    recap_bundle = prepare_recaption_ar_bundle(
+        tok,
+        prompt,
+        proc,
+        wte,
+        bot_task=BOT_TASK,
+        system_prompt=recap_system,
+        sequence_template="pretrain",
+        generator=generator,
+    )
+    prefix_len = int(recap_bundle.input_ids.shape[1])
+    config = SamplingConfig(
+        do_sample=DO_SAMPLE,
+        temperature=TEMPERATURE,
+        top_k=TOP_K,
+        top_p=TOP_P,
+        repetition_penalty=REP_PENALTY,
+        max_new_tokens=MAX_NEW_TOKENS,
+    )
+    print(
+        f"[demo] recaption stage (bot_task={BOT_TASK}, system={sp_key}/{sp_sub}) "
+        f"prefix_len={prefix_len} layers={RECAPTION_LAYERS} max_new_tokens={MAX_NEW_TOKENS} "
+        f"sample(do_sample={DO_SAMPLE}, temp={TEMPERATURE}, top_k={TOP_K}, top_p={TOP_P}, rep={REP_PENALTY})",
+        flush=True,
+    )
+
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    recap_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
+    try:
+        recap_mesh.enable_program_cache()
+        recap_ccl = CCLManager(recap_mesh, num_links=1, topology=ttnn.Topology.Linear)
+
+        def rep(t):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=recap_mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(recap_mesh),
+            )
+
+        t0 = time.time()
+        recap_backbone = _build_backbone(
+            recap_mesh,
+            recap_ccl,
+            c,
+            num_layers=RECAPTION_LAYERS,
+            apply_final_norm=True,
+            embed_sd={"model.wte.weight": wte},
+            norm_sd={"model.ln_f.weight": _load("model.ln_f.weight")},
+        )
+        print(f"[demo] recaption backbone ready ({time.time() - t0:.0f}s); loading LM head ...", flush=True)
+        lm_head = HunyuanTtLMHead(recap_mesh, {"lm_head.weight": _load("lm_head.weight")})
+        recap_result = run_recaption_on_device(
+            recap_backbone,
+            lm_head,
+            recap_mesh,
+            recap_bundle,
+            tok,
+            BOT_TASK,
+            proc,
+            wte,
+            image_size=1024,
+            config=config,
+            generator=generator,
+            replicate_to_mesh=rep,
+        )
+        return recap_result.cot_text[0], recap_result.image_size
+    finally:
+        ttnn.close_mesh_device(recap_mesh)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
 def main():
-    print(f"[demo] prompt={PROMPT!r}  steps={STEPS}  layers={NUM_LAYERS}  guidance={GUIDANCE}")
+    print(f"[demo] prompt={PROMPT!r}  steps={STEPS}  layers={NUM_LAYERS}  guidance={GUIDANCE}  recaption={RECAPTION}")
     c = _cfg()
     H = c["H"]
     down_sd, up_sd = _load_prefix("patch_embed"), _load_prefix("final_layer")
     LATENT, HID, HSZ = _pe_dims(down_sd)
 
-    # 1) tokenize -> input_ids (cond row 0, uncond row 1) + contiguous image span.
     tok = HunyuanTokenizer.from_pretrained()
-    bundle = prepare_gen_image_inputs(tok, PROMPT, image_size=1024)
+    wte = _load("model.wte.weight").float()
+    proc = HunyuanImage3ImageProcessor(json.load(open(f"{WEIGHTS}/config.json")))
+    generator = torch.Generator().manual_seed(SEED)
+
+    # 0) optional AR recaption: rewrite the prompt with the text-sampling loop
+    #    (temperature/top-k/top-p/repetition penalty) on a resident backbone + LM head.
+    cot_text, image_size = None, 1024
+    if RECAPTION:
+        cot_text, image_size = _run_recaption(c, tok, proc, wte, PROMPT, generator)
+        print(f"[demo] recaption cot_text:\n{cot_text}\n[demo] resolved image_size={image_size}")
+
+    # 1) tokenize -> input_ids (cond row 0, uncond row 1) + contiguous image span.
+    #    cot_text (when present) is injected as the assistant turn before the gen block.
+    bundle = prepare_gen_image_inputs(tok, PROMPT, image_size=image_size, cot_text=cot_text)
     ids = bundle.input_ids  # [2, S]
     S = bundle.seq_len
     span = bundle.rope_image_info[0][0][0]
@@ -104,7 +276,6 @@ def main():
     print(f"[demo] seq_len={S} image_span={span} grid={grid}")
 
     # 2) text embeddings (host wte lookup — exact) for cond/uncond rows.
-    wte = _load("model.wte.weight").float()
     emb = torch.nn.functional.embedding(ids, wte)  # [2, S, H]
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -140,34 +311,7 @@ def main():
             hidden_channels=HID,
             out_channels=LATENT,
         )
-        layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in _load_prefix(f"model.layers.{i}").items()}
-        bf16_layers = {0, 1, 2, 3, NUM_LAYERS - 4, NUM_LAYERS - 3, NUM_LAYERS - 2, NUM_LAYERS - 1}
-        print(f"[demo] building resident backbone ({NUM_LAYERS} layers, bf8 + bf16 layers {sorted(bf16_layers)}) ...")
-        backbone = HunyuanTtModel(
-            mesh_device,
-            num_layers=NUM_LAYERS,
-            hidden_size=H,
-            num_heads=c["HEADS"],
-            num_kv_heads=c["KV"],
-            head_dim=c["HD"],
-            num_experts=c["E"],
-            moe_topk=c["K"],
-            use_qk_norm=c["QKN"],
-            use_mixed_mlp_moe=c["MIXED"],
-            norm_topk_prob=c["NORM"],
-            rms_norm_eps=c["EPS"],
-            stream_experts=False,
-            layer_loader=layer_loader,
-            apply_final_norm=False,
-            weight_dtype=ttnn.bfloat8_b,
-            ccl_manager=ccl,
-            expert_mesh_axis=1,
-            tp_axis=1,  # TP=2 on axis 1: column-parallel qkv, row-parallel o_proj
-            tp_factor=2,
-            sp_axis=0,  # SP=2 on axis 0: sequence sharded across rows (gather-KV attn)
-            sp_factor=2,
-            bf16_layers=bf16_layers,
-        )
+        backbone = _build_backbone(mesh_device, ccl, c, num_layers=NUM_LAYERS, apply_final_norm=False)
         te1 = HunyuanTtTimestepEmbedder(
             mesh_device, H, {f"time_embed.{k}": v for k, v in _load_prefix("time_embed").items()}, "time_embed"
         )
@@ -184,8 +328,9 @@ def main():
             seq_len=S,
         )
 
-        mask = to_additive(build_attention_mask(S, image_slices=[span], bsz=1), dtype=torch.float32).reshape(1, 1, S, S)
-        mask_tt = rep(mask)
+        # Attention mask built entirely on device (TTNN ops, replicated across the mesh)
+        # — no host torch build + upload. Causal text + bidirectional image span.
+        mask_tt = build_attention_mask_tt(mesh_device, S, image_slices=[span], bsz=1, dtype=ttnn.bfloat16)
         image_infos = [[(span, grid)]]
 
         def cond_dict(row):
