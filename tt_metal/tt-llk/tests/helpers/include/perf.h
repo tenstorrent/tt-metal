@@ -46,8 +46,6 @@ enum class PerfRunType
     L1_CONGESTION
 };
 
-#ifndef ARCH_QUASAR
-
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {
     std::uint32_t set_a = source == ckernel::SrcA ? 1 : 0;
@@ -257,5 +255,3 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
         }
     }
 }
-
-#endif // !ARCH_QUASAR
