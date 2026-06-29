@@ -12,7 +12,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_de
 from models.demos.gpt_oss.utils.substate import substate
 from models.demos.gpt_oss_d_p.config import MeshConfig, Mode, ModeConfig
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.rope import RotarySetup, compute_gather_cos_sin
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
@@ -72,6 +72,39 @@ def create_rope_setup(
     )
 
     return rope_setup
+
+
+def _create_sp_rope_mats(mesh_device, hf_config, sp_axis, seq_total, datatype=ttnn.bfloat16):
+    """Create RoPE matrices SP-sharded over the sequence dimension.
+
+    Device i receives positions [i*local_seq, (i+1)*local_seq) of the global sequence,
+    so Q and K tokens are embedded with their absolute positions for ring attention.
+
+    Args:
+        seq_total: Global sequence length across all SP devices (local * sp_factor).
+    """
+    rope_scaling = rope_scaling_model_factory(getattr(hf_config, "rope_scaling", None))
+    cos_torch, sin_torch = compute_gather_cos_sin(
+        dhead=hf_config.head_dim,
+        end=2 * seq_total,
+        theta=getattr(hf_config, "rope_theta", 150000.0),
+        rope_scaling=rope_scaling,
+    )
+    # Unsqueeze to [1, 1, seq_total, head_dim] for 4D indexing in apply_rope
+    cos_torch = cos_torch.unsqueeze(0).unsqueeze(0)
+    sin_torch = sin_torch.unsqueeze(0).unsqueeze(0)
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2  # shard sequence dim on the SP mesh axis
+
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    cos_matrix = ttnn.from_torch(
+        cos_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=datatype, mesh_mapper=mapper
+    )
+    sin_matrix = ttnn.from_torch(
+        sin_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=datatype, mesh_mapper=mapper
+    )
+    return [cos_matrix, sin_matrix]
 
 
 class Model:
@@ -590,11 +623,19 @@ class Model:
         if rot_mats_global is not None:
             rope_mats = rot_mats_global
         else:
-            # Slice cos/sin matrices for prefill sequence length (matches tt-transformers model.py lines 156-159)
-            rope_mats = [
-                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-            ]
+            sp = self.mesh_config.prefill.sp
+            if sp > 1:
+                # SP-sharded: device i gets global positions [i*seq_len, (i+1)*seq_len).
+                # Passing the full-length local shard avoids an extra slice in prefill.py.
+                rope_mats = _create_sp_rope_mats(
+                    self.mesh_device, self.hf_config, self.mesh_config.sp_axis, seq_len * sp
+                )
+            else:
+                # Slice cos/sin matrices for prefill sequence length (matches tt-transformers model.py lines 156-159)
+                rope_mats = [
+                    self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                    self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
+                ]
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(
