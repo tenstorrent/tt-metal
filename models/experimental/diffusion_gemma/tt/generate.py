@@ -359,10 +359,16 @@ def make_host_noise_tokens_fn(mesh_device, host_noise_tokens):
 
 
 def _check_random_token_args(batch: int, canvas_len: int, vocab_size: int) -> None:
+    if isinstance(batch, bool) or not isinstance(batch, Integral):
+        raise ValueError("batch must be an integer")
     if batch <= 0:
         raise ValueError("batch must be positive")
+    if isinstance(canvas_len, bool) or not isinstance(canvas_len, Integral):
+        raise ValueError("canvas_len must be an integer")
     if canvas_len <= 0:
         raise ValueError("canvas_len must be positive")
+    if isinstance(vocab_size, bool) or not isinstance(vocab_size, Integral):
+        raise ValueError("vocab_size must be an integer")
     if vocab_size <= 0:
         raise ValueError("vocab_size must be positive")
 

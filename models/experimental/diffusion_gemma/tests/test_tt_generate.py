@@ -2288,6 +2288,33 @@ def test_seeded_host_token_helpers_allow_zero_seed(monkeypatch):
     assert torch.equal(calls[2][1], calls[3][1])
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"batch": 1.5}, "batch"),
+        ({"batch": True}, "batch"),
+        ({"canvas_len": 1.5}, "canvas_len"),
+        ({"canvas_len": True}, "canvas_len"),
+        ({"vocab_size": 1.5}, "vocab_size"),
+        ({"vocab_size": True}, "vocab_size"),
+    ],
+)
+@pytest.mark.parametrize(
+    "factory",
+    [
+        make_seeded_host_canvas_init_fn,
+        make_seeded_host_noise_tokens_fn,
+        make_seeded_gumbel_noise_fn,
+    ],
+)
+def test_seeded_generation_helpers_reject_non_integer_shapes(factory, kwargs, message):
+    args = {"batch": 1, "canvas_len": 4, "vocab_size": 16, "seed": 123}
+    args.update(kwargs)
+
+    with pytest.raises(ValueError, match=message):
+        factory("mesh", **args)
+
+
 def test_make_host_noise_tokens_fn_replays_fixed_tokens(monkeypatch):
     calls = []
 
