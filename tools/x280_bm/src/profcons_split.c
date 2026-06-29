@@ -24,25 +24,27 @@
  *                          +0x18 done (= DONE_MAGIC)
  *   COORDS  @ 0x08011200 : num_cores x { u32 noc_x, u32 noc_y } (translated)
  *   STAGECTL@ 0x08018000 : per reader h: +h*32 prod, +8 cons, +16 rdone (flit counts)
- *   STAGE   @ 0x08020000 : reader h at +h*STAGE_STRIDE (264 KiB):
- *                          +0x00000 FLIT ring: NREC=4096 x 64 B flits (= 64 rings buffered)
- *                          +0x40000 DESC ring: NDESC=128 x u64 host dst_start (per ring)
+ *   STAGE   @ 0x08020000 : reader h at +h*STAGE_STRIDE (64 KiB):
+ *                          +0x0000 FLIT ring: NREC=512 x 64 B flits (= 8 rings buffered)
+ *                          +0x8000 DESC ring: NDESC=16 x u64 host dst_start (per ring)
  *
  * Host pre-zeros STAGECTL before boot (no init race). Host slice for (core c,risc r)
  * = host_base + (c*5+r)*2048; region = num_cores*5*2048 < 2 MiB.
  */
 #include <stdint.h>
 
-#include "noc.h"
+#include "dma_engine.h" /* pulls in noc.h; for the --dma-egress probe (mode 4) */
 
 #define MBOX_PARAMS 0x08011000UL
 #define MBOX_RESULTS 0x08011040UL
 #define MBOX_COORDS 0x08011200UL
 #define STAGECTL 0x08018000UL
 #define STAGE_BASE 0x08020000UL
-/* X280 LIM is 1.875 MiB; staging lives above the 64 KiB managed region. 264 KiB per
- * reader (256 KiB flit ring + descriptors); nread<=4 -> <=1.03 MiB, fits comfortably. */
-#define STAGE_STRIDE 0x42000UL
+/* 64 KiB per reader (32 KiB flit ring + descriptors). A deeper buffer was tried
+ * (64 rings) and made no difference -- the wall is steady-state LIM bandwidth, not
+ * handoff stalls -- so this stays compact. X280 LIM is 1.875 MiB; staging lives
+ * above the 64 KiB managed region; nread<=4 -> 256 KiB, ample headroom. */
+#define STAGE_STRIDE 0x10000UL
 
 #define P_PCIE_ENC (MBOX_PARAMS + 0x00)
 #define P_HOST_BASE (MBOX_PARAMS + 0x08)
@@ -51,7 +53,9 @@
 #define P_NHARTS (MBOX_PARAMS + 0x20)
 #define P_NREAD (MBOX_PARAMS + 0x28)
 #define P_REPS (MBOX_PARAMS + 0x30)
-#define P_MODE (MBOX_PARAMS + 0x38) /* 0 = full read->stage->relay; 1 = read-only scatter; 2 = read-only contiguous */
+#define P_MODE (MBOX_PARAMS + 0x38)
+/* modes: 0 = full read->stage->relay; 1 = read-only scatter; 2 = read-only contiguous;
+ *        3 = direct grid->host (no LIM); 4 = DMA LIM->host egress probe */
 
 #define RES_SLOT(h) (MBOX_RESULTS + (uint64_t)(h) * 0x40)
 #define RES_BYTES 0x00
@@ -61,8 +65,8 @@
 
 #define NRISC 5
 #define FLITS_PER_RING 64u /* 64 x 64 B flits drained per (core,risc) */
-#define NREC 4096u         /* flit-ring depth per reader (= 64 rings buffered) */
-#define NDESC 128u         /* descriptor-ring depth (> rings-in-flight, no overwrite) */
+#define NREC 512u          /* flit-ring depth per reader (= 8 rings buffered) */
+#define NDESC 16u          /* descriptor-ring depth (> rings-in-flight, no overwrite) */
 #define HOST_SLICE 2048u   /* host stride per (core,risc) */
 #define WRITE_WIN_BASE 200u
 
@@ -199,6 +203,186 @@ int main(uint64_t hartid) {
     volatile uint32_t* coords = (volatile uint32_t*)MBOX_COORDS;
     uint64_t ctrl_off = prof_l1 & (NOC_2M_WINDOW_STRIDE - 1ULL);
     uint64_t off_w = host_base & (NOC_2M_WINDOW_STRIDE - 1ULL);
+
+    if (mode == 5) {
+        /* ---------------- LATENCY probe ----------------
+         * Hart 0 times, on its own rdcycle clock (pll MHz): (1) a single 64 B flit
+         * READ from a Tensix L1 ring (NOC0) -- the L1->X280 transit; (2) a posted
+         * host write ISSUE cost (NOC1, non-blocking); (3) a guarded NON-POSTED write
+         * to host (NOC1, posted=0) which stalls until ack = the X280->host landing
+         * round-trip. (3) MAY hang (PCIe-tile reads hang the hart; a non-posted write
+         * waits for a response too) -- so (1)/(2) are written to LIM BEFORE it, and
+         * the host reads them even if (3) never returns. Results @ RES_SLOT(0):
+         *   +0x00 read_min  +0x08 read_avg  +0x10 wissue_avg  +0x20 nonposted_rt
+         *   (all in cycles; +0x28 = 1 once safe results are published) */
+        if (hartid != 0) {
+            fence_();
+            w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
+            for (;;) {
+                __asm__ volatile("wfi");
+            }
+        }
+        (void)noc_configure_tlb_2m(0, coords[0], coords[1], prof_l1, 0, 0); /* NOC0 read win for core 0 */
+        uint64_t pcie_x = pcie_enc & 0x3f, pcie_y = (pcie_enc >> 6) & 0x3f;
+        for (uint32_t w = 0; w < 2; w++) { /* win 200 = posted, 201 = non-posted */
+            noc_tlb_2m_t wt;
+            wt.data[0] = 0;
+            wt.data[1] = 0;
+            wt.data[2] = 0;
+            wt.data[3] = 0;
+            wt.addr = host_base >> 21;
+            wt.x_end = (uint32_t)pcie_x;
+            wt.y_end = (uint32_t)pcie_y;
+            wt.x_start = (uint32_t)pcie_x;
+            wt.y_start = (uint32_t)pcie_y;
+            wt.posted = (w == 0) ? 1u : 0u;
+            wt.noc_selector = 1;
+            (void)noc_configure_tlb_2m_ext(WRITE_WIN_BASE + w, &wt, 0);
+        }
+        fence_();
+        uint64_t rp = NOC_2M_WINDOW_BASE + 0 * NOC_2M_WINDOW_STRIDE + ctrl_off + 128; /* core0 risc0 ring */
+        uint64_t wpost = NOC_2M_WINDOW_BASE + (uint64_t)WRITE_WIN_BASE * NOC_2M_WINDOW_STRIDE + off_w;
+        uint64_t wnp = NOC_2M_WINDOW_BASE + (uint64_t)(WRITE_WIN_BASE + 1) * NOC_2M_WINDOW_STRIDE + off_w;
+        uint64_t N = reps ? reps : 1;
+
+        /* (1) L1 -> X280 read latency (one 64 B flit, NOC0) */
+        uint64_t rmin = ~0ULL, rsum = 0;
+        for (uint64_t i = 0; i < N; i++) {
+            uint64_t t0 = rdcycle();
+            vread(rp);
+            uint64_t t1 = rdcycle();
+            uint64_t d = t1 - t0;
+            rsum += d;
+            if (d < rmin) {
+                rmin = d;
+            }
+        }
+        /* (2) posted host write ISSUE cost (non-blocking) */
+        uint64_t wsum = 0;
+        for (uint64_t i = 0; i < N; i++) {
+            uint64_t t0 = rdcycle();
+            vwrite(wpost);
+            uint64_t t1 = rdcycle();
+            wsum += t1 - t0;
+        }
+        w64(RES_SLOT(0) + 0x00, rmin);
+        w64(RES_SLOT(0) + 0x08, rsum / N);
+        w64(RES_SLOT(0) + 0x10, wsum / N);
+        w64(RES_SLOT(0) + 0x28, 1); /* safe results published */
+        fence_();
+
+        /* (3) NON-POSTED write round-trip (may hang) */
+        uint64_t t0 = rdcycle();
+        vwrite(wnp);
+        uint64_t t1 = rdcycle();
+        w64(RES_SLOT(0) + 0x20, t1 - t0);
+        fence_();
+        w64(RES_SLOT(0) + RES_DONE, DONE_MAGIC);
+        for (;;) {
+            __asm__ volatile("wfi");
+        }
+    }
+
+    if (mode == 4) {
+        /* ---------------- DMA LIM->host egress probe ----------------
+         * Hart 0 fires the Synopsys DMAC (channel 0) to push a contiguous LIM
+         * buffer straight to host via the PCIe tile (NOC-routed, EXTERN master),
+         * in a loop, timed. Measures DMA LIM->host bandwidth -- i.e. relaying via
+         * the DMA NIU instead of a hart's vse64. Only hart 0 drives the DMAC. */
+        if (hartid != 0) {
+            fence_();
+            w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
+            for (;;) {
+                __asm__ volatile("wfi");
+            }
+        }
+        w64(STAGE_BASE, 0xF00DD2C0FFEEULL); /* marker at source[0]; DMA copies it to host_base[0] */
+        fence_();
+        dma_engine_init();
+        uint32_t px = (uint32_t)(pcie_enc & 0x3f), py = (uint32_t)((pcie_enc >> 6) & 0x3f);
+        uint32_t chunk = 262144u; /* 256 KiB per DMA push */
+        uint64_t bytes = 0;
+        int rc = 0;
+        uint64_t t0 = rdcycle();
+        for (uint64_t rep = 0; rep < reps; rep++) {
+            rc = dma_engine_x280_to_noc(X280_DMA_MASTER_L2, STAGE_BASE, px, py, host_base, chunk);
+            if (rc != 0) {
+                break;
+            }
+            bytes += chunk;
+        }
+        uint64_t t1 = rdcycle();
+        w64(RES_SLOT(0) + RES_BYTES, bytes);
+        w64(RES_SLOT(0) + RES_CYCLES, t1 - t0);
+        w64(RES_SLOT(0) + 0x10, (uint64_t)(int64_t)rc); /* DMA return code for host */
+        fence_();
+        w64(RES_SLOT(0) + RES_DONE, DONE_MAGIC);
+        for (;;) {
+            __asm__ volatile("wfi");
+        }
+    }
+
+    if (mode == 3) {
+        /* ---------------- DIRECT grid->host (no LIM staging) ----------------
+         * Every hart owns a core range and, per flit-group, reads 4 flits from the
+         * grid (NOC0) into vregs and posted-writes them straight to host (NOC1) --
+         * read4_store4 with the stores aimed at the host window. Data never touches
+         * LIM, so the 2x-LIM-crossing ceiling (~1.25 GB/s) does not apply; the cap is
+         * the NoC (read NOC0 + posted write NOC1, separate NIUs). No relay, no SPSC. */
+        uint64_t q = (num_cores + nharts - 1) / nharts;
+        uint64_t lo = hartid * q, hi = lo + q;
+        if (hi > num_cores) {
+            hi = num_cores;
+        }
+        for (uint64_t c = lo; c < hi; c++) {
+            (void)noc_configure_tlb_2m((uint32_t)c, coords[c * 2 + 0], coords[c * 2 + 1], prof_l1, 0, 0);
+        }
+        uint64_t pcie_x = pcie_enc & 0x3f, pcie_y = (pcie_enc >> 6) & 0x3f;
+        uint32_t write_win = WRITE_WIN_BASE + (uint32_t)hartid;
+        noc_tlb_2m_t wt;
+        wt.data[0] = 0;
+        wt.data[1] = 0;
+        wt.data[2] = 0;
+        wt.data[3] = 0;
+        wt.addr = host_base >> 21;
+        wt.x_end = (uint32_t)pcie_x;
+        wt.y_end = (uint32_t)pcie_y;
+        wt.x_start = (uint32_t)pcie_x;
+        wt.y_start = (uint32_t)pcie_y;
+        wt.posted = 1;
+        wt.noc_selector = 1; /* NOC1 host writes; reads stay on NOC0 */
+        (void)noc_configure_tlb_2m_ext(write_win, &wt, 0);
+        fence_();
+        uint64_t wbase = NOC_2M_WINDOW_BASE + (uint64_t)write_win * NOC_2M_WINDOW_STRIDE + off_w;
+
+        uint64_t bytes = 0;
+        uint64_t t0 = rdcycle();
+        for (uint64_t rep = 0; rep < reps; rep++) {
+            for (uint64_t c = lo; c < hi; c++) {
+                uint64_t rbufs = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off + 128;
+                for (uint32_t r = 0; r < NRISC; r++) {
+                    uint64_t rp = rbufs + (uint64_t)r * 2048;
+                    uint64_t wp0 = wbase + (uint64_t)(c * NRISC + r) * HOST_SLICE;
+                    for (uint32_t g = 0; g < FLITS_PER_RING; g += 4) {
+                        uint64_t wp = wp0 + (uint64_t)g * 64;
+                        read4_store4(rp + (uint64_t)g * 64, wp, wp + 64, wp + 128, wp + 192);
+                        bytes += 256;
+                    }
+                }
+            }
+        }
+        uint64_t t1 = rdcycle();
+        fence_();
+        w64(wbase + (uint64_t)num_cores * NRISC * HOST_SLICE, 0xF00DD2C0FFEEULL); /* footer */
+        fence_();
+        w64(RES_SLOT(hartid) + RES_BYTES, bytes);
+        w64(RES_SLOT(hartid) + RES_CYCLES, t1 - t0);
+        fence_();
+        w64(RES_SLOT(hartid) + RES_DONE, DONE_MAGIC);
+        for (;;) {
+            __asm__ volatile("wfi");
+        }
+    }
 
     if (hartid < nread) {
         /* ---------------- READER: contiguous ILP-4 read -> contiguous flit stage ---------------- */

@@ -8,6 +8,10 @@ target_link_libraries(
         tt_metal
         m
         pthread
+        # Tracy client: provides the TRACY_ENABLE define + tracy/ include paths so the
+        # --tracy path (direct TTDeviceMarker emit) compiles and links. No-op when Tracy
+        # is built OFF (the --tracy block is #if defined(TRACY_ENABLE)).
+        $<$<TARGET_EXISTS:TracyClient>:TracyClient>
 )
 
 target_include_directories(

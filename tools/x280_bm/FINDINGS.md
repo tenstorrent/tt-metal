@@ -41,11 +41,19 @@ driver is a tt-metal **C++ programming example** under
   (§13).** Posted `vse64` (64 B) writes through the PCIe tile into host pinned
   memory; **1 hart is optimal** (egress-bound — more harts don't help), all data
   verified in host. The old 268 was scalar 8 B stores under Linux.
+- **Continuous consumer (the end-to-end profiler drain) — ~1.2 GB/s (§15/§16).** X280
+  drains all 110×5 device-profiler L1 rings live (lossless, flow-controlled) and
+  relays to host. Best config = **2 readers (NOC0) + 1 relay (NOC1), batched =
+  ~1.2 GB/s**, leaving the 4th hart free. The wall is **shared LIM SRAM bandwidth**
+  (every flit crosses LIM twice: reader writes in, relay reads out) — not the NoC,
+  not egress. Scatter reads (wash), deeper buffers (no gain), a 2nd relay hart (+6%),
+  and dropping LIM entirely (`--direct`, *worse*: 753) were all tried and ruled out.
 
 | Config | Throughput | Note |
 |---|---|---|
 | **X280 → host D2H write, 1 hart, vse64** | **~3.0 GB/s** | export ceiling, ~11× Linux 268 (§13) |
 | **2 harts, 110-core scatter drain, ILP 4** | **1533 MB/s** | the real profiler read — 2.9×, 2 harts free (§12) |
+| **Continuous consumer: 2 readers + 1 relay, batched** | **~1205 MB/s** | end-to-end read→stage→relay, lossless, chosen config (§16) |
 | **1 hart, scatter drain, ILP 4** | **860 MB/s** | beats old 4-hart 530 with 3 harts idle |
 | 2–3 harts, seq stream, ILP 8 | ~1.8 GB/s | synthetic peak (§11) |
 | ≥3 harts, ILP ≥4 | ~280–460 MB/s | collapse — too many issuers |
@@ -358,6 +366,162 @@ on-device backend was swapped to an SPSC ring drained live by the X280.
   design (both consume one per-reader ring → SPMC race; the consistency check catches
   it). The single relay hart is the current cap; correct multi-relay (partition reader
   rings, one consumer each) is the path toward ~1.5 GB/s.
+
+### 16. Consumer throughput — chasing the relay wall (bh-08)
+
+Reproduced §15 on bh-08, then tried to push the split consumer past 1097 toward the
+~1.5 GB/s read ceiling. Every lever was characterized with A/B benches added to
+`profcons_split` (`--ro`/`--ro-contig` read-only, `--direct` no-LIM). **Net: the wall
+is shared LIM SRAM bandwidth, and 2 readers + 1 relay ≈ 1.2 GB/s is the practical
+best.**
+
+Every approach tried (end-to-end = read→stage→relay→host, lossless, reps=200; all
+`consistent ✓` + NOC1 footer ✓ unless noted):
+
+| # | Approach | Config | MB/s | Verdict |
+|---|---|---|---|---|
+| a | Fused single-hart (read+relay, per-flit SPSC) | 1 hart | 327 | baseline; per-flit interleave + ILP-1 |
+| b | Decouple read↔relay onto separate harts, both NOC0 | 2r+1relay | 421 | helped, but relay still ILP-1 |
+| c | + reader ILP-4 (relay still ILP-1) | 2r+1relay | 406 | no gain → relay-bound (1r≈2r) |
+| d | + relay ILP-4 **and** relay→NOC1 (per-flit `lim4_to_host4`) | 2r+1relay | **1097** | §15 peak; two-sided ILP + NoC split |
+| e | per-flit relay, fewer/more readers | 1r+1relay / 3r+1relay | 747 / 1070 | 2 readers is the knee |
+| f | **Reader scatter** (half→4 quarters, 4 cores/group) | 2r+1relay | 1086 | wash vs (d) — read was never the bottleneck |
+| g | **Batched relay** (per-ring descriptor + wide `m8` contiguous copy) | 2r+1relay | **1197** | +10%; amortizes dst-read 64→1, contiguous bursts |
+| h | + 2-way ILP on the copy | 2r+1relay | 1206 | no gain → relay write-path not the bottleneck |
+| i | + deep flit buffer (8→64 rings) | 2r+1relay | 1207 | no gain → not stalls; steady-state bound |
+| j | **Two independent pipelines** (1:1 reader↔relay, separate buffers) | 2r+2relay | **1267** | correct multi-relay (no SPMC race), but only +6% |
+| k | batched relay, 3 readers | 3r+1relay | 1192 | 3rd reader doesn't help |
+| l | **Direct grid→host, no LIM** (`--direct`) | 2 harts | 753 | *worse* — read/write interleave stalls 1 in-order hart |
+| m | Direct grid→host, no LIM | 4 harts | 294 | bidirectional NoC congestion |
+| n | **DMA relay** (DMAC LIM→host via PCIe tile, `--dma-egress`) | 1 ch egress | 412 | *worse* — 7× slower than hart vse64; DMA = core-offload, not BW |
+| **o** | **Batched, compact buffer — CHOSEN** | **2r+1relay** | **~1205** | best value; 4th hart free, +6% not worth a hart |
+
+Read-only references (readers only, no relay — isolates the read path):
+
+| Approach | Config | MB/s |
+|---|---|---|
+| Contiguous ILP-4 read (`--ro-contig`) | 2 harts | **1495** |
+| Quarter-scatter read (`--ro`) | 2 harts | 1423 |
+| Contiguous ILP-4 read | 1 hart | 776 |
+| Quarter-scatter read | 1 hart | 748 |
+
+What was learned, in order:
+
+- **Scatter reads are a wash; the read was never the bottleneck.** Hypothesis: read
+  4 flits from 4 *different* cores per ILP-4 group (split each reader's half-grid into
+  4 quarters) would beat 4 consecutive flits at one core. Read-only A/B (no relay):
+  contiguous **1495** vs scatter **1423** @ 2 harts — scatter slightly *worse* (extra
+  TLB-window churn). The X280 System Port already overlaps multiple outstanding reads
+  to the *same* endpoint, so endpoint diversity is no lever. The earlier "748 read
+  ceiling" was `profcons --bench-ro` measuring read+full-SPSC-bookkeeping; the **raw**
+  read ceiling is ≈ **1490 @ 2 harts** (≈ gridilp's 1532, pattern-independent).
+  Production reader reverted to plain contiguous `read4_store4`.
+- **Relay batching: 1097 → 1197.** New staging layout — a **contiguous flit ring** +
+  a **per-ring descriptor ring** (one host `dst_start` per 64-flit ring). The relay
+  reads one descriptor + does one **batched wide contiguous copy** of the whole 4 KB
+  ring to host (`copy_contig`, RVV `e64,m8`, 2-way ILP), replacing 64× (per-flit
+  dst-read + scattered 64 B posted write). Amortizes bookkeeping 64→1 and turns
+  scattered writes into contiguous posted bursts.
+- **Two nulls that pinned the diagnosis.** Adding 2-way ILP to the copy → 1206 (no
+  gain ⇒ relay host-write path no longer the bottleneck). Deepening the flit buffer
+  8→64 rings → 1207 (no gain ⇒ not handoff stalls/burstiness; steady-state bound).
+- **Two independent pipelines (partitioned multi-relay) — the *correct* 2-relay.**
+  Relay hart `hartid` drains a **disjoint** reader subset (`lo_r=r_idx*nread/nrelay`);
+  with nrelay==nread that's a 1:1 reader↔relay pairing — own reader, own LIM buffer,
+  own NOC1 window, own host slice, **no shared ring ⇒ no SPMC race** (the correct fix
+  for §15's `consistent=NO`). Result: 2r+2relay = **1267, consistent ✓** — but only
+  **+6%** over 2r+1relay (1195). Doubling relay harts barely helps ⇒ **not relay-hart
+  capacity**.
+- **Direct grid→host (drop LIM entirely) — FAILED, and that's the key insight.** Every
+  hart reads its cores (NOC0) and posted-writes each flit straight to host (NOC1), no
+  staging (`--direct`). Predicted to beat the LIM ceiling; instead **2 harts = 753,
+  4 harts = 294** (footer ✓, correct, just slow). Each direct hart runs at ~376 ≈
+  *half* the read-only hart rate: interleaving NoC reads + NoC writes on one **in-order**
+  hart doesn't overlap — the posted `vse64` (NOC1) issue cost lands in the critical path
+  and consumes the ILP-4 that was hiding read latency (~2× per-flit work). 4 harts
+  congest the NoC bidirectionally (cf. gridilp 4-hart 276).
+  **⇒ LIM staging isn't just a buffer: it lets each hart SPECIALIZE to one NoC direction
+  in a tight unidirectional loop** (reader: NoC-read + cheap *local* LIM-store; relay:
+  cheap *local* LIM-load + NoC-write). That specialization beats avoiding the 2× LIM
+  crossing.
+- **DMA relay ruled out (`--dma-egress`).** Tried replacing the relay hart with the
+  Synopsys DMAC (LIM→host via the PCIe tile, EXTERN master, `dma_engine_x280_to_noc`).
+  It works (rc=0, data lands in host) but only **412 MB/s** — ~7× slower than a hart's
+  posted `vse64` egress (d2hbw 1-hart = 2779) and well below the 1205 hart-relay. The
+  DMAC's per-block software handshake (enable→start→poll-done) is latency-bound, not
+  bandwidth. So 2 readers + DMA-relay would cap at ~412 (≤~800 with both channels) —
+  worse than the hart relay. Confirms §3/§5: **the DMA is core-offload, not throughput.**
+- **The wall = shared LIM SRAM bandwidth.** The store-and-forward design crosses LIM
+  twice (readers write each flit in, relay reads it out). Read-only (writes only) =
+  1490; add the relay's concurrent LIM reads and aggregate LIM R+W saturates at
+  ~half of ~2.5 GB/s ⇒ end-to-end pins at **~1.2–1.27 GB/s regardless of hart split**
+  (1207 deep-buffer-1relay, 1267 two-pipeline). Not egress-bound (d2hbw 1h 3121 / 2h
+  2442) nor NoC-read-bound (1490). Beating it needs avoiding the double-LIM-crossing,
+  which `--direct` shows the in-order hart can't do.
+- **Chosen production config: 2 readers + 1 relay ≈ 1205 MB/s** (lossless, NOC1 footer
+  ✓), leaving the 4th hart free — a whole hart for +6% isn't worth it. `--ro`/
+  `--ro-contig`/`--direct`/`--dma-egress`/`--latency` kept as documented diagnostic /
+  negative-result probes.
+
+### 17. Per-packet latency — L1 → host (bh-08)
+
+Throughput (§16) is not latency. `--latency` (P_MODE 5) times, on hart 0's own rdcycle
+clock (pll MHz), the components of one marker's trip; the host-write *landing* is not
+device-observable and is estimated.
+
+- **L1→X280 read = 271 ns** (one 64 B flit, NOC0, in-order round-trip) — the one hard
+  hop, consistent with §2's 248.9 ns u32 read.
+- **Posted host write = fire-and-forget at the hart** (~tens of ns to inject). A
+  **non-posted** write was tried to force an ack-stall and measure the landing: it
+  returned in **13 ns** (≈ rdcycle noise) — i.e. `vse64` retires on local injection
+  **regardless of the posted bit**; the hart never stalls for a remote ack. Useful
+  nulls: (a) a non-posted write to the PCIe tile does **not** hang (unlike a read), and
+  (b) the **X280→host write-landing latency is not device-measurable** (no completion
+  signal a hart can time; host-side timing is swamped by µs-scale driver overhead).
+
+**End-to-end estimate, one marker through an (empty) pipeline:**
+
+| Stage | Latency | Source |
+|---|---|---|
+| Producer publishes marker to L1 (store + fence) | ~30–50 ns | local, est. |
+| Reader detects new tail (1 NoC ctrl read) | ~270 ns | measured |
+| Reader reads the flit L1→X280 (NOC0) | **271 ns** | **measured** |
+| LIM staging hop (reader store + relay load, local) | ~50–100 ns | local, est. |
+| Relay issues host write (NOC1) | ~tens of ns | measured (issue) |
+| PCIe write landing (X280→PCIe tile→host DRAM) | ~0.3–1 µs | **estimated** |
+| **Total transit** | **≈ 1–1.5 µs** | |
+
+- **Two regimes.** *Transit* (pipeline keeping up) ≈ **1–1.5 µs/marker**, dominated by
+  the two NoC reads (~540 ns measured) + the estimated sub-µs PCIe landing. *Under load*
+  **queueing dominates**: a marker waits in its L1 ring until the consumer sweeps to it;
+  with ~550 rings backed up (~1.1 MB) draining at ~1.2 GB/s, worst-case ≈ **~900 µs**.
+  Lightly loaded it collapses back toward the ~1–1.5 µs transit.
+
+### 18. End-to-end to Tracy — the loop closes (bh-08)
+
+The original goal: Tensix markers → X280 → host → **Tracy zones**. Done via direct emit
+(Strategy B, modeled on `realtime_profiler_tracy_handler.cpp`) in `test_x280_profcons
+--tracy`:
+
+- After a continuous profiled run (`TT_METAL_DEVICE_PROFILER=1 --loop N`), the host reads
+  every relayed `(core,risc)` slice from sysmem, parses the 2-word markers (`timer_id`,
+  64-bit timestamp, packet type), and pushes them as device zones: `TracyTTContext()` →
+  `TracyTTContextPopulate(0, global_min_ts, freq_GHz)` (one context per core, shared
+  anchor) → `TracyTTPushStartMarker/EndMarker`. Needs the `ENABLE_TRACY=ON` build; the
+  example's CMake links `TracyClient` (brings the `TRACY_ENABLE` define + tracy includes).
+- **Markers must be timestamp-sorted per context** — gather a core's 5 RISCs, `stable_sort`
+  by timestamp (START-before-END on ties) — else Tracy drops out-of-order device zones
+  (this is why tt-metal has `getSortedDeviceMarkersVector`). This was THE bug: raw
+  drain-order emit jumps backward at each RISC boundary.
+- Headless capture: `tracy-capture -o x280.tracy -f` + run with `TRACY_NO_EXIT=1` (client
+  flushes on exit). `tracy-csvexport` is **CPU-zone-only**, so device-zone correctness is
+  proven by an in-tool START/END pairing + duration pass, and viewed in the Tracy GUI.
+- **Verified (`--loop 50`, 1.35 GHz):** lossless drain 114,400 words; parsed **28,600
+  START / 28,600 END → 28,600 matched pairs (0 unmatched)**; zone durations **min 172 /
+  mean 577 / max 11,624 ns**; 57,200 markers pushed; `x280.tracy` saved (355 KB).
+- First cut: ZONE_START/END only (skips TS_DATA/multi-word packets); zone names synthesized
+  `x280_zone_<id>` (no kernel-source name map yet). `--tracy`/`--freq` flags on
+  `test_x280_profcons`.
 
 ---
 

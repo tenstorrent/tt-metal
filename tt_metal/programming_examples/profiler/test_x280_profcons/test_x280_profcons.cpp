@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -39,6 +40,11 @@
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+
+#if defined(TRACY_ENABLE)
+#include <common/TracyTTDeviceData.hpp>
+#include <tracy/TracyTTDevice.hpp>
+#endif
 
 using tt::Cluster;
 using tt::CoreType;
@@ -206,6 +212,9 @@ int main(int argc, char** argv) {
     uint64_t slice_words = 768, nharts = 2;  // fastest read setup: 2 harts x ILP 4
     int bench = 0;                           // --bench N: isolated drain benchmark, N passes (no producers)
     int bench_ro = 0;                        // --bench-ro: read-only (skip relay) to isolate read vs relay
+    int emit_tracy = 0;                      // --tracy: after the run, push relayed markers to Tracy zones
+    double dev_ghz = 1.35;                   // --freq: device wall-clock GHz for cycle->ns (Blackhole ~1.35)
+    int no_reset = 0;                        // --no-reset: skip tt-smi -r, boot X280 via L2CPU reset only
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -228,6 +237,12 @@ int main(int argc, char** argv) {
             bench = std::stoi(next());
         } else if (a == "--bench-ro") {
             bench_ro = 1;
+        } else if (a == "--tracy") {
+            emit_tracy = 1;
+        } else if (a == "--freq") {
+            dev_ghz = std::stod(next());
+        } else if (a == "--no-reset") {
+            no_reset = 1;
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -239,7 +254,7 @@ int main(int argc, char** argv) {
 
     auto bin = read_file(bin_path);
     printf("[fw] %s (%zu bytes)\n", bin_path.c_str(), bin.size());
-    {
+    if (!no_reset) {
         std::string cmd = "tt-smi -r " + std::to_string(device_id);
         printf("[boot] %s\n", cmd.c_str());
         if (std::system(cmd.c_str()) != 0) {
@@ -247,6 +262,8 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::this_thread::sleep_for(std::chrono::seconds(5));
+    } else {
+        printf("[boot] --no-reset: booting X280 via L2CPU reset only (device-init scenario)\n");
     }
 
     auto mesh = MeshDevice::create_unit_mesh(device_id);
@@ -463,12 +480,14 @@ int main(int argc, char** argv) {
     // ground truth: sum each ring's final tail (DEVICE_BUFFER_END_INDEX) over all cores
     uint64_t total_produced = 0;
     uint32_t overflow_rings = 0;
+    std::vector<uint32_t> tail_per(num_cores * NRISC, 0);  // per-(core,risc) final tail (words relayed)
     std::vector<uint8_t> ctrl(PROF_CTRL_WORDS * 4);
     for (uint32_t c = 0; c < num_cores; c++) {
         cluster.read_core(ctrl.data(), (uint32_t)ctrl.size(), tt_cxy_pair(device_id, vc[c]), prof_l1);
         for (int r = 0; r < NRISC; r++) {
             uint32_t tail;
             std::memcpy(&tail, ctrl.data() + (5 + r) * 4, 4);  // DEVICE_BUFFER_END_INDEX_BR_ER + r
+            tail_per[c * NRISC + r] = tail;
             total_produced += tail;
             if (tail > slice_words) {
                 overflow_rings++;
@@ -493,6 +512,177 @@ int main(int argc, char** argv) {
     printf(
         "  ring overflow exercised : %s\n",
         ring_overflowed ? "YES (producers relied on consumer)" : "no (workload fit in ring)");
+    // Clean teardown: halt the X280 (assert L2CPU reset) so it's left in a re-bootable
+    // state for the next --no-reset boot (the device-close hook will do this).
+    x280.assert_reset();
     std::fflush(stdout);
+
+#if defined(TRACY_ENABLE)
+    if (emit_tracy) {
+        // Read every relayed (core,risc) slice back from host sysmem, parse the 2-word
+        // markers, and push them to Tracy as device zones (Strategy B: direct emit, like
+        // realtime_profiler_tracy_handler). One Tracy context per core; all contexts share
+        // a single (cpu=0, gpu=global_min_ts) anchor so cross-core timing stays aligned.
+        printf("[tracy] waiting up to 30s for tracy-capture to connect ...\n");
+        std::fflush(stdout);
+        for (int w = 0; w < 600 && !tracy::GetProfiler().IsConnected(); w++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (!tracy::GetProfiler().IsConnected()) {
+            fprintf(stderr, "[tracy] no capture connected (start tracy-capture first) — skipping emit.\n");
+            return 1;
+        }
+        static const tracy::RiscType kRisc[NRISC] = {
+            tracy::RiscType::BRISC,
+            tracy::RiscType::NCRISC,
+            tracy::RiscType::TRISC_0,
+            tracy::RiscType::TRISC_1,
+            tracy::RiscType::TRISC_2};
+        // Pass 1: pull all slices into host memory, find the global min timestamp.
+        std::vector<std::vector<uint32_t>> slices(num_cores * NRISC);
+        uint64_t min_ts = ~0ULL;
+        for (uint32_t c = 0; c < num_cores; c++) {
+            for (int r = 0; r < NRISC; r++) {
+                uint32_t valid = std::min<uint32_t>(tail_per[c * NRISC + r], (uint32_t)slice_words);
+                if (valid < 2) {
+                    continue;
+                }
+                auto& s = slices[c * NRISC + r];
+                s.resize(valid);
+                cluster.read_sysmem(
+                    s.data(), valid * 4, data_off + (uint64_t)(c * NRISC + r) * slice_words * 4, device_id, 0);
+                for (uint32_t i = 0; i + 1 < valid; i += 2) {
+                    if ((s[i] & 0x80000000u) == 0) {
+                        continue;
+                    }
+                    uint64_t ts = ((uint64_t)(s[i] & 0xFFF) << 32) | s[i + 1];
+                    if (ts && ts < min_ts) {
+                        min_ts = ts;
+                    }
+                }
+            }
+        }
+        if (min_ts == ~0ULL) {
+            min_ts = 0;
+        }
+        // Stats pass: pair START/END per (core,risc) in ring order (= time order) to PROVE
+        // we extracted real zones with sane durations -- headless evidence independent of
+        // Tracy GUI rendering (tracy-csvexport only dumps CPU zones).
+        {
+            uint64_t nstart = 0, nend = 0, npair = 0, sumdur = 0, mindur = ~0ULL, maxdur = 0;
+            for (uint32_t cr = 0; cr < num_cores * NRISC; cr++) {
+                std::vector<uint64_t> stk;
+                auto& s = slices[cr];
+                for (uint32_t i = 0; i + 1 < s.size(); i += 2) {
+                    uint32_t w0 = s[i];
+                    if ((w0 & 0x80000000u) == 0) {
+                        continue;
+                    }
+                    uint32_t ptype = ((w0 >> 12) >> 16) & 0x7;
+                    if (ptype > 1) {
+                        continue;
+                    }
+                    uint64_t ts = ((uint64_t)(w0 & 0xFFF) << 32) | s[i + 1];
+                    if (ptype == 0) {
+                        nstart++;
+                        stk.push_back(ts);
+                    } else {
+                        nend++;
+                        if (!stk.empty()) {
+                            uint64_t st = stk.back();
+                            stk.pop_back();
+                            if (ts >= st) {
+                                uint64_t d = ts - st;
+                                npair++;
+                                sumdur += d;
+                                mindur = std::min(mindur, d);
+                                maxdur = std::max(maxdur, d);
+                            }
+                        }
+                    }
+                }
+            }
+            printf(
+                "[tracy] parsed zones: %llu START / %llu END -> %llu matched pairs\n",
+                (unsigned long long)nstart,
+                (unsigned long long)nend,
+                (unsigned long long)npair);
+            if (npair) {
+                printf(
+                    "[tracy] zone duration (cycles->ns @ %.3f GHz): min %.0f / mean %.0f / max %.0f ns\n",
+                    dev_ghz,
+                    mindur / dev_ghz,
+                    (double)sumdur / npair / dev_ghz,
+                    maxdur / dev_ghz);
+            }
+        }
+
+        // Pass 2: emit. ZONE_START(0)/ZONE_END(1) only (2-word markers) for this first cut.
+        // Markers MUST be pushed in timestamp order per context, else Tracy drops the
+        // out-of-order device zones (mirrors tt-metal's getSortedDeviceMarkersVector). So
+        // gather a whole core's markers across all 5 RISCs, sort by timestamp, then emit.
+        uint64_t emitted = 0;
+        for (uint32_t c = 0; c < num_cores; c++) {
+            std::vector<tracy::TTDeviceMarker> ms;
+            for (int r = 0; r < NRISC; r++) {
+                auto& s = slices[c * NRISC + r];
+                for (uint32_t i = 0; i + 1 < s.size(); i += 2) {
+                    uint32_t w0 = s[i];
+                    if ((w0 & 0x80000000u) == 0) {
+                        continue;
+                    }
+                    uint32_t timer_id = (w0 >> 12) & 0x7FFFF;
+                    uint32_t ptype = (timer_id >> 16) & 0x7;
+                    if (ptype > 1) {
+                        continue;  // skip non-zone packets for now
+                    }
+                    tracy::TTDeviceMarker m;
+                    m.chip_id = (uint64_t)device_id;
+                    m.core_x = (uint64_t)vc[c].x;
+                    m.core_y = (uint64_t)vc[c].y;
+                    m.risc = kRisc[r];
+                    m.timestamp = ((uint64_t)(w0 & 0xFFF) << 32) | s[i + 1];
+                    m.runtime_host_id = 0;
+                    m.marker_name = "x280_zone_" + std::to_string(timer_id & 0xFFFF);
+                    m.file = "x280_relayed";
+                    m.line = 0;
+                    m.marker_type =
+                        (ptype == 0) ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
+                    ms.push_back(std::move(m));
+                }
+            }
+            if (ms.empty()) {
+                continue;
+            }
+            std::stable_sort(ms.begin(), ms.end(), [](const auto& a, const auto& b) {
+                if (a.timestamp != b.timestamp) {
+                    return a.timestamp < b.timestamp;
+                }
+                return a.marker_type == tracy::TTDeviceMarkerType::ZONE_START;  // START before END on ties
+            });
+            TracyTTCtx ctx = TracyTTContext();
+            TracyTTContextPopulate(ctx, 0, (double)min_ts, dev_ghz);
+            for (auto& m : ms) {
+                if (m.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
+                    TracyTTPushStartMarker(ctx, m);
+                } else {
+                    TracyTTPushEndMarker(ctx, m);
+                }
+                emitted++;
+            }
+        }
+        printf(
+            "[tracy] emitted %llu zone markers (min_ts=%llu, %.3f GHz); draining to capture ...\n",
+            (unsigned long long)emitted,
+            (unsigned long long)min_ts,
+            dev_ghz);
+        std::fflush(stdout);
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        // normal return so the TracyClient destructor flushes (use TRACY_NO_EXIT=1 to block
+        // until tracy-capture has drained everything).
+        return (total_drained == total_produced && max_out <= 512) ? 0 : 1;
+    }
+#endif
+
     std::_Exit((total_drained == total_produced && max_out <= 512) ? 0 : 1);
 }

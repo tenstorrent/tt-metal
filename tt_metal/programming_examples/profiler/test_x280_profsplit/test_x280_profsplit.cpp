@@ -216,12 +216,18 @@ int main(int argc, char** argv) {
             mode = 1;  // read-only, quarter-scatter
         } else if (a == "--ro-contig") {
             mode = 2;  // read-only, contiguous (old pattern) -- A/B baseline
+        } else if (a == "--direct") {
+            mode = 3;  // direct grid->host, no LIM staging (every hart reads+writes)
+        } else if (a == "--dma-egress") {
+            mode = 4;  // DMA LIM->host egress probe (hart 0 fires the DMAC)
+        } else if (a == "--latency") {
+            mode = 5;  // per-component latency probe (hart 0)
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
         }
     }
-    if (nread >= nharts) {
+    if (mode < 3 && nread >= nharts) {
         fprintf(stderr, "need at least 1 relay hart (nread < nharts)\n");
         return 2;
     }
@@ -324,10 +330,75 @@ int main(int argc, char** argv) {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    if (!done) {
+    if (!done && mode != 5) {
         fprintf(stderr, "[run] timed out\n");
         std::fflush(stdout);
         std::_Exit(1);
+    }
+
+    if (mode == 5) {
+        bool published = x280.lim_rd_u64(MBOX_RESULTS + 0x28) == 1;
+        uint64_t rmin = x280.lim_rd_u64(MBOX_RESULTS + 0x00);
+        uint64_t ravg = x280.lim_rd_u64(MBOX_RESULTS + 0x08);
+        uint64_t wissue = x280.lim_rd_u64(MBOX_RESULTS + 0x10);
+        uint64_t np = x280.lim_rd_u64(MBOX_RESULTS + 0x20);
+        double ns = 1000.0 / (double)pll;  // cycles -> ns (pll in MHz)
+        printf("\n=== X280 latency probe (pll=%d MHz, %llu iters) ===\n", pll, (unsigned long long)reps);
+        if (!published) {
+            printf("  (hart 0 hung before publishing safe results)\n");
+        }
+        printf(
+            "  L1->X280 read  (64 B flit, NOC0) : min %.0f ns / avg %.0f ns\n", (double)rmin * ns, (double)ravg * ns);
+        printf("  host write ISSUE (posted, NOC1)  : %.0f ns (non-blocking)\n", (double)wissue * ns);
+        if (done && np) {
+            printf("  X280->host NON-POSTED round-trip : %.0f ns (write landing + ack)\n", (double)np * ns);
+        } else {
+            printf(
+                "  X280->host NON-POSTED round-trip : HUNG — PCIe tile does not ack writes (landing not "
+                "device-measurable)\n");
+        }
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
+    if (mode == 4) {
+        uint64_t landed = 0;  // DMA copies LIM source[0] (=FOOTER_MAGIC) to host_base[0]
+        cluster.read_sysmem(&landed, sizeof(landed), data_off, device_id, 0);
+        uint64_t bytes = x280.lim_rd_u64(MBOX_RESULTS + 0x00);
+        uint64_t cyc = x280.lim_rd_u64(MBOX_RESULTS + 0x08);
+        int64_t rc = (int64_t)x280.lim_rd_u64(MBOX_RESULTS + 0x10);
+        double mbps = cyc ? (double)bytes / 1e6 / ((double)cyc / ((double)pll * 1e6)) : 0.0;
+        printf("\n=== X280 DMA LIM->host egress probe ===\n");
+        printf("  pushed        : %llu B in %llu cycles\n", (unsigned long long)bytes, (unsigned long long)cyc);
+        printf("  DMA rc        : %lld%s\n", (long long)rc, rc ? "  <-- DMA error/timeout!" : " (ok)");
+        printf("  data landed   : %s\n", landed == FOOTER_MAGIC ? "YES" : "NO <-- nothing in host");
+        printf("  DMA EGRESS    : %.0f MB/s   (1 hart firing DMAC ch0, 256 KiB pushes)\n", mbps);
+        std::fflush(stdout);
+        std::_Exit((rc == 0 && landed == FOOTER_MAGIC) ? 0 : 1);
+    }
+
+    if (mode == 3) {
+        uint64_t footer = 0;
+        cluster.read_sysmem(&footer, sizeof(footer), data_off + region, device_id, 0);
+        bool ok = (footer == FOOTER_MAGIC);
+        uint64_t tot = 0, cyc = 0;
+        for (uint64_t h = 0; h < nharts; h++) {
+            tot += x280.lim_rd_u64(MBOX_RESULTS + h * 0x40 + 0x00);
+            uint64_t c = x280.lim_rd_u64(MBOX_RESULTS + h * 0x40 + 0x08);
+            if (c > cyc) {
+                cyc = c;
+            }
+        }
+        double mbps = cyc ? (double)tot / 1e6 / ((double)cyc / ((double)pll * 1e6)) : 0.0;
+        printf("\n=== X280 DIRECT grid->host (no LIM staging) ===\n");
+        printf("  shipped       : %llu B in %llu cycles (max)\n", (unsigned long long)tot, (unsigned long long)cyc);
+        printf("  NOC1 ->host landed : %s\n", ok ? "YES (footer present)" : "NO <-- dropped!");
+        printf(
+            "  END-TO-END    : %.0f MB/s   (%llu harts, each read NOC0 + write NOC1)\n",
+            mbps,
+            (unsigned long long)nharts);
+        std::fflush(stdout);
+        std::_Exit(ok ? 0 : 1);
     }
 
     if (mode != 0) {
