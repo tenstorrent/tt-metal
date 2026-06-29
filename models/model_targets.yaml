@@ -1072,8 +1072,11 @@ targets:
             status: active
             perf:
               prefill_time_to_first_token: 616
-              decode_t/s/u: 17.76
-              decode_t/s: 568.19
+              # decode raised 17.76 -> 20.6: dropping the force-argmax workaround (#47822) so greedy
+              # decode runs the now-trace-safe heavy path (#48404) removes per-step trace-refresh
+              # overhead; run 28376088185 measured 20.67 t/s/u / 661 t/s on wh_llmbox_perf.
+              decode_t/s/u: 20.6
+              decode_t/s: 659.2
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
