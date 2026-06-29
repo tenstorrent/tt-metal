@@ -128,9 +128,9 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
 # ---- to smoke the whole BC path here (API, the chunk_local cross-check, the BC_ENABLE kernel branch). All remap
 # ---- constants incl. BC_SHARD_STRIDE_GAP (= T/sp - chunk_local) are compile-time, with cache length T folded into the program hash, so
 # ---- each DISTINCT cache size T is its own program (the cache is expected to be a consistent-size prealloc).
-# ---- The sp>1 PERMUTATION arithmetic needs a real SP mesh (e.g. a 2-device p300); that multi-device coverage is
-# ---- a planned follow-up (it must live in its own module — a mesh_device fixture can't share this single-device
-# ---- use_module_device file). ----
+# ---- The sp>1 PERMUTATION arithmetic needs a real SP mesh; that multi-device coverage lives in
+# ---- tests/nightly/blackhole/sdpa/test_sparse_sdpa_multidevice.py (run on QuietBox-2 in BH post-commit — a
+# ---- mesh_device fixture can't share this single-device use_module_device file). ----
 @run_for_blackhole()
 def test_sparse_sdpa_block_cyclic_sp1_identity(device):
     """sp=1 (read from the 1x1 device-mesh): block-cyclic == natural, so the op must reproduce the natural golden
