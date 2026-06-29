@@ -132,6 +132,7 @@ def test_wan_transformer_block(
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
+    request,
 ) -> None:
     MIN_PCC = 0.999_500
     MAX_RMSE = 0.032
@@ -146,8 +147,7 @@ def test_wan_transformer_block(
     p_t, p_h, p_w = PATCH_SIZE
     spatial_seq_len = (T // p_t) * (H // p_h) * (W // p_w)
 
-    # Try loading golden data (inputs + reference output)
-    param_id = f"B{B}_T{T}_H{H}_W{W}_P{prompt_seq_len}"
+    param_id = request.node.name
     golden = load_golden("wan_transformer_block", param_id)
 
     # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
@@ -308,6 +308,7 @@ def test_wan_transformer_model(
     is_fsdp: bool,
     dit_unit_test: bool,
     reset_seeds,
+    request,
 ) -> None:
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
@@ -320,8 +321,7 @@ def test_wan_transformer_model(
     else:
         num_layers = NUM_LAYERS
 
-    # Try loading golden data (inputs + reference output + state_dict)
-    param_id = f"B{B}_T{T}_H{H}_W{W}_P{prompt_seq_len}_L{num_layers}"
+    param_id = request.node.name
     golden = load_golden("wan_transformer_model", param_id)
 
     # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
@@ -369,6 +369,8 @@ def test_wan_transformer_model(
         )
 
     tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+
+    # TODO: This conversion looks sus
     tt_timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
     tt_model = _make_wan_transformer(
@@ -419,6 +421,7 @@ def test_wan_transformer_inner_step(
     num_links: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
+    request,
 ) -> None:
     """Test inner_step against the torch reference, mimicking the pipeline denoising loop."""
     B = 1
@@ -431,31 +434,29 @@ def test_wan_transformer_inner_step(
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
-    # Try loading golden data
-    param_id = f"B{B}_T{T}_H{H}_W{W}_P{prompt_seq_len}_inner_step"
+    param_id = request.node.name
     golden = load_golden("wan_transformer_inner_step", param_id)
+
+    # Load pretrained torch model and truncate to 1 layer
+    torch_model = TorchWanTransformer3DModel.from_pretrained(
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+    )
+    torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
+    torch_model.eval()
+    hooks = _register_block_hooks(torch_model)
+    state_dict = torch_model.state_dict()
 
     if golden is not None:
         spatial_input = golden["spatial_input"]
         prompt_input = golden["prompt_input"]
         timestep_input = golden["timestep_input"]
         torch_output = golden["torch_output"]
-        state_dict = golden["state_dict"]
     else:
         # Generate inputs with fixed seed
         torch.manual_seed(0)
         spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
         prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
         timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
-
-        # Load pretrained torch model and truncate to 1 layer
-        torch_model = TorchWanTransformer3DModel.from_pretrained(
-            MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-        )
-        torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
-        torch_model.eval()
-        hooks = _register_block_hooks(torch_model)
-        state_dict = torch_model.state_dict()
 
         logger.info(f"Running torch reference with spatial shape {spatial_input.shape}")
         with torch.no_grad():
@@ -466,9 +467,6 @@ def test_wan_transformer_inner_step(
                 return_dict=False,
             )
         torch_output = torch_output[0]
-        for h in hooks:
-            h.remove()
-        del torch_model
 
         save_golden(
             "wan_transformer_inner_step",
@@ -478,9 +476,12 @@ def test_wan_transformer_inner_step(
                 "prompt_input": prompt_input,
                 "timestep_input": timestep_input,
                 "torch_output": torch_output,
-                "state_dict": state_dict,
             },
         )
+
+    for h in hooks:
+        h.remove()
+    del torch_model
 
     # Create 1-layer TT model with matching weights
     tt_model = _make_wan_transformer(
@@ -498,7 +499,11 @@ def test_wan_transformer_inner_step(
     # Prepare cached inputs on device (like the pipeline does once before the denoising loop)
     spatial_host, N = tt_model.preprocess_spatial_input_host(spatial_input)
     rope_cos_1HND, rope_sin_1HND, trans_mat = tt_model.prepare_rope_features(spatial_input)
-    prompt_1BLP = tt_model.prepare_text_conditioning(prompt_input)
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    prompt_1BLP = tt_model.prepare_text_conditioning(tt_prompt)
+
+    # TODO: This conversion looks sus
+    tt_timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
     spatial_device = from_torch(
         spatial_host, device=mesh_device, mesh_axes=[None, None, parallel_config.sequence_parallel.mesh_axis, None]
@@ -513,7 +518,7 @@ def test_wan_transformer_inner_step(
         rope_sin_1HND=rope_sin_1HND,
         trans_mat=trans_mat,
         N=N,
-        timestep_torch=timestep_input,
+        timestep=tt_timestep,
     )
     tt_output_1BNI = local_device_to_torch(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
