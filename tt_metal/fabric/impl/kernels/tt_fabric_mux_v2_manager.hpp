@@ -102,6 +102,10 @@ inline void retire_published_ring_entries(
 }
 
 inline void service_client(uint32_t logical_channel_id, ManagerClientState& state, uint32_t& finalized_client_count) {
+    if (state.finalized) {
+        return;
+    }
+
     auto worker_location_info_ptr = get_connection_info_ptr(logical_channel_id);
     auto connection_handshake_ptr = get_connection_handshake_ptr(logical_channel_id);
     const uint32_t connection_state = connection_handshake_ptr[0];
@@ -131,7 +135,6 @@ inline void service_client(uint32_t logical_channel_id, ManagerClientState& stat
 
 inline void run_manager() {
     auto status_ptr = get_status_ptr();
-    auto termination_signal_ptr = get_termination_signal_ptr();
     auto forwarder_ready_sem_ptr = get_forwarder_ready_sem_ptr();
     auto manager_init_done_sem_ptr = get_manager_init_done_sem_ptr();
     auto shared_control_ptr = get_shared_control_ptr();
@@ -146,17 +149,15 @@ inline void run_manager() {
         ct_args::num_channels);
     initialize_shared_ring_header();
     initialize_shared_control_block(shared_control_ptr);
-    termination_signal_ptr[0] = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
     noc_semaphore_set(manager_init_done_sem_ptr, 1);
     noc_semaphore_wait(forwarder_ready_sem_ptr, 1);
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
-    while (!tt::tt_fabric::got_immediate_termination_signal<true>(termination_signal_ptr)) {
+    // Phase 1: Steady state — service clients + opportunistic TRID retirement.
+    while (true) {
         invalidate_l1_cache();
-        const uint32_t ring_write_count_snapshot = shared_control_ptr->forwarder_stop_tracking != 0
-                                                       ? shared_ring_read_count
-                                                       : shared_ring_header_ptr->write_count;
+        const uint32_t ring_write_count_snapshot = shared_ring_header_ptr->write_count;
 
         for (uint32_t logical_channel_id = 0; logical_channel_id < ct_args::num_channels; ++logical_channel_id) {
             retire_published_ring_entries(
@@ -167,14 +168,17 @@ inline void run_manager() {
 
         if (finalized_client_count == ct_args::num_channels) {
             shared_control_ptr->drain_initiated = 1;
-        }
-
-        if (shared_control_ptr->drain_initiated != 0 && shared_control_ptr->forwarder_done != 0) {
             break;
         }
+    }
 
-        if (tt::tt_fabric::got_graceful_termination_signal(termination_signal_ptr)) {
-            shared_control_ptr->drain_initiated = 1;
+    // Phase 2: Drain — retire TRIDs until forwarder done, skip all client servicing.
+    // Once drain is initiated, clients are finalized and no future traffic can arrive.
+    while (shared_control_ptr->forwarder_done == 0) {
+        invalidate_l1_cache();
+        if (shared_control_ptr->forwarder_stop_tracking == 0) {
+            retire_published_ring_entries(
+                shared_ring_header_ptr, shared_ring_read_count, shared_ring_header_ptr->write_count, client_states);
         }
     }
 

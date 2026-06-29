@@ -84,7 +84,7 @@ inline void try_forward_channel_packet(
     }
 
     // Mirror V1's freshness point: invalidate just before consuming the worker-populated packet header.
-    invalidate_l1_cache();
+    // invalidate_l1_cache();
     const uint32_t packet_l1_address = channel.get_current_slot_address();
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_l1_address);
     const uint32_t packet_size_bytes = packet_header->get_payload_size_including_header();
@@ -116,6 +116,7 @@ inline bool service_channels(
 
     for (uint32_t channel_idx = 0; channel_idx < ct_args::num_channels; ++channel_idx) {
         auto& channel = context.channels[channel_idx];
+        invalidate_l1_cache();
         if (!channel.has_pending_packets()) {
             continue;
         }
@@ -158,7 +159,7 @@ inline void run_forwarder(ForwarderContext& context) {
         for (uint32_t service_pass = 0;
              service_pass < kForwarderServiceBurstSize && shared_control_ptr->drain_initiated == 0;
              ++service_pass) {
-            invalidate_l1_cache();
+            // invalidate_l1_cache();
             if (!service_channels<false>(context, shared_trid_ring, noc, fabric_connection)) {
                 break;
             }
@@ -168,7 +169,7 @@ inline void run_forwarder(ForwarderContext& context) {
     shared_control_ptr->forwarder_stop_tracking = 1;
     noc_clear_packet_tag(noc, data_noc_cmd_buf);
     while (!tt::tt_fabric::got_immediate_termination_signal<true>(termination_signal_ptr)) {
-        invalidate_l1_cache();
+        // invalidate_l1_cache();
 
         if (!service_channels<true>(context, shared_trid_ring, noc, fabric_connection)) {
             break;
