@@ -7,6 +7,7 @@ import pytest
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
     denoise_attention_forward,
+    embed_canvas_tokens,
     make_denoise_logits_adapter_from_kv_cache,
     make_denoise_logits_adapter_from_checkpoint_state,
     make_denoise_logits_adapter_from_remapped_state,
@@ -106,6 +107,11 @@ def test_denoise_logits_adapter_threads_canvas_rope_offset():
     assert calls[0]["prompt_hidden_by_layer"] == ["prompt"]
     assert calls[0]["canvas_tokens"] == "canvas"
     assert calls[0]["q_rope_offset"] == 576
+
+
+def test_embed_canvas_tokens_rejects_batch_greater_than_one():
+    with pytest.raises(ValueError, match="batch=1"):
+        embed_canvas_tokens(object(), _FakeTensor([2, 256]))
 
 
 def test_read_prompt_kv_cache_by_layer_reads_every_model_layer():

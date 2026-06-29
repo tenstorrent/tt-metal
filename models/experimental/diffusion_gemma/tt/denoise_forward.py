@@ -314,6 +314,8 @@ def read_prompt_kv_cache_by_layer(
 
 def embed_canvas_tokens(tt_model, canvas_tokens):
     """Embed device canvas token ids into `[1, 1, C, H]` TILE hidden states."""
+    if canvas_tokens.shape[0] != 1:
+        raise ValueError("embed_canvas_tokens currently supports batch=1")
     if len(canvas_tokens.shape) == 4 and canvas_tokens.shape[-1] == 1:
         canvas_len = canvas_tokens.shape[-2]
         token_ids = ttnn.reshape(canvas_tokens, (canvas_tokens.shape[0], canvas_len))
