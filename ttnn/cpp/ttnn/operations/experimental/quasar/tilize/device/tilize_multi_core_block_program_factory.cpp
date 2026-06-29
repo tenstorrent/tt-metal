@@ -54,7 +54,7 @@ struct GroupSpecs {
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts TilizeMultiCoreBlockProgramFactory::create_program_spec(
     const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
@@ -379,7 +379,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         {BLK_OUTPUT_TENSOR, TensorArgument{output.mesh_tensor()}},
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };

@@ -25,7 +25,7 @@ const KernelSpecName WS_WRITER_KERNEL{"writer"};
 const KernelSpecName WS_COMPUTE_KERNEL{"compute"};
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts TilizeMultiCoreWidthShardedProgramFactory::create_program_spec(
     const TilizeParams& /*operation_attributes*/, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
@@ -144,7 +144,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreWidthShardedProgramFacto
         {WS_OUTPUT_TENSOR, TensorArgument{output.mesh_tensor()}},
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };

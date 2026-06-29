@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim::qsr {
 
 struct TilizeMultiCoreShardedProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
         const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value);
 };
 }  // namespace ttnn::prim::qsr
