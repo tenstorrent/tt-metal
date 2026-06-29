@@ -5,11 +5,6 @@ on:
   schedule:
     - cron: "0 5 * * *" # Runs every day at 5:00 AM UTC
   workflow_dispatch:
-    inputs:
-      note:
-        description: 'This workflow can be run between 12 PM and 4 PM UTC'
-        required: false
-        default: ""
 
 run-name: Fabric Test on a BH Quad
 jobs:
