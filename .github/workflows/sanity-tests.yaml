@@ -264,7 +264,7 @@ jobs:
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
       - id: set-ttsim-tests
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name != 'push' && inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN sanity tests
   ttnn-sanity-tests:
