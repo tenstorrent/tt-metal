@@ -180,8 +180,6 @@ class LTXTransformerState:
         self._tt_video_cross_pe_sin = StateTensor()
         self._tt_audio_cross_pe_cos = StateTensor()
         self._tt_audio_cross_pe_sin = StateTensor()
-        self._tt_video_cross_pe_cos_full = StateTensor()
-        self._tt_video_cross_pe_sin_full = StateTensor()
         self._tt_audio_cross_pe_cos_full = StateTensor()
         self._tt_audio_cross_pe_sin_full = StateTensor()
         self._tt_audio_attn_mask = StateTensor()
@@ -1349,7 +1347,7 @@ class LTXPipeline:
         audio_N_real: int,
         fps: float = 24.0,
         cross_pe_max_pos: int = 20,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Compute temporal-only cross positional embeddings for A↔V cross-attention.
 
         Reference: ``MultiModalTransformerArgsPreprocessor.prepare`` builds ``cross_pe`` from
@@ -1357,10 +1355,10 @@ class LTXPipeline:
         with ``max_pos=[cross_pe_max_pos]``. Video and audio share the scheme so a video token
         and an audio token at the same time get the same rotary phase (AV temporal sync).
 
-        Returns 8 device tensors used by inner_step:
-            (v_q_cos, v_q_sin)         — video Q in A→V cross-attn (SP×TP sharded).
+        Returns 6 device tensors used by inner_step:
+            (v_q_cos, v_q_sin)         — video Q in A→V cross-attn (SP×TP sharded). Also reused as
+                                         the video K rope in V→A (ring SDPA gathers the SP-sharded K).
             (a_q_cos, a_q_sin)         — audio Q in V→A cross-attn (SP×TP sharded).
-            (v_k_cos, v_k_sin)         — video K in V→A cross-attn (TP-only; K side after AllGather).
             (a_k_cos, a_k_sin)         — audio K in A→V cross-attn (TP-only; K side after AllGather).
         """
         v_shape = VideoLatentShape(
@@ -1411,13 +1409,12 @@ class LTXPipeline:
         a_q_cos = bf16_tensor_2dshard(a_cos, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
         a_q_sin = bf16_tensor_2dshard(a_sin, device=self.mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
 
-        # K-side: TP-only on heads (sequence is replicated after AllGather on K).
-        v_k_cos = bf16_tensor(v_cos, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
-        v_k_sin = bf16_tensor(v_sin, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
+        # K-side: TP-only on heads (sequence is replicated after AllGather on K). Only the audio
+        # K rope is needed (A→V gathers audio K); video K in V→A reuses the SP-sharded v_q rope.
         a_k_cos = bf16_tensor(a_cos, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
         a_k_sin = bf16_tensor(a_sin, device=self.mesh_device, mesh_axis=tp_axis, shard_dim=1)
 
-        return (v_q_cos, v_q_sin, a_q_cos, a_q_sin, v_k_cos, v_k_sin, a_k_cos, a_k_sin)
+        return (v_q_cos, v_q_sin, a_q_cos, a_q_sin, a_k_cos, a_k_sin)
 
     @staticmethod
     def _zero_sp_padding(t: torch.Tensor, n_real: int) -> torch.Tensor:
@@ -1644,8 +1641,6 @@ class LTXPipeline:
             v_xpe_sin,
             a_xpe_cos,
             a_xpe_sin,
-            v_xpe_cos_full,
-            v_xpe_sin_full,
             a_xpe_cos_full,
             a_xpe_sin_full,
         ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
@@ -1765,8 +1760,6 @@ class LTXPipeline:
                     video_cross_pe_sin=v_xpe_sin,
                     audio_cross_pe_cos=a_xpe_cos,
                     audio_cross_pe_sin=a_xpe_sin,
-                    video_cross_pe_cos_full=v_xpe_cos_full,
-                    video_cross_pe_sin_full=v_xpe_sin_full,
                     audio_cross_pe_cos_full=a_xpe_cos_full,
                     audio_cross_pe_sin_full=a_xpe_sin_full,
                     skip_cross_attn=skip_ca,
