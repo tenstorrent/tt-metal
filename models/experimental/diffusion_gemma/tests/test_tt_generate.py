@@ -272,6 +272,25 @@ def test_generate_blocks_rejects_non_positive_canvas_length():
 
 
 @pytest.mark.parametrize(
+    ("canvas_length", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_blocks_rejects_non_integer_canvas_length(canvas_length, message):
+    with pytest.raises(ValueError, match=message):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=canvas_length),
+            init_canvas_fn=lambda *args: "canvas",
+        )
+
+
+@pytest.mark.parametrize(
     ("prompt_len", "message"),
     [
         (1.5, "integer"),
@@ -833,6 +852,31 @@ def test_generate_text_rejects_non_positive_canvas_length_before_tokenize():
             "hello",
             num_blocks=1,
             config=DiffusionConfig(canvas_length=0),
+            init_canvas_fn="init",
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("canvas_length", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_text_rejects_non_integer_canvas_length_before_tokenize(canvas_length, message):
+    class _FailTokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            raise AssertionError("tokenizer should not run for invalid canvas_length")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text(
+            "model",
+            "logits",
+            _FailTokenizer(),
+            "hello",
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=canvas_length),
             init_canvas_fn="init",
             blocks_fn=lambda *args, **kwargs: None,
         )
@@ -1573,6 +1617,31 @@ def test_generate_text_from_checkpoint_state_rejects_non_positive_canvas_length(
             init_canvas_fn="init",
             max_new_tokens=1,
             logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("canvas_length", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_non_integer_canvas_length(canvas_length, message):
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid canvas_length")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            config=DiffusionConfig(canvas_length=canvas_length),
+            init_canvas_fn="init",
+            max_new_tokens=1,
+            logits_fn_builder_factory=fail_builder_factory,
             generate_text_fn=lambda *args, **kwargs: None,
         )
 

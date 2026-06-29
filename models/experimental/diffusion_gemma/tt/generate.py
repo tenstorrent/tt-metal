@@ -531,6 +531,8 @@ def _validate_num_blocks(num_blocks: int) -> None:
 
 
 def _validate_canvas_length(config: DiffusionConfig) -> None:
+    if isinstance(config.canvas_length, bool) or not isinstance(config.canvas_length, Integral):
+        raise ValueError("config.canvas_length must be an integer")
     if config.canvas_length <= 0:
         raise ValueError("config.canvas_length must be positive")
 
