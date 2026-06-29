@@ -309,12 +309,8 @@ jobs:
           # Override PYTEST_ADDOPTS to drop -n 4 for the serial retry. Use export
           # so the override applies to every pytest in &&-chained serial_cmds.
           export PYTEST_ADDOPTS="-p no:timeout ${{ steps.skip-list.outputs.skip_args }}"
-          if ${{ matrix.test-group.serial_cmd }} --lf --lfnf=all --tb=long -v; then
-            echo "::warning::Parallel TTSim run failed, but serial rerun of failed tests passed. Treating as pass for known cold-cache xdist/JIT instability."
-            exit 0
-          else
-            exit $?
-          fi
+          ${{ matrix.test-group.serial_cmd }} --lf --lfnf=all --tb=long -v || true
+          exit 1
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
