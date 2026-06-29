@@ -216,6 +216,19 @@ def _validate_replay_canvases(canvases) -> None:
             raise ValueError("host_canvases must all have shape [batch, canvas_len]")
 
 
+def _validate_replay_canvas_blocks(blocks, *, kind: str) -> None:
+    expected_shape = None
+    for block in blocks:
+        _validate_replay_canvases(block)
+        if not block:
+            continue
+        block_shape = tuple(block[0].shape)
+        if expected_shape is None:
+            expected_shape = block_shape
+        elif block_shape != expected_shape:
+            raise ValueError(f"{kind} must all have shape [batch, canvas_len]")
+
+
 def _check_replay_block_index(block_idx: int, num_blocks: int, *, kind: str) -> None:
     if block_idx < 0 or block_idx >= num_blocks:
         raise IndexError(f"{kind} block index {block_idx} out of range for {num_blocks} blocks")
@@ -247,12 +260,31 @@ def _validate_gumbel_noise(noise: torch.Tensor) -> None:
     raise ValueError("gumbel_noise must have shape [batch, canvas_len, vocab] or [batch, 1, canvas_len, vocab]")
 
 
+def _logical_gumbel_noise_shape(noise: torch.Tensor) -> tuple[int, int, int]:
+    _validate_gumbel_noise(noise)
+    if noise.dim() == 3:
+        return tuple(noise.shape)
+    return (noise.shape[0], noise.shape[2], noise.shape[3])
+
+
+def _validate_gumbel_noise_blocks(blocks) -> None:
+    expected_shape = None
+    for block in blocks:
+        for noise in block:
+            shape = _logical_gumbel_noise_shape(noise)
+            if expected_shape is None:
+                expected_shape = shape
+            elif shape != expected_shape:
+                raise ValueError(
+                    "host_gumbel_noise must all have shape [batch, canvas_len, vocab] "
+                    "or [batch, 1, canvas_len, vocab]"
+                )
+
+
 def make_host_gumbel_noise_fn(mesh_device, host_gumbel_noise):
     """Create ``generate_blocks`` Gumbel noise hooks from fixed host noise tensors."""
     blocks = [[noise.clone() for noise in block] for block in host_gumbel_noise]
-    for block in blocks:
-        for noise in block:
-            _validate_gumbel_noise(noise)
+    _validate_gumbel_noise_blocks(blocks)
 
     def gumbel_noise_for_block(block_idx: int):
         _check_replay_block_index(block_idx, len(blocks), kind="host gumbel replay")
@@ -269,8 +301,7 @@ def make_host_gumbel_noise_fn(mesh_device, host_gumbel_noise):
 def make_host_noise_tokens_fn(mesh_device, host_noise_tokens):
     """Create ``generate_blocks`` renoise hooks from fixed host token tensors."""
     blocks = [[tokens.clone() for tokens in block] for block in host_noise_tokens]
-    for block in blocks:
-        _validate_replay_canvases(block)
+    _validate_replay_canvas_blocks(blocks, kind="host_noise_tokens")
 
     def noise_tokens_for_block(block_idx: int):
         _check_replay_block_index(block_idx, len(blocks), kind="host noise-token replay")

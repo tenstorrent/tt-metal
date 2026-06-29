@@ -1746,6 +1746,8 @@ def test_make_host_noise_tokens_fn_rejects_bad_shapes():
         make_host_noise_tokens_fn("mesh", [[torch.tensor([1, 2, 3])]])
     with pytest.raises(ValueError, match="host_canvases"):
         make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]]), torch.tensor([[4, 5]])]])
+    with pytest.raises(ValueError, match="host_noise_tokens"):
+        make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])], [torch.tensor([[4, 5]])]])
 
 
 def test_make_host_noise_tokens_fn_rejects_bad_block_or_step_index():
@@ -1786,6 +1788,23 @@ def test_make_host_gumbel_noise_fn_replays_fixed_noise(monkeypatch):
 def test_make_host_gumbel_noise_fn_rejects_bad_shape():
     with pytest.raises(ValueError, match="gumbel_noise"):
         make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3, 4, 5)]])
+    with pytest.raises(ValueError, match="host_gumbel_noise"):
+        make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 4, 8)], [torch.zeros(1, 4, 9)]])
+
+
+def test_make_host_gumbel_noise_fn_allows_equivalent_3d_and_4d_shapes(monkeypatch):
+    calls = []
+
+    def fake_host_gumbel_noise_to_device(mesh_device, noise):
+        calls.append((mesh_device, tuple(noise.shape)))
+        return f"device-gumbel-{len(calls)}"
+
+    monkeypatch.setattr(G, "host_gumbel_noise_to_device", fake_host_gumbel_noise_to_device)
+    noise_fn = make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 4, 8)], [torch.zeros(1, 1, 4, 8)]])
+
+    assert noise_fn(0)(0) == "device-gumbel-1"
+    assert noise_fn(1)(0) == "device-gumbel-2"
+    assert calls == [("mesh", (1, 4, 8)), ("mesh", (1, 1, 4, 8))]
 
 
 def test_make_host_gumbel_noise_fn_rejects_bad_block_or_step_index():
