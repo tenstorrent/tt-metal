@@ -207,6 +207,15 @@ def prefill_forward(
         # Ring attention: fuses cross-device K/V all-gather inside the kernel so
         # every token attends to the full causal context across all SP rows.
         seq_total = seq_len * sp_factor
+        # ring_joint_sdpa requires NQH == NVH; expand K/V heads to match Q for GQA.
+        if num_local_kv_heads != num_local_heads:
+            expand = num_local_heads // num_local_kv_heads
+            tt_k_pre_expand = tt_k
+            tt_v_pre_expand = tt_v
+            tt_k = ttnn.repeat_interleave(tt_k_pre_expand, expand, dim=1)
+            tt_v = ttnn.repeat_interleave(tt_v_pre_expand, expand, dim=1)
+            tt_k_pre_expand.deallocate(True)
+            tt_v_pre_expand.deallocate(True)
         tt_sdpa_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_k,
