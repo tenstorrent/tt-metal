@@ -508,6 +508,8 @@ def _contains_stop_token(tokens: torch.Tensor, stop_token_ids) -> bool:
 
 
 def _validate_num_blocks(num_blocks: int) -> None:
+    if isinstance(num_blocks, bool) or not isinstance(num_blocks, Integral):
+        raise ValueError("num_blocks must be an integer")
     if num_blocks < 0:
         raise ValueError("num_blocks must be non-negative")
 
@@ -537,6 +539,8 @@ def _validate_max_new_tokens_capacity(num_blocks: int, canvas_length: int, max_n
 
 
 def _validate_batch_size(batch_size: int) -> None:
+    if isinstance(batch_size, bool) or not isinstance(batch_size, Integral):
+        raise ValueError("batch_size must be an integer")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
 

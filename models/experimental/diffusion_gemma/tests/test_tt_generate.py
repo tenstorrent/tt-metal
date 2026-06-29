@@ -240,6 +240,25 @@ def test_generate_blocks_rejects_negative_num_blocks():
         )
 
 
+@pytest.mark.parametrize(
+    ("num_blocks", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_blocks_rejects_non_integer_num_blocks(num_blocks, message):
+    with pytest.raises(ValueError, match=message):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=num_blocks,
+            config=DiffusionConfig(canvas_length=3),
+            init_canvas_fn=lambda *args: "canvas",
+        )
+
+
 def test_generate_blocks_rejects_non_positive_canvas_length():
     with pytest.raises(ValueError, match="canvas_length must be positive"):
         generate_blocks(
@@ -288,6 +307,25 @@ def test_generate_blocks_allows_zero_blocks_without_init_canvas():
     assert out.next_pos == 32
     assert out.trajectories == []
     assert torch.equal(out.generated, torch.empty((2, 0), dtype=torch.long))
+
+
+@pytest.mark.parametrize(
+    ("batch_size", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_blocks_rejects_non_integer_batch_size(batch_size, message):
+    with pytest.raises(ValueError, match=message):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=0,
+            config=DiffusionConfig(canvas_length=4),
+            batch_size=batch_size,
+        )
 
 
 def test_generate_blocks_rejects_block_next_pos_mismatch():
@@ -751,6 +789,31 @@ def test_generate_text_rejects_negative_num_blocks_before_tokenize():
             _FailTokenizer(),
             "hello",
             num_blocks=-1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            blocks_fn=lambda *args, **kwargs: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("num_blocks", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_text_rejects_non_integer_num_blocks_before_tokenize(num_blocks, message):
+    class _FailTokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            raise AssertionError("tokenizer should not run for invalid num_blocks")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text(
+            "model",
+            "logits",
+            _FailTokenizer(),
+            "hello",
+            num_blocks=num_blocks,
             config=DiffusionConfig(canvas_length=2),
             init_canvas_fn="init",
             blocks_fn=lambda *args, **kwargs: None,
@@ -1529,6 +1592,31 @@ def test_generate_text_from_checkpoint_state_rejects_negative_num_blocks():
         )
 
 
+@pytest.mark.parametrize(
+    ("num_blocks", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_non_integer_num_blocks(num_blocks, message):
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid num_blocks")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=num_blocks,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            logits_fn_builder_factory=fail_builder_factory,
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_from_checkpoint_state_rejects_max_new_tokens_beyond_explicit_blocks():
     with pytest.raises(ValueError, match="num_blocks is too small"):
         generate_text_from_checkpoint_state(
@@ -1559,6 +1647,32 @@ def test_generate_text_from_checkpoint_state_rejects_nonpositive_batch_before_se
             vocab_size=99,
             gumbel_seed=123,
             batch=0,
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("batch", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_non_integer_batch_before_seeded_hooks(batch, message):
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            object(),
+            object(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            noise_tokens_fn="noise",
+            vocab_size=99,
+            batch=batch,
+            gumbel_seed=123,
             logits_fn_builder_factory=lambda *args, **kwargs: "builder",
             generate_text_fn=lambda *args, **kwargs: None,
         )
