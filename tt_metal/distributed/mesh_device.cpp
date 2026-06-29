@@ -889,8 +889,6 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
-    // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
-    // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
         if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
             tt::TargetDevice::Mock) {
@@ -939,13 +937,12 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         mesh_command_queues_.clear();
-    }
 
-    // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
-    // the final TERMINATE) but before the rest of the device teardown.
-    if (realtime_profiler_) {
-        realtime_profiler_->shutdown();
-        realtime_profiler_.reset();
+        if (realtime_profiler_) {
+            MetalContext::instance(this->get_context_id())
+                .device_manager()
+                ->set_rt_profiler_shutdown_hook([rtp = realtime_profiler_.get()] { rtp->shutdown(); });
+        }
     }
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
@@ -972,6 +969,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         sub_device_manager_tracker_.reset();
         scoped_devices_.reset();
         parent_mesh_.reset();
+        realtime_profiler_.reset();
         is_internal_state_initialized = false;
         if (distributed_context_) {
             distributed_context_.reset();

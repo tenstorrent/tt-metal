@@ -654,6 +654,10 @@ void DeviceManager::clear_rt_profiler_device_init_complete(ChipId chip_id) {
     rt_profiler_device_init_complete_.erase(chip_id);
 }
 
+void DeviceManager::set_rt_profiler_shutdown_hook(std::function<void()> hook) {
+    rt_profiler_shutdown_hook_ = std::move(hook);
+}
+
 bool DeviceManager::close_device(ChipId device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
@@ -706,6 +710,11 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     // cleanup must still succeed for the components that *were* initialized.
     if (init_done_.contains(DispatchKernelInitializer::key)) {
         initializers_[DispatchKernelInitializer::key]->teardown(init_done_);
+    }
+
+    if (rt_profiler_shutdown_hook_) {
+        rt_profiler_shutdown_hook_();
+        rt_profiler_shutdown_hook_ = nullptr;
     }
 
     if (init_done_.contains(FabricFirmwareInitializer::key)) {

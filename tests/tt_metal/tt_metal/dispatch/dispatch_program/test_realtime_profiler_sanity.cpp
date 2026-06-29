@@ -213,6 +213,49 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     EXPECT_TRUE(mesh_device->close());
 }
 
+TEST(RealtimeProfilerSanity, AllProgramsReportedThroughClose) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::mutex ids_mu;
+    std::set<uint32_t> ids;
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&ids_mu, &ids](const ProgramRealtimeRecord& record) {
+            std::lock_guard<std::mutex> lk(ids_mu);
+            ids.insert(record.runtime_id);
+        });
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+
+    for (uint32_t i = 0; i < kNumPrograms; ++i) {
+        enqueue_sanity_program(mesh_device, i + 1, all_cores);
+    }
+
+    EXPECT_TRUE(mesh_device->close());
+    UnregisterProgramRealtimeProfilerCallback(handle);
+
+    std::set<uint32_t> program_ids;
+    {
+        std::lock_guard<std::mutex> lk(ids_mu);
+        for (uint32_t id : ids) {
+            if (id >= 1 && id <= kNumPrograms) {
+                program_ids.insert(id);
+            }
+        }
+    }
+    EXPECT_EQ(program_ids.size(), kNumPrograms)
+        << "Expected all " << kNumPrograms << " program records after close; got " << program_ids.size() << ".";
+}
+
 TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
     constexpr int kDeviceId = 0;
     constexpr uint32_t kWarmupRuntimeId = 0x6001;
