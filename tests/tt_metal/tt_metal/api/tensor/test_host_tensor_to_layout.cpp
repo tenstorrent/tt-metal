@@ -16,6 +16,7 @@
 #include <gmock/gmock.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <tuple>
@@ -29,6 +30,7 @@
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
+#include <tt-metalium/tile.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -38,6 +40,14 @@ namespace {
 TensorSpec make_spec(const Shape& shape, DataType dtype, Layout layout) {
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     return TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config));
+}
+
+// A TILE-layout spec carrying an explicit (possibly non-32x32) tile. Used to build the reference
+// tensor for the custom-tile tests below; from_vector reaches the same tiling code through
+// encode_tensor_data, which honors the spec's tile.
+TensorSpec make_tile_spec(const Shape& shape, DataType dtype, const Tile& tile) {
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE, tile), memory_config));
 }
 
 // A deterministic ramp that is in-range for every dtype under test (incl. UINT8).
@@ -136,6 +146,80 @@ INSTANTIATE_TEST_SUITE_P(
             DataType::UINT16,
             DataType::UINT8)),
     to_layout_param_name);
+
+// ----------------------------------------------------------------------------------------------------
+// Custom tile sizes.
+// ----------------------------------------------------------------------------------------------------
+
+// to_tile_layout(tensor, tile) takes the tile explicitly (unlike to_layout(tensor, Layout::TILE),
+// which always uses the spec's tile), so it must honor non-32x32 tiles. For each {tile, dtype} we
+// row-major -> tile with the custom tile, then compare against a tensor freshly constructed directly
+// in TILE layout with the same custom tile -- the two must hold identical physical bytes.
+
+using CustomTileParam = std::tuple<std::array<uint32_t, 2>, DataType>;
+
+std::string custom_tile_param_name(const ::testing::TestParamInfo<CustomTileParam>& info) {
+    const auto tile_shape = std::get<0>(info.param);
+    const auto dtype = std::get<1>(info.param);
+    return "Tile" + std::to_string(tile_shape[0]) + "x" + std::to_string(tile_shape[1]) + "_" + dtype_to_str(dtype);
+}
+
+class HostTensorToTileLayoutCustomTile : public ::testing::TestWithParam<CustomTileParam> {};
+
+TEST_P(HostTensorToTileLayoutCustomTile, MatchesFreshConstruction) {
+    const auto tile_shape = std::get<0>(GetParam());
+    const auto dtype = std::get<1>(GetParam());
+    const Tile tile{tile_shape};
+
+    auto check_matches_fresh_construction = [&]<typename T>() {
+        // 64x64 is a multiple of every tile height/width under test, so logical == physical (no padding).
+        const Shape shape{64, 64};
+        const auto data = make_ramp<T>(shape.volume());
+
+        const auto source = HostTensor::from_vector<T>(data, make_spec(shape, dtype, Layout::ROW_MAJOR));
+        const auto result = to_tile_layout(source, tile);
+        const auto expected = HostTensor::from_vector<T>(data, make_tile_spec(shape, dtype, tile));
+
+        EXPECT_EQ(result.layout(), Layout::TILE);
+        EXPECT_EQ(result.logical_shape(), shape);
+        EXPECT_EQ(result.tensor_spec().tile(), tile);
+        EXPECT_EQ(result.padded_shape(), expected.padded_shape());
+        EXPECT_EQ(result.dtype(), dtype);
+
+        expect_equal_shard_data(result, expected);
+    };
+
+    switch (dtype) {
+        case DataType::FLOAT32: check_matches_fresh_construction.operator()<float>(); break;
+        case DataType::BFLOAT16: check_matches_fresh_construction.operator()<bfloat16>(); break;
+        case DataType::UINT32: check_matches_fresh_construction.operator()<uint32_t>(); break;
+        default: FAIL() << "Unhandled dtype in custom-tile matrix: " << dtype_to_str(dtype);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    HostTensorToLayout,
+    HostTensorToTileLayoutCustomTile,
+    ::testing::Combine(
+        // Valid non-default tile shapes (see TILE_FACE_HW_CHOICES in tile.cpp). 32x32 is the default
+        // and is already exercised by the dtype matrix above, so it is omitted here.
+        ::testing::Values(
+            std::array<uint32_t, 2>{16, 16},
+            std::array<uint32_t, 2>{16, 32},
+            std::array<uint32_t, 2>{32, 16},
+            std::array<uint32_t, 2>{8, 32},
+            std::array<uint32_t, 2>{1, 32}),
+        ::testing::Values(DataType::FLOAT32, DataType::BFLOAT16, DataType::UINT32)),
+    custom_tile_param_name);
+
+// A shape whose physical height/width is not a multiple of the custom tile dimensions must be rejected.
+TEST(HostTensorToLayout, CustomTileShapeMismatchThrows) {
+    const Shape shape{16, 48};  // width 48 is not a multiple of the tile width (32)
+    const auto data = make_ramp<float>(shape.volume());
+    const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::FLOAT32, Layout::ROW_MAJOR));
+
+    EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, Tile{{16, 32}}));
+}
 
 // ----------------------------------------------------------------------------------------------------
 // Unsupported conversions.
