@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "internal/disaggregation/kv_chunk_address_table.hpp"
+#include "tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp"
 #include "experimental/fabric/fabric_types.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {

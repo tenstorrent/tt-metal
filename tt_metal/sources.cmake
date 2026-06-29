@@ -1,5 +1,4 @@
 set(TT_METAL_PUBLIC_API
-    api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/service/inter_process_counter_channel.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
@@ -117,6 +116,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/internal/cluster.hpp
+    api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
