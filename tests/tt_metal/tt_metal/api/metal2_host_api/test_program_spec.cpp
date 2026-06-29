@@ -1435,6 +1435,99 @@ TEST_F(ProgramSpecTestQuasar, InvalidScratchpadAccessorNameFails) {
     }
 }
 
+TEST_F(ProgramSpecTestQuasar, MultipleScratchpadsEachBoundToOwnKernelSucceeds) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_multi";
+
+    // A scratchpad is private to a single kernel: two scratchpads, each owned by a distinct kernel.
+    auto kernel_a = MakeMinimalGen1DMKernel("kernel_a");
+    kernel_a.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_a"}, .accessor_name = "scratch"});
+    auto kernel_b = MakeMinimalGen1DMKernel("kernel_b");
+    kernel_b.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_b"}, .accessor_name = "scratch"});
+
+    spec.kernels = {kernel_a, kernel_b};
+    spec.scratchpads = {
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_a"}, .size_per_node = 1024},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_b"}, .size_per_node = 2048},
+    };
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_a", node0, {"kernel_a"}),
+        MakeMinimalWorkUnit("wu_b", node1, {"kernel_b"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+// ----------------------------------------------------------------------------
+// Kernel hash sensitivity to scratchpad bindings
+// ----------------------------------------------------------------------------
+//
+// The kernel's JIT cache key is its compute_hash(); a scratchpad binding flows into the device-side
+// codegen (the scratch:: namespace + the CRTA-injected base address) and into the kernel's
+// ScratchpadBindingHandles, so a kernel that binds a scratchpad must NOT hash equal to one that
+// doesn't — otherwise it would silently reuse a stale cached binary.
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadBindingAffectsKernelHash) {
+    // Same kernel source, differing only in whether the kernel binds a scratchpad. The bound variant
+    // carries an extra ScratchpadBindingHandle, so the hashes must differ.
+    auto make_bound_spec = [] {
+        ProgramSpec spec;
+        spec.name = "scratchpad_hash_bound";
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+        spec.kernels = {dm_kernel};
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+    auto make_unbound_spec = [] {
+        ProgramSpec spec;
+        spec.name = "scratchpad_hash_unbound";
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        spec.kernels = {dm_kernel};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+
+    Program prog_bound = MakeProgramFromSpec(*mesh_device_, make_bound_spec());
+    Program prog_unbound = MakeProgramFromSpec(*mesh_device_, make_unbound_spec());
+
+    auto hash_bound = prog_bound.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    auto hash_unbound = prog_unbound.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_NE(hash_bound, hash_unbound)
+        << "A kernel that binds a scratchpad must not share a JIT cache slot with one that doesn't.";
+}
+
+TEST_F(ProgramSpecTestQuasar, DifferentScratchpadSizeProducesDifferentKernelHash) {
+    // Same kernel source and accessor name; the two scratchpads differ only in size_per_node, which
+    // flows into the ScratchpadBindingHandle's size (and the generated scratch:: token), so the
+    // hashes must differ.
+    auto make_spec = [](uint32_t size_per_node) {
+        ProgramSpec spec;
+        spec.name = "scratchpad_hash_size";
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+        spec.kernels = {dm_kernel};
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = size_per_node}};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+
+    Program prog_small = MakeProgramFromSpec(*mesh_device_, make_spec(/*size_per_node=*/1024));
+    Program prog_large = MakeProgramFromSpec(*mesh_device_, make_spec(/*size_per_node=*/2048));
+
+    auto hash_small = prog_small.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    auto hash_large = prog_large.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_NE(hash_small, hash_large) << "Scratchpads of different sizes must produce different kernel hashes.";
+}
+
 TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelIsAccepted) {
     // A tensor binding on a compute kernel is legal: the kernel constructs a LocalTensorAccessor
     // (NOC-free) from the binding token rather than a TensorAccessor. ValidateProgramSpec accepts it;
@@ -3473,6 +3566,71 @@ void kernel_main() {
     spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor")};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_tensor");
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// ----------------------------------------------------------------------------
+// Scratchpad JIT-compile smoke tests (device-side accessor composes & compiles)
+// ----------------------------------------------------------------------------
+//
+// Like the TensorAccessor smoke above, these JIT-compile a kernel that constructs a Scratchpad from
+// its binding token (scratch::<name>) and reads the CRTA-injected base address — exercising the
+// generated scratch:: namespace + token alias and the device-side Scratchpad ctor. Compile-only on
+// the mock Wormhole device (Gen1: the Quasar TRISC firmware isn't built in this checkout, so a
+// Quasar JIT-compile would fail at link).
+
+TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeDMKernel) {
+    // DM kernel constructs a Scratchpad from its binding token and reads the CRTA-injected base address.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratch_smoke_dm";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    volatile uint32_t base = pad.get_base_address();
+    (void)base;
+}
+)"};
+    dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    spec.kernels = {dm_kernel};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// Compute-kernel counterpart. A scratchpad binding works on a compute kernel: scratchpad.h only
+// forward-declares get_common_arg_val (resolved by the kernel's own API header — api/compute/common.h
+// on TRISC, api/dataflow/dataflow_api.h on DM) and is otherwise NOC-free, so the device-side
+// Scratchpad<T> ctor composes on the compute (TRISC) build path as well as DM.
+TEST_F(ProgramSpecTestGen1, ScratchpadAccessorBindingJITSmokeComputeKernel) {
+    // MakeMinimalGen1ValidProgramSpec wires a DM producer (kernels[0]) into a compute consumer
+    // (kernels[1]) through a DFB; bind the scratchpad to the compute kernel and have it construct a
+    // Scratchpad from its binding token.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::scratch);
+    volatile uint32_t base = pad.get_base_address();
+    (void)base;
+}
+)"};
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
