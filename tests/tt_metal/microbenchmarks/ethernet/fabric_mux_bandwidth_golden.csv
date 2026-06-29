@@ -22,7 +22,7 @@ both_channel_types,8,1,8,8,10000,4096,1,32,12.2045
 both_channel_types,1,2,8,8,10000,4096,1,32,5.4663
 both_channel_types,2,2,8,8,10000,4096,1,32,7.6789
 both_channel_types,4,2,8,8,10000,4096,1,32,9.6460
-both_channel_types,8,2,8,8,10000,4096,1,32,10.4217
+both_channel_types,8,2,8,8,10000,4096,1,32,11.2356
 both_channel_types,1,4,8,8,10000,4096,1,32,3.4285
 both_channel_types,2,4,8,8,10000,4096,1,32,5.3774
 both_channel_types,4,4,8,8,10000,4096,1,32,7.3998
