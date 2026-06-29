@@ -163,7 +163,7 @@ def _prompt_source_len(prompt_source):
     return prompt_source[0].shape[-2] if isinstance(prompt_source, (tuple, list)) else prompt_source.shape[-2]
 
 
-def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, prompt_len, q_rope_offset):
+def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
     layer = tt_model.layers[layer_idx]
     residual = hidden_states
     normed = layer.input_layernorm.forward(hidden_states)
@@ -255,7 +255,6 @@ def denoise_hidden_forward(
             hidden_states,
             prompt_hidden_by_layer[layer_idx],
             attn_mask,
-            prompt_len,
             q_rope_offset,
         )
         _deallocate_optional_tensor(attn_mask)
