@@ -39,10 +39,11 @@ from models.tt_transformers.tt.model_config import determine_device_name
 _MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
-# needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated
-# TP serving config and is ample for the single 2048-token chunk trace — negligible vs the
-# per-device DRAM that chunk-outer prefill frees. Single-device params are left unchanged.
-_TP_TRACE_REGION_SIZE = 256 * 1024 * 1024
+# needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1024 MiB: the per-chunk prefill
+# trace's matmul count makes the buffer exceed 256 MiB at long contexts (128k needs ~285 MiB; a
+# 256 MiB region aborts end_trace_capture), so size it for the largest (256k) case. Negligible vs
+# the per-device DRAM that chunk-outer prefill frees. Single-device params are left unchanged.
+_TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
@@ -94,7 +95,7 @@ def _load_and_cache_context(context_url, max_length=None):
     return context_text
 
 
-def _get_prompt(seqlen, tokenizer):
+def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
     """Load a prompt of approximately seqlen tokens, clipped but not padded.
 
     Uses shared input data files from llama3_70b_galaxy for consistency with
@@ -102,7 +103,14 @@ def _get_prompt(seqlen, tokenizer):
     takes logits from the last token position — pad tokens would corrupt output.
     Tile alignment (multiples of 32) ensures the same programs compile regardless
     of small differences between actual and target token counts.
+
+    max_prompt_len caps the total prompt length so the caller can reserve room for the tokens it
+    will generate (prompt + generation must fit within the KV cache / RoPE table). The reservation
+    is taken out of the disposable context in the MIDDLE — never off the instruction + <think>
+    scaffolding suffix at the tail — so those task/reasoning-seed tokens survive even when the
+    prompt fills the model's full context (the 256k case). Defaults to seqlen (no reservation).
     """
+    cap = seqlen if max_prompt_len is None else min(seqlen, max_prompt_len)
     # QWEN35_REF_PROMPT=1: replicate the REFERENCE 27B's exact 64k task (quote-extraction + AI
     # metaphors) for an apples-to-apples comparison — same corpus (pg84.txt), the reference's
     # "You are a helpful assistant" system prompt + apply_chat_template (default thinking), and NO
@@ -122,13 +130,13 @@ def _get_prompt(seqlen, tokenizer):
             )
         )
         ctx_ids = tokenizer(context, add_special_tokens=False)["input_ids"]
-        context = tokenizer.decode(ctx_ids[: max(0, seqlen - overhead - 8)])
+        context = tokenizer.decode(ctx_ids[: max(0, cap - overhead - 8)])
         text = tokenizer.apply_chat_template(
             [{"role": "system", "content": sys_msg}, {"role": "user", "content": context + "\n\n" + instruction}],
             add_generation_prompt=True,
             tokenize=False,
         )
-        return tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][:, :seqlen]
+        return tokenizer(text, add_special_tokens=False, return_tensors="pt")["input_ids"][:, :cap]
 
     if seqlen <= 128:
         # Use the same prompt file as other models (Llama, etc.)
@@ -136,7 +144,7 @@ def _get_prompt(seqlen, tokenizer):
         with open(path) as f:
             data = json.load(f)
         inputs = tokenizer(data[0]["prompt"], return_tensors="pt")
-        return inputs["input_ids"][:, :seqlen]
+        return inputs["input_ids"][:, :cap]
 
     # For long sequences (16k+), use Frankenstein from Project Gutenberg.
     # Feed the raw text and let the model continue it — tests long-context processing.
@@ -166,13 +174,13 @@ def _get_prompt(seqlen, tokenizer):
         else:
             suffix = f"\n\nBased on the above text: {instruction}<|im_end|>\n<|im_start|>assistant\n<think>\n"
         wrapper_ids = tokenizer(prefix + suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
-        max_context_tokens = seqlen - wrapper_ids.shape[1]
+        max_context_tokens = cap - wrapper_ids.shape[1]
         context_ids = tokenizer(context, add_special_tokens=False, return_tensors="pt")["input_ids"][
             :, :max_context_tokens
         ]
         prefix_ids = tokenizer(prefix, add_special_tokens=False, return_tensors="pt")["input_ids"]
         suffix_ids = tokenizer(suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
-        return torch.cat([prefix_ids, context_ids, suffix_ids], dim=1)[:, :seqlen]
+        return torch.cat([prefix_ids, context_ids, suffix_ids], dim=1)[:, :cap]
 
     # For medium sequences (1k-8k), use static prompt files
     size_label = f"{seqlen // 1024}k" if seqlen >= 1024 else str(seqlen)
@@ -181,7 +189,7 @@ def _get_prompt(seqlen, tokenizer):
         data = json.load(f)
     prompt_text = data[0]["prompt"]
     inputs = tokenizer(prompt_text, return_tensors="pt")
-    return inputs["input_ids"][:, :seqlen]
+    return inputs["input_ids"][:, :cap]
 
 
 def _warmup_prefill(model, device, token_ids):
@@ -288,15 +296,16 @@ def test_demo_text(
     logger.info(f"Model load: {time.time() - t0:.1f}s")
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
 
-    token_ids = _get_prompt(seqlen, tokenizer)
-    # Reserve context for the tokens we generate: prefill writes the padded prompt bucket and decode
+    # Reserve room for the tokens we generate: prefill writes the padded prompt bucket and decode
     # extends by max_generated_tokens, so prompt + generation must fit within max_seq_len (the RoPE
     # table / KV cache / position span). This only bites when the prompt fills the whole context
     # (the 256k case, where seqlen == the model's native ceiling); smaller prompts sit well under it.
-    # Floor to a 128-multiple (GDN sub-chunk) so program shapes stay aligned.
+    # Floor to a 128-multiple (GDN sub-chunk) so program shapes stay aligned. Passed into _get_prompt
+    # so the reservation comes out of the disposable context — NOT the instruction + <think>
+    # scaffolding suffix at the tail (a blunt tail clip would drop the task + reasoning seed and the
+    # model would just continue the source text, then emit its own <think>).
     max_prompt_len = ((max_seq_len - max_generated_tokens) // 128) * 128
-    if token_ids.shape[1] > max_prompt_len:
-        token_ids = token_ids[:, :max_prompt_len]
+    token_ids = _get_prompt(seqlen, tokenizer, max_prompt_len=max_prompt_len)
     actual_len = token_ids.shape[1]
     # Long-context prompts are built from a corpus and clipped to seqlen; if the corpus is too
     # short the clip silently shortens the prompt (e.g. a 256k case quietly running at ~104k).
