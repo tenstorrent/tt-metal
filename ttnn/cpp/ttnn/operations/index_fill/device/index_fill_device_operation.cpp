@@ -16,12 +16,42 @@ void IndexFillOperation::validate(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Index fill: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Index fill: Input must be allocated in buffer on device");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Index fill: Only supporting row major layout");
+
+    auto input_mem_layout = input.memory_config().memory_layout();
     TT_FATAL(
-        input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Index fill: Not currently supporting sharding");
+        input_mem_layout == TensorMemoryLayout::INTERLEAVED || input_mem_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Index fill: Unsupported input memory layout: {}",
+        input_mem_layout);
+
+    auto out_mem_layout = operation_attributes.memory_config.memory_layout();
     TT_FATAL(
-        operation_attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Index fill: Not currently supporting sharding");
+        out_mem_layout == TensorMemoryLayout::INTERLEAVED || out_mem_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            out_mem_layout == TensorMemoryLayout::WIDTH_SHARDED || out_mem_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Index fill: Unsupported output memory layout: {}",
+        out_mem_layout);
+
+    // WIDTH and BLOCK sharding cannot be mixed with each other as output: the column
+    // fragmentation schemes are incompatible without inter-core communication.
+    bool input_is_col_sharded =
+        (input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+         input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    bool out_is_col_sharded =
+        (out_mem_layout == TensorMemoryLayout::WIDTH_SHARDED || out_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    if (input_is_col_sharded && out_is_col_sharded) {
+        TT_FATAL(
+            out_mem_layout == input_mem_layout,
+            "Index fill: Cannot convert between WIDTH_SHARDED and BLOCK_SHARDED; "
+            "got input={} output={}",
+            input_mem_layout,
+            out_mem_layout);
+        TT_FATAL(
+            input.shard_spec().has_value() && operation_attributes.memory_config.shard_spec().has_value() &&
+                input.shard_spec().value() == operation_attributes.memory_config.shard_spec().value(),
+            "Index fill: When input and output are both WIDTH_SHARDED or both BLOCK_SHARDED, "
+            "their shard specs must match");
+    }
 
     // Validate index tensor properties expected by the kernel.
     TT_FATAL(index.storage_type() == StorageType::DEVICE, "Index fill: Index tensor must be on device");
