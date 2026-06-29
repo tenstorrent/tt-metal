@@ -750,10 +750,21 @@ def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGenerati
 def _normalize_eos_token_ids(eos_token_id, *, kind: str = "eos_token_id"):
     if eos_token_id is None:
         return None
-    if isinstance(eos_token_id, Integral):
-        return {int(eos_token_id)}
-
     message = f"{kind} must be an int or iterable of ints"
+
+    def validate_token_id(token_id) -> int:
+        if isinstance(token_id, bool) or not isinstance(token_id, Integral):
+            raise ValueError(message)
+        token_id = int(token_id)
+        if token_id < 0:
+            raise ValueError(f"{kind} must be non-negative")
+        if token_id > torch.iinfo(torch.int32).max:
+            raise ValueError(f"{kind} must fit int32 token ids")
+        return token_id
+
+    if isinstance(eos_token_id, Integral):
+        return {validate_token_id(eos_token_id)}
+
     if isinstance(eos_token_id, (str, bytes)):
         raise ValueError(message)
 
@@ -762,9 +773,7 @@ def _normalize_eos_token_ids(eos_token_id, *, kind: str = "eos_token_id"):
     except TypeError as exc:
         raise ValueError(message) from exc
 
-    if any(not isinstance(token_id, Integral) for token_id in ids):
-        raise ValueError(message)
-    return {int(token_id) for token_id in ids}
+    return {validate_token_id(token_id) for token_id in ids}
 
 
 def _trim_generated_token_ids(generated: torch.Tensor, *, max_new_tokens: int | None = None, eos_token_id=None):
