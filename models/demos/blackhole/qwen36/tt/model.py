@@ -2352,8 +2352,12 @@ class Qwen36Model:
         """
         assert not (is_tokens or is_log_probs), "on-device sampling/log-probs unsupported (host sampling only)"
         if self.num_devices > 1:
-            # TP: logits are replicated (full vocab on every device); gather and take one replica.
-            full = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
+            # TP: logits are replicated (full vocab on every device). Read ONE replica (device 0)
+            # rather than ConcatMeshToTensor, which transfers all num_devices copies of the
+            # [B, vocab] logits to host and discards all but the first — wasted bandwidth that is a
+            # sizable fraction of each decode step (vocab is large).
+            one = ttnn.get_device_tensors(tt_out)[0]
+            full = ttnn.to_torch(one).float()
             return full.reshape(-1, self.args.vocab_size)[: B * S].view(B, S, -1)
         out = ttnn.to_torch(tt_out).float()
         return out[:B, :S, : self.args.vocab_size].view(B, S, -1)

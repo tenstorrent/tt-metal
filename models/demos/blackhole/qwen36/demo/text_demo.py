@@ -765,20 +765,22 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(snap)
 
+    # Time the FULL decode step (input update + device decode + host logit read + token select)
+    # so the reported tok/s is real end-to-end throughput, not just the device compute.
     decode_times = []
     while len(generated[0]) < max_generated_tokens:
-        _update([generated[u][-1] for u in range(B)], pos)
         t_step = time.time()
+        _update([generated[u][-1] for u in range(B)], pos)
         if eager:
             tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         else:
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
-        decode_times.append(time.time() - t_step)
         logits_step = model.process_output_decode(tt_logits, B)  # [B, 1, vocab]
         for u in range(B):
             generated[u].append(_pick(logits_step[u, 0, :vocab]))
         pos = [p + 1 for p in pos]
+        decode_times.append(time.time() - t_step)
     if trace_id is not None:
         ttnn.release_trace(mesh, trace_id)
 

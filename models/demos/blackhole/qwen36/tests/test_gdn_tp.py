@@ -232,6 +232,57 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+@parametrize_batch(batches=(2,))
+def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, request):
+    """Chunk-outer BATCHED GDN prefill (forward_prefill_batched carry=True) == single-shot.
+
+    Prefilling a 2-chunk sequence as TWO carried chunks must match prefilling it in ONE call
+    (the kernel runs <=16 sub-chunks per call, so the single-shot is the ground truth). Validates
+    the batched cross-chunk recurrent + conv-state carry in isolation — the foundation for grouped
+    long-context batched prefill.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    comp = tp_composer(mesh_device)
+
+    C = 128  # GDN kernel chunk size
+    T = 2 * C  # two full chunks
+    x = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
+    xd = torch.randn(1, 1, B, args.dim, dtype=torch.bfloat16)  # one decode token per user
+
+    # ---- reference: single-shot batched prefill over the full T (ground truth) ----
+    gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    gref.reset_state()
+    gref._stable_state = True
+    gref.forward_prefill_batched(replicate_to_device(mesh_device, x.unsqueeze(0)), chunk_size=C)
+    out_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
+
+    # ---- test: two CARRIED chunks ----
+    g = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    g.reset_state()
+    g._stable_state = True
+    g.reset_state_inplace()  # zero state + clear the batched conv carry at sequence start
+    g.forward_prefill_batched(replicate_to_device(mesh_device, x[:, :C].unsqueeze(0)), chunk_size=C, carry=True)
+    g.forward_prefill_batched(replicate_to_device(mesh_device, x[:, C:].unsqueeze(0)), chunk_size=C, carry=True)
+    out_t = ttnn.to_torch(g.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
+
+    thr = get_pcc_threshold(request, default=0.99)
+    pccs = [compute_pcc(out_ref[0, 0, u].float(), out_t[0, 0, u].float()) for u in range(B)]
+    worst = min(pccs)
+    logger.info(f"batched chunk-outer carry (B={B}) PCC min={worst:.5f} max={max(pccs):.5f}")
+    assert worst >= thr, f"carry vs single-shot PCC {worst:.5f} < {thr}: {pccs}"
+    logger.info(f"PASSED: batched chunk-outer GDN prefill carry (B={B}) worst PCC = {worst:.5f}")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     """Check that chunk-prefill and step-by-step decode agree on the same T=128 tokens.
 

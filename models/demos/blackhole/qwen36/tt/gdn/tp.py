@@ -180,6 +180,10 @@ class TPGatedDeltaNet:
         # capture_state writeback stays trace-safe (no host->device transfer inside a trace).
         self.conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
         self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
+        # Chunk-outer batched-prefill conv left-context (allocated lazily by forward_prefill_batched).
+        if getattr(self, "_batched_conv_carry", None) is not None:
+            ttnn.deallocate(self._batched_conv_carry)
+        self._batched_conv_carry = None
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state IN PLACE (preserves buffer addresses for tracing).
@@ -187,6 +191,10 @@ class TPGatedDeltaNet:
         Mirrors qwen35_27b gdn.py reset_state_inplace — used between sequences / trace
         replays so the captured decode trace's baked addresses stay valid.
         """
+        # Drop any chunk-outer batched-prefill conv left-context so the next sequence starts clean.
+        if getattr(self, "_batched_conv_carry", None) is not None:
+            ttnn.deallocate(self._batched_conv_carry)
+            self._batched_conv_carry = None
         if self.conv_states is None:
             self.reset_state()
             return
@@ -441,7 +449,7 @@ class TPGatedDeltaNet:
         for t in conv_new_list:
             ttnn.deallocate(t)
 
-    def forward_prefill_batched(self, x, chunk_size=128, valid_lens=None):
+    def forward_prefill_batched(self, x, chunk_size=128, valid_lens=None, carry=False):
         """Batched prefill: all B users in one pass (no per-user Python loop).
 
         The chunk-seq GDN kernel scans a leading BH = B*H batch dim, each (user, head) row an
@@ -452,8 +460,13 @@ class TPGatedDeltaNet:
         x:          [B, T, dim] replicated (all users padded to a common bucket length T).
         valid_lens: optional list of B real token counts (< T => right-padding masked per row);
                     None => every row is full length T.
-        Always from scratch, so it is the batched analog of B forward_prefill(return_state=True)
-        calls + assemble_batched_state.
+        carry:      False (default) => from scratch (single-shot). True => CHUNK-OUTER carry: read
+                    the recurrent state (self.rec_state) and conv left-context (self._batched_conv_carry)
+                    from the previous chunk and write the updated ones back, so a long prompt can be
+                    prefilled chunk-by-chunk over the batch. Mirrors the B=1 forward_prefill carry;
+                    the caller zeroes rec_state (reset_state_inplace) + _batched_conv_carry at
+                    sequence start, so the first chunk reads zeros (== from scratch). Requires
+                    _stable_state (the batched decode buffers).
 
         KERNEL CAP: gated_delta_attn_seq maps one BH = B*Nv_tp row per core and is L1-bound, so BH
         must stay <= ~32 (at TP=4, Nv_tp=8 => B <= 4). Larger B trips an L1 clash (B=8) or the
@@ -476,7 +489,17 @@ class TPGatedDeltaNet:
         ttnn.deallocate(ab)
 
         # FIR causal conv1d + SiLU over each user's sequence (per-row valid_len picks each user's
-        # decode conv window). From scratch: no conv_state carry.
+        # decode conv window). Chunk-outer carry: left-context = previous chunk's last K-1 inputs.
+        if carry and getattr(self, "_batched_conv_carry", None) is None:
+            # First chunk of a chunk-outer prefill: zeroed left-context (== from scratch).
+            self._batched_conv_carry = ttnn.from_torch(
+                torch.zeros(B, self.K - 1, D, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        conv_carry_in = self._batched_conv_carry if carry else None
         conv, conv_new_state = _causal_conv1d_fir(
             qkv,
             None,
@@ -484,7 +507,7 @@ class TPGatedDeltaNet:
             self.K,
             self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            conv_state=None,
+            conv_state=conv_carry_in,
             weight_taps=tw["conv_taps"],
             bias_dev=None,
             valid_len=valid_lens,
@@ -514,7 +537,7 @@ class TPGatedDeltaNet:
             g,
             chunk_size=chunk_size,
             scale=self.scale,
-            initial_state=None,
+            initial_state=self.rec_state if carry else None,
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_lens,
@@ -545,7 +568,14 @@ class TPGatedDeltaNet:
         for m in range(1, self.K):
             cs = ttnn.reshape(ttnn.slice(conv_new_state, (0, m - 1, 0), (B, m, D)), (1, B, D))  # [1,B,D]
             new_conv.append(cs)
-        ttnn.deallocate(conv_new_state)
+        if carry:
+            # Preserve this chunk's last K-1 inputs as the next chunk's left-context (replace the
+            # buffer just consumed by the FIR above).
+            if conv_carry_in is not None:
+                ttnn.deallocate(conv_carry_in)
+            self._batched_conv_carry = conv_new_state  # [B, K-1, D]
+        else:
+            ttnn.deallocate(conv_new_state)
         if self._stable_state and self.conv_states is not None:
             for m in range(self.K):
                 ttnn.copy(new_conv[m], self.conv_states[m])
