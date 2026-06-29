@@ -494,6 +494,13 @@ def _validate_prompt_tokens(prompt_tokens: torch.Tensor) -> None:
         raise ValueError("prompt_tokens must have shape [batch, seq_len]")
 
 
+def _validate_committed_block_shape(committed: torch.Tensor, *, batch_size: int, canvas_length: int) -> None:
+    if committed.dim() != 2:
+        raise ValueError("block.committed must have shape [batch, canvas_len]")
+    if committed.shape != (batch_size, canvas_length):
+        raise ValueError(f"block.committed must have shape [{batch_size}, {canvas_length}]")
+
+
 def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -> DeviceGeneration:
     return DeviceGeneration(
         generated=torch.zeros((batch_size, 0), dtype=torch.long, device=device),
@@ -591,6 +598,7 @@ def generate_blocks(
             page_table=page_table,
             page_tables_per_layer=page_tables_per_layer,
         )
+        _validate_committed_block_shape(block.committed, batch_size=batch_size, canvas_length=config.canvas_length)
         expected_next_pos = next_pos + block.committed.shape[1]
         if block.next_pos != expected_next_pos:
             raise ValueError("block.next_pos must equal start_pos + committed length")
