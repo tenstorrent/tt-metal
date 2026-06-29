@@ -642,7 +642,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 }  // namespace detail
 
-ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts ReshardGenericFactory::create_program_spec(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
@@ -859,7 +859,7 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         {TensorParamName{kGenOutputTensorParam}, TensorArgument{output.mesh_tensor()}},
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_params),
     };

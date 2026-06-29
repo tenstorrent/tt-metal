@@ -49,7 +49,7 @@ struct SameWidthPerNodeArgs {
 }  // namespace
 
 template <bool local_is_output>
-ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output>::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts ReshardSameWidthFactory<local_is_output>::create_program_spec(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
@@ -260,7 +260,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         {TensorParamName{kSWLocalTensorParam}, TensorArgument{local_tensor.mesh_tensor()}},
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_params),
     };

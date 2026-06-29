@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
-#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -28,7 +28,7 @@ const KernelSpecName COPY_LOCAL_NCRISC{"copy_local_ncrisc"};
 }  // namespace
 
 template <bool local_is_input>
-ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is_input>::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts NdReshardCopyLocalShardFactory<local_is_input>::create_program_spec(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
@@ -195,7 +195,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
             },
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
