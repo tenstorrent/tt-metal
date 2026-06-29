@@ -156,6 +156,8 @@ class SamplingOp:
         copy_probabilities: bool = False,
         mesh_axis: str = "x",
         num_internal_iterations: int = 1,
+        receiver_global_sem=None,
+        local_ready_global_sem=None,
     ):
         """
         Execute sampling.
@@ -210,6 +212,8 @@ class SamplingOp:
                     num_internal_iterations=num_internal_iterations,
                     metadata_output_tensor=metadata_output_tensor,
                     copy_probabilities=copy_probabilities,
+                    receiver_global_sem=receiver_global_sem,
+                    local_ready_global_sem=local_ready_global_sem,
                 )
         else:
             return SamplingOp._op_single_device_topk(
@@ -722,6 +726,8 @@ class SamplingOp:
         copy_probabilities: bool = False,
         mesh_axis: str = "x",
         num_internal_iterations: int = 1,
+        receiver_global_sem=None,
+        local_ready_global_sem=None,
     ):
         """
         Mesh (R,2) top-K sampling path (k > 1).
@@ -790,8 +796,12 @@ class SamplingOp:
         sem_core_range = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))]
         )
-        receiver_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
-        local_ready_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
+        # Allow the caller to pass pre-created semaphores so the op can be wrapped
+        # in begin/end_trace_capture (which forbids create_global_semaphore mid-capture).
+        if receiver_global_sem is None:
+            receiver_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
+        if local_ready_global_sem is None:
+            local_ready_global_sem = ttnn.create_global_semaphore(mesh_device, sem_core_range, 0)
         receiver_semaphore_addr = int(ttnn.get_global_semaphore_address(receiver_global_sem))
         local_ready_semaphore_addr = int(ttnn.get_global_semaphore_address(local_ready_global_sem))
 

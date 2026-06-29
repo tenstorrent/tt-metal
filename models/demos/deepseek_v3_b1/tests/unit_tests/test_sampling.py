@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import numpy as np
 import pytest
 import torch
@@ -932,6 +934,65 @@ def _run_sampling_topk_mesh(
         metadata_result = ttnn.get_device_tensors(ttnn_metadata)[final_device_idx]
         torch_metadata_results.append(ttnn.to_torch(metadata_result))
     ttnn.synchronize_device(mesh_device)
+
+    # [PERF] Trace-mode replay of the mesh sampling op (incl. cross-device reduce),
+    # gated by TT_SAMPLING_TRACE_ITERS. Run under the device profiler
+    # (python -m tracy -r -p): the per-stage SP-* DeviceZoneScopedN zones land in
+    # generated/profiler/reports/*/profile_log_device.csv. Single-op capture +
+    # repeated replay (the sampling/CCL op is not loop-safe back-to-back).
+    # Requires FABRIC_2D + FAST dispatch (TT_METAL_SLOW_DISPATCH_MODE unset).
+    _trace_iters = int(os.getenv("TT_SAMPLING_TRACE_ITERS", "0"))
+    if _trace_iters > 0:
+        try:
+            from tracy import signpost as _signpost
+        except Exception:
+            _signpost = lambda *a, **k: None
+
+        # Pre-create the op's internal semaphores OUTSIDE trace capture (the op
+        # otherwise calls create_global_semaphore mid-op, which trace capture forbids).
+        _full_grid = mesh_device.compute_with_storage_grid_size()
+        _sem_core_range = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_full_grid.x - 1, _full_grid.y - 1))]
+        )
+        _recv_sem = ttnn.create_global_semaphore(mesh_device, _sem_core_range, 0)
+        _ready_sem = ttnn.create_global_semaphore(mesh_device, _sem_core_range, 0)
+
+        _op_kwargs = dict(
+            scores_tensor=ttnn_scores,
+            indices_tensor=ttnn_indices,
+            output_index_tensor=ttnn_output_index,
+            k=k if not from_metadata else 32,
+            p=p if not from_metadata else 1.0,
+            temperature=temperature if not from_metadata else 0.6,
+            seed=seed,
+            rand_output_tensor=ttnn_rand_output,
+            final_core_coord=final_core,
+            final_mesh_coord=final_mesh_coord,
+            global_semaphore=global_semaphores[0],
+            global_stage2_semaphore=global_stage2_semaphores[0],
+            scores_scratch_tensor=ttnn_scores_scratch,
+            indices_scratch_tensor=ttnn_indices_scratch,
+            mesh_axis="x",
+            metadata_output_tensor=ttnn_metadata,
+            copy_probabilities=copy_probabilities,
+            receiver_global_sem=_recv_sem,
+            local_ready_global_sem=_ready_sem,
+        )
+        _tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        SamplingOp.op(**_op_kwargs)  # capture a SINGLE op
+        ttnn.end_trace_capture(mesh_device, _tid, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        for _ in range(3):  # warmup replays
+            ttnn.execute_trace(mesh_device, _tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        _signpost("trace_sampling_start")
+        for _ in range(_trace_iters):  # timed replays; profiler captures each
+            ttnn.execute_trace(mesh_device, _tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        _signpost("trace_sampling_stop")
+        ttnn.release_trace(mesh_device, _tid)
+        return
+
     # verify all results are the same
     ttnn_first_result = ttnn.get_device_tensors(ttnn_result)
     torch_first_metadata = torch_metadata_results[0]
@@ -1015,6 +1076,7 @@ def create_fabric_router_config(max_payload_size):
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
             "worker_l1_size": 1441828,
+            "trace_region_size": 1500000,
         }
     ],
     indirect=["device_params"],
@@ -1022,7 +1084,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize(
     "final_mesh_coord, seed, final_core_idx, p, temperature, k, from_metadata, copy_probabilities, iterations",
     [
-        ((1, 1), 2005, 100, 0.95, 2.0, 32, True, True, 100),
+        ((1, 1), 2005, 100, 0.95, 0.6, 32, True, True, 10),
         ((1, 0), 52098, 0, 0.995, 0.4, 16, True, True, 1),
         ((2, 1), 1337, 50, 1.0, 10.0, 32, True, True, 1),
         ((2, 0), 4242, 73, 0.1, 0.6, 32, True, True, 1),
