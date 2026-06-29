@@ -65,9 +65,12 @@ def model_config():
     # the gitignored data/ dir; if that file is absent the default is a stale,
     # non-None path that would otherwise fail mid-build with FileNotFoundError
     # (defeating each test's `if plan_anchor_path is None: skip` guard).
+    # DD_DATA_ROOT mirrors the eval-asset layout (default /mnt/diffusion-drive); see README.
+    _dd_data_root = os.environ.get("DD_DATA_ROOT", "/mnt/diffusion-drive")
     candidates = [
         os.environ.get("DD_ANCHOR_PATH"),  # explicit override
         _DATA_DIR / "kmeans_navsim_traj_20.npy",  # scripts/prepare_assets.py target
+        f"{_dd_data_root}/resnet34/kmeans_navsim_traj_20.npy",  # staged eval-asset layout
         cfg.plan_anchor_path,  # ModelConfig default
     ]
     cfg.plan_anchor_path = next((str(p) for p in candidates if p and Path(p).exists()), None)
