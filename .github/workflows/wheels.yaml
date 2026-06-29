@@ -132,6 +132,9 @@ jobs:
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
+            CCACHE_COMPRESS=true
+            CCACHE_COMPRESSLEVEL=3
+            CCACHE_LOGFILE=/tmp/ccache.log
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             AWS_ACCESS_KEY_ID="${{ env.AWS_ACCESS_KEY_ID }}"
             AWS_SECRET_ACCESS_KEY="${{ env.AWS_SECRET_ACCESS_KEY }}"
@@ -148,7 +151,7 @@ jobs:
           # Keep the default auditwheel repair, then write the stats to the host-mounted
           # /host/tmp (== host /tmp) so the host "ccache stats summary" step can read them.
           # The stats dump is best-effort (|| true) so it can never fail the wheel build.
-          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} && (ccache -sv > /host/tmp/ccache-wheel-stats.txt 2>&1 && cat /host/tmp/ccache-wheel-stats.txt || true)"
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} && (ccache -sv > /host/tmp/ccache-wheel-stats.txt 2>&1 && cat /host/tmp/ccache-wheel-stats.txt || true) && (cp /tmp/ccache.log /host/tmp/ccache-wheel.log 2>/dev/null || true) && (cp /tmp/ccache-storage-s3.log /host/tmp/ccache-storage-s3-wheel.log 2>/dev/null || true)"
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_TEST_SKIP: ${{ inputs.build-type == 'ASan' && '*' || '' }}
           CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
@@ -160,6 +163,29 @@ jobs:
             echo "## ccache stats" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             cat /tmp/ccache-wheel-stats.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache-wheel.log ]; then
+            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache-wheel.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
+          if [ -f /tmp/ccache-storage-s3-wheel.log ]; then
+            echo "=== ccache-storage-s3 log (first 30 lines) ==="
+            head -30 /tmp/ccache-storage-s3-wheel.log
+            echo "=== ccache-storage-s3 log (last 80 lines) ==="
+            tail -80 /tmp/ccache-storage-s3-wheel.log
+            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -30 /tmp/ccache-storage-s3-wheel.log >> $GITHUB_STEP_SUMMARY
+            echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
+            tail -200 /tmp/ccache-storage-s3-wheel.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 

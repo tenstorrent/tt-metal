@@ -95,6 +95,39 @@ jobs:
           fi
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
+      - name: Verify S3 connectivity (write / read-back / delete)
+        # NOTE: this probe is intentionally NON-FATAL. ccache treats the remote
+        # cache as a soft dependency (remote errors degrade to local misses), so a
+        # transient Garage hiccup must not turn into a hard build failure. We warn
+        # and continue rather than `exit 1`. The probe is purely diagnostic.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          # Use a per-job unique key so concurrent jobs (this is a reusable workflow
+          # invoked by many pipelines against the same bucket/prefix) don't clobber
+          # each other's PUT/GET/DELETE windows and cause spurious 404 read-backs.
+          KEY=".s3-connectivity-test-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${RANDOM}"
+          BASE="http://garage.garage.svc.cluster.local:3900/${CCACHE_S3_BUCKET}/${CCACHE_S3_PREFIX}/${KEY}"
+          PAYLOAD="ccache-s3-connectivity-ok"
+          SIGV4="aws:amz:garage:s3"
+          CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
+          probe() {
+            # PUT
+            echo "${PAYLOAD}" | curl -fsS -X PUT --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
+              "${BASE}" --data-binary @- -o /dev/null || return 1
+            # GET and verify
+            local result
+            result=$(curl -fsS --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}") || return 1
+            [ "${result}" = "${PAYLOAD}" ] || { echo "Read-back mismatch: got '${result}'"; return 1; }
+            # DELETE (best effort cleanup)
+            curl -fsS -X DELETE --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}" -o /dev/null || true
+            return 0
+          }
+          if probe; then
+            echo "S3 connectivity verified: write/read-back/delete all OK"
+          else
+            echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
+          fi
+
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
@@ -116,6 +149,11 @@ jobs:
             echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
             echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
             echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
+            # ctcache talks to Garage through the restricted proxy via boto3, which
+            # was validated with us-east-1. Pin it explicitly here so the job-level
+            # AWS_DEFAULT_REGION=garage (exported by the ccache step) does not leak
+            # in and leave ctcache's runtime region inconsistent with its probe.
+            echo "AWS_DEFAULT_REGION=us-east-1"
             echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
             echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
           } >> "$GITHUB_ENV"
