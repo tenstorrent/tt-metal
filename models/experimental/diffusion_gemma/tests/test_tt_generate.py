@@ -1257,6 +1257,43 @@ def test_generate_text_from_checkpoint_state_rejects_max_new_tokens_beyond_expli
         )
 
 
+def test_generate_text_from_checkpoint_state_rejects_nonpositive_batch_before_seeded_hooks():
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        generate_text_from_checkpoint_state(
+            object(),
+            object(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            noise_tokens_fn="noise",
+            vocab_size=99,
+            gumbel_seed=123,
+            batch=0,
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_generate_text_from_checkpoint_state_rejects_nonpositive_vocab_before_seeded_hooks():
+    with pytest.raises(ValueError, match="vocab_size must be positive"):
+        generate_text_from_checkpoint_state(
+            object(),
+            object(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            noise_tokens_fn="noise",
+            vocab_size=0,
+            gumbel_seed=123,
+            logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_noise():
     with pytest.raises(ValueError, match="noise_tokens_fn requires vocab_size"):
         generate_text_from_checkpoint_state(
