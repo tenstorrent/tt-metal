@@ -159,6 +159,9 @@ def prefill_forward(
         # predecessor, then prepend them. Device 0 receives zeros (Linear topology,
         # no wraparound). The non-square causal mask [seq_len, window+seq_len] then
         # correctly places Q tokens at their absolute SP-shard positions.
+        # Clamp padding to seq_len: neighbor_pad_async requires padding_left <= tensor_dim,
+        # and when seq_len < window the total sequence is already shorter than the window.
+        actual_pad = min(config.sliding_window, seq_len)
         # neighbor_pad_async requires ROW_MAJOR; convert in, convert back out.
         tt_k_tile = tt_k
         tt_k = ttnn.to_layout(tt_k_tile, ttnn.ROW_MAJOR_LAYOUT)
@@ -169,7 +172,7 @@ def prefill_forward(
         tt_k = ttnn.experimental.neighbor_pad_async(
             tt_k_rm,
             [2],
-            [config.sliding_window],
+            [actual_pad],
             [0],
             "zeros",
             [mesh_config.sp_axis],
@@ -193,7 +196,7 @@ def prefill_forward(
         tt_v = ttnn.experimental.neighbor_pad_async(
             tt_v_rm,
             [2],
-            [config.sliding_window],
+            [actual_pad],
             [0],
             "zeros",
             [mesh_config.sp_axis],
