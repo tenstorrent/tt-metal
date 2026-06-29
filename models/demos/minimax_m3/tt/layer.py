@@ -1,9 +1,38 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
+
+
+def _dbg_sub(layer_idx, tag, t):
+    """DEBUG_LAYERS=1: probe a SUBLAYER tensor (device-0 shard) at layers 32-39 to localize the token-0
+    activation explosion (attention-out vs MoE-out). Logs whole-tensor + last-row max|x|/std/finite, plus
+    the (row,col) of the global max so we can see WHICH token position blows up first."""
+    if os.getenv("DEBUG_LAYERS") != "1" or not (32 <= layer_idx <= 39):
+        return
+    try:
+        import torch
+        from loguru import logger
+
+        x = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        flat = x.reshape(-1, x.shape[-1])
+        last = flat[-1]
+        amax = flat.abs().max()
+        pos = (flat.abs() == amax).nonzero()[0].tolist() if torch.isfinite(amax) else [-1, -1]
+        logger.info(
+            f"[DBG L{layer_idx} {tag}] max|x|={amax.item():.3e} std={flat.std().item():.3e} "
+            f"finite={bool(torch.isfinite(x).all())} argmax_pos(row,col)={pos} "
+            f"|| LASTROW max|x|={last.abs().max().item():.3e} std={last.std().item():.3e}"
+        )
+    except Exception as e:
+        from loguru import logger
+
+        logger.info(f"[DBG L{layer_idx} {tag}] failed: {e}")
+
 
 from .attention import Attention, AttentionConfig
 from .attention_configs import MiniMaxM3AttentionProgramConfig
@@ -124,6 +153,7 @@ class DecoderLayer:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
         )
         self.mesh_device = mesh_device
+        self.layer_idx = layer_idx
 
     def __call__(
         self,
@@ -157,19 +187,24 @@ class DecoderLayer:
             cached_len=cached_len,
         )
         hidden_states_post_norm.deallocate(True)
+        _dbg_sub(self.layer_idx, "attn_out", hidden_states)
 
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
+        _dbg_sub(self.layer_idx, "post_attn_resid", hidden_states)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
+        _dbg_sub(self.layer_idx, "post_attn_norm", hidden_states_post_norm)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
         hidden_states = self.mlp(hidden_states_post_norm)
         hidden_states_post_norm.deallocate(True)
+        _dbg_sub(self.layer_idx, "mlp_out", hidden_states)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
+        _dbg_sub(self.layer_idx, "post_mlp_resid", hidden_states)
 
         return hidden_states

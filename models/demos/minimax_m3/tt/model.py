@@ -12,15 +12,46 @@ import ttnn
 
 def _dbg_layer_stats(tag, t):
     """DEBUG_LAYERS=1: log per-layer residual health (device-0 shard) to localize where SP real-weights
-    output degrades (token-0 debug). max|x| blow-up / std collapse / non-finite pinpoints the bad op."""
+    output degrades (token-0 debug). max|x| blow-up / std collapse / non-finite pinpoints the bad op.
+
+    Reports BOTH whole-tensor and LAST-position-row stats: the emitted token comes from the last seq
+    position only, so a last-row collapse/NaN can hide inside healthy whole-tensor averages."""
     try:
         x = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        flat = x.reshape(-1, x.shape[-1])
+        last = flat[-1]  # last seq position (the row that produces the next token)
         logger.info(
             f"[DBG {tag}] shape={tuple(x.shape)} max|x|={x.abs().max().item():.3f} "
-            f"mean={x.mean().item():.4f} std={x.std().item():.4f} finite={bool(torch.isfinite(x).all())}"
+            f"mean={x.mean().item():.4f} std={x.std().item():.4f} finite={bool(torch.isfinite(x).all())} "
+            f"|| LASTROW max|x|={last.abs().max().item():.3f} std={last.std().item():.5f} "
+            f"finite={bool(torch.isfinite(last).all())}"
         )
     except Exception as e:
         logger.info(f"[DBG {tag}] stat-failed: {e}")
+
+
+def _dbg_logits(tag, t, save_path=None):
+    """DEBUG_LAYERS=1: characterize the final logits (device-0 vocab shard, last-token row) to answer
+    'why exactly token 0?'. Degenerate output (std~0 flat / all-zero / NaN) -> argmax ties to index 0;
+    a real prediction shows std>0 with a distinct top-5. shard0 holds vocab[0:V_shard] (includes id 0)."""
+    try:
+        x = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        last = x.reshape(-1, x.shape[-1])[-1]  # [V_shard]
+        finite = bool(torch.isfinite(last).all())
+        safe = torch.nan_to_num(last, nan=-1e30, posinf=1e30, neginf=-1e30)
+        vals, idx = safe.topk(min(5, safe.shape[0]))
+        nz = int((last.abs() > 1e-9).sum().item())
+        logger.info(
+            f"[DBG {tag}] V_shard={last.shape[0]} finite={finite} nonzero={nz} "
+            f"max={last.max().item():.5f} min={last.min().item():.5f} mean={last.mean().item():.5f} "
+            f"std={last.std().item():.6f} argmax={int(safe.argmax().item())} "
+            f"top5_idx={idx.tolist()} top5_val={[round(v, 4) for v in vals.tolist()]}"
+        )
+        if save_path:
+            torch.save(last, save_path)
+            logger.info(f"[DBG {tag}] saved last-row -> {save_path}")
+    except Exception as e:
+        logger.info(f"[DBG {tag}] failed: {e}")
 
 
 from models.common.sampling.generator import SamplingGenerator
@@ -421,8 +452,14 @@ class Model:
             return hidden_states
 
         # Final norm and lm_head
+        if os.getenv("DEBUG_LAYERS") == "1":
+            _dbg_layer_stats("pre_norm(last_hidden)", hidden_states)
         hidden_states = self.norm(hidden_states)
+        if os.getenv("DEBUG_LAYERS") == "1":
+            _dbg_layer_stats("post_norm", hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        if os.getenv("DEBUG_LAYERS") == "1":
+            _dbg_logits("logits(shard0)", logits, save_path="/tmp/m3_logits_shard0.pt")
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill
