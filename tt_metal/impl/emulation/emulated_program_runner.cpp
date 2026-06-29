@@ -176,6 +176,12 @@ extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
 
+// Worker L1 slot size + mask: a worker's L1 offset is a 2 MB-aligned truncated host pointer, so the masked
+// low bits recover the in-slot offset. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
+// per-resolver comments). Used by every NOC-address resolver.
+static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
+static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
+
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
@@ -193,9 +199,6 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;  // 36 bits, raw
-
-    static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
-    static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 
     if (__emule_self && __emule_self->core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
@@ -233,8 +236,6 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     // firmware-style offsets (< 2 MB) this is a no-op.
     // Multicast targets only WORKER cores (DRAM cores are skipped by the role
     // check in the delivery loop below), so the mask is L1-correct here.
-    static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
-    static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
     l1_offset &= L1_SLOT_MASK;
 
     if (!__emule_self || !__emule_self->core_map) {
@@ -1836,7 +1837,6 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;
-    static constexpr uint32_t L1_SLOT_MASK = (2u * 1024 * 1024) - 1;
 
     auto find_core = [&](uint32_t x, uint32_t y) {
         return m.find((uint64_t(x) << 32) | y);
