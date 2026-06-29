@@ -51,6 +51,7 @@ def test_gumbel_max_zero_noise_is_argmax():
 def test_entropy_budget_accept_extremes_and_monotone():
     entropy = torch.tensor([[0.5, 0.1, 0.9, 0.2, 0.7]])
     assert S.entropy_budget_accept(entropy, budget=1e9).all()  # huge budget -> all
+    assert not S.entropy_budget_accept(entropy, budget=-1e-6).any()  # HF default: no min accept
 
     acc = S.entropy_budget_accept(entropy, budget=0.0, min_accept=1)
     assert acc.sum().item() == 1 and bool(acc[0, 1])  # only the lowest-entropy pos (idx 1)

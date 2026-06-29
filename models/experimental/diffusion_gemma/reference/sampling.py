@@ -128,7 +128,7 @@ def entropy_budget_accept(
     entropy: torch.Tensor,
     budget: float,
     *,
-    min_accept: int = 1,
+    min_accept: int = 0,
 ) -> torch.Tensor:
     """Entropy-bound acceptance — exact reproduction of HF ``EntropyBoundSampler.accept_canvas``.
 
@@ -144,10 +144,10 @@ def entropy_budget_accept(
 
     This is the upper bound on the joint mutual information of the accepted set
     (sum_i^k H_i - max_i H_i <= bound, https://arxiv.org/pdf/2505.24857), so the
-    accepted tokens are ~independent. The most-confident position always has an
-    exclusive prefix of 0, so it is always accepted (>=1 accepted per step) — HF
-    has no explicit ``min_accept``. ``min_accept`` is retained only for the
-    device spike's API (#47463) and is a no-op for the HF-default ``<=1``.
+    accepted tokens are ~independent. HF has no explicit ``min_accept``; for a
+    negative budget it accepts zero positions because even the most-confident
+    token's exclusive prefix (0) exceeds the budget. ``min_accept`` is retained
+    only for the device spike's API (#47463).
 
     The scatter-back is the inverse-permutation the device path must replicate.
     """
@@ -237,7 +237,7 @@ def denoise_step(
     gumbel_noise: Optional[torch.Tensor] = None,
     noise_tokens: Optional[torch.Tensor] = None,
     generator: Optional[torch.Generator] = None,
-    min_accept: int = 1,
+    min_accept: int = 0,
 ) -> DenoiseStepResult:
     """Compose one denoise step over a ``[B, L, vocab]`` logits tensor.
 
