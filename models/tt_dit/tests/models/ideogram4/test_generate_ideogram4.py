@@ -43,6 +43,53 @@ PROMPT = "a watercolor painting of a red panda reading a book under a cherry tre
 OUT_PATH = "/localdev/cglagovich/ideogram4_sample.png"
 
 
+def _ideogram_json_prompt() -> str:
+    """In-distribution structured-JSON caption (the format Ideogram 4 was trained on).
+
+    Schema from the reference magic_prompt / caption_verifier: aspect_ratio,
+    high_level_description, compositional_deconstruction{background, elements[]};
+    bbox = [y1, x1, y2, x2] in 0-1000 coords. Same scene as the plain PROMPT.
+    """
+    import json
+
+    caption = {
+        "aspect_ratio": "1:1",
+        "high_level_description": (
+            "A soft watercolor painting of a red panda sitting and reading an open book beneath a "
+            "blossoming cherry tree in gentle morning light."
+        ),
+        "compositional_deconstruction": {
+            "background": (
+                "Pale watercolor sky in soft peach and light-blue morning tones, a grassy meadow in muted "
+                "greens with faint wet-on-wet blooms, diffuse warm morning light from the upper left."
+            ),
+            "elements": [
+                {
+                    "type": "obj",
+                    "bbox": [30, 90, 650, 910],
+                    "desc": (
+                        "Blossoming cherry tree with a slender brown trunk and spreading branches covered in "
+                        "soft pink and white blossoms, a few petals drifting down, painted in loose watercolor washes."
+                    ),
+                },
+                {
+                    "type": "obj",
+                    "bbox": [520, 320, 950, 720],
+                    "desc": (
+                        "Red panda sitting upright on the grass, rust-red fur with cream face markings and dark eye "
+                        "patches, holding an open hardcover book with pale pages in both front paws, calm absorbed "
+                        "expression, soft watercolor edges."
+                    ),
+                },
+            ],
+        },
+    }
+    return json.dumps(caption, ensure_ascii=False, separators=(",", ":"))
+
+
+PROMPT_JSON = _ideogram_json_prompt()
+
+
 def _encode_prompt(prompt, llm_features_dim):
     """Host Qwen3-VL encode -> real [1, n_text, 13*4096] features (then free the encoder)."""
     tok = transformers.AutoTokenizer.from_pretrained(FP8, subfolder="tokenizer")
@@ -70,7 +117,12 @@ def _encode_prompt(prompt, llm_features_dim):
         lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
     for h in hh:
         h.remove()
-    feats = torch.cat([caps[i] for i in QWEN3_VL_ACTIVATION_LAYERS], dim=-1).to(torch.bfloat16)  # [1, n_text, 53248]
+    # Match the reference _encode_text layout EXACTLY: stack the 13 taps, permute so
+    # taps are the FASTEST axis, then reshape -> element index = h*13 + tap (interleaved).
+    # llm_cond_proj was trained on this layout; a block concat ([l0|l3|...]) scrambles
+    # the conditioning (coherent but prompt-unfaithful output).
+    stacked = torch.stack([caps[i] for i in QWEN3_VL_ACTIVATION_LAYERS], dim=0)  # [13, 1, L, 4096]
+    feats = stacked.permute(1, 2, 3, 0).reshape(1, ids.shape[1], -1).to(torch.bfloat16)  # [1, L, 53248]
     n_text = ids.shape[1]
     del hf, lm, caps
     gc.collect()
@@ -238,8 +290,12 @@ def _build_transformer_tp4(weights_file, config, mesh_device, ccl, parallel_conf
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
 @pytest.mark.parametrize(("height", "width", "num_steps"), [(512, 512, 12)], ids=["512px_12steps"])
-def test_generate_image_cfg(*, mesh_device, submesh_shape, tp_axis, num_links, height, width, num_steps) -> None:
+@pytest.mark.parametrize("prompt_kind", ["plain", "json"])
+def test_generate_image_cfg(
+    *, mesh_device, submesh_shape, tp_axis, num_links, height, width, num_steps, prompt_kind
+) -> None:
     """Full asymmetric-CFG generation: cond + uncond 9.3B transformers, TP=4 across the mesh."""
+    prompt = PROMPT if prompt_kind == "plain" else PROMPT_JSON
     from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
     from ....parallel.config import VAEParallelConfig  # noqa: F401  (host VAE; kept for parity)
@@ -267,7 +323,7 @@ def test_generate_image_cfg(*, mesh_device, submesh_shape, tp_axis, num_links, h
     )
 
     # ---- 1. encode (host) ----
-    llm_text, n_text = _encode_prompt(PROMPT, config.llm_features_dim)
+    llm_text, n_text = _encode_prompt(prompt, config.llm_features_dim)
     seq = n_text + num_img
     logger.info(
         f"[CFG] {n_text} text tokens + {num_img} image tokens; TP={tp_factor}, padded_heads={padding_config.target_heads}"
@@ -378,7 +434,7 @@ def test_generate_image_cfg(*, mesh_device, submesh_shape, tp_axis, num_links, h
         decoded = akl.decode(z_nchw).sample.float().clamp(-1, 1)
     img = ((decoded + 1) * 127.5).round().to(torch.uint8)[0].permute(1, 2, 0).cpu().numpy()
 
-    out_path = "/localdev/cglagovich/ideogram4_sample_cfg.png"
+    out_path = f"/localdev/cglagovich/ideogram4_sample_cfg_{prompt_kind}.png"
     Image.fromarray(img).save(out_path)
     logger.info(f"[CFG] saved {out_path} shape={img.shape} std={img.std():.1f}")
     assert img.std() > 1.0
