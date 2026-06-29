@@ -1,6 +1,9 @@
 name: "(TM-Fabric) Fabric Tests"
 
 on:
+  schedule:
+    # Once daily at 07:00 UTC — fabric CPU-only unit tests.
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       run-fabric-cpu-only-unit-tests:
@@ -82,6 +85,13 @@ on:
         type: boolean
         description: "Enable Link Time Optimization (LTO)"
 
+permissions:
+  contents: read
+  packages: write
+
+run-name: >-
+  (TM-Fabric) Fabric Tests${{ github.event_name == 'schedule' && ' [CPU-only scheduled]' || '' }}
+
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -112,7 +122,7 @@ jobs:
         run: |
           matrix_items=()
 
-          # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
+          # workflow_dispatch: checkbox inputs; schedule: CPU-only nightly; else: all test types.
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             run_cpu_only="${{ inputs.run-fabric-cpu-only-unit-tests }}"
             run_wh_n300="${{ inputs.run-wh-n300-fabric-tests }}"
@@ -122,6 +132,15 @@ jobs:
             bh_loudbox="${{ inputs.bh-runner-loudbox }}"
             bh_p300="${{ inputs.bh-runner-p300 }}"
             bh_quietbox_2="${{ inputs.bh-runner-quietbox-2 }}"
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            run_cpu_only="true"
+            run_wh_n300="false"
+            run_wh_t3k="false"
+            run_wh_6u="false"
+            run_bh="false"
+            bh_loudbox="false"
+            bh_p300="false"
+            bh_quietbox_2="false"
           else
             # Default to true for workflow_call and push events
             run_cpu_only="true"

@@ -218,6 +218,9 @@ def dict_to_compute_kernel_config(cfg):
         math_approx_mode=_to_bool(cfg.get("math_approx_mode", False)),
         fp32_dest_acc_en=_to_bool(cfg.get("fp32_dest_acc_en", False)),
         packer_l1_acc=_to_bool(cfg.get("packer_l1_acc", True)),
+        # Preserve the traced dst_full_sync_en; without it the rebuilt config
+        # defaults to False and diffs against a master traced with True.
+        dst_full_sync_en=_to_bool(cfg.get("dst_full_sync_en", False)),
     )
 
 
@@ -283,6 +286,17 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     """Parse program configs stored as string repr: 'ClassName(param=val, ...)'."""
     import re
 
+    # Canonicalize the grid repr: newer ttnn prints compute_with_storage_grid_size
+    # as `6-8` (dash) instead of `(x=6,y=8)`. The per-config regexes below expect
+    # the (x=,y=) form, so normalize first — otherwise the grid match fails and the
+    # whole program_config is dropped (e.g. a LayerNormShardedMultiCoreProgramConfig
+    # disappears -> program_config extra_key diff vs the master trace).
+    value_str = re.sub(
+        r"compute_with_storage_grid_size=(\d+)-(\d+)",
+        r"compute_with_storage_grid_size=(x=\1,y=\2)",
+        value_str,
+    )
+
     if "SDPAProgramConfig" in type_name or "SDPAProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         q_chunk_m = re.search(r"q_chunk_size=(\d+)", value_str)
@@ -293,12 +307,32 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
         exp_val = False
         if exp_m:
             exp_val = exp_m.group(1).lower() not in ("false", "0")
-        return ttnn.SDPAProgramConfig(
+        # sub_core_grids: the explicit kernel-placement grid ({[x1-y1 - x2-y2], ...}).
+        # It MUST be reconstructed: without it the op falls back to the full
+        # compute_with_storage_grid_size (e.g. width 8 -> x=7), which lands a kernel
+        # on a WORKER dispatch core ("not on_dispatch_core"). std::nullopt when absent.
+        sub_core_grids = None
+        if "sub_core_grids=std::nullopt" not in value_str:
+            _ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", value_str)
+            if _ranges:
+                sub_core_grids = ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(ttnn.CoreCoord(int(a), int(b)), ttnn.CoreCoord(int(c), int(d)))
+                        for a, b, c, d in _ranges
+                    }
+                )
+        mcphb_m = re.search(r"max_cores_per_head_batch=(\d+)", value_str)
+        _sdpa_kwargs = dict(
             compute_with_storage_grid_size=ttnn.CoreCoord(int(grid_m.group(1)), int(grid_m.group(2))),
             q_chunk_size=int(q_chunk_m.group(1)),
             k_chunk_size=int(k_chunk_m.group(1)),
             exp_approx_mode=exp_val,
         )
+        if sub_core_grids is not None:
+            _sdpa_kwargs["sub_core_grids"] = sub_core_grids
+        if mcphb_m:
+            _sdpa_kwargs["max_cores_per_head_batch"] = int(mcphb_m.group(1))
+        return ttnn.SDPAProgramConfig(**_sdpa_kwargs)
 
     if "LayerNormShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
@@ -379,6 +413,13 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 # constructor defaults to True and the kernel asserts on the
                 # batch-shape requirement for any non-singleton-batch input_b.
                 fuse_batch=bool(cfg.get("fuse_batch", False)),
+                # NOTE: the 2D MatmulMultiCoreReuseMultiCastProgramConfig C++
+                # constructor has no `untilize_out` parameter (only the 1D
+                # variant does). Passing it raises "incompatible function
+                # arguments", which made dict_to_program_config return None and
+                # silently dropped the program_config for linear's 2D-MultiCast
+                # configs — causing the matmul kernel to take the wrong path
+                # (WIDTH_SHARDED / on_dispatch_core TT_FATALs). Do not add it here.
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
@@ -397,6 +438,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 fuse_batch=bool(cfg.get("fuse_batch", True)),
                 mcast_in0=bool(cfg.get("mcast_in0", True)),
                 fused_activation=fused_activation,
+                untilize_out=bool(cfg.get("untilize_out", False)),
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])

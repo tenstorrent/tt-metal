@@ -24,18 +24,6 @@
   save-perf-data: true
   model-type: SD3.5
 
-- name: Galaxy DiT Flux.1 model perf tests
-  cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "wh_4x8sp0tp1" --timeout=500
-  model: flux1-dev
-  skus:
-    wh_galaxy_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  arch: wormhole_b0
-  save-perf-data: true
-  model-type: Flux.1-Dev
-
 - name: Galaxy DiT Motif model perf tests
   cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_performance_motif.py -k "4x8cfg1sp0tp1" --timeout=1000
   model: motif

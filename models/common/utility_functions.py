@@ -1016,6 +1016,11 @@ def is_single_chip():
     return ttnn.GetNumAvailableDevices() == 1
 
 
+def is_quasar():
+    ARCH_NAME = ttnn.get_arch_name()
+    return "quasar" in ARCH_NAME
+
+
 def is_blackhole():
     ARCH_NAME = ttnn.get_arch_name()
     return "blackhole" in ARCH_NAME
