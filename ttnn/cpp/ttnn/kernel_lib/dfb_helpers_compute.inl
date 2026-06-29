@@ -5,6 +5,11 @@
 // Do not include directly - include dfb_helpers_compute.hpp instead
 
 #include "api/compute/cb_api.h"
+#ifdef ARCH_QUASAR
+// ckernel::trisc::tile_counters — the per-Tensix HW tile-counter registers that hold each DFB's
+// capacity in entries/pages (the same source DataflowBuffer's reserve/wait/pop assert against).
+#include "ckernel_trisc_common.h"
+#endif
 
 namespace compute_kernel_lib {
 
@@ -58,17 +63,22 @@ ALWI constexpr bool is_block_float_format(uint32_t format) {
     return format == 2 || format == 3 || format == 11 || format == 6 || format == 7 || format == 15;
 }
 
-// Needed by the regular tilize path on Quasar (no fast tilize) — used only by debug capacity ASSERTs.
+// Returns the DFB's capacity in entries (pages) — used by the debug capacity ASSERTs in the
+// tilize/untilize/reduce helpers (both `>=` and the `% tiles_per_bulk == 0` check in reduce).
 ALWI uint32_t get_dfb_num_pages(uint32_t dfb_id) {
 #ifdef ARCH_QUASAR
-    // Quasar compute kernels use the DFB interface (g_dfb_interface), NOT cb_interface — the latter is
-    // undefined on the Quasar TRISC link (only the data-movement firmware defines it). get_dfb_num_pages
-    // is only consumed by the `>=` capacity ASSERTs in the tilize/untilize/reduce helpers; return a max
-    // sentinel so those pass without referencing cb_interface. The real DFB capacity is validated
-    // host-side via DataflowBufferSpec num_entries. TODO: read the DFB ring depth if a device-side
-    // runtime check is ever wanted (ring_size is a per-TC byte span, not a page count).
-    (void)dfb_id;
-    return 0xFFFFFFFFu;
+    // Quasar compute kernels track DFB state in g_dfb_interface, NOT cb_interface (the latter is
+    // undefined on the Quasar TRISC link). The buffer's capacity in entries/pages lives in the HW
+    // tile-counter register — exactly the value DataflowBuffer's reserve_back/wait_front/pop_front
+    // assert against (see dataflow_buffer.inl), so read it the same way. A max sentinel would be
+    // wrong for the `num_pages % tiles_per_bulk == 0` check in reduce_helpers_compute.inl. There is
+    // no compile-time per-DFB capacity descriptor (the JIT emits tile format/dims only, not ring
+    // depth), and even WH/BH derive this at runtime from cb_interface — so this is the runtime
+    // equivalent. tile_counters is a per-Tensix register shared across TRISCs, set at DFB init.
+    const LocalDFBInterface& dfb = get_local_dfb_interface(dfb_id);
+    const dfb::PackedTileCounter ptc = dfb.tc_slots[dfb.tc_idx].packed_tile_counter;
+    const uint8_t tc_id = dfb::get_counter_id(ptc);
+    return ckernel::trisc::tile_counters[tc_id].f.buf_capacity;
 #else
     auto& cb = get_local_cb_interface(dfb_id);
     return cb.fifo_size / cb.fifo_page_size;
