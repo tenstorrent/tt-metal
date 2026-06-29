@@ -46,10 +46,10 @@ dominant eval lever).
 Wire-up (see scripts/navsim_inproc/README.md for the full recipe + caveats):
   1. ``conda activate navsim310``
   2. one-time: install ttnn's pure-Python deps into navsim310 and put the
-     tt-metal ttnn *inner-package parent* on PYTHONPATH (just /root/tt/tt-metal
+     tt-metal ttnn *inner-package parent* on PYTHONPATH (just $TT_METAL_HOME
      resolves to an empty namespace package — ttnn.open_device would be missing):
        pip install --no-deps loguru==0.6.0 graphviz==0.21 seaborn==0.13.2 ml_dtypes==0.5.4
-       export PYTHONPATH=$BR:/root/tt/tt-metal/ttnn:/root/tt/tt-metal:/root/tt/tt-metal/tools:$NAVSIM_DEVKIT_ROOT
+       export PYTHONPATH=$BR:$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools:$NAVSIM_DEVKIT_ROOT
   3. copy ``diffusiondrive_ttnn_inproc_agent.yaml`` into the navsim agent config dir,
   4. run ``run_pdm_score.py`` with ``agent=diffusiondrive_ttnn_inproc_agent``.
 """

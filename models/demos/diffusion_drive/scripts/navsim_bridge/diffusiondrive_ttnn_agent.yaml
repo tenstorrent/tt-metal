@@ -25,5 +25,6 @@ config:
 # Weights live in the TTNN server; checkpoint_path is accepted only for CLI
 # compatibility with the upstream command line (agent.checkpoint_path=$CKPT).
 checkpoint_path: null
-socket_path: /tmp/ttnn_dd.sock
+# Must match the server's --socket (both default to $TTNN_DD_SOCKET, else /tmp/ttnn_dd.sock).
+socket_path: ${oc.env:TTNN_DD_SOCKET,/tmp/ttnn_dd.sock}
 lr: 6e-4

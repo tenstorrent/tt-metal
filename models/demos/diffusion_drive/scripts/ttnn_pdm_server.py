@@ -23,12 +23,15 @@ This process:
 
 Protocol (both directions): 8-byte big-endian length prefix + pickle payload.
 
-Run (tt-metal venv):
-    source python_env/bin/activate && export PYTHONPATH=/root/tt/tt-metal
+Run (tt-metal venv).  Paths come from env vars (see the demo README "Eval
+environment" block); the flags below override them:
+    source python_env/bin/activate && export PYTHONPATH="${TT_METAL_HOME:-$PWD}"
+    export DD_CHECKPOINT_PATH="${DD_DATA_ROOT:-/mnt/diffusion-drive}/weights/diffusiondrive_navsim_88p1_PDMS.pth"
+    export DD_ANCHOR_PATH="${DD_DATA_ROOT:-/mnt/diffusion-drive}/resnet34/kmeans_navsim_traj_20.npy"
     python models/demos/diffusion_drive/scripts/ttnn_pdm_server.py \
-        --checkpoint /root/02/weights/diffusiondrive_navsim_88p1_PDMS.pth \
-        --anchors    /root/02/resnet34/kmeans_navsim_traj_20.npy \
-        --socket     /tmp/ttnn_dd.sock
+        --checkpoint "$DD_CHECKPOINT_PATH" \
+        --anchors    "$DD_ANCHOR_PATH" \
+        --socket     "${TTNN_DD_SOCKET:-/tmp/ttnn_dd.sock}"
 """
 
 from __future__ import annotations
@@ -199,10 +202,26 @@ def serve(checkpoint: str, anchors: str, sock_path: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--anchors", required=True)
-    ap.add_argument("--socket", default="/tmp/ttnn_dd.sock")
+    # Defaults come from env vars so the harness is portable across machines;
+    # the flags override them. See the demo README "Eval environment" block.
+    ap.add_argument(
+        "--checkpoint",
+        default=os.environ.get("DD_CHECKPOINT_PATH"),
+        help="model checkpoint .pth (default: $DD_CHECKPOINT_PATH)",
+    )
+    ap.add_argument(
+        "--anchors",
+        default=os.environ.get("DD_ANCHOR_PATH"),
+        help="K-means plan-anchor .npy (default: $DD_ANCHOR_PATH)",
+    )
+    ap.add_argument(
+        "--socket",
+        default=os.environ.get("TTNN_DD_SOCKET", "/tmp/ttnn_dd.sock"),
+        help="Unix-domain socket path (default: $TTNN_DD_SOCKET or /tmp/ttnn_dd.sock)",
+    )
     args = ap.parse_args()
+    if not args.checkpoint or not args.anchors:
+        ap.error("set --checkpoint/--anchors or export $DD_CHECKPOINT_PATH / $DD_ANCHOR_PATH")
     serve(args.checkpoint, args.anchors, args.socket)
 
 
