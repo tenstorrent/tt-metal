@@ -29,6 +29,7 @@ The model class is the single source of truth — this driver wires rank topolog
 and the per-chunk schedule; it does not reimplement embed / layers / forward.
 """
 
+import json
 import os
 import signal
 import time
@@ -46,6 +47,65 @@ from models.demos.common.prefill.runners.runner_utils import (
     open_mesh_device,
     resolve_trace_dir,
 )
+
+
+def _apply_manifest_env():
+    """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
+    the runner (and migration/validation helpers) read. setdefault => an explicitly
+    exported env var still wins over the manifest. Must be invoked before the
+    module-level env reads below (e.g. PREFILL_MAX_SEQ_LEN) so the values take effect."""
+    manifest_path = os.environ.get("PREFILL_MANIFEST")
+    if not manifest_path:
+        return
+
+    with open(manifest_path) as mp:
+        manifest = json.load(mp)
+    users = manifest["users"]
+    N = len(users)
+
+    def sd(key, val):
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+    model = manifest.get("model", {})
+    mig = manifest.get("migration", {})
+    paths = manifest.get("paths", {})
+
+    sd("PREFILL_MODEL", model.get("variant"))
+    sd("DEEPSEEK_PREFILL_TRACE_DIR", paths.get("trace_dir"))
+    sd("PREFILL_MIGRATION_CLIENT_DIR", paths.get("migration_client_dir"))
+    sd("PREFILL_NUM_USERS", 2 * N)
+    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
+    sd("PREFILL_STANDALONE_CHUNKED_NCHUNKS", sum(u["n_chunks"] for u in users))
+    sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
+    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u.get("kv_cache", "") for u in users))
+
+    # Mode: default to pairwise
+    mode = mig.get("mode") or "pairwise"
+    # Loud failure for incorrect mode
+    if mode != "pairwise":
+        raise ValueError(f"manifest migration.mode must be 'pairwise', got: {mode}")
+    # Loud failure for empty users
+    if N < 1:
+        raise ValueError(f"manifest migration.mode 'pairwise' requires at least 1 user, got {N}")
+    sd("PREFILL_MIGRATE", mode)
+
+    # Each non-empty kv_cache must exist on disk.
+    for i, u in enumerate(users):
+        kv = u.get("kv_cache", "")
+        if kv and not os.path.exists(kv):
+            raise FileNotFoundError(f"PREFILL_MANIFEST user {i} kv_cache not found: {kv}")
+
+    # PREFILL_NUM_USERS (derived or explicitly exported) must equal 2*N.
+    num_users = int(os.environ["PREFILL_NUM_USERS"])
+    if num_users != 2 * N:
+        raise ValueError(
+            f"PREFILL_NUM_USERS ({num_users}) inconsistent with manifest " f"({N} users => expected {2 * N})"
+        )
+
+
+# Populate env from the manifest BEFORE the module-level env reads below.
+_apply_manifest_env()
 
 # Both socket transports (H2D input on rank 0, D2D between ranks) share a 1x1 push/sync worker grid and
 # the same 3-word PrefillMetadata (slot_id, actual_start, actual_end). The 1x1 grid is the cheapest

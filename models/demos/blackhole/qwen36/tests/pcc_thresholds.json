@@ -1,0 +1,16 @@
+{
+  "test_attention_tp": 0.97,
+  "test_attention_tp_prefill": 0.95,
+  "test_attention_tp_paged": 0.97,
+  "test_gdn_tp": 0.92,
+  "test_gdn_tp_prefill": 0.95,
+  "test_mlp_tp": 0.97,
+  "test_model_tp_contract": 0.99,
+  "test_model_tp_long_prefill": 0.99,
+  "test_model_tp_long_prefill_traced": 0.99,
+  "test_gated_attention_pcc": 0.99,
+  "test_deltanet_pcc": 0.99,
+  "test_mlp_pcc": 0.98,
+  "test_lm_head_precision": 0.999,
+  "test_embedding_pcc": 0.999
+}

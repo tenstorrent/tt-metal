@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -18,7 +18,8 @@ void kernel_main() {
     uint32_t Ht = get_arg(args::Ht);
     uint32_t Wt = get_arg(args::Wt);
 
-    transpose_wh_init(dfb::cb_in0, dfb::cb_out0);
+    compute_kernel_hw_startup(dfb::cb_in0, dfb::cb_out0);
+    transpose_init(dfb::cb_in0);
 
     DataflowBuffer cb_in(dfb::cb_in0);
     DataflowBuffer cb_out(dfb::cb_out0);
@@ -37,7 +38,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; ++w) {
             for (uint32_t h = 0; h < Ht; ++h) {
                 tile_regs_acquire();
-                transpose_wh_tile(dfb::cb_in0, tile_idx, 0);
+                transpose_tile(dfb::cb_in0, tile_idx, 0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, dfb::cb_out0);

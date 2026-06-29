@@ -148,31 +148,52 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     // ---- banded-product schedule -------------------------------------------------------------
     // groups -> rows (phase-stack when group_count > grid_y), bands -> columns (each owns a contiguous chunk).
+    // When the group dimension leaves grid rows idle (short sequences: group_count < grid_y), replicate each
+    // group across num_blocks row-blocks and split its band range across them (a band-chunk per block). Cells
+    // in different blocks write disjoint output columns -- no cross-core reduce -- and each block's k-mcast
+    // stays a contiguous per-column rectangle (a block's group_rows rows share that block's band-chunk).
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC)
     const auto grid = q.device()->compute_with_storage_grid_size();
     const uint32_t grid_x = grid.x, grid_y = grid.y;
 
-    const uint32_t rows_used = rows_for_groups(group_count, grid_y);
+    const uint32_t group_rows = rows_for_groups(group_count, grid_y);
     const uint32_t cols_used = cols_for_bands(band_count, grid_x);
+    // Row-block replication factor (shared with the perf model so their core counts can't drift): fill the
+    // idle rows (grid_y / group_rows), but never finer than one band per (block, column) cell. num_blocks==1
+    // is the original single-band-row schedule -- the deployed long-sequence cases, where group_rows fills
+    // grid_y.
+    const uint32_t num_blocks = band_row_blocks(group_count, band_count, grid_x, grid_y);
+    const uint32_t rows_used = group_rows * num_blocks;
     const uint32_t num_cores = rows_used * cols_used;
+    // Phase-stack count: groups dealt round-robin onto the group_rows rows (1 when group_rows == group_count).
+    const uint32_t num_groups = group_count / group_rows;
 
-    // Even band split across the used columns: the first (band_count % cols_used) columns get one extra.
-    std::vector<uint32_t> col_band_start(cols_used), col_band_size(cols_used);
+    // 2-D band deal: bands split into num_blocks contiguous blocks (front blocks get the remainder), each
+    // block split across cols_used columns (front columns get the remainder). Indexed [block][col]; with
+    // num_blocks==1 this is exactly the original per-column split over the whole band range.
+    std::vector<std::vector<uint32_t>> band_start(num_blocks, std::vector<uint32_t>(cols_used));
+    std::vector<std::vector<uint32_t>> band_size(num_blocks, std::vector<uint32_t>(cols_used));
     {
-        const uint32_t bands_per_col = band_count / cols_used, extra = band_count % cols_used;
-        uint32_t off = 0;
-        for (uint32_t col = 0; col < cols_used; ++col) {
-            col_band_size[col] = bands_per_col + (col < extra ? 1u : 0u);
-            col_band_start[col] = off;
-            off += col_band_size[col];
+        const uint32_t bands_per_block = band_count / num_blocks, blk_extra = band_count % num_blocks;
+        uint32_t blk_off = 0;
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+            const uint32_t blk_bands = bands_per_block + (blk < blk_extra ? 1u : 0u);
+            const uint32_t bands_per_col = blk_bands / cols_used, extra = blk_bands % cols_used;
+            uint32_t off = blk_off;
+            for (uint32_t col = 0; col < cols_used; ++col) {
+                band_size[blk][col] = bands_per_col + (col < extra ? 1u : 0u);
+                band_start[blk][col] = off;
+                off += band_size[blk][col];
+            }
+            blk_off += blk_bands;
         }
     }
-    // rows_used divides group_count, so every row runs the same num_groups (k-mcast lockstep).
-    const uint32_t num_groups = group_count / rows_used;
-    // Widest column's band count: the streaming q-mcast pad target (the kernels pad each row to max_bands
-    // with q-only phantom bands so the rendezvous stays uniform).
-    const uint32_t max_bands = (band_count + cols_used - 1) / cols_used;
+    // Widest cell's band count: the streaming q-mcast pad target (the kernels pad each row to max_bands with
+    // q-only phantom bands so the rendezvous stays uniform). Widest block has ceil(band_count/num_blocks)
+    // bands; its widest column ceil(that/cols_used).
+    const uint32_t bands_in_widest_block = (band_count + num_blocks - 1) / num_blocks;
+    const uint32_t max_bands = (bands_in_widest_block + cols_used - 1) / cols_used;
 
     const CoreRange core_rect(CoreCoord{0, 0}, CoreCoord{cols_used - 1, rows_used - 1});
     const CoreRangeSet core_ranges(core_rect);
@@ -185,8 +206,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         }
     }
 
-    // k-mcast needs >1 row down a column; q/w-mcast needs >1 column along a row (both HB-independent).
-    const uint32_t k_mcast_on = (rows_used > 1) ? 1u : 0u;
+    // k-mcast shares a block's band-chunk down its group_rows rows; q/w-mcast needs >1 column along a row
+    // (both HB-independent).
+    const uint32_t k_mcast_on = (group_rows > 1) ? 1u : 0u;
     const uint32_t q_mcast_on = (cols_used > 1) ? 1u : 0u;
 
     // 3 semaphores per active direction: send (receivers ready), recv (sender relays valid in), valid
@@ -235,12 +257,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // One-line schedule/mcast summary (per cache miss) for profiling.
     log_debug(
         tt::LogOp,
-        "indexer_score schedule: G={} U={} grid={}x{} rows_used={} cols_used={} num_groups={} "
-        "max_bands={} stream_heads={} k_mcast={} q_mcast={}",
+        "indexer_score schedule: G={} U={} grid={}x{} group_rows={} num_blocks={} rows_used={} cols_used={} "
+        "num_groups={} max_bands={} stream_heads={} k_mcast={} q_mcast={}",
         group_count,
         band_count,
         grid_x,
         grid_y,
+        group_rows,
+        num_blocks,
         rows_used,
         cols_used,
         num_groups,
@@ -378,21 +402,25 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         const uint32_t q_py = u32(phys[row][0].y);
         const uint32_t q_diag = std::min<uint32_t>(row, cols_used - 1);  // diagonal sender column
         const CoreCoord q_sender = phys[row][q_diag];
+        // This row's band-chunk block and its row base within the grid. The k-mcast spans only the block's
+        // group_rows rows; row % group_rows is the group this row computes (same in every block).
+        const uint32_t block = row / group_rows;
+        const uint32_t block_base = block * group_rows;
         for (uint32_t col = 0; col < cols_used; ++col) {
-            // physical bbox of this column down the used rows (k mcast rect); px constant down the column.
-            uint32_t k_ys = u32(phys[0][col].y), k_ye = u32(phys[0][col].y);
-            for (uint32_t bbox_row = 0; bbox_row < rows_used; ++bbox_row) {
+            // physical bbox of this column down the block's rows (k mcast rect); px constant down the column.
+            uint32_t k_ys = u32(phys[block_base][col].y), k_ye = u32(phys[block_base][col].y);
+            for (uint32_t bbox_row = block_base; bbox_row < block_base + group_rows; ++bbox_row) {
                 k_ys = std::min<uint32_t>(k_ys, u32(phys[bbox_row][col].y));
                 k_ye = std::max<uint32_t>(k_ye, u32(phys[bbox_row][col].y));
             }
-            const uint32_t k_px = u32(phys[0][col].x);
-            const CoreCoord k_sender = phys[0][col];
+            const uint32_t k_px = u32(phys[block_base][col].x);
+            const CoreCoord k_sender = phys[block_base][col];
 
             const CoreCoord core{col, row};
             cores.push_back(core);
-            // max_bands is uniform (the row's widest column); streaming pads its band loop to it.
+            // max_bands is uniform (global widest cell); streaming pads its band loop to it.
             const std::array<uint32_t, 6> sched = {
-                row, rows_used, num_groups, col_band_start[col], col_band_size[col], max_bands};
+                row % group_rows, group_rows, num_groups, band_start[block][col], band_size[block][col], max_bands};
 
             std::vector<uint32_t> reader_rt = {q.buffer()->address(), k.buffer()->address(), w.buffer()->address()};
             reader_rt.insert(reader_rt.end(), sched.begin(), sched.end());
@@ -412,15 +440,16 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
                 reader_rt.push_back(u32(s.y));
                 reader_rt.push_back(ndst);
             };
-            // K column: sender row 0, receivers rows [1, rows_used); vertical rect spanning the column.
+            // K column: per row-block, sender is the block's top row, receivers the rest of the block;
+            // vertical rect spanning only the block's group_rows rows.
             push_mcast_dir(
-                k_mcast_on ? (row == 0 ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
+                k_mcast_on ? (row == block_base ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
                 k_px,
                 k_ys,
                 k_px,
                 k_ye,
                 k_sender,
-                rows_used - 1);
+                group_rows - 1);
             // Q/W row: sender on the diagonal column, receivers the rest of the row; horizontal rect.
             push_mcast_dir(
                 q_mcast_on ? (col == q_diag ? mcast_role_sender : mcast_role_receiver) : mcast_role_none,
