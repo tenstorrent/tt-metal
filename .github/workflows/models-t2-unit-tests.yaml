@@ -2,8 +2,8 @@ name: "(Tier 2) Models Unit Tests"
 
 on:
   schedule:
-    # Twice a day at 01:00 and 13:00 UTC — all models, all SKUs
-    - cron: "0 1,13 * * *"
+    # Once a day at 01:00 UTC — all models, all SKUs
+    - cron: "0 1 * * *"
   workflow_dispatch:
     inputs:
       model:

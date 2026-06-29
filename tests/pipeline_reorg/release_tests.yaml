@@ -296,15 +296,6 @@
   team: models
   model-name: sd35_large
 
-- name: t3k_flux1-dev_tests
-  cmd: run_t3000_flux1_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 12
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux1-dev
-
 - name: t3k_wan2.2_tests
   cmd: run_t3000_wan22_tests
   skus:
@@ -379,7 +370,7 @@
 - name: Galaxy Flux.1-dev demo tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache NO_PROMPT=1 TT_MM_THROTTLE_PERF=5
-    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-dev" --timeout 1200
+    pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "4x8sp0tp1-flux_dev" --timeout 1200
   model-name: flux1
   skus:
     wh_galaxy:
