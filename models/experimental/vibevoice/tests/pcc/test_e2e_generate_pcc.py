@@ -2,7 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end generate() audio-parity test — reference vs TTNN.
+End-to-end generate() tests — mirrors Voxtral TTS ``test_ttnn_voxtral_tts_staged_pcc`` +
+``test_ttnn_voxtral_tts_free_run_asr``.
+
+1. **Teacher-forced PCC** — reference CPU generate produces the token stream; TT replays
+   it via ``forced_token_ids``. Gate on frame-0 PCC + RMS ratio (whole-clip PCC is
+   informational only; diffusion+streaming chaos prevents high clip PCC).
+
+2. **Free-run ASR WER** — TT generates its own token stream end-to-end; Whisper
+   (``openai/whisper-small``) transcribes the output and we gate on WER < 0.30 vs the
+   input script (same metric as Voxtral Phase-4 / VibeVoice paper).
 
 WHY THE OLD TEST WAS UNRELIABLE, AND WHAT THIS GATES ON INSTEAD
 --------------------------------------------------------------
@@ -34,6 +43,7 @@ the per-module PCC tests: ``test_lm_pcc`` (LM prefill+decode hidden), and the di
 head / acoustic+semantic tokenizer / connector PCC tests.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -53,6 +63,7 @@ for _p in (_REFERENCE_DIR, _VIBEVOICE_ROOT.parent.parent.parent):
 
 _VOICE_PATH = VOICES_DIR / "en-Alice_woman.wav"
 _TEXT_PATH = DEFAULT_TXT_PATH
+_SPEAKER_LINE = re.compile(r"^Speaker\s+(\d+):\s*(.*)$", re.IGNORECASE)
 
 CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
@@ -63,8 +74,14 @@ SAMPLES_PER_FRAME = 3200  # prod(acoustic encoder_ratios) = 8*5*5*4*2*2
 # blow-up). Whole-clip metrics are informational only (diffusion+streaming chaos).
 FRAME0_PCC_MIN = 0.90
 RMS_RATIO_RANGE = (0.5, 2.0)
-# Cap AR steps for CI; remove or raise for full demo-script parity runs.
-MAX_NEW_TOKENS = 128
+# Teacher-forced CI cap (128 tok ≈ 17s speech).
+TEACHER_FORCED_MAX_NEW_TOKENS = 128
+
+# Free-run ASR gate (Whisper WER vs input script) — matches Voxtral ``max_tokens=1500``.
+ASR_WER_TARGET = 0.30
+ASR_SAMPLE_RATE = 16000
+WHISPER_MODEL = "openai/whisper-small"
+FREE_RUN_MAX_NEW_TOKENS = 1500
 
 
 def _load_script() -> str:
@@ -77,6 +94,74 @@ def _voice_path() -> str:
     wavs = list(VOICES_DIR.glob("*.wav"))
     assert wavs, f"No voice WAV in {VOICES_DIR}"
     return str(wavs[0])
+
+
+def _plain_script_text(script: str) -> str:
+    """Plain text for ASR WER (strip ``Speaker N:`` prefixes if present)."""
+    parts: list[str] = []
+    for line in script.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        match = _SPEAKER_LINE.match(line)
+        parts.append(match.group(2).strip() if match else line)
+    return " ".join(parts)
+
+
+def _transcribe_waveform(waveform: torch.Tensor, src_sr: int) -> str:
+    """Transcribe a 1D float waveform with Whisper-small (mirrors Voxtral ``_transcribe_waveform``)."""
+    import librosa
+    import numpy as np
+    from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+    audio = waveform.detach().reshape(-1).float().cpu().numpy().astype(np.float32)
+    if src_sr != ASR_SAMPLE_RATE:
+        audio = librosa.resample(audio, orig_sr=src_sr, target_sr=ASR_SAMPLE_RATE)
+
+    processor = WhisperProcessor.from_pretrained(WHISPER_MODEL)
+    whisper = WhisperForConditionalGeneration.from_pretrained(WHISPER_MODEL).eval()
+    chunk = 30 * ASR_SAMPLE_RATE
+    segments: list[str] = []
+    with torch.no_grad():
+        for start in range(0, max(len(audio), 1), chunk):
+            seg = audio[start : start + chunk]
+            if seg.size == 0:
+                continue
+            feats = processor(seg, sampling_rate=ASR_SAMPLE_RATE, return_tensors="pt").input_features
+            ids = whisper.generate(feats, language="en", task="transcribe")
+            segments.append(processor.batch_decode(ids, skip_special_tokens=True)[0].strip())
+    return " ".join(s for s in segments if s).strip()
+
+
+def _normalize_words(s: str) -> list[str]:
+    return re.sub(r"[^a-z0-9\s]", " ", s.lower()).split()
+
+
+def _word_error_rate(reference: str, hypothesis: str) -> float:
+    """WER = Levenshtein word edit distance / #reference words."""
+    ref = _normalize_words(reference)
+    hyp = _normalize_words(hypothesis)
+    if not ref:
+        return 0.0 if not hyp else 1.0
+    n, m = len(ref), len(hyp)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        dp[i][0] = i
+    for j in range(m + 1):
+        dp[0][j] = j
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = 0 if ref[i - 1] == hyp[j - 1] else 1
+            dp[i][j] = min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    return dp[n][m] / n
+
+
+def _word_overlap(transcription: str, reference: str) -> float:
+    """Fraction of reference words present in the transcription (informational)."""
+    ref_words = set(_normalize_words(reference))
+    if not ref_words:
+        return 1.0
+    return len(ref_words & set(_normalize_words(transcription))) / len(ref_words)
 
 
 def _spec_logmag_l1(ref: torch.Tensor, tt: torch.Tensor, n: int) -> float:
@@ -92,10 +177,8 @@ def _spec_logmag_l1(ref: torch.Tensor, tt: torch.Tensor, n: int) -> float:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_e2e_generate_speech_pcc(mesh_device):
-    """Forced-token audio parity vs reference: replay the reference token stream on TT
-    (``forced_token_ids``) so the audio is frame-aligned, then gate on perceptual
-    log-mel L1 (robust) with sample PCC reported for information."""
+def test_e2e_generate_teacher_forced_pcc(mesh_device):
+    """Teacher-forced E2E: replay reference tokens on TT; gate on frame-0 PCC + RMS."""
     from vibevoice.modular.modeling_vibevoice_inference import (
         VibeVoiceForConditionalGenerationInference,
     )
@@ -135,7 +218,7 @@ def test_e2e_generate_speech_pcc(mesh_device):
     torch.manual_seed(0)
     ref_out = ref_model.generate(
         **inputs,
-        max_new_tokens=MAX_NEW_TOKENS,
+        max_new_tokens=TEACHER_FORCED_MAX_NEW_TOKENS,
         cfg_scale=CFG_SCALE,
         tokenizer=processor.tokenizer,
         generation_config={"do_sample": False},
@@ -229,3 +312,108 @@ def test_e2e_generate_speech_pcc(mesh_device):
     assert (
         RMS_RATIO_RANGE[0] <= rms_ratio <= RMS_RATIO_RANGE[1]
     ), f"TT/ref RMS ratio {rms_ratio:.3f} outside {RMS_RATIO_RANGE}"
+
+
+@pytest.mark.timeout(28800)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_e2e_generate_free_run_asr(mesh_device):
+    """Free-run E2E correctness via Whisper ASR WER (mirrors Voxtral ``free_run_asr``).
+
+    TT generates audio free-run on device; Whisper transcribes; assert WER < 0.30 vs
+    the input script.  No reference CPU generate and no tt-vs-ref WER gate.
+    """
+    try:
+        import librosa  # noqa: F401
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor  # noqa: F401
+    except Exception as exc:
+        pytest.skip(f"Whisper ASR deps unavailable: {exc}")
+
+    from vibevoice.modular.modeling_vibevoice_inference import (
+        VibeVoiceForConditionalGenerationInference,
+    )
+    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+
+    script = _load_script()
+    target_text = _plain_script_text(script)
+    voice_path = _voice_path()
+
+    processor = VibeVoiceProcessor.from_pretrained(MODEL_PATH)
+    ref_model = VibeVoiceForConditionalGenerationInference.from_pretrained(
+        MODEL_PATH,
+        torch_dtype=torch.float32,
+        device_map="cpu",
+        attn_implementation="sdpa",
+    )
+    ref_model.eval()
+    ref_model.set_ddpm_inference_steps(num_steps=NUM_DIFFUSION_STEPS)
+
+    inputs = processor(
+        text=[script],
+        voice_samples=[[voice_path]],
+        padding=True,
+        return_tensors="pt",
+        return_attention_mask=True,
+    )
+    prefill_len = inputs["input_ids"].shape[1]
+
+    torch.manual_seed(0)
+    with torch.no_grad():
+        _, prefill_speech_embeds = ref_model._process_speech_inputs(
+            inputs["speech_tensors"].to(ref_model.dtype),
+            inputs["speech_masks"],
+        )
+
+    tt_model = TTVibeVoiceModel.from_checkpoint(
+        mesh_device,
+        MODEL_PATH,
+        cfg_scale=CFG_SCALE,
+        num_diffusion_steps=NUM_DIFFUSION_STEPS,
+    )
+    tt_model.set_speech_scale_bias(
+        ref_model.model.speech_scaling_factor.item(),
+        ref_model.model.speech_bias_factor.item(),
+    )
+
+    torch.manual_seed(0)
+    tt_out = tt_model.generate(
+        input_ids=inputs["input_ids"],
+        attention_mask=inputs["attention_mask"],
+        speech_input_mask=inputs["speech_input_mask"],
+        prefill_speech_embeds=prefill_speech_embeds,
+        tokenizer=processor.tokenizer,
+        cfg_scale=CFG_SCALE,
+        num_diffusion_steps=NUM_DIFFUSION_STEPS,
+        max_new_tokens=FREE_RUN_MAX_NEW_TOKENS,
+    )
+
+    assert tt_out.speech_outputs and tt_out.speech_outputs[0].numel() > 0
+    tt_speech = tt_out.speech_outputs[0].to(torch.float32).reshape(-1)
+    n_gen = tt_out.sequences[0, prefill_len:].reshape(-1).numel()
+    assert n_gen > 0, "free-run generation produced no tokens"
+    assert torch.isfinite(tt_speech).all(), "free-run waveform has non-finite samples"
+
+    try:
+        torch.save(
+            {"tt": tt_speech, "target_text": target_text},
+            "/tmp/vv_e2e_free_run_audio.pt",
+        )
+    except Exception:
+        pass
+
+    transcription = _transcribe_waveform(tt_speech, SR)
+    wer = _word_error_rate(target_text, transcription)
+    overlap = _word_overlap(transcription, target_text)
+    duration_s = float(tt_speech.numel()) / SR
+
+    print(
+        f"[test_e2e_free_run] GATE WER vs script | tokens={n_gen} audio={duration_s:.2f}s\n"
+        f"  target       : {target_text!r}\n"
+        f"  transcription: {transcription!r}\n"
+        f"  WER          : {wer:.2%}  target<{ASR_WER_TARGET:.0%}  "
+        f"[{'PASS' if wer < ASR_WER_TARGET else 'HIGH'}]  (word overlap={overlap:.2%})"
+    )
+
+    assert (
+        wer < ASR_WER_TARGET
+    ), f"free-run ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%}; transcription={transcription!r} target={target_text!r}"
