@@ -225,6 +225,7 @@ def run_test_linear_impl(
                 tt_output = [tt_output]
 
         else:
+            ttnn.synchronize_device(device)  # TODO: remove this once done debugging
             tt_output = ttnn.experimental.all_gather_minimal_matmul_async(
                 tt_input,
                 tt_weight,
@@ -690,9 +691,10 @@ def run_test_linear(
     "enable_trace,num_iters",
     [
         (False, 1),
+        (False, 2),
         (True, 2),
     ],
-    ids=["check", "perf"],
+    ids=["check", "check2", "perf"],
 )
 def test_linear(
     mesh_device,

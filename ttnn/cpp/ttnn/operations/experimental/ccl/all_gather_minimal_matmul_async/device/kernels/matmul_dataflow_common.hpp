@@ -139,11 +139,52 @@ void compute_actual_k_block(
     if (device_iter > 0 && is_first_n_block) {
         // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
-            DeviceZoneScopedN("FAB-RECV-WAIT");
-            noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
-            sem_target_forward += in0_core_order_size;
-            noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
-            sem_target_backward += in0_core_order_size;
+            // The default path waits the two directions sequentially, so only the first-polled direction's
+            // zone measures true latency-from-this-point; the second is masked when its data already landed
+            // during the first wait. FAB_RECV_BACKWARD_FIRST flips the order so each direction can be the
+            // first wait across two runs. FAB_RECV_POLL_BOTH instead polls both from one start and stamps
+            // each arrival, decoupling the two latencies in a single run. Zone names stay bound to direction.
+#ifdef FAB_RECV_POLL_BOTH
+            {
+                DeviceZoneScopedN("FAB-RECV-WAIT-BOTH");
+                sem_target_forward += in0_core_order_size;
+                sem_target_backward += in0_core_order_size;
+                bool forward_arrived = false;
+                bool backward_arrived = false;
+                while (!(forward_arrived && backward_arrived)) {
+                    if (!forward_arrived && *out_ready_semaphore_forward >= sem_target_forward) {
+                        forward_arrived = true;
+                        DeviceTimestampedData("FAB-FWD-ARRIVE", *out_ready_semaphore_forward);
+                    }
+                    if (!backward_arrived && *out_ready_semaphore_backward >= sem_target_backward) {
+                        backward_arrived = true;
+                        DeviceTimestampedData("FAB-BWD-ARRIVE", *out_ready_semaphore_backward);
+                    }
+                }
+            }
+#elif defined(FAB_RECV_BACKWARD_FIRST)
+            {
+                DeviceZoneScopedN("FAB-RECV-WAIT-BACKWARD");
+                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
+                sem_target_backward += in0_core_order_size;
+            }
+            {
+                DeviceZoneScopedN("FAB-RECV-WAIT");
+                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
+                sem_target_forward += in0_core_order_size;
+            }
+#else
+            {
+                DeviceZoneScopedN("FAB-RECV-WAIT");
+                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
+                sem_target_forward += in0_core_order_size;
+            }
+            {
+                DeviceZoneScopedN("FAB-RECV-WAIT-BACKWARD");
+                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
+                sem_target_backward += in0_core_order_size;
+            }
+#endif
         }
     }
 #endif  // MATMUL_ISOLATION_MODE == 0
@@ -232,6 +273,8 @@ FORCE_INLINE void forward_half_block_to_fabric_neighbor(
             }
         }
     }
+
+    DeviceZoneScopedN("FAB-SEND-SEM-INC");
 
     // unicast output ready semaphore
     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(

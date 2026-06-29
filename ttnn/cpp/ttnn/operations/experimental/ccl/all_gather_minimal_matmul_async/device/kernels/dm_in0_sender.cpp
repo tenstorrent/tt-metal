@@ -299,6 +299,11 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
+    if (is_injector_core) {
+        // Stamp ring index per chip so the profiler CSV maps PCIe slot -> ring rank for topology analysis.
+        DeviceTimestampedData("MY-RANK", my_rank);
+    }
+
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
@@ -483,6 +488,7 @@ void kernel_main() {
                         get_write_ptr(cb_id_in0);
                         if (in0_core_order_index == forward_in0_core_order_index) {
                             // If forward, send backward
+                            DeviceZoneScopedN("FAB-SEND-FWD");
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
                                 k_block_left_tile,
@@ -502,6 +508,7 @@ void kernel_main() {
                                 true);
                         } else if (in0_core_order_index == backward_in0_core_order_index) {
                             // If backward, send forward
+                            DeviceZoneScopedN("FAB-SEND-BWD");
                             forward_half_block_to_fabric_neighbor(
                                 m_tile,
                                 k_block_right_tile,

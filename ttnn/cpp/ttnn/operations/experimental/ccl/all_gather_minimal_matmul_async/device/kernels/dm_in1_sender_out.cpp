@@ -226,6 +226,8 @@ void kernel_main() {
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
                 if (!is_sink_core) {
+                    DeviceZoneScopedN("SEND-WAIT");
+
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
 
@@ -249,8 +251,8 @@ void kernel_main() {
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
+                DeviceZoneScopedN("BIAS-READ");
                 cb_reserve_back(cb_id_in2, N_block_tiles);
-
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
                     noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);

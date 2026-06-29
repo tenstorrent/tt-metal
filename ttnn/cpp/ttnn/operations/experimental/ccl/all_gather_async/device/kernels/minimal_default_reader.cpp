@@ -6,6 +6,7 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -289,6 +290,7 @@ void kernel_main() {
                 while (sem_iter_pos < input_tile_id_end) {
                     // Wait for semaphore (sender's full slice pattern)
                     if (chunk_count % chunks_per_sync == 0) {
+                        DeviceZoneScopedSumN1("FAB-RECV-WAIT");
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;
@@ -365,6 +367,7 @@ void kernel_main() {
 
                 while (tiles_read < tiles_to_read) {
                     if (chunk_count % chunks_per_sync == 0) {
+                        DeviceZoneScopedSumN1("FAB-RECV-WAIT");
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -363,6 +364,7 @@ void kernel_main() {
 
             if (direction == 1) {
                 if constexpr (num_targets_backward_direction) {
+                    DeviceZoneScopedSumN1("FABRIC-SEND");
                     if (tiles_to_put_in_current_packet > 1) {
                         fabric_unicast_noc_scatter_write_with_state<
                             UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
@@ -387,6 +389,7 @@ void kernel_main() {
                 noc_async_write_barrier();
             } else {
                 if constexpr (num_targets_forward_direction) {
+                    DeviceZoneScopedSumN1("FABRIC-SEND");
                     if (tiles_to_put_in_current_packet > 1) {
                         fabric_unicast_noc_scatter_write_with_state<
                             UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
@@ -407,7 +410,10 @@ void kernel_main() {
             }
             tiles_read += tiles_to_put_in_current_packet;
 
+            {
+                DeviceZoneScopedSumN1("FABRIC-SEND");
                 noc_async_writes_flushed();
+            }
 
                 cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
 
@@ -415,6 +421,7 @@ void kernel_main() {
             if (chunk_count % chunks_per_sync == 0) {
                 // 2. unicast output ready semaphore
                 if (detail::valid_targets(direction)) {
+                    DeviceZoneScopedSumN2("FAB-SEND-SEM-INC");
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         fabric_direction_connection,
                         pkt_hdr_sem_inc,
@@ -427,6 +434,7 @@ void kernel_main() {
         if (chunk_count % chunks_per_sync != 0) {
             // Write the unicast packet
             if (detail::valid_targets(direction)) {
+                DeviceZoneScopedSumN2("FAB-SEND-SEM-INC");
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     fabric_direction_connection,
                     pkt_hdr_sem_inc,
@@ -574,32 +582,36 @@ void kernel_main() {
                     }
                     noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
                 }
-                if (tiles_to_put_in_current_packet > 1) {
-                    fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                        UnicastScatterWriteUpdateMask::PayloadSize>(
-                        fabric_direction_connection,
-                        pkt_scatter_hdr,
-                        l1_read_addr,
-                        NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                        page_size * tiles_to_put_in_current_packet);
-                } else {
-                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                        fabric_direction_connection,
-                        pkt_unicast_hdr,
-                        l1_read_addr,
-                        NocUnicastCommandHeader{noc_addrs[0]});
+                {
+                    DeviceZoneScopedSumN1("FABRIC-SEND");
+                    if (tiles_to_put_in_current_packet > 1) {
+                        fabric_unicast_noc_scatter_write_with_state<
+                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                            UnicastScatterWriteUpdateMask::PayloadSize>(
+                            fabric_direction_connection,
+                            pkt_scatter_hdr,
+                            l1_read_addr,
+                            NocUnicastScatterCommandHeader(noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
+                            page_size * tiles_to_put_in_current_packet);
+                    } else {
+                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                            fabric_direction_connection,
+                            pkt_unicast_hdr,
+                            l1_read_addr,
+                            NocUnicastCommandHeader{noc_addrs[0]});
+                    }
+
+                    tiles_read += tiles_to_put_in_current_packet;
+
+                    noc_async_writes_flushed();
                 }
-
-                tiles_read += tiles_to_put_in_current_packet;
-
-                noc_async_writes_flushed();
 
                 cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
 
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
                     // 2. unicast output ready semaphore
+                    DeviceZoneScopedSumN2("FAB-SEND-SEM-INC");
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         fabric_direction_connection,
                         pkt_hdr_sem_inc,
@@ -610,6 +622,7 @@ void kernel_main() {
 
             if (chunk_count % chunks_per_sync != 0) {
                 // 2. unicast output ready semaphore
+                DeviceZoneScopedSumN2("FAB-SEND-SEM-INC");
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     fabric_direction_connection,
                     pkt_hdr_sem_inc,

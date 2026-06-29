@@ -596,6 +596,19 @@ all_gather_minimal_matmul_async_factory_helper(
         defines["MCAST_BROADCAST"] = "1";
     }
 
+    // Flip the injector's forward/backward fabric-wait poll order. Only the first-polled wait reflects a
+    // direction's true latency, so measuring both directions needs one run per order. Off by default.
+    const char* env_fab_backward_first = std::getenv("TT_AGMM_FAB_BACKWARD_FIRST");
+    if (env_fab_backward_first != nullptr && std::string(env_fab_backward_first) == "1") {
+        defines["FAB_RECV_BACKWARD_FIRST"] = "1";
+    }
+    // Poll both fabric-wait directions from one start and stamp each arrival, so both per-direction
+    // latencies come from a single run off the same reference. Takes precedence in the kernel.
+    const char* env_fab_poll_both = std::getenv("TT_AGMM_FAB_POLL_BOTH");
+    if (env_fab_poll_both != nullptr && std::string(env_fab_poll_both) == "1") {
+        defines["FAB_RECV_POLL_BOTH"] = "1";
+    }
+
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
