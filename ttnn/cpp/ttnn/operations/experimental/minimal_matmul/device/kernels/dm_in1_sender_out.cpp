@@ -121,7 +121,10 @@ void kernel_main() {
 
 #endif  // FUSE_TERNARY
 
-    const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
+    // padded_d0 (K) = the in1 DRAM tensor's actual K extent (K_tiles); NOT padded_K_tiles, which under
+    // K-par is the PER-BAND compute count (< K_tiles) and would make logical_d0 (full K_tiles, needed for
+    // the absolute-K read guard) exceed padded_d0 and trip the TensorShape2D assert on watcher/--dev builds.
+    const TensorShape2D in1_shape(K_tiles, N_tiles, K_tiles, padded_N_tiles);
     // out_shape spans the full [num_k_slices * M, N] partial buffer so the logical_d0 guard in
     // write_block_sync admits this band's M-stripe (rows out_m_tile_offset .. +M). Base path uses the
     // original constexpr (M_tiles, padded_M_tiles) form so codegen matches main.
