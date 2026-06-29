@@ -53,12 +53,13 @@ def create_program_descriptor(
         D_BLOCK -= 1
     num_d_chunks = D_t // D_BLOCK
 
-    # K-block QK^T matmul for fp32 only: split the K dimension (D) into K-blocks
-    # so cb_q and cb_k are constant-bounded. For bf16/bf8b, matmul_block's internal
-    # K-accumulation is unsafe with HiFi4 (issue #38306: silent K-accumulator
-    # corruption on Wormhole B0), so we keep cb_q/cb_k at full D_t for those
-    # dtypes — the L1 budget analysis shows they fit (D=1024 bf16: 98 KB margin).
-    if query.dtype == ttnn.float32 and D_BLOCK < D_t:
+    # K-block QK^T matmul: split the K dimension (D) into K-blocks so cb_q
+    # and cb_k are constant-bounded. Enabled when D_t > D_BLOCK (i.e., the
+    # D-chunk size is smaller than the full head dim). With fp32_dest_acc_en=True,
+    # the DEST accumulator is fp32, so K-accumulation rounding is minimal even
+    # for bf16 inputs. The HiFi4+bf16 K-acc issue #38306 is avoided because
+    # fp32_dest_acc_en keeps partials in fp32 DEST, not bf16 L1.
+    if D_BLOCK < D_t:
         use_k_blocking = True
         k_block_dim = D_BLOCK  # K per K-block = D_BLOCK tiles
     else:
