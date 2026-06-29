@@ -235,11 +235,14 @@ class TTTextEncoderConvLNBlock:
         params: TTTextEncoderConvLNBlockParams,
         ln_eps: float,
         compute_kernel_config,
+        conv_compute_kernel_config=None,
     ) -> None:
         self.device = device
         self.params = params
         self.ln_eps = ln_eps
         self.compute_kernel_config = compute_kernel_config
+        # Conv may run at a different (lower) math fidelity than the LN; defaults to the shared config.
+        self.conv_compute_kernel_config = conv_compute_kernel_config or compute_kernel_config
 
     def forward(
         self,
@@ -265,7 +268,7 @@ class TTTextEncoderConvLNBlock:
             x_nlc=x_flat,
             params=self.params.conv,
             device=self.device,
-            compute_config=self.compute_kernel_config,
+            compute_config=self.conv_compute_kernel_config,
             # Blackhole runs the whole B-batch in one conv instead of one-conv-per-item (the split
             # is a Wormhole-only correctness workaround), halving conv/halo/shard dispatch. Flattened
             # in/out so the CNN stack never pays the [1,B*L,C]->[B,L,C] split between stages.
@@ -316,9 +319,21 @@ class TTTextEncoder:
     def __init__(self, device: ttnn.Device, params: TTTextEncoderParams) -> None:
         self.device = device
         self.params = params
+        # LayerNorm + the (numerically-touchier) BiLSTM matmuls run at HiFi3.
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+        # The CNN conv runs at HiFi2: a fidelity sweep showed HiFi2 ties HiFi3's PCC (conv inputs are
+        # bf16, so 2 MAC passes already saturate precision — isolated conv PCC 0.99999, full-seq
+        # 0.999953 vs 0.999963) while cutting conv device time ~22% (65.0->50.8µs over the 3 stages).
+        # Kept separate from the main config so the BiLSTM matmuls (whose output feeds the decoder)
+        # stay at HiFi3.
+        self.conv_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
@@ -328,6 +343,7 @@ class TTTextEncoder:
                 params=bp,
                 ln_eps=params.ln_eps,
                 compute_kernel_config=self.compute_kernel_config,
+                conv_compute_kernel_config=self.conv_compute_kernel_config,
             )
             for bp in params.blocks
         )
