@@ -49,3 +49,11 @@
 {"event":"test_run","status":"fail","test":"golden test suite","details":"48 failed, 1722 passed, 1 skipped, 462 xfailed. Previous: 1208 passed. +514 new causal cells passing. Need to classify 48 failures: OOM or causal-related?","ts":"2026-06-29T12:03:08+00:00"}
 {"event":"test_run","status":"pass","test":"golden suite analysis","details":"All 48 failures are pre-existing OOM cells (D=256+fp32, D=512, D=1024) across all mask modes (none/custom/causal). Causal cells at these shapes fail with same OOM as none/custom — causal implementation is correct. 1722 passed (up from 1208). 514 new cells passing, including ~314 new causal cells. 0 causal-specific failures.","ts":"2026-06-29T12:09:29+00:00"}
 {"event":"test_run","status":"pass","test":"full unit test suite","details":"351 passed, 162 skipped (HW limitations/exclusions). All unit tests green: causal (62), acceptance (34), non-aligned (19), extended (11), precision baseline (4), precision matrix (221 passed / 162 skipped).","ts":"2026-06-29T12:11:17+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-budget-metal","args":"","ts":"2026-06-29T12:22:42+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find kernel and descriptor files","ts":"2026-06-29T12:23:17+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-budget-metal","args":"","ts":"2026-06-29T13:10:44+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find golden test files and shapes","ts":"2026-06-29T13:17:24+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Study matmul_block helper API","ts":"2026-06-29T13:20:52+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-budget-metal","args":"","ts":"2026-06-29T15:05:08+00:00"}
+{"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find matmul_block K-blocking API","ts":"2026-06-29T15:35:32+00:00"}
+{"event":"hypothesis","description":"L1 OOM caused by cb_o and cb_o_accum sized B_q_t*D_t pages each. For D=1024: 4*32=128 tiles * 4KB = 512KB each. Plan: chunk PV matmul D dimension into d_block sub-blocks, accumulate O in-place across d-blocks. No new SUPPORTED axis needed.","ts":"2026-06-29T15:49:41+00:00"}

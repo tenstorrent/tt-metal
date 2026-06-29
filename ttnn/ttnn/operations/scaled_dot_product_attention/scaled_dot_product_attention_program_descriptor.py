@@ -8,6 +8,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 MAX_B_Q_T = 4
 MAX_B_KV_T = 4
+MAX_D_BLOCK = 4  # Max D tiles per D-chunk in the PV matmul (constant-bounds O/V CBs)
 
 
 def create_program_descriptor(
@@ -43,6 +44,27 @@ def create_program_descriptor(
         B_q_t -= 1
     while S_kv_tiles % B_kv_t != 0 and B_kv_t > 1:
         B_kv_t -= 1
+
+    # D-chunk for PV matmul: chunk D into blocks of D_BLOCK tiles so cb_o,
+    # cb_o_accum, cb_v, and cb_out are bounded by a constant (MAX_D_BLOCK),
+    # not by D_t. This prevents OOM on large head dims (D >= 512, D_t >= 16).
+    D_BLOCK = min(MAX_D_BLOCK, D_t)
+    while D_t % D_BLOCK != 0 and D_BLOCK > 1:
+        D_BLOCK -= 1
+    num_d_chunks = D_t // D_BLOCK
+
+    # K-block QK^T matmul for fp32 only: split the K dimension (D) into K-blocks
+    # so cb_q and cb_k are constant-bounded. For bf16/bf8b, matmul_block's internal
+    # K-accumulation is unsafe with HiFi4 (issue #38306: silent K-accumulator
+    # corruption on Wormhole B0), so we keep cb_q/cb_k at full D_t for those
+    # dtypes — the L1 budget analysis shows they fit (D=1024 bf16: 98 KB margin).
+    if query.dtype == ttnn.float32 and D_BLOCK < D_t:
+        use_k_blocking = True
+        k_block_dim = D_BLOCK  # K per K-block = D_BLOCK tiles
+    else:
+        use_k_blocking = False
+        k_block_dim = D_t  # single K-block = full D_t
+
     tile_size = ttnn.tile_size(query.dtype)
     fp32_tile_size = ttnn.tile_size(ttnn.float32)
     bf16_tile_size = ttnn.tile_size(ttnn.bfloat16)
@@ -60,7 +82,10 @@ def create_program_descriptor(
         has_mask = True
     num_q_blocks = (S_q_tiles + B_q_t - 1) // B_q_t
     num_kv_blocks = (S_kv_tiles + B_kv_t - 1) // B_kv_t
-    num_o_tiles = B_q_t * D_t
+    # After D-chunking: O/V CBs are bounded by D_BLOCK, not D_t.
+    # Q/K CBs are bounded by k_block_dim (D_BLOCK for fp32 K-blocking, D_t otherwise).
+    num_o_chunk_tiles = B_q_t * D_BLOCK  # O/V/out CB page count per D-chunk
+    num_qk_tiles = B_q_t * k_block_dim  # Q/K CB page count
     num_score_tiles = B_q_t * B_kv_t
 
     # Intermediate CB format: fp32 when fp32_dest_acc_en=True (accumulation crosses
@@ -106,9 +131,9 @@ def create_program_descriptor(
         )
 
     cbs = [
-        cb(0, num_o_tiles),  # cb_q (input dtype)
-        cb(1, 2 * B_kv_t * D_t),  # cb_k (input dtype)
-        cb(2, 2 * B_kv_t * D_t),  # cb_v (input dtype)
+        cb(0, num_qk_tiles),  # cb_q (input dtype) — k_block_dim tiles per K-block
+        cb(1, 2 * B_kv_t * k_block_dim),  # cb_k (input dtype, double-buffered)
+        cb(2, 2 * B_kv_t * D_BLOCK),  # cb_v (input dtype, double-buffered) — D_BLOCK constant-bounded
         # cb_mask: bf16 when causal (reader generates bf16 tiles on-device),
         # input dtype when custom mask (read from DRAM in input dtype)
         cb_bf16(3, 2 * num_score_tiles) if is_causal else cb(3, 2 * num_score_tiles),  # cb_mask
@@ -121,8 +146,8 @@ def create_program_descriptor(
         cb_bf16(5, 1),  # cb_scale_factor (bf16 — reader writes bf16 bits)
         # Intermediates: fp32 when fp32_dest_acc_en=True, input dtype when False.
         cb_interm(8, B_q_t),  # cb_alpha (running state)
-        cb_interm(16, num_o_tiles),  # cb_o (running accumulator)
-        cb(17, 2 * num_o_tiles),  # cb_out (input dtype, double-buffered)
+        cb_interm(16, num_o_chunk_tiles),  # cb_o (running accumulator, D_BLOCK-bounded)
+        cb(17, 2 * num_o_chunk_tiles),  # cb_out (input dtype, double-buffered, D_BLOCK-bounded)
         cb_interm(24, num_score_tiles),  # cb_scores
         cb_interm(25, num_score_tiles),  # cb_scores_masked
         cb_interm(26, B_q_t),  # cb_max_new (running state)
@@ -130,7 +155,7 @@ def create_program_descriptor(
         cb_interm(28, num_score_tiles),  # cb_exp_scores
         cb_interm(29, B_q_t),  # cb_sum_new (running state)
         cb_interm(30, B_q_t),  # cb_sum_old (running state)
-        cb_interm(31, num_o_tiles),  # cb_o_accum (PV matmul scratch)
+        cb_interm(31, num_o_chunk_tiles),  # cb_o_accum (PV matmul scratch, D_BLOCK-bounded)
     ]
 
     # Reader CT args: [has_mask, is_causal, H_q, H_kv, mask_is_per_head, ...Q_acc, ...K_acc, ...V_acc, ...mask_acc]
@@ -153,7 +178,18 @@ def create_program_descriptor(
         else:
             g1c = (num_work_units - num_cores * u2) // (u1 - u2)
             units = u1 if ci < g1c else u2
-        rt = [units, B_q_t, B_kv_t, D_t, S_q_tiles, S_kv_tiles]
+        rt = [
+            units,
+            B_q_t,
+            B_kv_t,
+            D_t,
+            S_q_tiles,
+            S_kv_tiles,
+            D_BLOCK,
+            num_d_chunks,
+            1 if use_k_blocking else 0,
+            k_block_dim,
+        ]
         for i in range(units):
             bh = wu_assigned + i
             rt.append(bh // H_q)
@@ -174,8 +210,8 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # Writer CT args: [B_q_t, D_t, num_q_blocks, ...output_acc]
-    writer_ct_args = [B_q_t, D_t, num_q_blocks]
+    # Writer CT args: [B_q_t, D_t, num_q_blocks, D_BLOCK, num_d_chunks, ...output_acc]
+    writer_ct_args = [B_q_t, D_t, num_q_blocks, D_BLOCK, num_d_chunks]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_rt_args = ttnn.RuntimeArgs()
@@ -202,8 +238,20 @@ def create_program_descriptor(
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    # Compute CT args: [B_q_t, B_kv_t, D_t, has_mask, num_q_blocks, num_kv_blocks]
-    compute_ct_args = [B_q_t, B_kv_t, D_t, 1 if has_mask else 0, num_q_blocks, num_kv_blocks]
+    # Compute CT args: [B_q_t, B_kv_t, D_t, has_mask, num_q_blocks, num_kv_blocks,
+    #                   D_BLOCK, num_d_chunks, use_k_blocking, k_block_dim]
+    compute_ct_args = [
+        B_q_t,
+        B_kv_t,
+        D_t,
+        1 if has_mask else 0,
+        num_q_blocks,
+        num_kv_blocks,
+        D_BLOCK,
+        num_d_chunks,
+        1 if use_k_blocking else 0,
+        k_block_dim,
+    ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
         core_ranges=all_cores,
