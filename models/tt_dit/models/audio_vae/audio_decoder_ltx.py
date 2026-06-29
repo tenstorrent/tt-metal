@@ -27,28 +27,7 @@ LATENT_DOWNSAMPLE_FACTOR = 4
 
 
 class AudioPatchifier:
-    """Host-side patchifier with ``patch_size=1``: flatten over (channels, mel_bins).
-
-    Per-channel un-normalize stats are applied to the patchified tensor so they
-    broadcast across T and F, not just channels.
-    """
-
-    def __init__(
-        self,
-        *,
-        patch_size: int = 1,
-        sample_rate: int = 16000,
-        hop_length: int = 160,
-        audio_latent_downsample_factor: int = LATENT_DOWNSAMPLE_FACTOR,
-        is_causal: bool = True,
-        shift: int = 0,
-    ) -> None:
-        self.patch_size = patch_size
-        self.sample_rate = sample_rate
-        self.hop_length = hop_length
-        self.audio_latent_downsample_factor = audio_latent_downsample_factor
-        self.is_causal = is_causal
-        self.shift = shift
+    """Host-side patchifier with ``patch_size=1``: flatten/unflatten over (channels, mel_bins)."""
 
     def patchify(self, audio_latents: torch.Tensor) -> torch.Tensor:
         return einops.rearrange(audio_latents, "b c t f -> b t (c f)")
@@ -310,19 +289,14 @@ class AudioDecoder(Module):
         if mid_block_add_attention:
             raise NotImplementedError("AudioDecoder Stage A does not support mid_block_add_attention=True")
 
-        self.ch = ch
         self.out_ch = out_ch
         self.ch_mult = tuple(ch_mult)
         self.num_res_blocks = num_res_blocks
         self.num_resolutions = len(self.ch_mult)
-        self.resolution = resolution
         self.z_channels = z_channels
-        self.sample_rate = sample_rate
-        self.mel_hop_length = mel_hop_length
         self.is_causal = is_causal
         self.mel_bins = mel_bins
         self.mesh_device = mesh_device
-        self.dtype = dtype
 
         # Per-channel denormalize stats: non-Parameter host tensors consumed in
         # _denormalize_latents. Default to identity (std=1, mean=0) so an unset
@@ -339,13 +313,7 @@ class AudioDecoder(Module):
         self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
         self._max_traces = None
 
-        self.patchifier = AudioPatchifier(
-            patch_size=1,
-            sample_rate=sample_rate,
-            hop_length=mel_hop_length,
-            audio_latent_downsample_factor=LATENT_DOWNSAMPLE_FACTOR,
-            is_causal=is_causal,
-        )
+        self.patchifier = AudioPatchifier()
 
         base_block_channels = ch * self.ch_mult[-1]
 

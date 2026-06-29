@@ -29,9 +29,9 @@ class _STFTFn(Module):
     device→host→device round-trip per call (no device-side unfold op exists);
     permanent fix is a device unfold to keep the waveform resident.
 
-    Input is ``(B, T, 1)`` ROW_MAJOR; output magnitude/phase are
+    Input is ``(B, T, 1)`` ROW_MAJOR; output magnitude is
     ``(B, T_frames, n_freqs)`` ROW_MAJOR. ``forward_basis`` is a Parameter loaded
-    from the checkpoint; ``inverse_basis`` (iSTFT path) is dropped.
+    from the checkpoint; ``inverse_basis`` (iSTFT path) and phase are dropped.
     """
 
     def __init__(
@@ -75,17 +75,15 @@ class _STFTFn(Module):
             state["forward_basis"] = w.squeeze(1).t().contiguous().unsqueeze(0).float()
         state.pop("inverse_basis", None)
 
-    def forward(self, y_BTC: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``y_BTC``: ``(B, T, 1)`` ROW_MAJOR waveform → ``(magnitude, phase)``,
-        each ``(B, T_frames, n_freqs)`` ROW_MAJOR.
+    def forward(self, y_BTC: ttnn.Tensor) -> ttnn.Tensor:
+        """``y_BTC``: ``(B, T, 1)`` ROW_MAJOR waveform → ``magnitude``,
+        ``(B, T_frames, n_freqs)`` ROW_MAJOR.
         """
         assert y_BTC.layout == ttnn.ROW_MAJOR_LAYOUT, f"expected ROW_MAJOR, got {y_BTC.layout}"
         assert y_BTC.shape[2] == 1, f"STFT input must have C=1, got {y_BTC.shape[2]}"
 
-        # Unfold on host (no device unfold), re-upload as a windowed view.
         y_host = ttnn.to_torch(ttnn.get_device_tensors(y_BTC)[0])
         y_host = y_host.squeeze(-1).float().contiguous()
-        # Causal left-pad by win_length - hop_length.
         y_padded = torch.nn.functional.pad(y_host, (self.left_pad, 0))
         y_windowed = y_padded.unfold(dimension=-1, size=self.win_length, step=self.hop_length)
         y_windowed = y_windowed.contiguous().float()
@@ -113,8 +111,7 @@ class _STFTFn(Module):
         )
         ttnn.deallocate(y_tile)
 
-        # Split real [0:n_freqs] / imag [n_freqs:2*n_freqs]. ttnn.slice prefers
-        # ROW_MAJOR for non-tile-aligned slices.
+        # ttnn.slice prefers ROW_MAJOR for non-tile-aligned slices.
         spec = ttnn.to_layout(spec_tile, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(spec_tile)
         real = ttnn.slice(spec, [0, 0, 0], [B, T_frames, self.n_freqs])
@@ -123,16 +120,15 @@ class _STFTFn(Module):
 
         real_sq = ttnn.multiply(real, real)
         imag_sq = ttnn.multiply(imag, imag)
+        ttnn.deallocate(real)
+        ttnn.deallocate(imag)
         mag_sq = ttnn.add(real_sq, imag_sq)
         ttnn.deallocate(real_sq)
         ttnn.deallocate(imag_sq)
         magnitude = ttnn.sqrt(mag_sq)
         ttnn.deallocate(mag_sq)
 
-        phase = ttnn.atan2(imag, real)
-        ttnn.deallocate(real)
-        ttnn.deallocate(imag)
-        return magnitude, phase
+        return magnitude
 
 
 class MelSTFT(Module):
@@ -189,8 +185,7 @@ class MelSTFT(Module):
 
     def forward(self, y_BT: ttnn.Tensor) -> ttnn.Tensor:
         """``y_BT``: ``(B, T, 1)`` ROW_MAJOR → log-mel ``(B, T_frames, n_mels)`` ROW_MAJOR."""
-        magnitude, phase = self.stft_fn(y_BT)
-        ttnn.deallocate(phase)
+        magnitude = self.stft_fn(y_BT)
 
         mag_tile = ttnn.to_layout(magnitude, ttnn.TILE_LAYOUT)
         ttnn.deallocate(magnitude)
@@ -248,14 +243,6 @@ class VocoderWithBWE(Module):
         """Free both generators' captured traces; safe to call when none is active."""
         self.vocoder.release_trace()
         self.bwe_generator.release_trace()
-
-    @property
-    def conv_pre(self):
-        return self.vocoder.conv_pre
-
-    @property
-    def conv_post(self):
-        return self.vocoder.conv_post
 
     def _compute_mel_device(self, x_BCT_torch: torch.Tensor) -> torch.Tensor:
         """Compute log-mel from waveform on device.

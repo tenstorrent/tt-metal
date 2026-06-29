@@ -35,13 +35,13 @@ Traced steady-state (`LTX_TRACED=1`, warmup + replay), same shape: 1088×1920, 1
 
 | Stage | Time |
 |-------|------|
-| Stage 1 denoise (half-res) | 3.0s |
+| Gemma encode (device; cached prompt) | 0.0s (~0.5s on a fresh prompt) |
+| Stage 1 denoise (half-res) | 2.7s |
 | Latent upsample | 0.2s |
-| Stage 2 denoise (full-res) | 3.6s |
-| VAE prepare | 0.0s |
-| VAE decode (forward) | 1.7s |
-| Audio decode (on-device) | 2.8s |
-| **Total** | **11.2s** |
+| Stage 2 denoise (full-res) | 3.1s |
+| VAE decode | 1.1s |
+| Audio decode (on-device) | 0.5s |
+| **Total** | **7.6s** |
 
 
 Remaining performance work:

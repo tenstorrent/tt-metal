@@ -13,7 +13,7 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import List, NamedTuple, Sequence
+from typing import List, Sequence
 
 import torch
 
@@ -36,19 +36,9 @@ from ...parallel.manager import CCLManager
 from ...utils.tracing import Tracer
 
 
-class _TraceEntry(NamedTuple):
-    """A captured trace for one input shape: the trace id plus its persistent
-    input/output device buffers (replay copies new data into ``input``, reads ``output``)."""
-
-    trace_id: int
-    input: ttnn.Tensor
-    output: ttnn.Tensor
-
-
 class DilatedConv1d(_AlignedOutConv1d):
-    """Dilated 1D conv: a symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with
-    ``dilation`` passed through to conv3d. For the AMP block's ``(k-1)*d`` (always
-    even) the base's ``eff_k // 2`` halo equals the symmetric ``same_pad``."""
+    """Symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with ``dilation``. For the AMP
+    block's even ``(k-1)*d``, the base's ``eff_k // 2`` halo equals the symmetric pad."""
 
     def __init__(
         self,
@@ -133,8 +123,7 @@ class AMPBlock1(Module):
                 for i in range(self.num_branches)
             ]
         )
-        # alpha_logscale=True: the checkpoint stores log α / log β and
-        # Snake/SnakeBeta collapses it at load time.
+        # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
         self.acts1 = ModuleList(
             [
                 Activation1d(
@@ -175,11 +164,9 @@ class AMPBlock1(Module):
         )
 
     def forward(self, x_BTC: ttnn.Tensor, set_tail=None, x_rep=None) -> ttnn.Tensor:
-        # set_tail(xd, mode) materializes the tile-align pad image to each op's boundary when
-        # T-sharded (acts replicate the real boundary, convs zero it); identity when unsharded.
-        # x_rep, when given, is x_BTC already replicate-tailed: the three blocks of a stage share
-        # one input, so the caller computes that tail-set once and passes it here for acts1[0]
-        # (read-only — the block never deallocates it).
+        # set_tail(xd, mode): materialize the tile-align pad image to an op's boundary when
+        # T-sharded (acts replicate, convs zero); identity when unsharded.
+        # x_rep: x_BTC pre-replicate-tailed by the caller and shared read-only for acts1[0].
         st = set_tail if set_tail is not None else (lambda xd, mode: xd)
 
         def _apply(op, x, mode):
@@ -263,9 +250,8 @@ class Vocoder(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self._tpad_mask_cache: dict = {}
-        self._t_pad = 0  # set per-input by _host_to_device; read by _forward_device/_device_to_host
-        # forward_traced cache: input-shape -> Tracer, LRU-ordered; max_traces caps device trace
-        # memory (LRU-evict beyond it; None = unbounded).
+        self._t_pad = 0  # set per-input by _host_to_device
+        # forward_traced cache: input-shape -> Tracer, LRU-ordered (max_traces caps it; None = unbounded).
         self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
         self._warmed_shapes: set = set()
         self._max_traces = max_traces
@@ -300,7 +286,7 @@ class Vocoder(Module):
             ]
         )
 
-        # 3 x num_upsamples AMP blocks, row-major over (stage, branch).
+        # num_kernels x num_upsamples AMP blocks, row-major over (stage, branch).
         self.resblocks = ModuleList()
         for i in range(self.num_upsamples):
             ch = upsample_initial_channel // (2 ** (i + 1))
@@ -346,8 +332,7 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            # Final waveform has out_channels=2 — too small to channel-shard; keep
-            # the output full so the trailing all-gather is a no-op.
+            # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
         )
 
@@ -363,29 +348,22 @@ class Vocoder(Module):
         return self._device_to_host(y_dev)
 
     def forward_traced(self, mel_spec: torch.Tensor) -> torch.Tensor:
-        """Same result as ``forward`` but captures the device graph and replays it, removing
-        per-op host dispatch (the vocoder is ~70% host-bound). One trace is captured per
-        distinct input shape and kept resident in an LRU cache, so a server with a bounded
-        set of shape buckets (pad each request up to a bucket) replays rather than
-        re-captures. The first call at a new shape compiles + captures (~2x an eager forward);
-        every later call at that shape copies the new mel into the persistent input buffer and
-        replays. ``max_traces`` (ctor) caps device trace memory by LRU-evicting old shapes.
+        """Like ``forward`` but captures and replays the device graph to remove per-op host
+        dispatch (the vocoder is ~70% host-bound). One trace per input shape, kept in an LRU
+        cache (``max_traces`` caps it). First call at a shape compiles + captures; later calls
+        copy the new mel into the persistent buffer and replay.
 
-        Requires the mesh to be opened with a ``trace_region_size`` large enough for the
-        resident traces.
+        Requires a ``trace_region_size`` large enough for the resident traces.
         """
         shape_key = tuple(mel_spec.shape)
         tracer = self._traces.get(shape_key)
         if tracer is None:
-            # First call at this shape: run EAGER (no capture) to warm the lazy device-graph state
-            # (snake α/β, CCL buffers, tpad-mask, zeros) — these persist on the module. The next call
-            # captures with prep_run=False. Why not capture now: a ttnn trace bakes absolute buffer
-            # addresses, so capture and replay must start from the same allocator free-list. The
-            # mel-VAE runs eager before EVERY decode and frees back to a deterministic post-mel-VAE
-            # state; capturing here would either need cold-cache host writes (forbidden in capture)
-            # or a warming pass whose alloc/free perturbs the free-list vs the clean post-mel-VAE
-            # state replay sees → garbage. Warming on a prior decode + prep_run=False (no extra
-            # alloc before capture) makes capture and every replay share the identical free-list.
+            # First call at a shape: run eager (no capture) to warm lazy device state (snake α/β,
+            # CCL buffers, tpad-mask, zeros), then capture next time with prep_run=False. A ttnn
+            # trace bakes absolute buffer addresses, so capture and replay must start from the same
+            # allocator free-list. The mel-VAE runs eager before every decode and frees back to a
+            # deterministic state; warming on a prior decode (instead of an extra alloc here) keeps
+            # capture and replay sharing that identical free-list.
             if shape_key not in self._warmed_shapes:
                 self._warmed_shapes.add(shape_key)
                 return self._device_to_host(self._forward_device(self._host_to_device(mel_spec)))
@@ -396,8 +374,6 @@ class Vocoder(Module):
                     _, evicted = self._traces.popitem(last=False)  # LRU
                     evicted.release_trace()
         self._traces.move_to_end(shape_key)  # LRU touch
-        # _host_to_device sets self._t_pad for this shape (read by the captured graph and the
-        # _device_to_host crop).
         y_dev = tracer(self._host_to_device(mel_spec), tracer_blocking_execution=False, tracer_execute_on_capture=False)
         return self._device_to_host(y_dev)
 
@@ -408,9 +384,8 @@ class Vocoder(Module):
         self._traces.clear()
 
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
-        """Host preprocessing + upload. Returns the ROW_MAJOR full-T device tensor that
-        ``_forward_device`` consumes. Split out from ``forward`` so the pure-device graph
-        can be captured for trace replay; sets ``self._t_pad`` for the device/host stages."""
+        """Host preprocessing + upload to a ROW_MAJOR full-T device tensor. Split out from
+        ``forward`` so the device graph is trace-capturable; sets ``self._t_pad``."""
         x_t = mel_spec.transpose(2, 3) if mel_spec.dim() == 4 else mel_spec.transpose(1, 2).unsqueeze(1)
         if x_t.dim() == 4:
             assert x_t.shape[1] == 2, f"stereo input must have 2 channels, got {x_t.shape[1]}"
@@ -422,9 +397,8 @@ class Vocoder(Module):
         x_BTC_torch = x_t.transpose(1, 2).float().contiguous()
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-        # Pad T to a multiple of (TILE_HEIGHT * factor) so mesh_partition produces
-        # tile-aligned per-chip shards. The extras propagate at upsampled length
-        # and get cropped from the final waveform.
+        # Pad T to a multiple of (TILE_HEIGHT * factor) for tile-aligned per-chip shards;
+        # the extras propagate and get cropped from the final waveform.
         t_pad = 0
         if sharded:
             factor = self.parallel_config.factor
@@ -440,8 +414,7 @@ class Vocoder(Module):
 
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
         """Pure-device graph: partition → conv_pre → ups/AMP stack → act_post → conv_post →
-        T-gather. Input/output are device tensors with fixed shapes for a given config and
-        input length, so this region is trace-capturable; replay rewrites ``x_dev`` in place."""
+        T-gather. Fixed-shape device in/out, so this region is trace-capturable."""
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         t_pad = self._t_pad
 
@@ -450,17 +423,14 @@ class Vocoder(Module):
             x_dev = _partition_t(x_dev, self.parallel_config)
             x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
-        # Channel-TP: split C across the channel axis up front so conv_pre's gather
-        # reconstructs full C_in. (Gathering a channel-replicated tensor would
-        # duplicate it.) conv_post leaves its output full, so no trailing gather.
+        # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
+        # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
         def _set_tail(xd, cumrate, mode):
-            # The tile-align pad image (t_pad*cumrate rows at the global tail) propagates as
-            # signal. Each non-causal op's kept-boundary output must see what unsharded sees:
-            # the gather-to-full upsamplers and zeros-pad convs want zeros, the replicate-pad
-            # activations want the real last row. Materialize the pad image to the op's own
-            # boundary right before it. No-op when unsharded (t_pad == 0).
+            # Materialize the tile-align pad image (t_pad*cumrate tail rows) to the op's boundary so
+            # it matches unsharded: zeros for gather/zeros-pad convs, the real last row for
+            # replicate-pad activations. No-op when unsharded (t_pad == 0).
             if t_pad == 0:
                 return xd
             return _set_tpad_tail(
@@ -481,11 +451,9 @@ class Vocoder(Module):
             cumrate *= self.upsample_rates[i]
             stage_set_tail = (lambda c: (lambda xd, mode: _set_tail(xd, c, mode)))(cumrate)
             start = i * self.num_kernels
-            # Mean over the num_kernels parallel AMP branches. Each block sets its own op
-            # boundaries (acts replicate, convs zeros) via stage_set_tail.
+            # Mean over the num_kernels parallel AMP branches.
             block_outputs = []
-            # All three blocks read the same stage input; their acts1[0] each replicate-tail it
-            # identically, so do that tail-set once and share it (read-only) across the blocks.
+            # All blocks share the same replicate-tailed stage input; tail-set it once, read-only.
             x_rep = stage_set_tail(x_dev, "replicate")
             for idx in range(start, start + self.num_kernels):
                 block_outputs.append(self.resblocks[idx](x_dev, set_tail=stage_set_tail, x_rep=x_rep))
@@ -523,8 +491,7 @@ class Vocoder(Module):
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
         x_host = ttnn.to_torch(ttnn.get_device_tensors(x_dev)[0])
-        # Trim padded out channels in case the conv left them.
-        x_host = x_host[..., : self.out_channels]
+        x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:
             prod_rates = 1
