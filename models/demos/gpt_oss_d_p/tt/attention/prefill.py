@@ -33,6 +33,8 @@ def prefill_forward(
     ccl_manager,
     user_id=0,
     batch_size=1,
+    persistent_k=None,
+    persistent_v=None,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
@@ -147,17 +149,99 @@ def prefill_forward(
                 ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
                 ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
 
-    # Scaled dot-product attention
-    tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
-        tt_q,
-        tt_k,
-        tt_v,
-        is_causal=True,
-        sliding_window_size=config.sliding_window,
-        program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len),
-        compute_kernel_config=program_config.get_compute_kernel_config(),
-        attention_sink=weights.sinks,
-    )
+    # Scaled dot-product attention — three paths based on SP factor and sliding window
+    sp_factor = mesh_config.prefill.sp
+    sdpa_program_config = program_config.get_prefill_sdpa_config(mesh_device, seq_len)
+    sdpa_compute_config = program_config.get_compute_kernel_config()
+
+    if sp_factor > 1 and config.sliding_window is not None:
+        # Ring-shift the last sliding_window tokens of K and V from each device's
+        # predecessor, then prepend them. Device 0 receives zeros (Linear topology,
+        # no wraparound). The non-square causal mask [seq_len, window+seq_len] then
+        # correctly places Q tokens at their absolute SP-shard positions.
+        neighbor_sem, barrier_sem = ccl_manager.get_neighbor_pad_semaphores()
+        tt_k_orig = tt_k
+        tt_k = ttnn.experimental.neighbor_pad_async(
+            tt_k_orig,
+            [2],
+            [config.sliding_window],
+            [0],
+            "zeros",
+            [mesh_config.sp_axis],
+            [neighbor_sem],
+            [barrier_sem],
+            num_links=[ccl_manager.num_links],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        tt_k_orig.deallocate(True)
+
+        neighbor_sem, barrier_sem = ccl_manager.get_neighbor_pad_semaphores()
+        tt_v_orig = tt_v
+        tt_v = ttnn.experimental.neighbor_pad_async(
+            tt_v_orig,
+            [2],
+            [config.sliding_window],
+            [0],
+            "zeros",
+            [mesh_config.sp_axis],
+            [neighbor_sem],
+            [barrier_sem],
+            num_links=[ccl_manager.num_links],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        tt_v_orig.deallocate(True)
+
+        tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=True,
+            sliding_window_size=config.sliding_window,
+            program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_config,
+            attention_sink=weights.sinks,
+        )
+    elif sp_factor > 1:
+        # Ring attention: fuses cross-device K/V all-gather inside the kernel so
+        # every token attends to the full causal context across all SP rows.
+        seq_total = seq_len * sp_factor
+        tt_sdpa_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            persistent_output_buffer_k=persistent_k,
+            persistent_output_buffer_v=persistent_v,
+            joint_strategy="rear",
+            logical_n=seq_total,
+            program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_config,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.ring_attn_semaphores,
+            num_links=ccl_manager.num_links,
+            cluster_axis=mesh_config.sp_axis,
+            mesh_device=mesh_device,
+            topology=ccl_manager.topology,
+            subdevice_id=ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=ccl_manager.ring_attn_ccl_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=config.scaling,
+        )
+    else:
+        # SP=1: plain SDPA, no cross-device communication needed
+        tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=True,
+            sliding_window_size=config.sliding_window,
+            program_config=sdpa_program_config,
+            compute_kernel_config=sdpa_compute_config,
+            attention_sink=weights.sinks,
+        )
+
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)
