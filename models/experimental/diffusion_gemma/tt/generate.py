@@ -679,6 +679,9 @@ def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGenerati
         raise ValueError("prompt_tokens and generation.generated batch sizes must match")
     if prompt_tokens.shape[1] != generation.prompt_len:
         raise ValueError("prompt_tokens length must match generation.prompt_len")
+    expected_next_pos = generation.prompt_len + generation.generated.shape[1]
+    if generation.next_pos != expected_next_pos:
+        raise ValueError("generation.next_pos must equal generation.prompt_len + generated length")
     return torch.cat([prompt_tokens, generation.generated], dim=1)
 
 

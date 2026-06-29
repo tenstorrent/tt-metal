@@ -1370,6 +1370,18 @@ def test_generation_sequences_rejects_prompt_len_mismatch():
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
+def test_generation_sequences_rejects_next_pos_mismatch():
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=7,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match="generation.next_pos"):
+        generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
+
+
 def test_decode_generation_defaults_to_generated_continuation():
     tokenizer = _FakeTokenizer()
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
