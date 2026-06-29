@@ -71,15 +71,15 @@ Authority is **per audit-class × arch**; never skip a source because it lacked 
 - **HW-semantics audits** (mmio, reconfig, cfg-word, semaphore, mailbox, srcreg, noc, dataflow-cb):
   - **WH B0 / BH A0:** **tt-isa-docs MCP** *or* **DeepWiki** — both serve the same `tenstorrent/tt-isa-documentation` corpus, either is fine — as primary ISA; **code** to cross-verify. **No Confluence for WH/BH** (no properly-written WH/BH Confluence docs).
   - **Quasar:** **tt-isa-docs MCP** — *queried every run* (empty for QSR today, but coverage is expected; promote to primary the moment it lands; do **not** use DeepWiki for QSR — it has none); **Quasar Confluence HW pages** (internal/authenticated only) as the de-facto primary today — **don't rely on naïve CQL search; anchor to these canonical pages** (seed list, not exhaustive; run a freshness check before citing any — pages older than ~3 months get a staleness caveat, >9 months or undated must be re-verified against code/HW):
-  - `1340276980` *Every Conceivable TTSync Detail (incl. Shadow Regs)* — Config-unit ordering, RMWCIB-vs-instruction, shadow registers → grounds **cfg-word / mmio / reconfig**
-  - `1613201604` *Tensix Instruction Set Architecture* — 164 per-instruction children incl. RMWCIB / WRCFG / SEM* → instruction semantics for any class
-  - `586515553` *Quasar vs Prev Devices* — arch deltas (3 unpackers, 2 packers, 4 TRISCs, shadow regs, tile counters)
-  - `646217858` *NEO cluster semaphore synchronization* → **semaphore / noc**
-  - `113017320` *Dest data-valid scheme* → **srcreg / semaphore** (dest dvalid vs MATH_PACK)
-  - `1256423592` *Quasar/Trinity SFPU Micro-Architecture Spec* → **instruction-latency** HW context
-  - `84508873` *Tensix NEO High Level Specification* — general arch overview
+    - `1340276980` *Every Conceivable TTSync Detail (incl. Shadow Regs)* — Config-unit ordering, RMWCIB-vs-instruction, shadow registers → grounds **cfg-word / mmio / reconfig**
+    - `1613201604` *Tensix Instruction Set Architecture* — 164 per-instruction children incl. RMWCIB / WRCFG / SEM* → instruction semantics for any class
+    - `586515553` *Quasar vs Prev Devices* — arch deltas (3 unpackers, 2 packers, 4 TRISCs, shadow regs, tile counters)
+    - `646217858` *NEO cluster semaphore synchronization* → **semaphore / noc**
+    - `113017320` *Dest data-valid scheme* → **srcreg / semaphore** (dest dvalid vs MATH_PACK)
+    - `1256423592` *Quasar/Trinity SFPU Micro-Architecture Spec* → **instruction-latency** HW context
+    - `84508873` *Tensix NEO High Level Specification* — general arch overview
 
-  Search beyond these when a topic isn't covered, but start here. If a seeded ID returns 404 (page deleted/recreated), search by its title above and update the ID. **BH-inference** only as a caveated last resort (never grounds or overturns a verdict). Where two sources carry a fact, cross-check and surface conflicts.
+    Search beyond these when a topic isn't covered, but start here. If a seeded ID returns 404 (page deleted/recreated), search by its title above and update the ID. **BH-inference** only as a caveated last resort (never grounds or overturns a verdict). Where two sources carry a fact, cross-check and surface conflicts.
 - **instruction-latency (all archs):** the pinned **`sfpi-gcc` source** (`rvtt.md` / `sfpu-ops-{wh,bh,qsr}.h` / `rtl-rvtt-schedule.cc`) — **fetch it at the pin**; the compiled toolchain / a compile experiment is not a substitute. Secondary: tt-isa-docs `VectorUnit` (WH/BH HW latency) and the Quasar SFPU uArch Confluence page (QSR HW context).
 - **dataflow-cb / noc:** the **dataflow API source** plus the per-arch ISA sources above (Quasar adds the tile-counter / global-semaphore Confluence pages).
 
