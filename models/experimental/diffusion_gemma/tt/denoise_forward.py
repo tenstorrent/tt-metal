@@ -36,12 +36,16 @@ def build_device_canvas_denoise_mask(
     *,
     prompt_len: int,
     canvas_len: int,
+    layer_type: str | None = None,
+    sliding_window: int | None = None,
     dtype=ttnn.bfloat16,
 ):
-    """Build the canonical all-attend `[1, 1, C, P+C]` denoise mask on device."""
+    """Build a `[1, 1, C, P+C]` denoise mask on device."""
     mask = build_canvas_denoise_mask(
         prompt_len,
         canvas_len,
+        layer_type=layer_type,
+        sliding_window=sliding_window,
         local_window=False,
         neg_inf=NEG,
         dtype=torch.float32,
@@ -53,6 +57,59 @@ def build_device_canvas_denoise_mask(
         dtype=dtype,
         mesh_mapper=_replicate_mapper(mesh_device),
     )
+
+
+def _layer_type_for_denoise(tt_model, layer_idx: int) -> str | None:
+    layer_types = getattr(getattr(tt_model, "hf_config", None), "layer_types", None)
+    if layer_types is not None:
+        return layer_types[layer_idx]
+    attn_config = getattr(getattr(tt_model.layers[layer_idx], "self_attn", None), "config", None)
+    return getattr(attn_config, "layer_type", None)
+
+
+def _sliding_window_for_denoise(tt_model, layer_idx: int) -> int | None:
+    attn_config = getattr(getattr(tt_model.layers[layer_idx], "self_attn", None), "config", None)
+    window = getattr(attn_config, "sliding_window", None)
+    if window is not None:
+        return window
+    return getattr(getattr(tt_model, "hf_config", None), "sliding_window", None)
+
+
+def _sliding_layer_needs_denoise_mask(prompt_len: int, canvas_len: int, sliding_window: int) -> bool:
+    # HF's bidirectional sliding overlay allows abs(q_idx - kv_idx) <= sliding_window.
+    return prompt_len + canvas_len - 1 > sliding_window
+
+
+def _build_denoise_attn_mask_for_layer(
+    tt_model,
+    layer_idx: int,
+    *,
+    prompt_len: int,
+    canvas_len: int,
+    mask_builder=build_device_canvas_denoise_mask,
+):
+    layer_type = _layer_type_for_denoise(tt_model, layer_idx)
+    if layer_type != "sliding_attention":
+        return None
+
+    sliding_window = _sliding_window_for_denoise(tt_model, layer_idx)
+    if sliding_window is None or sliding_window <= 0:
+        raise ValueError(f"sliding_attention layer {layer_idx} requires a positive sliding_window")
+    if not _sliding_layer_needs_denoise_mask(prompt_len, canvas_len, sliding_window):
+        return None
+
+    return mask_builder(
+        tt_model.mesh_device,
+        prompt_len=prompt_len,
+        canvas_len=canvas_len,
+        layer_type="sliding_attention",
+        sliding_window=sliding_window,
+    )
+
+
+def _deallocate_optional_tensor(tensor) -> None:
+    if tensor is not None and hasattr(tensor, "deallocate"):
+        tensor.deallocate(True)
 
 
 def denoise_attention_forward(
@@ -168,6 +225,7 @@ def denoise_hidden_forward(
     prompt_hidden_by_layer,
     canvas_hidden,
     q_rope_offset: int | None = None,
+    mask_builder=build_device_canvas_denoise_mask,
 ):
     """Run the short-prompt DiffusionGemma denoise backbone to final hidden states.
 
@@ -183,8 +241,14 @@ def denoise_hidden_forward(
     hidden_states = canvas_hidden
     prompt_len = _prompt_source_len(prompt_hidden_by_layer[0])
     q_rope_offset = prompt_len if q_rope_offset is None else q_rope_offset
-    attn_mask = None
     for layer_idx in range(len(tt_model.layers)):
+        attn_mask = _build_denoise_attn_mask_for_layer(
+            tt_model,
+            layer_idx,
+            prompt_len=prompt_len,
+            canvas_len=hidden_states.shape[-2],
+            mask_builder=mask_builder,
+        )
         hidden_states = _denoise_layer_forward(
             tt_model,
             layer_idx,
@@ -194,6 +258,7 @@ def denoise_hidden_forward(
             prompt_len,
             q_rope_offset,
         )
+        _deallocate_optional_tensor(attn_mask)
     return tt_model.norm.forward(hidden_states)
 
 

@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 from models.demos.gemma4.tt.attention.kv_phase import KVCachePhase
 import pytest
 
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
+    _build_denoise_attn_mask_for_layer,
     denoise_attention_forward,
     embed_canvas_tokens,
     make_denoise_logits_adapter_from_kv_cache,
@@ -37,11 +40,13 @@ class _FakeLayer:
 
 
 class _FakeModel:
-    def __init__(self, num_layers=1):
+    def __init__(self, num_layers=1, *, layer_types=None, sliding_window=1024):
         self.mesh_device = object()
         self.layers = [_FakeLayer() for _ in range(num_layers)]
         self.tt_kv_cache = [f"cache-{idx}" for idx in range(num_layers)]
         self.rope_requests = []
+        if layer_types is not None:
+            self.hf_config = SimpleNamespace(layer_types=layer_types, sliding_window=sliding_window)
 
     def _get_rope_mats(self, layer_idx, seq_len):
         self.rope_requests.append((layer_idx, seq_len))
@@ -87,6 +92,85 @@ def test_denoise_attention_accepts_explicit_canvas_rope_offset_for_later_blocks(
     kwargs = model.layers[0].self_attn.kwargs
     assert kwargs["q_rope_offset"] == 576
     assert model.rope_requests == [(0, 832)]
+
+
+def test_denoise_attn_mask_builder_skips_full_and_short_sliding_layers():
+    calls = []
+    model = _FakeModel(
+        num_layers=2,
+        layer_types=["full_attention", "sliding_attention"],
+        sliding_window=1024,
+    )
+
+    def mask_builder(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "mask"
+
+    assert (
+        _build_denoise_attn_mask_for_layer(
+            model,
+            0,
+            prompt_len=2048,
+            canvas_len=256,
+            mask_builder=mask_builder,
+        )
+        is None
+    )
+    assert (
+        _build_denoise_attn_mask_for_layer(
+            model,
+            1,
+            prompt_len=64,
+            canvas_len=256,
+            mask_builder=mask_builder,
+        )
+        is None
+    )
+    assert calls == []
+
+
+def test_denoise_attn_mask_builder_materializes_long_prompt_sliding_mask():
+    calls = []
+    model = _FakeModel(num_layers=1, layer_types=["sliding_attention"], sliding_window=4)
+
+    def mask_builder(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "mask"
+
+    assert (
+        _build_denoise_attn_mask_for_layer(
+            model,
+            0,
+            prompt_len=10,
+            canvas_len=6,
+            mask_builder=mask_builder,
+        )
+        == "mask"
+    )
+    assert calls == [
+        (
+            (model.mesh_device,),
+            {
+                "prompt_len": 10,
+                "canvas_len": 6,
+                "layer_type": "sliding_attention",
+                "sliding_window": 4,
+            },
+        )
+    ]
+
+
+def test_denoise_attn_mask_builder_rejects_missing_sliding_window():
+    model = _FakeModel(num_layers=1, layer_types=["sliding_attention"], sliding_window=None)
+
+    with pytest.raises(ValueError, match="requires a positive sliding_window"):
+        _build_denoise_attn_mask_for_layer(
+            model,
+            0,
+            prompt_len=10,
+            canvas_len=6,
+            mask_builder=lambda *args, **kwargs: "mask",
+        )
 
 
 def test_denoise_logits_adapter_threads_canvas_rope_offset():
