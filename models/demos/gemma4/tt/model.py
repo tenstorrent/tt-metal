@@ -72,6 +72,21 @@ def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     k_tiles = max(1, k // tile_size)
     n_tiles = max(1, n // tile_size)
 
+    # Scope the explicit 1D-mcast config to the regime it is tuned for:
+    # the sharded-vocab decode / last-token shape [B<=32, 1, H] x [H, V_per_dev]
+    # with M_tiles==1 and a per-device vocab shard bounded at 64K (the same
+    # width at which on-device sampling stays enabled, i.e. TP shards the 262144
+    # vocab down to <=64K). Outside that regime this config overruns L1:
+    #   - tp==1 (e.g. E2B on a single WH N150) keeps the full 262144-wide vocab
+    #     on one chip, so per_core_N explodes and the in1 CB grows to ~8 MB,
+    #     well past the ~1.4 MB L1 (program.cpp circular-buffer validation throw);
+    #   - a non-last-token prefill slice (get_last_token==-1 -> M==seq_len) scales
+    #     the output CB by M_tiles.
+    # In those cases return None so ttnn.linear falls back to its default matmul
+    # heuristic, which blocks N/M to fit L1 (the pre-tuning behaviour).
+    if m_tiles > 1 or n > 64 * 1024:
+        return None
+
     per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
 
     in0_block_w = 32
