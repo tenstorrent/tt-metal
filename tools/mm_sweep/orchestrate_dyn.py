@@ -122,6 +122,7 @@ def main():
                     if os.environ.get("BSWEEP_NO_LARGE_LEVERS")
                     else ""
                 )
+                + (f"BSWEEP_AUTO={os.environ['BSWEEP_AUTO']} " if os.environ.get("BSWEEP_AUTO") else "")
             )
             r = sh(f"{env}sbatch --partition={PART} --nodelist={n} --parsable {SBATCH} {ch['cf']} {ch['out']} 32")
             jid = r.stdout.strip().split(";")[0]
