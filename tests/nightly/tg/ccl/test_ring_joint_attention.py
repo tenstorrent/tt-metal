@@ -172,7 +172,6 @@ def test_ring_joint_sdpa(
     )
 
 
-@pytest.mark.xfail("FAILS")
 @pytest.mark.parametrize("dtype, pcc_threshold", [(ttnn.bfloat16, 0.994)], ids=["bf16"])
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
