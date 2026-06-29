@@ -1,0 +1,168 @@
+diff --git a/tt_metal/api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp b/tt_metal/api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
+index 4276985e277..670b02049ac 100644
+--- a/tt_metal/api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
++++ b/tt_metal/api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
+@@ -19,6 +19,7 @@
+ #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+ #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
+ #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
++#include <tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp>
+ #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+ 
+ namespace tt::tt_metal::experimental {
+@@ -57,7 +58,7 @@ struct ProgramRunArgs {
+         //
+         // NOTE: If a kernel runtime argument always has the same value for all nodes,
+         // passing a common runtime argument would provide better dispatch efficiency.
+-        using RuntimeArgValues = Table<std::string, uint32_t>;
++        using RuntimeArgValues = Table<RtaName, uint32_t>;
+         struct NodeRuntimeArgs {
+             NodeCoord node;
+             RuntimeArgValues args;
+diff --git a/tt_metal/api/tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp b/tt_metal/api/tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp
+new file mode 100644
+index 00000000000..2fc98ecc97c
+--- /dev/null
++++ b/tt_metal/api/tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp
+@@ -0,0 +1,78 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++//
++// SPDX-License-Identifier: Apache-2.0
++
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <functional>
++#include <string>
++#include <string_view>
++
++#include <fmt/format.h>
++#include <tt_stl/assert.hpp>
++
++namespace tt::tt_metal::experimental {
++
++// Owning, heap-free key for per-node runtime-argument tables (see RuntimeArgValues in
++// program_run_args.hpp). It replaces std::string as the key type to avoid a heap
++// allocation per argument name, per node: runtime-arg names are short identifiers known
++// at compile time, so storing them in a small inline buffer keeps the per-node
++// RuntimeArgValues tables malloc-free both when a factory builds them and when they are
++// copied through ProgramRunArgs. Implicitly constructible from the same string literals /
++// std::string the factories already use, so no factory-side code changes are required.
++class RtaName {
++public:
++    // Holds names up to 31 chars inline, making sizeof(RtaName) == 32 bytes (cache-friendly,
++    // cheap to copy). The constructor hard-fails if a name does not fit; the only current
++    // names that exceed this are the ~33-char matmul-reuse-optimized stride args, which
++    // should be shortened.
++    static constexpr std::size_t kCapacity = 31;
++
++    RtaName() = default;
++
++    // Implicit on purpose: factories write `{{"name", value}, ...}` and the framework
++    // looks tables up with std::string / string_view schema names.
++    RtaName(std::string_view s) {
++        TT_FATAL(
++            s.size() <= kCapacity,
++            "Runtime-arg name '{}' is {} chars but RtaName holds at most {}; bump RtaName::kCapacity.",
++            s,
++            s.size(),
++            kCapacity);
++        len_ = static_cast<std::uint8_t>(s.size());
++        std::memcpy(data_, s.data(), len_);
++    }
++    RtaName(const char* s) : RtaName(std::string_view(s)) {}
++    RtaName(const std::string& s) : RtaName(std::string_view(s)) {}
++
++    [[nodiscard]] std::string_view view() const noexcept { return {data_, len_}; }
++    [[nodiscard]] std::size_t size() const noexcept { return len_; }
++    [[nodiscard]] bool empty() const noexcept { return len_ == 0; }
++
++    bool operator==(const RtaName& other) const noexcept {
++        return len_ == other.len_ && std::memcmp(data_, other.data_, len_) == 0;
++    }
++
++private:
++    std::uint8_t len_ = 0;
++    char data_[kCapacity] = {};
++};
++
++}  // namespace tt::tt_metal::experimental
++
++template <>
++struct std::hash<tt::tt_metal::experimental::RtaName> {
++    std::size_t operator()(const tt::tt_metal::experimental::RtaName& n) const noexcept {
++        return std::hash<std::string_view>{}(n.view());
++    }
++};
++
++template <>
++struct fmt::formatter<tt::tt_metal::experimental::RtaName> : fmt::formatter<std::string_view> {
++    auto format(const tt::tt_metal::experimental::RtaName& n, fmt::format_context& ctx) const {
++        return fmt::formatter<std::string_view>::format(n.view(), ctx);
++    }
++};
+diff --git a/tt_metal/impl/metal2_host_api/program_run_args.cpp b/tt_metal/impl/metal2_host_api/program_run_args.cpp
+index 15b017505c3..f6a817152ba 100644
+--- a/tt_metal/impl/metal2_host_api/program_run_args.cpp
++++ b/tt_metal/impl/metal2_host_api/program_run_args.cpp
+@@ -205,7 +205,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
+ 
+         // Validate named RTAs: every declared name set per-node, no extras, no duplicate node entries.
+         const auto& named_rta_names = schema->runtime_arg_names;
+-        const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
++        const std::unordered_set<RtaName> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
+ 
+         std::unordered_set<NodeCoord> nodes_with_named_params;
+         for (const auto& [node, args] : kernel_params.runtime_arg_values) {
+@@ -506,7 +506,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
+         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
+ 
+         // Build a node -> named-RTA-values-map lookup for serialization.
+-        std::unordered_map<NodeCoord, const Table<std::string, uint32_t>*> named_rtas_by_node;
++        std::unordered_map<NodeCoord, const Table<RtaName, uint32_t>*> named_rtas_by_node;
+         for (const auto& [node, args] : kernel_params.runtime_arg_values) {
+             named_rtas_by_node[node] = &args;
+         }
+@@ -835,7 +835,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs&
+         // --- Named RTAs: supplied names must be declared (no extras); every non-invariant name
+         //     must be supplied for every node; invariant names may be omitted. ---
+         const auto& named_rta_names = schema->runtime_arg_names;
+-        const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
++        const std::unordered_set<RtaName> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
+         std::vector<std::string> regular_rta_names;
+         for (const auto& n : named_rta_names) {
+             if (!schema->enqueue_invariant_runtime_arg_names.contains(n)) {
+@@ -886,7 +886,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs&
+ 
+         // --- Named CRTAs: regular ones must be supplied; invariant may be omitted; no extras. ---
+         const auto& named_crta_names = schema->common_runtime_arg_names;
+-        const std::unordered_set<std::string> named_crta_name_set(named_crta_names.begin(), named_crta_names.end());
++        const std::unordered_set<RtaName> named_crta_name_set(named_crta_names.begin(), named_crta_names.end());
+         for (const auto& [name, _value] : kernel_params.common_runtime_arg_values) {
+             (void)_value;
+             TT_FATAL(
+diff --git a/tt_metal/impl/program/program_impl.hpp b/tt_metal/impl/program/program_impl.hpp
+index b4fad79edca..3ee73aacb0e 100644
+--- a/tt_metal/impl/program/program_impl.hpp
++++ b/tt_metal/impl/program/program_impl.hpp
+@@ -18,6 +18,7 @@
+ #include "impl/buffers/semaphore.hpp"
+ #include "tt-metalium/sub_device_types.hpp"
+ #include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
++#include "tt-metalium/experimental/metal2_host_api/runtime_arg_name.hpp"  // Metal 2.0 RtaName key
+ #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+ 
+ #include <umd/device/types/core_coordinates.hpp>        // CoreType
+@@ -385,8 +386,8 @@ public:
+         // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
+         // that path is not bypassable via skip_validation, so per-call construction would be pure
+         // host overhead on the inner re-enqueue loop.
+-        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
+-        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
++        std::unordered_map<tt::tt_metal::experimental::RtaName, size_t> runtime_arg_name_to_slot;
++        std::unordered_map<tt::tt_metal::experimental::RtaName, size_t> common_runtime_arg_name_to_slot;
+ 
+         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
+         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
