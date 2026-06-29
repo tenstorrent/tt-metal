@@ -181,6 +181,9 @@ def denoise_block(
     decision tensors: argmax, entropy, sampled ids, accept mask, and canvas.
     ``init_canvas`` is consumed; each superseded device canvas is deallocated.
     """
+    if gumbel_noise_fn is None or noise_tokens_fn is None:
+        raise ValueError("denoise_block requires injected gumbel_noise_fn and noise_tokens_fn")
+
     canvas = init_canvas
     records: List[StepRecord] = []
     committed: Optional[torch.Tensor] = None

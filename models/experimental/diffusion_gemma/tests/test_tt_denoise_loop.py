@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import pytest
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt import denoise_loop as DL
@@ -16,6 +17,25 @@ class _FakeTensor:
         assert force is True
         assert not self.deallocated, self.name
         self.deallocated = True
+
+
+@pytest.mark.parametrize(
+    "gumbel_noise_fn,noise_tokens_fn",
+    [
+        (None, lambda step: _FakeTensor("noise")),
+        (lambda step: _FakeTensor("gumbel"), None),
+        (None, None),
+    ],
+)
+def test_denoise_block_requires_injected_noise_hooks(gumbel_noise_fn, noise_tokens_fn):
+    with pytest.raises(ValueError, match="requires injected gumbel_noise_fn and noise_tokens_fn"):
+        DL.denoise_block(
+            lambda canvas, step: _FakeTensor("logits"),
+            _FakeTensor("init-canvas"),
+            DiffusionConfig(max_denoise_steps=1),
+            gumbel_noise_fn=gumbel_noise_fn,
+            noise_tokens_fn=noise_tokens_fn,
+        )
 
 
 def test_denoise_block_deallocates_consumed_injected_noise(monkeypatch):
