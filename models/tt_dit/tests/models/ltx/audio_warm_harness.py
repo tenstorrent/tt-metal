@@ -138,10 +138,6 @@ def test_warm_harness(
     traced_reps = int(os.environ.get("TRACED_REPS", "5"))
     warmups = int(os.environ.get("WARMUP_DECODES", "1"))
 
-    import models.tt_dit.layers.audio_ops as _ao
-
-    _ao._USE_CONV1D_DEPTHWISE = True  # conv1d path (the PCC-validated one)
-
     # Build pipeline EAGER first (traced=False). The single cold decode below pays the
     # one-time device-side assembly; both legs reuse the same warm pipeline + kernel cache.
     pipeline = LTXDistilledPipeline.create_pipeline(

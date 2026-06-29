@@ -555,11 +555,6 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     width = int(os.environ.get("WIDTH", "1920"))
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
 
-    # AUDIO_DEPTHWISE=mac reproduces the pre-conv1d (main) audio path for A/B profiling.
-    import models.tt_dit.layers.audio_ops as _ao
-
-    _ao._USE_CONV1D_DEPTHWISE = os.environ.get("AUDIO_DEPTHWISE", "conv1d") != "mac"
-
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors"),
@@ -621,20 +616,18 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
         sf.write(path, a.transpose(0, 1).cpu().numpy(), int(sr))
         logger.info(f"wrote {path}")
 
-    _save(wav, f"girl_audio_{'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'}{'_traced' if traced else ''}.wav")
+    _save(wav, f"girl_audio_conv1d{'_traced' if traced else ''}.wav")
 
     # Torch-oracle quality gate vs the diffusers vocoder+BWE (real checkpoint, CPU) — the ground
     # truth. The conv1d path runs under BOTH eager and traced (gating the traced vocoder/BWE
-    # output, which is otherwise unverified — exactly the gap that let a broken trace ship). The
-    # MAC comparison runs eager-only: running both depthwise toggles on one traced pipeline aliases
-    # the shape-keyed trace cache. Per-1s-interval error-to-signal (rmse/σ, dB) + overall PCC; the
-    # absolute level (~−18 dB conv1d) is the fp32/bf16 floor, gated only against a gross spike.
+    # output, which is otherwise unverified — exactly the gap that let a broken trace ship).
+    # Per-1s-interval error-to-signal (rmse/σ, dB) + overall PCC; the absolute level (~−18 dB
+    # conv1d) is the fp32/bf16 floor, gated only against a gross spike.
     from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c_real
 
     z = pipeline.tt_audio_decoder.z_channels
     audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
     mel = pipeline.tt_audio_decoder(audio_spatial)  # TT mel, fed to both TT and torch
-    _ao._USE_CONV1D_DEPTHWISE = True
     w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
     with torch.no_grad():
         w_torch = (
@@ -668,11 +661,6 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
         return worst_, med_, pcc
 
     cw, cm, c_pcc = _vs_torch(w_conv, "conv1d")
-    if not traced:
-        _ao._USE_CONV1D_DEPTHWISE = False
-        w_mac = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
-        _save(w_mac, "girl_audio_mac.wav")
-        _vs_torch(w_mac, "mac")
     # Gross localized spike only: an interval >4x the median AND past a clearly-audible floor
     # (rmse/σ 0.5 = −6 dB). Also gate overall PCC vs torch — a broken (e.g. mis-traced) vocoder
     # drops PCC far below the ~0.99 fp32/bf16 floor.
@@ -683,7 +671,7 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     pipeline.release_audio_submesh()
     dur = wav.shape[-1] / sr
     print(
-        f"\nAUDIO_GIRL depthwise={'conv1d' if _ao._USE_CONV1D_DEPTHWISE else 'mac'} traced={traced} "
+        f"\nAUDIO_GIRL traced={traced} "
         f"latent_frames={als.frames} out={tuple(wav.shape)} {dur:.2f}s@{sr}Hz cold={cold_ms:.1f}ms warm={warm_ms:.1f}ms",
         flush=True,
     )
