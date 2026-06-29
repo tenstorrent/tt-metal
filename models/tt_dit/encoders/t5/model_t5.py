@@ -288,8 +288,8 @@ class T5DenseGatedActDense(Module):
         # internally in fp32, so gelu_tanh_f32 (f32 intermediates, single bf16
         # round-trip at the end) is a closer match than the bf16-decomposed
         # gelu_tanh which has ~7 bf16 materialization points.
-        self.wi0.fused_activation_fn = None
-        self.wi0.activation_fn = "gelu_tanh_f32"
+        # self.wi0.fused_activation_fn = None
+        # self.wi0.activation_fn = "gelu_tanh_f32"
         self.wi1 = ColParallelLinear(
             in_features=self.config.embed_dim,
             out_features=self.config.ff_dim,
