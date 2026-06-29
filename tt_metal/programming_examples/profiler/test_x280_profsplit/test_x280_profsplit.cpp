@@ -193,6 +193,7 @@ int main(int argc, char** argv) {
     std::string bin_path = "tools/x280_bm/build/profcons_split.bin";
     int device_id = 0, l2cpu = 0, pll = 1000;
     uint64_t nharts = 3, nread = 2, reps = 200;
+    int mode = 0;  // 0 = full read->relay; 1 = read-only scatter; 2 = read-only contiguous
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -211,6 +212,10 @@ int main(int argc, char** argv) {
             nread = std::stoull(next());
         } else if (a == "--reps") {
             reps = std::stoull(next());
+        } else if (a == "--ro") {
+            mode = 1;  // read-only, quarter-scatter
+        } else if (a == "--ro-contig") {
+            mode = 2;  // read-only, contiguous (old pattern) -- A/B baseline
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -296,6 +301,7 @@ int main(int argc, char** argv) {
     pack<uint64_t>(params, 0x20, nharts);
     pack<uint64_t>(params, 0x28, nread);
     pack<uint64_t>(params, 0x30, reps);
+    pack<uint64_t>(params, 0x38, (uint64_t)mode);
     x280.write_block(params, MBOX_PARAMS);
     x280.set_reset_vectors(LIM_BASE);
     x280.set_pll(pll);
@@ -324,6 +330,24 @@ int main(int argc, char** argv) {
         std::_Exit(1);
     }
 
+    if (mode != 0) {
+        uint64_t ro_bytes = 0, ro_cyc = 0;
+        for (uint64_t h = 0; h < nread; h++) {
+            ro_bytes += x280.lim_rd_u64(MBOX_RESULTS + h * 0x40 + 0x00);
+            uint64_t c = x280.lim_rd_u64(MBOX_RESULTS + h * 0x40 + 0x08);
+            if (c > ro_cyc) {
+                ro_cyc = c;
+            }
+        }
+        double mbps = ro_cyc ? (double)ro_bytes / 1e6 / ((double)ro_cyc / ((double)pll * 1e6)) : 0.0;
+        printf("\n=== X280 read-only bench (%s) ===\n", mode == 1 ? "quarter-scatter" : "contiguous");
+        printf(
+            "  readers read : %llu B in %llu cycles (max)\n", (unsigned long long)ro_bytes, (unsigned long long)ro_cyc);
+        printf("  READ BW      : %.0f MB/s   (%llu readers, no relay)\n", mbps, (unsigned long long)nread);
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
+
     uint64_t footer = 0;
     cluster.read_sysmem(&footer, sizeof(footer), data_off + region, device_id, 0);
     bool noc1_ok = (footer == FOOTER_MAGIC);
@@ -348,9 +372,10 @@ int main(int argc, char** argv) {
     printf("  NOC1 relay->host landed : %s\n", noc1_ok ? "YES (footer present)" : "NO <-- NOC1->PCIe write dropped!");
     printf("  -------------------------------------------------\n");
     printf(
-        "  END-TO-END    : %.0f MB/s   (%llu readers + 1 relay on NOC1; NOC0 relay ref 421; read-only 748)\n",
+        "  END-TO-END    : %.0f MB/s   (%llu readers + %llu relay on NOC1)\n",
         mbps,
-        (unsigned long long)nread);
+        (unsigned long long)nread,
+        (unsigned long long)(nharts - nread));
     std::fflush(stdout);
     std::_Exit((reader_bytes == relay_bytes && noc1_ok) ? 0 : 1);
 }
