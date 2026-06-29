@@ -159,27 +159,15 @@ def prefill_forward(
         # predecessor, then prepend them. Device 0 receives zeros (Linear topology,
         # no wraparound). The non-square causal mask [seq_len, window+seq_len] then
         # correctly places Q tokens at their absolute SP-shard positions.
-        neighbor_sem, barrier_sem = ccl_manager.get_neighbor_pad_semaphores()
-        tt_k_orig = tt_k
-        tt_k = ttnn.experimental.neighbor_pad_async(
-            tt_k_orig,
-            [2],
-            [config.sliding_window],
-            [0],
-            "zeros",
-            [mesh_config.sp_axis],
-            [neighbor_sem],
-            [barrier_sem],
-            num_links=[ccl_manager.num_links],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
-        )
-        tt_k_orig.deallocate(True)
+        # neighbor_pad_async requires ROW_MAJOR; convert in, convert back out.
+        tt_k_tile = tt_k
+        tt_k = ttnn.to_layout(tt_k_tile, ttnn.ROW_MAJOR_LAYOUT)
+        tt_k_tile.deallocate(True)
 
         neighbor_sem, barrier_sem = ccl_manager.get_neighbor_pad_semaphores()
-        tt_v_orig = tt_v
-        tt_v = ttnn.experimental.neighbor_pad_async(
-            tt_v_orig,
+        tt_k_rm = tt_k
+        tt_k = ttnn.experimental.neighbor_pad_async(
+            tt_k_rm,
             [2],
             [config.sliding_window],
             [0],
@@ -191,7 +179,34 @@ def prefill_forward(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        tt_v_orig.deallocate(True)
+        tt_k_rm.deallocate(True)
+        tt_k_padded = tt_k
+        tt_k = ttnn.to_layout(tt_k_padded, ttnn.TILE_LAYOUT)
+        tt_k_padded.deallocate(True)
+
+        tt_v_tile = tt_v
+        tt_v = ttnn.to_layout(tt_v_tile, ttnn.ROW_MAJOR_LAYOUT)
+        tt_v_tile.deallocate(True)
+
+        neighbor_sem, barrier_sem = ccl_manager.get_neighbor_pad_semaphores()
+        tt_v_rm = tt_v
+        tt_v = ttnn.experimental.neighbor_pad_async(
+            tt_v_rm,
+            [2],
+            [config.sliding_window],
+            [0],
+            "zeros",
+            [mesh_config.sp_axis],
+            [neighbor_sem],
+            [barrier_sem],
+            num_links=[ccl_manager.num_links],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+        )
+        tt_v_rm.deallocate(True)
+        tt_v_padded = tt_v
+        tt_v = ttnn.to_layout(tt_v_padded, ttnn.TILE_LAYOUT)
+        tt_v_padded.deallocate(True)
 
         tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
