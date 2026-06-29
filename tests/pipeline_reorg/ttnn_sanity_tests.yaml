@@ -1,6 +1,3 @@
-# =============================================================================
-# Shared TTNN Test Definitions
-# =============================================================================
 # This file defines TTNN unit test groups used by:
 #   - ttnn-sanity-tests-impl.yaml (hardware CI + ttsim simulator coverage)
 # Merge-gate tests live in ttnn_smoke_merge_gate_tests.yaml (smoke).
@@ -11,7 +8,6 @@
 # sim_wormhole_b0 / sim_blackhole SKUs run the same cmd under the ttsim simulator
 # on ubuntu-latest; ttnn-sanity-tests-impl.yaml invokes setup-ttsim for these.
 # See .github/actions/setup-ttsim/action.yml.
-# =============================================================================
 
 - name: "ttnn data movement group"
   cmd: >-
@@ -45,10 +41,10 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U05ACKAJTHS # Naif Tarafdar
 
@@ -61,10 +57,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
@@ -77,10 +73,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
@@ -93,10 +89,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
@@ -109,10 +105,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
 
@@ -125,10 +121,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
 
@@ -141,10 +137,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
 
@@ -157,10 +153,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
@@ -173,10 +169,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
@@ -189,10 +185,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
@@ -205,10 +201,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U08JFM3CFA4 # Gongyu Wang
 
@@ -221,10 +217,10 @@
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
 
@@ -238,8 +234,8 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-    # sim_blackhole:
-      # timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
 
@@ -252,10 +248,10 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
@@ -268,9 +264,9 @@
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

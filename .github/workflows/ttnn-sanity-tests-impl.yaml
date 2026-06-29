@@ -53,8 +53,11 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
       has-sim: ${{ steps.detect-sim.outputs.has-sim }}
+      skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
+      skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sanity_tests.yaml
+      TTSIM_SKIP_LIST_YAML: ./tests/pipeline_reorg/ttsim-skip-list.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -93,6 +96,21 @@ jobs:
           matrix='${{ steps.build-matrix.outputs.matrix }}'
           has_sim=$(echo "$matrix" | jq -r 'any(.[]; .sku | startswith("sim_"))')
           echo "has-sim=$has_sim" >> "$GITHUB_OUTPUT"
+
+      # Load the TTSim skip list ONCE for the whole matrix and expose per-arch --deselect
+      # args. The ttnn job applies these (via PYTEST_ADDOPTS) on every sim_* entry so the
+      # simulator runs the same cmd as hardware minus the tests that don't yet work on ttsim.
+      # Path is $TTSIM_SKIP_LIST_YAML; see tests/pipeline_reorg/ttsim-skip-list.yaml.
+      - name: Load TTSim skip list
+        id: skip-list
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, yaml
+          skips = yaml.safe_load(open(os.environ["TTSIM_SKIP_LIST_YAML"])) or {}
+          for arch in ("wormhole_b0", "blackhole"):
+              args = " ".join("--deselect=" + p for p in (skips.get(arch) or []))
+              print(f"skip-args-{arch}={args}")
+          PY
 
   # Fetch ttsim simulator binaries once for the whole matrix; only needed when
   # the resolved matrix contains sim_* SKUs. Consumed by setup-ttsim below.
@@ -187,6 +205,20 @@ jobs:
         with:
           sku: ${{ matrix.test-group.sku }}
 
+      # WORKAROUND (TEN-3868 / https://github.com/tenstorrent/tt-metal/issues/38246):
+      # unpack_to_dest_tile_done() issues TT_UNPACR(SrcA, INT32), which is UndefinedBehavior
+      # per the ISA spec; ttsim faithfully rejects it while real HW silently has the bug.
+      # The simulator doesn't need the workaround, so strip that line from the wormhole_b0
+      # header before kernels are JIT-compiled. Wormhole sim only; this patches the runner's
+      # /opt/venv (so it must run here, not in load-test-matrix). Remove once LLK ships a fix.
+      - name: Apply ttsim wormhole workaround patches
+        if: ${{ matrix.test-group.sku == 'sim_wormhole_b0' }}
+        run: |
+          HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
+          echo "Patching: $HEADER"
+          sed -i -e '/TT_UNPACR(SrcA, 0, 0, context_id, 0, 1 \/\* Set OvrdThreadId\*\/, 0 \/\*Set Dvalid\*\/, p_unpacr::RAREFYB_DISABLE, 1, 0, 0, 0, 1);/d' \
+            "$HEADER"
+
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
@@ -212,6 +244,11 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests (simulator)
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        env:
+          # Apply the once-loaded TTSim skip list (from load-test-matrix) for this sim SKU's arch.
+          # Via PYTEST_ADDOPTS so the --deselect flags reach every pytest invocation in cmd,
+          # including cmds that chain multiple pytest calls with &&.
+          PYTEST_ADDOPTS: ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}
         run: |
           ${{ matrix.test-group.cmd }}
 

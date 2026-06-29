@@ -11,9 +11,9 @@
   skus:
     wh_n300_civ2:
       timeout: 40
-    # sim_wormhole_b0:
-      # timeout: 40
-    # sim_blackhole:
-      # timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
