@@ -1259,9 +1259,10 @@ def test_group_norm_negative_tests(
     num_groups,
     msg_pattern,
     device,
+    expect_error,
 ):
     input_tensor = ttnn.empty(input_shape, device=device)
-    with pytest.raises(RuntimeError, match=msg_pattern):
+    with expect_error(RuntimeError, msg_pattern):
         ttnn.group_norm(
             input_tensor,
             num_groups=num_groups,
@@ -1270,11 +1271,11 @@ def test_group_norm_negative_tests(
         )
 
 
-def test_group_norm_rejects_host_input_mask(device):
+def test_group_norm_rejects_host_input_mask(device, expect_error):
     input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
     input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
 
-    with pytest.raises(RuntimeError, match="Input mask must be on device"):
+    with expect_error(RuntimeError, "Input mask must be on device"):
         ttnn.group_norm(
             input_tensor,
             num_groups=32,
@@ -1284,7 +1285,7 @@ def test_group_norm_rejects_host_input_mask(device):
         )
 
 
-def test_group_norm_rejects_host_negative_mask(device):
+def test_group_norm_rejects_host_negative_mask(device, expect_error):
     grid_size = ttnn.CoreGrid(y=1, x=1)
     torch_input_tensor = torch.rand((1, 320, 32, 32), dtype=torch.bfloat16)
     input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(1, 1, 32 * 32, 320)
@@ -1307,7 +1308,7 @@ def test_group_norm_rejects_host_negative_mask(device):
     )
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
 
-    with pytest.raises(RuntimeError, match="Negative mask must be on device"):
+    with expect_error(RuntimeError, "Negative mask must be on device"):
         ttnn.group_norm(
             input_tensor,
             num_groups=32,
@@ -1562,3 +1563,97 @@ def test_group_norm_sharded_welford_all_config(device, layout, in_dtype, gb_dtyp
 
     passing, pcc = comp_pcc(ref, out, pcc=0.999)
     assert passing, f"sharded welford {in_dtype} gamma={gb_dtype} {layout} PCC failed: {pcc}"
+
+
+# ---------------------------------------------------------------------------------------------
+# Legacy (non-welford) GroupNorm FP32 sharded path. FP32 input + FP32/bf16 gamma/beta, with bf16
+# input as control. Legacy fp32 mirrors LayerNorm's legacy fp32: it requires fp32_dest_acc_en=True
+# (fp32 DEST accumulation + fp32 intermediate storage), and is validation-gated to sharded inputs
+# (interleaved legacy fp32 is not yet supported). Precision is fp32-quality on normal inputs but
+# TF32-limited on biased inputs (the FPU reads x via SrcA at TF32) -- so this test uses unbiased
+# (offset 0) data, matching the LayerNorm legacy fp32 contract.
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_group_norm_sharded_legacy_fp32(device, in_dtype, gb_dtype):
+    N, C, H, W, num_groups = 1, 320, 32, 32, 16
+    grid = ttnn.CoreGrid(y=1, x=8)
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for legacy FP32 (fp32 DEST accumulation)
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.DataType.BFLOAT8_B), device)
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=gb_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_shape = N * H * W // grid.x, C // grid.y
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    mem = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+    xt = ttnn.to_memory_config(xt, mem)
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=mem,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        inplace=False,
+    )
+    out = (
+        ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).float().reshape(ref.shape)
+    )
+
+    passing, pcc = comp_pcc(ref, out, pcc=0.999)
+    assert passing, f"sharded legacy {in_dtype} gamma={gb_dtype} PCC failed: {pcc}"
+
+
+# Legacy (non-welford) FP32 GroupNorm is validation-gated to sharded inputs; interleaved FP32 input
+# without use_welford must be rejected (rather than emit silently-wrong output).
+def test_group_norm_legacy_fp32_interleaved_rejected(device, expect_error):
+    N, C, H, W, num_groups = 1, 320, 32, 32, 16
+    torch.manual_seed(0)
+    x = torch.rand((N, 1, H * W, C), dtype=torch.float32)
+    xt = ttnn.from_torch(
+        x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, 1, ttnn.DataType.BFLOAT8_B), device)
+    with expect_error(RuntimeError, "only supported for sharded"):
+        ttnn.group_norm(
+            xt,
+            num_groups=num_groups,
+            input_mask=mask,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=1, x=8),
+            dtype=ttnn.float32,
+            use_welford=False,
+            output_layout=ttnn.TILE_LAYOUT,
+            inplace=False,
+        )

@@ -11,6 +11,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
+#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_zero_fill.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -154,6 +155,18 @@ void kernel_main() {
     }
 #endif
 
+    // fp32 stats: the REDUCE_SCALAR packer-zero contract that the full-tile self-read below relies
+    // on (to zero-init the gap bytes between per-core slots) does NOT hold for Float32 tiles,
+    // leaving uninitialized L1 that pollutes the cross-core reduce sum -> non-deterministic output.
+    // Mirror the interleaved reader (reader_mcast_sender_unary_gn.cpp): zero cb_ex_external once up
+    // front and read every core's scalar (including self) at datum width. Gap bytes are then never
+    // written and stay zero across all reserve/wrap cycles (the compute side only reads this CB).
+    // bf16 keeps the cheaper full-tile self-read trick, which is correct for Float16_b.
+    constexpr bool stats_fp32_zero_fill = (datum_size_bytes >= 4);
+    if constexpr (stats_fp32_zero_fill) {
+        zero_whole_cb(cb_ex_external_id, noc);
+    }
+
     if constexpr (num_mcast_cores > 1) {
         for (uint32_t m = 0; m < num_batch_group; ++m) {
             for (uint32_t n = 0; n < 2; ++n) {
@@ -185,10 +198,12 @@ void kernel_main() {
                 // the downstream reduce_tile sum on cb_ex_external is not
                 // polluted.
                 UnicastEndpoint remote_ep;
+                // fp32: read self at datum width (gaps already zeroed up front). bf16: full-tile
+                // self-read doubles as the zero-init of the reserved tile.
                 noc.async_read(
                     remote_ep,
                     CoreLocalMem<uint32_t>(l1_write_addr_external),
-                    single_tile_size_bytes,
+                    stats_fp32_zero_fill ? num_bytes_read : single_tile_size_bytes,
                     {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par},
                     {});
                 l1_write_addr_external += cb_ex_external_slot_pitch_bytes;

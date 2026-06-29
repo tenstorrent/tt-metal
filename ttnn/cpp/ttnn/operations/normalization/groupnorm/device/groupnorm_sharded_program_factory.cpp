@@ -324,12 +324,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
     uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
-    // in2 - scaler
-    uint32_t in2_CB_size = single_tile_size * (use_welford ? 3 : 1);
-    // in3 - eps. Always bfloat16: generate_bcast_col_scalar (in the writer/reader) writes a bf16
-    // scalar, so the eps CB must be bf16 regardless of the compute format (fp32 would misread the
-    // bf16 bit pattern as garbage). eps is tiny, so bf16 precision is irrelevant.
+    // Scalar CBs (scaler c_2, scaler-c c_4, eps c_3, ones c_26) are always bf16: their values are
+    // written as bf16 bit patterns (generate_reduce_scaler / generate_bcast_col_scalar /
+    // generate_tile_with_packed_bfloat16_values). On the legacy fp32 path cb_data_format is Float32,
+    // so binding these CBs to cb_data_format would make the kernel read a bf16 bit pattern as fp32 ->
+    // garbage scaler/ones -> wrong mean/variance scale. Pin them to bf16 (precision is irrelevant for
+    // these constants). bf16/welford paths are unaffected (cb_data_format is already bf16 there).
     uint32_t eps_single_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t scalar_single_tile_size = eps_single_tile_size;
+    // in2 - scaler
+    uint32_t in2_CB_size = scalar_single_tile_size * (use_welford ? 3 : 1);
+    // in3 - eps.
     uint32_t in3_CB_size = eps_single_tile_size;
     // gamma
     uint32_t gamma_beta_num_cols_tile_per_core = per_core_Nt;
@@ -734,6 +739,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         "group_norm welford with Float32 input requires fp32_dest_acc_en=true in the compute "
         "kernel config; otherwise precision is silently lost in the unpacker format conversion.");
 
+    // Legacy (non-welford) fp32 mirrors LayerNorm's legacy fp32 path: the reduction accumulates
+    // in the fp32 DEST register and stores intermediates fp32 (im_data_format=Float32). That
+    // requires fp32_dest_acc_en; without it, fp32 input is silently truncated to TF32 on SrcA and
+    // accumulated in bf16 DEST. The host op defaults fp32_dest_acc_en=true for fp32 input, so this
+    // only fires when a user-supplied compute_kernel_config explicitly disables it.
+    TT_FATAL(
+        !(!use_welford && in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "group_norm (legacy, non-welford) with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config; otherwise precision is silently lost in the unpacker format conversion.");
+
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_wh_tile in fp32 mode).
     // The welford_groupnorm_sharded_v2 kernel feeds both c_0 (non-TILIZE_IN) and c_1
@@ -935,8 +950,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in2_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = scalar_single_tile_size,
         }}},
     });
     // in3 eps
@@ -958,8 +973,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(in4_cb_index),
-                .data_format = cb_data_format,
-                .page_size = single_tile_size,
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = scalar_single_tile_size,
             }}},
         });
     }
@@ -1105,12 +1120,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
 
     constexpr uint32_t cb_ones_index = tt::CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = single_tile_size,
+        .total_size = scalar_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb_ones_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = scalar_single_tile_size,
         }}},
     });
 

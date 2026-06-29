@@ -231,7 +231,10 @@ Tensor group_norm(
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
-    const auto fp32_acc = use_welford;
+    // Legacy (non-welford) fp32 mirrors LayerNorm: fp32 input accumulates in the fp32 DEST
+    // register. Welford already forces fp32 acc. A user-supplied compute_kernel_config still
+    // overrides this default.
+    const auto fp32_acc = use_welford || (input_tensor.dtype() == DataType::FLOAT32);
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
@@ -353,7 +356,10 @@ Tensor group_norm(
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .im_data_format = DataType::BFLOAT16,
+            // Legacy fp32 stores intermediates/stats in fp32 (LayerNorm cb_data_format mirror).
+            // Welford keeps bf16 here and relies on its UnpackToDestFp32 c_29/c_31 aliases.
+            .im_data_format =
+                (input_tensor.dtype() == DataType::FLOAT32 && !use_welford) ? DataType::FLOAT32 : DataType::BFLOAT16,
             .out_data_format = dtype.value_or(input_tensor.dtype()),
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};

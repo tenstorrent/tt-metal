@@ -148,6 +148,13 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
+                    // Datum-aware stick offsets: a gamma RM stick of TILE_WIDTH(32) datums is split
+                    // across face 0 row 0 and face 1 row 0. bf16 hardcoded 32/512/32; derive from the
+                    // datum width (gamma_tile_bytes/1024 = 2 for bf16, 4 for fp32) so fp32 gamma reads
+                    // the correct byte ranges. face_row = 16 datums, face = 16*16 datums.
+                    const uint32_t gamma_datum_bytes = gamma_tile_bytes / 1024;
+                    const uint32_t gamma_face_row_bytes = 16 * gamma_datum_bytes;
+                    const uint32_t gamma_face_bytes = 256 * gamma_datum_bytes;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
                     cb_gamma.reserve_back(num_cols_tile_gamma_beta);
@@ -158,29 +165,29 @@ void kernel_main() {
                         noc.async_read(
                             gamma,
                             CoreLocalMem<uint32_t>(l1_write_addr_gamma),
-                            32 * 2,
+                            2 * gamma_face_row_bytes,
                             {.page_id = tile_id},
                             {});
                         noc.async_read_barrier();
                         UnicastEndpoint self_ep;
                         noc.async_read(
                             self_ep,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
+                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + gamma_face_bytes),
+                            gamma_face_row_bytes,
+                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + gamma_face_row_bytes},
                             {});
 #else
                         noc.async_read(
                             gamma,
                             CoreLocalMem<uint32_t>(l1_write_addr_gamma),
-                            32,
+                            gamma_face_row_bytes,
                             {.page_id = tile_id},
                             {});
                         noc.async_read(
                             gamma,
-                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                            32,
-                            {.page_id = tile_id, .offset_bytes = 32},
+                            CoreLocalMem<uint32_t>(l1_write_addr_gamma + gamma_face_bytes),
+                            gamma_face_row_bytes,
+                            {.page_id = tile_id, .offset_bytes = gamma_face_row_bytes},
                             {});
 #endif
                         l1_write_addr_gamma += gamma_tile_bytes;
@@ -191,6 +198,10 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
+                    // Datum-aware stick offsets (see gamma block above).
+                    const uint32_t beta_datum_bytes = beta_tile_bytes / 1024;
+                    const uint32_t beta_face_row_bytes = 16 * beta_datum_bytes;
+                    const uint32_t beta_face_bytes = 256 * beta_datum_bytes;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 
                     uint32_t l1_write_addr_beta = cb_beta.get_write_ptr();
@@ -201,29 +212,29 @@ void kernel_main() {
                         noc.async_read(
                             beta,
                             CoreLocalMem<uint32_t>(l1_write_addr_beta),
-                            32 * 2,
+                            2 * beta_face_row_bytes,
                             {.page_id = tile_id},
                             {});
                         noc.async_read_barrier();
                         UnicastEndpoint self_ep;
                         noc.async_read(
                             self_ep,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                            32,
-                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
+                            CoreLocalMem<uint32_t>(l1_write_addr_beta + beta_face_bytes),
+                            beta_face_row_bytes,
+                            {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + beta_face_row_bytes},
                             {});
 #else
                         noc.async_read(
                             beta,
                             CoreLocalMem<uint32_t>(l1_write_addr_beta),
-                            32,
+                            beta_face_row_bytes,
                             {.page_id = tile_id},
                             {});
                         noc.async_read(
                             beta,
-                            CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                            32,
-                            {.page_id = tile_id, .offset_bytes = 32},
+                            CoreLocalMem<uint32_t>(l1_write_addr_beta + beta_face_bytes),
+                            beta_face_row_bytes,
+                            {.page_id = tile_id, .offset_bytes = beta_face_row_bytes},
                             {});
 #endif
                         l1_write_addr_beta += beta_tile_bytes;
