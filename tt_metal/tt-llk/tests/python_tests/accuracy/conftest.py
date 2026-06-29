@@ -12,7 +12,6 @@ controller. We run clear/merge only on the controller (the single process
 without `config.workerinput`) so it happens once, not once per worker.
 """
 
-from accuracy.accuracy_harness import OUTPUT_DIR, clear_shards, merge_shards
 from helpers.logger import logger
 
 
@@ -22,12 +21,16 @@ def _is_controller(config) -> bool:
 
 def pytest_configure(config):
     if _is_controller(config):
+        from accuracy.accuracy_harness import clear_shards
+
         clear_shards()
 
 
 def pytest_sessionfinish(session, exitstatus):
     config = session.config
     if _is_controller(config):
+        from accuracy.accuracy_harness import OUTPUT_DIR, merge_shards
+
         written = merge_shards()
         if written:
             logger.success("Merged {} per-op CSV(s) into {}", len(written), OUTPUT_DIR)

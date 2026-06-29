@@ -12,8 +12,6 @@ shards into one CSV per op. Sanity-assert only (no ULP threshold gating).
 from itertools import product
 
 import pytest
-from accuracy.accuracy_harness import run_case
-from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
@@ -24,6 +22,8 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats
 from helpers.test_config import TestConfig
+
+from conftest import skip_for_coverage
 
 # Transcendental / approximated ops where HW accuracy is interesting.
 TRANSCENDENTAL_OPS = [
@@ -102,5 +102,7 @@ def test_sfpu_accuracy_sweep(
         )
     ):
         pytest.skip(reason="This combination is not supported on BH architecture")
+
+    from accuracy.accuracy_harness import run_case
 
     run_case(mathop, formats, approx_mode, fast_mode, dest_acc)
