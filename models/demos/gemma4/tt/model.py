@@ -558,6 +558,10 @@ class Gemma4Model:
                 f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
                 f"but model has {len(self.layers)} layers"
             )
+        if prefix_kv_by_layer is not None and len(prefix_kv_by_layer) != len(self.layers):
+            raise ValueError(
+                f"prefix_kv_by_layer has {len(prefix_kv_by_layer)} entries but model has {len(self.layers)} layers"
+            )
 
         # Compute per-layer inputs (E2B/E4B)
         # Decode: PLI pre-computed on host (pli_combined); main embed on device

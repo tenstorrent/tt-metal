@@ -10,6 +10,10 @@ from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model import Gemma4Model
 
 
+class _FakeHidden:
+    shape = (1, 1, 32, 16)
+
+
 def test_kv_phase_defaults_preserve_gemma4_write_paths():
     assert coerce_kv_cache_phase(None, is_decode=False) == KVCachePhase.PREFILL_WRITE
     assert coerce_kv_cache_phase(None, is_decode=True) == KVCachePhase.COMMIT_APPEND
@@ -66,3 +70,16 @@ def test_kv_phase_is_threaded_through_attention_call_chain():
     assert "prefix_kv" in inspect.signature(prefill_forward).parameters
     assert "q_rope_offset" in inspect.signature(prefill_forward).parameters
     assert "write_kv_cache" in inspect.signature(decode_forward).parameters
+
+
+def test_model_rejects_prefix_kv_layer_count_mismatch_before_layer_forward():
+    model = object.__new__(Gemma4Model)
+    model.layers = [object(), object()]
+    model.tt_kv_cache = [None, None]
+
+    with pytest.raises(ValueError, match="prefix_kv_by_layer has 1 entries but model has 2 layers"):
+        Gemma4Model.__call__(
+            model,
+            _FakeHidden(),
+            prefix_kv_by_layer=[("k0", "v0")],
+        )
