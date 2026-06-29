@@ -114,6 +114,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
         init_reduce<POOL_TYPE, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>();
 
+        // Item-6 optimization: hoist the loop-invariant phases-2-4 horizontal-max replay buffer out of
+        // the per-tile calculate_reduce (where it was re-recorded on every call) into this one-time init.
+        // The matching calculate_reduce below passes RECORD_REPLAY=false to skip the per-call record.
+        if constexpr (REDUCE_DIM == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::MAX)
+        {
+            record_horizontal_reduce_max();
+        }
+
         PROFILER_SYNC();
     }
     {
@@ -134,7 +142,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    calculate_reduce<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>(BLOCK_CT_DIM, BLOCK_RT_DIM);
+                    calculate_reduce<
+                        POOL_TYPE,
+                        REDUCE_DIM,
+                        static_cast<DataFormat>(formats.math),
+                        is_fp32_dest_acc_en,
+                        static_cast<DataFormat>(formats.math),
+                        /*RECORD_REPLAY=*/false>(BLOCK_CT_DIM, BLOCK_RT_DIM);
                     TTI_CLEARDVALID(1, 0);
                 }
             }
@@ -155,7 +169,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 _llk_math_eltwise_sfpu_start_(0);
-                calculate_reduce<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>(BLOCK_CT_DIM, BLOCK_RT_DIM);
+                calculate_reduce<
+                    POOL_TYPE,
+                    REDUCE_DIM,
+                    static_cast<DataFormat>(formats.math),
+                    is_fp32_dest_acc_en,
+                    static_cast<DataFormat>(formats.math),
+                    /*RECORD_REPLAY=*/false>(BLOCK_CT_DIM, BLOCK_RT_DIM);
                 _llk_math_eltwise_sfpu_done_();
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
