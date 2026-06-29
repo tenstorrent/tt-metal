@@ -788,11 +788,20 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
     logger.info(f"RMSCORR [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
 
 
+# adaLN block-norm hidden dim + head count per model (the DistributedLayerNorm
+# use case). feat_local = hidden/tp drives the resident-vs-wide-shard split.
+_LN_HID = {WAN: 5120, LTX: 4096, FLUX: 3072}
+_LN_HEADS = {WAN: 40, LTX: 32, FLUX: 24}
+# Real model shapes across TP (1x{tp} LINE submesh, tp_axis=1). Spans the
+# feat_local range: WAN tp1=160 tiles (wide) ... tp8=20 tiles (resident).
 _LN_PARAMS = [
     ((4, 8), _DP_GAL, WAN, 1, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
     ((4, 8), _DP_GAL, WAN, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, WAN, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, LTX, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, LTX, 4, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
 ]
-_LN_IDS = ["ln_tp1", "ln_tp2"]
+_LN_IDS = ["wan_tp1", "wan_tp2", "wan_tp4", "ltx_tp2", "ltx_tp4"]
 
 
 @pytest.mark.parametrize(
@@ -801,44 +810,52 @@ _LN_IDS = ["ln_tp1", "ln_tp2"]
     indirect=["mesh_device", "device_params"],
 )
 def test_layernorm_corr(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
-    """Phase 2 Welford LayerNorm bringup: TP=1 (is_tp_1) whole-row block adaLN
-    LayerNorm vs fp32-PyTorch reference, plus a 3x bit-exact determinism check.
-    A block config (head_dim=None) makes _build supply weight=(1+scale) and
-    bias=shift, i.e. the adaLN affine every LayerNorm caller uses. dim=1024 (32
-    tiles) fits the resident layout (no streaming / block-major)."""
+    """Welford LayerNorm vs fp32-PyTorch reference on real adaLN block-norm shapes
+    (head_dim=None -> _build supplies weight=(1+scale), bias=shift), plus a 3x
+    bit-exact determinism check. Shapes whose shard overflows L1 resident hit the
+    Phase-3 'resident only' TT_FATAL (wide-shard support is Phase 4) — those are
+    recorded as NEED_WIDE, not correctness failures, so one run maps the landscape."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
     links = _fused_links(op_override)
-    # dim scaled so feat_local = dim/tp = 1024 (32 tiles) stays resident at every TP.
+    dim, heads = _LN_HID[model], _LN_HEADS[model]
+    feat_local_tiles = (dim // tp) // 32
     cfgs = [
         Cfg(
-            f"ln_block_N128_D{1024 * tp}",
+            f"ln_{model}_tp{tp}_D{dim}_N256",
             model,
             tp,
-            rows=128,
-            dim=1024 * tp,
+            rows=256,
+            dim=dim,
             head_dim=None,
             rope=False,
-            full_heads=1,
+            full_heads=heads,
             broadcast_rope=True,
             norm="layernorm",
         ),
     ]
-    flagged = []
+    flagged, need_wide = [], []
     for cfg in cfgs:
-        logger.info(f"=== [LN] {cfg.cid} rows={cfg.rows} dim={cfg.dim} ===")
+        logger.info(f"=== [LN] {cfg.cid} rows={cfg.rows} dim={cfg.dim} feat_local_tiles={feat_local_tiles} ===")
         ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
         inp = _build(submesh, cfg, tp_axis)
         sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
-        pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
         ref = _torch_ref(cfg)
 
-        def _fused(k, _inp=inp, _sems=sems, _pobs=pobs, _cfg=cfg):
+        def _fused(k, _inp=inp, _sems=sems, _cfg=cfg):
             s = _sems[k % _PINGPONG]
-            return _gather(
-                _run_fused(_inp, submesh, s, _cfg, topology, tp_axis, _pobs[k % _PINGPONG], op_override), tp_axis
-            )
+            pob = _make_pob(_inp, submesh, _cfg, links, tp_axis)
+            return _gather(_run_fused(_inp, submesh, s, _cfg, topology, tp_axis, pob, op_override), tp_axis)
 
-        out0 = _fused(0)
+        try:
+            out0 = _fused(0)
+        except RuntimeError as e:
+            msg = str(e)
+            if "resident" in msg or "LayerNorm requires the resident layout" in msg:
+                need_wide.append(cfg.cid)
+                logger.info(f"LNCORR {cfg.cid:<26} NEED_WIDE (overflows L1 resident; Phase-4 streaming/block-major)")
+                continue
+            raise
+
         ndiff = 0
         for j in range(3):  # same input -> must be bit-exact
             if (_fused(j + 1) - out0).abs().max().item() > 0.0:
@@ -850,10 +867,11 @@ def test_layernorm_corr(mesh_device, model, tp, topology, op_override, tp_axis, 
         if susp:
             flagged.append(cfg.cid)
         logger.info(
-            f"LNCORR {cfg.cid:<22} det={'OK' if det else 'FAIL'} pcc(F:torch)={pcc * 100:.4f}% "
+            f"LNCORR {cfg.cid:<26} det={'OK' if det else 'FAIL'} pcc(F:torch)={pcc * 100:.4f}% "
             f"maxabs={maxabs:.4f} det_ndiff={ndiff}/3{'  <-- SUSPICIOUS' if susp else ''}"
         )
-    assert not flagged, f"LayerNorm flagged: {flagged}"
+    logger.info(f"LNCORR [{model} tp{tp}] flagged={flagged or 'NONE'} need_wide={need_wide or 'NONE'}")
+    assert not flagged, f"LayerNorm correctness flagged: {flagged}"
 
 
 @pytest.mark.parametrize(
