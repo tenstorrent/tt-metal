@@ -496,7 +496,7 @@ class LTXDistilledPipeline(LTXPipeline):
         num_frames: int = 121,
         height: int = 512,
         width: int = 768,
-        seed: int = 10,
+        seed: int = 42,
         fps: int = 24,
     ):
         """Run the distilled 2-stage AV pipeline.
