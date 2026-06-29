@@ -158,6 +158,30 @@ def test_canvas_sample_from_params_deallocates_generated_gumbel_noise(monkeypatc
     assert noise.deallocated is True
 
 
+def test_canvas_sample_from_params_deallocates_generated_gumbel_noise_on_failure(monkeypatch):
+    noise = _FakeNoise("permuted-gumbel")
+
+    def fake_permuted_noise(shape, *, device, seed):
+        return noise
+
+    def fail_canvas_sample(logits, temperature, gumbel_noise):
+        assert gumbel_noise is noise
+        assert noise.deallocated is False
+        raise RuntimeError("sampling failed")
+
+    monkeypatch.setattr(TS, "sample_gumbel_noise_with_permuted_vocab", fake_permuted_noise)
+    monkeypatch.setattr(TS, "canvas_sample", fail_canvas_sample)
+
+    with pytest.raises(RuntimeError, match="sampling failed"):
+        canvas_sample_from_params(
+            _FakeLogits(),
+            {"temperature": 0.7, "seed": 47472},
+            default_temperature=0.8,
+        )
+
+    assert noise.deallocated is True
+
+
 def test_canvas_sample_from_params_preserves_injected_gumbel_noise(monkeypatch):
     calls = {}
     noise = _FakeNoise("injected-gumbel")
