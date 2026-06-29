@@ -50,6 +50,7 @@ def apply_tt_env_overrides(
     out_conv_stream_threshold: int | None = None,
     residual_stream_stride4_threshold: int | None = None,
     residual_stream_stride2_threshold: int | None = None,
+    cpu_decode: bool | None = None,
 ) -> dict:
     overrides = {
         "AUDIOX_TT_OPEN_MODE": open_mode,
@@ -96,6 +97,7 @@ def apply_tt_env_overrides(
         "AUDIOX_TT_RESIDUAL_STREAM_STRIDE2_THRESHOLD": None
         if residual_stream_stride2_threshold is None
         else str(residual_stream_stride2_threshold),
+        "AUDIOX_TT_CPU_DECODE": None if cpu_decode is None else ("1" if cpu_decode else "0"),
     }
     previous = {key: os.environ.get(key) for key in overrides}
     for key, value in overrides.items():

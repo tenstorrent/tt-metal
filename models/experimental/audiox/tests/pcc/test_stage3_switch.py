@@ -115,6 +115,7 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
                 "timings": {
                     "sampling_seconds": 0.5,
                     "generation_seconds": 2.0,
+                    "decode_backend": "tt",
                 },
             }
 
@@ -142,6 +143,7 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
             "diffusion_token_steps": details["t_latent"] * details["steps"],
             "sampling_seconds": details["timings"]["sampling_seconds"],
             "diffusion_tokens_per_second": 8.0,
+            "timings": details["timings"],
         }
 
     monkeypatch.setattr(
@@ -176,3 +178,94 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
     assert "text_to_audio" in summary
     assert "video_to_music" in summary
     assert '"all_runs_without_error": true' in summary
+    assert '"all_tt_decode": true' in summary
+
+
+def test_main_fails_when_any_case_uses_cpu_decode(tmp_path, monkeypatch):
+    class FakeSession:
+        def __init__(self, checkpoint, device, seed=None):
+            pass
+
+        def prepare_conditioning(
+            self,
+            *,
+            prompt,
+            video_path=None,
+            video_prompt_tensor=None,
+            duration_seconds=None,
+        ):
+            return torch.zeros(1, 3, 8)
+
+        def run(
+            self,
+            prompt,
+            output,
+            *,
+            video_path=None,
+            video_prompt_tensor=None,
+            cross_attn_cond_torch=None,
+            steps=0,
+            seed=0,
+            duration_seconds=None,
+            return_details=False,
+        ):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"fake")
+            return {
+                "output_path": output,
+                "latent": torch.zeros(1, 4, 4),
+                "cross_attn_cond": torch.zeros(1, 3, 8),
+                "conditioning_tokens": 3,
+                "t_latent": 4,
+                "duration_seconds": duration_seconds,
+                "timings": {
+                    "sampling_seconds": 0.5,
+                    "generation_seconds": 2.0,
+                    "decode_backend": "cpu",
+                },
+            }
+
+        def deallocate(self):
+            pass
+
+    monkeypatch.setattr(
+        switch_mod, "_build_session", lambda checkpoint, device, seed: FakeSession(checkpoint, device, seed)
+    )
+    monkeypatch.setattr(switch_mod, "_open_tt_device", lambda device_id: f"device-{device_id}")
+    monkeypatch.setattr(switch_mod, "_close_tt_device", lambda device: None)
+    monkeypatch.setattr(switch_mod, "_build_synthetic_video_prompt", lambda args: torch.zeros(1, 5, 3, 224, 224))
+    monkeypatch.setattr(
+        switch_mod,
+        "apply_tt_env_overrides",
+        lambda **kwargs: {"AUDIOX_TT_CPU_DECODE": kwargs.get("cpu_decode")},
+    )
+    monkeypatch.setattr(switch_mod, "restore_tt_env", lambda _previous: None)
+    monkeypatch.setattr(
+        switch_mod.validate_mod,
+        "_summarize_run_details",
+        lambda output_path, elapsed_seconds, details: {
+            "path": str(output_path),
+            "valid_16khz": True,
+            "elapsed_seconds": elapsed_seconds,
+            "generation_seconds": details["timings"]["generation_seconds"],
+            "conditioning_tokens": details["conditioning_tokens"],
+            "latent_tokens": details["t_latent"],
+            "diffusion_token_steps": details["t_latent"] * details["steps"],
+            "sampling_seconds": details["timings"]["sampling_seconds"],
+            "diffusion_tokens_per_second": 8.0,
+            "timings": details["timings"],
+        },
+    )
+
+    rc = switch_mod.main(
+        [
+            "--checkpoint",
+            "/tmp/fake.safetensors",
+            "--output-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert rc == 1
+    summary = (tmp_path / "stage3_switch_summary.json").read_text()
+    assert '"all_tt_decode": false' in summary
