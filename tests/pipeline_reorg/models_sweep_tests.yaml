@@ -14,11 +14,10 @@
 
 # Entries are grouped by model.
 
+# Full Llama-3.1-8B prefill does not fit a single N150 L1, so run a reduced 10-layer smoke for
+# pipeline liveness on N150. Full-model sweep coverage lives on multi-device SKUs. See #44482.
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
-    # Full Llama-3.1-8B prefill does not fit a single N150's L1 (DRAM and L1 both exhausted), so run a
-    # reduced 10-layer smoke for pipeline liveness on N150; full-model sweep coverage is on multi-device
-    # SKUs. See #44482.
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
   model: llama3.1-8b
