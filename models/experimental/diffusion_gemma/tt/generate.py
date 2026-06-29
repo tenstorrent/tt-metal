@@ -129,8 +129,7 @@ def tokenize_prompt(
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            if prompt:
-                messages.append({"role": "user", "content": prompt})
+            messages.append({"role": "user", "content": prompt})
         else:
             messages = prompt
         return _as_prompt_token_tensor(
@@ -586,16 +585,15 @@ def generate_from_prompt_tokens(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
-    if num_blocks > 0:
-        logits_fn = _resolve_generation_logits_fn(
-            tt_model,
-            logits_fn,
-            logits_fn_builder,
-            prompt_tokens=prompt_tokens,
-            prompt_len=prompt_len,
-            page_table=page_table,
-            page_tables_per_layer=page_tables_per_layer,
-        )
+    logits_fn = _resolve_generation_logits_fn(
+        tt_model,
+        logits_fn,
+        logits_fn_builder,
+        prompt_tokens=prompt_tokens,
+        prompt_len=prompt_len,
+        page_table=page_table,
+        page_tables_per_layer=page_tables_per_layer,
+    )
     return blocks_fn(
         tt_model,
         logits_fn,

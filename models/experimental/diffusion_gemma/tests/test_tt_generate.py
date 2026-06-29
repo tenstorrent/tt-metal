@@ -1492,6 +1492,15 @@ def test_tokenize_prompt_applies_chat_template_to_string_prompt():
     ]
 
 
+def test_tokenize_prompt_preserves_empty_string_user_message():
+    tokenizer = _FakeChatTokenizer()
+
+    out = tokenize_prompt(tokenizer, "")
+
+    assert torch.equal(out, torch.tensor([[1, 1, 99]], dtype=torch.long))
+    assert tokenizer.calls == [([{"role": "user", "content": ""}], True, True)]
+
+
 def test_tokenize_prompt_passes_chat_messages_through():
     tokenizer = _FakeChatTokenizer()
     messages = [{"role": "user", "content": "hello"}]
