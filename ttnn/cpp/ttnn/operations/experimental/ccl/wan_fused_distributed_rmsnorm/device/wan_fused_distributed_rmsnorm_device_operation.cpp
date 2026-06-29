@@ -27,11 +27,11 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     const auto& rope_cos = tensor_args.rope_cos;
     const auto& rope_sin = tensor_args.rope_sin;
 
-    // Welford LayerNorm (Phase 2): supported only for the is_tp_1 (TP=1, no
-    // all-gather) whole-row case, bf16 input, no RoPE. TP>1 (cross-shard Welford
-    // merge), per_head_norm, fp32 input, and RoPE-fused LayerNorm are later phases.
+    // Welford LayerNorm (Phases 2-3): whole-row, bf16 input, no RoPE. TP=1 reduces
+    // locally; TP>1 gathers per-shard Welford (mean, var) partials over the fabric
+    // ring and merges them (parallel Welford). per_head_norm, fp32 input, and
+    // RoPE-fused LayerNorm are later phases.
     if (args.norm_type == ttnn::experimental::WanFusedNormType::LAYERNORM) {
-        TT_FATAL(args.ring_size == 1, "LayerNorm currently supports TP=1 only (ring_size==1); got {}", args.ring_size);
         TT_FATAL(!args.per_head_norm, "LayerNorm does not support per_head_norm yet");
         TT_FATAL(
             input.dtype() == DataType::BFLOAT16, "LayerNorm currently requires BFLOAT16 input; got {}", input.dtype());
