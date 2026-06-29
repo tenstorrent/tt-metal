@@ -2150,6 +2150,22 @@ def test_host_gumbel_noise_to_device_rejects_bad_shape():
         host_gumbel_noise_to_device("mesh", torch.zeros(1, 2, 4, 6))
 
 
+@pytest.mark.parametrize(
+    "noise",
+    [
+        torch.zeros(0, 4, 8),
+        torch.zeros(1, 0, 8),
+        torch.zeros(1, 4, 0),
+        torch.zeros(0, 1, 4, 8),
+        torch.zeros(1, 1, 0, 8),
+        torch.zeros(1, 1, 4, 0),
+    ],
+)
+def test_host_gumbel_noise_to_device_rejects_empty_dimensions(noise):
+    with pytest.raises(ValueError, match="dimensions must be positive"):
+        host_gumbel_noise_to_device("mesh", noise)
+
+
 def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
     calls = {}
 
@@ -2568,6 +2584,22 @@ def test_make_host_gumbel_noise_fn_rejects_bad_shape():
         make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3, 4, 5)]])
     with pytest.raises(ValueError, match="host_gumbel_noise"):
         make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 4, 8)], [torch.zeros(1, 4, 9)]])
+
+
+@pytest.mark.parametrize(
+    "noise",
+    [
+        torch.zeros(0, 4, 8),
+        torch.zeros(1, 0, 8),
+        torch.zeros(1, 4, 0),
+        torch.zeros(0, 1, 4, 8),
+        torch.zeros(1, 1, 0, 8),
+        torch.zeros(1, 1, 4, 0),
+    ],
+)
+def test_make_host_gumbel_noise_fn_rejects_empty_dimensions(noise):
+    with pytest.raises(ValueError, match="dimensions must be positive"):
+        make_host_gumbel_noise_fn("mesh", [[noise]])
 
 
 def test_make_host_gumbel_noise_fn_allows_equivalent_3d_and_4d_shapes(monkeypatch):

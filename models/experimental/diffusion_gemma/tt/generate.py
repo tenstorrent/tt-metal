@@ -109,10 +109,9 @@ def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
 
 def host_gumbel_noise_to_device(mesh_device, gumbel_noise: torch.Tensor):
     """Move host Gumbel noise to denoise logits layout ``[batch, 1, canvas_len, vocab]``."""
+    _validate_gumbel_noise(gumbel_noise)
     if gumbel_noise.dim() == 3:
         gumbel_noise = gumbel_noise.unsqueeze(1)
-    if gumbel_noise.dim() != 4 or gumbel_noise.shape[1] != 1:
-        raise ValueError("gumbel_noise must have shape [batch, canvas_len, vocab] or [batch, 1, canvas_len, vocab]")
     return ttnn.from_torch(
         gumbel_noise.to(torch.float32),
         device=mesh_device,
@@ -296,8 +295,12 @@ def make_host_canvas_init_fn(mesh_device, host_canvases):
 
 def _validate_gumbel_noise(noise: torch.Tensor) -> None:
     if noise.dim() == 3:
+        if any(dim <= 0 for dim in noise.shape):
+            raise ValueError("gumbel_noise dimensions must be positive")
         return
     if noise.dim() == 4 and noise.shape[1] == 1:
+        if noise.shape[0] <= 0 or noise.shape[2] <= 0 or noise.shape[3] <= 0:
+            raise ValueError("gumbel_noise dimensions must be positive")
         return
     raise ValueError("gumbel_noise must have shape [batch, canvas_len, vocab] or [batch, 1, canvas_len, vocab]")
 
