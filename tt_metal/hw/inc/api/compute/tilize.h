@@ -302,12 +302,15 @@ unpack_tilizeA_B_block(
 #pragma GCC diagnostic pop
 }
 
+#endif  // ifndef ARCH_QUASAR
+
 // clang-format off
 /**
  * Uninitializes the tilize operation before re-initializing for another operation.
  *
  * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
  * as a part of tt-metal#22904.
+ * NOTE: Does nothing on Quasar because there is no persistent tilize unpack/pack state to undo.
  *
  * Return value: None
  *
@@ -317,8 +320,6 @@ unpack_tilizeA_B_block(
  * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-
-#endif  // ifndef ARCH_QUASAR
 
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 #ifndef ARCH_QUASAR
