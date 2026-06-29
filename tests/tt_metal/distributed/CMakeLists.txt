@@ -10,6 +10,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_device.cpp
     test_mesh_device_reshape.cpp
     test_mesh_device_view.cpp
+    test_pinned_memory_cache_remote_coord.cpp
     test_mesh_workload.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
