@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 pytestmark = pytest.mark.use_module_device
 
 
-binary_fns = {
+binary_fns = [
     "ge",
     "gt",
     "le",
@@ -33,7 +33,7 @@ binary_fns = {
     "rsub",
     "mul",
     "bias_gelu",
-}
+]
 
 
 def test_binary_ng_typecast_lt(device):
