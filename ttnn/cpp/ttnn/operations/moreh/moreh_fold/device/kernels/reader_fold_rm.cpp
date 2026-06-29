@@ -106,13 +106,15 @@ void kernel_main() {
                             {.offset_bytes = 0});
                         noc.async_read_barrier();
                         // Then copy actual size from scratch to final destination via local NoC
-                        UnicastEndpoint scratch_src{
-                            .noc_x = static_cast<uint32_t>(my_x[0]),
-                            .noc_y = static_cast<uint32_t>(my_y[0]),
-                            .addr = scratch_cb.get_write_ptr(),
-                        };
+                        UnicastEndpoint scratch_src{};
                         noc.async_read(
-                            scratch_src, input_cb, input_cb_page_size, {.offset_bytes = 0}, {.offset_bytes = 0});
+                            scratch_src,
+                            input_cb,
+                            input_cb_page_size,
+                            {.noc_x = static_cast<uint32_t>(my_x[noc.get_noc_id()]),
+                             .noc_y = static_cast<uint32_t>(my_y[noc.get_noc_id()]),
+                             .addr = scratch_cb.get_write_ptr()},
+                            {.offset_bytes = 0});
                         noc.async_read_barrier();
                     }
 
