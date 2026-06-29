@@ -33,7 +33,6 @@ from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
     parametrize,
 )
-from helpers.perf import log_parallel_scratch, read_perf_scratch
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -244,12 +243,6 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     )
 
     outcome = configuration.run()
-
-    if TestConfig.EN_PERF_MEASURE:
-        log_parallel_scratch(
-            read_perf_scratch(TestConfig.TENSIX_LOCATION),
-            sfpu_tiles=tile_cnt_exp,
-        )
 
     res_exp = torch.tensor(outcome.result, dtype=torch_format)
     res_matmul = torch.tensor(stimuli.collect_buffer_c_results(), dtype=torch_format)

@@ -303,7 +303,6 @@ def pytest_configure(config):
         or TestConfig.DUMP_RAW_METRICS
         or TestConfig.DUMP_CSV_COUNTERS
     )
-    TestConfig.EN_PERF_MEASURE = os.environ.get("TT_LLK_PERF_MEASURE") == "1"
 
     # Device print is enabled on debug or trace.
     resolved_log_level = (

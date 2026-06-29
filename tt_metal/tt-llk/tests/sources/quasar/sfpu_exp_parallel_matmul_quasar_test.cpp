@@ -10,7 +10,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
-#include "perf.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -61,17 +60,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM);
 
-    perf_scratch_measure(
-        PerfScratchSlot::Unpack,
-        [&]()
-        {
-            for (std::uint32_t j = 0; j < KT_DIM; j++)
-            {
-                _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
-            }
-            // End timing on completion, not issue: block until this thread's Tensix work drains.
-            tensix_sync();
-        });
+    for (std::uint32_t j = 0; j < KT_DIM; j++)
+    {
+        _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+    }
 }
 
 #endif
@@ -93,18 +85,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
 
-    perf_scratch_measure(
-        PerfScratchSlot::Math,
-        [&]()
-        {
-            for (std::uint32_t i = 0; i < KT_DIM; i++)
-            {
-                _llk_math_matmul_block_(CT_DIM, RT_DIM);
-            }
-            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-            // End timing on completion, not issue: block until this thread's Tensix work drains.
-            tensix_sync();
-        });
+    for (std::uint32_t i = 0; i < KT_DIM; i++)
+    {
+        _llk_math_matmul_block_(CT_DIM, RT_DIM);
+    }
+    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 
 #endif
@@ -177,38 +162,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
     const int store_base_addr     = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
 
-    // One-time (untimed) setup: program the exp LOADMACRO sequence and record the per-slice
+    // One-time setup: program the exp LOADMACRO sequence and record the per-slice
     // instruction stream (load+exp via SFPLOADMACRO, then explicit store to the output slice).
     _exp_init_loadmacro_(load_base_addr, store_base_addr, num_sfpu_iterations);
     const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
 
-    // Time the full TRISC3 path: UNP_S -> SFPU exp (SFPLOADMACRO replay) -> PACK1. The end-of-window
-    // waits stop the timer on completion (per-thread busy bits), not issue.
-    perf_scratch_measure(
-        PerfScratchSlot::Sfpu,
-        [&]()
+    // Full TRISC3 path: UNP_S -> SFPU exp (SFPLOADMACRO replay) -> PACK1.
+    for (std::uint32_t i = 0; i < num_tiles; ++i)
+    {
+        _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
+        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
+
+        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
-            for (std::uint32_t i = 0; i < num_tiles; ++i)
-            {
-                _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
-                _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
+            TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
+            // Drain the LOADMACRO pipeline before clearing the SrcS valids so PACK1 reads the
+            // exp result, not a store still in flight.
+            TTI_SFPNOP(0, 0, 0);
+            TTI_SFPNOP(0, 0, 1);
 
-                for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
-                {
-                    TT_REPLAY(0, exp_replay_len, 0, 0, 0, 0);
-                    // Drain the LOADMACRO pipeline before clearing the SrcS valids so PACK1 reads the
-                    // exp result, not a store still in flight.
-                    TTI_SFPNOP(0, 0, 0);
-                    TTI_SFPNOP(0, 0, 1);
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+        }
+    }
 
-                    _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
-                }
-            }
-
-            wait_unpack_idle();
-            wait_sfpu_idle();
-            wait_pack_idle();
-        });
+    wait_unpack_idle();
+    wait_sfpu_idle();
+    wait_pack_idle();
 }
 
 #endif
@@ -240,15 +219,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
     _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1);
 
-    perf_scratch_measure(
-        PerfScratchSlot::Pack,
-        [&]()
-        {
-            _llk_pack_matmul_(0, 0);
-            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-            // End timing on completion, not issue: block until this thread's Tensix work drains.
-            tensix_sync();
-        });
+    _llk_pack_matmul_(0, 0);
+    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
 #endif

@@ -197,7 +197,6 @@ class TestConfig:
     DUMP_RAW_COUNTERS: ClassVar[bool] = False
     DUMP_RAW_METRICS: ClassVar[bool] = False
     DUMP_CSV_COUNTERS: ClassVar[bool] = False
-    EN_PERF_MEASURE: ClassVar[bool] = False
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
@@ -210,9 +209,6 @@ class TestConfig:
         0x16C000,  # Math
         0x16D000,  # Pack
     ]
-
-    # Wall-clock scratch for EN_PERF_MEASURE (must match perf.h PERF_SCRATCH_BASE).
-    PERF_SCRATCH_BASE: ClassVar[int] = 0x16F000
 
     # Performance counter L1 memory addresses
     # NOTE: These addresses must match the values in tests/helpers/include/counters.h
@@ -1264,9 +1260,6 @@ class TestConfig:
                     and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 ):
                     optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
-
-                if TestConfig.EN_PERF_MEASURE:
-                    optional_kernel_flags += " -DEN_PERF_MEASURE "
 
                 COVERAGES_DEPS = (
                     f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "

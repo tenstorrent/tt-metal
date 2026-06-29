@@ -10,7 +10,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
-#include "perf.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -61,15 +60,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM);
 
-    perf_scratch_measure(
-        PerfScratchSlot::Unpack,
-        [&]()
-        {
-            for (std::uint32_t j = 0; j < KT_DIM; j++)
-            {
-                _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
-            }
-        });
+    for (std::uint32_t j = 0; j < KT_DIM; j++)
+    {
+        _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+    }
 }
 
 #endif
@@ -91,16 +85,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
 
-    perf_scratch_measure(
-        PerfScratchSlot::Math,
-        [&]()
-        {
-            for (std::uint32_t i = 0; i < KT_DIM; i++)
-            {
-                _llk_math_matmul_block_(CT_DIM, RT_DIM);
-            }
-            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-        });
+    for (std::uint32_t i = 0; i < KT_DIM; i++)
+    {
+        _llk_math_matmul_block_(CT_DIM, RT_DIM);
+    }
+    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 
 #endif
@@ -205,40 +194,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 
-    perf_scratch_measure(
-        PerfScratchSlot::Sfpu,
-        [&]()
+    for (std::uint32_t i = 0; i < num_tiles; ++i)
+    {
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
+
+        _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
+
+        constexpr int preload_count = 3;
+#pragma GCC unroll preload_count
+        for (std::uint32_t j = 0; j < preload_count; j++)
         {
-            for (std::uint32_t i = 0; i < num_tiles; ++i)
-            {
-                TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+        }
 
-                _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
-
-                constexpr int preload_count = 3;
-#pragma GCC unroll preload_count
-                for (std::uint32_t j = 0; j < preload_count; j++)
-                {
-                    TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
-                    TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
-                }
-
-                for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT - preload_count; slice++)
-                {
-                    TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
-                    TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
-                    TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
-                    _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
-                }
+        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT - preload_count; slice++)
+        {
+            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
+            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
+            TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+        }
 
 #pragma GCC unroll preload_count
-                for (std::uint32_t j = 0; j < preload_count; j++)
-                {
-                    TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
-                    _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
-                }
-            }
-        });
+        for (std::uint32_t j = 0; j < preload_count; j++)
+        {
+            TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+        }
+    }
 
     wait_sfpu_idle();
     wait_unpack_idle();
@@ -274,13 +258,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
     _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1);
 
-    perf_scratch_measure(
-        PerfScratchSlot::Pack,
-        [&]()
-        {
-            _llk_pack_matmul_(0, 0);
-            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-        });
+    _llk_pack_matmul_(0, 0);
+    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
 #endif

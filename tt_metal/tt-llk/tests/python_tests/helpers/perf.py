@@ -12,7 +12,6 @@ from typing import Any, ClassVar
 
 import pandas as pd
 import pytest
-from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .counters import print_counters, read_counters
 from .device import BootMode
@@ -24,36 +23,6 @@ from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import BuildMode, ProfilerBuild, TestConfig
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
-
-PERF_SCRATCH_SLOTS = ("unpack", "math", "pack", "sfpu")
-
-
-def read_perf_scratch(location: str = "0,0") -> dict[str, int]:
-    words = read_words_from_device(
-        location=location,
-        addr=TestConfig.PERF_SCRATCH_BASE,
-        word_count=len(PERF_SCRATCH_SLOTS),
-    )
-    return dict(zip(PERF_SCRATCH_SLOTS, words, strict=True))
-
-
-def log_parallel_scratch(
-    scratch: dict[str, int],
-    *,
-    sfpu_tiles: int,
-) -> None:
-    for name, cycles in scratch.items():
-        if name == "sfpu":
-            cpt = cycles // sfpu_tiles if sfpu_tiles else 0
-            logger.info(
-                "perf {}: {} cycles ({} tiles, {} cpt)",
-                name,
-                cycles,
-                sfpu_tiles,
-                cpt,
-            )
-        else:
-            logger.info("perf {}: {} cycles", name, cycles)
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
