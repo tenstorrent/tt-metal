@@ -1,0 +1,28 @@
+{
+  "target": "target_runtime_ns",
+  "log1p": true,
+  "features": [
+    "max_ulp",
+    "degree",
+    "segments",
+    "num_degree",
+    "den_degree",
+    "is_rational",
+    "is_polynomial",
+    "is_lowering",
+    "has_range_reduction",
+    "range_min",
+    "range_max",
+    "range_width",
+    "coeff_count",
+    "nonzero_coeff_count",
+    "max_abs_coeff",
+    "sum_abs_coeff",
+    "avg_abs_coeff",
+    "log10_max_abs_coeff",
+    "log10_sum_abs_coeff",
+    "log10_avg_abs_coeff",
+    "avg_effective_degree",
+    "max_effective_degree"
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "rows": 6708,
+  "table": "tt_metal/programming_examples/generic_lut_activation_embedded/results/frontier/bf16/data/csv/frontier_gbdt_training.tsv",
+  "targets": {
+    "target_runtime_ns": {
+      "backend": "xgboost",
+      "best_params": null,
+      "feature_count": 22,
+      "holdout_count": 1342,
+      "median_abs_pct_error": 0.71,
+      "p90_abs_pct_error": 4.79,
+      "p99_abs_pct_error": 22.25,
+      "per_family": {
+        "generic_lut_activation_embedded": {
+          "holdout_count": 1342,
+          "median_abs_pct_error": 0.71,
+          "p90_abs_pct_error": 4.79
+        }
+      },
+      "saved_model_train_count": 6708,
+      "saved_on": "full",
+      "top_features": [
+        {
+          "feature": "nonzero_coeff_count",
+          "importance": 2.03196
+        },
+        {
+          "feature": "is_lowering",
+          "importance": 0.70165
+        },
+        {
+          "feature": "segments",
+          "importance": 0.30218
+        },
+        {
+          "feature": "has_range_reduction",
+          "importance": 0.29959
+        },
+        {
+          "feature": "coeff_count",
+          "importance": 0.13147
+        },
+        {
+          "feature": "range_max",
+          "importance": 0.13034
+        },
+        {
+          "feature": "is_rational",
+          "importance": 0.11564
+        },
+        {
+          "feature": "range_width",
+          "importance": 0.10643
+        },
+        {
+          "feature": "log10_sum_abs_coeff",
+          "importance": 0.10496
+        },
+        {
+          "feature": "den_degree",
+          "importance": 0.0814
+        },
+        {
+          "feature": "avg_effective_degree",
+          "importance": 0.07437
+        },
+        {
+          "feature": "range_min",
+          "importance": 0.0558
+        },
+        {
+          "feature": "log10_max_abs_coeff",
+          "importance": 0.04967
+        },
+        {
+          "feature": "sum_abs_coeff",
+          "importance": 0.04847
+        },
+        {
+          "feature": "max_effective_degree",
+          "importance": 0.0293
+        }
+      ],
+      "train_count": 5366
+    }
+  }
+}
