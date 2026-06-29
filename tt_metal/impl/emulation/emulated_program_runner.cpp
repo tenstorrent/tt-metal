@@ -1907,8 +1907,7 @@ constexpr uint32_t UNSET = 0, UNICAST_1D = 1, UNICAST_2D = 2, MCAST_1D = 3, MCAS
 struct EmuleRoute {
     uint32_t kind = 0, a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;
     uint32_t dir_index = 0;  // 1D: which of the worker's connections (fwd=0/bwd=1), set at send time
-    // Real per-connection direction hints (preferred over the range-match heuristic), set at send time:
-    uint32_t eth_dir = 0xFF;                   // explicit eth_chan_directions index (direct 4-dir path)
+    // Mux-path direction hint (preferred over the range-match heuristic), set at send time:
     uint32_t mux_x = 0xFFFF, mux_y = 0xFFFF;   // worker's mux NOC (TRANSLATED) coords (fabric MUX path)
 };
 static std::mutex g_route_meta_mu;
@@ -1922,15 +1921,13 @@ extern "C" void __emule_fabric_set_route(
 }
 
 // Record the per-connection direction signals for a 1D send, called from the sender's teleport_ just before
-// the teleport: the fwd/bwd conn_index (FabricConnectionManager direct path), the explicit eth-direction
-// index (direct 4-directional path, e.g. all_to_all_dispatch), and the worker's mux NOC coords (fabric MUX
-// path). 0xFF/0xFFFF mean "unset"; the teleport prefers eth_dir, then mux, then the range-match fallback.
+// the teleport: the fwd/bwd conn_index (FabricConnectionManager direct path) and the worker's mux NOC coords
+// (fabric MUX path). 0xFFFF means "unset"; the teleport prefers the mux signal, then the range-match fallback.
 extern "C" void __emule_fabric_set_route_dir(
-    uint32_t hdr, uint32_t conn_index, uint32_t eth_dir, uint32_t mux_x, uint32_t mux_y) {
+    uint32_t hdr, uint32_t conn_index, uint32_t mux_x, uint32_t mux_y) {
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
     auto& r = g_route_meta[hdr];
     r.dir_index = conn_index;
-    r.eth_dir = eth_dir;
     r.mux_x = mux_x;
     r.mux_y = mux_y;
 }
@@ -2056,9 +2053,9 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
     if (rdbg) {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         auto cit = g_conn_route.find(src_chip);
-        fprintf(stderr, "[EMULE_FABRIC]   resolve src=%u kind=%u a=%u b=%u ewns=%u/%u/%u/%u dir_idx=%u conns=%zu eth_dir=%u mux=(%u,%u)\n",
+        fprintf(stderr, "[EMULE_FABRIC]   resolve src=%u kind=%u a=%u b=%u ewns=%u/%u/%u/%u dir_idx=%u conns=%zu mux=(%u,%u)\n",
                 src_chip, r.kind, r.a, r.b, r.c, r.d, r.e, r.f, r.dir_index,
-                cit == g_conn_route.end() ? (size_t)0 : cit->second.size(), r.eth_dir, r.mux_x, r.mux_y);
+                cit == g_conn_route.end() ? (size_t)0 : cit->second.size(), r.mux_x, r.mux_y);
     }
     auto& cp = MetalContext::instance().get_control_plane();
     if (r.kind == emule_route_kind::UNICAST_2D) {  // a=dst_dev, b=dst_mesh
@@ -2106,14 +2103,7 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             }
         }
         int dir = -1;
-        // (1) Explicit eth-direction hint (direct 4-directional path, e.g. all_to_all_dispatch): the worker's
-        // sender array index IS the eth_chan_directions index (E=0/W=1/N=2/S=3) → RoutingDirection.
-        if (r.eth_dir != 0xFF && r.eth_dir < 4) {
-            using RD = tt::tt_fabric::RoutingDirection;
-            static const RD eth2rd[4] = {RD::E, RD::W, RD::N, RD::S};
-            dir = static_cast<int>(eth2rd[r.eth_dir]);
-        }
-        // (2) Mux-core direction (fabric MUX path): translate the worker's mux TRANSLATED NOC coords back to
+        // (1) Mux-core direction (fabric MUX path): translate the worker's mux TRANSLATED NOC coords back to
         // the mux's LOGICAL core (same coord handling as __emule_fabric_resolve_remote) and look up the
         // direction the mux→EDM append recorded. Resolves ring, where the range-match below cannot.
         if (dir < 0 && r.mux_x != 0xFFFF) {
@@ -2132,8 +2122,10 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                 }
             }
         }
-        // (3) Fallback — the range-match heuristic (and its cached g_worker_dir / conn-index), used only when
-        // neither real direction signal above is present (preserves the previously-green configs byte-for-byte).
+        // (2) Fallback — the range-match heuristic (and its cached g_worker_dir / conn-index), used only when
+        // the mux signal above is absent (preserves the previously-green configs byte-for-byte). The direct
+        // 4-directional path (all_to_all_dispatch et al.) lands here for now; a faithful emule-side resolution
+        // (capture the real eth_channel rt-arg in build_from_args) is deferred until a consumer is unblocked.
         if (dir < 0 && r.kind == emule_route_kind::MCAST_1D) {
             const uint32_t range = r.b ? r.b : 1;
             for (const auto& cr : conns) {
