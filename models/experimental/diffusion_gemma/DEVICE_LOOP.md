@@ -6,7 +6,7 @@
 This file is the **single source of truth** for the branch (the former `STATUS.md` was folded in). It is organized as:
 - **Roadmap** (below, read first) — the forward plan: where we are, the critical path, and the phased work to a running model.
 - **Part I — Execution spec** — the loop protocol, env/run recipe, ground rules, the decision-fidelity bar, and the W1–W4 workstream specs + acceptance criteria.
-- **Part II — Implementation status** — environment constraints, the per-workstream status table, the 2026-06-26 code review + fix verification, session notes, and build order.
+- **Part II — Implementation status** — environment constraints, the per-workstream status table, the 2026-06-26 code review + fix verification, the 2026-06-29 #47464 integration-layer review, session notes, and build order.
 
 ---
 
@@ -16,7 +16,7 @@ This file is the **single source of truth** for the branch (the former `STATUS.m
 
 ## Where we are (2026-06-26)
 
-Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus the device attention/KV/sampling pieces are validated: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA — **both** ≤32768 (W2a) **and** the long-prompt >32768 path (W2b, resolved via the maskless reframe — no new kernel) (#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
+Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus the device attention/KV/sampling pieces are validated: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA — **both** ≤32768 (W2a) **and** the long-prompt >32768 path (W2b, resolved with regular non-causal SDPA — no new kernel) (#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
 
 **Nothing runs end-to-end.** There is no callable — device, or even CPU-against-real-weights — that takes a prompt string and returns text. The validated halves (the full 26B backbone ↔ the device denoise loop) have **never been joined**: no device commit-append, no per-block position advancement, no full-model + self-conditioning assembly from the real checkpoint, no tokenizer/text I/O, and no end-to-end acceptance test.
 
@@ -39,7 +39,7 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 | 3 | **Join full 26B + device self-conditioning + 30-layer prompt-KV** from the real checkpoint — all-layer prompt KV cache reader, self-conditioning builders, and raw/remapped checkpoint adapter/generation-builder helpers exist (`read_prompt_kv_cache_by_layer`, `build_self_conditioning`, `build_self_conditioning_embedding_weight`, `make_generation_logits_fn_builder_from_checkpoint_state`); real 26B device-vs-HF acceptance still open | 🚧 | #47464 |
 | 4 | **Measure the integrated real-size denoise step fits** on the (1,4) mesh (full-canvas logits + 262k soft-embed matmul + 30-layer `[P+C]` KV concat) | ⬜ | #47464 / #47487 |
 | 5 | **Entry point `tt/generate.py`** — prompt→text wrappers exist (`generate_text` composes tokenization, prompt prefill, optional post-prefill logits adapter construction via raw/remapped checkpoint generation builders, multi-block commit loop, block-level EOS stop, full-sequence/decode, and host-visible EOS/length trim; `generate_text_from_checkpoint_state` builds the raw-checkpoint logits builder first, defaults to released `DiffusionConfig()`, defaults adapter config from `tt_model.hf_config`, can infer `num_blocks` from `max_new_tokens`, can infer `vocab_size` from tokenizer/model metadata for seeded host canvas init / denoise gumbel / renoise hooks, defaults EOS stop/trim from `tokenizer.eos_token_id`, defaults decode to skip special tokens, validates length/block/canvas/vocab/logits inputs, and fast-paths zero-token generation without canvas/logits/prefill work) and are smoke-tested on QB2 for prompt string → post-prefill logits builder → two committed blocks → decoded text using seeded random-token canvas init; production device RNG and intra-block device-side early stop still open | 🚧 | #47464 |
-| 6 | **e2e acceptance test** — CPU HF `generate()` vs `reference/generate_blocks` token-equal is ✅; `reference/generate_blocks` can now replay fixed per-block canvases plus injected denoise noise for device-vs-reference tests; device-vs-HF on a short prompt with injected reference noise remains | 🚧 | #47464 |
+| 6 | **e2e acceptance test** — CPU HF `generate()` vs `reference/generate_blocks` token-equal is ✅; `reference/generate_blocks` can now replay fixed per-block canvases plus injected denoise noise via `make_replay_canvas_init_fn` / `make_replay_noise_fn` for device-vs-reference tests; device-vs-HF on a short prompt with injected reference noise remains | 🚧 | #47464 |
 
 > **Cheapest unblocked step:** start #47464 device integration with the CPU outer-loop oracle now pinned. The next useful slice is device commit-append / per-block position advancement for a single generated 256-token block before joining all 30 real layers.
 
@@ -50,7 +50,7 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 **Phase 1 — Device pieces (W1–W4)** — built; one blocked:
 - W1 KV-phase machine ✅ (#47474) — bounded-sliding commit-append wrap now has a discriminating QB2 regression test.
 - W2a bidirectional masked SDPA, prompt+canvas ≤ 32768 ✅ (#47462).
-- W2b long-prompt (>32768) attention ✅ via the maskless reframe (D1, no new kernel) — SDPA op + RoPE reachability + integrated tiny-model denoise pass PCC≥0.99 through **262144** for **both** full and sliding layers, wired into the BH QuietBox2 pipeline (`tests/pipeline_reorg/blackhole_e2e_tests.yaml`). Residual: integration is a tiny config (hidden=128, head_dim=32); real-26B denoise integration is #47464 (#47462).
+- W2b long-prompt (>32768) attention ✅ via regular non-causal SDPA (D1, no new kernel) — SDPA op + RoPE reachability + integrated tiny-model denoise pass PCC≥0.99 through **262144** for **both** full and sliding layers, wired into the BH QuietBox2 pipeline (`tests/pipeline_reorg/blackhole_e2e_tests.yaml`). Residual: integration is a tiny config (hidden=128, head_dim=32); real-26B denoise integration is #47464 (#47462).
 - W4 on-device canvas sampling ✅ (#47472) — SAMP-3 mesh-mapper `TT_FATAL` fixed; residual: regenerated-noise unvalidated at production vocab.
 - W3 decode-loop control flow ✅ built & validated on synthetic logits, 🔴 blocked on #48291 (#47463).
 
@@ -204,7 +204,7 @@ not exist yet, and W2/W3 can't run correctly without it.
 
 ---
 
-## W2 — #47462 bidirectional canvas attention (integration)  ✅ W2a · ✅ W2b (maskless reframe, no new kernel)
+## W2 — #47462 bidirectional canvas attention (integration)  ✅ W2a · ✅ W2b (regular SDPA, no new kernel)
 
 **State:** mask geometry reference (`reference/attention_mask.py`, 8 tests) ✅ and an
 **isolated** non-causal SDPA spike (`test_device_bidirectional_sdpa.py`, 4/4) ✅ are done.
@@ -215,50 +215,47 @@ isolated SDPA call.
 (`models/demos/gemma4/tt/attention/prefill.py:126,264`, `operations.py:333`). Add a
 non-causal path driven by an explicit `attn_mask`.
 
-### ⚠️ CANONICAL DENOISE MASK = ALL-ATTEND (read this before touching the mask)
+### ⚠️ CANONICAL DENOISE MASK = HF BIDIRECTIONAL VISIBILITY (read before touching the mask)
 
-`reference/attention_mask.py` is the oracle and it is explicit (`modeling_diffusion_gemma.py:1399-1438`,
-`bidirectional_mask_function`): the DiffusionGemma decoder is **fully bidirectional for
-BOTH full-attention AND sliding layers**. `sliding_window` only shapes offsets / the SDPA
-skip hint — it **NEVER restricts which keys a canvas query sees**. So the canonical denoise
-mask is **all-attend**: every canvas query attends to **prompt + the entire canvas**, for
-every layer type.
+`reference/attention_mask.py` is the oracle. After the 2026-06-29 H2 review against installed
+transformers, the rule is:
 
-- **The denoise oracle is `build_canvas_denoise_mask(prompt_len, canvas_len)` with
-  `local_window=False`** → all-zeros `[C, P+C]` additive mask. Use this, and only this, as
-  the denoise reference.
-- **The symmetric 2W+1 window is NON-canonical.** `local_window=True` exists ONLY to
-  exercise the ttnn SDPA windowed-mask path (because `sliding_window_size` and `attn_mask`
-  are mutually exclusive, `sdpa_device_operation.cpp:67-68`). It is an **optional
-  op-capability test**, must **NOT** enter denoise acceptance, and must **NOT** be used as
-  the denoise oracle. (Any earlier "local = symmetric 2W+1 for denoise" framing was wrong.)
+- **Full-attention layers:** all-attend `[C, P+C]` (zeros / maskless fast path).
+- **Sliding-attention layers:** short prompts with `P+C-1 <= sliding_window` are also all-attend,
+  but long prompts must use HF's bidirectional sliding visibility
+  `abs(q_idx - kv_idx) <= sliding_window`, which drops prompt tokens before the window.
+- **Do not pass `sliding_window_size` in the denoise path.** `attn_mask` and
+  `sliding_window_size` remain mutually exclusive in the ttnn SDPA op
+  (`sdpa_device_operation.cpp:67-68`), so the sliding visibility is baked into the
+  dense mask only when needed.
+
+Use `build_canvas_denoise_mask(..., layer_type="sliding_attention", sliding_window=...)`
+for long-prompt sliding layers; use the default/full-attention all-zero mask or maskless
+fast path otherwise. `local_window=True` remains a non-canonical op-capability test only.
 
 ### W2a — non-causal masked SDPA, prompt + canvas ≤ 32768  ✅ (the real W2 deliverable)
 - Reference non-causal SDPA usage: `models/experimental/pi0/tt/ttnn_gemma.py:320`
   (`scaled_dot_product_attention(attn_mask=…, is_causal=False)`) and
   `models/tt_dit/encoders/gemma/model_gemma.py:253`.
 - Add an `is_causal=False` / `attn_mask=` branch to `prefill.py` SDPA; gate by `kv_phase`
-  from W1 (denoise → non-causal all-attend mask, prefill/commit → causal).
-- Build the `[256, prompt_len+256]` mask from `build_canvas_denoise_mask(..., local_window=False)`
-  (all-attend). Canvas absolute/RoPE positions are offset by `prompt_len`
+  from W1 (denoise → non-causal HF bidirectional visibility, prefill/commit → causal).
+- Build the `[256, prompt_len+256]` mask from `build_canvas_denoise_mask(...)` when a
+  materialized mask is required. Canvas absolute/RoPE positions are offset by `prompt_len`
   (`canvas_positions`). Cover the canvas→prompt prefix, not just an isolated 256 canvas.
-- **Do NOT pass `sliding_window_size` in the denoise path — even for sliding layers.** In
-  denoise you pass `attn_mask` (all-attend), and `attn_mask` ⊥ `sliding_window_size`
-  (`sdpa_device_operation.cpp:67-68`); passing both trips the mutual-exclusion guard. The
-  formerly-sliding layers attend fully during denoise, so the window simply does not apply.
-  (`sliding_window_size` stays only on the causal prefill/commit paths.)
+- **Do NOT pass `sliding_window_size` in the denoise path — even for sliding layers.**
+  `attn_mask` ⊥ `sliding_window_size` (`sdpa_device_operation.cpp:67-68`); passing both
+  trips the mutual-exclusion guard. (`sliding_window_size` stays only on the causal
+  prefill/commit paths.)
 - **Acceptance (device):** `tests/test_device_bidirectional_attention.py` — a full-attn
-  layer AND a (formerly-)sliding layer, both run with the **all-attend** denoise mask (and
-  **neither** passing `sliding_window_size`); output PCC ≥ 0.99 vs a torch reference forward
-  built on `build_canvas_denoise_mask(local_window=False)`, including the prompt prefix.
-  **Same all-attend mask for both layer types** (that's the canonical check — a sliding
-  layer must NOT window during denoise).
+  layer and a sliding layer run with denoise `is_causal=False` and no `sliding_window_size`;
+  output PCC ≥ 0.99 vs a torch reference forward built from the corresponding
+  `build_canvas_denoise_mask(...)`, including the prompt prefix.
 - **Optional op-capability test (does NOT gate W2):** a separate
   `test_device_windowed_mask_path` driving `local_window=True` purely to prove the ttnn
   SDPA masked path handles a windowed mask. Clearly label it non-canonical.
 
-### W2b — long-prompt masked attention, prompt + canvas > 32768  ✅ RESOLVED via the maskless reframe (no new kernel)
-> 📋 **Detailed spike-first plan + status: [`DEVICE_LOOP_W2B.md`](./DEVICE_LOOP_W2B.md).** Outcome: the gating spike **S1 PASSED** — the existing maskless non-causal SDPA returns correct results (PCC≥0.99 vs an independent fp32 oracle) at `[256 × Sk]` up to **262144**, so the original "new kernel" framing was wrong. W2b reduced to **D1**: re-key the `prefill.py` `long_seq` guard against K-length + run maskless (`is_causal=False`, no mask, no `sliding_window_size`). SDPA op, RoPE reachability, and integrated tiny-model denoise (both full & sliding layers) all pass through 262144, wired into the BH QuietBox2 pipeline. Real-26B denoise integration is #47464. **The original framing below is superseded** (kept for the source map / decision history).
+### W2b — long-prompt masked attention, prompt + canvas > 32768  ✅ RESOLVED with regular SDPA (no new kernel)
+> 📋 **Detailed spike-first plan + status: [`DEVICE_LOOP_W2B.md`](./DEVICE_LOOP_W2B.md).** Outcome: the gating spike **S1 PASSED** — regular non-causal SDPA returns correct results (PCC≥0.99 vs an independent fp32 oracle) at `[256 × Sk]` up to **262144**, so the original "new kernel" framing was wrong. W2b reduced to **D1**: re-key the `prefill.py` `long_seq` guard against K-length + run `is_causal=False` without `sliding_window_size`; materialize a dense mask only when HF sliding-layer visibility requires it. SDPA op, RoPE reachability, and integrated tiny-model denoise (both full & sliding layers) all pass through 262144, wired into the BH QuietBox2 pipeline. Real-26B denoise integration is #47464. **The original framing below is superseded** (kept for the source map / decision history).
 
 **Do NOT bundle this into W2a acceptance.** The existing gemma4 chunked-prefill long-context
 path is **causal-only** (`operations.py:25-29`, `prefill.py:106-130`) and `attn_mask` is
@@ -412,7 +409,7 @@ and marked `TODO(env)`. **HW + env + checkpoints are no longer blockers — QB2 
 | Entropy-budget acceptance on QB2 (device) | #47463 (R1) | ✅ **validated on device (2026-06-22) — full chain `ttnn.sort`→`cumsum`→exclusive-prefix→`scatter` matches the oracle, 5/5 (`test_device_entropy_accept.py`).** The 2026-06-19 "device `ttnn.sort` returns garbage" conclusion was **WRONG** — it was a **degraded-board** artifact (erisc 29-25 fault), not a `ttnn.sort`-on-BH bug. On healthy HW `ttnn.sort` is correct: `test_sort_standard[…64…]` all pass; standalone repro (bf16/fp32, 2D `[64,64]`, 4D `[1,1,64,64]`, `[…,256]`) gives correct values+indices. **Host-side sort is unnecessary — the device chain works.** Two things were needed to validate: (1) a **consistent build** — the prebuilt `.so` (dev20260616) JIT-compiled source kernels (dev20260618) against its own headers → `tt_memmove` overload mismatch in the permute reader kernel; fixed by building the source tree (`build_metal.sh --disable-profiler`, run with `PYTHONPATH=$TT_METAL_HOME/ttnn:$TT_METAL_HOME` + `TT_METAL_RUNTIME_ROOT=$TT_METAL_HOME`); (2) the device chain must use the **exclusive** prefix `(cum - sorted_vals) <= budget` to match HF `accept_canvas`, not inclusive `cum <= budget` (off-by-one at the boundary element). (Teardown still re-hangs erisc 29-25 each run — see SDPA row — so minimize device churn.) |
 | Multi-canvas generation loop (reference, pure torch) | #47464 | ✅ done — `reference/generate.py`, 3 tests (commit-append, prefix-grows) |
 | Bidirectional canvas attention (device SDPA integration, short/medium prompts) | #47462 (W2a) | ✅ **validated on QB2** — mask reference done; isolated non-causal SDPA spike is ✅ (`test_device_bidirectional_sdpa.py`, 4/4). Real Gemma4 prefill attention now accepts explicit `attn_mask` and routes to `is_causal=False` without `sliding_window_size`; rectangular denoise support lets canvas Q attend `[prompt; canvas]` K/V with canvas RoPE offset. `tt/denoise_forward.py` exposes W2 product wrappers: `denoise_attention_forward`, `denoise_logits_forward`, `denoise_logits_from_tokens`, `collect_prompt_hidden_by_layer` (legacy hidden-source shim), `collect_prompt_kv_by_layer` (projected prompt K/V), and `read_prompt_kv_cache_slice` (non-paged Gemma4 KV cache → projected prefix K/V via `ttnn.experimental.nlp_kv_cache_load_slice`). Validated with `tests/test_device_bidirectional_attention_integration.py` (4 passed): square all-attend smoke; prompt-prefix attention PCC≥0.99 for both `sliding_attention` and `full_attention`; token-driven full-canvas logits wrapper PCC≥0.98 after `PREFILL_WRITE` writes the prompt cache and denoise reads that cache slice, plus real `TtSelfConditioning` softmax→embedding→gated-MLP hook on mesh (full logits include known bf16 MoE/lm_head ceiling). `tests/test_device_self_conditioning.py` still passes 4/4 for the standalone module. |
-| Paged / long-prompt denoise cache reader + masked chunking | #47462 (W2b) | ✅ done — S1/S2 resolved the core SDPA risk in favor of D1: regular non-causal SDPA passes `[256 × Sk]` through `Sk=262144`, `head_dim ∈ {256,512}` on QB2, both maskless and explicit all-zero masked. D1 is wired so canonical denoise uses maskless `is_causal=False` SDPA and no longer materializes the all-zero mask by default. S4 RoPE reachability is verified at 262144, and integrated tiny-model denoise attention PCC passes at `P+C=33280` and `P+C=262144` for both full and sliding layers (`prompt_len > sliding_window=1024` for sliding). Full W2b suite: `test_device_long_sdpa_w2b.py` 29 passed with `DG_W2B_SDPA_SWEEP=full`, and the same full-sweep command is now in the QB2 Blackhole pipeline (`bh-diffusion-gemma-w2b-full-sweep`). Real 26B e2e generation remains #47464/#48291, not a W2b SDPA blocker. |
+| Paged / long-prompt denoise cache reader + masked chunking | #47462 (W2b) | ✅ done — S1/S2 resolved the core SDPA risk in favor of D1: regular non-causal SDPA passes `[256 × Sk]` through `Sk=262144`, `head_dim ∈ {256,512}` on QB2, both maskless and explicit masked. D1 is wired so full layers and short-prompt sliding layers keep the maskless fast path, while long-prompt sliding layers materialize HF's bidirectional sliding mask (`abs(q-k) <= sliding_window`). S4 RoPE reachability is verified at 262144, and integrated tiny-model denoise attention PCC passes at `P+C=33280` and `P+C=262144` for both full and sliding layers. Full W2b suite: `test_device_long_sdpa_w2b.py` 29 passed with `DG_W2B_SDPA_SWEEP=full`, and the same full-sweep command is now in the QB2 Blackhole pipeline (`bh-diffusion-gemma-w2b-full-sweep`). Real 26B e2e generation remains #47464/#48291, not a W2b SDPA blocker. |
 | Reference denoise trajectory (pure torch) | #47463/#47468 | ✅ done — `reference/denoise_loop.py`, 4 tests pass |
 | Discrete-diffusion decode loop (device) | #47463 | 🔴 **blocked on bf16 decision bar / full-logits precision** — local `ttnn` build unblocked by syncing `tt_metal/third_party/tracy` and `tt_metal/third_party/umd` to the superproject pins, then rebuilding with `./build_metal.sh --disable-profiler`. W3 control-loop implementation is in place and validated on QB2 (2026-06-25): `tests/test_device_denoise_loop.py` 3 passed, entropy/accept harnesses 12 passed, and real-W2-logits integration tests passed (`test_denoise_logits_adapter_threads_prev_logits_for_self_conditioning`, `test_denoise_controller_real_logits_records_decision_flips`). `tt/denoise_loop.py` composes Gumbel-max, logsumexp-form entropy, exclusive-prefix accept, uint32-safe renoise, multi-step carry, clean-argmax commit, and stable+confident halting against `reference/denoise_loop.py`; the synthetic trajectory smoke uses 256 canvas positions, injected zero Gumbel + renoise ids, halts after 2 steps, passes `compare_trajectories`, and records 0 accept flips. `tt/denoise_forward.py` exposes `DenoiseLogitsAdapter`, a stateful W2 callback that threads previous-step logits into real self-conditioning for the controller while keeping logits on device; it also accepts controller-shaped `[1,1,L,1]` TILE token canvases. Real W2 logits smoke (1-layer, vocab=256, 2 denoise steps) runs end-to-end and records **accept_flips=[0,0]**, but also a precision finding: **argmax_flips=[225,222]**, **canvas_flips=[1,1]**, entropy PCC≈[0.624,0.653] vs torch. Triage shows drift is already present at logits: logits PCC≈[0.985,0.969] but logits argmax agreement≈[0.121,0.133]; reference top1/top2 margin is tiny (~0.005) while TT-vs-torch logits mean|Δ| is ~1.86/2.64, so argmax is margin-limited. Hidden-vs-logits diagnostic shows final hidden PCC≈0.9887 before lm_head, so this is not isolated to softcap/lm_head; dense (MoE-disabled) diagnostic improved logits PCC (~0.995/0.984) but still had ~0.125 argmax agreement and even accept_flips=[2,2], so this is not MoE-only. W3 should not be marked ✅ until either backbone/full-logits precision drift is reduced enough for the decision bar, or the bf16 diffusion decision bar is explicitly accepted/escalated by product. Since control-flow is implemented and blocked on that decision, the loop can proceed to independent W4 sampler work. |
 | On-device canvas sampling | #47472 | ✅ done — deterministic exact path validated on QB2 (2026-06-25): `tests/test_device_canvas_sampling_exact.py` 3 passed. `tt/sampling.py` exposes `canvas_sample(logits, temperature, injected_gumbel_noise)` as the W4 released per-position draw (`argmax(logits/T + gumbel)`); tests feed the torch run's injected Gumbel noise and match sampled ids token-exact, including the params-routed seam, plus verify temperature scaling PCC≥0.9999. W4 sampling-params seam is in place: `tt/sampling_params.py` exposes `MODEL_CAPABILITIES["supports_sample_on_device"]=True`, duck-types vLLM `TTSamplingParams` fields (temperature/top_k/top_p/seed) into a per-step `CanvasSamplingConfig`, and `canvas_sample_from_params(...)` maps those params onto the device sampler; `tests/test_sampling_params.py` 5 passed. Seed-regenerated sampling now defaults to the permuted-vocab RNG path, which keeps one `ttnn.rand` draw per logits element but generates vocab as an outer axis before permuting back; explicit distributional tolerances pass on QB2 for both direct and params-routed paths (`N=4096`, max top1-frequency error≈0.0282, mean KL≈0.0129), while the slower vocab-chunk diagnostic also passes (`max top1-frequency error≈0.0324`, mean KL≈0.0035). The raw single-call `ttnn.rand[..., vocab]` path remains as a strict-xfailed diagnostic (`max top1-frequency error≈0.179`, mean KL≈0.651`) because torch consuming the same raw noise exactly reproduces the biased samples, proving the issue is RNG axis correlation rather than sampler arithmetic/argmax; this raw path is not the released params default. |
@@ -477,6 +474,44 @@ A second multi-agent pass independently verified all 23 fix commits at snapshot 
   - **KV-P-4** — fix is production-identical; only the `(100,100)==32` assertion distinguishes new from old — `(384,256)==192` / `(512,256)==256` pass under both (sanity checks, not regression guards).
 
 **Net:** the campaign is solid; the known SAMP-3 mesh-mapper fatal is fixed, and neither the remaining leak-regression guard gap nor the RNG distribution/fidelity caveats touch the production `gemma4` path.
+
+## Code review — 2026-06-29 (multi-agent review of the #47464 integration layer)
+
+Adversarial multi-agent review of the 68 commits `03c40727c48..HEAD` (~4.5k LOC) — the #47464 integration push since the 2026-06-26 review: `tt/generate.py` entrypoints, device commit-append / per-block RoPE advancement, checkpoint-state adapter & generation-logits builders, the reference outer loop + replay hooks, and `config.py` / `weight_mapping.py`. 9 module-group reviewers, every finding adversarially re-verified against the code (the two headline items also against the **installed transformers 5.12.1** source). **29 findings confirmed, 18 dismissed as false positives** (notable dismissals listed at the end so they are not re-raised). Status below was refreshed after the 2026-06-29 fix sweep through commit `4d114c83fbc`.
+
+**Headline — still no production gemma4 regression; all review bugs with clear fixes are actioned.** Shared-path defaults remain safe (re-confirmed: `coerce_kv_cache_phase(None)`→legacy write, new prefill kwargs default off). The `kv_hidden_states` fused-QKV leak is fixed, long-prompt sliding denoise masks now match HF and are threaded into the device path, replay hooks are bounded, seed/shape/config guards are in place, and the known diagnostic device trajectory test now has nonzero fail thresholds. Remaining residuals are explicitly scoped below.
+
+### 🔴 Must-fix
+
+- ✅ **Fixed 2026-06-29 [#47462/gemma4] `kv_hidden_states` denoise prefill leaked the fused QKV DRAM tensor every layer·step** — `models/demos/gemma4/tt/attention/prefill.py:82-90`. `xqkv_kv = apply_qkv_projection(kv_hidden_states, ...)` is now deallocated immediately after `split_qkv_heads_prefill(...)` extracts the replacement K/V tensors, preventing one fused-QKV DRAM allocation from accumulating per decoder layer per denoise step. Validated with CPU `test_generate.py` + `test_gemma4_prefill_guards.py` (18 passed) and QB2 `test_denoise_logits_adapter_threads_prev_logits_for_self_conditioning[blackhole-1x4]` (1 passed).
+- ✅ **Fixed 2026-06-29 [#47462] All-attend denoise mask diverged from HF for sliding layers when `prompt_len ≥ sliding_window`** — `reference/attention_mask.py` now exposes `layer_type="sliding_attention"` + `sliding_window` to reproduce HF's bidirectional sliding visibility (`abs(q-k) <= sliding_window`) and `tests/test_real_transformers_parity.py` compares canvas rows against installed transformers. The device wrapper now materializes this mask only for long-prompt sliding layers while preserving the maskless path for full layers and short prompts. Validated with CPU mask/denoise parity tests (28 passed).
+
+### 🟡 Should-fix
+
+- ✅ **Fixed 2026-06-29 [#47472] `seed=0` made "deterministic" Gumbel noise non-reproducible** — `sampling_params.py` and all TT regenerated Gumbel helpers now reject non-positive seeds (`5cd7debf6f2`, `aa292d7ca5a`).
+- ✅ **Fixed 2026-06-29 [#47474, test] `test_commit_append_decode_writes_full_256_token_canvas` `NameError`** — test now defines the missing mesh mapper before reuse (`915d81e3ba6`).
+- ✅ **Fixed 2026-06-29 [#47464] `embed_canvas_tokens` hardcoded batch=1 in the post-embedding reshape** — batch >1 now fails explicitly rather than silently reshaping incorrectly (`0c37988955b`).
+
+### 🟢 Low / hardening
+
+- ✅ **Fixed 2026-06-29 Denoise-loop injected-noise leaks** — consumed per-step `gumbel_noise` / `noise_tokens` are now released in `tt/denoise_loop.py` (`7c0d5642b5a`).
+- ✅ **Fixed 2026-06-29 `max_denoise_steps==0` degenerate config** — `DiffusionConfig.__post_init__` rejects non-positive denoise steps (`83473879ba2`).
+- ✅ **Fixed 2026-06-29 oracle parameter-edge drift** — entropy accept defaults now match HF's no-min-accept edge; long-prompt mask parity is covered against real transformers. EOS remains intentionally owned by `tt/generate.py`, not the pure reference outer loop.
+- ✅ **Fixed 2026-06-29 config defaults off the 26B-A4B path** — HF MoE fields are preserved, dense MoE nulls stay null, unknown checkpoint keys are surfaced, and top-level canvas-length consistency is validated (`3454f880344`, `283ccd20ab8`, `29d9db665f4`).
+- ✅ **Fixed 2026-06-29 dead / unstable code** — removed dead `reference/sampling.is_converged` and unused `tt/sampling.softmax`; also dropped the unused internal denoise `prompt_len` argument (`f6326617fdb`, `bcd2759d729`, `60836956be9`).
+- ✅ **Fixed 2026-06-29 robustness footguns** — multi-layer model-level `kv_hidden_states` / `q_rope_offset` now fail fast; `prefix_kv_by_layer` length is validated before layer forward; denoise replay noise hooks are required explicitly (`a2fb4bb1aff`, `b63c3294c6c`, `3bbd872e054`).
+
+### Nits (no action required)
+
+Resolved nits: dead `if num_blocks > 0` after the zero-block early return, empty-string prompt chat templating, replay noise step/block bounds, misleading `resolution_token_budgets # verified` comment, unknown-key handling in `weight_mapping.py`, and the real-logits trajectory test's zero thresholds. Remaining no-action nit: redundant double `coerce_kv_cache_phase` (`model.py` + `attention/__init__.py`) is idempotent and harmless.
+
+### Dismissed — verified false positives (no action)
+
+- **`denoise_step` leaks the pre-typecast argmax tensors every step** — refuted: the subsequent deallocation frees them; the two sub-facts are correct but the leak conclusion ignores the cleanup.
+- **Docstring cites a non-existent `bidirectional_mask_function`** — refuted: the function exists in the installed source (it is the all-attend mask function; the real issue is cache/mask *slicing* for sliding layers, captured as H2).
+- **`top_k`/`top_p` are silently dropped, not rejected** — refuted: `sampling_params.py` parses and carries them with `top_k_top_p_supported=False`, and `canvas_sample` asserts they are unset; the no-op is explicit and tested.
+- **`decode` + `write_kv_cache=False` reads stale KV** — refuted: dead-but-correct defensive code; `coerce_kv_cache_phase` forbids `DENOISE_READONLY` in decode, so it is unreachable.
+- **`_largest_tile_divisor` can return a non-divisor** / **prefix_kv from a bounded circular cache wraps** / **layer/model param threading is only signature-checked** / **`SelfConditioning.condition()` can't apply per-example self-cond** / **`embed_host_tokens` / `prefill_prompt_tokens` leak** / **seeded hooks share one generator** / **EOS inside a committed block still pads the canvas** / **device accept omits `min_accept`** / **bf16 entropy cumsum flips the accept boundary** / **`soft_embedding` scale diverges from the tied table** / **fp32 zero-noise argmax floor 0.95 too loose** — all refuted against HEAD (handled elsewhere, intentional, or factually wrong).
 
 ## Session 2026-06-22 — #47468 / #47461 / #47487 push (QB2-only)
 
