@@ -8,7 +8,12 @@ from __future__ import annotations
 import argparse
 import os
 
-from models.experimental.diffusion_gemma.checkpoint import build_and_generate_text_from_checkpoint_dir
+from models.experimental.diffusion_gemma.checkpoint import (
+    build_tt_model_from_checkpoint_inputs,
+    generate_text_from_checkpoint_model_inputs,
+    load_checkpoint_inputs,
+    text_generation_prefixes_for_layers,
+)
 
 
 _MESH_SHAPES = {
@@ -63,19 +68,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    checkpoint_inputs = load_checkpoint_inputs(
+        args.checkpoint,
+        tokenizer_kwargs={"local_files_only": args.local_files_only},
+        state_prefixes=text_generation_prefixes_for_layers(args.num_layers),
+    )
+
     mesh_device = _open_mesh_device(args.mesh)
     try:
-        generation = build_and_generate_text_from_checkpoint_dir(
+        checkpoint_model_inputs = build_tt_model_from_checkpoint_inputs(
             mesh_device,
-            args.checkpoint,
+            checkpoint_inputs,
+            max_batch_size=args.batch,
+            max_seq_len=args.max_seq_len,
+            num_layers=args.num_layers,
+            bounded_sliding_kv_cache=args.bounded_sliding_kv_cache,
+        )
+        generation = generate_text_from_checkpoint_model_inputs(
+            checkpoint_model_inputs,
             args.prompt,
-            tokenizer_kwargs={"local_files_only": args.local_files_only},
-            model_kwargs={
-                "max_batch_size": args.batch,
-                "max_seq_len": args.max_seq_len,
-                "num_layers": args.num_layers,
-                "bounded_sliding_kv_cache": args.bounded_sliding_kv_cache,
-            },
             max_new_tokens=args.max_new_tokens,
             num_blocks=args.num_blocks,
             seed=args.seed,
