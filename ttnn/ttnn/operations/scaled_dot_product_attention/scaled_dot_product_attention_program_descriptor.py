@@ -138,7 +138,8 @@ def create_program_descriptor(
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
-    if has_mask:
+    # Only create mask accessor when there's an actual mask tensor (not causal)
+    if has_mask and not is_causal:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(attn_mask).get_compile_time_args())
     else:
         reader_ct_args.extend(ttnn.TensorAccessorArgs().get_compile_time_args())
