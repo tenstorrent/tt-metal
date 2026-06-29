@@ -22,19 +22,24 @@ class CCLManager:
         self.rs_ping_pong_idx = 0
         self.ag_ping_pong_idx = 0
         self.barrier_idx = 0
+        self._neighbor_pad_idx = 0
 
     def _init_subdevice(self):
-        compute_grid_size = ttnn.CoreCoord(8, 8)
+        compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
 
-        _worker_sub_device = ttnn.SubDevice(
-            [
-                self.ccl_cores,
-            ]
-        )
+        worker_sub_device = ttnn.SubDevice([self.ccl_cores])
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [self.ccl_sub_device_id]
+
+        self.sub_device_manager = self.mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        self.mesh_device.load_sub_device_manager(self.sub_device_manager)
+        self.mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+        # Last column reserved for ring-attention CCL traffic; compute uses the rest
+        self.ring_attn_ccl_grid_offset = ttnn.CoreCoord(compute_grid_size.x - 1, 0)
 
     def _init_semaphores(self):
         # Initialize semaphores for reduce scatter ping pong
@@ -53,6 +58,17 @@ class CCLManager:
         barrier_ns_sems = 2 * 1
         self.barrier_semaphore = [
             ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_ns_sems)
+        ]
+
+        # Ring attention semaphores (2 for internal double-buffering)
+        self.ring_attn_semaphores = [
+            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(2)
+        ]
+
+        # Neighbor pad semaphores — ping-pong across K and V calls (one pair per outstanding op)
+        self._neighbor_pad_sems = [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(2)]
+        self._neighbor_pad_barrier_sems = [
+            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(2)
         ]
 
     def get_rs_ping_pong_semaphore(self):
@@ -87,9 +103,24 @@ class CCLManager:
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
 
+    def get_neighbor_pad_semaphores(self):
+        """
+        Get a (neighbor_semaphore, barrier_semaphore) pair for one neighbor_pad_async call.
+        Ping-pongs between two pairs so consecutive K and V calls don't conflict.
+        """
+        idx = self._neighbor_pad_idx
+        self._neighbor_pad_idx = (idx + 1) % 2
+        return self._neighbor_pad_sems[idx], self._neighbor_pad_barrier_sems[idx]
+
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""
         for sem in self.rs_ping_pong_semaphores:
             ttnn.reset_global_semaphore_value(sem, 0)
         for sem in self.ag_ping_pong_semaphores:
+            ttnn.reset_global_semaphore_value(sem, 0)
+        for sem in self.ring_attn_semaphores:
+            ttnn.reset_global_semaphore_value(sem, 0)
+        for sem in self._neighbor_pad_sems:
+            ttnn.reset_global_semaphore_value(sem, 0)
+        for sem in self._neighbor_pad_barrier_sems:
             ttnn.reset_global_semaphore_value(sem, 0)

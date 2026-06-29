@@ -192,7 +192,9 @@ def main():
 
         state_dict = ModelArgs.load_state_dict(model_args.weights_path, dummy_weights=False)
         cache = model_args.weight_cache_path(ttnn.bfloat8_b)
-        mesh_config = MeshConfig(shape, decode=ModeConfig(tp=shape[1], ep=shape[0]))
+        mesh_config = MeshConfig(
+            shape, decode=ModeConfig(tp=shape[1], ep=shape[0]), prefill=ModeConfig(tp=shape[1], sp=1, ep=1)
+        )
         ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=topology)
 
         model = Model(

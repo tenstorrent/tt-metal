@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 
 from models.demos.gpt_oss.config import MeshConfig
@@ -100,6 +101,32 @@ class Attention:
             config.head_dim,
         )
 
+        # Pre-allocate persistent K/V buffers for ring attention on non-sliding-window layers.
+        # Sliding-window layers use a ring-shift + plain SDPA path that doesn't need them.
+        prefill_sp = mesh_config.prefill.sp
+        if prefill_sp > 1 and not self.use_sliding_window:
+            seq_total = config.max_seq_len
+            num_kv_heads_local = mesh_config.shard_size(config.num_kv_heads)
+            self.persistent_k = ttnn.as_tensor(
+                torch.zeros(1, num_kv_heads_local, seq_total, config.head_dim),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.persistent_v = ttnn.as_tensor(
+                torch.zeros(1, num_kv_heads_local, seq_total, config.head_dim),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self.persistent_k = None
+            self.persistent_v = None
+
         # Store references for backward compatibility
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_heads
@@ -178,4 +205,6 @@ class Attention:
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
                 batch_size=batch_size,
+                persistent_k=self.persistent_k,
+                persistent_v=self.persistent_v,
             )
