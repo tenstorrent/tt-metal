@@ -49,6 +49,27 @@ def warm_wall_ms(walls: Sequence[float]) -> float:
     return median(warm)
 
 
+_FORWARD_WALL_RE = re.compile(r"FORWARD_WALL_MS=([0-9]+\.?[0-9]*)")
+
+
+def forward_wall_ms(profiles_dir: str | Path, runs: int) -> float | None:
+    vals: list[float] = []
+    for i in range(max(runs, 1)):
+        lp = Path(profiles_dir) / ("run%d_tracy.log" % i)
+        if not lp.is_file():
+            continue
+        try:
+            hits = _FORWARD_WALL_RE.findall(lp.read_text(errors="ignore"))
+        except OSError:
+            continue
+        if hits:
+            vals.append(float(hits[-1]))
+    if not vals:
+        return None
+    warm = vals[1:] if len(vals) > 1 else vals
+    return round(median(warm), 4)
+
+
 def host_overhead_bucket(buckets: Sequence[dict[str, Any]], device_ms: float) -> dict[str, Any]:
     """host_overhead = Σ device Op-to-Op Gap (dispatch idle). source=op_gap when real, else unavailable."""
     gaps = [b.get("dispatch_gap_ms") for b in buckets if b.get("dispatch_gap_ms") is not None]
@@ -458,6 +479,7 @@ def tracy_tool(
     }
     return {
         "wall_ms": wall_ms,
+        "forward_wall_ms": forward_wall_ms(profiles_dir, runs),
         "device_ms": device_ms,
         "host_ms": host_ms,
         "host_fraction": round(host_ms / wall_ms, 4) if wall_ms else 0.0,
