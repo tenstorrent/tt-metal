@@ -24,7 +24,11 @@ config:
   latent: False
 
 # Weights are loaded in-process and run on the Wormhole device.
-checkpoint_path: /root/02/weights/diffusiondrive_navsim_88p1_PDMS.pth
-anchors_path: /root/02/resnet34/kmeans_navsim_traj_20.npy
+# Paths resolve from env vars (export DD_CHECKPOINT_PATH / DD_ANCHOR_PATH, themselves
+# derived from DD_DATA_ROOT — see the demo README "Eval environment" block); the
+# literal after the comma is only the last-resort default. CLI overrides still work:
+#   agent.checkpoint_path=$DD_CHECKPOINT_PATH agent.anchors_path=$DD_ANCHOR_PATH
+checkpoint_path: ${oc.env:DD_CHECKPOINT_PATH,/mnt/diffusion-drive/weights/diffusiondrive_navsim_88p1_PDMS.pth}
+anchors_path: ${oc.env:DD_ANCHOR_PATH,/mnt/diffusion-drive/resnet34/kmeans_navsim_traj_20.npy}
 lr: 6e-4
 device_id: 0

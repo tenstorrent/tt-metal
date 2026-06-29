@@ -15,7 +15,7 @@ All files are placed under models/demos/diffusion_drive/data/.
 
 Usage:
     source python_env/bin/activate
-    export PYTHONPATH=/root/tt/tt-metal
+    export PYTHONPATH="${TT_METAL_HOME:-$PWD}"   # your tt-metal checkout
     python models/demos/diffusion_drive/scripts/prepare_assets.py
 """
 
