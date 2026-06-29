@@ -208,15 +208,6 @@ void wait_for_go_message() {
 FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
     go_msg_t go_message;
     go_message.all = go_message_in->all;
-    DPRINT(
-        "calculate_dispatch_addr: go_message.master_x: {}, go_message.master_y: {}, "
-        "go_message.dispatch_message_offset: {}\n",
-        go_message.master_x,
-        go_message.master_y,
-        go_message.dispatch_message_offset);
-    DPRINT("NOC_X: {:#x}\n", NOC_X(go_message.master_x));
-    DPRINT("NOC_Y: {:#x}\n", NOC_Y(go_message.master_y));
-    DPRINT("DISPATCH_MESSAGE_ADDR: {:#x}\n", DISPATCH_MESSAGE_ADDR);
 #ifdef ARCH_QUASAR
     constexpr uint32_t dispatch_message_stride = L1_ALIGNMENT;
 #else
@@ -226,12 +217,10 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
         NOC_X(go_message.master_x),
         NOC_Y(go_message.master_y),
         DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset);
-    DPRINT("addr: {:#x}\n", addr);
     return addr;
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
-    DPRINT("notify_dispatch_core_done: dispatch_addr: {:#x}, noc_index: {}\n", dispatch_addr, noc_index);
 #ifdef ARCH_QUASAR
     // Quasar has no stream registers; dispatch_addr points to an L1 worker completion counter address.
     noc_fast_atomic_increment<DM_DEDICATED_NOC>(
