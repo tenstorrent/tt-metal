@@ -53,16 +53,21 @@ Not every cache must be vLLM-owned. vLLM owns the attention KV cache, but recurr
 
 Make prompt lengths, page tables, decode positions, batch dimensions, trace-side state, and on-device sampling explicit. The serving decode pass must drive the generator's traced decode path, not an eager-only fallback. When adding or debugging trace capture/replay, trace-safe inputs, or replay correctness for this adapter, use `$tt-enable-tracing`. The adapter should not duplicate model logic that already lives in `tt/model.py` or `tt/generator.py`.
 
-For decode performance, implement the vLLM async split before advertising it: `decode_forward(..., read_from_device=False)` should return device tensors, `read_decode_output(..., async_read=True)` should perform the minimal deferred read, and `process_decode_output_host(...)` should do host formatting. Only set `supports_async_decode=True` after this path passes the vLLM plugin's expectations with decode trace enabled and stale-token/current-position tests passing. Leave prefix caching `False` unless it is implemented and tested.
+For decode performance, implement the vLLM async split before advertising it: `decode_forward(..., read_from_device=False)` should return device tensors, `read_decode_output(..., async_read=True)` should perform the minimal deferred read, and `process_decode_output_host(...)` should do host formatting. Only set `supports_async_decode=True` after this path passes the vLLM plugin's expectations with decode trace enabled and stale-token/current-position tests passing.
+When
+1. `supports_async_decode=True`
+2. sampling on device
+2. tracing is enabled
+3. reset_batch=False
+vLLM may build and submit decode step N+1 before sampled token N has been applied to host scheduler state, so the inputs may be stale or wrong.
+This is OK because vLLM expects the model to not read the inputs, and instead have the previous step's sampling output preserved and used as input. Page-table tensor is guaranteed to be unchanged.
+Make sure to not read from host in such case, and instead use the inputs already on device.
+To allow this, always update the device copy of inputs, such as token/current-position/RoPE-position-state when sampling on device and do it exactly once per emitted token.
+Make sure to account for different traces within a model.
+To validate, run a focus overlap test under `--async-scheduling` and `sample_on_device_mode=all` checking tha the output passes the degenerate-output check, with no doubled subwords or repeated control tokens.
 
-Do not treat `supports_async_decode=True` as permission for scheduler overlap. It only means the adapter can split submit/read/host-formatting. The steady overlap path is a separate contract: vLLM may build and submit decode step N+1 before sampled token N has been applied to host scheduler state. For a new adapter, set `tt_async_decode_allows_overlap = False` whenever next-step `model_input` is built from vLLM host state such as `input_batch.token_ids_cpu`, `num_tokens`, positions, or per-request scheduler tables, or whenever the adapter refreshes traced token/current-position/page-table tensors from that `model_input`.
+Leave prefix caching `False` unless it is implemented and tested.
 
-Only set `tt_async_decode_allows_overlap = True` after a focused overlap test proves all of these under `--async-scheduling` and `sample_on_device_mode=all`:
-
-- sampled token N is either applied to host scheduler state before step N+1 input construction, or step N+1 input construction is entirely device-owned and cannot be overwritten by stale host state;
-- current-position/RoPE position state advances exactly once per emitted token and matches the request's output length;
-- traced token/current-position/page-table inputs observed immediately before replay N+1 contain the new values, not the previous step's values;
-- the async-overlap qualitative output passes the degenerate-output check, with no doubled subwords or repeated control tokens.
 
 If the vLLM plugin or harness is being changed, prefer the same safety rule there: overlap should default to false unless the model declares this proof-backed capability. Leaving overlap disabled may cost a few tokens/sec/user; letting it default on can silently corrupt generation.
 
@@ -190,7 +195,7 @@ Done means all of these are true and recorded:
 - Served max context, matching `doc/context_contract.json`, with any hard-physical-limit reduction evidence.
 - Non-aligned prompt-length evidence through serving: a valid request length that is not divisible by internal chunk/page/block alignment succeeds without capping or truncating the advertised context.
 - Served batch/concurrency coverage, including the largest tested `max_num_seqs` up to 32 and any hard-physical-limit reduction evidence.
-- Capability flags with evidence: no unproven `supports_async_decode=True`, explicit `tt_async_decode_allows_overlap` value with proof if true, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
+- Capability flags with evidence: no unproven `supports_async_decode=True`, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
 - Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.
 - Sampling test results, with any reproducibility-only failures separated from real failures.
