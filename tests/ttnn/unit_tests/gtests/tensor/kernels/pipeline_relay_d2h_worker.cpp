@@ -54,17 +54,16 @@ constexpr uint32_t d2h_backing_addr = get_compile_time_arg_val(2);              
 constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_iters = get_compile_time_arg_val(4);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(5);
-constexpr uint32_t produce_downstream = get_compile_time_arg_val(6);  // unused
-constexpr uint32_t metadata_enabled = get_compile_time_arg_val(7);
-constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(8);
+constexpr uint32_t metadata_enabled = get_compile_time_arg_val(6);
+constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(7);
 // L1 address (uniform on every worker core) where the UPSTREAM service multicast
 // this iter's metadata blob; the designated worker forwards it to the D2H service core.
-constexpr uint32_t upstream_metadata_l1_addr = get_compile_time_arg_val(9);
+constexpr uint32_t upstream_metadata_l1_addr = get_compile_time_arg_val(8);
 
-constexpr uint32_t d2h_transfer_done_sem_addr = get_compile_time_arg_val(10);
+constexpr uint32_t d2h_transfer_done_sem_addr = get_compile_time_arg_val(9);
 // Upstream backing and D2H backing share the same per-shard spec, so a single
 // TensorAccessorArgs set is reused with the two distinct base addresses.
-constexpr auto acc_args = TensorAccessorArgs<11>();
+constexpr auto acc_args = TensorAccessorArgs<10>();
 
 void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(0);
