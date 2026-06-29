@@ -79,14 +79,14 @@ enum class InputPolicy : uint8_t { WaitAndPopPerKBlock, WaitAndRetainOnLastBlock
 namespace matmul_config {
 
 /**
- * Init lifecycle for matmul_block: whether the helper issues mm_block_init_short.
+ * Init lifecycle for matmul_block: whether the helper issues matmul_block_init.
  * Independent of the reconfig switch (separate compile-time gate, per the
  * tilize/reduce/binary helper pattern).
  *
- * Short  (default) issue mm_block_init_short (matmul unpack/math init, no
+ * Short  (default) issue matmul_block_init (matmul unpack/math init, no
  *        hw_configure). Correct for every mid-kernel call: restores matmul-block
  *        unpack/math state after an intervening op without the slow hw_configure MMIO.
- * None   skip the init. Use when the caller already issued mm_block_init_short, or when
+ * None   skip the init. Use when the caller already issued matmul_block_init, or when
  *        chaining helper calls that left matmul state configured. Independent of
  *        reconfig (pass reconfig=NONE separately if reconfig is also external).
  * ShortAfterPreKBlock
@@ -97,9 +97,10 @@ namespace matmul_config {
  *        The restore keys on active_in0_cb_id, so a non-default In0SourceFn's alternate
  *        CBs must share in0's dataformat.
  *
- * The caller MUST issue mm_block_init() (or compute_kernel_hw_startup + mm_init for
- * scalar-matmul-first kernels) exactly ONCE at the top of kernel_main; hw_configure-
- * bearing inits are unsafe mid-kernel (slow MMIO can race executing units). Likewise
+ * The caller MUST issue compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) ONCE at the
+ * top of kernel_main, then matmul_block_init(in0, in1, transpose, ct_dim, rt_dim, kt_dim) (or
+ * matmul_init for scalar matmul_tiles-first kernels); hw_configure-bearing inits are unsafe
+ * mid-kernel (slow MMIO can race executing units). Likewise
  * ActivationInitHelper::init() is the caller's boot-time job — the helper never issues it.
  */
 enum class InitMode : uint8_t { Short, None, ShortAfterPreKBlock };
@@ -181,12 +182,12 @@ struct NoPostCompute {
 // unpacker/math state wrong for the matmul about to fire. Restore it one of two ways via
 // init_mode:
 //   (A) init_mode=ShortAfterPreKBlock (preferred): the HELPER restores — it issues the
-//       reconfig + mm_block_init_short after pre_k_block() each K-block, so the functor
+//       reconfig + matmul_block_init after pre_k_block() each K-block, so the functor
 //       does only its own op (+ any uninit it owes) and must NOT also restore matmul
 //       state. Matches the reduce/untilize/reblock "helper inits, caller uninits" rule.
 //   (B) init_mode=None (legacy): the functor MUST restore before returning, canonically
-//       mm_block_init_short_with_both_dt(...) (reconfigs srca/srcb AND re-inits unpack/
-//       math). The helper does not redo this for you in this mode.
+//       reconfig_data_format(old_in1, in1, old_in0, in0) + matmul_block_init(...) (reconfigs
+//       srca/srcb AND re-inits unpack/math). The helper does not redo this for you in this mode.
 struct NoPreKBlock {
     ALWI void operator()(uint32_t, uint32_t, bool) const {}
 };
@@ -228,10 +229,11 @@ struct NoIn1BaseOffset {
  * matmul_block: sub-blocked tiled matmul C = A × B with K-blocking. One helper for all
  * matmul callers; behavior is selected by the template parameters below.
  *
- * Required includes: "api/compute/matmul.h" (boot-time mm_block_init) and this header.
- * If the kernel's first matmul is a scalar matmul_tiles rather than matmul_block, also
- * include "api/compute/compute_kernel_hw_startup.h" and boot with
- * compute_kernel_hw_startup + mm_init.
+ * Required includes: "api/compute/matmul.h" (matmul_block_init) and
+ * "api/compute/compute_kernel_hw_startup.h" (boot-time compute_kernel_hw_startup), plus this
+ * header. Boot with compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) then
+ * matmul_block_init(...); if the kernel's first matmul is a scalar matmul_tiles, boot with
+ * matmul_init instead of matmul_block_init.
  *
  * ── CB contract ─────────────────────────────────────────────────────────────
  * in0_buf, in1_buf, out_buf must be DISTINCT CBs — aliasing silently corrupts FIFO state
@@ -259,7 +261,7 @@ struct NoIn1BaseOffset {
  *   Wormhole B0 (issue #38306); use HiFi2/HiFi3.
  *
  * Init/reconfig: by default (init_mode=Short, reconfig=INPUT_AND_OUTPUT) the helper issues
- * the data-format reconfig + mm_block_init_short itself, so callers only do the one
+ * the data-format reconfig + matmul_block_init itself, so callers only do the one
  * boot-time init at the top of kernel_main. See the InitMode / DataFormatReconfig enums
  * for the narrower modes.
  *
@@ -317,8 +319,9 @@ struct NoIn1BaseOffset {
  *                      reuse in1_per_core_w. Pass the larger pack width when the output is
  *                      padded above the in1 read width.
  *
- * @example  // Single K-block, all defaults. Boot once with mm_block_init(cb_in0, cb_in1,
- *           // cb_out, transpose=0, ct_dim=1, rt_dim=1, kt_dim=Kt). Pass out_buf as the
+ * @example  // Single K-block, all defaults. Boot with compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0,
+ *           // cb_in1, cb_out) then matmul_block_init(cb_in0, cb_in1, transpose=0, ct_dim=1,
+ *           // rt_dim=1, kt_dim=Kt). Pass out_buf as the
  *           // interm placeholder (unused when num_k_blocks == 1).
  *   CircularBuffer in0_buf(cb_in0), in1_buf(cb_in1), out_buf(cb_out);
  *   matmul_block<>(in0_buf, in1_buf, out_buf, out_buf,

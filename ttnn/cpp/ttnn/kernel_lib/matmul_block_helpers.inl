@@ -181,7 +181,7 @@ ALWI void matmul_block(
             PACK((pack_reconfig_data_format(interm_cb_id)));
         }
         if constexpr (init_mode == matmul_config::InitMode::Short) {
-            mm_block_init_short(
+            matmul_block_init(
                 in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
         }
     }
@@ -243,7 +243,7 @@ ALWI void matmul_block(
                     reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
                     PACK((pack_reconfig_data_format(interm_cb_id)));
                 }
-                mm_block_init_short(
+                matmul_block_init(
                     active_in0_cb_id,
                     in1_cb_id,
                     transpose,
@@ -334,8 +334,11 @@ ALWI void matmul_block(
                             copy_block_matmul_partials(interm_cb_id, 0, 0, out_num_tiles);
                             interm_buf.pop_front(out_num_tiles);
                         }
-                        mm_block_init_short_with_dt(
-                            in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
+#ifndef ARCH_QUASAR
+                        reconfig_data_format_srca(interm_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
+#endif
                     }
 
                     // Compute the output sub-block. SKIP_COMPUTE (microbench) omits only the LLK call.
