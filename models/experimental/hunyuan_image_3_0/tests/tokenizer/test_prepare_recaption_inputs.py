@@ -77,7 +77,7 @@ def _upstream_recaption_ids(hf_model, *, prompt, system_prompt, image=None, bot_
 
 
 def test_recaption_text_only_parity(bundled_tok, hf_preprocess_model):
-    from hunyuan_image_3.system_prompt import get_system_prompt
+    from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
     system_prompt = get_system_prompt("en_recaption", "recaption")
     bundle = prepare_recaption_inputs(
@@ -101,7 +101,7 @@ def test_recaption_text_only_parity(bundled_tok, hf_preprocess_model):
 
 
 def test_recaption_i2i_with_cond_parity(instruct_tok, hf_preprocess_model, processor, rgb_image):
-    from hunyuan_image_3.system_prompt import get_system_prompt
+    from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
     system_prompt = get_system_prompt("en_unified", "image")
     cond, _ = processor.get_image_with_size(rgb_image, return_type="vae_vit")
@@ -133,7 +133,7 @@ def rgb_image():
 
 
 def test_think_prefix_ends_with_think_token(bundled_tok, hf_preprocess_model):
-    from hunyuan_image_3.system_prompt import get_system_prompt
+    from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
     system_prompt = get_system_prompt("en_think_recaption", "think_recaption")
     bundle = prepare_recaption_inputs(

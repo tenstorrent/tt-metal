@@ -152,7 +152,7 @@ def build_host_bundle(*, cfg_factor=CFG_FACTOR, vit_layers=VIT_LAYERS, seed=42):
     from models.experimental.hunyuan_image_3_0.ref.weights import load_tensors
 
     if USE_INSTRUCT_I2I:
-        from hunyuan_image_3.system_prompt import get_system_prompt
+        from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
         tok = HunyuanTokenizer.from_model_dir(I2I_WEIGHTS, sequence_template="instruct")
         system_prompt = get_system_prompt("en_unified", "image")
