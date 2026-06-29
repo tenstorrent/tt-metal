@@ -562,6 +562,11 @@ class Gemma4Model:
             raise ValueError(
                 f"prefix_kv_by_layer has {len(prefix_kv_by_layer)} entries but model has {len(self.layers)} layers"
             )
+        if len(self.layers) != 1 and (kv_hidden_states is not None or q_rope_offset != 0):
+            raise ValueError(
+                "model-level kv_hidden_states/q_rope_offset are only supported for single-layer calls; "
+                "use per-layer denoise helpers with prefix_kv_by_layer for multi-layer models"
+            )
 
         # Compute per-layer inputs (E2B/E4B)
         # Decode: PLI pre-computed on host (pli_combined); main embed on device

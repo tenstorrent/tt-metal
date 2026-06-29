@@ -83,3 +83,29 @@ def test_model_rejects_prefix_kv_layer_count_mismatch_before_layer_forward():
             _FakeHidden(),
             prefix_kv_by_layer=[("k0", "v0")],
         )
+
+
+def test_model_rejects_model_level_kv_hidden_states_for_multi_layer_forward():
+    model = object.__new__(Gemma4Model)
+    model.layers = [object(), object()]
+    model.tt_kv_cache = [None, None]
+
+    with pytest.raises(ValueError, match="model-level kv_hidden_states/q_rope_offset"):
+        Gemma4Model.__call__(
+            model,
+            _FakeHidden(),
+            kv_hidden_states=object(),
+        )
+
+
+def test_model_rejects_model_level_q_rope_offset_for_multi_layer_forward():
+    model = object.__new__(Gemma4Model)
+    model.layers = [object(), object()]
+    model.tt_kv_cache = [None, None]
+
+    with pytest.raises(ValueError, match="model-level kv_hidden_states/q_rope_offset"):
+        Gemma4Model.__call__(
+            model,
+            _FakeHidden(),
+            q_rope_offset=32,
+        )
