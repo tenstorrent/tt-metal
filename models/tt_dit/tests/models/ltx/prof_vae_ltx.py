@@ -22,6 +22,7 @@ import pytest
 import torch
 
 import ttnn
+from models.tt_dit.layers.normalization import RMSNorm
 from models.tt_dit.models.vae.vae_ltx import LTXCausalConv3d, LTXDepthToSpaceUpsample, LTXResnetBlock3D, LTXVideoDecoder
 from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
@@ -226,6 +227,21 @@ def test_prof_vae_ltx_trace(mesh_device, device_params):
     """
     mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
     tt_decoder = _build_tt_decoder(mesh)
+
+    # Skip-ablation: identity-patch an op type so the traced-wall drop = its TRUE e2e contribution
+    # (immune to the per-block-flush device-FW inflation that distorts op-share absolutes). Output is
+    # garbage under ablation — this measures device time only. LTX_ABLATE=norm zeroes the RMSNorm cost.
+    ablate = os.environ.get("LTX_ABLATE", "")
+    if "norm" in ablate:
+        for m in _walk(tt_decoder):
+            if isinstance(m, RMSNorm):
+                m.forward = lambda x, **kw: x
+    if "binary" in ablate:
+        # Skip every elementwise add/mul (residual adds + denorm + W-mask); arg0 is always the full
+        # activation, so returning it is shape-safe. Measures BinaryNg's true e2e contribution.
+        ttnn.add = lambda a, b, *p, **kw: a
+        ttnn.multiply = lambda a, b, *p, **kw: a
+
     latent = _latent()
     sample_tt, logical_h, logical_w = _prepare_decode_input(tt_decoder, latent)
 
