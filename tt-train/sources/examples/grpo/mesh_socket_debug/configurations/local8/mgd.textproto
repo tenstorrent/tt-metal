@@ -1,0 +1,43 @@
+# Mesh Graph Descriptor for the minimal socket-transfer reproducer (4-device).
+#
+# Two [1, 4] meshes (one per rank), each covering FOUR chips (two eth-linked
+# N300 boards). The FABRIC graph wires the two meshes together so
+# ttnn.experimental.send_async/recv_async can route across them.
+#
+#   Rank 0 (sender)   -> mesh_id 0, opens the full [1, 4].
+#   Rank 1 (receiver) -> mesh_id 1, opens [1, 4] then splits into four [1, 1]
+#                        submeshes.
+#
+# !!! HARDWARE-SPECIFIC TEMPLATE !!!
+# This declares a [1, 4] line per rank spanning four chips. The exact
+# device_topology, channel counts, and inter-mesh connections MUST match your
+# physical wiring (the four chips of each rank must be eth-connected in a
+# line). Adjust for your machine.
+#
+# Copied from tests/weight_transfer/configurations/local8.
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

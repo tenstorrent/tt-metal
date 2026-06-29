@@ -1,0 +1,38 @@
+# Mesh Graph Descriptor for the minimal socket-transfer reproducer.
+#
+# Two [1, 2] meshes (one per rank), each covering one full N300 board (one
+# PCIe device, 2 chips). The FABRIC graph wires the two boards together so
+# ttnn.experimental.send_async/recv_async can route across them.
+#
+#   Rank 0 (sender)   -> mesh_id 0, opens the full [1, 2].
+#   Rank 1 (receiver) -> mesh_id 1, opens [1, 2] then splits into two [1, 1]
+#                        submeshes.
+#
+# Copied verbatim from tests/weight_transfer/configurations/local2 (the
+# proven WeightBridge topology).
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
