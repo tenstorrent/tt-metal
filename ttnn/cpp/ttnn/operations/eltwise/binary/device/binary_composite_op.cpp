@@ -19,6 +19,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -546,12 +547,19 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
 // leading dims: a:[..., N], b:[..., M] -> [..., N, M], equivalent to
 // a.unsqueeze(-1) * b.unsqueeze(-2).
 //
+// Float-family dtypes (BFLOAT16, BFLOAT8_B, FLOAT32) route through ttnn::matmul:
+// the unsqueeze pair shapes inputs to [..., N, 1] and [..., 1, M], for which the
+// matmul kernel's tile-level outer-product engine is the natural fast path
+// (Kt=1, one matmul_block call per output sub-block, no K-loop reduction).
+// Integer dtypes (INT32, UINT32) stay on the broadcast-multiply path since
+// matmul does not support integer accumulation.
+//
 // Height-sharded inputs flow through unchanged: the shard is along the
-// preserved dim, so unsqueeze's reshape and the downstream broadcast
-// multiply both accept the layout. Width-, block-, and ND-sharded inputs
-// are materialized as interleaved first (preserving the source
-// buffer_type so L1-resident sharded inputs stay in L1).
-// Output sharding remains caller-controlled via output_mem_config.
+// preserved dim, so unsqueeze's reshape and the downstream op both accept
+// the layout. Width-, block-, and ND-sharded inputs are materialized as
+// interleaved first (preserving the source buffer_type so L1-resident
+// sharded inputs stay in L1). Output sharding remains caller-controlled via
+// output_mem_config.
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
         input_a.logical_shape().rank() >= 1 && input_b.logical_shape().rank() >= 1,
@@ -591,11 +599,17 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         return ttnn::to_memory_config(
             t, MemoryConfig{TensorMemoryLayout::INTERLEAVED, t.memory_config().buffer_type()});
     };
-    return ttnn::multiply(
-        ttnn::unsqueeze(deshard_unless_height(input_a), -1),
-        ttnn::unsqueeze(deshard_unless_height(input_b), -2),
-        std::nullopt,
-        output_mem_config);
+    const auto a_unsq = ttnn::unsqueeze(deshard_unless_height(input_a), -1);
+    const auto b_unsq = ttnn::unsqueeze(deshard_unless_height(input_b), -2);
+
+    const DataType dt = input_a.dtype();
+    const bool is_integer = (dt == DataType::INT32 || dt == DataType::UINT32);
+    if (is_integer) {
+        // ttnn::matmul does not support integer dtypes; keep INT32/UINT32 on
+        // the broadcast-multiply path.
+        return ttnn::multiply(a_unsq, b_unsq, std::nullopt, output_mem_config);
+    }
+    return ttnn::matmul(a_unsq, b_unsq, /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
 }
 
 Tensor polyval(
