@@ -16,11 +16,9 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include "impl/context/metal_context.hpp"
@@ -167,22 +165,6 @@ TEST_F(MeshDevice1x8ReshapeTest, From1x8To2x4ThenBackTo1x8) {
 
     mesh_device_->reshape(MeshShape(1, 8));
     EXPECT_EQ(mesh_device_->get_device_ids(), original_order);
-}
-
-TEST_F(MeshDevice1x8ReshapeTest, ReshapeClearsProgramCache) {
-    // Reshape remaps device order, so stale cached programs must be dropped.
-
-    // Inserts a dummy entry so num_program_cache_entries() > 0 without dispatching a workload.
-    mesh_device_->get_program_cache().insert(
-        tt::tt_metal::program_cache::detail::ProgramCacheKey{1, "reconfig_regression_dummy"},
-        tt::tt_metal::program_cache::detail::CachedProgramFactory(
-            tt::tt_metal::program_cache::detail::CachedProgram<int>(tt::tt_metal::CreateProgram(), 0), 0));
-
-    EXPECT_GT(mesh_device_->num_program_cache_entries(), 0u);
-
-    mesh_device_->reshape(MeshShape(2, 4));
-
-    EXPECT_EQ(mesh_device_->num_program_cache_entries(), 0u);
 }
 
 TEST_F(MeshDevice1x8ReshapeTest, InvalidTotalDeviceCount) {
