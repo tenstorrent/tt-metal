@@ -88,7 +88,7 @@ def canvas_sample_from_params(
     default_seed: int | None = None,
     gumbel_noise=None,
     use_vocab_chunked_noise: bool = False,
-    use_vocab_permuted_noise: bool = True,
+    use_vocab_permuted_noise: bool | None = None,
     vocab_chunk_size: int = 1,
 ):
     """Apply duck-typed TT sampling params to the device canvas sampler.
@@ -98,8 +98,9 @@ def canvas_sample_from_params(
     maps temperature/seed onto the per-position DiffusionGemma canvas sampler.
     ``top_k``/``top_p`` remain parsed-only until the reference sampler ships those
     filters. Seed-regenerated Gumbel noise defaults to the permuted-vocab path to
-    avoid the known QB2 innermost-vocab ``ttnn.rand`` correlation; set
-    ``use_vocab_permuted_noise=False`` only for raw-RNG diagnostics.
+    avoid the known QB2 innermost-vocab ``ttnn.rand`` correlation. Set
+    ``use_vocab_chunked_noise=True`` for the slower chunked diagnostic path, or
+    ``use_vocab_permuted_noise=False`` for raw-RNG diagnostics.
     """
     from models.experimental.diffusion_gemma.tt import sampling as TS
 
@@ -111,6 +112,8 @@ def canvas_sample_from_params(
     if gumbel_noise is None:
         if config.seed is None:
             raise ValueError("canvas_sample_from_params requires gumbel_noise or a sampling seed")
+        if use_vocab_permuted_noise is None:
+            use_vocab_permuted_noise = not use_vocab_chunked_noise
         if use_vocab_chunked_noise and use_vocab_permuted_noise:
             raise ValueError("choose at most one regenerated-noise workaround")
         if use_vocab_permuted_noise:
