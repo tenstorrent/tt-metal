@@ -773,7 +773,7 @@ def render(
       <div class="meta">{html.escape(xml_path.name)} · {count_summary} · {wall_time_str_full or (cases_time_str + " test-time")}</div>
     </div>
     <div class="passrate">
-      <div class="passrate-num">{pass_pct:.1f}%</div>
+      <div class="passrate-num">{pass_pct:.2f}%</div>
       <div class="passrate-label">{passed} of {ran} tests passed</div>
     </div>
   </div>
@@ -803,7 +803,7 @@ def render(
         <div class="donut">
           <div class="center">
             <div>
-              <div class="pct">{pass_pct:.0f}%</div>
+              <div class="pct">{pass_pct:.2f}%</div>
               <div class="ctxt">passing</div>
             </div>
           </div>
