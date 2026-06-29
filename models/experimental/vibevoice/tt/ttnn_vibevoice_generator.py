@@ -515,16 +515,15 @@ class TTVibeVoiceGenerator:
         scale = self.speech_scaling_factor or 1.0
         bias = self.speech_bias_factor or 0.0
 
-        # Inverse-normalise the current latent frame to the acoustic VAE space.
-        lat = ttnn.to_torch(speech_latent).to(torch.float32)  # [1, 1, 1, D]
-        scaled = (lat / scale - bias).to(torch.bfloat16)
-        scaled_tt = ttnn.as_tensor(
-            scaled,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+        # Inverse-normalise the current latent frame to the acoustic VAE space,fully on device (no host round-trip).
+        # scale/bias are Python floats, so this is scaled = latent * (1/scale) - bias.
+        lat_f32 = ttnn.typecast(speech_latent, ttnn.float32)
+        scaled_f32 = ttnn.subtract(
+            ttnn.mul(lat_f32, 1.0 / scale, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            bias,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        scaled_tt = ttnn.to_layout(ttnn.typecast(scaled_f32, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
 
         # Streaming decode (current frame, cached causal context) → audio chunk.
         audio_chunk = self.acoustic_tok.decode(scaled_tt, use_cache=True)  # [1, 1, 1, T_audio]
