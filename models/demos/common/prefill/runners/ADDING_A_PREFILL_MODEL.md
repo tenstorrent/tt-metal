@@ -129,10 +129,14 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output)."""
 
-    # --- only if the model supports cache migration / golden-trace bring-up ---
+    # --- OPTIONAL hooks; only if the model supports golden-trace bring-up / cache migration. The
+    #     engine guards kv_cache_pcc_check with getattr, so a model that omits it just can't run
+    #     PREFILL_STANDALONE_PCC=1. Production serving never calls any of these. Keep the heavy PCC /
+    #     table logic in your model's own validation module (a thin forwarder on the runtime), not
+    #     inline here — see deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
     def kv_cache_pcc_check(self, kv_cache, *, slot_id, n_chunks, trace_dir, first_layer_idx) -> float:
         """PCC `kv_cache` for `slot_id` against the golden trace; return the min per-layer
-        PCC (asserting on failure). Called when PREFILL_STANDALONE_PCC=1."""
+        PCC (asserting on failure). Called only when PREFILL_STANDALONE_PCC=1."""
 
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's

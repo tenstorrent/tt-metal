@@ -5,8 +5,8 @@
 # instead of the host/NFS file round-trip. rank 0 (mesh 0) sends to rank 1 (mesh 1); rank 1 receives.
 #
 # Launch on d07u02 + d07u08:
-#   ./run_pipeline_prefill.sh \
-#     models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_rank_binding_2rank_d2d.yaml \
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_rank_binding_2rank_d2d.yaml \
 #     bh-glx-d07u02:1,bh-glx-d07u08:1
 
 rank_bindings:

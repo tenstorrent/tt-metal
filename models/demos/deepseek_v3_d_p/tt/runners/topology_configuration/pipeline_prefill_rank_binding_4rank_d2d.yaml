@@ -6,8 +6,8 @@
 #
 # Launch on the 4-galaxy superpod. Host order must match the physical cabling chain (mesh 0 -> first
 # --host, ... mesh 3 -> last); reorder the --host slots if a boundary's fabric fails to train:
-#   ./run_pipeline_prefill.sh \
-#     models/demos/deepseek_v3_d_p/tt/runners/pipeline_prefill_rank_binding_4rank_d2d.yaml \
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/pipeline_prefill_rank_binding_4rank_d2d.yaml \
 #     bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u02:1,bh-glx-d08u08:1
 
 rank_bindings:

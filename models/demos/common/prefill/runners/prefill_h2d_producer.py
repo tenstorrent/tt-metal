@@ -4,8 +4,8 @@
 
 """External producer for the H2D-streamed prefill_runner.
 
-Pairs with `prefill_runner.py` running in `PREFILL_H2D_EXTERNAL_PRODUCER=1`
-mode. The runner constructs an `H2DStreamService`, calls
+Pairs with `prefill_runner.py` running in request mode (the default — i.e. NOT
+PREFILL_STANDALONE). The runner constructs an `H2DStreamService`, calls
 `export_descriptor(service_id)` to drop a flatbuffer at
 `/dev/shm/tt_h2d_stream_service_<service_id>.bin`, then loops on
 `inbound_socket_service_sync` (blocks on `data_ready_sem`).
@@ -32,13 +32,13 @@ Env vars:
   PREFILL_SP / PREFILL_TP / PREFILL_MAX_SEQ_LEN / PREFILL_CHUNK_SIZE
     — must match the runner so token packing produces the same byte layout.
 
-Usage (two terminals):
-    # terminal A — runner (creates service + exports descriptor + waits):
-    PREFILL_STANDALONE=1 PREFILL_H2D_EXTERNAL_PRODUCER=1 \
+Usage (two terminals; PREFILL_H2D_SERVICE_ID must match between them):
+    # terminal A — runner in request mode (creates service + exports descriptor + serves):
+    PREFILL_H2D_SERVICE_ID=ds_prefill \
       python -m models.demos.common.prefill.runners.prefill_runner
 
     # terminal B — producer (pushes tokens):
-    PREFILL_STANDALONE_ITERS=1 \
+    PREFILL_H2D_SERVICE_ID=ds_prefill PREFILL_STANDALONE_ITERS=1 \
       python -m models.demos.common.prefill.runners.prefill_h2d_producer
 """
 

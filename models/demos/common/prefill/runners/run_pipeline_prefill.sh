@@ -14,7 +14,9 @@
 #                        For a single-rank/one-galaxy binding pass e.g. bh-glx-d03u02:1.
 #   [tcp_iface]          NIC for MPI TCP. Default: ens5f0np0 (the 10.32.24.x cluster net here).
 #
-# Rank-binding YAMLs + mesh-graph descriptors live in topology_configuration/.
+# This launcher is model-agnostic (it only execs the common prefill_runner entry point). The
+# rank-binding YAMLs + mesh-graph descriptors are per-model run config and live in the model package,
+# e.g. models/demos/deepseek_v3_d_p/tt/runners/topology_configuration/. Pass your model's binding as $1.
 #
 # Examples:
 #   # 2-galaxy D2D pipeline (connected MGD, FABRIC_2D):
@@ -32,7 +34,7 @@ HOST_LIST="${2:-bh-glx-d03u02:1,bh-glx-d03u08:1}"
 TCP_IFACE="${3:-ens5f0np0}"
 
 # TT_METAL_HOME = the tt-metal tree this script lives in
-# (models/demos/deepseek_v3_d_p/tt/runners -> 5 levels up).
+# (models/demos/common/prefill/runners -> 5 levels up).
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
 # Per-host LOCAL JIT cache. A shared (NFS) TT_METAL_CACHE makes both hosts write the same generated

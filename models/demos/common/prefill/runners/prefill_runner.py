@@ -399,9 +399,21 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
     if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
         # Each rank PCC-checks the KV slice it populated against the golden trace (offset by
         # first_layer_idx); all ranks passing == the rank-sliced model reproduces single-rank KV.
-        trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default))
-        runtime.kv_cache_pcc_check(
-            kv_cache, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=cfg.first_layer_idx
+        # kv_cache_pcc_check is an OPTIONAL runtime hook (golden-trace bring-up only — never used in
+        # production serving), so a model whose runtime doesn't implement it can't be checked this way.
+        pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
+        if pcc_check is None:
+            raise RuntimeError(
+                f"PREFILL_STANDALONE_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
+                "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
+            )
+        # Pass the raw trace path; the validation helper resolves it (descends the vllm hash subdir).
+        pcc_check(
+            kv_cache,
+            slot_id=slot_id,
+            n_chunks=n_chunks,
+            trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
+            first_layer_idx=cfg.first_layer_idx,
         )
 
 
