@@ -1986,6 +1986,55 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     v.push_back(ConnRoute{dir, neighbor});
 }
 
+// Ordered ring members at distance 1,2,... from `src` starting in `start_dir`, by chaining the per-chip
+// recorded ring neighbors (g_conn_route). The 1D ring is a Hamiltonian cycle that snakes through the mesh
+// (consecutive members are physically adjacent but the cycle TURNS at the mesh edges), so the fixed-direction
+// compass walk dead-ends after one row — it can't follow the turn. The CCL host records, for every chip, the
+// immediate neighbor of each of its two ring connections (fwd/bwd); walking those — at each hop taking the
+// neighbor that is NOT the one we came from — follows the real ring all the way around. This is the same ring
+// all_gather relays over (its distance-1 sends define these edges); returns empty if the chain is incomplete
+// (caller falls back to the compass walk). 2D multicast keeps the compass walk.
+static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t start_dir) {
+    std::vector<uint32_t> walk;
+    std::lock_guard<std::mutex> lk(g_conn_route_mu);
+    auto sit = g_conn_route.find(src);
+    if (sit == g_conn_route.end()) {
+        return walk;
+    }
+    int first = -1;
+    for (const auto& c : sit->second) {
+        if (c.dir == start_dir) {
+            first = static_cast<int>(c.neighbor);
+            break;
+        }
+    }
+    if (first < 0) {
+        return walk;  // start direction not recorded — caller falls back
+    }
+    walk.push_back(static_cast<uint32_t>(first));
+    uint32_t prev = src, cur = static_cast<uint32_t>(first);
+    for (int hop = 0; hop < 64; ++hop) {  // 64 = chip-count backstop
+        auto cit = g_conn_route.find(cur);
+        if (cit == g_conn_route.end()) {
+            break;
+        }
+        int next = -1;
+        for (const auto& c : cit->second) {
+            if (c.neighbor != prev) {  // the ring edge that continues forward (not the one back to prev)
+                next = static_cast<int>(c.neighbor);
+                break;
+            }
+        }
+        if (next < 0 || static_cast<uint32_t>(next) == src) {
+            break;  // dead end, or the cycle closed back at the source
+        }
+        walk.push_back(static_cast<uint32_t>(next));
+        prev = cur;
+        cur = static_cast<uint32_t>(next);
+    }
+    return walk;
+}
+
 // Resolve the FINAL destination chip(s) for a send: a single chip for unicast, the line members for a
 // multicast. Gated by EMULE_FABRIC8 (off → legacy single neighbor, byte-for-byte today's behavior; the
 // 2-chip case is the degenerate distance-1 neighbor, so gate-on subsumes it — single code path).
@@ -2110,7 +2159,14 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             }
         }
         if (dir >= 0) {
-            const auto& walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(dir));
+            // Follow the real 1D ring (turning Hamiltonian cycle) via the recorded per-chip ring neighbors;
+            // fall back to the fixed-direction compass walk if the chain is incomplete. walk[0] equals the
+            // compass neighbor, so distance-1 relays (all_gather, reduce_scatter) are unchanged; only the
+            // multi-hop reach (e.g. reduce_scatter's full-ring barrier multicast) differs.
+            std::vector<uint32_t> walk = __emule_fabric_walk_ring(src_chip, static_cast<uint32_t>(dir));
+            if (walk.empty()) {
+                walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(dir));
+            }
             std::vector<uint32_t> tgts;
             if (r.kind == emule_route_kind::MCAST_1D) {
                 const uint32_t start = r.a ? r.a : 1, range = r.b ? r.b : 1;
