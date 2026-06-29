@@ -261,7 +261,7 @@ mapfile -t WORK < <(build_worklist)
 export TT_METAL_CACHE="$CACHE"   # per-worker JIT cache (isolation)
 mkdir -p "$(dirname "$OUT")"
 if [[ "$FRESH" -eq 1 || ! -f "$OUT" ]]; then
-  echo "csv,activation,method,degree,segments,metric,precision,bf16_maxulp,runtime_us,compiles,range,target_runtime_us,target_runtime_ns,target_cycles_1350mhz,tile_count,range_min,range_max,range_width,num_degree,den_degree,is_rational,is_polynomial,is_lowering,has_range_reduction,coeff_count,nonzero_coeff_count,max_abs_coeff,sum_abs_coeff,avg_effective_degree,max_effective_degree" > "$OUT"
+  echo "csv,activation,method,degree,segments,metric,precision,bf16_maxulp,runtime_us,compiles,range,target_runtime_us,target_runtime_ns,target_cycles_1350mhz,tile_count,range_min,range_max,range_width,num_degree,den_degree,is_rational,is_polynomial,is_lowering,has_range_reduction,coeff_count,nonzero_coeff_count,max_abs_coeff,sum_abs_coeff,avg_abs_coeff,log10_max_abs_coeff,log10_sum_abs_coeff,log10_avg_abs_coeff,avg_effective_degree,max_effective_degree" > "$OUT"
 fi
 
 echo "frontier_sweep: shard $SHARD/$NUM_SHARDS, $(( ${#WORK[@]} )) candidate configs (precision=$PRECISION, filter='${FILTER:-all}'), chip TT_VISIBLE_DEVICES=${TT_VISIBLE_DEVICES:-unset}, cache=$CACHE, out=$OUT" >&2
@@ -316,6 +316,16 @@ def fnum(value):
     except Exception:
         return None
 
+def bounded(value, limit=1.0e30):
+    if not math.isfinite(value):
+        return 0.0
+    return max(-limit, min(limit, value))
+
+def log10p(value):
+    if not math.isfinite(value):
+        return 0.0
+    return math.log10(1.0 + abs(value))
+
 identity = parse_csv_artifact(path) if parse_csv_artifact else {}
 num_degree = identity.get("num_degree", "")
 den_degree = identity.get("den_degree", "")
@@ -361,6 +371,7 @@ hi = fnum(hi_s)
 width = (hi - lo) if lo is not None and hi is not None else ""
 avg_eff = (sum(effective) / len(effective)) if effective else ""
 max_eff = max(effective) if effective else ""
+avg_abs = (sum_abs / coeff_count) if coeff_count else 0.0
 is_rational = 1 if (approx_type == "rational" or den_degree not in ("", None, 0, "0")) else 0
 is_poly = 1 if not is_rational else 0
 is_lowering = 1 if method in {"identity", "clamped_affine", "threshold_identity", "algebraic_lowering"} else 0
@@ -382,8 +393,12 @@ vals = [
     has_rr,
     coeff_count,
     nonzero,
-    max_abs,
-    sum_abs,
+    bounded(max_abs),
+    bounded(sum_abs),
+    bounded(avg_abs),
+    log10p(max_abs),
+    log10p(sum_abs),
+    log10p(avg_abs),
     avg_eff,
     max_eff,
 ]

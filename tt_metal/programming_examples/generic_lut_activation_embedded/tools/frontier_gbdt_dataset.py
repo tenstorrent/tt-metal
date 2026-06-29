@@ -61,6 +61,9 @@ NUMERIC_COLUMNS = [
     "max_abs_coeff",
     "sum_abs_coeff",
     "avg_abs_coeff",
+    "log10_max_abs_coeff",
+    "log10_sum_abs_coeff",
+    "log10_avg_abs_coeff",
     "avg_effective_degree",
     "max_effective_degree",
 ]
@@ -73,6 +76,18 @@ def fnum(value):
     except (TypeError, ValueError):
         return None
     return v if math.isfinite(v) else None
+
+
+def bounded_feature(value: float, limit: float = 1.0e30) -> float:
+    if not math.isfinite(value):
+        return 0.0
+    return max(-limit, min(limit, value))
+
+
+def log10p_feature(value: float) -> float:
+    if not math.isfinite(value):
+        return 0.0
+    return math.log10(1.0 + abs(value))
 
 
 def find_fitter() -> Path:
@@ -168,12 +183,16 @@ def coeff_stats(path: Path) -> dict[str, float]:
                     nonzero += 1
                     seg_eff = max(seg_eff, int(col[1:]))
             effective.append(seg_eff)
+    avg_abs = total_abs / coeff_count if coeff_count else 0.0
     return {
         "coeff_count": float(coeff_count),
         "nonzero_coeff_count": float(nonzero),
-        "max_abs_coeff": max_abs,
-        "sum_abs_coeff": total_abs,
-        "avg_abs_coeff": total_abs / coeff_count if coeff_count else 0.0,
+        "max_abs_coeff": bounded_feature(max_abs),
+        "sum_abs_coeff": bounded_feature(total_abs),
+        "avg_abs_coeff": bounded_feature(avg_abs),
+        "log10_max_abs_coeff": log10p_feature(max_abs),
+        "log10_sum_abs_coeff": log10p_feature(total_abs),
+        "log10_avg_abs_coeff": log10p_feature(avg_abs),
         "avg_effective_degree": sum(effective) / len(effective) if effective else 0.0,
         "max_effective_degree": float(max(effective) if effective else 0),
     }
