@@ -16,6 +16,7 @@ import torch
 
 from models.experimental.hunyuan_image_3_0.tests.pcc import i2i_helpers as h
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
+from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep
 
@@ -103,8 +104,21 @@ def test_i2i_denoise_step_pcc(device):
     )
 
     step_embeds = h.prepare_step_host_embeds(host["cond"], t_scalar, timestep_emb)
-    base_tt = h.upload_base_embeds(device, step_embeds)
-    mask_tt = h.upload_mask(device, host["mask_add"])
+    cond_upload = h.upload_loop_cond(
+        device, host["cond"], seq_len=seq_len, attn_spans=host["bundle"].full_attn_slices[0]
+    )
+    tt_timestep_emb = HunyuanTtTimestepEmbedder(
+        device, h_dim, {f"timestep_emb.{k}": v for k, v in h.load_prefix("timestep_emb").items()}, "timestep_emb"
+    )
+    from models.experimental.hunyuan_image_3_0.tt.denoise_cond import scatter_step_embeds_tt
+
+    base_tt = scatter_step_embeds_tt(
+        cond_upload["base_embeds"],
+        t_scalar=t_scalar,
+        gen_timestep_scatter_index=host["cond"].get("gen_timestep_scatter_index"),
+        tt_timestep_emb=tt_timestep_emb,
+    )
+    mask_tt = cond_upload["attention_mask"]
 
     pred_tt = step(
         latent,

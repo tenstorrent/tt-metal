@@ -128,8 +128,13 @@ def test_i2i_denoise_loop_cfg_pcc(device):
         seq_len=seq_len,
     )
 
-    cond_tt = h.upload_loop_cond(device, host["cond"])
-    uncond_tt = h.upload_loop_cond(device, host["uncond"])
+    cond_tt = h.upload_loop_cond(device, host["cond"], seq_len=seq_len, attn_spans=host["bundle"].full_attn_slices[0])
+    uncond_tt = h.upload_loop_cond(
+        device, host["uncond"], seq_len=seq_len, attn_spans=host["bundle"].full_attn_slices[0]
+    )
+    tt_timestep_emb = HunyuanTtTimestepEmbedder(
+        device, h_dim, {f"timestep_emb.{k}": v for k, v in h.load_prefix("timestep_emb").items()}, "timestep_emb"
+    )
     sched_tt = HunyuanTtScheduler(device)
     sched_tt.set_timesteps(STEPS)
     tt_final = denoise_loop(
@@ -141,7 +146,7 @@ def test_i2i_denoise_loop_cfg_pcc(device):
         cond=cond_tt,
         uncond=uncond_tt,
         guidance_scale=GUIDANCE,
-        timestep_emb=timestep_emb,
+        tt_timestep_emb=tt_timestep_emb,
     )
 
     score = h.pcc(ref_final, tt_final)

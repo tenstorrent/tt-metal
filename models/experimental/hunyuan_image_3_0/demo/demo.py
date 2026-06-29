@@ -41,6 +41,7 @@ from safetensors import safe_open
 ROOT = str(Path(__file__).resolve().parents[4])  # tt-metal repo root (robust to checkout location)
 HUNYUAN = os.environ.get("HUNYUAN_UPSTREAM", "/home/iguser/christy/HunyuanImage-3.0")
 WEIGHTS = os.environ.get("HUNYUAN_MODEL_DIR", "/home/iguser/christy/HunyuanImage-3")
+os.environ.setdefault("HUNYUAN_MODEL_DIR", WEIGHTS)
 for p in (ROOT, HUNYUAN):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -65,6 +66,7 @@ from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import Hunyu
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
+from models.experimental.hunyuan_image_3_0.tt.denoise_cond import make_wte_embed_fn
 from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
 
@@ -275,9 +277,6 @@ def main():
     grid = bundle.rope_image_info[0][0][1]  # (64, 64)
     print(f"[demo] seq_len={S} image_span={span} grid={grid}")
 
-    # 2) text embeddings (host wte lookup — exact) for cond/uncond rows.
-    emb = torch.nn.functional.embedding(ids, wte)  # [2, S, H]
-
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     # 2x2 mesh (full QB2): SP=axis0 / TP=axis1 layout. Phase 1 wires 4-way expert
     # parallelism across BOTH axes (16 experts/device, ~19GB bf8) so the 80GB model
@@ -318,6 +317,9 @@ def main():
         te2 = HunyuanTtTimestepEmbedder(
             mesh_device, H, {f"time_embed_2.{k}": v for k, v in _load_prefix("time_embed_2").items()}, "time_embed_2"
         )
+        te_gen = HunyuanTtTimestepEmbedder(
+            mesh_device, H, {f"timestep_emb.{k}": v for k, v in _load_prefix("timestep_emb").items()}, "timestep_emb"
+        )
         step = HunyuanTtDenoiseStep(
             mesh_device,
             patch_embed=patch_embed,
@@ -333,10 +335,18 @@ def main():
         mask_tt = build_attention_mask_tt(mesh_device, S, image_slices=[span], bsz=1, dtype=ttnn.bfloat16)
         image_infos = [[(span, grid)]]
 
+        # Device wte embed for cond/uncond rows (no host F.embedding).
+        embed_fn = make_wte_embed_fn(mesh_device, wte, replicate_fn=rep)
+        emb_tt = embed_fn(ids)
+
         def cond_dict(row):
+            base = ttnn.slice(emb_tt, [row, 0, 0], [row + 1, S, H])
             return dict(
-                text_pre=rep(emb[row : row + 1, : span.start, :]),
-                text_post=rep(emb[row : row + 1, span.stop :, :]),
+                base_embeds=base,
+                base_embeds_persistent=True,
+                gen_timestep_scatter_index=bundle.gen_timestep_scatter_index[row : row + 1]
+                if bundle.gen_timestep_scatter_index is not None
+                else None,
                 image_infos=image_infos,
                 attention_mask=mask_tt,
                 batch=1,
@@ -360,6 +370,7 @@ def main():
             uncond=uncond,
             guidance_scale=GUIDANCE,
             mesh_device=mesh_device,
+            tt_timestep_emb=te_gen,
         )
         print(f"[demo] denoised latent {tuple(latent.shape)}  (finite={bool(torch.isfinite(latent).all())})")
     finally:

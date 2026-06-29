@@ -326,7 +326,6 @@ def bundle_to_denoise_cond(
     if bundle.inputs_embeds is not None:
         return dict(
             base_embeds_host=bundle.inputs_embeds[row : row + 1].to(dtype=dtype),
-            base_embeds=bundle.inputs_embeds[row : row + 1].to(dtype=dtype),
             **scatter,
             image_infos=image_infos,
             attention_mask=mask_add,

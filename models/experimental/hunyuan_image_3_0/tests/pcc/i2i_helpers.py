@@ -244,20 +244,10 @@ def upload_base_embeds(device, embeds):
     return ttnn.from_torch(embeds.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def upload_loop_cond(device, cond):
-    import ttnn
+def upload_loop_cond(device, cond, *, seq_len=None, attn_spans=None):
+    from models.experimental.hunyuan_image_3_0.tt.denoise_cond import upload_denoise_cond
 
-    s = cond["attention_mask"].shape[-1]
-    b = cond["batch"]
-    return dict(
-        cond,
-        attention_mask=ttnn.from_torch(
-            cond["attention_mask"].reshape(b, 1, s, s).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        ),
-    )
+    return upload_denoise_cond(device, cond, seq_len=seq_len, attn_spans=attn_spans)
 
 
 def ref_i2i_step(

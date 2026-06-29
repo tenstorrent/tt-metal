@@ -63,6 +63,7 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import (
     HunyuanTokenizer,
     build_i2i_cfg_conds,
+    enrich_bundle_attention,
     prepare_i2i_denoise_bundle,
     prepare_recaption_ar_bundle,
 )
@@ -71,6 +72,7 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
     INSTRUCT_MODEL_DIR,
     load_tensors,
 )
+from models.experimental.hunyuan_image_3_0.tt.denoise_cond import upload_denoise_cond
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.lm_head import HunyuanTtLMHead
@@ -438,14 +440,12 @@ def main():
         generator=gen,
     )
     cond_row, uncond_row = build_i2i_cfg_conds(bundle, wte, proc)
+    enrich_bundle_attention(bundle, proc)
+    attn_spans = bundle.full_attn_slices[0]
     img_slice = cond_row["gen_slice"]
     grid = cond_row["gen_hw"]
     seq_len = bundle.seq_len
     print(f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}")
-
-    timestep_emb = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H)
-    guidance_emb = load_timestep_embedder("guidance_emb", model_dir, hidden_size=H) if cfg_distilled else None
-    timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
 
     print("[demo_i2i] opening denoise mesh (2x2) ...", flush=True)
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
@@ -496,6 +496,32 @@ def main():
             {f"time_embed_2.{k}": v for k, v in weights.load_prefix("time_embed_2").items()},
             "time_embed_2",
         )
+        tt_timestep_emb = HunyuanTtTimestepEmbedder(
+            mesh_device,
+            H,
+            {f"timestep_emb.{k}": v for k, v in weights.load_prefix("timestep_emb").items()},
+            "timestep_emb",
+        )
+        tt_guidance_emb = (
+            HunyuanTtTimestepEmbedder(
+                mesh_device,
+                H,
+                {f"guidance_emb.{k}": v for k, v in weights.load_prefix("guidance_emb").items()},
+                "guidance_emb",
+            )
+            if cfg_distilled
+            else None
+        )
+        tt_timestep_r_emb = (
+            HunyuanTtTimestepEmbedder(
+                mesh_device,
+                H,
+                {f"timestep_r_emb.{k}": v for k, v in weights.load_prefix("timestep_r_emb").items()},
+                "timestep_r_emb",
+            )
+            if use_meanflow
+            else None
+        )
         step = HunyuanTtDenoiseStep(
             mesh_device,
             patch_embed=patch_embed,
@@ -506,15 +532,13 @@ def main():
             seq_len=seq_len,
         )
 
-        print("[demo_i2i] uploading cond/uncond attention masks ...", flush=True)
-        cond_tt = dict(cond_row)
-        cond_tt["attention_mask"] = rep(cond_row["attention_mask"].reshape(1, 1, seq_len, seq_len).to(torch.bfloat16))
-        uncond_tt = None
-        if uncond_row is not None:
-            uncond_tt = dict(uncond_row)
-            uncond_tt["attention_mask"] = rep(
-                uncond_row["attention_mask"].reshape(1, 1, seq_len, seq_len).to(torch.bfloat16)
-            )
+        print("[demo_i2i] uploading cond/uncond to device (base_embeds + TT mask) ...", flush=True)
+        cond_tt = upload_denoise_cond(mesh_device, cond_row, replicate_fn=rep, seq_len=seq_len, attn_spans=attn_spans)
+        uncond_tt = (
+            upload_denoise_cond(mesh_device, uncond_row, replicate_fn=rep, seq_len=seq_len, attn_spans=attn_spans)
+            if uncond_row is not None
+            else None
+        )
 
         torch.manual_seed(SEED + 1)
         init_latent = torch.randn(1, LATENT, grid[0], grid[1])
@@ -534,9 +558,9 @@ def main():
             cond=cond_tt,
             uncond=uncond_tt,
             guidance_scale=GUIDANCE,
-            timestep_emb=timestep_emb,
-            guidance_emb=guidance_emb,
-            timestep_r_emb=timestep_r_emb,
+            tt_timestep_emb=tt_timestep_emb,
+            tt_guidance_emb=tt_guidance_emb,
+            tt_timestep_r_emb=tt_timestep_r_emb,
             cfg_distilled=cfg_distilled,
             use_meanflow=use_meanflow,
             mesh_device=mesh_device,
