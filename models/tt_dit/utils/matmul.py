@@ -735,6 +735,12 @@ fused_mmrs_configs = {
         (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 662 us
         (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 1082 us
         (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 787 us
+        # Flux2 fused-kernel base (sadesoye) merged spatial+prompt proj_out: M=1152
+        # (xc-merged 1024+128) and prompt-only M=128. Swept on wh_4x8_ring_sp0tp1
+        # (sweep_rsmm_block_sizes.py, 2026-06-29, plain RS+MM); chunk=1 + sb(2,2)
+        # optimal, M_block flat over 6-10. Optimum within ~0.3% of analogy guess.
+        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 6, 12, 8, 2, 2, None, 1),  # 902 us
+        (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 4, 8, 8, 2, 2, None, 1),  # 349 us
     },
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
