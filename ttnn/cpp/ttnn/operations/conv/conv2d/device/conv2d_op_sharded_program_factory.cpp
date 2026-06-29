@@ -241,7 +241,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
     const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
 
-    const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::tt_metal::DataType conv_input_dtype = (a.dtype() == tt::tt_metal::DataType::FLOAT32)
+                                                        ? tt::tt_metal::DataType::FLOAT32
+                                                        : tt::tt_metal::DataType::BFLOAT16;
+    const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(conv_input_dtype);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
