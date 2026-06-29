@@ -135,8 +135,8 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     const auto& hal = MetalContext::instance(context_id).hal();
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM-sender GlobalCircularBuffer requires programmable DRAM cores; set "
-        "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1");
+        "DRAM-sender GlobalCircularBuffer requires programmable DRAM cores, which auto-enable on Blackhole "
+        "with firmware >= 19.12.0.0 and either no harvested DRAM channels or a single device");
     uint32_t max_num_receivers_per_sender = 0;
     initialize_global_circular_buffer(
         mesh_device,

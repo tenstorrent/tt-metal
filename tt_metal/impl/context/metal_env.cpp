@@ -23,6 +23,7 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
+#include <umd/device/utils/semver.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
 
@@ -122,6 +123,39 @@ const Hal& MetalEnvImpl::get_hal() { return *hal_; }
 Cluster& MetalEnvImpl::get_cluster() { return *cluster_; }
 const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descriptor_; }
 
+namespace {
+// Decide whether to register Blackhole DRAM programmable cores (the "DRAM-core" / tensor-prefetcher
+// path) in the HAL. Two constraints, both about the application owning the right DRAM RISC core:
+//   - Firmware bundle >= 19.12.0.0: earlier firmware places the syseng firmware on a DRAM core the
+//     application wants to use, so enabling there would overlap with syseng.
+//   - No harvested DRAM channels, OR a single device: with DRAM harvesting the specific core the
+//     application must write to for GCB credits can differ per device, which breaks our programming
+//     model that the cores look identical on every device. A single device has no cross-device
+//     consistency to break, and an unharvested multi-device system lines the cores up the same way.
+// Queryable afterwards via Hal::has_programmable_core_type(HalProgrammableCoreType::DRAM).
+bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster) {
+    if (cluster.arch() != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    static const tt::umd::FirmwareBundleVersion kMinFirmware{19, 12, 0, 0};
+    const auto fw_version = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version();
+    if (!fw_version.has_value() || *fw_version < kMinFirmware) {
+        return false;
+    }
+    if (cluster.number_of_devices() == 1) {
+        return true;
+    }
+    // Multi-device: the GCB-credit core must be the same on every device, so reject if any device has
+    // a harvested DRAM channel (which would shift that core on that device).
+    for (const auto chip : cluster.all_chip_ids()) {
+        if (cluster.get_soc_desc(chip).harvesting_masks.dram_harvesting_mask != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
+
 void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
@@ -153,7 +187,7 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        this->rtoptions_->get_enable_blackhole_dram_programmable_cores());
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_));
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
