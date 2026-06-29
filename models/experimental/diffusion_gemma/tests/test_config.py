@@ -29,6 +29,11 @@ def test_max_context_is_256k():
     assert DiffusionGemmaConfig().max_context == 262144  # 256 canvas * 1024 blocks
 
 
+def test_top_level_config_rejects_canvas_length_mismatch():
+    with pytest.raises(ValueError, match="text.canvas_length .* must match diffusion.canvas_length"):
+        DiffusionGemmaConfig(text=TextConfig(canvas_length=128), diffusion=DiffusionConfig(canvas_length=256))
+
+
 @pytest.mark.parametrize("max_denoise_steps", [0, -1])
 def test_diffusion_config_rejects_nonpositive_denoise_steps(max_denoise_steps):
     with pytest.raises(ValueError, match="max_denoise_steps must be positive"):

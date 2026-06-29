@@ -205,6 +205,13 @@ class DiffusionGemmaConfig:
     # Max context = canvas_length * max_blocks (256 * 1024 = 256K).
     max_blocks: int = 1024  # verified (256K / 256)
 
+    def __post_init__(self) -> None:
+        if self.text.canvas_length != self.diffusion.canvas_length:
+            raise ValueError(
+                f"text.canvas_length ({self.text.canvas_length}) must match "
+                f"diffusion.canvas_length ({self.diffusion.canvas_length})"
+            )
+
     @property
     def max_context(self) -> int:
         return self.text.canvas_length * self.max_blocks
