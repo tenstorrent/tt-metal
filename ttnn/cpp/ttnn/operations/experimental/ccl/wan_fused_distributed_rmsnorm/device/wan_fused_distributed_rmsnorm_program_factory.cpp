@@ -554,15 +554,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // (decide_streaming_low_l1 false). Then block-major engages on the overflow.
     const bool streaming_low_l1 = streaming_input || (overflows_resident_post && !args.per_head_norm);
     const bool block_major_post = overflows_resident_post && (streaming_low_l1 || args.per_head_norm);
-    // TP>1 wide LayerNorm (streaming input 2-pass + block-major POST + fabric AG)
-    // currently deadlocks — the reader's 2nd-pass push races the ring gather. Reject
-    // it cleanly (a clear error, not a hang) until that interaction is debugged.
-    // is_tp_1 wide LayerNorm (no AG) works; TP>1 LayerNorm works while resident.
-    TT_FATAL(
-        !(is_layernorm && block_major_post && use_mux),
-        "wide-shard LayerNorm at TP>1 (streaming + all-gather) is not yet supported; "
-        "use a higher TP so the shard fits resident. num_tile_cols={}",
-        num_tile_cols);
+    // TP>1 wide (streaming input 2-pass + block-major POST + fabric AG) uses the
+    // reader's SPLIT input schedule: the PRE pass is read first so the local stats /
+    // ring gather start ASAP, then the side inputs, then the POST re-read pass (weight
+    // now resident before the block-major POST consumes it). This avoids the
+    // reader<->compute deadlock without delaying the AG. Applies to RMS and LayerNorm.
     // Clamp to a single resident row for (a) per-head RoPE — its cos/sin CBs are
     // chunk*num_tile_cols fp32 tiles (overflow L1 at feat>=1024) and the compute
     // deadlocks at chunk>=2 with many rows; and (b) the streaming-low-L1 path,
@@ -888,12 +884,15 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
         static_cast<uint32_t>(streaming_low_l1),
-        // Defer the streaming input past the resident side-inputs ONLY on the is_tp_1
-        // block-major path: there's no all-gather between PRE and POST to give the
-        // reader a window to push weight/cos before the POST block loop needs them, so
-        // it must push them first. The all-gather (ring>1) block-major path keeps
-        // input-first (the AG window covers the side-input pushes) — deferring raced the AG.
-        static_cast<uint32_t>(block_major_post && is_tp_1 && streaming_low_l1),  // reader "defer_input" (CT arg 17)
+        // reader input_schedule (CT arg 17): WHERE the streaming input passes are read
+        // relative to the resident weight/bias/cos pushes that the block-major POST
+        // consumes mid-pass. 0=INPUT_FIRST (all input at top: resident, or streaming
+        // with a resident POST), 1=DEFER_ALL (side inputs then both passes: is_tp_1
+        // block-major — no AG, so delaying PRE is free), 2=SPLIT (PRE pass at top so the
+        // local stats / ring gather start ASAP, then side inputs, then the POST pass:
+        // the AG (ring>1) block-major path — fixes the deadlock without delaying the AG).
+        static_cast<uint32_t>(
+            (block_major_post && streaming_low_l1) ? (is_tp_1 ? 1u /*DEFER_ALL*/ : 2u /*SPLIT*/) : 0u /*INPUT_FIRST*/),
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {

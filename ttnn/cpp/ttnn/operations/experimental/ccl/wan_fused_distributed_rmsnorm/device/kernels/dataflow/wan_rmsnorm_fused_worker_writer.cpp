@@ -49,7 +49,6 @@ constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(10);  // num
 constexpr uint32_t packet_cb = get_compile_time_arg_val(11);
 constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);
 constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);
-constexpr uint32_t padded_row_tiles = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
 // Tile row-0 layout (post transpose_wh): face_00 row0 = bytes [0,64), face_01
 // row0 = bytes [1024,1088). 32 fp32 = 128 B real data per stat tile.
 constexpr uint32_t kFaceRowBytes = 64u;
@@ -163,19 +162,21 @@ void kernel_main() {
         cb_push_back(stats_transposed_gathered_cb, num_stats * ring_size);
 
         // ---- 4. drain this row's output_cb tiles ----
+        // Per-block wait + pop (NOT a cumulative wait with a single end-of-row pop):
+        // under block_major_post the factory sizes output_cb to just 2*block_size
+        // (block-local), NOT the whole row, so a cumulative cb_wait_front(output_cb,
+        // 3*block_size...) could never be satisfied — compute can't push a 3rd block
+        // into a 2-block CB it never popped → deadlock (this is why is_tp_1 wide, which
+        // uses the per-block drain-only writer, worked while TP>1 wide hung). Compute
+        // pushes block_size-padded slots per col-block; wait/pop the full block, but
+        // only NoC-write the valid tiles. Matches the drain-only writer's drain loop.
         {
             DeviceZoneScopedN("W_DRAIN");
-            uint32_t row_base_rd = 0;
-            uint32_t cumulative = 0;
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t tiles_in_block =
                     ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                cumulative += block_size;
-                cb_wait_front(output_cb, cumulative);
-                if (col_tile == 0) {
-                    row_base_rd = get_read_ptr(output_cb);
-                }
-                uint32_t rd = row_base_rd + col_tile * output_tile_bytes;
+                cb_wait_front(output_cb, block_size);
+                uint32_t rd = get_read_ptr(output_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                     const uint32_t c = col_tile + i;
                     const uint32_t h = c / head_dim_tiles;
@@ -185,9 +186,9 @@ void kernel_main() {
                     noc_async_write_tile(out_idx, output_accessor, rd);
                     rd += output_tile_bytes;
                 }
+                noc_async_writes_flushed();
+                cb_pop_front(output_cb, block_size);
             }
-            noc_async_writes_flushed();
-            cb_pop_front(output_cb, padded_row_tiles);
         }
     }
     noc_async_write_barrier();

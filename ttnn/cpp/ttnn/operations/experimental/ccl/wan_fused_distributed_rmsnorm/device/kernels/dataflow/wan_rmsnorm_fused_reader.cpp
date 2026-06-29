@@ -51,12 +51,24 @@ void kernel_main() {
     // block_size-tile pushes that compute pops as it consumes. The resident
     // fast path reads the whole row once. See program_factory.
     constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(16);
-    // defer_input (== block_major_post && is_tp_1): defer the streaming input to AFTER
-    // the resident weight/bias/cos pushes so the fused per-block POST has its side
-    // inputs before the POST re-read pass (avoids a reader<->compute deadlock on the
-    // no-AG is_tp_1 path). The all-gather block-major path keeps input-first — its
-    // gather window already covers the side-input pushes, and deferring raced the AG.
-    constexpr uint32_t defer_input = get_compile_time_arg_val(17);
+    // input_schedule: WHERE the streaming input passes are read relative to the
+    // resident weight/bias/cos pushes. The block-major POST consumes weight/bias/cos
+    // mid-(POST pass), so they must be pushed BEFORE the POST pass — but PRE needs the
+    // PRE pass, and on the AG path the local stats (from PRE) must be produced ASAP so
+    // the ring gather isn't delayed. Three schedules:
+    //   0 INPUT_FIRST: read all input at the top (resident: whole row once; streaming:
+    //     both passes). Used when the POST is resident (no mid-pass side-input wait) or
+    //     non-streaming. Streaming block-major would deadlock here (POST waits weight,
+    //     reader can't finish pushing the POST pass to reach the weight push).
+    //   1 DEFER_ALL: push side inputs first, then BOTH passes (is_tp_1 block-major). No
+    //     AG between PRE and POST, so delaying PRE is free; weight is resident first.
+    //   2 SPLIT: read the PRE pass at the top (stats produced ASAP -> ring gather starts),
+    //     push side inputs, then read the POST pass (weight now resident). The AG
+    //     (ring>1) block-major path: avoids the deadlock without delaying the gather.
+    constexpr uint32_t input_schedule = get_compile_time_arg_val(17);
+    constexpr uint32_t SCHED_INPUT_FIRST = 0u;
+    constexpr uint32_t SCHED_DEFER_ALL = 1u;
+    constexpr uint32_t SCHED_SPLIT = 2u;
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
     constexpr auto input_args = TensorAccessorArgs<18>();
@@ -102,6 +114,25 @@ void kernel_main() {
     bool weight_pushed = (has_weight == 0);
     bool bias_pushed = (has_bias == 0);
 
+    // Read one full pass over a tile-row's input (num_tile_cols tiles) in block_size
+    // pushes, deep-barriered per block. Streaming reads this twice (PRE then a POST
+    // re-read); resident reads it once (compute holds the whole row). The schedule
+    // logic below decides WHEN each pass runs relative to the side-input pushes.
+    auto read_input_pass = [&](uint32_t input_tile_idx) {
+        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+            const uint32_t tiles_in_block =
+                ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+            cb_reserve_back(input_cb, tiles_in_block);
+            uint32_t input_wr_ptr = get_write_ptr(input_cb);
+            for (uint32_t i = 0; i < tiles_in_block; i++) {
+                noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
+                input_wr_ptr += input_tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(input_cb, tiles_in_block);
+        }
+    };
+
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         // Deep input read: issue the whole row's tiles, then ONE barrier, so
         // num_tile_cols reads are in flight at once (keeps DRAM-read latency hidden;
@@ -115,44 +146,22 @@ void kernel_main() {
         // below) so their DRAM read latency overlaps PRE — they aren't consumed until
         // the POST RoPE phase.
         const uint32_t input_tile_idx = tile_row * num_tile_cols;
-        // defer_input (is_tp_1 block-major path only): defer all input to AFTER the
-        // resident weight/bias/cos pushes, so the fused per-block POST has its side
-        // inputs before it consumes the POST re-read pass — otherwise the reader fills
-        // input_cb with the POST pass while compute waits on weight/cos not yet pushed
-        // (deadlock). Other paths read input HERE so PRE starts ASAP: streaming = two
-        // block-sized passes (PRE + POST re-read), resident = the whole row once.
-        if constexpr (!defer_input) {
+        // Input read placement is schedule-driven (see input_schedule above):
+        //   INPUT_FIRST: read everything HERE so PRE starts ASAP — streaming = both
+        //     passes (PRE + POST re-read), resident = the whole row once.
+        //   SPLIT: read ONLY the PRE pass here (streaming) so the local stats are
+        //     produced ASAP and the ring gather isn't delayed; the POST pass is read
+        //     below, after the side inputs are resident.
+        //   DEFER_ALL: read nothing here; both passes are read below, after side inputs.
+        if constexpr (input_schedule == SCHED_INPUT_FIRST) {
             DeviceZoneScopedN("R_INPUT");
+            read_input_pass(input_tile_idx);
             if constexpr (streaming_low_l1) {
-                for (uint32_t pass = 0; pass < 2; pass++) {
-                    for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                        const uint32_t tiles_in_block =
-                            ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                        cb_reserve_back(input_cb, tiles_in_block);
-                        uint32_t input_wr_ptr = get_write_ptr(input_cb);
-                        for (uint32_t i = 0; i < tiles_in_block; i++) {
-                            noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
-                            input_wr_ptr += input_tile_bytes;
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(input_cb, tiles_in_block);
-                    }
-                }
-            } else {
-                // Resident input read: push + barrier every block_size tiles.
-                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                    const uint32_t grp =
-                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                    cb_reserve_back(input_cb, grp);
-                    uint32_t input_wr_ptr = get_write_ptr(input_cb);
-                    for (uint32_t i = 0; i < grp; i++) {
-                        noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
-                        input_wr_ptr += input_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(input_cb, grp);
-                }
+                read_input_pass(input_tile_idx);  // POST re-read pass
             }
+        } else if constexpr (input_schedule == SCHED_SPLIT) {
+            DeviceZoneScopedN("R_INPUT");
+            read_input_pass(input_tile_idx);  // PRE pass only; POST pass deferred below
         }
 
         // (cos/sin moved BELOW the weight/bias reads — compute consumes weight
@@ -300,27 +309,19 @@ void kernel_main() {
             }
         }
 
-        // Deferred block-major input: now that weight/bias/cos are resident, stream
-        // the row TWICE in block_size pushes — pass 0 feeds PRE sum-of-squares, pass
-        // 1 feeds the POST x*(1/rms) re-read. input_cb is block-sized so compute pops
-        // each block; the block-major POST consumes pass 1 with its side inputs
-        // already resident (no reader<->compute deadlock).
-        if constexpr (defer_input) {
+        // Deferred block-major input: now that weight/bias/cos are resident, stream the
+        // POST re-read pass(es) in block_size pushes. The block-major POST consumes them
+        // with its side inputs already resident (no reader<->compute deadlock).
+        //   DEFER_ALL (is_tp_1): both passes here — PRE pass 0, then POST pass 1.
+        //   SPLIT (AG): only the POST pass here (the PRE pass already ran at the top, so
+        //     the local stats / ring gather started before this side-input wait).
+        if constexpr (input_schedule == SCHED_DEFER_ALL) {
             DeviceZoneScopedN("R_INPUT");
-            for (uint32_t pass = 0; pass < 2; pass++) {
-                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                    const uint32_t tiles_in_block =
-                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
-                    cb_reserve_back(input_cb, tiles_in_block);
-                    uint32_t input_wr_ptr = get_write_ptr(input_cb);
-                    for (uint32_t i = 0; i < tiles_in_block; i++) {
-                        noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
-                        input_wr_ptr += input_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(input_cb, tiles_in_block);
-                }
-            }
+            read_input_pass(input_tile_idx);  // PRE pass
+            read_input_pass(input_tile_idx);  // POST re-read pass
+        } else if constexpr (input_schedule == SCHED_SPLIT) {
+            DeviceZoneScopedN("R_INPUT");
+            read_input_pass(input_tile_idx);  // POST re-read pass
         }
     }
 }
