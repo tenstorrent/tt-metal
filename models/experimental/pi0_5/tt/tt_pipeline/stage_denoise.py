@@ -90,9 +90,16 @@ def _build_phantom_mask_and_offset(prefix_len, suffix_len, action_horizon):
     return mask, position_offset
 
 
-def _remap_paired_to_flat(prefix_kv_per_chip):
-    """6x3 per-chip device (K,V) -> flat 18-entry torch list; layer l = chip l//3, local l%3."""
-    flat = [(ttnn.to_torch(k), ttnn.to_torch(v)) for chip in prefix_kv_per_chip for (k, v) in chip]
+def _remap_paired_to_flat(prefix_kv_per_chip, *, to_host=True):
+    """Per-chip (K,V) -> flat 18-entry list; layer l = chip l//3, local l%3.
+
+    to_host=True (default) materializes a torch list -- the original, topology-agnostic behaviour.
+    to_host=False keeps the tensors on device, so the bind (_bind_prefix_kv) consumes them
+    device-direct when co-resident on the consuming mesh; opt in only where co-residence holds."""
+    if to_host:
+        flat = [(ttnn.to_torch(k), ttnn.to_torch(v)) for chip in prefix_kv_per_chip for (k, v) in chip]
+    else:
+        flat = [(k, v) for chip in prefix_kv_per_chip for (k, v) in chip]
     assert len(flat) == _EXPERT_TOTAL_LAYERS, f"expected 18 flat KV layers, got {len(flat)}"
     return flat
 

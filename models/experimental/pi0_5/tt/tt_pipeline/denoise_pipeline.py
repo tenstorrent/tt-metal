@@ -113,6 +113,28 @@ def _kv_dtype() -> "ttnn.DataType":
     return ttnn.bfloat8_b
 
 
+def _bind_prefix_kv(entry, mesh, dtype, memcfg):
+    """Resolve one prefix-KV tensor to (dtype, TILE, memcfg) resident on `mesh`.
+
+    Host torch tensor -> from_torch (legacy path). Device tensor already on `mesh` -> relaid out
+    on-device, no host round-trip (zero-copy when already in target format). Device tensor on
+    another mesh -> relocated via host (to_torch -> from_torch), matching the legacy behaviour."""
+    if not isinstance(entry, ttnn.Tensor):
+        return ttnn.from_torch(entry, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=memcfg)
+    try:
+        co_resident = entry.device() is mesh
+    except Exception:
+        co_resident = False
+    if not co_resident:
+        return ttnn.from_torch(
+            ttnn.to_torch(entry), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=memcfg
+        )
+    t = entry if entry.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(entry, ttnn.TILE_LAYOUT)
+    if t.dtype != dtype:
+        return ttnn.typecast(t, dtype, memory_config=memcfg)
+    return ttnn.to_memory_config(t, memcfg)
+
+
 def _to_dram(tensors):
     out = []
     for t in tensors:
@@ -277,15 +299,15 @@ def _bind_stage_runtime(
             st._prefix_kv = []
             for j, blk in enumerate(st.blocks):
                 pk, pv = prefix_kv_cache[lo + j]
-                pk_dev = ttnn.from_torch(pk, dtype=kvd_concat, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=_L1)
-                pv_dev = ttnn.from_torch(pv, dtype=kvd_concat, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=_L1)
+                pk_dev = _bind_prefix_kv(pk, mesh, kvd_concat, _L1)
+                pv_dev = _bind_prefix_kv(pv, mesh, kvd_concat, _L1)
                 st._prefix_kv.append((pk_dev, pv_dev))
         else:
             for j, blk in enumerate(st.blocks):
                 pk, pv = prefix_kv_cache[lo + j]
                 blk.init_static_kv(prefix_len, suffix_len)
-                k_dev = ttnn.from_torch(pk, dtype=kvd, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=_DRAM)
-                v_dev = ttnn.from_torch(pv, dtype=kvd, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=_DRAM)
+                k_dev = _bind_prefix_kv(pk, mesh, kvd, _DRAM)
+                v_dev = _bind_prefix_kv(pv, mesh, kvd, _DRAM)
                 blk.fill_static_prefix(k_dev, v_dev)
                 ttnn.deallocate(k_dev)
                 ttnn.deallocate(v_dev)
@@ -577,15 +599,15 @@ def build_single_stage_reference(
         stage._prefix_kv = []
         for j, blk in enumerate(stage.blocks):
             pk, pv = prefix_kv_cache[j]
-            pk_dev = ttnn.from_torch(pk, dtype=kvd_concat, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=_L1)
-            pv_dev = ttnn.from_torch(pv, dtype=kvd_concat, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=_L1)
+            pk_dev = _bind_prefix_kv(pk, submesh, kvd_concat, _L1)
+            pv_dev = _bind_prefix_kv(pv, submesh, kvd_concat, _L1)
             stage._prefix_kv.append((pk_dev, pv_dev))
     else:
         for j, blk in enumerate(stage.blocks):
             pk, pv = prefix_kv_cache[j]
             blk.init_static_kv(prefix_len, suffix_len)
-            k_dev = ttnn.from_torch(pk, dtype=kvd, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=_DRAM)
-            v_dev = ttnn.from_torch(pv, dtype=kvd, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=_DRAM)
+            k_dev = _bind_prefix_kv(pk, submesh, kvd, _DRAM)
+            v_dev = _bind_prefix_kv(pv, submesh, kvd, _DRAM)
             blk.fill_static_prefix(k_dev, v_dev)
             ttnn.deallocate(k_dev)
             ttnn.deallocate(v_dev)
