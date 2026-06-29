@@ -158,7 +158,11 @@ def run_topk_router_component(
 
     # Extract reference TopK router from reference layer
     reference_router = reference_layer.mlp.router
-    router_scores, router_indices = reference_router(hidden_states)
+    router_outputs = reference_router(hidden_states)
+    if len(router_outputs) == 3:
+        _, router_scores, router_indices = router_outputs
+    else:
+        router_scores, router_indices = router_outputs
     if decoder_layer.mlp.use_throughput_experts:
         # When using throughput experts, we return a dense tensor of router_scores. Convert sparse reference router_scores to dense router_weights (note: this requires reorder the weights to match the order of the indices)
         dense_router_scores = torch.concat(
@@ -561,7 +565,11 @@ def run_full_mlp_pipeline(
         )
         dense_routing_weights.scatter_(1, tt_router_indices_torch, tt_router_weights_torch)
 
-        _, reference_router_indices = reference_model.router(hidden_states)
+        router_outputs = reference_model.router(hidden_states)
+        if len(router_outputs) == 3:
+            _, _, reference_router_indices = router_outputs
+        else:
+            _, reference_router_indices = router_outputs
         tt_sorted = torch.sort(tt_router_indices_torch.cpu(), dim=-1).values
         ref_sorted = torch.sort(reference_router_indices[: batch * seq_len].cpu(), dim=-1).values
         topk_set_match = torch.all(tt_sorted == ref_sorted, dim=-1).float().mean().item()
@@ -585,7 +593,11 @@ def run_full_mlp_pipeline(
             : batch * seq_len, : reference_model.router.top_k
         ].float()
 
-        _, reference_router_indices = reference_model.router(hidden_states)
+        router_outputs = reference_model.router(hidden_states)
+        if len(router_outputs) == 3:
+            _, _, reference_router_indices = router_outputs
+        else:
+            _, reference_router_indices = router_outputs
         tt_sorted = torch.sort(tt_router_indices_torch.cpu(), dim=-1).values
         ref_sorted = torch.sort(reference_router_indices[: batch * seq_len].cpu(), dim=-1).values
         topk_set_match = torch.all(tt_sorted == ref_sorted, dim=-1).float().mean().item()
