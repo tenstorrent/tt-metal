@@ -174,10 +174,3 @@ def test_denoise_step_shapes_commit_argmax():
     assert torch.equal(res.sampled, logits.argmax(dim=-1))  # zero noise
     # accepted canvas positions hold the (clean argmax) sample
     assert torch.equal(res.canvas[res.accept_mask], res.argmax[res.accept_mask])
-
-
-def test_is_converged():
-    toks = torch.zeros(1, 8, dtype=torch.long)
-    assert S.is_converged(toks, toks.clone(), torch.full((1, 8), 0.01), entropy_threshold=0.1)
-    assert not S.is_converged(toks, toks.clone(), torch.full((1, 8), 5.0), entropy_threshold=0.1)
-    assert not S.is_converged(toks, toks + 1, torch.full((1, 8), 0.01), entropy_threshold=0.1)

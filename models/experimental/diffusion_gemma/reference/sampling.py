@@ -190,22 +190,6 @@ def random_canvas(
     return torch.randint(0, vocab_size, shape, generator=generator, device=device)
 
 
-def is_converged(
-    prev_tokens: torch.Tensor,
-    cur_tokens: torch.Tensor,
-    entropy: torch.Tensor,
-    entropy_threshold: float,
-) -> bool:
-    """Halt when the argmax canvas is stable AND mean entropy < threshold.
-
-    Whole-canvas (batch-collapsed) convergence; per-request halting for batched
-    decode is #47557.
-    """
-    stable = torch.equal(prev_tokens, cur_tokens)
-    low_entropy = entropy.mean().item() < entropy_threshold
-    return stable and low_entropy
-
-
 class DenoiseStepResult(NamedTuple):
     canvas: torch.Tensor  # [B, L] updated canvas token ids (accepted=sampled, rejected=renoised)
     accept_mask: torch.Tensor  # [B, L] bool
