@@ -415,7 +415,8 @@ void process_go_signal_mcast_cmd() {
 
     if (telemetry_enabled) {
         static uint32_t local_launch_seq_counter = 0;
-        const uint32_t stream_index = cmd->mcast.wait_stream - first_stream_used;
+        const uint32_t stream_index = wait_stream - first_stream_used;
+        ASSERT(stream_index < max_num_worker_sems);
         auto dispatch_telemetry =
             reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
 
