@@ -57,6 +57,34 @@ std::pair<uint32_t, uint32_t> auto_pick_s_pk(
     uint32_t M_tiles, uint32_t N_tiles, uint32_t K_tiles, uint32_t grid_x, uint32_t grid_y) {
     const uint32_t small = std::min(M_tiles, N_tiles);
     const uint32_t big = std::max(M_tiles, N_tiles);
+
+    // WORMHOLE (8x8) specialization. Fit on the representative WH joint sweep (57 shapes): geomean
+    // regret 1.025 / max 1.15 vs the per-shape (S,Pk) oracle, vs 1.14 / 1.88 for the grid-generic
+    // ladder below. The driver is output-row occupancy via small = min(Mt,Nt):
+    //   * small >= 32: the output already fills the 64-core grid -> no split (S1,Pk1).
+    //   * else K-parallelism is the primary lever: fewer output rows -> more Pk, which both fills the
+    //     idle cores AND shortens the per-core K-loop. Levels small{1->8, 2..15->4, 16..31->2}.
+    //   * a single N-slice (S=2) is taken only for VERY skewed skinny shapes (big/small >= 32), where
+    //     K-par alone leaves the wide free dim under-parallelized; half the K-budget is traded for it.
+    // Pk is then reduced to keep the reduction valid (K_tiles % Pk == 0 and >= 2 K-tiles/band). S*Pk
+    // divides 8 by construction. This is intentionally minimal: a handful of integer thresholds, no
+    // skew/out ladder. The grid-generic path below is kept for non-8x8 grids.
+    if (grid_x == 8 && grid_y == 8) {
+        if (small >= 32) {
+            return {1u, 1u};
+        }
+        uint32_t Pk = (small >= 16) ? 2u : (small >= 2) ? 4u : 8u;
+        uint32_t S = 1u;
+        if (big / small >= 32) {  // extreme skew: trade half the K-par budget for one N-slice
+            S = 2u;
+            Pk = std::max(1u, Pk / 2u);
+        }
+        while (Pk > 1 && (K_tiles % Pk != 0 || K_tiles / Pk < 2)) {
+            Pk /= 2;  // shallow K: step the K-par down (power-of-2) until the reduction is valid
+        }
+        return {S, Pk};
+    }
+
     const uint32_t out = M_tiles * N_tiles;
     const uint32_t cores = grid_x * grid_y;
     const double skew = small ? static_cast<double>(big) / static_cast<double>(small) : 1.0;
@@ -426,11 +454,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     TT_FATAL(
         !(num_k_fused && num_k_slices == 1),
         "fused split-K (plan B) requires num_k_slices > 1 (the fused reduction needs >1 K-band).");
-    // Sub-grid K_block refinement: a sliced sub-grid has small per-core M/N, so the default K_block=8
-    // makes the per-k-block work too coarse — finer K (4) pipelines read/forward/compute better.
-    // Measured ~+8%/+6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048. Only on the auto
-    // path (no pinned config); the caller's K_block is respected when a config is given.
-    if (num_slices > 1 && !config.has_value()) {
+    // Sub-grid K_block refinement: a sliced OR K-parallel sub-grid has small per-core M/N (and, for
+    // K-par, a short per-band K reduced cooperatively across cores), so the default K_block=8 makes the
+    // per-k-block work too coarse — finer K (4) pipelines read/forward/compute better. Measured ~+8%/
+    // +6%/+3.6% on sliced 4864x4096x512 / 4864x4096x32 / 32x2048x2048; the WH joint sweep shows EVERY
+    // K-par optimum uses K_block=4 (leaving the default 8 on output-starved K-par shapes like 32xKx32
+    // costs up to ~3.8x). Only on the auto path (no pinned config); a caller's K_block is respected.
+    if ((num_slices > 1 || num_k_fused) && !config.has_value()) {
         K_block_tiles = std::min(K_block_tiles, 4u);
     }
     // Small-K: never let K_block exceed K_tiles — otherwise round_up pads K (e.g. K=128 -> 4 tiles
