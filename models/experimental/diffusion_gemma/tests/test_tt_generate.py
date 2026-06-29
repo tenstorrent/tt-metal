@@ -2315,6 +2315,26 @@ def test_seeded_generation_helpers_reject_non_integer_shapes(factory, kwargs, me
         factory("mesh", **args)
 
 
+@pytest.mark.parametrize(
+    ("seed", "message"),
+    [
+        (1.5, "integer"),
+        (True, "integer"),
+        (-1, "non-negative"),
+    ],
+)
+@pytest.mark.parametrize(
+    "factory",
+    [
+        make_seeded_host_canvas_init_fn,
+        make_seeded_host_noise_tokens_fn,
+    ],
+)
+def test_seeded_host_token_helpers_reject_invalid_seeds(factory, seed, message):
+    with pytest.raises(ValueError, match=message):
+        factory("mesh", batch=1, canvas_len=4, vocab_size=16, seed=seed)
+
+
 def test_make_host_noise_tokens_fn_replays_fixed_tokens(monkeypatch):
     calls = []
 

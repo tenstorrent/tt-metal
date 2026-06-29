@@ -373,6 +373,14 @@ def _check_random_token_args(batch: int, canvas_len: int, vocab_size: int) -> No
         raise ValueError("vocab_size must be positive")
 
 
+def _validate_host_rand_seed(seed: int) -> int:
+    if isinstance(seed, bool) or not isinstance(seed, Integral):
+        raise ValueError("host random token seed must be an integer")
+    if seed < 0:
+        raise ValueError("host random token seed must be non-negative")
+    return int(seed)
+
+
 def make_seeded_host_canvas_init_fn(
     mesh_device,
     *,
@@ -383,6 +391,7 @@ def make_seeded_host_canvas_init_fn(
 ):
     """Create a seeded random-token canvas init hook for runnable TT generation."""
     _check_random_token_args(batch, canvas_len, vocab_size)
+    seed = _validate_host_rand_seed(seed)
     generator = torch.Generator()
     generator.manual_seed(seed)
 
@@ -410,6 +419,7 @@ def make_seeded_host_noise_tokens_fn(
     denoise loop's token layout.
     """
     _check_random_token_args(batch, canvas_len, vocab_size)
+    seed = _validate_host_rand_seed(seed)
     generator = torch.Generator()
     generator.manual_seed(seed)
 
