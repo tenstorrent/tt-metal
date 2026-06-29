@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from collections import defaultdict
 from typing import Optional
 
@@ -28,6 +29,72 @@ WHISPER_BATCH_SIZE = 2
 # ~1.5 KiB allocations;
 WHISPER_L1_SMALL_SIZE = 1600
 WHISPER_TRACE_REGION_SIZE = 100000000
+
+
+def _get_linear_program_config(input_tensor, weight_tensor, activation=None):
+    """Build a 2D-mcast program_config from input/weight shapes + device grid."""
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    shape = input_tensor.shape
+    M = shape[0] * shape[1] * shape[2] if len(shape) == 4 else shape[0] * shape[1]
+    K = shape[-1]
+    N = weight_tensor.shape[-1]
+    tile = ttnn.TILE_SIZE
+    m_t = math.ceil(M / tile)
+    k_t = math.ceil(K / tile)
+    n_t = math.ceil(N / tile)
+    per_core_m = math.ceil(m_t / grid.y)
+    per_core_n = math.ceil(n_t / grid.x)
+    in0_block_w = max(1, k_t // grid.x)
+    while k_t % in0_block_w != 0:
+        in0_block_w -= 1
+    out_subblock_w = max(i for i in range(1, 9) if per_core_n % i == 0)
+    out_subblock_h = max(i for i in range(1, 9) if per_core_m % i == 0 and i * out_subblock_w <= 8)
+    ttnn_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, param=1.0) if activation == "gelu" else None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=ttnn_activation,
+    )
+
+
+def _get_lm_head_program_config(input_tensor, weight_tensor):
+    """Build a 1D-mcast program_config for narrow shapes (e.g. single decode token × large vocab)."""
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    shape = input_tensor.shape
+    M = shape[0] * shape[1] * shape[2] if len(shape) == 4 else shape[0] * shape[1]
+    K = shape[-1]
+    N = weight_tensor.shape[-1]
+    tile = ttnn.TILE_SIZE
+    m_t = math.ceil(M / tile)
+    k_t = math.ceil(K / tile)
+    n_t = math.ceil(N / tile)
+    is_wide = n_t >= m_t
+    per_core_n = math.ceil(n_t / num_cores) if is_wide else n_t
+    per_core_m = m_t if is_wide else math.ceil(m_t / num_cores)
+    in0_block_w = max(1, k_t // num_cores)
+    while k_t % in0_block_w != 0:
+        in0_block_w -= 1
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=min(4, per_core_n),
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=is_wide,
+    )
 
 
 def dropout(hidden_states, p, training):
@@ -138,6 +205,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
         key_value_states,
         parameters.key_value.weight,
         bias=parameters.key_value.bias,
+        program_config=_get_linear_program_config(key_value_states, parameters.key_value.weight),
         core_grid=core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
@@ -188,8 +256,21 @@ def ffn_forward(
     }
 
     h = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-    h = ttnn.linear(h, fc1_weight, bias=fc1_bias, activation="gelu", **linear_kw)
-    h = ttnn.linear(h, fc2_weight, bias=fc2_bias, **linear_kw)
+    h = ttnn.linear(
+        h,
+        fc1_weight,
+        bias=fc1_bias,
+        activation="gelu",
+        program_config=_get_linear_program_config(h, fc1_weight, activation="gelu"),
+        **linear_kw,
+    )
+    h = ttnn.linear(
+        h,
+        fc2_weight,
+        bias=fc2_bias,
+        program_config=_get_linear_program_config(h, fc2_weight),
+        **linear_kw,
+    )
 
     return ttnn.to_memory_config(h, WHISPER_MEMORY_CONFIG)
 
@@ -204,6 +285,7 @@ def _linear_lofi_l1_roundtrip(x, weight, bias):
         h,
         weight,
         bias=bias,
+        program_config=_get_linear_program_config(h, weight),
         core_grid=core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         compute_kernel_config=WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG,
@@ -477,6 +559,7 @@ def whisper_attention(
         fused_qkv = ttnn.linear(
             hidden_states,
             parameters.query_key_value.weight,
+            program_config=_get_linear_program_config(hidden_states, parameters.query_key_value.weight),
             **fused_qkv_linear_kw,
         )
         ttnn.deallocate(hidden_states)

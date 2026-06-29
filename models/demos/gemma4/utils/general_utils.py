@@ -5,9 +5,40 @@
 General utilities for the Gemma4 demo.
 """
 
+import math
+
 
 def get_cache_file_name(tensor_cache_path, name):
     return f"{tensor_cache_path}/{name}" if tensor_cache_path else None
+
+
+def build_matmul_program_config(M: int, K: int, N: int, grid_x: int, grid_y: int):
+    """Build a MatmulMultiCoreReuseMultiCastProgramConfig for a (M, K, N) linear on a given grid."""
+    import ttnn
+
+    tile = ttnn.TILE_SIZE
+    m_t = math.ceil(M / tile)
+    k_t = math.ceil(K / tile)
+    n_t = math.ceil(N / tile)
+    per_core_m = math.ceil(m_t / grid_y)
+    per_core_n = math.ceil(n_t / grid_x)
+    in0_block_w = max(1, k_t // grid_x)
+    while k_t % in0_block_w != 0:
+        in0_block_w -= 1
+    out_subblock_w = max(i for i in range(1, 9) if per_core_n % i == 0)
+    out_subblock_h = max(i for i in range(1, 9) if per_core_m % i == 0 and i * out_subblock_w <= 8)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
 
 
 def cast_host_for_ttnn(torch_tensor, ttnn_dtype):

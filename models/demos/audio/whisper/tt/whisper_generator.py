@@ -489,7 +489,13 @@ class WhisperGenerator:
 
             # LM head projection
             decoder_output = ttnn.squeeze(decoder_output, 1)
-            logits = decoder_output @ self.ttnn_linear_weight
+            logits = ttnn.matmul(
+                decoder_output,
+                self.ttnn_linear_weight,
+                program_config=ttnn_optimized_functional_whisper._get_lm_head_program_config(
+                    decoder_output, self.ttnn_linear_weight
+                ),
+            )
 
             # Apply suppress tokens mask (sets suppressed logits to -inf)
             if self.tt_suppress_mask is not None:

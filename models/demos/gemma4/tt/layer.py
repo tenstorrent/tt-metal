@@ -47,7 +47,7 @@ from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
+from models.demos.gemma4.utils.general_utils import build_matmul_program_config, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
@@ -308,10 +308,31 @@ class Gemma4DecoderLayer:
         # Per-layer input embeddings (E2B/E4B) — BEFORE layer_scalar (matching HF order)
         if self.hidden_size_per_layer_input and per_layer_input is not None and hasattr(self, "per_layer_input_gate"):
             residual_pli = hidden_states
-            gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
+            _grid = hidden_states.device().compute_with_storage_grid_size()
+            _shape = hidden_states.shape
+            _M = _shape[0] * _shape[1] * _shape[2] if len(_shape) == 4 else _shape[0] * _shape[1]
+            gated = ttnn.linear(
+                hidden_states,
+                self.per_layer_input_gate,
+                program_config=build_matmul_program_config(
+                    _M, _shape[-1], self.per_layer_input_gate.shape[-1], _grid.x, _grid.y
+                ),
+            )
             gated = ttnn.gelu(gated, fast_and_approximate_mode=True)
             gated = ttnn.mul(gated, per_layer_input)
-            projected = ttnn.linear(gated, self.per_layer_projection)
+            _gated_shape = gated.shape
+            _gM = (
+                _gated_shape[0] * _gated_shape[1] * _gated_shape[2]
+                if len(_gated_shape) == 4
+                else _gated_shape[0] * _gated_shape[1]
+            )
+            projected = ttnn.linear(
+                gated,
+                self.per_layer_projection,
+                program_config=build_matmul_program_config(
+                    _gM, _gated_shape[-1], self.per_layer_projection.shape[-1], _grid.x, _grid.y
+                ),
+            )
             normed_pli = self.post_per_layer_input_norm.forward(projected)
             hidden_states = ttnn.add(residual_pli, normed_pli)
             if len(hidden_states.shape) > 4:

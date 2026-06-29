@@ -12,7 +12,7 @@ top-k weights linearly (NOT a second softmax — that would diverge from HF).
 
 import ttnn
 from models.demos.gemma4.tt.rms_norm import RMSNorm
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
+from models.demos.gemma4.utils.general_utils import build_matmul_program_config, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
@@ -105,7 +105,14 @@ class Gemma4Router:
         scaled = ttnn.mul(scaled, self.scalar_root_size)
 
         # 3. Linear projection → [1, 1, seq_len, num_experts] — on device
-        expert_scores = ttnn.linear(scaled, self.proj_weight)
+        grid = scaled.device().compute_with_storage_grid_size()
+        shape = scaled.shape
+        _M = shape[0] * shape[1] * shape[2] if len(shape) == 4 else shape[0] * shape[1]
+        expert_scores = ttnn.linear(
+            scaled,
+            self.proj_weight,
+            program_config=build_matmul_program_config(_M, shape[-1], self.proj_weight.shape[-1], grid.x, grid.y),
+        )
         scaled.deallocate(True)
 
         # 4. Softmax over all experts — on device

@@ -836,6 +836,22 @@ class ModelArgs:
             n_w1_w3 = self.hidden_dim // self.cluster_shape[1]
             self.model_config["MIXTRAL_PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
             self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
+            # Gate matmul: [1,1,32,4096] x [1,1,4096,64] with 8x8 grid.
+            # M=1 tile, K=128 tiles, N=2 tiles, 64 cores -> is_wide -> mcast_in0=True,
+            # per_core_M=1, per_core_N=1, in0_block_w=2 (ceil(128/64), adjusted to divide 128).
+            self.model_config["GATE_MM_DECODE_PROGRAM_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
             # Mixtral prefill program configs
             self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(

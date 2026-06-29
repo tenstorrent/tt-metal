@@ -16,7 +16,7 @@ HF weight shapes:
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
+from models.demos.gemma4.utils.general_utils import build_matmul_program_config, get_cache_file_name
 
 
 class SharedMLP:
@@ -93,6 +93,12 @@ class SharedMLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def _prog_cfg(self, inp, weight):
+        grid = inp.device().compute_with_storage_grid_size()
+        shape = inp.shape
+        M = shape[0] * shape[1] * shape[2] if len(shape) == 4 else shape[0] * shape[1]
+        return build_matmul_program_config(M, shape[-1], weight.shape[-1], grid.x, grid.y)
+
     def __call__(self, hidden_states):
         """
         GeGLU MLP forward with TP support.
@@ -100,11 +106,11 @@ class SharedMLP:
         gate/up are column-parallel, down is row-parallel + allreduce.
         """
         # gate = GELU(x @ gate_proj)
-        gate = ttnn.linear(hidden_states, self.gate_proj)
+        gate = ttnn.linear(hidden_states, self.gate_proj, program_config=self._prog_cfg(hidden_states, self.gate_proj))
         gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
 
         # up = x @ up_proj
-        up = ttnn.linear(hidden_states, self.up_proj)
+        up = ttnn.linear(hidden_states, self.up_proj, program_config=self._prog_cfg(hidden_states, self.up_proj))
 
         # hidden = gate * up
         hidden = ttnn.mul(gate, up)
@@ -112,7 +118,7 @@ class SharedMLP:
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = ttnn.linear(hidden, self.down_proj)
+        output = ttnn.linear(hidden, self.down_proj, program_config=self._prog_cfg(hidden, self.down_proj))
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj

@@ -348,6 +348,7 @@ class T5Attention(Module):
         self.embed_dim = config.embed_dim
         self.head_dim = config.embed_dim // self.num_heads
         self.use_relative_position_bias = use_relative_position_bias
+        self._attn_program_configs: dict[tuple, tuple] = {}
 
         self.q_proj = ColParallelLinear(
             in_features=self.embed_dim,
@@ -391,6 +392,54 @@ class T5Attention(Module):
             else None
         )
 
+    def _get_attn_program_configs(self, seq_len: int, num_local_heads: int):
+        """Return (qk_config, av_config) for the given seq_len/head layout.
+
+        Configs are computed once per (seq_len, num_local_heads) pair and cached.
+        seq_len and head_dim are fixed for a given trace, so the same config is
+        reused on every forward call — satisfying the trace-safety requirement.
+        """
+        key = (seq_len, num_local_heads)
+        if key in self._attn_program_configs:
+            return self._attn_program_configs[key]
+
+        import math
+
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        num_cores = grid.x * grid.y
+        tile = 32
+
+        def _make_2d_mcast_config(m, k, n):
+            m_t = math.ceil(m / tile)
+            k_t = math.ceil(k / tile)
+            n_t = math.ceil(n / tile)
+            per_core_m = math.ceil(m_t / grid.y)
+            per_core_n = math.ceil(n_t / grid.x)
+            in0_block_w = max(1, k_t // grid.x)
+            while k_t % in0_block_w != 0:
+                in0_block_w -= 1
+            out_subblock_w = max(i for i in range(1, 9) if per_core_n % i == 0)
+            out_subblock_h = max(i for i in range(1, 9) if per_core_m % i == 0 and i * out_subblock_w <= 8)
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                out_block_h=per_core_m,
+                out_block_w=per_core_n,
+                per_core_M=per_core_m,
+                per_core_N=per_core_n,
+                transpose_mcast=False,
+                fused_activation=None,
+            )
+
+        # Q@K: [1, heads, seq, head_dim] x [1, heads, head_dim, seq] -> M=seq, K=head_dim, N=seq
+        # AV:  [1, heads, seq, seq] x [1, heads, seq, head_dim] -> M=seq, K=seq, N=head_dim
+        qk_config = _make_2d_mcast_config(seq_len, self.head_dim, seq_len)
+        av_config = _make_2d_mcast_config(seq_len, seq_len, self.head_dim)
+        self._attn_program_configs[key] = (qk_config, av_config)
+        return qk_config, av_config
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "SelfAttention.q", "q_proj")
         rename_substate(state, "SelfAttention.k", "k_proj")
@@ -420,11 +469,14 @@ class T5Attention(Module):
             qkv, num_heads=num_local_heads, transpose_key=True
         )
 
-        scores = ttnn.matmul(q, k)
+        seq_len = q.shape[-2]
+        qk_config, av_config = self._get_attn_program_configs(seq_len, num_local_heads)
+
+        scores = ttnn.matmul(q, k, program_config=qk_config)
 
         scores = scores + position_bias
         attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
-        attn_output = ttnn.matmul(attn_weights, v)
+        attn_output = ttnn.matmul(attn_weights, v, program_config=av_config)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
         attn_output = ttnn.unsqueeze(attn_output, 0)  # unsqueeze for all gather

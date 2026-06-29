@@ -106,7 +106,7 @@ class TtMoeLayer(LightweightModule):
             self.gates_H8,
             memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            program_config=self.model_config["GATE_MM_DECODE_PROGRAM_CONFIG"],
             dtype=ttnn.bfloat16,
         )
         if mode == Mode.DECODE:

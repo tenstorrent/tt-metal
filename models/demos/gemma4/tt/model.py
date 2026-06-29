@@ -24,7 +24,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
-from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
+from models.demos.gemma4.utils.general_utils import build_matmul_program_config, cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
@@ -766,7 +766,16 @@ class Gemma4Model:
           on-device sampling (the sampling module consumes sharded logits).
         """
         if self.lm_head_weight is not None:
-            logits = ttnn.linear(hidden_states, self.lm_head_weight)
+            grid = hidden_states.device().compute_with_storage_grid_size()
+            shape = hidden_states.shape
+            _M = shape[0] * shape[1] * shape[2] if len(shape) == 4 else shape[0] * shape[1]
+            logits = ttnn.linear(
+                hidden_states,
+                self.lm_head_weight,
+                program_config=build_matmul_program_config(
+                    _M, shape[-1], self.lm_head_weight.shape[-1], grid.x, grid.y
+                ),
+            )
             hidden_states.deallocate(True)
         else:
             logits = hidden_states

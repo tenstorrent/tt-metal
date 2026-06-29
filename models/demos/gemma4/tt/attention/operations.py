@@ -19,6 +19,7 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.demos.gemma4.utils.general_utils import build_matmul_program_config
 
 from .weights import AttentionWeights
 
@@ -40,9 +41,21 @@ PREFILL_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_CHUNK_SIZE", "8192"))
 PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SIZE", "30720"))
 
 
+def _get_linear_program_config(input_tensor, weight_tensor):
+    """Return a cached 2D-mcast program_config derived from input/weight shapes + device grid."""
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    shape = input_tensor.shape
+    M = shape[0] * shape[1] * shape[2] if len(shape) == 4 else shape[0] * shape[1]
+    K = shape[-1]
+    N = weight_tensor.shape[-1]
+    return build_matmul_program_config(M, K, N, grid.x, grid.y)
+
+
 def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     """Fused QKV matmul (no bias for Gemma4)."""
-    return ttnn.linear(hidden_states, weights.wqkv)
+    return ttnn.linear(
+        hidden_states, weights.wqkv, program_config=_get_linear_program_config(hidden_states, weights.wqkv)
+    )
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
@@ -411,7 +424,7 @@ def concat_heads(tensor, is_decode_mode: bool, num_heads: int = None, head_dim: 
 
 def apply_output_projection(tensor, weights: AttentionWeights):
     """Apply output projection (no bias for Gemma4)."""
-    out = ttnn.linear(tensor, weights.o_proj)
+    out = ttnn.linear(tensor, weights.o_proj, program_config=_get_linear_program_config(tensor, weights.o_proj))
     tensor.deallocate(True)
     return out
 
