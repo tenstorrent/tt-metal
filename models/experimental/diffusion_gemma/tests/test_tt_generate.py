@@ -1715,6 +1715,28 @@ def test_make_seeded_host_noise_tokens_fn_generates_step_noise(monkeypatch):
     assert int(calls[0][1].min()) >= 0 and int(calls[0][1].max()) < 16
 
 
+def test_seeded_host_token_helpers_allow_zero_seed(monkeypatch):
+    calls = []
+
+    def fake_host_canvas_to_device(mesh_device, canvas):
+        calls.append((mesh_device, canvas.clone()))
+        return f"device-tokens-{len(calls)}"
+
+    monkeypatch.setattr(G, "host_canvas_to_device", fake_host_canvas_to_device)
+
+    init_a = make_seeded_host_canvas_init_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=0)
+    init_b = make_seeded_host_canvas_init_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=0)
+    noise_a = make_seeded_host_noise_tokens_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=0)
+    noise_b = make_seeded_host_noise_tokens_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=0)
+
+    assert init_a(0, 32) == "device-tokens-1"
+    assert init_b(0, 32) == "device-tokens-2"
+    assert noise_a(0)(0) == "device-tokens-3"
+    assert noise_b(0)(0) == "device-tokens-4"
+    assert torch.equal(calls[0][1], calls[1][1])
+    assert torch.equal(calls[2][1], calls[3][1])
+
+
 def test_make_host_noise_tokens_fn_replays_fixed_tokens(monkeypatch):
     calls = []
 
