@@ -68,11 +68,12 @@ def _sparse_meshes():
     return SPARSE_MESH_BY_DEVICES.get(n, [(1, max(n, 1))])
 
 
-# GLM exception (expected to be temporary): sparse_sdpa needs per-chip n_heads/tp >= 32, and GLM has
-# only 64 q-heads, so it caps at TP=2. DeepSeek (128 heads) has no such limit. Handled locally here
-# rather than as a TestVariant field, so this soon-to-be-lifted limitation doesn't leak into the
-# generic variant metadata (and the other models).
-_GLM_MAX_TP = 2
+# sparse_sdpa needs per-chip n_heads/tp >= 32. GLM has only 64 q-heads, so at TP=4 the per-chip shard
+# is 16 < 32 -- ttMLA._sparse_mla handles this by transposing the TP sharding axis heads -> sequence for
+# the attention (all-gather heads, seq-shard, invert after), so GLM now runs at TP=4. DeepSeek (128
+# heads) never needed it. Kept as a local cap (not a TestVariant field) so it stays out of the generic
+# variant metadata; raise/lower it here as the reshard support changes.
+_GLM_MAX_TP = 4
 
 
 def _mesh_ok_for_variant(variant_name, mesh):
