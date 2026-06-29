@@ -119,8 +119,8 @@ struct KernelSpec {
     CompilerOptions compiler_options = {};
 
     ///////////////////////////////////////////////////////////////////
-    // Resource bindings (immutable Program parameters)
-    //////////////////////////////////////////////////////////////////
+    // Program-scope resource bindings
+    ///////////////////////////////////////////////////////////////////
 
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
@@ -152,30 +152,34 @@ struct KernelSpec {
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
-    // Tensor bindings
-    // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
-    struct TensorBinding {
-        TensorParamName tensor_parameter_name;      // identify the TensorParameter within the ProgramSpec
-        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
-    };
-    Group<TensorBinding> tensor_bindings;
-
     // Scratchpad bindings
     // Declares that this kernel uses a scratchpad resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via Scratchpad(scratch::<accessor_name>)
-    // A scratchpad is private to one kernel: each ScratchpadSpec is bound by exactly one
-    // ScratchpadBinding across the whole ProgramSpec.
+    // A scratchpad instance is private to a single kernel instance, so a scratchpad may be bound to at
+    // most one kernel per node (or equivalently, per WorkUnitSpec).
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
         std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
     };
     Group<ScratchpadBinding> scratchpad_bindings;
 
-    // Additional resource binding types:
-    //  - Buffer bindings (User-managed memory resource)
-    //  - GlobalSemaphore bindings (User-managed resource)
-    //  - GlobalDataflowBuffer bindings (User-managed resource)
+    ///////////////////////////////////////////////////////////////////
+    // Program parameter bindings (user-managed resources)
+    ///////////////////////////////////////////////////////////////////
+
+    // Tensor bindings
+    // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
+    struct TensorBinding {
+        TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
+        std::string accessor_name;              // tensor accessor name (used in the kernel source code)
+    };
+    Group<TensorBinding> tensor_bindings;
+
+    // Additional program parameter binding types (coming soon):
+    //  - GlobalSemaphore bindings
+    //  - GlobalDataflowBuffer bindings
+    //  - MeshBuffer bindings
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
