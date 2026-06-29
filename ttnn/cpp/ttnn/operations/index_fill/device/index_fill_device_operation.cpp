@@ -32,8 +32,13 @@ void IndexFillOperation::validate(
         "Index fill: Unsupported output memory layout: {}",
         out_mem_layout);
 
-    // WIDTH and BLOCK sharding cannot be mixed with each other as output: the column
-    // fragmentation schemes are incompatible without inter-core communication.
+    // Column-sharded → column-sharded (WIDTH↔WIDTH, BLOCK↔BLOCK, WIDTH↔BLOCK) is supported
+    // as long as the column fragmentation matches. The kernel addresses output pages as
+    // page_id = row * KW + col_shard, which is identical for WIDTH and BLOCK layouts; the
+    // TensorAccessor resolves each page to the physically-owning core. The only requirement
+    // is that the column shard WIDTH (shard_spec.shape[1]) — and hence the column shard count
+    // KW — matches between input and output. The row sharding (BLOCK's shard height) may
+    // differ freely, since rows are distributed by the accessor, not by the page formula.
     bool input_is_col_sharded =
         (input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
          input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
@@ -41,16 +46,14 @@ void IndexFillOperation::validate(
         (out_mem_layout == TensorMemoryLayout::WIDTH_SHARDED || out_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
     if (input_is_col_sharded && out_is_col_sharded) {
         TT_FATAL(
-            out_mem_layout == input_mem_layout,
-            "Index fill: Cannot convert between WIDTH_SHARDED and BLOCK_SHARDED; "
-            "got input={} output={}",
-            input_mem_layout,
-            out_mem_layout);
+            input.shard_spec().has_value() && operation_attributes.memory_config.shard_spec().has_value(),
+            "Index fill: both input and output must have a shard spec when both are column-sharded");
         TT_FATAL(
-            input.shard_spec().has_value() && operation_attributes.memory_config.shard_spec().has_value() &&
-                input.shard_spec().value() == operation_attributes.memory_config.shard_spec().value(),
-            "Index fill: When input and output are both WIDTH_SHARDED or both BLOCK_SHARDED, "
-            "their shard specs must match");
+            input.shard_spec().value().shape[1] == operation_attributes.memory_config.shard_spec().value().shape[1],
+            "Index fill: When input and output are both column-sharded (WIDTH/BLOCK), their column shard width "
+            "(shard_spec.shape[1]) must match; got input={} output={}",
+            input.shard_spec().value().shape[1],
+            operation_attributes.memory_config.shard_spec().value().shape[1]);
     }
 
     // Validate index tensor properties expected by the kernel.

@@ -56,10 +56,12 @@ void bind_index_fill_operation(nb::module_& mod) {
             Memory Support:
                 - Interleaved (DRAM or L1): output may be any supported layout
                 - Height sharded (DRAM or L1): output may be any supported layout
-                - Width sharded (DRAM or L1): output must be interleaved, height sharded, or width sharded
-                  with the same shard spec; conversion to block sharded is not supported
-                - Block sharded (DRAM or L1): output must be interleaved, height sharded, or block sharded
-                  with the same shard spec; conversion to width sharded is not supported
+                - Width sharded (DRAM or L1): output may be interleaved, height sharded, width sharded,
+                  or block sharded; for width/block sharded output the column shard width
+                  (shard_spec.shape[1]) must match the input
+                - Block sharded (DRAM or L1): output may be interleaved, height sharded, block sharded,
+                  or width sharded; for width/block sharded output the column shard width
+                  (shard_spec.shape[1]) must match the input
 
             Limitations:
                 -  The input tensor must be on the device.
