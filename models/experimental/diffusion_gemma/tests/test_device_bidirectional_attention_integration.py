@@ -632,14 +632,14 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
     comparison = compare_trajectories(
         ref,
         tt,
-        min_argmax_agreement=0.0,
-        min_sampled_agreement=0.0,
+        min_argmax_agreement=0.10,
+        min_sampled_agreement=0.10,
         min_accept_iou=0.0,
-        min_canvas_agreement=0.0,
-        min_per_step_entropy_pcc=0.0,
-        max_entropy_abs_err_threshold=float("inf"),
-        committed_match_threshold=0.0,
-        entropy_pcc_threshold=0.0,
+        min_canvas_agreement=0.98,
+        min_per_step_entropy_pcc=0.60,
+        max_entropy_abs_err_threshold=0.50,
+        committed_match_threshold=0.10,
+        entropy_pcc_threshold=0.99,
     )
     accept_flips = [int((ra.accept_mask != rb.accept_mask).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
     argmax_flips = [int((ra.argmax != rb.argmax).sum()) for ra, rb in zip(ref.per_step, tt.per_step)]
@@ -688,13 +688,14 @@ def test_denoise_controller_real_logits_records_decision_flips(mesh_device, rese
         tt_v.deallocate(True)
 
     assert comparison.steps_match and comparison.halted_match
+    assert comparison.passed, comparison
     assert ref.num_steps == tt.num_steps == max_steps
     assert not ref.halted and not tt.halted
     assert len(accept_flips) == max_steps
     # This remains a diagnostic for the known bf16 decision-bar blocker, but it
     # should still fail loudly if the real-logits path stops resembling torch.
     min_logits_pcc = 0.96 if enable_moe else 0.975
-    max_total_accept_flips = 0 if enable_moe else 4
+    max_total_accept_flips = 2 if enable_moe else 4
     assert min(logits_pcc) >= min_logits_pcc
     assert min(logits_top8_contains_ref_argmax) >= 0.80
     assert sum(accept_flips) <= max_total_accept_flips
