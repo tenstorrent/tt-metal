@@ -1625,6 +1625,18 @@ def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
     assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
 
 
+@pytest.mark.parametrize(
+    ("canvas_tokens", "message"),
+    [
+        (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+    ],
+)
+def test_host_canvas_to_device_rejects_invalid_token_ids(canvas_tokens, message):
+    with pytest.raises(ValueError, match=message):
+        host_canvas_to_device("mesh", canvas_tokens)
+
+
 def test_host_gumbel_noise_to_device_uses_logits_layout(monkeypatch):
     calls = {}
 
@@ -1689,6 +1701,18 @@ def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
     assert kwargs["layout"] == "row-major"
     assert kwargs["dtype"] == "uint32"
     assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
+
+
+@pytest.mark.parametrize(
+    ("tokens", "message"),
+    [
+        (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+    ],
+)
+def test_host_tokens_to_device_rejects_invalid_token_ids(tokens, message):
+    with pytest.raises(ValueError, match=message):
+        host_tokens_to_device("mesh", tokens)
 
 
 def test_tokenize_prompt_applies_chat_template_to_string_prompt():

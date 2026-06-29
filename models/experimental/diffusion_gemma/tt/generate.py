@@ -58,10 +58,26 @@ def _replicate_mapper(mesh_device):
     return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
 
+def _validate_nonnegative_integer_token_tensor(tokens: torch.Tensor, *, name: str, shape_name: str) -> None:
+    if tokens.dtype == torch.bool or torch.is_floating_point(tokens) or torch.is_complex(tokens):
+        raise ValueError(f"{name} must contain integer token ids")
+    if tokens.dim() != 2:
+        raise ValueError(f"{name} must have shape {shape_name}")
+    if tokens.shape[0] <= 0:
+        raise ValueError(f"{name} batch size must be positive")
+    if tokens.shape[1] <= 0:
+        raise ValueError(f"{name} length must be positive")
+    if torch.any(tokens < 0).item():
+        raise ValueError(f"{name} must be non-negative")
+
+
 def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
     """Move host canvas token ids ``[batch, canvas_len]`` to W3 device layout."""
-    if canvas_tokens.dim() != 2:
-        raise ValueError("canvas_tokens must have shape [batch, canvas_len]")
+    _validate_nonnegative_integer_token_tensor(
+        canvas_tokens,
+        name="canvas_tokens",
+        shape_name="[batch, canvas_len]",
+    )
     batch, canvas_len = canvas_tokens.shape
     return ttnn.from_torch(
         canvas_tokens.view(batch, 1, canvas_len, 1).to(torch.int32),
@@ -89,8 +105,7 @@ def host_gumbel_noise_to_device(mesh_device, gumbel_noise: torch.Tensor):
 
 def host_tokens_to_device(mesh_device, tokens: torch.Tensor):
     """Move host token ids ``[batch, seq_len]`` to Gemma4 token layout."""
-    if tokens.dim() != 2:
-        raise ValueError("tokens must have shape [batch, seq_len]")
+    _validate_nonnegative_integer_token_tensor(tokens, name="tokens", shape_name="[batch, seq_len]")
     return ttnn.from_torch(
         tokens.to(torch.int32),
         device=mesh_device,
@@ -495,16 +510,7 @@ def _validate_batch_size(batch_size: int) -> None:
 
 
 def _validate_prompt_tokens(prompt_tokens: torch.Tensor) -> None:
-    if prompt_tokens.dtype == torch.bool or torch.is_floating_point(prompt_tokens) or torch.is_complex(prompt_tokens):
-        raise ValueError("prompt_tokens must contain integer token ids")
-    if prompt_tokens.dim() != 2:
-        raise ValueError("prompt_tokens must have shape [batch, seq_len]")
-    if prompt_tokens.shape[0] <= 0:
-        raise ValueError("prompt_tokens batch size must be positive")
-    if prompt_tokens.shape[1] <= 0:
-        raise ValueError("prompt_tokens length must be positive")
-    if torch.any(prompt_tokens < 0).item():
-        raise ValueError("prompt_tokens must be non-negative")
+    _validate_nonnegative_integer_token_tensor(prompt_tokens, name="prompt_tokens", shape_name="[batch, seq_len]")
 
 
 def _validate_committed_block_shape(committed: torch.Tensor, *, batch_size: int, canvas_length: int) -> None:
