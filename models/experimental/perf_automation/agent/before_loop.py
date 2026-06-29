@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -28,6 +29,7 @@ from .environment import environment_check
 from .model_files import read_model_files
 from .opclass import STRUCTURAL_OP_CLASSES
 from .router import build_index, cache_playbook
+from .probes import PerfRunFailed
 from .run import Run
 from .tracy_tool import profile_model, stack_report
 
@@ -39,6 +41,30 @@ FIXTURES = PKG_ROOT / "tests" / "fixtures"
 
 METRIC_UNITS = {"device_ms": "ms", "wall_ms": "ms", "fps": "fps", "throughput_tok_s": "tok/s"}
 N_STAGES = 7
+
+
+_SHAPE_CONFIG_CRASH_RE = re.compile(
+    r"block_h|per_core_M|per_core_N|num_cores_r|ceil\(Mt|must equal ceil|program.?config",
+    re.IGNORECASE,
+)
+
+
+def _seq_retry_candidates(err: str, current_seq: int) -> list[int]:
+    cands: list[int] = []
+    m_bh = re.search(r"block_h\s*\((\d+)\)", err or "")
+    m_nc = re.search(r"num_cores_r=(\d+)", err or "")
+    m_mt = re.search(r"Mt=(\d+)", err or "")
+    if m_bh and m_nc and m_mt and current_seq > 0:
+        cur_mt = int(m_mt.group(1))
+        wanted_mt = int(m_bh.group(1)) * int(m_nc.group(1))
+        if cur_mt > 0 and wanted_mt > cur_mt:
+            scaled = int(round(current_seq * wanted_mt / cur_mt))
+            if scaled > current_seq:
+                cands.append(scaled)
+    for s in (256, 384, 512, 768):
+        if s > current_seq and s not in cands:
+            cands.append(s)
+    return cands
 
 
 class _Stages:
@@ -425,13 +451,40 @@ def before_loop(
     run.manifest.write(manifest)
 
     stages.start("tracy_baseline", f"runs={config.get('runs', 1)} · tail -f {run.profiles_dir}/run0_tracy.log")
-    profile = profile_model(
-        perf_test=perf_rel,
-        config=config,
-        env=env,
-        profiles_dir=run.profiles_dir,
-        run_profiled=run_profiled_factory(perf_rel, case),
-    )
+
+    def _run_baseline():
+        return profile_model(
+            perf_test=perf_rel,
+            config=config,
+            env=env,
+            profiles_dir=run.profiles_dir,
+            run_profiled=run_profiled_factory(perf_rel, case),
+        )
+
+    try:
+        profile = _run_baseline()
+    except PerfRunFailed as _exc:
+        if not _SHAPE_CONFIG_CRASH_RE.search(_exc.error or ""):
+            raise
+        _cur = int(os.environ.get("TT_PERF_SEQ_LEN", "128") or "128")
+        profile = None
+        for _seq in _seq_retry_candidates(_exc.error, _cur):
+            msg = (
+                f"baseline crashed at TT_PERF_SEQ_LEN={_cur} with a shape/program-config assertion "
+                f"(model program configs pinned to native shape); retrying at TT_PERF_SEQ_LEN={_seq}"
+            )
+            print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
+            stages._event("note", msg)
+            os.environ["TT_PERF_SEQ_LEN"] = str(_seq)
+            try:
+                profile = _run_baseline()
+                break
+            except PerfRunFailed as _exc2:
+                if not _SHAPE_CONFIG_CRASH_RE.search(_exc2.error or ""):
+                    raise
+                continue
+        if profile is None:
+            raise
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
     _bk = {b.get("id"): int(b.get("count", 0)) for b in (profile.get("buckets") or [])}
