@@ -60,22 +60,18 @@ BASEW = _profw(148.0, 4026, 300.0)  # seamless-ish complete baseline (above floo
 
 
 def test_partial_capture_above_floor_rejected_by_forward_wall():
-    # seamless bimodal: device_ms halves (148->74, above floor) but the independent end-to-end
-    # forward wall is unchanged -> the profiler dropped ops, not a real speedup -> reject.
     partial = _profw(74.0, 3400, 300.0)
     ok, reason = _comparable(BASEW, partial, floor_ms=15.3)
     assert ok is False and "capture_incomplete" in reason
 
 
 def test_real_speedup_drops_both_device_and_wall_accepted():
-    # a real win: device_ms drops AND the end-to-end forward wall drops with it -> accept.
     win = _profw(100.0, 4026, 210.0)
     ok, reason = _comparable(BASEW, win, floor_ms=15.3)
     assert ok is True and reason is None
 
 
 def test_forward_wall_absent_degrades_gracefully():
-    # tt-metal / non-instrumented tests carry no forward_wall_ms -> check is skipped, no regression.
     partial = _prof(74.0, 3400)
     ok, reason = _comparable(BASE, partial, floor_ms=15.3)
     assert ok is True and reason is None
