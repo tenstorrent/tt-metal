@@ -473,8 +473,16 @@ def prepare_gen_image_inputs(
     image_size: str | int | tuple[int, int] | list[int] = 1024,
     cfg_factor: int | None = None,
     max_length: int | None = None,
+    cot_text: str | None = None,
+    system_prompt: str | None = None,
 ) -> GenImageHostInputs:
-    """Run chat template and build position IDs + 2D RoPE metadata for the transformer."""
+    """Run chat template and build position IDs + 2D RoPE metadata for the transformer.
+
+    Pass ``cot_text`` (e.g. the ``<recaption>...</recaption>`` string produced by the AR
+    recaption stage) to inject it as an assistant turn before the gen-image block — the
+    prompt-rewrite path used by base T2I. ``system_prompt`` optionally prepends a system
+    block. Both default to ``None`` (identical to the plain prompt-only T2I sequence).
+    """
     if cfg_factor is None:
         cfg_factor = 1 if tok.config.cfg_distilled else 2
 
@@ -483,6 +491,8 @@ def prepare_gen_image_inputs(
         image_size=image_size,
         cfg_factor=cfg_factor,
         max_length=max_length,
+        cot_text=cot_text,
+        system_prompt=system_prompt,
     )
     output = result["output"]
     sections = result["sections"]
@@ -839,7 +849,7 @@ if __name__ == "__main__":
         if p not in sys.path:
             sys.path.insert(0, p)
 
-    from hunyuan_image_3.system_prompt import get_system_prompt
+    from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
 
     from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
     from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import print_recaption_inputs_report
