@@ -137,7 +137,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
 MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
-
+    const auto& input_tensor_b = tensor_args.input_tensor_b;
     // Output shape is the LHS shape with the last dim replaced by N. We use the
     // operation attribute N (rather than B's last logical dim) so that the partial
     // width-sharded layout -- whose reshaped/permuted B has a different logical
@@ -146,9 +146,8 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     output_shape[-1] = operation_attributes.N;
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
-    int output_num_cores = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
-    CoreRangeSet output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
-        output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
+    CoreRangeSet output_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
+    int output_num_cores = output_core_range_set.num_cores();
     int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
     std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
     auto shard_spec =
