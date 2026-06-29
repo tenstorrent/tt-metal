@@ -580,6 +580,10 @@ def tt_bilstm_nlc(
         cat = ttnn.concat(outs_comb, dim=-1)  # [B, L*2H]
         for o in outs_comb:
             ttnn.deallocate(o)
+        # The [B, L*2H] -> [B, L, 2H] de-interleave is a genuine tile relayout (L moves from the width
+        # axis, where the per-step concat placed it, onto the height axis) ~22µs. A row-major round-trip
+        # (untilize -> RM-view -> retilize) was measured *worse* (~32µs: the padded RM reshape isn't a
+        # free view, plus the two layout ops), so keep the single TILE reshape.
         hcomb = ttnn.reshape(cat, [B, L, H2], memory_config=asm_mc)  # [B, L, 2H]
         ttnn.deallocate(cat)
         hs_f = ttnn.slice(hcomb, [0, 0, 0], [B, L, H], [1, 1, 1], memory_config=asm_mc)
