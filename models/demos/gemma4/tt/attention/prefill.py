@@ -84,6 +84,7 @@ def _prefill_forward_single(
         tt_kv_q, tt_k_from_kv, tt_v_from_kv = split_qkv_heads_prefill(
             xqkv_kv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
         )
+        xqkv_kv.deallocate(True)
         tt_k.deallocate(True)
         tt_v.deallocate(True)
         tt_kv_q.deallocate(True)
