@@ -606,7 +606,10 @@ def tt_bilstm_nlc(
         # Stack the L combined states -> [B, L, 2H], then split the two direction halves in one slice
         # each. The reverse half is in reverse-pass order (row t holds position L-1-t); re-order it to
         # natural time with the same anti-identity matmul used for the input (bit-exact 0/1 reorder).
-        cat = ttnn.concat(outs_comb, dim=-1)  # [B, L*2H]
+        # Keep this transient [B, L*2H] in L1 (asm_mc) instead of letting concat default to DRAM: it is
+        # consumed immediately by the L1 reshape->slice below, so a DRAM output would force a needless
+        # write + read-back of the ~1.5 MiB tensor. Placement only — bit-identical.
+        cat = ttnn.concat(outs_comb, dim=-1, memory_config=asm_mc)  # [B, L*2H]
         for o in outs_comb:
             ttnn.deallocate(o)
         # The [B, L*2H] -> [B, L, 2H] de-interleave is a genuine tile relayout (L moves from the width
