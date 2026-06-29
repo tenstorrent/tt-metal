@@ -12,6 +12,7 @@ from models.experimental.diffusion_gemma.checkpoint import (
     build_tt_model_from_checkpoint_inputs,
     generate_text_from_checkpoint_model_inputs,
     load_checkpoint_inputs,
+    load_tokenizer,
     text_generation_prefixes_for_layers,
 )
 
@@ -68,6 +69,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    zero_block_run = args.num_blocks == 0 or (args.num_blocks is None and args.max_new_tokens == 0)
+    if zero_block_run:
+        from models.experimental.diffusion_gemma.tt.generate import generate_text_from_checkpoint_state
+
+        tokenizer = load_tokenizer(args.checkpoint, local_files_only=args.local_files_only)
+        generation = generate_text_from_checkpoint_state(
+            object(),
+            tokenizer,
+            args.prompt,
+            dg_state_dict={},
+            num_blocks=0 if args.num_blocks == 0 else None,
+            max_new_tokens=0,
+            batch=args.batch,
+        )
+        for text in generation.text:
+            print(text)
+        return 0
+
     checkpoint_inputs = load_checkpoint_inputs(
         args.checkpoint,
         tokenizer_kwargs={"local_files_only": args.local_files_only},
