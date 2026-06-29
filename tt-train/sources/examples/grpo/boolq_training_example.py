@@ -5,6 +5,7 @@
 
 import argparse
 import csv
+import logging
 import os
 import random
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ try:
 except ImportError:
     wandb = None
     _WANDB_AVAILABLE = False
+    logging.warning("'wandb' package not installed; --wandb will be a no-op.")
 
 
 class GRPOMonitor(TrainerCallback):
@@ -46,11 +48,16 @@ class GRPOMonitor(TrainerCallback):
         max_length = kwargs["max_completion_len"]
         step_time_s = kwargs.get("step_time_s", float("nan"))
         generation_time_s = kwargs.get("generation_time_s", float("nan"))
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        print(
-            f"[{timestamp}] Step {step} | Reward: {reward:.4f} "
-            f"| Len: {length:.2f} (min {min_length}, max {max_length}) tokens "
-            f"| Step: {step_time_s:.2f}s | Gen: {generation_time_s:.2f}s"
+        # The logging format already prepends a timestamp (%(asctime)s).
+        logging.info(
+            "Step %d | Reward: %.4f | Len: %.2f (min %d, max %d) tokens | Step: %.2fs | Gen: %.2fs",
+            step,
+            reward,
+            length,
+            min_length,
+            max_length,
+            step_time_s,
+            generation_time_s,
         )
         with open(self.file_path, mode="a", newline="") as f:
             writer = csv.writer(f)
@@ -70,7 +77,7 @@ class GRPOMonitor(TrainerCallback):
             )
 
     def on_train_end(self, trainer):
-        print("Training complete.")
+        logging.info("Training complete.")
         if self.wandb_enabled:
             wandb.finish()
 
@@ -95,17 +102,18 @@ def boolq_reward(completions, answer, **kwargs):
     # (mean_brevity / mean_chars).
     n = max(len(rewards), 1)
     frac_correct = sum(correct_flags) / n
-    print(
-        f"[reward] frac_correct={frac_correct:.3f} "
-        f"mean_brevity={sum(brevities) / n:.2f} mean_chars={sum(char_lens) / n:.1f} "
-        f"mean_reward={sum(rewards) / n:.2f}",
-        flush=True,
+    logging.info(
+        "[reward] frac_correct=%.3f mean_brevity=%.2f mean_chars=%.1f mean_reward=%.2f",
+        frac_correct,
+        sum(brevities) / n,
+        sum(char_lens) / n,
+        sum(rewards) / n,
     )
-    # Print first generation for the FIRST prompt.
+    # Log first generation for the FIRST prompt.
     if completions:
-        print(f"[reward] first-prompt gt={answer[0]!r}", flush=True)
+        logging.info("[reward] first-prompt gt=%r", answer[0])
         preview = completions[0].strip().replace("\n", " ")[:300]
-        print(f"[reward]   gen[{0}] = {preview!r}", flush=True)
+        logging.info("[reward]   gen[%d] = %r", 0, preview)
 
     return rewards
 
@@ -194,6 +202,16 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    # Configure the root logger before any library (W&B, datasets, ...) can
+    # claim it. INFO surfaces the per-generate summaries; set GRPO_LOGLEVEL=DEBUG
+    # to also see the per-chunk decode progress in qwen3_completer. force=True
+    # wins regardless of import order.
+    logging.basicConfig(
+        level=os.environ.get("GRPO_LOGLEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
+
     args = parse_args()
 
     random.seed(args.seed)
@@ -233,10 +251,12 @@ if __name__ == "__main__":
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
-    print(
-        f"Loaded config {config_path} | "
-        f"enable_ddp={device_config.enable_ddp} mesh_shape={device_config.mesh_shape} "
-        f"(total_devices={device_config.total_devices()})"
+    logging.info(
+        "Loaded config %s | enable_ddp=%s mesh_shape=%s (total_devices=%s)",
+        config_path,
+        device_config.enable_ddp,
+        device_config.mesh_shape,
+        device_config.total_devices(),
     )
     if is_qwen3:
         # Qwen3 architecture is read from the HF config inside the completer;
@@ -260,7 +280,7 @@ if __name__ == "__main__":
     wandb_enabled = False
     if args.wandb:
         if not _WANDB_AVAILABLE:
-            print("Warning: --wandb specified but the 'wandb' package is not installed; skipping W&B logging.")
+            logging.warning("--wandb specified but the 'wandb' package is not installed; skipping W&B logging.")
         else:
             wandb.init(
                 project=args.wandb_project,
@@ -276,7 +296,11 @@ if __name__ == "__main__":
                 },
             )
             wandb_enabled = True
-            print(f"   - W&B logging enabled (project={args.wandb_project}, run={args.wandb_run_name or '<auto>'})")
+            logging.info(
+                "W&B logging enabled (project=%s, run=%s)",
+                args.wandb_project,
+                args.wandb_run_name or "<auto>",
+            )
 
     if is_qwen3:
         completer = Qwen3GRPOCompleter(
@@ -312,4 +336,4 @@ if __name__ == "__main__":
         model_source=model_id,
     )
     grpo_trainer.train()
-    print("BOOLQ GRPO TRAINING COMPLETE")
+    logging.info("BOOLQ GRPO TRAINING COMPLETE")

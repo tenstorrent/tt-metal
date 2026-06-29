@@ -283,15 +283,18 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
         stop_ids = self._get_stop_ids()
 
-        print(
-            f"[qwen3] generate B={B} prompts={len(prompts)} Np={Np} tokens_to_complete={tokens_to_complete}",
-            flush=True,
+        logging.info(
+            "[qwen3] generate B=%d prompts=%d Np=%d tokens_to_complete=%d",
+            B,
+            len(prompts),
+            Np,
+            tokens_to_complete,
         )
-        # Print decode prompt[0] to confirm the chat-templated input is sane (not itself
+        # Log decode prompt[0] to confirm the chat-templated input is sane (not itself
         # garbage) -- rules the prompt in/out as a gibberish source.
         try:
             preview = self._ctx._tokenizer.decode(rows[0], skip_special_tokens=False)
-            print(f"[qwen3] prompt[0] ({len(rows[0])} toks) = {preview[:300]!r}", flush=True)
+            logging.info("[qwen3] prompt[0] (%d toks) = %r", len(rows[0]), preview[:300])
         except Exception:  # noqa: BLE001
             pass
 
@@ -397,11 +400,15 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                         n_done = i + 1
                         elapsed = time.perf_counter() - decode_t0
                         rate = n_done / elapsed if elapsed > 0 else 0.0
-                        print(
-                            f"[qwen3] decode {n_done}/{tokens_to_complete - 1} "
-                            f"cache_pos={kv.get_seq_length()} done={int(done.sum())}/{B} "
-                            f"{rate:.1f} tok/s ({elapsed:.0f}s)",
-                            flush=True,
+                        logging.debug(
+                            "[qwen3] decode %d/%d cache_pos=%d done=%d/%d %.1f tok/s (%.0fs)",
+                            n_done,
+                            tokens_to_complete - 1,
+                            kv.get_seq_length(),
+                            int(done.sum()),
+                            B,
+                            rate,
+                            elapsed,
                         )
 
                 decode_np = _columns_to_np(generated_columns)
