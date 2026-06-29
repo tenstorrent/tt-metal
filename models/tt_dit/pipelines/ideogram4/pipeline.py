@@ -67,15 +67,12 @@ class Ideogram4DecodeStage:
         z_torch = tensor.to_torch(z, mesh_axes=[None, None, None])
         z_nchw = unpatchify_latent(z_torch, grid_h=grid_h, grid_w=grid_w, patch=self.patch)
 
-        tt_z = ttnn.from_torch(
-            z_nchw.permute(0, 2, 3, 1),  # NCHW -> NHWC
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            layout=ttnn.TILE_LAYOUT,
-        )
+        # Feed replicated NHWC: post_quant_conv is replicated; the decoder conv_in shards
+        # channels via out_mesh_axis. Works for TP=1 and TP>1. Output is replicated
+        # (VAEDecoder vae_all_gathers before conv_out), so take device 0's tensor.
+        tt_z = bf16_tensor(z_nchw.permute(0, 2, 3, 1), device=self.mesh_device)  # NCHW -> NHWC, replicated
         decoded = self.vae_decoder(tt_z)
-        return tensor.to_torch(decoded, mesh_axes=[None, None, None, None]).permute(0, 3, 1, 2)  # NHWC -> NCHW
+        return ttnn.to_torch(ttnn.get_device_tensors(decoded)[0]).permute(0, 3, 1, 2)  # NHWC -> NCHW
 
     @staticmethod
     def to_images(decoded: torch.Tensor) -> torch.Tensor:
@@ -90,3 +87,254 @@ def cfg_blend(v_cond: ttnn.Tensor, v_uncond: ttnn.Tensor, guidance_weight: float
 
 
 __all__ = ["Ideogram4DecodeStage", "Ideogram4Sampler", "cfg_blend", "unpatchify_latent"]
+
+
+# =============================================================================
+# Full pipeline class. Mirrors the QwenImage/SD3.5 pipeline shape: a factory
+# (from_pretrained) that builds device-resident models, and __call__ for T2I.
+#
+# CFG is run SEQUENTIALLY on the full submesh (see the CFG decision doc): the
+# conditional pass (text+image) and unconditional pass (image-only) are asymmetric,
+# so giving each pass the whole mesh beats splitting it. Everything is device-
+# resident at TP=4 (encoder + cond + uncond transformers + VAE); no dynamic offload.
+# =============================================================================
+
+import gc as _gc
+
+import transformers as _tf
+from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL as _AutoencoderKL
+from safetensors.torch import load_file as _load_file
+
+from ...encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, create_rope_tensors
+from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
+from ...parallel.manager import CCLManager
+from ...reference.ideogram4 import modeling_ideogram4
+from ...reference.ideogram4.constants import (
+    IMAGE_POSITION_OFFSET,
+    LLM_TOKEN_INDICATOR,
+    OUTPUT_IMAGE_INDICATOR,
+    QWEN3_VL_ACTIVATION_LAYERS,
+)
+from ...reference.ideogram4.dequant import dequant_fp8_state_dict
+
+
+def _dq(path):
+    return dequant_fp8_state_dict(_load_file(path))
+
+
+class Ideogram4Pipeline:
+    """Ideogram 4.0 text-to-image pipeline (device-resident, TP=4, sequential CFG)."""
+
+    def __init__(
+        self,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        weights_dir: str,
+        qwen_repo: str = "Qwen/Qwen3-VL-8B-Instruct",
+        tp_axis: int = 1,
+        num_links: int = 1,
+    ) -> None:
+        self.mesh_device = mesh_device
+        self.weights_dir = weights_dir
+        self.tp_axis = tp_axis
+        self.config = modeling_ideogram4.Ideogram4Config()
+        self.patch, self.ae = 2, 8
+        tp_factor = tuple(mesh_device.shape)[tp_axis]
+        self.tp_factor = tp_factor
+        cfg = self.config
+
+        ccl = CCLManager(mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+        self.ccl = ccl
+        dit_pc = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=1, mesh_axis=1 - tp_axis),
+        )
+        from ...utils.padding import PaddingConfig
+
+        padding_config = (
+            PaddingConfig.from_tensor_parallel_factor(cfg.num_heads, cfg.emb_dim // cfg.num_heads, tp_factor)
+            if cfg.num_heads % tp_factor != 0
+            else None
+        )
+
+        # --- text encoder (TP=4) ---
+        hf = _tf.AutoModel.from_pretrained(qwen_repo, torch_dtype=torch.bfloat16)
+        lm = hf.language_model if hasattr(hf, "language_model") else hf.model.language_model
+        enc_sd = _dq(f"{weights_dir}/text_encoder/model.safetensors")
+        enc_sd = {k[len("language_model.") :]: v for k, v in enc_sd.items() if k.startswith("language_model.")}
+        qcfg = lm.config
+        self.tokenizer = _tf.AutoTokenizer.from_pretrained(weights_dir, subfolder="tokenizer")
+        self._enc_head_dim = qcfg.hidden_size // qcfg.num_attention_heads
+        self._enc_mrope = qcfg.rope_scaling["mrope_section"]
+        self._enc_rope_theta = qcfg.rope_scaling["rope_theta"]
+        self.encoder = Qwen3VlTextEncoder(
+            vocab_size=qcfg.vocab_size,
+            hidden_size=qcfg.hidden_size,
+            intermediate_size=qcfg.intermediate_size,
+            hidden_act="silu",
+            num_hidden_layers=qcfg.num_hidden_layers,
+            num_attention_heads=qcfg.num_attention_heads,
+            num_key_value_heads=qcfg.num_key_value_heads,
+            rms_norm_eps=qcfg.rms_norm_eps,
+            rope_theta=self._enc_rope_theta,
+            mrope_section=self._enc_mrope,
+            activation_layers=QWEN3_VL_ACTIVATION_LAYERS,
+            device=mesh_device,
+            parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
+            ccl_manager=ccl,
+        )
+        self.encoder.load_torch_state_dict(enc_sd)
+        del hf, lm, enc_sd
+        _gc.collect()
+
+        # --- conditional + unconditional denoisers (TP=4, both resident) ---
+        def _build_dit(sub):
+            sd = _dq(f"{weights_dir}/{sub}/diffusion_pytorch_model.safetensors")
+            m = Ideogram4Transformer(
+                emb_dim=cfg.emb_dim,
+                num_layers=cfg.num_layers,
+                num_heads=cfg.num_heads,
+                intermediate_size=cfg.intermediate_size,
+                adaln_dim=cfg.adanln_dim,
+                in_channels=cfg.in_channels,
+                llm_features_dim=cfg.llm_features_dim,
+                norm_eps=cfg.norm_eps,
+                mesh_device=mesh_device,
+                ccl_manager=ccl,
+                parallel_config=dit_pc,
+                padding_config=padding_config,
+            )
+            m.load_torch_state_dict(sd)
+            del sd
+            _gc.collect()
+            return m
+
+        self.cond = _build_dit("transformer")
+        self.uncond = _build_dit("unconditional_transformer")
+
+        # --- VAE decoder (TP=4) ---
+        vae_sd = _load_file(f"{weights_dir}/vae/diffusion_pytorch_model.safetensors")
+        akl = _AutoencoderKL(
+            in_channels=3,
+            out_channels=3,
+            latent_channels=cfg.in_channels // (self.patch * self.patch),
+            down_block_types=("DownEncoderBlock2D",) * 4,
+            up_block_types=("UpDecoderBlock2D",) * 4,
+            block_out_channels=(128, 256, 512, 512),
+            layers_per_block=2,
+            norm_num_groups=32,
+        )
+        akl.load_state_dict({k: v for k, v in vae_sd.items() if not k.startswith("bn.")}, strict=False)
+        akl = akl.to(torch.bfloat16).eval()
+        vae = Ideogram4VAEDecoder.from_torch(
+            akl,
+            mesh_device=mesh_device,
+            parallel_config=VAEParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
+            ccl_manager=ccl,
+        )
+        self.decode_stage = Ideogram4DecodeStage(vae, mesh_device=mesh_device, patch=self.patch)
+        del akl, vae_sd
+        _gc.collect()
+
+    @classmethod
+    def from_pretrained(cls, mesh_device, weights_dir="/localdev/cglagovich/ideogram-4-fp8", **kw):
+        return cls(mesh_device=mesh_device, weights_dir=weights_dir, **kw)
+
+    def _encode(self, prompt: str):
+        """Tokenize + run the device encoder -> real interleaved llm_features (host) + n_text."""
+        text = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        ids = self.tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"]
+        n_text = ids.shape[1]
+        cos, sin = create_rope_tensors(1, n_text, None, self._enc_head_dim, self._enc_rope_theta, self._enc_mrope)
+        tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
+        taps = self.encoder.forward(
+            tt_ids,
+            attention_mask=None,
+            pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
+        )
+        # taps: 13 x [1, n_text, 4096] replicated on TP; interleave to [1, n_text, 53248]
+        taps_t = [tensor.to_torch(t, mesh_axes=[None, None, None]) for t in taps]
+        feats = torch.stack(taps_t, dim=0).permute(1, 2, 3, 0).reshape(1, n_text, -1).to(torch.bfloat16)
+        return feats, n_text
+
+    def _branch(self, n_pre, num_img, grid_h, grid_w, llm_real):
+        cfg = self.config
+        ind = torch.full((1, n_pre + num_img), OUTPUT_IMAGE_INDICATOR, dtype=torch.long)
+        if n_pre:
+            ind[:, :n_pre] = LLM_TOKEN_INDICATOR
+        llm = torch.zeros(1, n_pre + num_img, cfg.llm_features_dim, dtype=torch.bfloat16)
+        if n_pre and llm_real is not None:
+            llm[:, :n_pre] = llm_real
+        pos = torch.zeros(1, n_pre + num_img, 3, dtype=torch.long)
+        if n_pre:
+            tp = torch.arange(n_pre)
+            pos[:, :n_pre] = torch.stack([tp, tp, tp], dim=1)
+        hh = torch.arange(grid_h).repeat_interleave(grid_w)
+        ww = torch.arange(grid_w).repeat(grid_h)
+        pos[:, n_pre:, 0] = IMAGE_POSITION_OFFSET
+        pos[:, n_pre:, 1] = IMAGE_POSITION_OFFSET + hh
+        pos[:, n_pre:, 2] = IMAGE_POSITION_OFFSET + ww
+        rope = modeling_ideogram4.Ideogram4MRoPE(
+            head_dim=cfg.emb_dim // cfg.num_heads, base=cfg.rope_theta, mrope_section=cfg.mrope_section
+        )
+        cos, sin = rope(pos)
+        dev = self.mesh_device
+        return dict(
+            llm=bf16_tensor(llm, device=dev),
+            cos=bf16_tensor(cos.unsqueeze(1).to(torch.bfloat16), device=dev),
+            sin=bf16_tensor(sin.unsqueeze(1).to(torch.bfloat16), device=dev),
+            llm_mask=bf16_tensor((ind == LLM_TOKEN_INDICATOR).float().unsqueeze(-1), device=dev),
+            img_mask=bf16_tensor((ind == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1), device=dev),
+            idx=tensor.from_torch((ind == OUTPUT_IMAGE_INDICATOR).to(torch.int32), device=dev, dtype=ttnn.uint32),
+            seq=n_pre + num_img,
+        )
+
+    @torch.no_grad()
+    def __call__(
+        self, prompt: str, *, height: int = 512, width: int = 512, preset: str = "V4_TURBO_12", seed: int = 1234
+    ):
+        cfg = self.config
+        dev = self.mesh_device
+        grid_h, grid_w = height // (self.patch * self.ae), width // (self.patch * self.ae)
+        num_img = grid_h * grid_w
+        torch.manual_seed(seed)
+
+        llm_real, n_text = self._encode(prompt)
+        cond_b = self._branch(n_text, num_img, grid_h, grid_w, llm_real)
+        uncond_b = self._branch(0, num_img, grid_h, grid_w, None)
+
+        sampler = Ideogram4Sampler.from_preset(preset, height=height, width=width)
+        z = torch.randn(1, num_img, cfg.in_channels, dtype=torch.float32)
+
+        def _v(model, br, x_full, t_val):
+            t_sin = Ideogram4Transformer.sinusoidal_embedding(torch.tensor([t_val]), cfg.emb_dim)
+            out = model(
+                x=bf16_tensor(x_full, device=dev),
+                llm_features=br["llm"],
+                t_sin=bf16_tensor(t_sin.unsqueeze(1), device=dev),
+                cos=br["cos"],
+                sin=br["sin"],
+                image_indicator_index=br["idx"],
+                llm_token_mask=br["llm_mask"],
+                output_image_mask=br["img_mask"],
+                spatial_sequence_length=br["seq"],
+            )
+            return tensor.to_torch(out, mesh_axes=[None, None, None])[:, br["seq"] - num_img :].float()
+
+        for i in reversed(range(sampler.num_steps)):
+            t_val, s_val = sampler.times_for_step(i)
+            gw = sampler.guidance_weight(i)
+            pos_x = torch.zeros(1, n_text + num_img, cfg.in_channels, dtype=torch.bfloat16)
+            pos_x[:, n_text:] = z.to(torch.bfloat16)
+            v_cond = _v(self.cond, cond_b, pos_x, t_val)
+            v_uncond = _v(self.uncond, uncond_b, z.to(torch.bfloat16), t_val)
+            z = z + (gw * v_cond + (1.0 - gw) * v_uncond) * (s_val - t_val)
+
+        decoded = self.decode_stage.decode(bf16_tensor(z, device=dev), grid_h=grid_h, grid_w=grid_w)
+        return Ideogram4DecodeStage.to_images(decoded)[0].cpu().numpy()
