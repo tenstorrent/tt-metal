@@ -571,6 +571,14 @@ def _validate_batch_size(batch_size: int) -> None:
         raise ValueError("batch_size must be positive")
 
 
+def _validate_vocab_size(vocab_size: int) -> int:
+    if isinstance(vocab_size, bool) or not isinstance(vocab_size, Integral):
+        raise ValueError("vocab_size must be an integer")
+    if vocab_size <= 0:
+        raise ValueError("vocab_size must be positive")
+    return int(vocab_size)
+
+
 def _validate_prompt_tokens(prompt_tokens: torch.Tensor) -> None:
     _validate_nonnegative_integer_token_tensor(prompt_tokens, name="prompt_tokens", shape_name="[batch, seq_len]")
 
@@ -1020,8 +1028,8 @@ def generate_text_from_checkpoint_state(
         _validate_batch_size(batch)
     if vocab_size is None and num_blocks > 0:
         vocab_size = _infer_generation_vocab_size(tokenizer, tt_model)
-    if vocab_size is not None and vocab_size <= 0:
-        raise ValueError("vocab_size must be positive")
+    if vocab_size is not None:
+        vocab_size = _validate_vocab_size(vocab_size)
     if init_canvas_fn is None and num_blocks == 0:
         init_canvas_fn = _unused_canvas_init_fn
     if init_canvas_fn is None:

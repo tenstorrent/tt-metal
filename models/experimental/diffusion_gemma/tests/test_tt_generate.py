@@ -1804,6 +1804,57 @@ def test_generate_text_from_checkpoint_state_rejects_nonpositive_vocab_before_se
         )
 
 
+@pytest.mark.parametrize("vocab_size", [1.5, True, "99"])
+def test_generate_text_from_checkpoint_state_rejects_non_integer_vocab_before_builder(vocab_size):
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid vocab_size")
+
+    with pytest.raises(ValueError, match="vocab_size must be an integer"):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            vocab_size=vocab_size,
+            logits_fn_builder_factory=fail_builder_factory,
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("vocab_size", "message"),
+    [
+        (1.5, "vocab_size must be an integer"),
+        (True, "vocab_size must be an integer"),
+        (0, "vocab_size must be positive"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_invalid_inferred_vocab_before_builder(vocab_size, message):
+    class _Tokenizer:
+        pass
+
+    _Tokenizer.vocab_size = vocab_size
+
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid inferred vocab_size")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            "model",
+            _Tokenizer(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            logits_fn_builder_factory=fail_builder_factory,
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_noise():
     with pytest.raises(ValueError, match="noise_tokens_fn requires vocab_size"):
         generate_text_from_checkpoint_state(
