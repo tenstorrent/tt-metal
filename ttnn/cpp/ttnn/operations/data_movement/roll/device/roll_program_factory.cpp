@@ -72,15 +72,23 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     // from per-row/per-element NOC writes. The write is always one full shard = shard_size
     // bytes, which we validate is 32-byte aligned below.
     if (is_dram_rm) {
+        // Each shard cell-row is a buffer page padded up to the backing memory's alignment.
+        // For DRAM this is the DRAM alignment (64B on Blackhole, 32B on Wormhole), NOT the L1
+        // alignment — using the wrong alignment here desyncs the staged layout from the actual
+        // in-DRAM layout and corrupts the gather.
+        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
         const uint32_t shard_size_check =
-            (input.shard_spec().value().shape[0] * tt::tt_metal::hal::get_l1_alignment() *
-             ((input.shard_spec().value().shape[1] * input.element_size() + tt::tt_metal::hal::get_l1_alignment() - 1) /
-              tt::tt_metal::hal::get_l1_alignment()));
+            (input.shard_spec().value().shape[0] *
+             ((input.shard_spec().value().shape[1] * input.element_size() + dram_alignment - 1) / dram_alignment) *
+             dram_alignment);
         TT_FATAL(
-            shard_size_check % 32 == 0,
-            "DRAM-sharded RM roll requires shard_size ({} bytes) to be 32-byte aligned for NOC DRAM writes. "
-            "Adjust shard dimensions so shard_h × align_up(shard_w × elem_size, 16) is a multiple of 32.",
-            shard_size_check);
+            shard_size_check % dram_alignment == 0,
+            "DRAM-sharded RM roll requires shard_size ({} bytes) to be {}-byte aligned for NOC DRAM writes. "
+            "Adjust shard dimensions so shard_h × align_up(shard_w × elem_size, {}) is a multiple of {}.",
+            shard_size_check,
+            dram_alignment,
+            dram_alignment,
+            dram_alignment);
     }
 
     const auto& shape = input.padded_shape();
@@ -165,8 +173,13 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     const uint32_t num_cores = grid_rows * grid_cols;
 
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    // Sharded buffers store one shard cell-row per page, padded up to the L1 alignment.
-    const uint32_t row_pitch_bytes = ((shard_cells_w * cell_size + l1_alignment - 1) / l1_alignment) * l1_alignment;
+    // Sharded buffers store one shard cell-row per page, padded up to the backing memory's
+    // alignment. DRAM pages use the (larger) DRAM alignment — 64B on Blackhole, 32B on Wormhole —
+    // whereas L1 pages use the L1 alignment. The row pitch must match whichever memory actually
+    // holds the data, otherwise the staged copy and the host-computed offsets disagree.
+    const uint32_t page_alignment = is_dram ? tt::tt_metal::hal::get_dram_alignment() : l1_alignment;
+    const uint32_t row_pitch_bytes =
+        ((shard_cells_w * cell_size + page_alignment - 1) / page_alignment) * page_alignment;
 
     auto local_offset = [&](uint32_t row, uint32_t col) {
         const uint32_t local_r = row % shard_cells_h;

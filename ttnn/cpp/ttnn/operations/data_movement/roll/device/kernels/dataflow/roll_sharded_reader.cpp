@@ -65,7 +65,9 @@ void kernel_main() {
     if constexpr (mode == 2) {
         // DRAM RM mode: read full source shard(s) from DRAM into L1 staging, assemble the
         // rolled result in L1 via local element copies, then write full shard to DRAM dst.
-        // All DRAM NOC transfers are shard-sized (validated 32-byte aligned) — no sub-alignment issue.
+        // All DRAM NOC transfers are shard-sized (validated DRAM-alignment aligned) — no
+        // sub-alignment issue. The host computes the staging row pitch using the DRAM alignment
+        // (64B on Blackhole, 32B on Wormhole) so the staged layout matches the in-DRAM layout.
         CircularBuffer src_cbs[2] = {CircularBuffer(dram_src0_cb_id), CircularBuffer(dram_src1_cb_id)};
         CircularBuffer dst_cb(dram_dst_cb_id);
         const uint32_t src_base[2] = {src_cbs[0].get_write_ptr(), src_cbs[1].get_write_ptr()};
