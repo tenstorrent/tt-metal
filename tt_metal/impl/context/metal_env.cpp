@@ -23,7 +23,6 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include <umd/device/utils/semver.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
 
@@ -125,23 +124,27 @@ const MetalEnvDescriptor& MetalEnvImpl::get_descriptor() const { return descript
 
 namespace {
 // Decide whether to register Blackhole DRAM programmable cores (the "DRAM-core" / tensor-prefetcher
-// path) in the HAL. Two constraints, both about the application owning the right DRAM RISC core:
-//   - Firmware bundle >= 19.12.0.0: earlier firmware places the syseng firmware on a DRAM core the
-//     application wants to use, so enabling there would overlap with syseng.
-//   - No harvested DRAM channels, OR a single device: with DRAM harvesting the specific core the
-//     application must write to for GCB credits can differ per device, which breaks our programming
-//     model that the cores look identical on every device. A single device has no cross-device
-//     consistency to break, and an unharvested multi-device system lines the cores up the same way.
-// Queryable afterwards via Hal::has_programmable_core_type(HalProgrammableCoreType::DRAM).
+// path) in the HAL. Queryable afterwards via Hal::has_programmable_core_type(HalProgrammableCoreType::DRAM).
+//
+// Two independent constraints, both about the application owning the right DRAM RISC core:
+//   - Firmware must support it (arch + firmware-bundle floor) -- resolved by check_firmware_capabilities.
+//   - Topology: with DRAM harvesting the specific core the application must write to for GCB credits can
+//     differ per device, which breaks our programming model that the cores look identical on every
+//     device. A single device has no cross-device consistency to break, and an unharvested multi-device
+//     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster) {
-    if (cluster.arch() != tt::ARCH::BLACKHOLE) {
+    FirmwareCapabilityRequest req;
+    req.dram_programmable_cores = true;
+    FirmwareCapabilityResult res;
+    check_firmware_capabilities(
+        cluster.arch(),
+        {.firmware_bundle = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version()},
+        req,
+        res);
+    if (!res.dram_programmable_cores) {
         return false;
     }
-    static const tt::umd::FirmwareBundleVersion kMinFirmware{19, 12, 0, 0};
-    const auto fw_version = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version();
-    if (!fw_version.has_value() || *fw_version < kMinFirmware) {
-        return false;
-    }
+
     if (cluster.number_of_devices() == 1) {
         return true;
     }
