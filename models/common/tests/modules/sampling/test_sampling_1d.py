@@ -26,6 +26,10 @@ QWEN3_32B = "Qwen/Qwen3-32B"
 _slow = pytest.mark.slow
 
 
+def _sub_core_grids_for_32_users():
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+
+
 def _list_collected_sampling_cases() -> list[pytest.param]:
     """
     Collected from TTTv1 demo runs (Phase B of test_case_collection.md).
@@ -706,6 +710,34 @@ def test_sampling1d_topk_masks_qwen3_32b_padded_tail(ttnn_mesh_device):
     tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
 
     assert torch.all(tokens_host < valid_vocab_size)
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+def test_sampling1d_padded_tail_with_sub_core_grids_runs(ttnn_mesh_device):
+    B = 32
+    valid_vocab_size = 151936
+    padded_vocab_size = 152064
+    sub_core_grids = _sub_core_grids_for_32_users()
+    sampler = Sampling1D(
+        vocab_size=padded_vocab_size,
+        valid_vocab_size=valid_vocab_size,
+        mesh_device=ttnn_mesh_device,
+        sub_core_grids=sub_core_grids,
+        sub_core_grid_topk=sub_core_grids,
+        start_core=ttnn.CoreCoord(0, 0),
+    )
+
+    logits_host = torch.zeros((1, 1, B, padded_vocab_size), dtype=torch.bfloat16)
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+    tokens_tt, _ = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B]
+
+    assert tokens_host.numel() == B
 
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
