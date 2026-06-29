@@ -287,6 +287,7 @@ class TtPrefillBlock(LightweightModule):
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                is_balanced=is_balanced,
             )
         else:
             self.ffn = TtFfn(
@@ -317,6 +318,7 @@ class TtPrefillBlock(LightweightModule):
         weight_cache_path=None,
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
+        is_balanced=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -366,6 +368,7 @@ class TtPrefillBlock(LightweightModule):
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+            is_balanced=is_balanced,
         )
 
     def forward(
@@ -381,6 +384,8 @@ class TtPrefillBlock(LightweightModule):
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
         return_kv_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
     ):
         """
         Args:
@@ -390,8 +395,8 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates: if True, forward to TtMoe so it runs its
                 intermediates-gated checks (per-chip dispatch buffer overflow,
                 region-offset bounds). Has no effect on dense layers.
-            on_layer_complete: optional callback passed to MLA. In chunked prefill MLA writes the
-                chunk, zeros the pad window past actual_end, then fires this per layer.
+            on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
+                the chunk this block zeros the pad window past actual_end, flushes, then fires this.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
                 write offset = cumulative valid-KV count before it; None for single-shot). Selects
                 MLA's chunked path; requires the block to have been built with is_chunked=True.
@@ -400,6 +405,9 @@ class TtPrefillBlock(LightweightModule):
             return_kv_intermediates: if True, MLA surfaces its 4 KV stages (tt_kv, tt_kv_nope,
                 tt_kv_rope, tt_kvpe) and this returns (output_tensor, kv_intermediates_dict) — also
                 carrying post_mla_residual + post_attn_norm — instead of (output_tensor, kv_cache).
+            actual_isl: actual (unpadded) count of real tokens; threaded to the MoE FFN for
+                padding-aware routing.
+            padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
@@ -407,14 +415,13 @@ class TtPrefillBlock(LightweightModule):
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
+        seq_len_local = attn_norm_out.shape[2]
         mla_out = self.mla.forward(
             attn_norm_out,
             rope_tensors,
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
-            on_layer_complete=on_layer_complete,
             actual_start=actual_start,
-            actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
         )
@@ -422,6 +429,27 @@ class TtPrefillBlock(LightweightModule):
         if return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
         ttnn.deallocate(attn_norm_out)
+
+        # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
+        # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
+        # 128-boundary; zero that pad window so the decode side reads clean zeros. The synchronize
+        # flushes the (async) zero to device before on_layer_complete hands this layer's KV to the
+        # migration worker, which reads the cache over NoC out-of-band from the ttnn command queue —
+        # without the flush it could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
+        # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
+        if on_layer_complete is not None:
+            assert actual_end is not None, "actual_end required when on_layer_complete is set"
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                kvpe_cache,
+                cache_user_id,
+                cache_layer_idx,
+                self.mla.layer_num,
+                actual_end,
+                seq_len_local * self.mla.sp_factor,
+                self.mla.sp_axis,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block
@@ -442,7 +470,12 @@ class TtPrefillBlock(LightweightModule):
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
         if self.is_moe:
-            ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
+            ffn_out = self._moe_path(
+                ffn_norm_out,
+                return_intermediates=return_intermediates,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+            )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
@@ -456,11 +489,22 @@ class TtPrefillBlock(LightweightModule):
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
         return x, kv_cache
 
-    def _moe_path(self, ffn_norm_out: ttnn.Tensor, return_intermediates: bool = False) -> ttnn.Tensor:
+    def _moe_path(
+        self,
+        ffn_norm_out: ttnn.Tensor,
+        return_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+    ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE."""
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
 
-        moe_out, _ = self.ffn(moe_input, return_intermediates=return_intermediates)
+        moe_out, _ = self.ffn(
+            moe_input,
+            return_intermediates=return_intermediates,
+            actual_isl=actual_isl,
+            padding_side=padding_side,
+        )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
         return moe_out

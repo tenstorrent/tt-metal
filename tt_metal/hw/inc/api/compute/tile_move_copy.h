@@ -44,8 +44,14 @@ ALWI void copy_tile_to_dst_init_short(
 #endif
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, transpose_within_16x16_face, cbid)));
+    // 4th template arg is arch-divergent (unpack_to_dest on Quasar, is_int_fpu_en on WH/BH); keep it
+    // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
+#ifndef ARCH_QUASAR
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
+#else
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         cbid)));
+#endif
 }
 /**
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset

@@ -1,6 +1,7 @@
+# grid is the full NOC coordinate-space extent and must contain every core's coords
 grid:
-  x_size: 8
-  y_size: 4
+  x_size: 10
+  y_size: 8
 
 arc:
   []

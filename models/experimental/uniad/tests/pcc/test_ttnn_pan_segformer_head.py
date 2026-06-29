@@ -12,8 +12,7 @@ from models.experimental.uniad.tt.model_preprocessing_encoder import (
 
 from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
 from models.experimental.uniad.tt.ttnn_pan_segformer_head import TtPansegformerHead
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 class DotDict(dict):
@@ -21,6 +20,13 @@ class DotDict(dict):
         return self[key]
 
 
+# Smoke test only. This test feeds random `pts_feats` as the BEV embedding, and
+# white noise makes the seg DETR encoder's deformable-attention PCC meaningless
+# (sampling uncorrelated noise amplifies bf16 error). The seg head's ACCURACY is
+# validated in test_ttnn_uniad on the real BEV embedding, where its continuous
+# outputs score ~0.999 (see the "seg-head PCC gate" there). Here we only check
+# that the seg head runs on device and returns the expected output structure, to
+# catch crashes / shape regressions.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_uniad_TtPansegformerhead(device, reset_seeds, model_location_generator):
     kwargs = {
@@ -122,31 +128,17 @@ def test_uniad_TtPansegformerhead(device, reset_seeds, model_location_generator)
         rescale=True,
     )
 
-    def check_pcc_and_log(name, torch_tensor, ttnn_tensor, threshold=0.99, convert_ttnn_to_torch=False):
-        if convert_ttnn_to_torch:
-            ttnn_tensor = ttnn.to_torch(ttnn_tensor)
-        try:
-            assert_with_pcc(torch_tensor, ttnn_tensor, threshold)
-        except AssertionError as e:
-            print(f"[WARNING] PCC check failed for '{name}'. Error: {e}")
-
-    check_pcc_and_log("bbox", torch_output[0]["pts_bbox"]["bbox"], ttnn_output[0]["pts_bbox"]["bbox"])
-    check_pcc_and_log("segm", torch_output[0]["pts_bbox"]["segm"], ttnn_output[0]["pts_bbox"]["segm"])
-    check_pcc_and_log("labels", torch_output[0]["pts_bbox"]["labels"], ttnn_output[0]["pts_bbox"]["labels"])
-    check_pcc_and_log("drivable", torch_output[0]["pts_bbox"]["drivable"], ttnn_output[0]["pts_bbox"]["drivable"])
-    check_pcc_and_log(
-        "score_list",
-        torch_output[0]["pts_bbox"]["score_list"],
-        ttnn_output[0]["pts_bbox"]["score_list"],
-        convert_ttnn_to_torch=True,
-    )
-    check_pcc_and_log("lane_score", torch_output[0]["pts_bbox"]["lane_score"], ttnn_output[0]["pts_bbox"]["lane_score"])
-
-    for i in range(len(torch_output[0]["args_tuple"]) - 2):
-        if torch_output[0]["args_tuple"][i] is not None:
-            check_pcc_and_log(
-                "args_tuple",
-                torch_output[0]["args_tuple"][i],
-                ttnn_output[0]["args_tuple"][i],
-                convert_ttnn_to_torch=True,
-            )
+    # Structural smoke check: the seg head ran on device and returns the
+    # expected outputs with shapes matching the reference. Accuracy (PCC) is
+    # asserted in test_ttnn_uniad on the real BEV embedding, not here (random
+    # input — see the module docstring above).
+    tt_bbox = ttnn_output[0]["pts_bbox"]
+    ref_bbox = torch_output[0]["pts_bbox"]
+    for key in ("bbox", "segm", "labels", "drivable", "lane_score"):
+        assert key in tt_bbox, f"seg head output missing key {key!r}"
+        ref_t = torch.as_tensor(ref_bbox[key])
+        tt_t = tt_bbox[key]
+        tt_t = ttnn.to_torch(tt_t) if isinstance(tt_t, ttnn.Tensor) else torch.as_tensor(tt_t)
+        assert tuple(ref_t.shape) == tuple(
+            tt_t.shape
+        ), f"seg head {key} shape {tuple(tt_t.shape)} != reference {tuple(ref_t.shape)}"

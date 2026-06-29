@@ -151,15 +151,8 @@ struct FabricTelemetrySettings {
     }
 };
 
-enum class SanitizerReportMethod {
-    Default,
-    Assert,
-    Print,
-};
-
 struct SanitizerSettings {
     bool enabled = false;
-    SanitizerReportMethod method = SanitizerReportMethod::Default;
 
     std::optional<bool> pedantic = std::nullopt;
     std::optional<bool> warn = std::nullopt;
@@ -466,7 +459,6 @@ public:
     }
     const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
-    bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
     bool watcher_assert_disabled() const { return watcher_feature_disabled(watcher_assert_str); }
     bool watcher_pause_disabled() const { return watcher_feature_disabled(watcher_pause_str); }
     bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
@@ -475,6 +467,11 @@ public:
     bool watcher_eth_disabled() const { return watcher_feature_disabled(watcher_eth_str); }
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
     bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
+
+    // TODO: Remove these Watcher NOC sanitize functions once NOC sanitization is supported on Quasar in fast dispatch
+    // (#45878)
+    bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
+    void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }

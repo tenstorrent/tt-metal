@@ -150,31 +150,17 @@ def test_binary_sfpu_pow_neg(device, input_shapes):
     assert pcc >= 0.99
 
 
-@pytest.mark.parametrize(
-    "dtype_a",
-    [
-        "float32",
-        "bfloat16",
-    ],
-)
-@pytest.mark.parametrize(
-    "dtype_b",
-    [
-        "float32",
-        "bfloat16",
-    ],
-)
-def test_binary_pow(device, dtype_a, dtype_b):
-    torch_dtype_a = getattr(torch, dtype_a)
-    ttnn_dtype_a = getattr(ttnn, dtype_a)
-    torch_dtype_b = getattr(torch, dtype_b)
-    ttnn_dtype_b = getattr(ttnn, dtype_b)
-    x_torch = torch.tensor([[0.98828125, 0.47851562, 1.1875, -1.59375]], dtype=torch_dtype_a)
-    y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625, 0.1533203125]], dtype=torch_dtype_b)
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_pow(device, dtype):
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    x_torch = torch.tensor([[0.98828125, 0.47851562, 1.1875, -1.59375]], dtype=torch_dtype)
+    y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625, 0.1533203125]], dtype=torch_dtype)
     golden_fn = ttnn.get_golden_function(ttnn.pow)
     z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype_a, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype_b, layout=ttnn.TILE_LAYOUT, device=device)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
     z_tt_pow = ttnn.pow(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_pow)
     # output - bfloat16

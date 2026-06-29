@@ -772,12 +772,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         use_llk_bcast = false;
     }
 
-    // Integer relational ops on UInt16 use either the FPU SUB + {EQZ/NEZ} postprocess
-    // path (EQ/NE) or direct SFPU comparison (LT/GT/LE/GE), both with DEST configured
-    // for Fp16_b accumulation (fp32_dest_acc_en is false for UInt16).  Under SCALAR
-    // broadcast the B2D datacopy unpacker writes a single u16 lane into all DEST
-    // positions; the resulting Fp16_b-tagged DEST is then read back by the postprocess
-    // or SFPU comparison kernel, which interprets the integer bit pattern through the
+    // Integer relational/equality ops on UInt16 use direct SFPU comparison
+    // (LT/GT/LE/GE/EQ/NE), with DEST configured for Fp16_b accumulation
+    // (fp32_dest_acc_en is false for UInt16).  Under SCALAR broadcast the B2D
+    // datacopy unpacker writes a single u16 lane into all DEST positions; the
+    // resulting Fp16_b-tagged DEST is then read back by the SFPU comparison
+    // kernel, which interprets the integer bit pattern through the
     // format-conversion path and corrupts the comparison result (#36217).
     // Fall back to software broadcast for this combination - non-broadcast u16
     // relational ops and broadcasted arithmetic u16 ops (no postprocess) are
@@ -788,7 +788,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
           (std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LT ||
            std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GT ||
            std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LE ||
-           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GE))) &&
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GE ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::EQ ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::NE))) &&
         (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
          operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
         use_llk_bcast = false;
@@ -829,7 +831,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else if (b_dtype == DataType::UINT32) {
-            compute_kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::UInt32>";
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
