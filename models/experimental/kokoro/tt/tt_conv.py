@@ -373,6 +373,16 @@ def _batched_tt_conv1d_nlc(
     if x_flat.layout != ttnn.TILE_LAYOUT:
         x_flat = ttnn.to_layout(x_flat, ttnn.TILE_LAYOUT, memory_config=memory_config)
 
+    # ttnn#47927 ("conv1d: enable DRAM slicing by default") dropped conv1d's historical L1_FULL
+    # default: a missing slice_config now auto-routes by input location, so a DRAM input (the embedding
+    # output that feeds block 0) gets width-sliced through DRAM and the conv returns its output
+    # *interleaved in DRAM*. That breaks ``output_sharded`` — the LayerNorm can no longer read the
+    # conv's block-sharded L1 output in place and falls back to a 3-core DRAM LN, with a per-block
+    # ShardedToInterleaved/InterleavedToSharded/ReshapeView round-trip. When the caller wants the
+    # sharded output, force L1_FULL to restore the block-sharded L1 result (the B*T≈96 TextEncoder
+    # shape fits L1; long-sequence DRAM-slicing callers leave output_sharded=False and are untouched).
+    slice_config = ttnn.Conv2dL1FullSliceConfig if output_sharded else None
+
     y = ttnn.conv1d(
         input_tensor=x_flat,
         weight_tensor=params.weight,
@@ -388,6 +398,7 @@ def _batched_tt_conv1d_nlc(
         input_length=seq,
         conv_config=conv_config,
         compute_config=compute_config,
+        slice_config=slice_config,
         groups=params.groups,
         dtype=out_dtype,
     )
