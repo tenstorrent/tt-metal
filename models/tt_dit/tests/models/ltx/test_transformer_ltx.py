@@ -827,9 +827,6 @@ def test_ltx_transformer_block(
         ax_cos, ax_sin = _tt_rope(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
         )
-        vx_cos_full, vx_sin_full = _tt_rope_full(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis, pad_to=video_N
-        )
         ax_cos_full, ax_sin_full = _tt_rope_full(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
@@ -870,8 +867,6 @@ def test_ltx_transformer_block(
             video_cross_pe_sin=vx_sin,
             audio_cross_pe_cos=ax_cos,
             audio_cross_pe_sin=ax_sin,
-            video_cross_pe_cos_full=vx_cos_full,
-            video_cross_pe_sin_full=vx_sin_full,
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
             audio_attn_mask=a_attn_mask,
@@ -1059,9 +1054,6 @@ def _run_inner_step(
         ax_cos, ax_sin = _tt_rope(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
         )
-        vx_cos_full, vx_sin_full = _tt_rope_full(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis, pad_to=video_N
-        )
         ax_cos_full, ax_sin_full = _tt_rope_full(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
@@ -1077,8 +1069,6 @@ def _run_inner_step(
             video_cross_pe_sin=vx_sin,
             audio_cross_pe_cos=ax_cos,
             audio_cross_pe_sin=ax_sin,
-            video_cross_pe_cos_full=vx_cos_full,
-            video_cross_pe_sin_full=vx_sin_full,
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
             video_padding_mask=v_pad_sp,

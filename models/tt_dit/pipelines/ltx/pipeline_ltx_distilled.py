@@ -172,8 +172,6 @@ class LTXDistilledPipeline(LTXPipeline):
             v_xpe_sin,
             a_xpe_cos,
             a_xpe_sin,
-            v_xpe_cos_full,
-            v_xpe_sin_full,
             a_xpe_cos_full,
             a_xpe_sin_full,
         ) = self._prepare_av_cross_pe(latent_frames, latent_h, latent_w, audio_N, audio_N_real)
@@ -187,8 +185,6 @@ class LTXDistilledPipeline(LTXPipeline):
         state._tt_video_cross_pe_sin.update(v_xpe_sin, False)
         state._tt_audio_cross_pe_cos.update(a_xpe_cos, False)
         state._tt_audio_cross_pe_sin.update(a_xpe_sin, False)
-        state._tt_video_cross_pe_cos_full.update(v_xpe_cos_full, False)
-        state._tt_video_cross_pe_sin_full.update(v_xpe_sin_full, False)
         state._tt_audio_cross_pe_cos_full.update(a_xpe_cos_full, False)
         state._tt_audio_cross_pe_sin_full.update(a_xpe_sin_full, False)
         state._tt_audio_attn_mask.update(tt_attn_mask, False)
@@ -451,8 +447,6 @@ class LTXDistilledPipeline(LTXPipeline):
                 video_cross_pe_sin=state.tt_video_cross_pe_sin,
                 audio_cross_pe_cos=state.tt_audio_cross_pe_cos,
                 audio_cross_pe_sin=state.tt_audio_cross_pe_sin,
-                video_cross_pe_cos_full=state.tt_video_cross_pe_cos_full,
-                video_cross_pe_sin_full=state.tt_video_cross_pe_sin_full,
                 audio_cross_pe_cos_full=state.tt_audio_cross_pe_cos_full,
                 audio_cross_pe_sin_full=state.tt_audio_cross_pe_sin_full,
                 audio_attn_mask=state.tt_audio_attn_mask,
