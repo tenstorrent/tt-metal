@@ -711,14 +711,8 @@ def bh_2d_mesh_device_context(device_params):
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     if ttnn.get_num_devices() == 8:
-        try:
-            desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
-            local_shape = desc.local_shape()
-            mesh_shape = ttnn.MeshShape(local_shape[0], local_shape[1])
-        except Exception:
-            mesh_shape = ttnn.MeshShape(4, 2)
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=mesh_shape,
+            mesh_shape=ttnn.MeshShape(4, 2),
             **updated_device_params,
         )
     elif ttnn.get_num_devices() == 32:
