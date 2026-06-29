@@ -594,15 +594,16 @@ HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
 
 HostTensor to_row_major_layout(const HostTensor& tensor) {
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
-        if constexpr (std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b>) {
-            // TODO(#43763):
+        if constexpr (
+            std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
+            std::is_same_v<T, float8_e4m3>) {
+            // bfloat4_b / bfloat8_b: TODO(#43763):
             // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
             // This silent fail has a high impact area and should be studied and addressed asap.
             //
             // Original comment:
             // TODO: Flip to assert when we remove use cases in python and c++
-            return tensor;
-        } else if constexpr (std::is_same_v<T, float8_e4m3>) {
+            //
             // FP8_E4M3 is constrained to ROW_MAJOR at construction, so it is already row-major.
             return tensor;
         } else {
