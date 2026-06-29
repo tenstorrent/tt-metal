@@ -35,7 +35,6 @@ constexpr char kStandaloneDrainerKernelPath[] =
 constexpr uint32_t kTestResultsSizeBytes = 128;
 constexpr uint32_t kPacketHeaderBufferSizeBytes = 1024;
 constexpr uint32_t kNocAddressPaddingBytes = 16;
-constexpr uint32_t kStandaloneDrainerNumBuffers = 16;
 constexpr uint32_t kSenderStartDelayCycles = 100000;
 constexpr uint32_t kStandaloneDownstreamFreeSlotsStreamId =
     tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
@@ -348,7 +347,9 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     mux_config.set_forwarder_max_in_flight_trids(benchmark_case.max_in_flight_trids);
 
     StandaloneMuxV2DrainerLayout drainer_layout(
-        static_cast<uint8_t>(kStandaloneDrainerNumBuffers), channel_buffer_size_bytes, l1_unreserved_base_address);
+        static_cast<uint8_t>(benchmark_case.num_drainer_buffers),
+        channel_buffer_size_bytes,
+        l1_unreserved_base_address);
 
     const auto mux_logical_core = context.get_mux_logical_core();
     const auto drainer_logical_core = context.get_drainer_logical_core();

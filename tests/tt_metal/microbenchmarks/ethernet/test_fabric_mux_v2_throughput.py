@@ -19,6 +19,7 @@ FAMILY_SORT_ORDER = {
     "sender_sweep": 2,
     "trid_sweep": 3,
     "service_sweep": 4,
+    "drainer_sweep": 5,
 }
 
 SUMMARY_HEADERS = [
@@ -34,7 +35,6 @@ SUMMARY_HEADERS = [
     "Aggregate bytes",
     "Max sender cycles",
     "Bytes per cycle",
-    "Packets per cycle",
     "Cycles per packet",
     "Throughput GB/s",
     "Speedup vs golden",
@@ -119,7 +119,6 @@ def normalize_benchmark_row(benchmark: dict) -> dict:
     max_sender_cycles = as_int(benchmark["max_sender_cycles"])
     aggregate_packet_count = sender_count * num_packets
     bytes_per_cycle = as_float(benchmark["bytes_per_cycle"])
-    packets_per_cycle = aggregate_packet_count / max_sender_cycles
     cycles_per_packet = max_sender_cycles / aggregate_packet_count
     throughput_gb_per_s = as_float(benchmark["throughput_bytes_per_s"]) / 1.0e9
     return {
@@ -135,7 +134,6 @@ def normalize_benchmark_row(benchmark: dict) -> dict:
         "Aggregate bytes": as_int(benchmark["aggregate_case_bytes"]),
         "Max sender cycles": max_sender_cycles,
         "Bytes per cycle": bytes_per_cycle,
-        "Packets per cycle": packets_per_cycle,
         "Cycles per packet": cycles_per_packet,
         "Throughput GB/s": throughput_gb_per_s,
     }
@@ -167,6 +165,8 @@ def get_family_axis_sort_value(row: dict) -> int:
         return row["Max in-flight TRIDs"]
     if case_name.startswith("service_sweep"):
         return row["Service burst size"]
+    if case_name.startswith("drainer_sweep"):
+        return row.get("Drainer buffers", 0)
     return 0
 
 
@@ -278,7 +278,6 @@ def format_golden_field(row: dict, field: str):
 def format_summary_row(row: dict) -> dict:
     formatted = row.copy()
     formatted["Bytes per cycle"] = f"{row['Bytes per cycle']:.6f}"
-    formatted["Packets per cycle"] = f"{row['Packets per cycle']:.6f}"
     formatted["Cycles per packet"] = f"{row['Cycles per packet']:.6f}"
     formatted["Throughput GB/s"] = f"{row['Throughput GB/s']:.6f}"
     if row.get("Speedup vs golden") != "":
@@ -302,7 +301,6 @@ def format_text_table(rows: list[dict], geomean_speedup: float) -> str:
         "SB",
         "TRID",
         "B/c",
-        "Pkt/c",
         "Cyc/pkt",
         "GB/s",
         "vs golden",
@@ -320,7 +318,6 @@ def format_text_table(rows: list[dict], geomean_speedup: float) -> str:
                 str(row["Service burst size"]),
                 str(row["Max in-flight TRIDs"]),
                 f"{row['Bytes per cycle']:.3f}",
-                f"{row['Packets per cycle']:.4f}",
                 f"{row['Cycles per packet']:.2f}",
                 f"{row['Throughput GB/s']:.3f}",
                 f"{row['Speedup vs golden']:.3f}x" if row.get("Speedup vs golden") != "" else "",

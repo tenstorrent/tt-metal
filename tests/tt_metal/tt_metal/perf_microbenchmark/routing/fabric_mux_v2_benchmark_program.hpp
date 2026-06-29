@@ -18,6 +18,7 @@ namespace tt::tt_fabric::bench {
 inline constexpr uint64_t kDefaultTargetAggregatePayloadBytes = 256ull * 1024ull * 1024ull;
 inline constexpr uint32_t kDefaultForwarderServiceBurstSize = 8;
 inline constexpr uint32_t kDefaultForwarderMaxInFlightTrids = 8;
+inline constexpr uint32_t kDefaultDrainerNumBuffers = 16;
 
 struct MuxV2ThroughputCase {
     std::string name_suffix;
@@ -27,6 +28,7 @@ struct MuxV2ThroughputCase {
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
     uint32_t service_burst_size = kDefaultForwarderServiceBurstSize;
     uint32_t max_in_flight_trids = kDefaultForwarderMaxInFlightTrids;
+    uint32_t num_drainer_buffers = kDefaultDrainerNumBuffers;
     uint64_t target_aggregate_payload_bytes = kDefaultTargetAggregatePayloadBytes;
 };
 

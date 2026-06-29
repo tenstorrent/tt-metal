@@ -46,11 +46,12 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
     constexpr std::array<uint32_t, 5> kSenderSweep = {1, 2, 4, 8, 16};
     constexpr std::array<uint32_t, 4> kTridSweep = {1, 2, 4, 8};
     constexpr std::array<uint32_t, 5> kServiceBurstSweep = {1, 2, 4, 8, 16};
+    constexpr std::array<uint32_t, 6> kDrainerSlotsSweep = {1, 2, 4, 8, 16, 32};
 
     std::vector<MuxV2ThroughputCase> cases;
     cases.reserve(
         kForwarderNocSweep.size() * (kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() +
-                                     kTridSweep.size() + kServiceBurstSweep.size()));
+                                     kTridSweep.size() + kServiceBurstSweep.size() + kDrainerSlotsSweep.size()));
 
     for (const auto& noc_config : kForwarderNocSweep) {
         for (const auto buffer_count : kBufferSweep) {
@@ -101,6 +102,18 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
                 .num_buffers_per_channel = kDefaultBufferCount,
                 .forwarder_noc = noc_config.noc,
                 .service_burst_size = service_burst_size,
+            });
+        }
+
+        for (const auto num_drainer_buffers : kDrainerSlotsSweep) {
+            cases.push_back(MuxV2ThroughputCase{
+                .name_suffix = "drainer_sweep_8s_max_buf8_" + std::string(noc_config.name) + "_sb8_trid8_dr" +
+                               std::string(2 - std::to_string(num_drainer_buffers).size(), '0') +
+                               std::to_string(num_drainer_buffers),
+                .num_senders = kTuningSenderCount,
+                .num_buffers_per_channel = kDefaultBufferCount,
+                .forwarder_noc = noc_config.noc,
+                .num_drainer_buffers = num_drainer_buffers,
             });
         }
     }
@@ -205,6 +218,7 @@ void BM_StandaloneMuxV2Throughput(
         benchmark::Counter(static_cast<double>(benchmark_case.num_buffers_per_channel));
     state.counters["service_burst_size"] = benchmark::Counter(static_cast<double>(benchmark_case.service_burst_size));
     state.counters["max_in_flight_trids"] = benchmark::Counter(static_cast<double>(benchmark_case.max_in_flight_trids));
+    state.counters["drainer_buffers"] = benchmark::Counter(static_cast<double>(benchmark_case.num_drainer_buffers));
     state.counters["target_payload_bytes"] =
         benchmark::Counter(static_cast<double>(benchmark_case.target_aggregate_payload_bytes));
     state.counters["clock_mhz"] = benchmark::Counter(static_cast<double>(get_tt_npu_clock(context->get_device())));
