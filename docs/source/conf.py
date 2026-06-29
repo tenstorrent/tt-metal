@@ -97,17 +97,23 @@ exclude_patterns = []
 # a list of builtin themes.
 #
 html_theme = "sphinx_rtd_theme"
+html_theme_options = {
+    "collapse_navigation": False,
+    "titles_only": True,
+    "navigation_depth": 2,
+}
 html_logo = "images/tt_logo.svg"
 html_favicon = "images/favicon.png"
 html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_config.shortname}"
 
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are copied after the builtin static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
+html_css_files = ["https://docs.tenstorrent.com/_static/tt_theme.css"]
 html_js_files = ["posthog.js"]
 
-html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
+html_context = {
+    "logo_link_url": "https://docs.tenstorrent.com/",
+    "search_site_base_url": "https://docs.tenstorrent.com/",
+}
 
 
 def setup(app):
