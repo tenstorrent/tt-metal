@@ -92,7 +92,7 @@ size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
     return this->dram_view_address_offsets.at(dram_view);
 }
 
-size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
+size_t metal_SocDescriptor::get_physical_channel_for_dram_view(int dram_view) const {
     TT_ASSERT(
         dram_view < this->dram_view_channels.size(),
         "dram_view={} must be within range of dram_view_channels.size={}",
@@ -101,8 +101,8 @@ size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
     return this->dram_view_channels.at(dram_view);
 }
 
-size_t metal_SocDescriptor::get_logical_channel_for_dram_view(int dram_view) const {
-    const size_t physical_channel = get_channel_for_dram_view(dram_view);
+size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
+    const size_t physical_channel = get_physical_channel_for_dram_view(dram_view);
     const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
     TT_ASSERT(
         (dram_harvesting_mask & (1u << physical_channel)) == 0,
@@ -156,7 +156,7 @@ CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoo
 }
 
 CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const {
-    const int channel = static_cast<int>(get_logical_channel_for_dram_view(dram_view));
+    const int channel = static_cast<int>(get_channel_for_dram_view(dram_view));
     const tt::umd::CoreCoord phys_umd = get_dram_core_for_channel(channel, subchannel, tt::CoordSystem::TRANSLATED);
     const CoreCoord phys{phys_umd.x, phys_umd.y};
     TT_FATAL(

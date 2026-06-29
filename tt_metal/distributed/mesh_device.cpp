@@ -1505,7 +1505,7 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const 
     }
 
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    const size_t channel = soc_desc.get_logical_channel_for_dram_view(static_cast<int>(bank_id));
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
     for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
         tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
             static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
@@ -1531,7 +1531,7 @@ std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_i
     const CoreCoord noc1_endpoint_phys =
         soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/static_cast<uint8_t>(1));
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    const size_t channel = soc_desc.get_logical_channel_for_dram_view(static_cast<int>(bank_id));
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
     for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
         const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
             static_cast<int>(channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
