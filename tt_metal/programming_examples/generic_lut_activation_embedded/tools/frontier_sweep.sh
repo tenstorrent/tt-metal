@@ -85,9 +85,10 @@ dispatch_local() {
   [[ -x "$RUN_CSV" ]] || { echo "ERROR: run_csv.sh not found at $RUN_CSV (set TT_METAL_HOME)" >&2; exit 1; }
   [[ -d "$COEFFS" ]] || { echo "ERROR: corpus not found at $COEFFS (set TT_POLY_FIT_DIR)" >&2; exit 1; }
 
-  local repo_root parent base wt script out cache log_dir log pid rc failures=0
+  local repo_root parent base repo_head wt script out cache log_dir log pid rc failures=0
   local -a worker_args
   repo_root="$(cd "$TT_METAL_HOME" && pwd)"
+  repo_head="$(git -C "$repo_root" rev-parse HEAD)"
   parent="$(dirname "$repo_root")"
   base="$(basename "$repo_root")"
   [[ -n "$WORKTREE_PREFIX" ]] || WORKTREE_PREFIX="$parent/${base}-chip"
@@ -105,6 +106,8 @@ dispatch_local() {
     wt="${WORKTREE_PREFIX}${chip}"
     if [[ ! -e "$wt/.git" ]]; then
       git -C "$repo_root" worktree add --detach "$wt" HEAD >&2
+    else
+      git -C "$wt" checkout --detach -f "$repo_head" >&2
     fi
     script="$wt/tt_metal/programming_examples/generic_lut_activation_embedded/tools/frontier_sweep.sh"
     [[ -x "$script" ]] || { echo "ERROR: worktree sweep script missing/executable: $script" >&2; exit 1; }
