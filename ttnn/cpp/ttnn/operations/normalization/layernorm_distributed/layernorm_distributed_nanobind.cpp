@@ -133,7 +133,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16, BFLOAT8_B
+                    * - BFLOAT16, BFLOAT8_B, FLOAT32
                       - TILE
 
                   .. list-table:: stats
@@ -141,7 +141,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
+                    * - BFLOAT16, BFLOAT8_B, FLOAT32
                       - TILE
 
                   .. list-table:: weight (gamma) and bias (beta)
@@ -149,16 +149,17 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
-                      - ROW_MAJOR
+                    * - BFLOAT16, FLOAT32
+                      - ROW_MAJOR, TILE
 
                   Output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
                 Limitations:
                   - Input tensors must be on-device and rank 4.
+                  - FLOAT32 :attr:`input_tensor` / :attr:`stats` require ``fp32_dest_acc_en=true`` in the compute kernel config.
                   - The last padded dim of :attr:`stats` must be a multiple of TILE_WIDTH.
                   - The first three padded dims of :attr:`stats` must match :attr:`input_tensor`.
-                  - :attr:`weight` (gamma) and :attr:`bias` (beta) are independently optional; when either is provided it must be BFLOAT16 and match :attr:`input_tensor` per the layout rules above.
+                  - :attr:`weight` (gamma) and :attr:`bias` (beta) are independently optional, may be BFLOAT16 or FLOAT32, and must match :attr:`input_tensor` per the layout rules above.
                   - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32), and :attr:`stats` must be sharded with `num_cores=1` and expected tile columns per device.
         )doc",
         &ttnn::layer_norm_post_all_gather,
