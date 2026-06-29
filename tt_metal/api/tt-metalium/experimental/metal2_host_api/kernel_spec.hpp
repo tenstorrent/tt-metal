@@ -132,8 +132,9 @@ struct KernelSpec {
         // for multi-threaded kernels; at num_threads == 1 all patterns are equivalent.)
         //   STRIDED: a kernel thread accesses every N-th entry (where N = num_threads)
         //   ALL:     each kernel thread accesses every DFB entry
-        //   BLOCKED: a kernel thread accesses blocks of N entries, in strides of N blocks
-        //            (NOT YET SUPPORTED — currently rejected at runtime)
+        //   BLOCKED: a kernel thread accesses a contiguous block of block_size entries, then strides
+        //            by block_size * num_threads to its next block (set block_size via DFBBinding,
+        //            BlockedProducerOf, or BlockedConsumerOf)
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
