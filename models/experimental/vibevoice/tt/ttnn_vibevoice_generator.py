@@ -93,6 +93,8 @@ from models.experimental.vibevoice.tt.reference_lm_runner import ReferenceLMRunn
 class TTVibeVoiceOutput:
     sequences: torch.Tensor  # [B, S] full token ids (prefill + generated)
     speech_outputs: List[torch.Tensor]  # concatenated waveforms per batch row
+    prefill_wall_s: float = 0.0  # wall time covering embed-build + LM prefill forward
+    decode_wall_s: float = 0.0  # wall time covering the full AR decode loop
 
 
 def _greedy_argmax(logits: ttnn.Tensor, use_fp32: bool = False) -> int:
@@ -628,6 +630,7 @@ class TTVibeVoiceGenerator:
             f"diffusion_steps={self.num_diffusion_steps}"
         )
 
+        _t_prefill_start = time.perf_counter()
         with prof.section("prefill_build_embeds (voice-clone encode)"):
             inputs_embeds = self._build_prefill_embeds(
                 input_ids,
@@ -672,6 +675,7 @@ class TTVibeVoiceGenerator:
 
         with prof.section("lm_prefill"):
             logits_pos, prefill_hidden = self._lm_prefill(inputs_embeds, kv_cache_pos)
+        _t_prefill_end = time.perf_counter()
         _vv_debug(f"lm_prefill done: kv_cache_pos size={prefill_len + max_steps + 8}")
 
         neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
@@ -703,6 +707,7 @@ class TTVibeVoiceGenerator:
         _vv_debug(f"AR loop: max_steps={max_steps} first_token={next_token} ({self._token_label(next_token)})")
 
         diffusion_frames = 0
+        _t_decode_start = time.perf_counter()
         for step in range(max_steps):
             current_token = next_token
             sequences = torch.cat(
@@ -779,6 +784,7 @@ class TTVibeVoiceGenerator:
                 else:
                     next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)
 
+        _t_decode_end = time.perf_counter()
         # The per-step streaming decode already produced each frame's audio chunk
         # (with full causal context via the decoder cache); concatenate for the
         # final waveform — no separate batch decode needed.
@@ -797,4 +803,6 @@ class TTVibeVoiceGenerator:
         return TTVibeVoiceOutput(
             sequences=sequences,
             speech_outputs=[speech_waveform],
+            prefill_wall_s=_t_prefill_end - _t_prefill_start,
+            decode_wall_s=_t_decode_end - _t_decode_start,
         )
