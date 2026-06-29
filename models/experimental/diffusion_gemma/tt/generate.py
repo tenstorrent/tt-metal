@@ -74,6 +74,8 @@ def _validate_nonnegative_integer_token_tensor(tokens: torch.Tensor, *, name: st
 
 
 def _validate_position_span(start_pos: int, length: int, *, name: str) -> None:
+    if isinstance(start_pos, bool) or not isinstance(start_pos, Integral):
+        raise ValueError(f"{name} must be an integer")
     if start_pos < 0:
         raise ValueError(f"{name} must be non-negative")
     if length <= 0:

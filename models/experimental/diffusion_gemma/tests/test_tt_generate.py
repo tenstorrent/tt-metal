@@ -141,6 +141,8 @@ def test_denoise_and_commit_block_rejects_bad_committed_shape_before_commit():
 @pytest.mark.parametrize(
     ("start_pos", "message"),
     [
+        (1.5, "integer"),
+        (True, "integer"),
         (-1, "start_pos"),
         (torch.iinfo(torch.int32).max, "fit int32"),
     ],
@@ -253,6 +255,8 @@ def test_generate_blocks_rejects_non_positive_canvas_length():
 @pytest.mark.parametrize(
     ("prompt_len", "message"),
     [
+        (1.5, "integer"),
+        (True, "integer"),
         (-1, "prompt_len"),
         (torch.iinfo(torch.int32).max, "fit int32"),
     ],
