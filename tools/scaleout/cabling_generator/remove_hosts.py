@@ -33,11 +33,51 @@ import sys
 from pathlib import Path
 
 
-def validate_paths(paths):
-    for name, path in paths.items():
-        if not os.path.exists(path):
-            print(f"Error: {name} not found: {path}", file=sys.stderr)
-            sys.exit(1)
+# RFC 1123 host/label characters only. Anchored, no path separators, no leading
+# dash. This is an allowlist: any input that does not match is rejected outright,
+# which prevents both argument injection (e.g. a value starting with "-") and any
+# attempt to smuggle shell/path metacharacters into the downstream binary call.
+HOSTNAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9])?$")
+
+
+def validate_hostname(hostname):
+    """Reject any hostname that is not a plain RFC 1123-style name."""
+    if not HOSTNAME_RE.match(hostname):
+        print(f"Error: invalid hostname: {hostname!r}", file=sys.stderr)
+        sys.exit(1)
+    return hostname
+
+
+def validate_build_dir(build_dir):
+    """Constrain --build-dir to a single, simple directory name.
+
+    Rejecting path separators and traversal keeps the binary-discovery path
+    rooted under repo_root and prevents user input from escaping it.
+    """
+    if (
+        build_dir in (".", "..")
+        or "/" in build_dir
+        or "\\" in build_dir
+        or os.sep in build_dir
+        or (os.altsep and os.altsep in build_dir)
+    ):
+        print(f"Error: invalid --build-dir (must be a simple directory name): {build_dir!r}", file=sys.stderr)
+        sys.exit(1)
+    return build_dir
+
+
+def resolve_input_file(name, raw_path):
+    """Resolve a user-supplied input path to an absolute, existing regular file.
+
+    Resolving normalizes any '..' traversal to a concrete absolute path, and the
+    absolute form guarantees the value cannot be misread as a CLI flag by the
+    downstream binary (it always begins with the filesystem root).
+    """
+    resolved = Path(raw_path).resolve()
+    if not resolved.is_file():
+        print(f"Error: {name} not found or not a regular file: {raw_path}", file=sys.stderr)
+        sys.exit(1)
+    return str(resolved)
 
 
 def find_cabling_generator(repo_root, build_dir=None):
@@ -95,26 +135,29 @@ def main():
 
     args = parser.parse_args()
 
-    validate_paths({"cabling": args.cabling, "deployment": args.deployment})
-
     # Drop accidental empty --remove values; preserve user-given order otherwise.
-    remove_list = [h.strip() for h in args.remove if h and h.strip()]
+    # Every retained hostname is validated against a strict allowlist before it is
+    # ever placed on the downstream command line.
+    remove_list = [validate_hostname(h.strip()) for h in args.remove if h and h.strip()]
     if not remove_list:
         print("Error: --remove must specify at least one non-empty hostname", file=sys.stderr)
         sys.exit(1)
 
+    build_dir = validate_build_dir(args.build_dir) if args.build_dir else None
+
     script_dir = Path(__file__).resolve().parent
     # tools/scaleout/cabling_generator/remove_hosts.py -> repo root is 3 levels up
     repo_root = script_dir.parent.parent.parent
-    cabling_gen = find_cabling_generator(repo_root, args.build_dir)
+    cabling_gen = find_cabling_generator(repo_root, build_dir)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # The C++ tool runs with cwd=repo_root, so convert input paths to absolute to ensure
-    # they resolve regardless of the user's working directory.
-    cabling_path = str(Path(args.cabling).resolve())
-    deployment_path = str(Path(args.deployment).resolve())
+    # they resolve regardless of the user's working directory. resolve_input_file also
+    # normalizes traversal and verifies the target is an existing regular file.
+    cabling_path = resolve_input_file("cabling", args.cabling)
+    deployment_path = resolve_input_file("deployment", args.deployment)
 
     cmd = [
         str(cabling_gen),
