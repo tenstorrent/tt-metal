@@ -544,6 +544,8 @@ models/experimental/gated_attention_gated_deltanet @sdawle-TT @dvartaniansTT @te
 # tracy
 tools/tracy/ @mo-tenstorrent @akerteszTT @tenstorrent/codeowner-bypass
 
+tools/scripts/ @mtairum @tenstorrent/codeowner-bypass
+
 # tt-triage
 tools/tt-triage.py @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tools/tt-run-triage.py @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
