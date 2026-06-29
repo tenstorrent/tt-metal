@@ -64,8 +64,20 @@ Sensible defaults cover the common cases, so override only when needed.
 - `name` — custom test ID or output filename. The default is `<Op>-<fmt>`.
 - `clamp_negative` — enable the kernel's negative-input clamp.
 - `dest_acc` and `unpack_to_dest` — override the format-derived accumulator defaults.
-- `input_dimensions` — override the default `[32, 32]` tile.
+- `input_dimensions` — set how many points sample the domain (see below).
 - `extra_undefined_ranges` — override the red undefined-domain shading on the plot.
+
+### How many points to sample (`input_dimensions`)
+
+`input_dimensions` is the input tensor shape; its element count is how many points sample the domain. The default `[32, 32]` is one tile = 1024 points.
+
+1024 points cover BF16/FP16 well, but sample FP32's much finer grid sparsely. To sample FP32 more densely, add points using whole tiles — each dimension must be a multiple of 32, so use `[32, 32*K]` for `1024*K` points.
+
+```python
+# Denser FP32 sweep: 4 tiles = 4096 points.
+Case(op=MathOperation.Sqrt, spec=StimuliSpec.ramp(low=0.0, high=100.0), fmt=FP32,
+     input_dimensions=[32, 32 * 4])
+```
 
 ## Reading the output
 
