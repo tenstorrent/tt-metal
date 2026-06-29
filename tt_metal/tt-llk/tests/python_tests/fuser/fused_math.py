@@ -414,11 +414,15 @@ class ComputePipeline:
             body = self._packer_wait_for_math(config)
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
+            prev_was_pack = False
             for pack_node in self.pack_nodes:
                 if isinstance(pack_node, SfpuNode):
+                    if prev_was_pack:
+                        body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
                     body += pack_node.math_init(operation, config, block)
                     body += pack_node.math_run(operation, config, block)
                     body += pack_node.math_uninit(operation, config, block)
+                    prev_was_pack = False
                 elif isinstance(pack_node, PackNode):
                     if not hoist_reconfig:
                         body += pack_node.reconfig(operation, config)
@@ -427,6 +431,7 @@ class ComputePipeline:
                     body += pack_node.pack_loop(operation, config, block)
                     if not hoist:
                         body += pack_node.uninit(operation, config)
+                    prev_was_pack = True
             body += self._packer_dest_section_done(operation, config)
             return body
 
