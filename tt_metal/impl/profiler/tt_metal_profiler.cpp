@@ -740,6 +740,27 @@ void InitDeviceProfiler(IDevice* device) {
         return;
     }
 
+    // L1-accumulate is an internal runtime-team mode, not a general profiling mode.
+    // Warn loudly, once per process, at the start of any accumulate run.
+    if (MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+        static std::atomic<bool> accumulate_warned = false;
+        if (!accumulate_warned.exchange(true)) {
+            log_warning(
+                tt::LogAlways,
+                "===================================== L1-ACCUMULATE PROFILING "
+                "=====================================");
+            log_warning(
+                tt::LogAlways,
+                "Accumulate mode is for INTERNAL RUNTIME-TEAM use only and must NOT be used for general "
+                "profiling: key information such as program / op IDs is not recorded, and the per-op perf "
+                "report is disabled. Results are raw accumulated device zones only.");
+            log_warning(
+                tt::LogAlways,
+                "=================================================================================="
+                "=================");
+        }
+    }
+
     TracySetCpuTime(TracyGetCpuTime());
 
     static std::atomic<bool> firstInit = true;
