@@ -12,6 +12,7 @@ shards into one CSV per op. Sanity-assert only (no ULP threshold gating).
 from itertools import product
 
 import pytest
+from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
@@ -22,8 +23,6 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats
 from helpers.test_config import TestConfig
-
-from conftest import skip_for_coverage
 
 # Transcendental / approximated ops where HW accuracy is interesting.
 TRANSCENDENTAL_OPS = [
