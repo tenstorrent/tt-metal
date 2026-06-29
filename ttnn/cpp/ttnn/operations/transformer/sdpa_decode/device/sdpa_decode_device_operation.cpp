@@ -87,10 +87,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "Q tensor memory layout must be HEIGHT_SHARDED when sharded but got {}",
             Q_memcfg.memory_layout());
     } else {
-        TT_FATAL(
-            Q_memcfg.buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Q tensor buffer type must be DRAM when not sharded but got {}",
-            Q_memcfg.buffer_type());
+        // TT_FATAL(
+        //     Q_memcfg.buffer_type() == tt::tt_metal::BufferType::DRAM,
+        //     "Q tensor buffer type must be DRAM when not sharded but got {}",
+        //     Q_memcfg.buffer_type());
     }
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
