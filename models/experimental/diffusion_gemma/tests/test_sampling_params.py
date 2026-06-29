@@ -119,3 +119,30 @@ def test_canvas_sample_from_params_defaults_to_permuted_vocab_rng(monkeypatch):
     assert out == "samples"
     assert calls["noise"] == (_FakeLogits.shape, "mesh", 47472)
     assert calls["sample"] == (logits, 0.7, "permuted-gumbel")
+
+
+def test_canvas_sample_from_params_can_use_raw_rng_for_diagnostics(monkeypatch):
+    calls = {}
+
+    def fake_raw_noise(shape, *, device, seed):
+        calls["noise"] = (shape, device, seed)
+        return "raw-gumbel"
+
+    def fake_canvas_sample(logits, temperature, gumbel_noise):
+        calls["sample"] = (logits, temperature, gumbel_noise)
+        return "samples"
+
+    monkeypatch.setattr(TS, "sample_gumbel_noise", fake_raw_noise)
+    monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
+
+    logits = _FakeLogits()
+    out = canvas_sample_from_params(
+        logits,
+        {"temperature": 0.7, "seed": 47472},
+        default_temperature=0.8,
+        use_vocab_permuted_noise=False,
+    )
+
+    assert out == "samples"
+    assert calls["noise"] == (_FakeLogits.shape, "mesh", 47472)
+    assert calls["sample"] == (logits, 0.7, "raw-gumbel")
