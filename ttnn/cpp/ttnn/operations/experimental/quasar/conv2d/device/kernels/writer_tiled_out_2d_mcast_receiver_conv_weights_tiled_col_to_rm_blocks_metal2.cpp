@@ -9,7 +9,7 @@
 //   - CB-index CTAs -> dfb:: tokens (weights / bias / act_second_reader / act_sharded / reader_indices)
 //   - weights mcast semaphore-id RTAs -> sem::weights_mcast_sender / sem::weights_mcast_receiver
 //   - remaining positional CTAs -> get_arg(args::name); remaining RTAs -> get_arg(args::name)
-//   - experimental::CB -> DataflowBuffer; get_tile_size(cb) -> cb.get_entry_size()
+//   - DataflowBuffer -> DataflowBuffer; get_tile_size(cb) -> cb.get_entry_size()
 //
 // SCOPE: split_reader_cb_shared (the side-channel-semaphore second-writer overlap) is DROPPED.
 // The Metal 2.0 sharded factory TT_FATAL-rejects split_reader_cb_shared on the host, so this fork
@@ -70,7 +70,7 @@ void kernel_main() {
     DataflowBuffer cb_bias_obj(dfb::bias);
 #endif
 #ifdef SPLIT_READER
-    experimental::CB cb_act_second_obj(dfb::act_second_reader);
+    DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     DataflowBuffer cb_reader_indices_obj(dfb::reader_indices);
     DataflowBuffer cb_sharded_act_obj(dfb::act_sharded);
 #endif
