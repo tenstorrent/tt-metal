@@ -90,7 +90,7 @@
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_h2d_socket_sync" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -v -k "not performance and not test_h2d_socket_sync" --timeout=600'
   skus:
     bh_p100:
       timeout: 35
