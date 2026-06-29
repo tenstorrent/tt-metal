@@ -739,6 +739,9 @@ def generate_from_prompt_tokens(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
+    _validate_position_span(prompt_len, 1, name="prefill prompt_len")
+    if prompt_len != prompt_tokens.shape[1]:
+        raise ValueError("prefill prompt_len must match prompt_tokens length")
     logits_fn = _resolve_generation_logits_fn(
         tt_model,
         logits_fn,

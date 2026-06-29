@@ -597,6 +597,45 @@ def test_generate_from_prompt_tokens_can_build_logits_after_prefill():
     assert calls[2][0:3] == ("blocks", "model", "built-logits")
 
 
+def test_generate_from_prompt_tokens_rejects_prefill_prompt_len_mismatch_before_blocks():
+    prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+
+    def fail_blocks(*args, **kwargs):
+        raise AssertionError("blocks should not run for a bad prefill length")
+
+    with pytest.raises(ValueError, match="prefill prompt_len"):
+        generate_from_prompt_tokens(
+            "model",
+            "logits",
+            prompt_tokens,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            prefill_fn=lambda *args, **kwargs: 3,
+            blocks_fn=fail_blocks,
+        )
+
+
+@pytest.mark.parametrize("prompt_len", [4.0, True])
+def test_generate_from_prompt_tokens_rejects_non_integer_prefill_prompt_len(prompt_len):
+    prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+
+    def fail_blocks(*args, **kwargs):
+        raise AssertionError("blocks should not run for a bad prefill length")
+
+    with pytest.raises(ValueError, match="prefill prompt_len"):
+        generate_from_prompt_tokens(
+            "model",
+            "logits",
+            prompt_tokens,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn="init",
+            prefill_fn=lambda *args, **kwargs: prompt_len,
+            blocks_fn=fail_blocks,
+        )
+
+
 def test_generate_from_prompt_tokens_allows_zero_blocks_without_logits():
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
 
