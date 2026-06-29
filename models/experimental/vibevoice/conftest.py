@@ -60,3 +60,25 @@ def vibevoice_model_weights(model_location_generator):
 @pytest.fixture(scope="session")
 def model_path(vibevoice_model_weights):
     return vibevoice_model_weights
+
+
+@pytest.fixture(scope="module")
+def vv_config(model_path):
+    """VibeVoice model config loaded from session weights path."""
+    from models.experimental.vibevoice.tt.vibevoice_config import load_vibevoice_model_config
+
+    return load_vibevoice_model_config(model_path)
+
+
+@pytest.fixture(scope="module")
+def lm_state(model_path):
+    """LM submodule state dict remapped for TT transformers."""
+    from models.experimental.vibevoice.tt.load_weights import (
+        load_vibevoice_state_dict,
+        remap_lm_keys_to_tt_transformers,
+        split_submodule_weights,
+    )
+
+    full_sd = load_vibevoice_state_dict(model_path)
+    sub = split_submodule_weights(full_sd)
+    return remap_lm_keys_to_tt_transformers(sub["lm"])
