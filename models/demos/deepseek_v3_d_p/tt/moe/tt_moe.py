@@ -325,24 +325,16 @@ class TtMoe(LightweightModule):
             self.sd_manager_id = mesh_device.create_sub_device_manager([dm_sd, compute_sd], 0)
             self.dm_sd_id = ttnn.SubDeviceId(0)
             self.compute_sd_id = ttnn.SubDeviceId(1)
-            # Stash the CoreRangeSet of the compute sub-device so TtSharedExpert can build
-            # sub-device-confined shard_specs in Python without a C++ worker_cores binding.
-            self.compute_sd_cores = compute_cores
             logger.debug(
                 f"Sub-devices: grid={grid_x}x{grid_y}, dm=rows[0,{dm_sd_rows}), " f"compute=rows[{dm_sd_rows},{grid_y})"
             )
 
-            # Global semaphore for overlapping the routed expert with the combine.
-            self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
-                mesh_device, dm_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
-            )
-        else:
-            self.sd_manager_id = None
-            self.dm_sd_id = None
-            self.compute_sd_id = None
-            self.compute_sd_cores = None
+            # Global semaphore is only needed for overlapping the routed expert with the combine.
             self.routed_expert_global_semaphore = None
-            logger.debug("Sub-devices disabled: overlapped ops will run sequentially")
+            if overlap_routed_expert_with_combine:
+                self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
+                    mesh_device, dm_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
+                )
 
         # Initialize dispatch module (row axis: axis 0)
         self.dispatch_module = TtDispatchModule(
@@ -358,7 +350,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            subdevice_id=self.dm_sd_id,
+            subdevice_id=self.dm_sd_id if self.overlap_shared_expert_with_dispatch else None,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -373,8 +365,8 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             init_zeros=False,
-            subdevice_id=self.dm_sd_id,
-            global_semaphore=self.routed_expert_global_semaphore,
+            subdevice_id=self.dm_sd_id if self.overlap_routed_expert_with_combine else None,
+            global_semaphore=self.routed_expert_global_semaphore if self.overlap_routed_expert_with_combine else None,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -408,7 +400,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            subdevice_id=self.compute_sd_id,
+            subdevice_id=self.compute_sd_id if self.overlap_routed_expert_with_combine else None,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -423,8 +415,7 @@ class TtMoe(LightweightModule):
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
-            subdevice_id=self.compute_sd_id,
-            subdevice_cores=self.compute_sd_cores,
+            subdevice_id=self.compute_sd_id if self.overlap_shared_expert_with_dispatch else None,
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
