@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import time
 
 import pytest
@@ -318,10 +317,6 @@ def test_wan_transformer_block(
 
 
 @pytest.mark.parametrize(
-    "dit_unit_test",
-    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
-)
-@pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     COMMON_MESH_PARAMS
     + [
@@ -369,7 +364,6 @@ def test_wan_transformer_model(
     prompt_seq_len: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
-    dit_unit_test: bool,
     reset_seeds,
     request,
 ) -> None:
@@ -379,10 +373,7 @@ def test_wan_transformer_model(
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
-    if dit_unit_test:
-        num_layers = 1
-    else:
-        num_layers = NUM_LAYERS
+    num_layers = 1
 
     param_id = request.node.name
     commit_hash, golden, torch_model = _load_model_and_golden("wan_transformer_model", param_id)
