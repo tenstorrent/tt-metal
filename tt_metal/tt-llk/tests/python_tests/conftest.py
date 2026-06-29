@@ -414,8 +414,11 @@ def pytest_configure(config):
 def pytest_ignore_collect(collection_path, config):
     # Skip collecting the quasar/ dir on non-quasar arch — those tests are
     # deselected there anyway, so there's no need to collect them.
-    if get_chip_architecture() != ChipArchitecture.QUASAR:
-        return "quasar" in collection_path.parts
+    if (
+        get_chip_architecture() != ChipArchitecture.QUASAR
+        and "quasar" in collection_path.parts
+    ):
+        return True
     return None
 
 
