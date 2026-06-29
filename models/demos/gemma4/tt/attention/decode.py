@@ -234,12 +234,16 @@ def decode_forward(
     # the SDPA op falls back to the full device grid, which exceeds 64 cores
     # on Blackhole (>=110 cores) when num_kv_heads is small. The struct's
     # default max_cores_per_head_batch=16 caps the per-head reduction tree.
-    if config.head_dim >= 512:
-        # Global layers: smaller grid — head_dim=512 needs more L1 per core.
+    # Batched Q is height-sharded row-major across the device grid (one user per
+    # core), so the SDPA grid must cover those cores — an 8-wide grid would miss
+    # users on columns 8..10 of an 11-wide Blackhole grid and corrupt the output.
+    batch_size = tt_q.shape[1]
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    if config.head_dim >= 512 and batch_size == 1:
+        # Single-user global layers: smaller grid — head_dim=512 needs more L1 per core.
         sdpa_grid = ttnn.CoreCoord(8, 4)
     else:
-        # Sliding layers: use the full device compute grid.
-        device_grid = mesh_device.compute_with_storage_grid_size()
+        # Sliding layers, and all batched decode: use the full device compute grid.
         sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
 
     sdpa_program_config = ttnn.SDPAProgramConfig(
