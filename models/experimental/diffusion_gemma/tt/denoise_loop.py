@@ -191,13 +191,19 @@ def denoise_block(
         temperature = temperature_at_step(
             step, config.max_denoise_steps, config.temperature_start, config.temperature_end
         )
+        gumbel_noise = gumbel_noise_fn(step) if gumbel_noise_fn else None
+        noise_tokens = noise_tokens_fn(step) if noise_tokens_fn else None
         res = denoise_step(
             logits_fn(canvas, step),
             temperature=temperature,
             entropy_budget=config.entropy_budget,
-            gumbel_noise=gumbel_noise_fn(step) if gumbel_noise_fn else None,
-            noise_tokens=noise_tokens_fn(step) if noise_tokens_fn else None,
+            gumbel_noise=gumbel_noise,
+            noise_tokens=noise_tokens,
         )
+        if gumbel_noise is not None:
+            gumbel_noise.deallocate(True)
+        if noise_tokens is not None:
+            noise_tokens.deallocate(True)
 
         argmax = _ids_to_torch(res.argmax)
         entropy = _entropy_to_torch(res.entropy)
