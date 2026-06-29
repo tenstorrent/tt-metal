@@ -62,7 +62,7 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::
 }
 
 std::pair<int, int> get_cpu_cores_for_dispatch_threads(
-    ContextId context_id,
+    tt::tt_metal::MetalEnvImpl& env,
     int mmio_controlled_device_id,
     const std::unordered_map<int, std::vector<uint32_t>>& cpu_cores_per_numa_node,
     std::unordered_set<uint32_t>& free_cores,
@@ -72,9 +72,7 @@ std::pair<int, int> get_cpu_cores_for_dispatch_threads(
     int core_assigned_to_device_completion_queue_reader = 0;
     uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
     // Get NUMA node that the current device is mapped to through UMD
-    int numa_node_for_device = tt::tt_metal::MetalContext::instance(context_id)
-                                   .get_cluster()
-                                   .get_numa_node_for_device(mmio_controlled_device_id);
+    int numa_node_for_device = env.get_cluster().get_numa_node_for_device(mmio_controlled_device_id);
 
     if (numa_available() != -1 and cpu_cores_per_numa_node.contains(numa_node_for_device)) {
         // NUMA node reported by UMD exists on host. Choose a core on this numa-node using round robin policy
@@ -129,15 +127,14 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 }
 
 std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
-    ContextId context_id,
+    tt::tt_metal::MetalEnvImpl& env,
     const uint8_t num_hw_cqs,
     std::unordered_map<uint32_t, uint32_t>& completion_queue_reader_to_cpu_core_map) {
     std::vector<ChipId> device_ids;
-    for (ChipId device_id : tt::tt_metal::MetalContext::instance(context_id).get_cluster().all_chip_ids()) {
+    for (ChipId device_id : env.get_cluster().all_chip_ids()) {
         device_ids.emplace_back(device_id);
     }
-    bool use_numa_node_based_thread_binding =
-        tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_numa_based_affinity();
+    bool use_numa_node_based_thread_binding = env.get_rtoptions().get_numa_based_affinity();
     std::unordered_set<uint32_t> free_cores = {};
     uint32_t num_online_processors = sysconf(_SC_NPROCESSORS_ONLN);
     constexpr uint32_t max_num_procs_per_device = 2;
@@ -151,7 +148,7 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
         for (const auto& device_id : device_ids) {
             auto [worker_thread_core, completion_queue_reader_core] =
                 device_cpu_allocator::get_cpu_cores_for_dispatch_threads(
-                    context_id,
+                    env,
                     device_id,
                     cpu_cores_per_numa_node,
                     free_cores,
@@ -203,7 +200,7 @@ void DeviceManager::initialize(
     initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
 
     worker_thread_to_cpu_core_map_ = device_cpu_allocator::get_device_id_to_core_map(
-        this->ctx_.get_context_id(), num_hw_cqs_, completion_queue_reader_to_cpu_core_map_);
+        env_impl_, num_hw_cqs_, completion_queue_reader_to_cpu_core_map_);
 
     l1_bank_remap_.assign(descriptor_->l1_bank_remap().begin(), descriptor_->l1_bank_remap().end());
 
