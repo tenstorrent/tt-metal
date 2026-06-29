@@ -106,15 +106,7 @@ def _short_hardware_label(card_type: str) -> str:
         return "N300"
     if "n150" in ct or "1 device" in ct:
         return "N150"
-    # Distinguish the blackhole boards (card_type is e.g. "blackhole (p150b)",
-    # "blackhole (p100a)", "blackhole (P300)") instead of collapsing to "BH".
-    if "p100" in ct:
-        return "P100a"
-    if "p300" in ct:
-        return "P300a"
-    if "p150" in ct:
-        return "P150b"
-    if "blackhole" in ct:
+    if "blackhole" in ct or "p150b" in ct:
         return "BH"
     if "galaxy" in ct:
         return "Galaxy"
