@@ -513,6 +513,25 @@ def test_generate_from_prompt_tokens_rejects_empty_prompt_tokens_before_zero_blo
         )
 
 
+@pytest.mark.parametrize(
+    ("prompt_tokens", "message"),
+    [
+        (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+    ],
+)
+def test_generate_from_prompt_tokens_rejects_invalid_token_ids_before_zero_block_fast_path(prompt_tokens, message):
+    with pytest.raises(ValueError, match=message):
+        generate_from_prompt_tokens(
+            "model",
+            None,
+            prompt_tokens,
+            num_blocks=0,
+            config=DiffusionConfig(canvas_length=4),
+            prefill_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
     with pytest.raises(ValueError, match="either logits_fn or logits_fn_builder"):
         generate_from_prompt_tokens(
@@ -1717,6 +1736,18 @@ def test_tokenize_prompt_uses_callable_tokenizer_without_chat_template():
 
 def test_tokenize_prompt_accepts_existing_token_tensor():
     assert torch.equal(tokenize_prompt(object(), torch.tensor([1, 2, 3], dtype=torch.int32)), torch.tensor([[1, 2, 3]]))
+
+
+@pytest.mark.parametrize(
+    ("token_ids", "message"),
+    [
+        (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integers"),
+        (torch.tensor([[1, -2]], dtype=torch.int32), "non-negative"),
+    ],
+)
+def test_tokenize_prompt_rejects_invalid_token_ids(token_ids, message):
+    with pytest.raises(ValueError, match=message):
+        tokenize_prompt(object(), token_ids)
 
 
 def test_prefill_prompt_tokens_embeds_and_writes_kv(monkeypatch):

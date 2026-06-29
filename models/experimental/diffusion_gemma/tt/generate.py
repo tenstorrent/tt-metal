@@ -104,13 +104,18 @@ def _as_prompt_token_tensor(input_ids) -> torch.Tensor:
     if isinstance(input_ids, dict):
         input_ids = input_ids["input_ids"]
     if isinstance(input_ids, torch.Tensor):
-        tokens = input_ids.to(torch.long)
+        tokens = input_ids
     else:
-        tokens = torch.tensor(input_ids, dtype=torch.long)
+        tokens = torch.as_tensor(input_ids)
+    if tokens.dtype == torch.bool or torch.is_floating_point(tokens) or torch.is_complex(tokens):
+        raise ValueError("prompt token ids must be integers")
+    tokens = tokens.to(torch.long)
     if tokens.dim() == 1:
         tokens = tokens.unsqueeze(0)
     if tokens.dim() != 2:
         raise ValueError("prompt token ids must have shape [batch, seq_len]")
+    if torch.any(tokens < 0).item():
+        raise ValueError("prompt token ids must be non-negative")
     return tokens
 
 
@@ -490,12 +495,16 @@ def _validate_batch_size(batch_size: int) -> None:
 
 
 def _validate_prompt_tokens(prompt_tokens: torch.Tensor) -> None:
+    if prompt_tokens.dtype == torch.bool or torch.is_floating_point(prompt_tokens) or torch.is_complex(prompt_tokens):
+        raise ValueError("prompt_tokens must contain integer token ids")
     if prompt_tokens.dim() != 2:
         raise ValueError("prompt_tokens must have shape [batch, seq_len]")
     if prompt_tokens.shape[0] <= 0:
         raise ValueError("prompt_tokens batch size must be positive")
     if prompt_tokens.shape[1] <= 0:
         raise ValueError("prompt_tokens length must be positive")
+    if torch.any(prompt_tokens < 0).item():
+        raise ValueError("prompt_tokens must be non-negative")
 
 
 def _validate_committed_block_shape(committed: torch.Tensor, *, batch_size: int, canvas_length: int) -> None:
