@@ -69,8 +69,8 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-    // Common runtime args (uniform across all cores, updated between dispatches)
-    const address_t input_tensor_address = get_common_arg_val<address_t>(0);
+    // Common runtime args (uniform across all cores, updated between dispatches). Index 0 (input addr)
+    // is part of the shared CRTA layout but unused by the writer (it reads/writes the output buffer).
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
     const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
