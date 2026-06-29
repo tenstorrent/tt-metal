@@ -307,7 +307,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
-    if (MetalEnvAccessor(*env_).impl().get_rtoptions().get_watcher_enabled()) {
+    if (MetalEnvAccessor(*env_).impl().get_rtoptions().get_watcher_enabled() && context_->watcher_server()) {
         watcher_lock = context_->watcher_server()->get_lock();
     }
     for (uint32_t y = 0; y < logical_grid_size().y; y++) {
