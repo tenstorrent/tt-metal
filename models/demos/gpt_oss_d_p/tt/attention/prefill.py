@@ -178,7 +178,7 @@ def prefill_forward(
             [mesh_config.sp_axis],
             [neighbor_sem],
             [barrier_sem],
-            num_links=[ccl_manager.num_links],
+            num_links=[1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -202,7 +202,7 @@ def prefill_forward(
             [mesh_config.sp_axis],
             [neighbor_sem],
             [barrier_sem],
-            num_links=[ccl_manager.num_links],
+            num_links=[1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
