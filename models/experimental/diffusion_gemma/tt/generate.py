@@ -73,6 +73,15 @@ def _validate_nonnegative_integer_token_tensor(tokens: torch.Tensor, *, name: st
         raise ValueError(f"{name} must fit int32 device token buffers")
 
 
+def _validate_position_span(start_pos: int, length: int, *, name: str) -> None:
+    if start_pos < 0:
+        raise ValueError(f"{name} must be non-negative")
+    if length <= 0:
+        return
+    if start_pos + length - 1 > torch.iinfo(torch.int32).max:
+        raise ValueError(f"{name} span must fit int32 device positions")
+
+
 def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
     """Move host canvas token ids ``[batch, canvas_len]`` to W3 device layout."""
     _validate_nonnegative_integer_token_tensor(
@@ -460,6 +469,7 @@ def commit_canvas_tokens(
         raise ValueError("canvas_tokens must have shape [batch, canvas_len]")
     if canvas_tokens.shape[0] != 1:
         raise NotImplementedError("commit_canvas_tokens currently supports batch=1")
+    _validate_position_span(start_pos, canvas_tokens.shape[1], name="start_pos")
 
     for offset in range(canvas_tokens.shape[1]):
         token = canvas_tokens[:, offset]
@@ -604,6 +614,7 @@ def generate_blocks(
     _validate_num_blocks(num_blocks)
     _validate_canvas_length(config)
     _validate_batch_size(batch_size)
+    _validate_position_span(prompt_len, num_blocks * config.canvas_length, name="prompt_len")
     init_canvas_fn = _resolve_init_canvas_fn(num_blocks, init_canvas_fn)
     next_pos = prompt_len
     committed_blocks: list[torch.Tensor] = []

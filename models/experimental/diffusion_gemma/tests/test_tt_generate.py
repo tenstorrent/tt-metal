@@ -9,6 +9,7 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 from models.experimental.diffusion_gemma.tt import generate as G
 from models.experimental.diffusion_gemma.tt.generate import (
     GeneratedBlock,
+    commit_canvas_tokens,
     decode_generation,
     denoise_and_commit_block,
     generate_blocks,
@@ -137,6 +138,26 @@ def test_denoise_and_commit_block_rejects_bad_committed_shape_before_commit():
         )
 
 
+@pytest.mark.parametrize(
+    ("start_pos", "message"),
+    [
+        (-1, "start_pos"),
+        (torch.iinfo(torch.int32).max, "fit int32"),
+    ],
+)
+def test_commit_canvas_tokens_rejects_bad_position_before_model_call(start_pos, message):
+    class _FailModel:
+        def prepare_inputs_decode(self, *args, **kwargs):
+            raise AssertionError("prepare_inputs_decode should not run for invalid positions")
+
+    with pytest.raises(ValueError, match=message):
+        commit_canvas_tokens(
+            _FailModel(),
+            torch.tensor([[7, 8]], dtype=torch.long),
+            start_pos=start_pos,
+        )
+
+
 def test_generate_blocks_advances_position_and_concatenates_commits():
     calls = []
 
@@ -209,6 +230,26 @@ def test_generate_blocks_rejects_non_positive_canvas_length():
             num_blocks=1,
             config=DiffusionConfig(canvas_length=0),
             init_canvas_fn=lambda *args: "canvas",
+        )
+
+
+@pytest.mark.parametrize(
+    ("prompt_len", "message"),
+    [
+        (-1, "prompt_len"),
+        (torch.iinfo(torch.int32).max, "fit int32"),
+    ],
+)
+def test_generate_blocks_rejects_bad_prompt_position_span(prompt_len, message):
+    with pytest.raises(ValueError, match=message):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=prompt_len,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=2),
+            init_canvas_fn=lambda *args: "canvas",
+            block_fn=lambda *args, **kwargs: None,
         )
 
 
