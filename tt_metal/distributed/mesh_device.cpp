@@ -938,6 +938,10 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
         mesh_command_queues_.clear();
 
+        // Defer RT profiler shutdown via a hook that close_devices runs *after* dispatch
+        // teardown (which issues the final TERMINATE) but before the rest of device teardown,
+        // so the push kernel, receiver thread, and callbacks are still alive to capture the
+        // last program's record.
         if (realtime_profiler_) {
             MetalContext::instance(this->get_context_id())
                 .device_manager()
