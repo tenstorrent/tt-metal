@@ -5,12 +5,12 @@
 """
 Single-forward parity check for the in-process DiffusionDrive TTNN agent.
 
-Run in the ``navsim310`` conda env (torch 2.0.1) to confirm the on-device stack
+Run in the ``navsim`` conda env (torch 2.0.1) to confirm the on-device stack
 still matches the PyTorch reference under that env *before* committing to a full
 PDM eval.  Mirrors ``tests/pcc/test_pcc_stage4.py`` but exercises the in-process
 AGENT and the real checkpoint (latent=False) — i.e. the deployed eval config.
 
-  conda activate "$NAVSIM_CONDA_ENV"   # machine-specific env name; default navsim310
+  conda activate navsim
   PYTHONPATH="$TT_METAL_HOME:$NAVSIM_DEVKIT_ROOT" \
     python models/demos/diffusion_drive/scripts/navsim_inproc/check_parity.py \
       --checkpoint "$DD_CHECKPOINT_PATH" \
