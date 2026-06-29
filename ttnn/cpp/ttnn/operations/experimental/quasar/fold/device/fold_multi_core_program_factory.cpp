@@ -18,7 +18,7 @@ namespace ttnn::operations::experimental::quasar {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts Fold::MultiCore::create_program_spec(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -154,7 +154,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
     run_args.tensor_args.insert({INPUT, input});
     run_args.tensor_args.insert({OUTPUT, output});
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::experimental::quasar

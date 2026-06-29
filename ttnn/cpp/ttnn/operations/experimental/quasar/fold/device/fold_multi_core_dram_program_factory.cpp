@@ -30,7 +30,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace {
 
-ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
+ttnn::device_operation::ProgramSpecArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
 
@@ -253,10 +253,10 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     run_args.tensor_args.insert({INPUT, input_tensor.mesh_tensor()});
     run_args.tensor_args.insert({OUTPUT, output.mesh_tensor()});
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
+ttnn::device_operation::ProgramSpecArtifacts fold_multi_core_row_major_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
 
@@ -445,12 +445,12 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     run_args.tensor_args.insert({INPUT, input_tensor.mesh_tensor()});
     run_args.tensor_args.insert({OUTPUT, output.mesh_tensor()});
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts Fold::MultiCoreDRAMFold::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts Fold::MultiCoreDRAMFold::create_program_spec(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {

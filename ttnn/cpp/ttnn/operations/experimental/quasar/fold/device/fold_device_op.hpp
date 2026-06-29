@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/program_spec_artifacts.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -29,14 +29,14 @@ struct Fold {
     using tensor_return_value_t = Tensor;
 
     struct MultiCore {
-        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
     };
 
     struct MultiCoreDRAMFold {
-        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
