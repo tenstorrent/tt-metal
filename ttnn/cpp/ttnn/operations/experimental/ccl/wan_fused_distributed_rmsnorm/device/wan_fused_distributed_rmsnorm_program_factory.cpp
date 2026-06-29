@@ -173,11 +173,14 @@ bool decide_block_major_post(
     bool has_weight,
     bool has_bias,
     bool fuse_rope,
+    bool is_layernorm,
     uint64_t l1_cap_bytes) {
     const uint32_t padded = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
     // Whole-row CBs that the block-major layout collapses to O(block_size):
-    uint64_t whole_row = static_cast<uint64_t>(padded) * intermediate_tile_bytes;             // intermediate_cb
-    whole_row += fuse_rope ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;  // rotated_input_cb
+    uint64_t whole_row = static_cast<uint64_t>(padded) * intermediate_tile_bytes;  // intermediate_cb
+    // rotated_input_cb is whole-row for RoPE; LayerNorm always uses it as the
+    // (x-mean) xmm buffer, so it's whole-row there too (RMS no-rope leaves it tiny).
+    whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
     whole_row += 2ull * padded * output_tile_bytes;                                           // output_cb (2 rows)
     whole_row += has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;          // weight_cb (bf16)
     whole_row += has_bias ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;            // bias_cb (bf16)
@@ -527,6 +530,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     //    output, head-local CBs). No streaming needed (input stays resident through
     //    PRE+POST), so it engages on per_head_norm directly. per_head_norm forces
     //    is_tp_1, so there's no fabric/AG ordering to worry about.
+    // Welford LayerNorm runs a dedicated compute kernel. Wide shards use the same
+    // streaming-input (Welford PRE re-reads the row) + block-major POST machinery
+    // as RMS; the reader's defer_input (block_major && is_tp_1 && streaming) keeps
+    // the no-AG path from deadlocking. per_head_norm LayerNorm is not supported.
+    const bool is_layernorm = (args.norm_type == WanFusedNormType::LAYERNORM);
+    if (is_layernorm) {
+        TT_FATAL(!args.per_head_norm, "LayerNorm does not support per_head_norm (block-major head-major path)");
+    }
     const uint64_t l1_cap_bytes = static_cast<uint64_t>(device->l1_size_per_core()) - 112640ull;
     const bool overflows_resident_post = decide_block_major_post(
         num_tile_cols,
@@ -536,19 +547,22 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         has_weight,
         has_bias,
         fuse_rope,
+        is_layernorm,
         l1_cap_bytes);
-    const bool block_major_post = overflows_resident_post && (streaming_input || args.per_head_norm);
-    // Whole-row block-major streams input; per_head_norm block-major keeps it resident.
-    const bool streaming_low_l1 = streaming_input;
-
-    // Welford LayerNorm runs a dedicated compute kernel. Wide shards use the same
-    // streaming-input (Welford PRE re-reads the row) + block-major POST machinery
-    // as RMS; the reader's defer_input (block_major && is_tp_1 && streaming) keeps
-    // the no-AG path from deadlocking. per_head_norm LayerNorm is not supported.
-    const bool is_layernorm = (args.norm_type == WanFusedNormType::LAYERNORM);
-    if (is_layernorm) {
-        TT_FATAL(!args.per_head_norm, "LayerNorm does not support per_head_norm (block-major head-major path)");
-    }
+    // When the resident POST overflows, the whole-row path MUST stream (block-major
+    // re-reads input pass 1), so force streaming even if the input alone would fit
+    // (decide_streaming_low_l1 false). Then block-major engages on the overflow.
+    const bool streaming_low_l1 = streaming_input || (overflows_resident_post && !args.per_head_norm);
+    const bool block_major_post = overflows_resident_post && (streaming_low_l1 || args.per_head_norm);
+    // TP>1 wide LayerNorm (streaming input 2-pass + block-major POST + fabric AG)
+    // currently deadlocks — the reader's 2nd-pass push races the ring gather. Reject
+    // it cleanly (a clear error, not a hang) until that interaction is debugged.
+    // is_tp_1 wide LayerNorm (no AG) works; TP>1 LayerNorm works while resident.
+    TT_FATAL(
+        !(is_layernorm && block_major_post && use_mux),
+        "wide-shard LayerNorm at TP>1 (streaming + all-gather) is not yet supported; "
+        "use a higher TP so the shard fits resident. num_tile_cols={}",
+        num_tile_cols);
     // Clamp to a single resident row for (a) per-head RoPE — its cos/sin CBs are
     // chunk*num_tile_cols fp32 tiles (overflow L1 at feat>=1024) and the compute
     // deadlocks at chunk>=2 with many rows; and (b) the streaming-low-L1 path,
@@ -652,7 +666,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // so the CB just needs enough depth for the reader to run a few blocks
     // ahead of compute within each pass.
     const uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
-    constexpr uint32_t kStreamingInputBlocks = 4u;
+    // Shallower streaming depth on the AG path (use_mux): the per-shard stats +
+    // ring-gather + combine CBs consume L1 that the is_tp_1 path doesn't, so a
+    // streamed wide TP>1 shard (LayerNorm) would overflow at depth 4. Depth 2 is
+    // still double-buffered (reader one block ahead). RMS TP>1 shapes fit resident
+    // (never stream), so this only affects wide TP>1 LayerNorm.
+    const uint32_t kStreamingInputBlocks = use_mux ? 2u : 4u;
     const uint32_t input_cb_tiles =
         streaming_low_l1 ? (kStreamingInputBlocks * block_size) : (kInputCbChunks * chunk_input_tiles);
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
