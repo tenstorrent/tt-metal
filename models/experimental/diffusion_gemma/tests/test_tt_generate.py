@@ -158,6 +158,23 @@ def test_commit_canvas_tokens_rejects_bad_position_before_model_call(start_pos, 
         )
 
 
+@pytest.mark.parametrize(
+    ("canvas_tokens", "message"),
+    [
+        (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
+    ],
+)
+def test_commit_canvas_tokens_rejects_invalid_token_ids_before_model_call(canvas_tokens, message):
+    class _FailModel:
+        def prepare_inputs_decode(self, *args, **kwargs):
+            raise AssertionError("prepare_inputs_decode should not run for invalid canvas tokens")
+
+    with pytest.raises(ValueError, match=message):
+        commit_canvas_tokens(_FailModel(), canvas_tokens, start_pos=0)
+
+
 def test_generate_blocks_advances_position_and_concatenates_commits():
     calls = []
 
@@ -309,6 +326,35 @@ def test_generate_blocks_rejects_bad_committed_shape(committed):
         )
 
     with pytest.raises(ValueError, match="block.committed"):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn=lambda *args: "canvas",
+            block_fn=bad_block,
+        )
+
+
+@pytest.mark.parametrize(
+    ("committed", "message"),
+    [
+        (torch.tensor([[1.5, 2.0, 3.0, 4.0]], dtype=torch.float32), "integer token ids"),
+        (torch.tensor([[1, -2, 3, 4]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1, 3, 4]], dtype=torch.long), "fit int32"),
+    ],
+)
+def test_generate_blocks_rejects_invalid_committed_token_ids(committed, message):
+    def bad_block(tt_model, logits_fn, init_canvas, config, **kwargs):
+        trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
+        return GeneratedBlock(
+            committed=committed,
+            next_pos=kwargs["start_pos"] + config.canvas_length,
+            trajectory=trajectory,
+        )
+
+    with pytest.raises(ValueError, match=message):
         generate_blocks(
             "model",
             "logits",

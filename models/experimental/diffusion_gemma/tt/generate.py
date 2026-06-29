@@ -465,8 +465,11 @@ def commit_canvas_tokens(
         page_table: Optional shared page table for the decode append path.
         page_tables_per_layer: Optional hybrid per-layer page tables.
     """
-    if canvas_tokens.dim() != 2:
-        raise ValueError("canvas_tokens must have shape [batch, canvas_len]")
+    _validate_nonnegative_integer_token_tensor(
+        canvas_tokens,
+        name="canvas_tokens",
+        shape_name="[batch, canvas_len]",
+    )
     if canvas_tokens.shape[0] != 1:
         raise NotImplementedError("commit_canvas_tokens currently supports batch=1")
     _validate_position_span(start_pos, canvas_tokens.shape[1], name="start_pos")
@@ -532,6 +535,11 @@ def _validate_committed_block_shape(committed: torch.Tensor, *, batch_size: int,
         raise ValueError("block.committed must have shape [batch, canvas_len]")
     if committed.shape != (batch_size, canvas_length):
         raise ValueError(f"block.committed must have shape [{batch_size}, {canvas_length}]")
+    _validate_nonnegative_integer_token_tensor(
+        committed,
+        name="block.committed",
+        shape_name="[batch, canvas_len]",
+    )
 
 
 def _empty_device_generation(batch_size: int, prompt_len: int, *, device=None) -> DeviceGeneration:
