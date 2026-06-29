@@ -339,7 +339,6 @@ ttnn/cpp/ttnn/operations/embedding_backward/ @tenstorrent/metalium-developers-op
 ttnn/cpp/ttnn/operations/embedding_backward/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/transformer/sdpa_decode/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/ @gwangTT @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/topk_large_indices/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/paged_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
