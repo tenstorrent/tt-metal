@@ -80,4 +80,5 @@ strip_ts() {
 } | sort | uniq -c | sort -rn \
   | awk 'NR<=10 { count=$1; $1=""; printf "  %4dx  %s\n", count, substr($0,2) }
          END    { if (NR==0) print "  None"
-                  else if (NR>10) printf "  ... and %d more\n", NR-10 }'
+                  else if (NR>10) printf "  ... and %d more\n", NR-10 }' \
+  || true
