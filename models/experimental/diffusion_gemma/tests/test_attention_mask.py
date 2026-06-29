@@ -1,14 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU unit tests for the canvas denoise attention-mask geometry (#47462).
-
-Pure torch. The canonical DiffusionGemma decoder is **fully bidirectional for
-every layer type** (modeling_diffusion_gemma.py:1399-1438) — the local window
-shapes offsets, not visibility — so the denoise mask is all-attend. The
-``local_window=True`` bake is non-canonical (exercises the ttnn SDPA windowed-mask
-path only) and is tested as such.
-"""
+"""CPU unit tests for the canvas denoise attention-mask geometry (#47462)."""
 
 import torch
 
@@ -29,10 +22,46 @@ def test_canvas_positions_offset_by_prompt_len():
 
 
 def test_denoise_mask_is_fully_bidirectional_by_default():
-    # Canonical: BOTH full and sliding layers attend fully to prompt + canvas.
     mask = build_canvas_denoise_mask(prompt_len=20, canvas_len=8)
     assert mask.shape == (8, 28)
-    assert torch.all(mask == 0)  # all-attend — no window gates visibility in the decoder
+    assert torch.all(mask == 0)
+
+
+def test_full_attention_layer_type_is_fully_bidirectional():
+    mask = build_canvas_denoise_mask(
+        prompt_len=20,
+        canvas_len=8,
+        layer_type="full_attention",
+        sliding_window=4,
+    )
+    assert torch.all(mask == 0)
+
+
+def test_sliding_attention_layer_type_windows_prompt_tail():
+    prompt_len, canvas_len, sliding_window = 10, 6, 4
+    attend = _attend(
+        build_canvas_denoise_mask(
+            prompt_len,
+            canvas_len,
+            layer_type="sliding_attention",
+            sliding_window=sliding_window,
+        )
+    )
+
+    q0 = prompt_len
+    assert not attend[0, q0 - sliding_window - 1]
+    assert attend[0, q0 - sliding_window]
+    assert attend[0, q0 + sliding_window]
+    assert not attend[0, q0 + sliding_window + 1]
+
+
+def test_sliding_attention_requires_window():
+    try:
+        build_canvas_denoise_mask(prompt_len=10, canvas_len=6, layer_type="sliding_attention")
+    except ValueError as exc:
+        assert "sliding_window must be positive" in str(exc)
+    else:
+        raise AssertionError("expected sliding_attention without sliding_window to fail")
 
 
 # --- below: the NON-canonical local_window bake (ttnn SDPA windowed-mask path only) ---

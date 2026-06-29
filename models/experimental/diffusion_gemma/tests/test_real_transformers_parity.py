@@ -21,6 +21,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.reference.self_conditioning import DiffusionGemmaRMSNorm, SelfConditioning
 
@@ -79,6 +80,45 @@ def test_stopping_confidence_matches_real_criterion():
     real_out = real(logits.argmax(dim=-1), logits)
     ours = S.token_entropy(logits).mean(dim=-1) < thresh
     assert torch.equal(ours, real_out)
+
+
+def test_canvas_denoise_mask_matches_real_bidirectional_layer_masks():
+    from transformers.models.diffusion_gemma.configuration_diffusion_gemma import DiffusionGemmaTextConfig
+    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import create_masks_for_generate
+
+    prompt_len, canvas_len, sliding_window, hidden = 10, 6, 4, 8
+    cfg = DiffusionGemmaTextConfig(
+        vocab_size=32,
+        hidden_size=hidden,
+        intermediate_size=16,
+        num_hidden_layers=2,
+        num_attention_heads=1,
+        num_key_value_heads=1,
+        head_dim=hidden,
+        layer_types=["sliding_attention", "full_attention"],
+        sliding_window=sliding_window,
+    )
+    cfg.is_causal = False
+    cfg._attn_implementation = "eager"
+
+    total_len = prompt_len + canvas_len
+    hf_masks = create_masks_for_generate(cfg, torch.zeros(1, total_len, hidden), None, None)
+
+    hf_sliding = hf_masks["sliding_attention"][0, 0, prompt_len:, :] == 0
+    ours_sliding = (
+        build_canvas_denoise_mask(
+            prompt_len,
+            canvas_len,
+            layer_type="sliding_attention",
+            sliding_window=sliding_window,
+        )
+        == 0
+    )
+    assert torch.equal(ours_sliding, hf_sliding)
+
+    # HF skips materializing an all-bidirectional mask for full layers.
+    assert hf_masks["full_attention"] is None
+    assert torch.all(build_canvas_denoise_mask(prompt_len, canvas_len, layer_type="full_attention") == 0)
 
 
 def test_real_denoising_step_uses_temperature_processed_logits_for_decisions():

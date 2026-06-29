@@ -8,20 +8,13 @@ by concatenating encoder K/V **in front of** the canvas K/V (prefix-style). So
 for canvas *queries* the key axis is ``[prompt (P) ; canvas (C)]`` of length
 ``P + C`` and the additive mask is ``[C, P + C]`` (0 = attend, -inf = masked).
 
-CANONICAL VISIBILITY (resolves plan.md §10 against the source): the DiffusionGemma
-decoder is **fully bidirectional for BOTH full-attention AND sliding layers** —
-``modeling_diffusion_gemma.py:1399-1438`` builds the decoder mask with
-``bidirectional_mask_function`` (``q_idx >= 0`` → always True) for every layer type
-and uses ``sliding_window`` only to shape offsets / the SDPA skip hint, NEVER to
-restrict visibility ("DiT module doesn't need a sliding mask and has to attend
-fully to prev context and itself"). So the denoise mask is **all-attend** — the
-local window does NOT gate which keys a canvas query sees.
+HF VISIBILITY: full-attention layers are fully bidirectional. Sliding layers use
+HF's ``sliding_window_bidirectional_overlay`` when ``prompt_len`` grows beyond the
+window, so they attend only keys with ``abs(q_idx - kv_idx) <= sliding_window``.
 
-:func:`build_canvas_denoise_mask` therefore returns an all-attend mask by default.
-The symmetric-window bake is kept behind ``local_window=True`` ONLY to exercise the
-ttnn SDPA windowed-mask path (``sliding_window_size`` and ``attn_mask`` are mutually
-exclusive, ``sdpa_device_operation.cpp:67-68``) — it is **not** the canonical
-denoise geometry and must not be used as the denoise oracle.
+:func:`build_canvas_denoise_mask` returns an all-attend mask by default for
+backwards compatibility and short-prompt tests. Pass ``layer_type="sliding_attention"``
+plus ``sliding_window`` to reproduce HF sliding-layer visibility.
 """
 
 from __future__ import annotations
@@ -38,6 +31,8 @@ def build_canvas_denoise_mask(
     prompt_len: int,
     canvas_len: int,
     *,
+    layer_type: str | None = None,
+    sliding_window: int | None = None,
     local_window: bool = False,
     window_half: int | None = None,
     inclusive: bool = True,
@@ -48,9 +43,11 @@ def build_canvas_denoise_mask(
 ) -> torch.Tensor:
     """Additive ``[canvas_len, prompt_len + canvas_len]`` mask for canvas queries.
 
-    Default (``local_window=False``) → **all-attend (zeros)** for every layer type,
-    matching the canonical fully-bidirectional decoder (see module docstring). This
-    is the denoise oracle.
+    Default (``local_window=False`` and ``layer_type is None``) → all-attend
+    (zeros), preserving the original short-prompt oracle behavior.
+
+    ``layer_type="full_attention"`` → all-attend. ``layer_type="sliding_attention"``
+    → HF-style bidirectional sliding visibility, requiring ``sliding_window``.
 
     ``local_window=True`` (NON-canonical, op-test only) → symmetric window of
     half-width ``window_half`` over absolute positions; ``inclusive`` toggles
@@ -68,8 +65,16 @@ def build_canvas_denoise_mask(
         allowed = dist <= window_half if inclusive else dist < window_half
         if prompt_fully_visible:
             allowed[:, :prompt_len] = True
-    else:
+    elif layer_type == "sliding_attention":
+        if sliding_window is None or sliding_window <= 0:
+            raise ValueError("sliding_window must be positive for sliding_attention")
+        q_abs = canvas_positions(prompt_len, canvas_len, device=device).unsqueeze(1)  # [C, 1]
+        k_abs = torch.arange(total_k, device=device).unsqueeze(0)  # [1, P+C]
+        allowed = (q_abs - k_abs).abs() <= sliding_window
+    elif layer_type in (None, "full_attention"):
         allowed = torch.ones(canvas_len, total_k, dtype=torch.bool, device=device)
+    else:
+        raise ValueError(f"unsupported layer_type {layer_type!r}")
 
     return torch.where(
         allowed, torch.zeros((), dtype=dtype, device=device), torch.full((), neg_inf, dtype=dtype, device=device)
