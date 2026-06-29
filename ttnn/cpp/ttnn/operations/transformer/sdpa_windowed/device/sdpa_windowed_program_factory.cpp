@@ -131,6 +131,14 @@ ProgramDescriptor WindowedScaledDotProductAttentionDeviceOperation::WindowedSDPA
         num_cores,
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
+    // fp32_dest_acc_en requires Float32 intermediate CBs, but they are currently
+    // hardcoded to Float16_b (Issue #13364). Enabling fp32 dest accumulation with
+    // Float16_b CBs causes a hardware UndefinedBehavior (tensix_movd2b mismatch).
+    TT_FATAL(
+        !fp32_dest_acc_en,
+        "fp32_dest_acc_en=True is not supported by windowed SDPA (Issue #13364): intermediate CBs are hardcoded to "
+        "Float16_b. Set fp32_dest_acc_en=False in WormholeComputeKernelConfig.");
+
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
     uint32_t batch_parallel_factor = std::min(B, num_cores);
