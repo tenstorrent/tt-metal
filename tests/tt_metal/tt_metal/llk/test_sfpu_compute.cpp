@@ -439,17 +439,19 @@ inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector
             return pack_vector<uint32_t, bfloat16>(bf);
         }
         case tt::DataFormat::Float32: {
-            std::vector<uint32_t> out(vals.size());
-            for (size_t i = 0; i < vals.size(); ++i) {
-                out[i] = float32(vals[i]).to_packed();
+            std::vector<uint32_t> out;
+            out.reserve(vals.size());
+            for (const float v : vals) {
+                out.push_back(float32(v).to_packed());
             }
             return out;
         }
         case tt::DataFormat::Int32: {
             // Quasar Int32 in L1 is sign-magnitude (same encoding as the int8->int32 binary path).
-            std::vector<uint32_t> out(vals.size());
-            for (size_t i = 0; i < vals.size(); ++i) {
-                out[i] = int32_to_sign_mag_word(static_cast<int32_t>(std::lround(vals[i])));
+            std::vector<uint32_t> out;
+            out.reserve(vals.size());
+            for (const float v : vals) {
+                out.push_back(int32_to_sign_mag_word(static_cast<int32_t>(std::lround(v))));
             }
             return out;
         }

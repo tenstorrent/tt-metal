@@ -77,15 +77,17 @@ ALWI void typecast_tile(uint32_t idst) {
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
     // collapse to a pure format no-op, while MX <-> {Float32, Int32, ...} run the Float16_b <-> X SFPU
     // conversion on top of the format (X -> MX runs X -> Float16_b, then the packer emits MX).
-    constexpr DataFormat eff_in = detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
-    constexpr DataFormat eff_out = detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (eff_in != eff_out) {
-         // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
+    constexpr DataFormat effective_input_format =
+        detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
+    constexpr DataFormat effective_output_format =
+        detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
+    if constexpr (effective_input_format != effective_output_format) {
+        // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_typecast,
-            (eff_in, eff_out, SFPU_ITERATIONS),
+            (effective_input_format, effective_output_format, SFPU_ITERATIONS),
             idst,
             VectorMode::RC));
     }
@@ -410,9 +412,11 @@ ALWI void typecast_tile_init() {
 #ifdef ARCH_QUASAR
     // Mirror typecast_tile: an MX endpoint behaves as Float16_b at the SFPU level, so only a
     // non-trivial effective conversion needs the SFPU init (MX <-> Float16_b is a format no-op).
-    constexpr DataFormat eff_in = detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
-    constexpr DataFormat eff_out = detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (eff_in != eff_out) {
+    constexpr DataFormat effective_input_format =
+        detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
+    constexpr DataFormat effective_output_format =
+        detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
+    if constexpr (effective_input_format != effective_output_format) {
         MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
     }
 #else
