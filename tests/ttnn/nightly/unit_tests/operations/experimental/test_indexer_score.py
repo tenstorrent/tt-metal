@@ -788,7 +788,7 @@ def test_indexer_score_perf(device, case_id, heads):
 
 # ---------------------------------------------------------------------------
 # sp_rank 7 perf helpers (tracy device profiler; no accuracy check). math_util = matmul FLOPs /
-# (cores x device cycles x matmul peak); duration from tracy, FLOPs from shape. Consumed by the three
+# (cores x device cycles x matmul peak); duration from tracy, FLOPs from shape. Consumed by the DSA
 # band checks in test_indexer_score_math_util (run with INDEXER_SCORE_PERF_CHECKS=1).
 # ---------------------------------------------------------------------------
 SP7_CHUNK_START = GLX_HISTORY + 7 * GLX_SQ  # fullest causal case (99.5% valid)
@@ -828,6 +828,55 @@ def test_indexer_score_sp7_perf_impl(device, case_id, heads):
     for _ in range(5):  # tracy logs each op's device duration; the outer test takes the min
         ttnn.experimental.indexer_score_dsa(
             q_dev, k_dev, w_dev, chunk_start_idx=SP7_CHUNK_START, program_config=cfg
+        ).deallocate()
+    ttnn.synchronize_device(device)
+
+
+# Short-query-chunk perf: the SAME two deployments (GLM5, DSv32) on the SAME keys (T=56320), but resharded
+# TP=1 / SP=32 instead of the deployed TP=4 / SP=8. Two things change together:
+#   - SP=32 splits the 5120-query prefill chunk 32 ways -> 160 q/device (vs GLX_SQ=640 at SP=8): a SHORT chunk.
+#   - TP=1 puts every index head on the one device (no tensor-parallel head split), so the per-device head
+#     count is 4x the deployed TP=4 count: GLM5 8h -> 32h (glm5_tp1), DSv32 16h -> 64h (dsv32_tp1).
+# So these are exactly GLM5/DSv32 at TP=1/SP=32 -- many heads AND a short sequence. At QC=1 the 160-query
+# chunk is 5 q-groups -> only 5 of the 10 grid rows, which is what the block-split scheduler fills
+# (num_blocks=2 -> 110 cores). chunk_start at the end of the keys = fullest causal. Resharding preserves the
+# per-device heads x queries product (4x heads x 1/4 queries), so glm5_tp1 has essentially the same matmul
+# FLOPs and wall-clock as the deployed glm5 8h/640 once the grid is filled.
+SHORT_SQ = 160  # 5 q-tile-rows: 5120-query prefill chunk / SP=32
+SHORT_CHUNK_START = GLX_T - SHORT_SQ  # 56160: queries at the end of the all-gathered keys (fullest causal)
+
+
+def short_valid_tiles():
+    """Causal-valid output tiles V for the 160-query chunk at SHORT_CHUNK_START: sum_s min(Tt, chunk_t+s+1)."""
+    chunk_t = SHORT_CHUNK_START // 32
+    tt_tiles = GLX_T // 32
+    sqt = SHORT_SQ // 32
+    return sum(min(tt_tiles, chunk_t + s + 1) for s in range(sqt))
+
+
+def short_config(heads):
+    """QC=1 (q_chunk=32): the 160-query chunk makes 5 q-groups, half the 10-row grid -> block-split fills it.
+    head_group_size=0 keeps all heads resident; k_chunk is the largest that fits L1 at this head count -- the
+    4x head count from TP=1 leaves no room for the deployed KC, so KC=8 (k_chunk=256) at <=32 heads (glm5_tp1)
+    and the smaller KC=4 (k_chunk=128) at 64 heads (dsv32_tp1). KC does not change the core count here
+    (band_count stays >> cols, so num_blocks=2 -> 110 cores either way)."""
+    return ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=256 if heads <= 32 else 128, head_group_size=0)
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="perf test - run locally with tracy")
+@pytest.mark.parametrize("case_id, heads", [("dsv32_tp1", 64), ("glm5_tp1", 32)], ids=["dsv32_tp1", "glm5_tp1"])
+def test_indexer_score_short_seq_perf_impl(device, case_id, heads):
+    """Inner test profiled by tracy: GLM5/DSv32 resharded TP=1/SP=32 -- a SHORT 160-query chunk (QC=1) that
+    under-fills the grid, so the block-split scheduler replicates each q-group across num_blocks=2 row-blocks
+    (110 cores). bf16 q + bfp8 k. No accuracy check."""
+    q, k, w = make_inputs(heads, GLX_DIM, SHORT_SQ, GLX_T)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
+    w_dev = to_device(w, device)
+    cfg = short_config(heads)
+    for _ in range(5):  # tracy logs each op's device duration; the outer test takes the min
+        ttnn.experimental.indexer_score_dsa(
+            q_dev, k_dev, w_dev, chunk_start_idx=SHORT_CHUNK_START, program_config=cfg
         ).deallocate()
     ttnn.synchronize_device(device)
 
@@ -890,6 +939,42 @@ def test_indexer_score_streaming_qmcast_uneven_bands(device):
     assert head_group < heads, "must be streaming (HB < Hi)"
     assert cols_used > 1, f"need >1 column for q-mcast: cols_used={cols_used}"
     assert max_bands > min_bands, f"need an uneven band split: U={U}, cols_used={cols_used}"
+
+    _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
+# ---------------------------------------------------------------------------
+# Block-split grid fill (accuracy): short sequences (group_count < grid.y) leave grid rows idle, so each
+# q-group is replicated across num_blocks row-blocks with its band range split across them (a band-chunk
+# per block). This is the path with BOTH group_rows>1 (per-block k-mcast is a contiguous vertical rect)
+# AND num_blocks>1 (two-or-more mcast rectangles per column, disjoint output columns, no reduce) -- the
+# genmcast prime case only exercises group_rows==1 (k-mcast off). Same exact -inf + PCC + neg-gate check.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group",
+    [
+        (8, 128, 160, 2816, 1024, 32, 64, 0),  # G=5 -> group_rows=5, num_blocks=2 (target 64h/160 shape)
+        (8, 128, 64, 3584, 1536, 32, 64, 0),  # G=2 -> group_rows=2, num_blocks=5 (deep split, 2 rows/block)
+        (8, 128, 96, 2176, 768, 32, 64, 0),  # G=3 -> group_rows=3, num_blocks=3 (9 rows used)
+        (8, 128, 160, 2880, 1024, 32, 128, 0),  # G=5, num_blocks=2 + KC not dividing Tt (partial last band)
+    ],
+    ids=["fill_5x2", "fill_2x5", "fill_3x3", "fill_5x2_partial"],
+)
+def test_indexer_score_block_split_fill(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
+    """Under-filled short sequences split each q-group's bands across num_blocks row-blocks to use the idle
+    rows. Asserts the shape really hits the block-split-with-k-mcast regime (group_rows>1 AND num_blocks>1),
+    then checks exact causality + PCC. The scheduler/mcast change is head-independent, so heads=8 (L1-safe)
+    exercises it fully."""
+    grid = device.compute_with_storage_grid_size()
+    QC, KC = q_chunk // 32, k_chunk // 32
+    group_count = (sq // 32) // QC
+    band_count = ((t // 32) + KC - 1) // KC
+    group_rows = max(d for d in range(1, min(group_count, grid.y) + 1) if group_count % d == 0)
+    cols_used = min(band_count, grid.x)
+    num_blocks = max(1, min(grid.y // group_rows, band_count // cols_used))
+    # Precondition: this is the target regime -- per-block k-mcast (>1 row/block) AND >1 band-row-block.
+    assert group_rows > 1, f"need a multi-row block for k-mcast: group_rows={group_rows}"
+    assert num_blocks > 1, f"need block replication: num_blocks={num_blocks}"
 
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
 
@@ -1167,8 +1252,9 @@ def test_indexer_score_msa_m3_perf_impl(device):
 
 
 # ---------------------------------------------------------------------------
-# The three math-utilization band checks (CI-gated by INDEXER_SCORE_PERF_CHECKS=1): GLM5, DSv32, and
-# MiniMax-M3, all at the deployed HiFi2 dtypes (bf16 q + bfp8 k), sp_rank 7. Each spawns its perf_impl
+# The math-utilization band checks (CI-gated by INDEXER_SCORE_PERF_CHECKS=1), all at the deployed HiFi2 dtypes
+# (bf16 q + bfp8 k): the deployed TP=4/SP=8 shapes GLM5, DSv32 and MiniMax-M3 at sp_rank 7, plus the resharded
+# TP=1/SP=32 grid-fill shapes glm5_tp1 and dsv32_tp1 (block-split, fullest causal). Each spawns its perf_impl
 # under tracy, reads the min DEVICE KERNEL DURATION, computes math_util = matmul FLOPs / (cores x device
 # cycles x matmul peak), and asserts it within +/- INDEXER_PERF_MARGIN of the value measured on a Blackhole
 # dev board. mm_flops is a thunk so the shape-derived FLOP count is evaluated at run time.
@@ -1198,6 +1284,25 @@ _MATH_UTIL_CASES = [
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
         43.55,
     ),
+    # Block-split grid fill: GLM5/DSv32 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
+    # scheduler spreads across num_blocks=2 row-blocks (110 cores); without the fill these would use only 55
+    # cores at ~half the util. These guard the feature's headline shapes. glm5_tp1 (32h) preserves the deployed
+    # glm5 8h/640 per-device work, so it matches that wall-clock once the grid is full; its util tracks DSv32
+    # (shared KC=8, matmul-bound). dsv32_tp1 (64h) carries twice the heads.
+    (
+        "dsv32_tp1",
+        "test_indexer_score_short_seq_perf_impl[dsv32_tp1]",
+        "ttnn_indexer_score_short_seq",
+        lambda: indexer_mm_flops(short_valid_tiles(), 64),
+        77.31,
+    ),
+    (
+        "glm5_tp1",
+        "test_indexer_score_short_seq_perf_impl[glm5_tp1]",
+        "ttnn_indexer_score_short_seq",
+        lambda: indexer_mm_flops(short_valid_tiles(), 32),
+        75.54,
+    ),
 ]
 
 
@@ -1211,9 +1316,10 @@ _MATH_UTIL_CASES = [
     ids=[c[0] for c in _MATH_UTIL_CASES],
 )
 def test_indexer_score_math_util(case_id, perf_id, subdir, mm_flops_thunk, expected_util):
-    """GLM5 / DSv32 / MiniMax-M3 sp_rank-7 HiFi2 (bf16 q, bfp8 k) matmul math utilization via tracy, asserted
-    within +/- INDEXER_PERF_MARGIN. Spawns the case's perf_impl under the profiler and compares the achieved
-    math_util to the expected value (measured on a BH dev board)."""
+    """Per-deployment HiFi2 (bf16 q, bfp8 k) matmul math utilization via tracy, asserted within +/-
+    INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8, plus glm5_tp1 / dsv32_tp1 at the
+    resharded TP=1/SP=32 grid-fill shapes. Spawns the case's perf_impl under the profiler and compares the
+    achieved math_util to the expected value (measured on a BH dev board)."""
     from tracy.process_model_log import run_device_profiler
     from tests.nightly.sdpa_perf_utils import post_process_ops_log
 

@@ -2145,6 +2145,7 @@ class UnarySFPUGolden:
             MathOperation.Celu: self._celu,
             MathOperation.Silu: self._silu,
             MathOperation.Gelu: self._gelu,
+            MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
@@ -2158,6 +2159,7 @@ class UnarySFPUGolden:
             MathOperation.ReluMin: self._relu_min,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
+            MathOperation.Typecast: self._typecast,
         }
         self.data_format = None
         self.dest_acc = DestAccumulation.No
@@ -2463,6 +2465,12 @@ class UnarySFPUGolden:
     def _neg(self, x):
         return -x
 
+    def _typecast(self, x):
+        # Typecast is an elementwise identity at the value level; the src->dst format
+        # conversion is applied by the golden framework's dst_format / output-format
+        # casting (and, for class-1 MXFP8 pairs, by the unpack/pack gasket on hardware).
+        return x
+
     def _gelu(self, x):
         input_tensor = (
             x
@@ -2470,6 +2478,16 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.gelu(input_tensor).item()
+
+    def _gelu_tanh(self, x):
+        # Matches calculate_gelu_tanh: the tanh approximation of GELU,
+        # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
 
     def _fill(self, x, const_value=5):
         input_tensor = (

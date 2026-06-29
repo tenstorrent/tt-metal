@@ -29,12 +29,17 @@ from matplotlib.patches import FancyArrowPatch
 # Lines are MPI-tagged ([1,R]<stderr>:) and the message also carries [pp rank R]; key off the latter
 # so the parser is independent of the MPI tag.
 _CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
+_CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
 _E2E = re.compile(r"\[pp rank (\d+)\] E2E_CLOCK first_compute_start=([\d.]+) last_compute_end=([\d.]+)")
 
 
 def parse(path):
-    """-> (starts[rank][chunk] = epoch, last_end[rank] = epoch)."""
+    """-> (starts[rank][chunk] = epoch, last_end[rank] = epoch, measured[rank][chunk] = compute seconds).
+
+    measured is populated only when the runner ran with PREFILL_SYNC_PER_CHUNK (CHUNK_COMPUTE lines) —
+    an exact per-chunk device compute, so the plot needs no downstream-start proxy or last-rank estimate."""
     starts = defaultdict(dict)
+    measured = defaultdict(dict)
     last_end = {}
     with open(path, errors="ignore") as f:
         for line in f:
@@ -42,12 +47,16 @@ def parse(path):
             if m:
                 starts[int(m.group(1))][int(m.group(2))] = float(m.group(3))
                 continue
+            m = _CHUNK_COMPUTE.search(line)
+            if m:
+                measured[int(m.group(1))][int(m.group(2))] = float(m.group(3)) / 1000.0
+                continue
             m = _E2E.search(line)
             if m:
                 last_end[int(m.group(1))] = float(m.group(3))
     if not starts:
         raise SystemExit(f"no CHUNK_START lines found in {path} (the pipeline loop always logs CHUNK_START)")
-    return starts, last_end
+    return starts, last_end, measured
 
 
 def slot_end(starts, last_end, rank, chunk, ordered):
@@ -71,7 +80,7 @@ def main():
     ap.add_argument("--no-arrows", action="store_true", help="omit the rank->rank handoff arrows")
     args = ap.parse_args()
 
-    starts, last_end = parse(args.log)
+    starts, last_end, measured = parse(args.log)
     ranks = sorted(starts)
     origin = min(s for r in ranks for s in starts[r].values())  # t=0 at the first chunk start
 
@@ -97,12 +106,27 @@ def main():
         for c in ordered:
             s = starts[rank][c]
             slot_e = slot_end(starts, last_end, rank, c, ordered)
-            dur = compute_dur(rank, c)
+            # Exact measured compute (PREFILL_SYNC_PER_CHUNK) wins over the downstream-start proxy.
+            dur = measured.get(rank, {}).get(c)
             estimated = dur is None
+            if estimated:
+                dur = compute_dur(rank, c)
+                estimated = dur is None
             if estimated:
                 # last rank: clamp the upstream-median estimate to the slot. With no proxy data at all
                 # (single rank), there is no pipeline overlap, so the whole slot IS the compute.
-                dur = min(est_compute, slot_e - s) if est_compute > 0 else (slot_e - s)
+                slot = slot_e - s
+                if est_compute > 0:
+                    # slot<=0 means the final chunk has no end marker (E2E_CLOCK didn't flush, so
+                    # last_end is empty and slot_e degenerates to s); use the estimate so the last
+                    # rank's last bar isn't drawn zero-width.
+                    dur = min(est_compute, slot) if slot > 0 else est_compute
+                else:
+                    own = [
+                        b - a
+                        for a, b in zip([starts[rank][x] for x in ordered], [starts[rank][x] for x in ordered[1:]])
+                    ]
+                    dur = slot if slot > 0 else median(own)
             comp_end = s + dur
             color = cmap(c % cmap.N)
             # Compute block (solid). The idle time (comp_end -> next chunk start) is left UNDRAWN, so
@@ -154,16 +178,21 @@ def main():
 
     from matplotlib.patches import Patch
 
-    ax.legend(
-        handles=[
-            Patch(facecolor="grey", edgecolor="black", label="compute (downstream-start proxy)"),
-            Patch(facecolor="white", edgecolor="grey", label="idle / waiting (white gap)"),
-            Patch(facecolor="grey", hatch="//", edgecolor="black", label="last rank: compute estimated (median)"),
-        ],
-        loc="upper left",
-        fontsize=8,
-        framealpha=0.9,
-    )
+    # With CHUNK_COMPUTE every bar is exact, so the proxy/estimate legend entries would misdescribe it.
+    any_measured = any(measured.get(r) for r in ranks)
+    handles = [
+        Patch(
+            facecolor="grey",
+            edgecolor="black",
+            label="compute (measured, per-chunk sync)" if any_measured else "compute (downstream-start proxy)",
+        ),
+        Patch(facecolor="white", edgecolor="grey", label="idle / waiting (white gap)"),
+    ]
+    if not any_measured:
+        handles.append(
+            Patch(facecolor="grey", hatch="//", edgecolor="black", label="last rank: compute estimated (median)")
+        )
+    ax.legend(handles=handles, loc="upper left", fontsize=8, framealpha=0.9)
     ax.set_yticks(ranks)
     ax.set_yticklabels([f"rank {r}" for r in ranks])
     # rank 0 at the bottom; the pipeline flows upward (default y increases upward).

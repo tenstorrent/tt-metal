@@ -70,10 +70,7 @@ class CLIPConfig:
         self.layer_norm_eps = layer_norm_eps
         self.attention_dropout = attention_dropout
         self.projection_dim = projection_dim
-        if hidden_act == "gelu":
-            self.hidden_act = "decomposed_gelu"
-        else:
-            self.hidden_act = hidden_act
+        self.hidden_act = hidden_act
 
 
 class CLIPEncoder(Module):
