@@ -109,6 +109,7 @@ def canvas_sample_from_params(
         default_temperature=default_temperature,
         default_seed=default_seed,
     )
+    owns_gumbel_noise = False
     if gumbel_noise is None:
         if config.seed is None:
             raise ValueError("canvas_sample_from_params requires gumbel_noise or a sampling seed")
@@ -122,6 +123,7 @@ def canvas_sample_from_params(
                 device=logits.device(),
                 seed=config.seed,
             )
+            owns_gumbel_noise = True
         elif use_vocab_chunked_noise:
             gumbel_noise = TS.sample_gumbel_noise_by_vocab_chunks(
                 logits.shape,
@@ -129,7 +131,13 @@ def canvas_sample_from_params(
                 seed=config.seed,
                 vocab_chunk_size=vocab_chunk_size,
             )
+            owns_gumbel_noise = True
         else:
             gumbel_noise = TS.sample_gumbel_noise(logits.shape, device=logits.device(), seed=config.seed)
+            owns_gumbel_noise = True
 
-    return TS.canvas_sample(logits, config.temperature, gumbel_noise)
+    try:
+        return TS.canvas_sample(logits, config.temperature, gumbel_noise)
+    finally:
+        if owns_gumbel_noise and hasattr(gumbel_noise, "deallocate"):
+            gumbel_noise.deallocate(True)

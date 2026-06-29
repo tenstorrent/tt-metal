@@ -28,6 +28,15 @@ class _FakeLogits:
         return "mesh"
 
 
+class _FakeNoise:
+    def __init__(self, name):
+        self.name = name
+        self.deallocated = False
+
+    def deallocate(self, force):
+        self.deallocated = force
+
+
 def test_canvas_sampling_params_defaults_and_capability():
     config = canvas_sampling_config_from_params(None, default_temperature=0.8, default_seed=47472)
 
@@ -119,6 +128,57 @@ def test_canvas_sample_from_params_defaults_to_permuted_vocab_rng(monkeypatch):
     assert out == "samples"
     assert calls["noise"] == (_FakeLogits.shape, "mesh", 47472)
     assert calls["sample"] == (logits, 0.7, "permuted-gumbel")
+
+
+def test_canvas_sample_from_params_deallocates_generated_gumbel_noise(monkeypatch):
+    calls = {}
+    noise = _FakeNoise("permuted-gumbel")
+
+    def fake_permuted_noise(shape, *, device, seed):
+        calls["noise"] = (shape, device, seed)
+        return noise
+
+    def fake_canvas_sample(logits, temperature, gumbel_noise):
+        calls["sample"] = (logits, temperature, gumbel_noise, gumbel_noise.deallocated)
+        return "samples"
+
+    monkeypatch.setattr(TS, "sample_gumbel_noise_with_permuted_vocab", fake_permuted_noise)
+    monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
+
+    logits = _FakeLogits()
+    out = canvas_sample_from_params(
+        logits,
+        {"temperature": 0.7, "seed": 47472},
+        default_temperature=0.8,
+    )
+
+    assert out == "samples"
+    assert calls["noise"] == (_FakeLogits.shape, "mesh", 47472)
+    assert calls["sample"] == (logits, 0.7, noise, False)
+    assert noise.deallocated is True
+
+
+def test_canvas_sample_from_params_preserves_injected_gumbel_noise(monkeypatch):
+    calls = {}
+    noise = _FakeNoise("injected-gumbel")
+
+    def fake_canvas_sample(logits, temperature, gumbel_noise):
+        calls["sample"] = (logits, temperature, gumbel_noise)
+        return "samples"
+
+    monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
+
+    logits = _FakeLogits()
+    out = canvas_sample_from_params(
+        logits,
+        {"temperature": 0.7},
+        default_temperature=0.8,
+        gumbel_noise=noise,
+    )
+
+    assert out == "samples"
+    assert calls["sample"] == (logits, 0.7, noise)
+    assert noise.deallocated is False
 
 
 def test_canvas_sample_from_params_can_use_chunked_rng_without_disabling_default(monkeypatch):
