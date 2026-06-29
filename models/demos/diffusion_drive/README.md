@@ -90,7 +90,7 @@ LiDAR (B,1,256,256)                                                      │
 ### TTNN vs PyTorch per submodule (after `build_stage3_7`)
 
 Every **weight-bearing** op runs on TTNN. The host residue is non-weight scalar
-glue (see `01_plan.md` §8).
+glue (enumerated in the table below).
 
 | Submodule | Execution | Stage | Notes |
 |---|---|---|---|
@@ -102,7 +102,7 @@ glue (see `01_plan.md` §8).
 | Perception TransformerDecoder ×3 | **TTNN** | 3.4 | SDPA + FFN + LN |
 | TrajectoryHead DDIM denoiser (incl. `grid_sample`) | **TTNN** | 3.5 | plan_anchor_encoder, time_mlp, grid-sample cross-attn, 2× MHA, FFN, norms, FiLM, task heads |
 | `_agent_head` MLPs | **TTNN** | 3.7 | `_mlp_states`, `_mlp_label` |
-| DDIM `scheduler.step`, `gen_sineembed`, norm/denorm, argmax/gather, embedding-add | host (glue) | — | scalar/indexing on ≤320-elt tensors; not kernel-worthy (`01_plan.md` §8) |
+| DDIM `scheduler.step`, `gen_sineembed`, norm/denorm, argmax/gather, embedding-add | host (glue) | — | scalar/indexing on ≤320-elt tensors; not kernel-worthy |
 
 ---
 
@@ -212,14 +212,14 @@ new full-model tests.
 | 3.1 | Review fixes: 2-ch DDIM noise (upstream match), FPN bilinear upsample on TTNN, `ttnn.grid_sample` validated, conv-weight caching | +0 conv (+2 upsample) | 24/24 | `4b07970` |
 | 3.4 | Perception head on TTNN (`_bev_downscale`, `_status_encoding`, `bev_proj`, 3-layer `_tf_decoder`) | +1 conv | — | `ca36c5b0` |
 | 3.5 | DDIM denoiser on TTNN (plan_anchor_encoder, time_mlp, grid-sample cross-attn, 2× MHA, FFN, norms, FiLM, task heads) | — | — | `ca36c5b0` |
-| 3.6 | Backbone completion: ResNet stems ×2 + GPT cross-modal fusion ×4 on TTNN (`build_stage3_6`) | +grid/pool/upsample | — | *(uncommitted)* |
-| 3.7 | Agent head MLPs on TTNN (`build_stage3_7`) — **every weight op now on TTNN** | — | — | *(uncommitted)* |
+| 3.6 | Backbone completion: ResNet stems ×2 + GPT cross-modal fusion ×4 on TTNN (`build_stage3_6`) | +grid/pool/upsample | — | `30cca82a69` |
+| 3.7 | Agent head MLPs on TTNN (`build_stage3_7`) — **every weight op now on TTNN** | — | — | `30cca82a69` |
 
 **Current total: 26 PCC tests pass.**  After `build_stage3_7` every
 weight-bearing op runs on TTNN; `test_pcc_stage3_6.py` validates the whole
 on-device model at production resolution (trajectory PCC 1.0 random / 0.9998
-real-checkpoint).  Remaining host code is documented scalar glue (`01_plan.md`
-§8).  See §10 for the Stage-3.1 fixes.
+real-checkpoint).  Remaining host code is non-weight scalar glue (enumerated in
+the §2 submodule table).  See §11 for the Stage-3.1 fixes.
 
 ### TTNN ops on-device at Stage 3
 
@@ -249,23 +249,25 @@ FPN up_conv4          — 3×3 conv2d  (64→64, 64×64)          =  1 op
 
 Measured on Wormhole N300s, batch=1, full production resolution
 (camera 256×1024, LiDAR 256×256), `latent=True`.
-Each figure is the minimum over 5 runs after 2 warm-up calls.
 
 ### Latency
 
-| Stage | Min latency | vs Stage 1 | On-device ops |
-|---|---|---|---|
-| Stage 1 — pure PyTorch | 652 ms | baseline | 0 |
-| Stage 2 — TTNN backbone | 540 ms | **−17%** | 70 |
-| Stage 3 — TTNN backbone + FPN | 486 ms | **−25%** | 73 |
+Every weight-bearing op runs on-device, and the model executes as a **consolidated
+graph** rather than a staged sequence of host↔device hops. The TransFuser backbone
+runs as one consolidated device-native graph by default — stems → [stage →
+fusion] × 4 → FPN chained ttnn→ttnn, eliminating the 8 per-stage host round-trips
+(`DD_CONSOLIDATE=0` to opt out) — and `build_stage4` consolidates the perception
+head + DDIM decoder on-device as well. Stage 7 then captures that consolidated
+backbone loop as a TTNN trace (`compile()` / `execute_compiled()`) and replays it
+as a single command: traced-vs-eager trajectory PCC 1.0, with the backbone loop
+**1.76×** faster and the full forward **1.34×** (same-process A/B, batch=1,
+production resolution; the still-eager FPN/perception/DDIM tail dilutes the loop's
+gain).
 
-The latency figures above are from Stage 3 (backbone + FPN on-device, fusion and
-denoiser still host).  As of Stage 3.6/3.7 the GPT cross-modal fusion and the
-DDIM denoiser also run on TTNN, but each on-device submodule still does its own
-host↔device round-trip (the staged drop-in approach), so wall-clock is not yet
-representative of a fused graph.  Collapsing those hops into a single TTNN graph
-(and enabling trace capture) is the Stage-3.7 single-graph consolidation — a
-performance refactor tracked in `01_plan.md` §8, not required for the PDM score.
+Absolute forward latency is hardware- and build-dependent, so it isn't pinned
+here — measure it on your own setup with the [Profiling](#profiling) snippet below.
+End-to-end NavSim eval throughput is gated by host-side navsim CPU rather than the
+model forward — see §9.
 
 ### Accuracy (PCC vs PyTorch reference)
 
@@ -285,7 +287,9 @@ To measure forward-pass latency locally:
 import time, torch, ttnn
 
 device = ttnn.open_device(device_id=0, l1_small_size=32768)
-# ... build ttnn_model (stage 2 or 3) ...
+# ... build the full ttnn_model: .build_stage2(device) … .build_stage4(device) ...
+# (traced path: open with trace_region_size=256*1024*1024, call model.compile() once,
+#  then time model.execute_compiled(features) instead of ttnn_model(features))
 
 features = {
     "camera_feature": torch.randn(1, 3, 256, 1024),
@@ -323,39 +327,6 @@ export PYTHONPATH="${TT_METAL_HOME:-$(pwd)}"   # TT_METAL_HOME = your tt-metal c
 python3 -m ttnn.examples.usage.run_op_on_device   # should print a bfloat16 tensor
 tt-smi                                             # device info
 ```
-
-### One-time environment fixes (Wormhole N300s)
-
-These are machine-local patches that survive `git pull` but are lost if
-`runtime/` is deleted and recreated.
-
-**a) sfpi runtime alias**
-
-`ttnn.conv2d` triggers JIT compilation of `pack_untilize.cpp`.  The tt-llk
-headers at commit `8dab3a5982` renamed `s2vFloat16b` → `sFloat16b`, but the
-bundled `runtime/sfpi/include/sfpi_fp16.h` only defines the old name.
-Add these two aliases inside the `sfpi` namespace:
-
-```cpp
-// runtime/sfpi/include/sfpi_fp16.h  — inside namespace sfpi { ... }
-using sFloat16a = s2vFloat16a;
-using sFloat16b = s2vFloat16b;
-```
-
-Without this fix the first `ttnn.conv2d` call fails with:
-```
-error: 'sfpi::sFloat16b' is not a member of 'sfpi'
-```
-
-**b) l1_small_size**
-
-Open all devices used with conv2d with `l1_small_size=32768` (see §3.3).
-The test `conftest.py` already does this.
-
-**c) Conv2dConfig keyword**
-
-The compiled binary's `Conv2dConfig.__init__` accepts only `weights_dtype`,
-not `dtype`.  Do not pass `dtype=ttnn.bfloat16`.
 
 ### Assets
 
@@ -514,7 +485,6 @@ wherever you actually put each piece):
 # --- Base dirs -------------------------------------------------------------
 export TT_METAL_HOME=/path/to/tt-metal           # <-- EDIT: your tt-metal checkout
 export DD_DATA_ROOT=/mnt/diffusion-drive         # <-- EDIT: where eval assets live
-                                                 #     (replaces the original /root/02 layout)
 
 # --- Model assets (derived from DD_DATA_ROOT) ------------------------------
 export DD_CHECKPOINT_PATH=$DD_DATA_ROOT/weights/diffusiondrive_navsim_88p1_PDMS.pth
@@ -531,7 +501,7 @@ export NUPLAN_MAP_VERSION=nuplan-maps-v1.0
 The eval runs in the `navsim` conda env (Python 3.10 — the navsim stack plus
 `ttnn`); activate it with `conda activate navsim`.
 
-> ⚠️ **Not env-var-driven — you must customize these before the PDM scoring step.**
+> **Not env-var-driven — you must customize these before the PDM scoring step.**
 > A few things are intrinsically machine-specific and cannot be parameterized away:
 >
 > - **The `navsim` conda env** — the one-time `pip install --no-deps …` step (see
@@ -565,12 +535,12 @@ The checkpoint + anchors come from `scripts/prepare_assets.py` (see §6) or are
 staged manually; the devkit, OpenScene data, and maps are provisioned per the
 NavSim devkit's own setup instructions.
 
-### 9.3 One-time: build the PDM metric cache  ⚠️ **most-missed first-run step**
+### 9.3 One-time: build the PDM metric cache (required before evaluating)
 
-`run_pdm_score.py` does **not** compute the PDM metric cache on the fly — it
-expects a **precomputed** cache at `$NAVSIM_EXP_ROOT/metric_cache` (~3.1 GB for
-`navtest`). On a fresh machine this directory does not exist yet, so the eval
-fails with missing-cache errors until you build it **once**:
+Before the eval can run, you must build the PDM metric cache once.
+`run_pdm_score.py` does **not** compute it on the fly — it expects a precomputed
+cache at `$NAVSIM_EXP_ROOT/metric_cache` (~3.1 GB for `navtest`), which does not
+exist on a fresh machine:
 
 ```bash
 conda activate navsim
@@ -668,4 +638,4 @@ Applied after a line-by-line review against upstream
 
 **Still PyTorch (open fallbacks):** ResNet stems, GPT cross-modal fusion,
 perception `_tf_decoder`, the rest of the TrajectoryHead denoiser, and all the
-Linear/LayerNorm/SDPA host ops.  See `01_plan.md` for the full inventory.
+Linear/LayerNorm/SDPA host ops.

@@ -204,8 +204,8 @@ class TtnnDiffusionDriveModel:
         agent head does not feed the trajectory/scores; the only host residue
         left is non-weight scalar/control-flow glue (DDIM ``scheduler.step``,
         ``gen_sineembed`` trig, norm/denorm, ``argmax``/``gather`` best-mode
-        select, per-index tanh scaling) — see ``tt/ttnn_trajectory.py`` and
-        ``01_plan.md`` §8 for the rationale on what cannot become a tensor op.
+        select, per-index tanh scaling) — see ``tt/ttnn_trajectory.py`` for the
+        rationale on what cannot become a tensor op.
         Chainable.  Returns self.
         """
         from models.demos.diffusion_drive.tt.ttnn_trajectory import install_ttnn_agent_head
