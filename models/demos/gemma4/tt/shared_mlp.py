@@ -152,8 +152,7 @@ class SharedMLP:
 
         if state_dict:
             # Fuse gate_proj + up_proj into a single column-parallel weight so the
-            # forward runs ONE matmul producing a [gate | up] slab (mirrors the wqkv
-            # fusion in attention/weights.py).
+            # forward runs ONE matmul producing a [gate | up] slab
             gate_w = state_dict["gate_proj.weight"]  # [intermediate_size, hidden_size]
             up_w = state_dict["up_proj.weight"]  # [intermediate_size, hidden_size]
             pad = self._intermediate_pad
@@ -225,8 +224,7 @@ class SharedMLP:
                 m_tiles, _tiles(self.gate_up_proj.shape[-2]), _tiles(self.gate_up_proj.shape[-1]), grid, is_bh
             )
             # Request a matching L1 width-sharded output config for down_proj so
-            # the matmul writes its result into L1 instead of DRAM (saves the
-            # output DRAM write; the following allreduce/norm can read locally).
+            # the matmul writes its result into L1 instead of DRAM
             down_pc, down_out_memcfg = _decode_linear_1d_config(
                 m_tiles,
                 _tiles(self.down_proj.shape[-2]),
@@ -242,13 +240,6 @@ class SharedMLP:
         # Split the slab into gate / up halves and fuse GeGLU into the multiply:
         # fast-approx GELU on the gate half (operand a) only, then elementwise * up.
         # Matches the original fast_and_approximate_mode=True GeGLU semantics.
-        #
-        # The split uses the *tile-aligned* per-device width (padded_split): with TP
-        # the raw per-device width (e.g. 264) is mid-tile, so both halves were padded
-        # to padded_split (e.g. 288) at load time. Slicing there lands on a tile
-        # boundary, keeping gate/up lanes from mixing within a tile. The padded zero
-        # lanes pass through GeGLU as zeros and are dropped by the row-parallel
-        # down_proj, whose input rows were padded to match.
         split = self.padded_split
         gate = gate_up[..., :split]
         up = gate_up[..., split:]
@@ -259,8 +250,11 @@ class SharedMLP:
         output = ttnn.linear(hidden, self.down_proj, program_config=down_pc, memory_config=down_out_memcfg)
         hidden.deallocate(True)
 
-        # Allreduce after row-parallel down_proj
+        # Allreduce after row-parallel down_proj. down_proj is row-parallel so
+        # the all-reduce sums partials over the *full* hidden width — its output
+        # spans the same N as the matmul, so the matmul's L1 width-sharded
+        # output config (down_out_memcfg) also describes the all-reduce output.
         if self.mesh_config is not None and self.mesh_config.tp > 1:
-            output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
+            output = ccl_allreduce(output, self.mesh_config, self.ccl_manager, memory_config=down_out_memcfg)
 
         return output
