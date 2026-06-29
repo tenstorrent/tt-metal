@@ -21,9 +21,9 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
       * ``comb [B, S, H, H]`` -- the stream-mixing matrix projected onto the
         doubly-stochastic manifold by ``hc_sinkhorn_iters`` Sinkhorn-Knopp steps.
 
-    The learned ``fn`` / ``base`` / ``scale`` parameters are split host-side into
-    their ``pre`` / ``post`` / ``comb`` parts (and ``fn`` run as three separate
-    linears) so we never sub-tile-slice the packed ``(2+H)*H``-wide projection.
+    The learned ``base`` / ``scale`` parameters are split host-side into their
+    ``pre`` / ``post`` / ``comb`` parts; ``fn`` runs as a single fused matmul whose
+    output is split into the three parts via ``ttnn.split``.
     See ``modular_deepseek_v4.py`` for the reference math.
     """
 
@@ -46,9 +46,10 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         scale_src = weights["scale"]
         scale = (scale_src() if callable(scale_src) else scale_src).flatten().tolist()  # 3 learned scalars
 
-        self.fn_pre = Linear(lambda: fn()[:hc], device, cache.file("fn_pre"))
-        self.fn_post = Linear(lambda: fn()[hc : 2 * hc], device, cache.file("fn_post"))
-        self.fn_comb = Linear(lambda: fn()[2 * hc : 2 * hc + hc * hc], device, cache.file("fn_comb"))
+        # The pre [H] / post [H] / comb [H*H] projections are contiguous slices of
+        # the packed ``fn`` weight, so fuse them into one matmul ([(2+H)*H, H*D])
+        # and split the output back into the three parts via ``ttnn.split``.
+        self.fn = Linear(lambda: fn()[: 2 * hc + hc * hc], device, cache.file("fn"))
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
             device,
@@ -79,9 +80,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d])
         flat = _rms_norm_unweighted(flat, self.norm_eps)
 
-        pre_w = self.fn_pre(flat)  # [1,1,T,H]
-        post_w = self.fn_post(flat)  # [1,1,T,H]
-        comb_w = self.fn_comb(flat)  # [1,1,T,H*H]
+        fused_w = self.fn(flat)  # [1,1,T,(2+H)*H]
+        pre_w, post_w, comb_w = ttnn.split(fused_w, [hc, hc, hc * hc], dim=3)  # [1,1,T,H], [1,1,T,H], [1,1,T,H*H]
         _profile(self.device)
 
         return ttnn.experimental.deepseek.fused_hyperconnection(
