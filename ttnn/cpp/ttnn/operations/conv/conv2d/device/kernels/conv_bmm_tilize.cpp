@@ -408,9 +408,7 @@ void kernel_main() {
                     }
                 }
 
-                if constexpr (packer_l1_acc) {
-                    pack_reconfig_data_format(curr_matmul_out_cb);
-                }
+                pack_reconfig_data_format(curr_matmul_out_cb);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
