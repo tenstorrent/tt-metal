@@ -1616,6 +1616,38 @@ def test_generate_text_from_checkpoint_state_uses_tokenizer_eos_by_default():
     assert calls["generate"]["eos_token_id"] == 9
 
 
+@pytest.mark.parametrize(
+    ("eos_token_id", "message"),
+    [
+        ("9", "eos_token_id"),
+        (True, "eos_token_id"),
+        (-1, "non-negative"),
+        (torch.iinfo(torch.int32).max + 1, "fit int32"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_invalid_tokenizer_eos_before_builder(eos_token_id, message):
+    class _Tokenizer:
+        pass
+
+    _Tokenizer.eos_token_id = eos_token_id
+
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid tokenizer eos")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            "model",
+            _Tokenizer(),
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            logits_fn_builder_factory=fail_builder_factory,
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_from_checkpoint_state_preserves_explicit_eos():
     calls = {}
 
@@ -1640,6 +1672,34 @@ def test_generate_text_from_checkpoint_state_preserves_explicit_eos():
     )
 
     assert calls["generate"]["eos_token_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("eos_token_id", "message"),
+    [
+        ("9", "eos_token_id"),
+        (True, "eos_token_id"),
+        (-1, "non-negative"),
+        (torch.iinfo(torch.int32).max + 1, "fit int32"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_invalid_explicit_eos_before_builder(eos_token_id, message):
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid explicit eos")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            eos_token_id=eos_token_id,
+            logits_fn_builder_factory=fail_builder_factory,
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
 
 
 def test_generate_text_from_checkpoint_state_defaults_to_skip_special_tokens():

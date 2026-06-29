@@ -1067,9 +1067,12 @@ def generate_text_from_checkpoint_state(
             vocab_size=vocab_size,
             seed=gumbel_seed_value,
         )
-    if "eos_token_id" not in generate_kwargs:
+    if "eos_token_id" in generate_kwargs:
+        _normalize_eos_token_ids(generate_kwargs["eos_token_id"])
+    else:
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
         if eos_token_id is not None:
+            _normalize_eos_token_ids(eos_token_id)
             generate_kwargs["eos_token_id"] = eos_token_id
     if "decode_kwargs" not in generate_kwargs:
         generate_kwargs["decode_kwargs"] = {"skip_special_tokens": True}
