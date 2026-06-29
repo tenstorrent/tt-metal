@@ -69,6 +69,8 @@ def _validate_nonnegative_integer_token_tensor(tokens: torch.Tensor, *, name: st
         raise ValueError(f"{name} length must be positive")
     if torch.any(tokens < 0).item():
         raise ValueError(f"{name} must be non-negative")
+    if torch.any(tokens > torch.iinfo(torch.int32).max).item():
+        raise ValueError(f"{name} must fit int32 device token buffers")
 
 
 def host_canvas_to_device(mesh_device, canvas_tokens: torch.Tensor):
@@ -131,6 +133,8 @@ def _as_prompt_token_tensor(input_ids) -> torch.Tensor:
         raise ValueError("prompt token ids must have shape [batch, seq_len]")
     if torch.any(tokens < 0).item():
         raise ValueError("prompt token ids must be non-negative")
+    if torch.any(tokens > torch.iinfo(torch.int32).max).item():
+        raise ValueError("prompt token ids must fit int32 device token buffers")
     return tokens
 
 

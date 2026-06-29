@@ -518,6 +518,7 @@ def test_generate_from_prompt_tokens_rejects_empty_prompt_tokens_before_zero_blo
     [
         (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
         (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
 def test_generate_from_prompt_tokens_rejects_invalid_token_ids_before_zero_block_fast_path(prompt_tokens, message):
@@ -1630,6 +1631,7 @@ def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
     [
         (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
         (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
 def test_host_canvas_to_device_rejects_invalid_token_ids(canvas_tokens, message):
@@ -1708,6 +1710,7 @@ def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
     [
         (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integer token ids"),
         (torch.tensor([[1, -2]], dtype=torch.long), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
 def test_host_tokens_to_device_rejects_invalid_token_ids(tokens, message):
@@ -1767,6 +1770,7 @@ def test_tokenize_prompt_accepts_existing_token_tensor():
     [
         (torch.tensor([[1.5, 2.0]], dtype=torch.float32), "integers"),
         (torch.tensor([[1, -2]], dtype=torch.int32), "non-negative"),
+        (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
 def test_tokenize_prompt_rejects_invalid_token_ids(token_ids, message):
