@@ -1195,9 +1195,9 @@ def ttnn_graph_report(request):
     """
     Automatically generate graph reports when config enables it.
 
-    Activates when enable_logging and report_path are set, and either
-    enable_graph_report or enable_comparison_mode is on. Skipped when a graph
-    capture is already active (e.g. a test that manages its own capture).
+    Gates on enable_logging and either enable_graph_report or enable_comparison_mode,
+    then delegates to ``ttnn.graph_report.run_pytest_graph_report_fixture`` for
+    report_path validation, capture lifecycle, and import.
     """
     import ttnn
 
@@ -1208,16 +1208,6 @@ def ttnn_graph_report(request):
     enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
     enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
     if not enable_graph_report and not enable_comparison_mode:
-        yield
-        return
-
-    report_path = getattr(ttnn.CONFIG, "report_path", None)
-    report_name = getattr(ttnn.CONFIG, "report_name", None)
-    if report_path is None or not report_name or str(report_name).strip() == "":
-        yield
-        return
-
-    if ttnn.graph.is_graph_capture_active():
         yield
         return
 

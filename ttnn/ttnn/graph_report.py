@@ -67,21 +67,30 @@ SUPPORTED_REPORT_VERSION = 1
 
 
 def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
-    """Pytest autouse lifecycle for graph capture, import, and comparison flush.
+    """Pytest fixture for automatic graph capture and report generation.
 
-    Lives in ``ttnn.graph_report`` (not tt-metal root ``conftest.py``) so reporting
-    plumbing can evolve without codeowner review on the top-level conftest on every
-    change. Root ``conftest.py`` keeps a thin ``ttnn_graph_report`` stub that gates
-    on ``ttnn.CONFIG`` and delegates here via ``yield from``.
+    This fixture is used to automatically generate the graph report when the
+    `enable_graph_report` or `enable_comparison_mode` configuration options are set.
 
-    This is a generator so pytest runs setup before ``yield`` and teardown in
-    ``finally`` after the test body — same pattern as an inline fixture.
+    This function defines the body of the pytest fixture, but it is not a pytest fixture
+    itself. To be used, it must be returned from a pytest fixture definition that is decorated
+    with `@pytest.fixture`.
     """
     import ttnn
 
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+
+    if ttnn.graph.is_graph_capture_active():
+        yield
+        return
+
     enable_graph_report = getattr(ttnn.CONFIG, "enable_graph_report", False)
     enable_comparison_mode = getattr(ttnn.CONFIG, "enable_comparison_mode", False)
-    report_path = Path(getattr(ttnn.CONFIG, "report_path"))
+    report_path = Path(report_path)
     enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
 
     # Ensure we are torn down before device fixtures: request whichever device
