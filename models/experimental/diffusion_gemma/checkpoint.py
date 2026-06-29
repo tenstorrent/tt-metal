@@ -20,6 +20,7 @@ from safetensors.torch import safe_open
 from models.experimental.diffusion_gemma.weight_mapping import DG_DECODER_PREFIX
 
 TEXT_GENERATION_PREFIXES = (DG_DECODER_PREFIX,)
+STATE_SNAPSHOT_ALLOW_PATTERNS = ("model.safetensors", "model.safetensors.index.json", "*.safetensors")
 
 
 class CheckpointInputs(NamedTuple):
@@ -52,11 +53,37 @@ def _as_prefix_tuple(prefixes: tuple[str, ...] | list[str] | str) -> tuple[str, 
     return tuple(prefixes)
 
 
+def resolve_checkpoint_dir(
+    checkpoint_dir: str | Path,
+    *,
+    local_files_only: bool | None = None,
+    allow_patterns: tuple[str, ...] | list[str] | str | None = STATE_SNAPSHOT_ALLOW_PATTERNS,
+) -> Path:
+    """Return a local checkpoint directory for either a path or HF model id."""
+
+    path = Path(checkpoint_dir)
+    if path.exists():
+        return path
+
+    if path.is_absolute():
+        raise FileNotFoundError(f"checkpoint directory not found: {path}")
+
+    from huggingface_hub import snapshot_download
+
+    kwargs = {}
+    if local_files_only is not None:
+        kwargs["local_files_only"] = local_files_only
+    if allow_patterns is not None:
+        kwargs["allow_patterns"] = list(_as_prefix_tuple(allow_patterns))
+    return Path(snapshot_download(str(checkpoint_dir), **kwargs))
+
+
 def load_text_generation_state_dict(
     checkpoint_dir: str | Path,
     *,
     prefixes: tuple[str, ...] | list[str] | str = TEXT_GENERATION_PREFIXES,
     device: str = "cpu",
+    local_files_only: bool | None = None,
 ) -> dict:
     """Load the raw DiffusionGemma text-generation weights from a HF checkpoint.
 
@@ -66,7 +93,7 @@ def load_text_generation_state_dict(
     encoder / vision / multimodal weights.
     """
 
-    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir = resolve_checkpoint_dir(checkpoint_dir, local_files_only=local_files_only)
     prefixes = _as_prefix_tuple(prefixes)
     index_path = checkpoint_dir / "model.safetensors.index.json"
     state_dict = {}
@@ -120,8 +147,14 @@ def load_checkpoint_inputs(
 ) -> CheckpointInputs:
     """Load tokenizer + text-generation state for the prompt-to-text entrypoint."""
 
-    tokenizer = load_tokenizer(checkpoint_dir, **(tokenizer_kwargs or {}))
-    state_dict = load_text_generation_state_dict(checkpoint_dir, prefixes=state_prefixes, device=device)
+    tokenizer_kwargs = dict(tokenizer_kwargs or {})
+    tokenizer = load_tokenizer(checkpoint_dir, **tokenizer_kwargs)
+    state_dict = load_text_generation_state_dict(
+        checkpoint_dir,
+        prefixes=state_prefixes,
+        device=device,
+        local_files_only=tokenizer_kwargs.get("local_files_only"),
+    )
     return CheckpointInputs(tokenizer=tokenizer, state_dict=state_dict)
 
 
