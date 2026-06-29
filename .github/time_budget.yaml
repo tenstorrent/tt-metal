@@ -84,7 +84,7 @@ ttnn:
     wh_n300_civ2: 545
     bh_p100: 545
     bh_p150b_civ2: 545
-    bh_quietbox_2: 45
+    bh_quietbox_2: 55
     bh_p300: 15
   unit:
     wh_llmbox: 50

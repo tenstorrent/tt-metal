@@ -23,6 +23,7 @@
       timeout: 15
     bh_p300:
       timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
 
 - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
@@ -35,6 +36,7 @@
       timeout: 15
     bh_p300:
       timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
 
 - name: Host IO fast unit test (viommu only)
@@ -42,6 +44,7 @@
   skus:
     bh_p300:
       timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
 - name: sdpa nightly tests (QB2 only)
@@ -49,6 +52,7 @@
   skus:
     bh_quietbox_2:
       timeout: 20
+  owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
 - name: ring sdpa PERF tests (QB2 only)
@@ -59,4 +63,15 @@
   skus:
     bh_quietbox_2:
       timeout: 10
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+
+- name: indexer_score multi-device tests (QB2 only)
+  # The per-device chunk_start (SP=4 and SP=2xTP=2) mesh tests; single-chip cases in the same
+  # file run in tt-metal-l2-nightly. -k selects only the multi-device functions.
+  cmd: pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k indexer_score_qb -svv
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
