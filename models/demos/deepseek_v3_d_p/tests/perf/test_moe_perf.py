@@ -66,6 +66,18 @@ def test_deepseek_v3_moe_perf_loudbox():
 
 
 @pytest.mark.timeout(0)
+def test_moe_perf_8x1_only():
+    run_model_device_perf_test_with_merge(
+        command=_CMD_8X1,
+        expected_device_perf_ns_per_iteration=27_587_332,
+        subdir="deepseek_v3_moe",
+        model_name="deepseek_v3_moe_lb_8x1_dispatch_combine",
+        margin=0.03,
+        comments="seq3200_lb_8x1_dispatch_combine_proxy",
+    )
+
+
+@pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy():
     """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
     if not _is_galaxy_env():

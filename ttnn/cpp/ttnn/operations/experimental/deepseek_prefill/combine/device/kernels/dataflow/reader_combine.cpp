@@ -273,6 +273,12 @@ void kernel_main() {
         read_slots[c] = 0;
     }
 
+    // TEMP pairing-rate measurement: count contributions whose dst_chip matches the
+    // immediately-preceding contribution from the SAME untilizer core (the ceiling on
+    // what per-core look-ahead scatter-pairing could coalesce). Remove after measuring.
+    uint32_t total_contrib = 0;
+    uint32_t paired_contrib = 0;
+
     // Round-robin polling loop — sender polls all untilizer core CBs without blocking on any
     // single one.  Each untilizer core writes routing metadata + row data for every non-local row,
     // then sends ROUTE_INFO_SENTINEL when all its batches are complete.  Sender exits when
@@ -347,6 +353,33 @@ void kernel_main() {
                     uint32_t distance =
                         manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
+                    uint32_t chunk_count = 1;
+                    uint32_t output_page_idx1 = 0;
+                    uint64_t buffer_scratch_noc_addr1 = 0;
+#ifdef ENABLE_SCATTER_PAIRING
+                    // Look ahead one slot in THIS core's ring: if the next contribution is already
+                    // filled by the untilizer and targets the same dst_chip, coalesce both into one
+                    // scatter packet. Never block to form a pair — if the next slot is not yet ready
+                    // (or is the sentinel, or a different dst), fall back to a single unicast.
+                    invalidate_l1_cache();
+                    if (*data_ready_sem_ptrs[c] != consumed[c]) {
+                        uint32_t slot_next = read_slots[c];
+                        volatile tt_l1_ptr uint32_t* ring_meta_next =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_meta_addr[c][slot_next]);
+                        uint32_t next_meta0 = ring_meta_next[0];
+                        if (next_meta0 != ROUTE_INFO_SENTINEL && next_meta0 == dst_chip) {
+                            output_page_idx1 = ring_meta_next[1] * num_experts_per_tok + ring_meta_next[2];
+                            buffer_scratch_noc_addr1 = buffer_scratch_noc_addr_table[c][slot_next];
+                            read_slots[c] = (slot_next + 1) & SLOTS_PER_UNTILIZER_MASK;
+                            consumed[c]++;
+                            chunk_count = 2;
+                        }
+                    }
+                    constexpr uint32_t route_info_header_bytes = 2 * l1_alignment;
+#else
+                    constexpr uint32_t route_info_header_bytes = l1_alignment;
+#endif
+
                     cb_reserve_back(cb_route_info_id, 1);
                     uint32_t cb_base = get_write_ptr(cb_route_info_id);
                     volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
@@ -357,18 +390,44 @@ void kernel_main() {
                     // and ignores slots [0..1]. All four slots are written unconditionally so the
                     // 2D writer doesn't see uninitialized garbage in the dst_chip slot.
                     route_info[3] = dst_chip;
+#ifdef ENABLE_SCATTER_PAIRING
+                    route_info[4] = output_page_idx1;  // valid only when chunk_count == 2
+                    route_info[5] = chunk_count;
+#endif
                     {
                         // DeviceZoneScopedN("sending-for-FABRIC-write");
-                        uint32_t output_dst = cb_base + l1_alignment;
+                        uint32_t output_dst = cb_base + route_info_header_bytes;
                         noc_async_read(buffer_scratch_noc_addr, output_dst, aligned_output_page_size);
+                        if (chunk_count == 2) {
+                            noc_async_read(
+                                buffer_scratch_noc_addr1,
+                                output_dst + aligned_output_page_size,
+                                aligned_output_page_size);
+                        }
                         noc_async_read_barrier();
                     }
                     cb_push_back(cb_route_info_id, 1);
+
+                    // Achievable pairing-rate measurement (actual coalesced pairs). Remove before PR.
+                    total_contrib += chunk_count;
+                    if (chunk_count == 2) {
+                        paired_contrib++;
+                        // Return the second consumed slot's credit (the base credit is returned below).
+                        noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
+                    }
                 }
                 noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
             }
         }
     }
+
+    // TEMP achievable-pairing measurement: per-sender totals. paired == fabric writes saved
+    // (each coalesced look-ahead pair turns 2 fabric writes into 1).
+    DPRINT(
+        "COMBINE_PAIRING total={} paired={} writes_with_pair={}\n",
+        total_contrib,
+        paired_contrib,
+        total_contrib - paired_contrib);
 
     // Push sentinel to signal writer that all dispatches are done
     cb_reserve_back(cb_route_info_id, 1);

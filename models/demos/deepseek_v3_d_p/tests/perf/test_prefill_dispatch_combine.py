@@ -187,6 +187,7 @@ def test_ttnn_dispatch_combine(
         num_links=num_links,
         topology=topology,
         init_zeros=True,
+        fp8_output=True,
     )
 
     # Dispatch → production layout transform → combine (mirrors tt_moe.py).

@@ -133,6 +133,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         num_links);
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    log_info(tt::LogOp, "fabric_max_packet_size: {}", fabric_max_packet_size);
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const auto [neighbors, directions] =
@@ -440,9 +441,21 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     {
         constexpr uint32_t rw_buffering = 2;
 
-        uint32_t route_info_page_size = l1_alignment;
+        // Scatter-pairing (FP8 only) coalesces up to 2 same-dst pages into one route_info entry:
+        // the header widens to 2*l1_alignment (room for page_idx1 + chunk_count) and the payload
+        // region holds 2 output pages. Must stay in sync with reader_combine / writer_combine,
+        // which gate the same layout on the ENABLE_SCATTER_PAIRING define below.
+        const bool scatter_pairing = operation_attributes.use_fp8_combine;
+        uint32_t route_info_page_size = scatter_pairing ? 2 * l1_alignment : l1_alignment;
         uint32_t output_payload_page_size = detail::get_aligned_page_size(output_tensor);
-        uint32_t merged_page_size = route_info_page_size + output_payload_page_size;
+        // Coalesced payload (2 pages) must fit one fabric packet, else the scatter send overruns
+        // the EDM channel buffer. Holds for FP8 (2*7168 = 14336 = BH max); fail loud if it ever doesn't.
+        TT_FATAL(
+            !scatter_pairing || 2 * output_payload_page_size <= fabric_max_packet_size,
+            "Scatter-pairing requires 2 output pages ({} B) to fit one fabric packet ({} B)",
+            2 * output_payload_page_size,
+            fabric_max_packet_size);
+        uint32_t merged_page_size = route_info_page_size + (scatter_pairing ? 2 : 1) * output_payload_page_size;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = rw_buffering * merged_page_size,
             .core_ranges = sender_core_grid,
@@ -593,6 +606,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     std::map<std::string, std::string> reader_defines = fabric_defines;
     reader_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
     reader_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
+    // Defined (#ifdef-gated in the kernel) only when FP8 makes two pages fit one fabric packet.
+    if (operation_attributes.use_fp8_combine) {
+        reader_defines["ENABLE_SCATTER_PAIRING"] = "1";
+    }
 
     const bool init_zeros = operation_attributes.init_zeros;
     tt::tt_metal::KernelHandle writer_untilize_kernel_id = 0;
@@ -852,6 +869,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
     writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
+    // Must match reader_combine's gating: scatter-write the coalesced 2-page payload.
+    if (operation_attributes.use_fp8_combine) {
+        writer_defines["ENABLE_SCATTER_PAIRING"] = "1";
+    }
 
     // writer_untilize runs on untilizer cores for BOTH layouts now: it consumes cb_untilize_id
     // (c_2 — produced by the compute kernel in TILE, or directly by reader_untilize in ROW_MAJOR)
