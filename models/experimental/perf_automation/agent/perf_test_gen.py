@@ -18,6 +18,7 @@ from pathlib import Path
 # Structural reference handed to the LLM (the seamless bounded-perf pattern, generic-ized).
 _SKELETON_REF = """
 import os
+import time
 import pytest
 import ttnn
 # from <model>.tt.<generator> import <Generator>   # lift the import from the demo
@@ -49,12 +50,14 @@ def test_<task>_perf(device_params, device):
             _op = getattr(_mod, _n, None)
             if type(_op).__name__ == "FastOperation":     # every dispatched ttnn op, by type
                 _orig.append((_mod, _n, _op)); setattr(_mod, _n, _draining(_op))
+    _fw0 = time.monotonic()
     try:
         out = ...  # run the pipeline BOUNDED (cap decode via PERF_MAX_NEW_TOKENS, or one forward)
         try: ttnn.ReadDeviceProfiler(device)
         except Exception: pass
     finally:
         for _mod, _n, _f in _orig: setattr(_mod, _n, _f)
+    print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _fw0) * 1000.0))
     assert out is not None   # perf only — NO PCC
 """
 
@@ -212,6 +215,9 @@ def generate_perf_test(
         "defines a large seq constant, OVERRIDE it with a small value here (env-overridable, small default). "
         "A perf profile only needs a representative dispatch-dense pass, not the max shape.\n"
         "- NO PCC / correctness assertions (this is perf only) — just assert the pipeline produced output.\n"
+        "- TIME THE FORWARD: keep the skeleton's time.monotonic() bracket around the bounded forward and "
+        'the final print("FORWARD_WALL_MS=...") VERBATIM — the harness reads it as an independent '
+        "end-to-end check on the profiler capture. Do not remove or rename it.\n"
         "- Lift the imports + build args straight from the demo above.\n\n"
         f"Use this structural skeleton (adapt the build+run to the demo):\n{_SKELETON_REF}\n"
     )
