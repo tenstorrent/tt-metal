@@ -569,18 +569,18 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         Drop-in for :meth:`_attention` on the decode paths: fuses the scale, the
         additive ``mask``, the per-head sink, and both matmuls into one device op.
 
-        ``q`` ``[1, H, 1, Dh]``; ``kv`` is the shared K==V ``[1, 1, Skv, Dh]``
-        (MQA, one KV head); ``mask`` ``[1, 1, 1, Skv]`` additive (``0`` valid /
-        ``_MASK_NEG`` masked). The op consumes Q as ``[1, B, H, Dh]`` (one row per
-        batch) and emits the same, so we swap the head/seq axes around the call.
+        ``q`` ``[1, 1, H, Dh]`` (already the op's ``[1, B, H, Dh]`` decode head
+        layout, produced by :meth:`_qkv`); ``kv`` is the shared K==V
+        ``[1, 1, Skv, Dh]`` (MQA, one KV head); ``mask`` ``[1, 1, 1, Skv]`` additive
+        (``0`` valid / ``_MASK_NEG`` masked). The op emits ``[1, 1, H, Dh]`` too, so
+        no head/seq transposes are needed around the call.
 
         The op requires the mask to carry the same (padded) head count as Q, so the
         head-independent ``mask`` is broadcast across the ``H`` head axis first.
         """
-        q_in = ttnn.transpose(q, 1, 2)  # [1, H, 1, Dh] -> [1, 1, H, Dh]
         mask_h = ttnn.repeat(mask, ttnn.Shape([1, 1, self.num_heads, 1]))  # [1, 1, H, Skv]
-        attn = ttnn.transformer.scaled_dot_product_attention_decode(
-            q_in,
+        return ttnn.transformer.scaled_dot_product_attention_decode(
+            q,
             kv,
             kv,  # K == V (shared single KV head)
             is_causal=False,
@@ -589,9 +589,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             scale=self.scaling,
             program_config=self._sdpa_pcfg,
             compute_kernel_config=_HIFI4_SDPA,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, 1, H, Dh]
-        return ttnn.transpose(attn, 1, 2)  # -> [1, H, 1, Dh]
 
     def _grouped_output(self, attn: ttnn.Tensor) -> ttnn.Tensor:
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
@@ -613,39 +612,64 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     ) -> ttnn.Tensor:
         """Fused SDPA-decode + output RoPE + grouped output projection.
 
-        Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` ``[B,H,1,Dh]``,
+        Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` ``[B,1,H,Dh]``,
         the shared K==V ``kv`` ``[B,1,Skv,Dh]`` and the additive ``mask``
         ``[1,1,1,Skv]`` -> the block's hidden output ``[B,1,1,D]``. The only
         per-path difference is how ``kv`` / ``mask`` are assembled (concat-grown
         cache + implicit-zero mask for eager vs. fixed in-place cache + device mask
         for the traced path); the attention compute itself is identical.
         """
-        attn = self._sdpa_decode(q, kv, mask)  # [B, H, 1, Dh]
+        attn = self._sdpa_decode(q, kv, mask)  # [B, 1, H, Dh]
         attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
-        attn = ttnn.transpose(attn, 1, 2)  # [B, 1, H, Dh]
-        return self._grouped_output(attn)
+        return self._grouped_output(attn)  # already [B, 1, H, Dh] for the grouped proj
 
     def _qkv(self, hidden: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Project + RoPE the query and (shared) K=V for ``hidden`` ``[B, S, 1, D]``.
 
-        Returns ``q`` ``[B, H, S, Dh]`` and the rotated ``kv`` ``[B, 1, S, Dh]``
-        (pre-compressor, pre-cache). Shared by the decode paths.
+        Returns ``q`` ``[B, 1, H, Dh]`` (the SDPA-decode head layout) and the
+        rotated ``kv`` ``[B, 1, S, Dh]`` (pre-compressor, pre-cache). Shared by the
+        decode paths.
+
+        The per-head split uses the fused ``nlp_create_qkv_heads_decode`` op (as in
+        the gpt-oss decode attention) instead of manual ``reshape``/``transpose``:
+        Q and the shared K=V are concatenated into one ``[1, 1, B, (H+2)*Dh]`` row
+        (K==V, so the single KV head is duplicated for the op's K and V slices) and
+        split into the ``[1, B, H, Dh]`` decode layout in one device op. Producing Q
+        directly in this layout also removes the head/seq transposes that previously
+        wrapped the SDPA-decode call.
         """
-        b, s, _, _ = hidden.shape
+        b, s, _, _ = hidden.shape  # B == 1, S == 1 (decode)
         h, dh = self.num_heads, self.head_dim
         _profile(self.device)
 
-        q_residual = self.q_a_norm(self.q_a_proj(hidden))  # [B, S, q_lora_rank]
-        q = self.q_b_proj(q_residual)  # [B, S, H*Dh]
-        q = ttnn.reshape(q, [b, s, h, dh])
-        q = ttnn.transpose(q, 1, 2)  # [B, H, S, Dh]
-        q = _rms_norm_unweighted(q, self.eps)
-        q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)
-
+        q = self.q_b_proj(self.q_a_norm(self.q_a_proj(hidden)))  # [B, S, H*Dh]
         kv = self.kv_norm(self.kv_proj(hidden))  # [B, S, Dh]
-        kv = ttnn.reshape(kv, [b, s, 1, dh])
-        kv = ttnn.transpose(kv, 1, 2)  # [B, 1, S, Dh]
-        kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
+
+        # Fuse [Q | K | V] (K==V) -> [1, 1, B, (H+2)*Dh] and split into the decode
+        # head layout. The op emits height-sharded heads; convert back to
+        # interleaved L1 so the custom RoPE / cache / SDPA path stays unchanged.
+        fused = ttnn.concat(
+            [
+                ttnn.reshape(q, [1, 1, b * s, h * dh]),
+                ttnn.reshape(kv, [1, 1, b * s, dh]),
+                ttnn.reshape(kv, [1, 1, b * s, dh]),
+            ],
+            dim=-1,
+        )
+        q_h, kv_h, v_h = ttnn.experimental.nlp_create_qkv_heads_decode(
+            fused, num_heads=h, num_kv_heads=1, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        )
+        ttnn.deallocate(v_h)  # K == V, so the duplicated V head is unused
+        ttnn.deallocate(fused)
+        q = ttnn.sharded_to_interleaved(q_h, ttnn.L1_MEMORY_CONFIG)  # [B, 1, H, Dh]
+        kv = ttnn.sharded_to_interleaved(kv_h, ttnn.L1_MEMORY_CONFIG)  # [B, 1, 1, Dh]
+        ttnn.deallocate(q_h)
+        ttnn.deallocate(kv_h)
+
+        q = _rms_norm_unweighted(q, self.eps)
+        q = _apply_rope(q, cos, sin, self.rot, self.rope_dim)  # [B, 1, H, Dh]
+
+        kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)  # [B, 1, S, Dh]
         return q, kv
 
     def decode(
@@ -672,7 +696,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         """
         b, s, _, _ = hidden.shape  # s == 1
 
-        q, kv_new = self._qkv(hidden, cos, sin)  # q [B,H,1,Dh], kv_new [B,1,1,Dh]
+        q, kv_new = self._qkv(hidden, cos, sin)  # q [B,1,H,Dh], kv_new [B,1,1,Dh]
         kv = kv_cache.sliding.append(kv_new)  # [B, 1, L_sld, Dh]
 
         if self.compressor is not None:
@@ -707,7 +731,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         ``_MASK_NEG`` for unwritten slots and not-yet-emittable windows). Equivalent
         to :meth:`decode` but with static shapes / addresses for a reusable trace.
         """
-        q, kv_new = self._qkv(hidden, cos, sin)  # q [1,H,1,Dh], kv_new [1,1,1,Dh]
+        q, kv_new = self._qkv(hidden, cos, sin)  # q [1,1,H,Dh], kv_new [1,1,1,Dh]
         _update_cache_at(scache.sliding, kv_new, sliding_pos)
         kv = scache.sliding  # [1, 1, window, Dh] (updated in place)
 
