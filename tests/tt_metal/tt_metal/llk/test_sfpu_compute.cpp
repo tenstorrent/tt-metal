@@ -1384,7 +1384,7 @@ bool run_sfpu_typecast(
     auto packed_in = sfpu_util::typecast_pack(in_fmt, vals);
     auto golden = sfpu_util::typecast_golden(in_fmt, out_fmt, packed_in);
 
-    // Flag selection mirrors ttnn.typecast / the tt-llk typecast test (see test_eltwise_unary_typecast.py:
+    // Flag selection mirrors the typecast op / the tt-llk typecast test (see test_eltwise_unary_typecast.py:
     // _preserve_fp32_precision, _production_dest_acc, unpack_to_dest), so the compute-side datapath matches
     // the LLK reference these conversions pass under.
     const bool in_is_32bit = in_fmt == tt::DataFormat::Float32 || in_fmt == tt::DataFormat::Int32;
@@ -1838,7 +1838,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
 //
 // 32-bit inputs (Int32/Float32) are unpacked straight into a 32-bit Dest (UnpackToDestFp32); every other
 // input (Float16_b/MX/Int16) reaches Dest via the FPU A2D datacopy. run_sfpu_typecast picks
-// fp32_dest_acc_en and unpack_to_dest the way ttnn.typecast does (see tt-llk test_eltwise_unary_typecast):
+// fp32_dest_acc_en and unpack_to_dest the way the typecast op does (see tt-llk test_eltwise_unary_typecast):
 // narrow integer pairs (e.g. Int16 -> Float16_b) stay in a 16-bit Dest. Skipped classes: a 16-bit input
 // widening into a 32-bit output (Float16_b/Int16 -> Float32/Int32; an MX input counts as 16-bit, so
 // MX -> Float32/Int32 is skipped too), and any UInt8 endpoint (passes in tt-llk but needs datacopy /
@@ -1860,19 +1860,13 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
     // likely the unpacker's UInt8->INT8 register masking (masked_data_format) is not applied on this path.
     // A UInt8 OUTPUT mismatches on the 8-bit pack value encoding (also independent of Dest width; pack_src
     // already follows the output format). Both need metal2 datapath fixes, not test-harness changes.
-    if (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8) {
-        GTEST_SKIP() << "UInt8 typecast not yet wired through the metal compute-API harness";
-    }
+    // if (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8) {
+    //     GTEST_SKIP() << "UInt8 typecast not yet wired through the metal compute-API harness";
+    // }
 
-    // A 16-bit input widening into a 32-bit output (e.g. Float16_b -> Int32) is not supported: the
-    // narrow source cannot widen into a 32-bit Dest. Only 16->16, 32->16 and 32->32 are supported. An
-    // MX input arrives in Dest as Float16_b, so it counts as 16-bit data here.
-    const bool in_is_16bit = in_fmt == tt::DataFormat::Float16_b || in_fmt == tt::DataFormat::Int16 ||
-                             unit_tests::sfpu_util::typecast_is_mx(in_fmt);
-    const bool out_is_32bit = out_fmt == tt::DataFormat::Float32 || out_fmt == tt::DataFormat::Int32;
-    if (in_is_16bit && out_is_32bit) {
-        GTEST_SKIP() << "16-bit input -> 32-bit output not supported";
-    }
+    // if ((out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32) || (in_fmt == tt::DataFormat::Int16 && out_fmt == tt::DataFormat::Float32)) {
+    //     GTEST_SKIP() << "16-bit input -> 32-bit output not supported";
+    // }
 
     log_info(
         tt::LogTest,
@@ -1928,7 +1922,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Int16),
         std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::MxFp8R),
         std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::UInt8),
-        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::MxFp8R)),
+        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::MxFp8R),
+        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::UInt8),
+        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::UInt8)),
     [](const testing::TestParamInfo<std::tuple<tt::DataFormat, tt::DataFormat>>& info) {
         return unit_tests::sfpu_util::typecast_device_format_name(std::get<0>(info.param)) + "_to_" +
                unit_tests::sfpu_util::typecast_device_format_name(std::get<1>(info.param));

@@ -14,10 +14,10 @@ namespace ckernel {
 
 #ifdef ARCH_QUASAR
 namespace detail {
-// MX / block-float typecasts are a pure unpack/pack gasket conversion (a datacopy) on Quasar:
+// MX / block-float typecasts are a pure unpack/pack format conversion (a datacopy) on Quasar:
 // the unpacker converts MX -> float into Dest and the packer converts float -> MX on the way out,
 // so no SFPU op runs. This mirrors the BH "handled by unpacker/packer" no-op bfp arms.
-inline constexpr bool _typecast_is_mx_gasket_(DataFormat fmt) {
+inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
     return fmt == DataFormat::MxFp8R || fmt == DataFormat::MxFp8P || fmt == DataFormat::MxFp6R ||
            fmt == DataFormat::MxFp6P || fmt == DataFormat::MxFp4 || fmt == DataFormat::MxInt8 ||
            fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2 || fmt == DataFormat::MxFp4_2x_A ||
@@ -73,16 +73,14 @@ ALWI void typecast_tile(uint32_t idst) {
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
 #ifdef ARCH_QUASAR
-    // An MX endpoint is unpacked to / packed from Float16_b by the gasket, so at the SFPU level an MX
+    // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
-    // collapse to a pure gasket no-op, while MX <-> {Float32, Int32, ...} run the Float16_b <-> X SFPU
-    // conversion on top of the gasket (X -> MX runs X -> Float16_b, then the packer emits MX).
-    constexpr DataFormat eff_in = detail::_typecast_is_mx_gasket_(in_format) ? DataFormat::Float16_b : in_format;
-    constexpr DataFormat eff_out = detail::_typecast_is_mx_gasket_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (eff_in == eff_out) {
-        // No SFPU op: pure unpack/pack gasket conversion (datacopy).
-    } else {
-        // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
+    // collapse to a pure format no-op, while MX <-> {Float32, Int32, ...} run the Float16_b <-> X SFPU
+    // conversion on top of the format (X -> MX runs X -> Float16_b, then the packer emits MX).
+    constexpr DataFormat eff_in = detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
+    constexpr DataFormat eff_out = detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
+    if constexpr (eff_in != eff_out) {
+         // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -411,13 +409,11 @@ ALWI void typecast_tile_init() {
 
 #ifdef ARCH_QUASAR
     // Mirror typecast_tile: an MX endpoint behaves as Float16_b at the SFPU level, so only a
-    // non-trivial effective conversion needs the SFPU init (MX <-> Float16_b is a gasket no-op).
-    constexpr DataFormat eff_in = detail::_typecast_is_mx_gasket_(in_format) ? DataFormat::Float16_b : in_format;
-    constexpr DataFormat eff_out = detail::_typecast_is_mx_gasket_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (eff_in == eff_out) {
-        // No SFPU init: pure unpack/pack gasket conversion.
-    } else {
-        MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::typecast>(sfpu::init_typecast)));
+    // non-trivial effective conversion needs the SFPU init (MX <-> Float16_b is a format no-op).
+    constexpr DataFormat eff_in = detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
+    constexpr DataFormat eff_out = detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
+    if constexpr (eff_in != eff_out) {
+        MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
     }
 #else
     if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b) {
