@@ -151,6 +151,11 @@ def test_wan_transformer_block(
     golden = load_golden("wan_transformer_block", param_id)
 
     # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
+    _, commit_hash = TorchWanTransformer3DModel.load_config(
+        MODEL_NAME, subfolder="transformer", return_commit_hash=True
+    )
+    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
+
     parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
         MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
     )
@@ -325,6 +330,11 @@ def test_wan_transformer_model(
     golden = load_golden("wan_transformer_model", param_id)
 
     # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
+    _, commit_hash = TorchWanTransformer3DModel.load_config(
+        MODEL_NAME, subfolder="transformer", return_commit_hash=True
+    )
+    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
+
     torch_model = TorchWanTransformer3DModel.from_pretrained(
         MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
     )
@@ -438,6 +448,11 @@ def test_wan_transformer_inner_step(
     golden = load_golden("wan_transformer_inner_step", param_id)
 
     # Load pretrained torch model and truncate to 1 layer
+    _, commit_hash = TorchWanTransformer3DModel.load_config(
+        MODEL_NAME, subfolder="transformer", return_commit_hash=True
+    )
+    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
+
     torch_model = TorchWanTransformer3DModel.from_pretrained(
         MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
     )
