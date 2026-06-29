@@ -23,12 +23,6 @@ enum class ArgConfig : uint8_t {
     RuntimeTensorShape = 1 << 4,
     RuntimeShardShape = 1 << 5,
     RuntimeBankCoords = 1 << 6,
-    // Shards are distributed contiguously across banks (shard-contiguous; ShardDistributionStrategy::CONTIGUOUS_1D)
-    // rather than round-robin. This bit is the *compile-time* default, used only when num_banks is also
-    // compile-time. When num_banks is runtime (RuntimeNumBanks), the shard-contiguous flag instead rides in the top
-    // bit of the runtime num_banks word (see ShardContiguousBit), so it can vary per dispatch without
-    // recompiling. Either way the flag carries no extra args/slots; it only changes the shard->bank math.
-    IsShardContiguous = 1 << 7,
     Runtime = RuntimeRank | RuntimeNumBanks | RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
 };
 
@@ -36,10 +30,11 @@ using ArgsConfig = Flags<ArgConfig>;
 constexpr ArgsConfig operator|(ArgConfig a, ArgConfig b) noexcept { return ArgsConfig(a) | b; }
 constexpr ArgsConfig operator|(ArgConfig a, ArgsConfig b) noexcept { return ArgsConfig(a) | b; }
 
-// When num_banks is a common runtime arg, its CRTA word doubles as the carrier for the shard-contiguous distribution
-// flag: the value lives in the low bits and the shard-contiguous flag in the top bit. num_banks is tiny (number of
-// DRAM/L1 banks), so this never collides with a real bank count. This lets the distribution strategy vary
-// at runtime without adding a CRTA slot or a new ArgConfig bit, gated on RuntimeNumBanks being set.
+// The num_banks word (whether it is a compile-time arg or a common runtime arg) doubles as the carrier for the
+// shard-contiguous distribution flag: the bank count lives in the low bits and the shard-contiguous flag in the top
+// bit. num_banks is tiny (number of DRAM/L1 banks), so this never collides with a real bank count. This lets the
+// distribution strategy be selected -- at compile time or per dispatch -- without adding an arg/slot or an ArgConfig
+// bit.
 //
 // pack/unpack are the single source of truth for this layout, so the host encoder and the device decoders
 // cannot drift. Callers must ensure num_banks < ShardContiguousBit (always true for real bank counts).

@@ -29,10 +29,6 @@ struct TensorAccessorArgs {
     static constexpr bool tensor_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape);
     static constexpr bool shard_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape);
     static constexpr bool bank_coords_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords);
-    // Compile-time default for shard-contiguous distribution (CONTIGUOUS_1D) vs. round-robin. Used
-    // directly when num_banks is compile-time. When num_banks is runtime, the live value is read from the
-    // runtime num_banks word instead (see resolve_shard_contiguous()). Carries no extra args/slots.
-    static constexpr bool is_shard_contiguous = args_config.test(tensor_accessor::ArgConfig::IsShardContiguous);
 
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time
@@ -59,13 +55,22 @@ struct TensorAccessorArgs {
         }
     }();
 
-    static constexpr uint32_t NumBanksCT = [] {
+    // Raw compile-time num_banks word: the bank count in the low bits and the shard-contiguous flag in the top bit
+    // (see arg_config.hpp). NumBanksCT / is_shard_contiguous are the unpacked views used everywhere else.
+    static constexpr uint32_t NumBanksRawCT = [] {
         if constexpr (!is_sharded || num_banks_is_crta) {
             return 0;
         } else {
             return get_compile_time_arg_val(NumBanksCTAOffset);
         }
     }();
+
+    static constexpr uint32_t NumBanksCT = tensor_accessor::unpack_num_banks(NumBanksRawCT);
+
+    // Shard-contiguous distribution (CONTIGUOUS_1D) vs. round-robin. When num_banks is compile-time this is read from
+    // the top bit of the compile-time num_banks word; when num_banks is runtime, the live value is read from the
+    // runtime num_banks word instead (see resolve_shard_contiguous()). Carries no extra args/slots.
+    static constexpr bool is_shard_contiguous = tensor_accessor::unpack_is_shard_contiguous(NumBanksRawCT);
 
     static constexpr uint32_t PhysicalNumBanksCT = (NumBanksCT + 1) / 2;
 
@@ -118,8 +123,9 @@ public:
     }
 
     // Whether shards are distributed contiguously (shard-contiguous, CONTIGUOUS_1D) vs. round-robin. When num_banks is
-    // compile-time this is the constexpr config bit; when num_banks is runtime it is read from the top bit
-    // of the runtime num_banks word, so it can vary per dispatch without recompiling.
+    // compile-time this is the constexpr is_shard_contiguous (top bit of the compile-time num_banks word); when
+    // num_banks is runtime it is read from the top bit of the runtime num_banks word, so it can vary per dispatch
+    // without recompiling.
     constexpr bool resolve_shard_contiguous() const {
         if constexpr (!num_banks_is_crta) {
             return is_shard_contiguous;

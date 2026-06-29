@@ -56,11 +56,11 @@ void append_sharded_args(
         args.push_back(rank);
     }
     if (add_num_banks) {
-        // When num_banks is a runtime arg, its top bit carries the shard-contiguous flag so the strategy
-        // can vary per dispatch without recompiling (no extra CRTA slot). Compile-time num_banks instead
-        // relies on the ArgConfig::IsShardContiguous bit.
-        const bool pack_shard_contiguous = is_runtime && buffer_distribution_spec.shard_distribution_strategy() ==
-                                                             ShardDistributionStrategy::CONTIGUOUS_1D;
+        // The num_banks word (compile-time or runtime) carries the shard-contiguous flag in its top bit, so the
+        // distribution strategy needs no extra arg/slot and no ArgConfig bit. pack/unpack (arg_config.hpp) are the
+        // single source of truth for this layout.
+        const bool pack_shard_contiguous =
+            buffer_distribution_spec.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D;
         TT_FATAL(
             n_banks < tensor_accessor::ShardContiguousBit,
             "num_banks {} is too large to pack the shard-contiguous flag",
@@ -151,14 +151,6 @@ void TensorAccessorArgs::update_args_config() {
 
     if (buffer_->buffer_distribution_spec().has_value()) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
-        // Shard-contiguous distribution is baked into the compile-time config bit only when num_banks is compile-time.
-        // When num_banks is runtime, the flag rides in the runtime num_banks word instead, so the same
-        // binary serves both strategies; leave the config bit clear to keep the IsShardContiguous template fixed.
-        const bool is_shard_contiguous = buffer_->buffer_distribution_spec()->shard_distribution_strategy() ==
-                                         ShardDistributionStrategy::CONTIGUOUS_1D;
-        args_config_.set(
-            tensor_accessor::ArgConfig::IsShardContiguous,
-            is_shard_contiguous && !args_config_.test(tensor_accessor::ArgConfig::RuntimeNumBanks));
     } else {
         args_config_ = tensor_accessor::ArgConfig::None;
     }
