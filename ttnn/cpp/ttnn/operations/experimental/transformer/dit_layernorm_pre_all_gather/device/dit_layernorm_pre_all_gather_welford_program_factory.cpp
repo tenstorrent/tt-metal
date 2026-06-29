@@ -122,19 +122,13 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
-    // Intermediate scratch CB (c_1) holds data only for the final transpose operation,
-    // so its format mirrors out_data_format. When both that format is Float32 and DEST
-    // is in fp32 mode, force fp32 unpack on c_1 too so the read-back doesn't truncate to
-    // TF32. For non-fp32 outputs the final pack to c_14 truncates anyway, so unpacking to
-    // fp32 would not be useful.
-    if (out_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
+    // CB c_1 is no longer used for the transpose round-trip (the compute kernel now uses
+    // transpose_wh_dest to transpose in-place in DEST), but remains allocated for
+    // compute_kernel_hw_startup and transpose_wh_init format configuration.
 
-    // Argument to gate the post-transpose welford state re-establishment in the kernel,
-    // which is only needed when unpacking to fp32.
     KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
         {"welford_unpack_fp32_active", welford_unpack_fp32_active ? 1u : 0u},
+        {"fp32_dest_acc_en", fp32_dest_acc_en ? 1u : 0u},
     };
 
     // Compute kernel
