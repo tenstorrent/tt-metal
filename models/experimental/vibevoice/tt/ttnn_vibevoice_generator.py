@@ -431,6 +431,7 @@ class TTVibeVoiceGenerator:
         condition: ttnn.Tensor,
         neg_condition: ttnn.Tensor,
         latent_size: int = 64,
+        noise_2x: Optional[torch.Tensor] = None,
         rng: Optional[torch.Generator] = None,
     ) -> ttnn.Tensor:
         if self.ref_inference is not None:
@@ -446,13 +447,16 @@ class TTVibeVoiceGenerator:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Draw 2×latent_size values to match reference's torch.randn(2, vae_dim)
-        # (reference cats pos+neg into batch=2, draws one noise per batch entry,
-        # then uses speech[:1]).  This keeps our global RNG state aligned.
+        # Initial diffusion noise: 2×latent_size values matching the reference's
+        # torch.randn(2, vae_dim) (it cats pos+neg into batch=2, draws one noise per
+        # entry, then uses speech[:1]).  Normally pre-drawn once before the AR loop and
+        # passed in via ``noise_2x`` (keeps the global RNG aligned with the reference);
+        # falls back to drawing here when not supplied.
         # IMPORTANT: draw in float32 (the reference dtype) then cast to bfloat16 —
         # torch.randn(dtype=bfloat16) produces *different* values than randn(float32)
         # for the same seed, which would feed the diffusion completely different noise.
-        noise_2x = torch.randn(2, 1, 1, latent_size, dtype=torch.float32, generator=rng).to(torch.bfloat16)
+        if noise_2x is None:
+            noise_2x = torch.randn(2, 1, 1, latent_size, dtype=torch.float32, generator=rng).to(torch.bfloat16)
         noise = noise_2x[:1]
         initial_latent = ttnn.as_tensor(
             noise,
@@ -515,7 +519,7 @@ class TTVibeVoiceGenerator:
         scale = self.speech_scaling_factor or 1.0
         bias = self.speech_bias_factor or 0.0
 
-        # Inverse-normalise the current latent frame to the acoustic VAE space,fully on device (no host round-trip).
+        # Inverse-normalise the current latent frame to the acoustic VAE space, fully on device (no host round-trip).
         # scale/bias are Python floats, so this is scaled = latent * (1/scale) - bias.
         lat_f32 = ttnn.typecast(speech_latent, ttnn.float32)
         scaled_f32 = ttnn.subtract(
@@ -705,6 +709,16 @@ class TTVibeVoiceGenerator:
         step_hidden = prefill_hidden
         _vv_debug(f"AR loop: max_steps={max_steps} first_token={next_token} ({self._token_label(next_token)})")
 
+        # Pre-draw all diffusion init noise here — after the voice-encode RNG draws in
+        # prefill, before the AR loop — hoisting the per-frame torch.randn out of the
+        # loop.  torch.randn(N, ...) yields the same values, in order, as N sequential
+        # per-frame draws, so this is bit-identical and keeps the global RNG aligned
+        # with the reference.  Sized to max_steps (the upper bound on diffusion frames);
+        # only the first #diffusion-frames rows are consumed.
+        diffusion_noise: Optional[torch.Tensor] = None
+        if self.ref_inference is None:
+            diffusion_noise = torch.randn(max_steps, 2, 1, 1, 64, dtype=torch.float32, generator=rng).to(torch.bfloat16)
+
         diffusion_frames = 0
         _t_decode_start = time.perf_counter()
         for step in range(max_steps):
@@ -733,7 +747,10 @@ class TTVibeVoiceGenerator:
                     cond_neg = _condition_from_hidden(neg_hidden)
 
                 with prof.section("diffusion (CFG x num_steps)"):
-                    speech_latent = self._run_speech_diffusion(cond_pos, cond_neg, latent_size=64, rng=rng)
+                    noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
+                    speech_latent = self._run_speech_diffusion(
+                        cond_pos, cond_neg, latent_size=64, noise_2x=noise_2x, rng=rng
+                    )
 
                 # On-device streaming: fused next-step embed + this frame's audio chunk.
                 with prof.section("post_diffusion (decode+sem_enc+conn)"):

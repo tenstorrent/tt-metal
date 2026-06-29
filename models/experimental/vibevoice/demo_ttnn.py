@@ -129,7 +129,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--output_dir",
-        default="/tmp/vv_ttnn_out",
+        default=str(_VV_ROOT / "output"),
         help="Root output dir; writes {output_dir}/{demo_id}/{demo_id}_tt.wav etc.",
     )
     ap.add_argument("--model_path", default=None, help="VibeVoice checkpoint (auto-download if omitted)")
