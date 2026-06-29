@@ -23,7 +23,7 @@
 - **Compute config**: hard-coded HiFi4 + fp32_dest_acc_en=True
 - **Golden baseline**: 200 / 2767 cells passing (per verifier CLI); 8 OOM on D=512/D=1024; 2440 xfail_expected
 
-### [ ] Refinement 1 — Numerical configurability expansion
+### [x] Refinement 1 — Numerical configurability expansion
 
 **Goal**: add `ttnn.float32`, `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, add `False` to `SUPPORTED["fp32_dest_acc_en"]`, and expose `compute_kernel_config: ttnn.ComputeKernelConfig` on the entry point (already accepted but only True is in SUPPORTED). Cells that fail out of the box (typically `bfloat8_b + fp32_dest_acc_en=False`) land in `EXCLUSIONS`, not in their own refinement. Also add the `EXCLUSIONS` entry for `{dtype: float32, fp32_dest_acc_en: False}` (maxed input + non-maxed acc is rejected, mirrors softmax convention per feature_spec.py).
 
