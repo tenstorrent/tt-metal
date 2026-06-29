@@ -17,17 +17,13 @@ Pipeline (all from local reference/ files):
 """
 
 import os
+import sys
 import time
 
-import scipy.io.wavfile as wavfile
 import torch
 
-from models.experimental.xtts.reference.tokenizer import VoiceBpeTokenizer
-from models.experimental.xtts.reference.xtts import Xtts
-from models.experimental.xtts.reference.xtts_config import XttsConfig
-
 # PyTorch >=2.6 changed torch.load default weights_only=True, which breaks
-# XTTS checkpoint loading. Patch back to False (Coqui model is trusted).
+# XTTS checkpoint loading. Patch BEFORE any TTS imports.
 _orig_load = torch.load
 
 
@@ -37,6 +33,14 @@ def _patched_load(*args, **kwargs):
 
 
 torch.load = _patched_load
+
+import scipy.io.wavfile as wavfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
+
+from models.experimental.xTTS.reference.tokenizer import VoiceBpeTokenizer
+from models.experimental.xTTS.reference.xtts import Xtts
+from models.experimental.xTTS.reference.xtts_config import XttsConfig
 
 MODEL_DIR = os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2")
 REF_WAV = "/home/ubuntu/tt-metal/reference.wav"
@@ -63,6 +67,11 @@ config.load_json(f"{MODEL_DIR}/config.json")
 model = Xtts.init_from_config(config)
 model.load_checkpoint(config, checkpoint_dir=MODEL_DIR, eval=True)
 # No model.cuda() — CPU only
+
+# Confirm XTTS-v2 is running (v2 uses PerceiverResampler, v1 uses prompt_embedding)
+# is_v2 = model.gpt.use_perceiver_resampler
+# print(f"Model version : {'XTTS-v2 ✓ (PerceiverResampler active)' if is_v2 else 'XTTS-v1 (prompt_embedding)'}")
+# print(f"Device        : {next(model.parameters()).device}")
 
 # Show token count before running
 _tok = VoiceBpeTokenizer(vocab_file=f"{MODEL_DIR}/vocab.json")
