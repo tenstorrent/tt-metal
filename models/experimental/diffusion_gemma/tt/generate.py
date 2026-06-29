@@ -216,6 +216,16 @@ def _validate_replay_canvases(canvases) -> None:
             raise ValueError("host_canvases must all have shape [batch, canvas_len]")
 
 
+def _check_replay_block_index(block_idx: int, num_blocks: int, *, kind: str) -> None:
+    if block_idx < 0 or block_idx >= num_blocks:
+        raise IndexError(f"{kind} block index {block_idx} out of range for {num_blocks} blocks")
+
+
+def _check_replay_step_index(step: int, num_steps: int, *, block_idx: int, kind: str) -> None:
+    if step < 0 or step >= num_steps:
+        raise IndexError(f"{kind} step index {step} out of range for block {block_idx} with {num_steps} steps")
+
+
 def make_host_canvas_init_fn(mesh_device, host_canvases):
     """Create a ``generate_blocks`` init hook from fixed host canvas tensors."""
     canvases = [canvas.clone() for canvas in host_canvases]
@@ -223,6 +233,7 @@ def make_host_canvas_init_fn(mesh_device, host_canvases):
 
     def init_canvas_fn(block_idx: int, start_pos: int):
         del start_pos
+        _check_replay_block_index(block_idx, len(canvases), kind="host canvas replay")
         return host_canvas_to_device(mesh_device, canvases[block_idx].clone())
 
     return init_canvas_fn
@@ -244,7 +255,10 @@ def make_host_gumbel_noise_fn(mesh_device, host_gumbel_noise):
             _validate_gumbel_noise(noise)
 
     def gumbel_noise_for_block(block_idx: int):
+        _check_replay_block_index(block_idx, len(blocks), kind="host gumbel replay")
+
         def gumbel_noise_for_step(step: int):
+            _check_replay_step_index(step, len(blocks[block_idx]), block_idx=block_idx, kind="host gumbel replay")
             return host_gumbel_noise_to_device(mesh_device, blocks[block_idx][step].clone())
 
         return gumbel_noise_for_step
@@ -259,7 +273,15 @@ def make_host_noise_tokens_fn(mesh_device, host_noise_tokens):
         _validate_replay_canvases(block)
 
     def noise_tokens_for_block(block_idx: int):
+        _check_replay_block_index(block_idx, len(blocks), kind="host noise-token replay")
+
         def noise_tokens_for_step(step: int):
+            _check_replay_step_index(
+                step,
+                len(blocks[block_idx]),
+                block_idx=block_idx,
+                kind="host noise-token replay",
+            )
             return host_canvas_to_device(mesh_device, blocks[block_idx][step].clone())
 
         return noise_tokens_for_step
