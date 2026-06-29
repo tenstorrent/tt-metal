@@ -830,8 +830,8 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
     // for the high-precision path) followed by Newton-Raphson refinement of
     // y ~= 1 / sqrt(x): y <- y * (1.5 - 0.5 * x * y * y).
     sfpi::vFloat half_x = sfpi::addexp(x, -1);  // 0.5 * x
-    sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(x) >> 1);
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(0x5f1110a0 - i);
+    sfpi::vInt i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 1);
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(0x5f1110a0 - i);
 
     y = y * (1.5f - half_x * y * y);
     y = y * (1.5f - half_x * y * y);

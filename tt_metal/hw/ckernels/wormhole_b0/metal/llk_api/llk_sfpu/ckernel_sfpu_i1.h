@@ -91,12 +91,9 @@ inline void calculate_i1() {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
         // Clamp to [-88.5, 88.5] — exp() saturates near ±88.7 in FP32.
-        sfpi::vFloat lo = -I1_MAX_INPUT;
-        sfpi::vec_min_max(lo, x);
-        sfpi::vFloat hi = I1_MAX_INPUT;
-        sfpi::vec_min_max(x, hi);
+        x = sfpi::symmetric_clamp(x, I1_MAX_INPUT);
 
-        const sfpi::vFloat abs_x = sfpi::setsgn(x, 0);
+        const sfpi::vFloat abs_x = sfpi::abs(x);
 
         sfpi::vFloat val;
         // ─── Polynomial path (always; valid for |x| ≤ 10) ────────────────

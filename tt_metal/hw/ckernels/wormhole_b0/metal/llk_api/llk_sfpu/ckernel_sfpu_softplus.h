@@ -118,9 +118,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // Reconstruct softplus(t):
         //   t >= 0: softplus(t) = t + f(t) = max(0,t) + residual
         //   t < 0:  softplus(t) = f(|t|) = 0 + residual
-        // Branch-free: vec_min_max clamps t to max(0,t), saving 1 instruction vs v_if
-        sfpi::vFloat zero_threshold = 0.0f;
-        sfpi::vec_min_max(zero_threshold, t);
+        t = sfpi::max(t, 0.0f);
         sfpi::vFloat sp = t + residual;
 
         // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)
