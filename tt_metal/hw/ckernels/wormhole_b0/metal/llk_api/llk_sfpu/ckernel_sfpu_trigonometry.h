@@ -119,6 +119,7 @@ inline void calculate_tangent() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vInt i;
@@ -374,6 +375,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
@@ -550,6 +552,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat a = sfpi::setsgn(x, 0);
@@ -647,6 +650,7 @@ sfpi_inline sfpi::vFloat _sfpu_sinh_(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sinh() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat y = _sfpu_sinh_<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
 
@@ -848,7 +852,10 @@ inline void calculate_acosh() {
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_asinh() {
     // SFPU microcode
-    // NOTE: no `#pragma GCC unroll 8` (see calculate_acosh): measured <5% gain.
+    // Pass 2: re-added `#pragma GCC unroll 8` — measured −2.2% (real, <5%) and
+    // kept under the cumulative "speed up every time" goal. acosh/atanh stay
+    // un-unrolled (measured +0.0% / −0.1%: pure neutral, code-growth only).
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
         sfpi::vFloat tmp = inp * inp + sfpi::vConst1;

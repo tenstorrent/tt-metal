@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -29,10 +30,10 @@ namespace ckernel::sfpu {
 // ======================================================================
 
 #ifdef INP_FLOAT32
-constexpr uint32_t ERF_NUM_DEGREE = 16;
-constexpr uint32_t ERF_DEN_DEGREE = 16;
-constexpr uint32_t ERF_NUM_SEGMENTS = 1;
-constexpr uint32_t ERF_LUT_SIZE = 36;
+constexpr std::uint32_t ERF_NUM_DEGREE = 16;
+constexpr std::uint32_t ERF_DEN_DEGREE = 16;
+constexpr std::uint32_t ERF_NUM_SEGMENTS = 1;
+constexpr std::uint32_t ERF_LUT_SIZE = 36;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
     {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f,  1.1283791065e+00f,  0.0000000000e+00f,
      2.1477432549e-01f,  0.0000000000e+00f, 6.2133435160e-02f,  0.0000000000e+00f,  5.6230435148e-03f,
@@ -48,10 +49,10 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 // n8/d8 rational (WH refit v2) — preserves MaxULP=1 vs truth; GELU-chain
 // byte-match 99.3 % vs old polynomial GELU (v1: 99.0 %; baseline: 97.9 %).
 // GELU-chain objective captures the composed error that CLIP PCC gate sees.
-constexpr uint32_t ERF_NUM_DEGREE = 8;
-constexpr uint32_t ERF_DEN_DEGREE = 8;
-constexpr uint32_t ERF_NUM_SEGMENTS = 1;
-constexpr uint32_t ERF_LUT_SIZE = 20;
+constexpr std::uint32_t ERF_NUM_DEGREE = 8;
+constexpr std::uint32_t ERF_DEN_DEGREE = 8;
+constexpr std::uint32_t ERF_NUM_SEGMENTS = 1;
+constexpr std::uint32_t ERF_LUT_SIZE = 20;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
     {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1280932447e+00f, 0.0000000000e+00f,
      2.7609212279e-01f,  0.0000000000e+00f, 4.5400281738e-02f, 0.0000000000e+00f, 7.4481184425e-04f,
@@ -62,6 +63,7 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
