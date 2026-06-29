@@ -214,7 +214,8 @@ new full-model tests.
 | 3.6 | Backbone completion: ResNet stems ×2 + GPT cross-modal fusion ×4 on TTNN (`build_stage3_6`) | +grid/pool/upsample | — | `30cca82a69` |
 | 3.7 | Agent head MLPs on TTNN (`build_stage3_7`) — **every weight op now on TTNN** | — | — | `30cca82a69` |
 
-**Current total: 26 PCC tests pass.**  After `build_stage3_7` every
+**Current total: 32 PCC tests** (a few skip without the real checkpoint/anchor
+assets).  After `build_stage3_7` every
 weight-bearing op runs on TTNN; `test_pcc_stage3_6.py` validates the whole
 on-device model at production resolution (trajectory PCC 1.0 random / 0.9998
 real-checkpoint).  Remaining host code is non-weight scalar glue (enumerated in
@@ -355,7 +356,7 @@ it is absent. The full eval-asset env-var scheme is in
 source python_env/bin/activate
 export PYTHONPATH="${TT_METAL_HOME:-$(pwd)}"   # TT_METAL_HOME = your tt-metal checkout
 
-# Full suite (21 PCC + 3 sanity = 24 tests)
+# Full suite (32 PCC + 3 sanity = 35 tests; some PCC tests skip without the checkpoint/anchor assets)
 python -m pytest models/demos/diffusion_drive/tests/ -v
 
 # PCC tests only (require attached Wormhole device)
@@ -365,26 +366,24 @@ python -m pytest models/demos/diffusion_drive/tests/pcc/ -v
 python -m pytest models/demos/diffusion_drive/tests/sanity/ -v
 ```
 
-Individual test files:
+Individual test files (the full set lives in `tests/pcc/`):
 
 ```bash
-# BN-fold accuracy (6 tests, no device)
-python -m pytest models/demos/diffusion_drive/tests/pcc/test_pcc_bn_fold.py -v
+P=models/demos/diffusion_drive/tests/pcc
 
-# BasicBlock PCC (3 tests)
-python -m pytest models/demos/diffusion_drive/tests/pcc/test_pcc_resnet_block.py -v
+# No device — BN-fold + DDIM noise-channel correctness
+python -m pytest $P/test_pcc_bn_fold.py $P/test_noise_channels.py -v
 
-# Stage 2 backbone outputs (2 tests — bev_upscale, bev_feature)
-python -m pytest models/demos/diffusion_drive/tests/pcc/test_pcc_backbone.py -v
+# Backbone / FPN / consolidated backbone (Stage 2 → 3.6)
+python -m pytest $P/test_pcc_resnet_block.py $P/test_pcc_backbone.py \
+                 $P/test_pcc_fpn.py $P/test_pcc_backbone_consolidated.py -v
 
-# Stage 3 FPN conv output (1 test)
-python -m pytest models/demos/diffusion_drive/tests/pcc/test_pcc_fpn.py -v
+# Full on-device model (Stage 2 → 4) + grid-sample attention
+python -m pytest $P/test_pcc_stage2.py $P/test_pcc_stage3.py $P/test_pcc_stage4.py \
+                 $P/test_pcc_full_model.py $P/test_pcc_grid_sample.py -v
 
-# Stage 2 full-model trajectory + scores (2 tests)
-python -m pytest models/demos/diffusion_drive/tests/pcc/test_pcc_stage2.py -v
-
-# Stage 3 full-model trajectory + scores (2 tests)
-python -m pytest models/demos/diffusion_drive/tests/pcc/test_pcc_stage3.py -v
+# Real-checkpoint gates — need $DD_CHECKPOINT_PATH (+ anchors); skip otherwise
+python -m pytest $P/test_pcc_checkpoint_accuracy.py $P/test_pcc_trace.py -v
 ```
 
 ---
@@ -407,13 +406,20 @@ cfg = DiffusionDriveConfig(
 )
 ref_model = DiffusionDriveModel(cfg).eval()
 
-# Upgrade to Stage 3 TTNN (chains: build_stage2 then build_stage3)
+# Build the full on-device model (every weight-bearing op on TTNN)
 model_config = ModelConfig()
 ttnn_model = (
     TtnnDiffusionDriveModel(ref_model, model_config, device)
-    .build_stage2(device)
-    .build_stage3(device)
+    .build_stage2(device)      # ResNet-34 BasicBlocks
+    .build_stage3(device)      # + FPN
+    .build_stage3_4(device)    # + perception head
+    .build_stage3_5(device)    # + DDIM denoiser
+    .build_stage3_6(device)    # + ResNet stems + GPT fusion (needs production resolution)
+    .build_stage3_7(device)    # + agent-head MLPs
+    .build_stage4(device)      # consolidate perception + decoder on-device
 )
+# Traced fast path: open the device with trace_region_size=256*1024*1024, then call
+# model.compile() once and model.execute_compiled(features) per call (see §5).
 
 # Inference — reset seed before each call so DDIM noise is reproducible
 features = {
@@ -440,17 +446,26 @@ diffusion_drive/
 ├── reference/
 │   └── model.py                 # PyTorch reference (DiffusionDriveModel)
 ├── scripts/
-│   └── prepare_assets.py        # download checkpoint + extract anchors
+│   ├── prepare_assets.py        # download checkpoint + extract anchors
+│   ├── ttnn_pdm_server.py       # TTNN inference server (bridge fallback)
+│   ├── navsim_inproc/           # default PDM-eval agent (in-process, single env)
+│   └── navsim_bridge/           # fallback PDM-eval agent (cross-process socket)
 ├── tests/
-│   ├── conftest.py              # device fixture (l1_small_size=32768)
+│   ├── conftest.py              # device fixture (l1_small_size=32768) + asset resolution
 │   ├── pcc/                     # accuracy tests (require device)
 │   └── sanity/                  # NaN/Inf + range checks (no device)
 └── tt/
     ├── config.py                # ModelConfig dataclass
+    ├── common.py                # BN-fold + weight-preprocessing helpers
     ├── ttnn_resnet34.py         # TtnnBasicBlock (BN-fold + ttnn.conv2d)
-    ├── ttnn_backbone.py         # TtnnTransfuserBackbone (Stage 2)
-    ├── ttnn_fpn.py              # TtnnFPN (Stage 3)
-    └── ttnn_diffusion_drive.py  # TtnnDiffusionDriveModel (build_stage2/3)
+    ├── ttnn_backbone.py         # TtnnTransfuserBackbone (stems, BasicBlocks, consolidation + trace)
+    ├── ttnn_gpt_fusion.py       # GPT cross-modal fusion — TtnnFuseFeatures
+    ├── ttnn_fpn.py              # TtnnFPN
+    ├── ttnn_perception.py       # perception-head TTNN drop-ins
+    ├── ttnn_grid_sample_attention.py  # GridSampleCrossBEVAttention
+    ├── ttnn_trajectory.py       # DDIM denoiser + agent head
+    ├── ttnn_consolidated.py     # consolidated perception/decoder forward
+    └── ttnn_diffusion_drive.py  # TtnnDiffusionDriveModel (build_stage2…4, compile/execute_compiled)
 ```
 
 ---
@@ -469,9 +484,10 @@ live in two script READMEs:
 - [`scripts/navsim_bridge/`](scripts/navsim_bridge/README.md) — fallback:
   cross-process socket bridge (use only if `ttnn` cannot import in the navsim env).
 
-**Validated result:** TTNN PDM ≈ **0.8789** over the full `navtest` (vs the
-PyTorch baseline 0.8808 and upstream published 88.04) — the bf16 on-device stack
-reproduces the reference PDM within ~0.24 %.
+**Validated result:** TTNN PDM ≈ **0.8789** over the full `navtest` (12146
+scenarios) — vs the PyTorch reference agent **0.8795** on this setup (§9.4) and
+upstream published 88.04. The bf16 on-device stack reproduces the reference PDM
+within ~0.07 %.
 
 ### 9.1 Eval environment (customize to your machine)
 
@@ -519,20 +535,61 @@ These same vars are read directly by the code: the scripts default
 YAMLs interpolate them via `${oc.env:…}`, and the PCC gates fall back to
 `$DD_DATA_ROOT/weights/…`.
 
-### 9.2 Assets
+### 9.2 Assets & one-time provisioning
 
-| Env var | Reference path | What it is |
+**Assets** (everything staged under `$DD_DATA_ROOT`):
+
+| Env var / file | Reference path | What it is |
 |---|---|---|
-| `DD_CHECKPOINT_PATH` | `$DD_DATA_ROOT/weights/diffusiondrive_navsim_88p1_PDMS.pth` | trained 88.x checkpoint (≈700 MB) |
-| `DD_ANCHOR_PATH` | `$DD_DATA_ROOT/resnet34/kmeans_navsim_traj_20.npy` | K=20 plan anchors (20×8×2) |
 | `NAVSIM_DEVKIT_ROOT` | `$DD_DATA_ROOT/DiffusionDrive` | NavSim devkit (`run_pdm_score.py`, `navsim` pkg, hydra configs) |
 | `OPENSCENE_DATA_ROOT` | `$NAVSIM_DEVKIT_ROOT/download` | OpenScene sensor blobs + `navsim_logs` |
 | `NUPLAN_MAPS_ROOT` | `$DD_DATA_ROOT/dataset/maps` | nuPlan maps |
 | `NAVSIM_EXP_ROOT` | `$DD_DATA_ROOT/exp` | experiment output **and the metric cache** (§9.3) |
+| `DD_CHECKPOINT_PATH` | `$DD_DATA_ROOT/weights/diffusiondrive_navsim_88p1_PDMS.pth` | trained 88.x checkpoint (≈700 MB) |
+| `DD_ANCHOR_PATH` | `$DD_DATA_ROOT/resnet34/kmeans_navsim_traj_20.npy` | K=20 plan anchors (20×8×2) |
+| `pytorch_model.bin` | `$DD_DATA_ROOT/resnet34/pytorch_model.bin` | **required** ImageNet ResNet-34 init (`timm/resnet34.a1_in1k`) — **no env var**: its path is the `bkb_path` you patch in `transfuser_config.py` (below) |
 
-The checkpoint + anchors come from `scripts/prepare_assets.py` (see §6) or are
-staged manually; the devkit, OpenScene data, and maps are provisioned per the
-NavSim devkit's own setup instructions.
+For the *PCC tests* (§6) the checkpoint + anchors can instead come from
+`scripts/prepare_assets.py` (into the repo `data/` dir). For the *PDM eval*, stage
+everything under `$DD_DATA_ROOT` once — this is NavSim-devkit-side setup the model
+repo does not automate:
+
+```bash
+# 1. NavSim devkit (python310 branch) + its conda env
+cd $DD_DATA_ROOT && git clone -b python310 https://github.com/ayewo/DiffusionDrive
+cd DiffusionDrive && conda env create --name navsim -f environment.yml
+conda activate navsim && pip install -r requirements.txt && pip install -e .
+
+# 2. OpenScene navtest split (sensors + logs), then strip the test_ prefix navtest expects
+cd $OPENSCENE_DATA_ROOT && ./download_test.sh            # large; ~1.5 h
+ln -s $OPENSCENE_DATA_ROOT/test_navsim_logs  $OPENSCENE_DATA_ROOT/navsim_logs
+ln -s $OPENSCENE_DATA_ROOT/test_sensor_blobs $OPENSCENE_DATA_ROOT/sensor_blobs
+
+# 3. nuPlan maps
+cd $OPENSCENE_DATA_ROOT
+curl -LO https://motional-nuplan.s3-ap-northeast-1.amazonaws.com/public/nuplan-v1.1/nuplan-maps-v1.1.zip
+unzip nuplan-maps-v1.1.zip && mv nuplan-maps-v1.0 $NUPLAN_MAPS_ROOT
+
+# 4. Checkpoint, anchors, resnet34 backbone
+mkdir -p $DD_DATA_ROOT/weights $DD_DATA_ROOT/resnet34
+huggingface-cli download hustvl/DiffusionDrive --local-dir $DD_DATA_ROOT/weights
+mv $DD_DATA_ROOT/weights/diffusiondrive_navsim_88p1_PDMS{,.pth}
+cd $DD_DATA_ROOT/resnet34
+curl -LO https://huggingface.co/timm/resnet34.a1_in1k/resolve/main/pytorch_model.bin
+curl -LO https://github.com/hustvl/DiffusionDrive/releases/download/DiffusionDrive_88p1_PDMS_Eval_file/kmeans_navsim_traj_20.npy
+```
+
+> **Two hard-coded paths to patch — not env-var-driven.** The devkit's
+> `navsim/agents/diffusiondrive/transfuser_config.py` hard-codes the resnet34
+> backbone (`bkb_path`) and plan-anchor (`plan_anchor_path`) to the upstream
+> author's home dir. Repoint them at your `$DD_DATA_ROOT/resnet34/` — needed only
+> for the **PyTorch reference** agent (`agent=diffusiondrive_agent`); the TTNN
+> agent reads `$DD_ANCHOR_PATH` from its YAML:
+> ```bash
+> cfg=$NAVSIM_DEVKIT_ROOT/navsim/agents/diffusiondrive/transfuser_config.py
+> sed -i "s|bkb_path: str = .*|bkb_path: str = \"$DD_DATA_ROOT/resnet34/pytorch_model.bin\"|" $cfg
+> sed -i "s|plan_anchor_path: str = .*|plan_anchor_path: str = \"$DD_DATA_ROOT/resnet34/kmeans_navsim_traj_20.npy\"|" $cfg
+> ```
 
 ### 9.3 One-time: build the PDM metric cache (required before evaluating)
 
@@ -545,21 +602,17 @@ exist on a fresh machine:
 conda activate navsim
 python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_metric_caching.py \
     train_test_split=navtest \
-    cache.cache_path=$NAVSIM_EXP_ROOT/metric_cache
-# → builds $NAVSIM_EXP_ROOT/metric_cache/  (~3.1 GB; one-time, reused by every eval run)
+    worker=ray_distributed
+# builds $NAVSIM_EXP_ROOT/metric_cache/ (the config default cache.cache_path) — one-time,
+# reused by every eval run. ~1.3 h wall on a 4-core host; caches all 12146 navtest scenes.
 ```
 
-It reads `OPENSCENE_DATA_ROOT`, `NUPLAN_MAPS_ROOT`, and `NUPLAN_MAP_VERSION` from
-the §9.1 block. Verify before evaluating:
+It reads `NAVSIM_EXP_ROOT`, `OPENSCENE_DATA_ROOT`, `NUPLAN_MAPS_ROOT`, and
+`NUPLAN_MAP_VERSION` from the §9.1 block. Verify before evaluating:
 
 ```bash
-du -sh $NAVSIM_EXP_ROOT/metric_cache    # expect ~3.1 GB
+du -shL $NAVSIM_EXP_ROOT/metric_cache    # expect ~3.1 GB
 ```
-
-<!-- TODO(user-supplied): merge the machine-specific metric-caching notes from
-     CLAUDE.local.md here — the file will be provided separately. The command
-     above is the standard NavSim devkit recipe and is correct as a starting
-     point; refine with the supplied notes (timing, worker choice, gotchas). -->
 
 ### 9.4 Run the eval (default: in-process agent)
 
@@ -592,3 +645,17 @@ The `Final average score of valid results: …` line is the PDM score (expect
 validate parity first with `scripts/navsim_inproc/check_parity.py` (§0 of the
 sub-README). The agent reads the checkpoint/anchors from the YAML, which
 interpolate `$DD_CHECKPOINT_PATH`/`$DD_ANCHOR_PATH`.
+
+**Reproduce the PyTorch reference baseline (optional).** For the comparison
+number, run the upstream PyTorch agent instead — it needs the resnet34 backbone +
+the `transfuser_config.py` patches from §9.2:
+
+```bash
+python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score.py \
+    train_test_split=navtest \
+    agent=diffusiondrive_agent \
+    worker=ray_distributed \
+    agent.checkpoint_path=$DD_CHECKPOINT_PATH \
+    experiment_name=diffusiondrive_agent_eval
+# this setup: PDM 0.8795 over 12146/12146, ~48 min wall
+```
