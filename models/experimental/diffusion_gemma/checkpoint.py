@@ -53,6 +53,26 @@ def _as_prefix_tuple(prefixes: tuple[str, ...] | list[str] | str) -> tuple[str, 
     return tuple(prefixes)
 
 
+def text_generation_prefixes_for_layers(num_layers: int | None = None) -> tuple[str, ...]:
+    """Return raw DiffusionGemma prefixes needed for text generation.
+
+    ``num_layers=None`` means the full decoder. Passing an integer creates a
+    smoke-load prefix set for the first N decoder layers while keeping shared
+    weights required by embedding, final norm, lm-head tying, and self-conditioning.
+    """
+
+    if num_layers is None:
+        return TEXT_GENERATION_PREFIXES
+    if num_layers < 0:
+        raise ValueError("num_layers must be non-negative")
+    return (
+        f"{DG_DECODER_PREFIX}embed_tokens.",
+        f"{DG_DECODER_PREFIX}norm.",
+        f"{DG_DECODER_PREFIX}self_conditioning.",
+        *(f"{DG_DECODER_PREFIX}layers.{layer_idx}." for layer_idx in range(num_layers)),
+    )
+
+
 def resolve_checkpoint_dir(
     checkpoint_dir: str | Path,
     *,
@@ -206,6 +226,8 @@ def build_tt_model_from_checkpoint_dir(
 ) -> CheckpointModelInputs:
     """Load a DiffusionGemma checkpoint directory and build the TT text model."""
 
+    if state_prefixes == TEXT_GENERATION_PREFIXES and model_kwargs.get("num_layers") is not None:
+        state_prefixes = text_generation_prefixes_for_layers(model_kwargs["num_layers"])
     inputs = checkpoint_loader(
         checkpoint_dir,
         tokenizer_kwargs=tokenizer_kwargs,
