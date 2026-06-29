@@ -155,13 +155,12 @@ def prefill_forward(
     sdpa_compute_config = program_config.get_compute_kernel_config()
 
     if sp_factor > 1 and config.sliding_window is not None:
-        # Ring-shift the last sliding_window tokens of K and V from each device's
-        # predecessor, then prepend them. Device 0 receives zeros (Linear topology,
-        # no wraparound). The non-square causal mask [seq_len, window+seq_len] then
-        # correctly places Q tokens at their absolute SP-shard positions.
-        # Clamp padding to seq_len: neighbor_pad_async requires padding_left <= tensor_dim,
-        # and when seq_len < window the total sequence is already shorter than the window.
+        # Ring-shift the last actual_pad tokens of K and V from each device's
+        # predecessor and prepend them. Device 0 receives zeros (Linear topology).
+        # Clamp to seq_len: neighbor_pad_async requires padding_left <= tensor_dim,
+        # and when seq_len < window the total sequence fits within one window anyway.
         actual_pad = min(config.sliding_window, seq_len)
+
         # neighbor_pad_async requires ROW_MAJOR; convert in, convert back out.
         tt_k_tile = tt_k
         tt_k = ttnn.to_layout(tt_k_tile, ttnn.ROW_MAJOR_LAYOUT)
@@ -211,16 +210,38 @@ def prefill_forward(
         tt_v = ttnn.to_layout(tt_v_padded, ttnn.TILE_LAYOUT)
         tt_v_padded.deallocate(True)
 
-        tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+        # SDPA requires Sq == Sk for is_causal=True, so pad Q with actual_pad zero
+        # rows at the front to match the extended K/V length. The causal mask then
+        # correctly lets real Q row i attend to K rows 0..actual_pad+i, which spans
+        # the ring-shifted predecessor tokens plus local tokens up to position i.
+        # We slice away the fake rows from the output.
+        tt_q_orig = tt_q
+        tt_q = ttnn.pad(tt_q_orig, ((0, 0), (0, 0), (actual_pad, 0), (0, 0)), value=0.0)
+        tt_q_orig.deallocate(True)
+
+        tt_sdpa_out_padded = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
             tt_v,
             is_causal=True,
             sliding_window_size=config.sliding_window,
-            program_config=sdpa_program_config,
+            program_config=program_config.get_prefill_sdpa_config(mesh_device, actual_pad + seq_len),
             compute_kernel_config=sdpa_compute_config,
             attention_sink=weights.sinks,
         )
+        tt_q.deallocate(True)
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
+
+        # Drop the actual_pad fake output rows, keep only the real seq_len rows.
+        b, nh = tt_sdpa_out_padded.shape[0], tt_sdpa_out_padded.shape[1]
+        dh = tt_sdpa_out_padded.shape[3]
+        tt_sdpa_out = ttnn.slice(
+            tt_sdpa_out_padded,
+            (0, 0, actual_pad, 0),
+            (b, nh, actual_pad + seq_len, dh),
+        )
+        tt_sdpa_out_padded.deallocate(True)
     elif sp_factor > 1:
         # Ring attention: fuses cross-device K/V all-gather inside the kernel so
         # every token attends to the full causal context across all SP rows.
@@ -256,6 +277,9 @@ def prefill_forward(
             is_causal=True,
             scale=config.scaling,
         )
+        tt_q.deallocate(True)
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
     else:
         # SP=1: plain SDPA, no cross-device communication needed
         tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
@@ -268,10 +292,9 @@ def prefill_forward(
             compute_kernel_config=sdpa_compute_config,
             attention_sink=weights.sinks,
         )
-
-    tt_q.deallocate(True)
-    tt_k.deallocate(True)
-    tt_v.deallocate(True)
+        tt_q.deallocate(True)
+        tt_k.deallocate(True)
+        tt_v.deallocate(True)
 
     # Concat heads and apply output projection
     tt_sdpa_out_pre_concat = tt_sdpa_out
