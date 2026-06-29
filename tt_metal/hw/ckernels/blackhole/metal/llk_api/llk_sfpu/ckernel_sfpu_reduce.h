@@ -565,19 +565,24 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
  * reduce (e.g. ttir.max dim=[1,2]) chains a column reduce then this row reduce over the same DEST, with
  * the column path (calculate_reduce_max_min_int32) leaving its result in two's-complement. SFPSWAP
  * compares in sign-magnitude and on Blackhole INT32_2S_COMP load/store is a no-op (it does not convert),
- * so — exactly like the column path — we cast each operand two's-complement -> sign-magnitude around the
- * compare-and-swap reduce and cast the surviving maxima back to two's-complement before storing. (The
- * earlier sign-magnitude-only version disagreed with the column path's two's-complement output and
- * mis-ordered negatives in the chained multi-axis reduce.)
+ * so we cast each loaded operand two's-complement -> sign-magnitude before the compare-and-swap reduce.
+ *
+ * The surviving maxima are cast back to two's-complement only when @p final_store is set — i.e. the
+ * single-column-tile case where this per-tile store is the packer-visible result and must match ttnn /
+ * the column path. With block_ct_dim > 1 the store is an intermediate that max_first_columns_across_tiles_int32
+ * re-reads and keeps comparing in sign-magnitude, so we leave it in sign-magnitude and skip the
+ * round-trip cast (the cross-tile step applies the single two's-complement cast on the final result).
  *
  * Register budget: the cast needs a free GPR scratch, but the 8 loaded operands leave none. As in the
  * column / sum Int32 paths we process the two independent 4-row groups in sequence: load+cast+reduce
  * group A into LREG0 (freeing LREG1-3), then use those freed registers as scratch for group B into LREG4.
  *
  * @param tile_row_offset Base row offset for this tile in the dest register
+ * @param final_store     Whether this per-tile store is the final, packer-visible result (block_ct_dim == 1).
  */
 template <bool clear_high_bits = false>
-inline void perform_reduce_row_max_int32_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode) {
+inline void perform_reduce_row_max_int32_tile(
+    std::uint32_t tile_row_offset, std::uint32_t result_store_mode, bool final_store) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;  // raw load/store; cast is explicit
 
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
@@ -620,10 +625,14 @@ inline void perform_reduce_row_max_int32_tile(std::uint32_t tile_row_offset, std
             // Consolidate the 8 SFPU columns into column 0 (operates on LREG0/LREG1 and LREG4/LREG5).
             horizontal_reduce_max();
 
-            // Cast the sign-magnitude winners back to two's-complement before the store. Only LREG0 and
-            // LREG4 hold results, so LREG1/LREG5 are free GPR scratch.
-            convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG1);
-            convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
+            // Cast the sign-magnitude winners back to two's-complement only for the final, packer-visible
+            // store (single column tile). Intermediate stores (block_ct_dim > 1) stay in sign-magnitude;
+            // the cross-tile step re-reads them as-is and applies the single cast on the final result.
+            // Only LREG0 and LREG4 hold results, so LREG1/LREG5 are free GPR scratch.
+            if (final_store) {
+                convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG1);
+                convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
+            }
 
             TT_SFPSTORE(p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, group_a_base);
             TT_SFPSTORE(p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, group_b_base);
@@ -688,11 +697,12 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
 /**
  * @brief Accumulates partial row maxima from all tiles in a row of tiles into tile 0 (Int32).
  *
- * The per-tile row maxima written by perform_reduce_row_max_int32_tile are two's-complement (matching
- * ttnn and the column path), but SFPSWAP compares in sign-magnitude and INT32_2S_COMP load/store is a
- * no-op on Blackhole, so we cast two's-complement -> sign-magnitude around the cross-tile compare-and-swap
- * and cast the surviving maxima back before storing — mirroring sum_first_columns_across_tiles' Int32
- * handling but with SFPSWAP instead of SFPIADD.
+ * The per-tile row maxima written by perform_reduce_row_max_int32_tile are already in sign-magnitude
+ * (the representation SFPSWAP compares in) because that path skips the round-trip cast for intermediate
+ * stores. So we load and compare them directly — no per-operand cast — and apply a single
+ * sign-magnitude -> two's-complement cast on the surviving maxima before the final, packer-visible store
+ * (matching ttnn and the column path). This mirrors the float max_first_columns_across_tiles' pipelined
+ * load-4 / swap-4 shape, with one trailing cast block added.
  *
  * @param tile_row_base Base address of the first tile in this row of tiles
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
@@ -705,8 +715,7 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
     for (std::uint32_t batch = 0; batch < 2; batch++) {
         std::uint32_t base_idx = batch * 4;
 
-        // Load tile 0's four partial maxima into LREG0-3 and cast them to sign-magnitude. LREG4-7 are
-        // free here and serve as GPR scratch for the four casts.
+        // Tile 0's intermediates are already sign-magnitude, so load them straight into the accumulators.
         load_and_clear_high_bits<false>(
             p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
         load_and_clear_high_bits<false>(
@@ -715,23 +724,24 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
             p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
         load_and_clear_high_bits<false>(
             p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
-        convert_int_representation_inplace(p_sfpu::LREG0, p_sfpu::LREG4);
-        convert_int_representation_inplace(p_sfpu::LREG1, p_sfpu::LREG5);
-        convert_int_representation_inplace(p_sfpu::LREG2, p_sfpu::LREG6);
-        convert_int_representation_inplace(p_sfpu::LREG3, p_sfpu::LREG7);
 
         for (std::uint32_t t = 1; t < block_ct_dim; t++) {
             std::uint32_t tile_offset = tile_row_base + t * ROWS_PER_TILE;
 
-            // The four accumulators (LREG0-3) are live and casting needs a free GPR scratch, so process
-            // one column at a time: load into LREG4, cast to sign-magnitude (scratch LREG5), then keep the
-            // max in the accumulator via compare-and-swap. LREG5-7 stay free for scratch.
-            for (std::uint32_t j = 0; j < 4; j++) {
-                load_and_clear_high_bits<false>(
-                    p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + j]);
-                convert_int_representation_inplace(p_sfpu::LREG4, p_sfpu::LREG5);
-                TTI_SFPSWAP(0, p_sfpu::LREG0 + j, p_sfpu::LREG4, 1);  // LREG(j) = max(LREG(j), LREG4)
-            }
+            // Accumulators and operands are all sign-magnitude, so load the four operands into LREG4-7 and
+            // compare-and-swap with no cast — the same pipelined shape as the float cross-tile path.
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 0]);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 1]);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 2]);
+            load_and_clear_high_bits<false>(
+                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, tile_offset + RESULT_ROWS[base_idx + 3]);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG6, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG7, 1);
         }
 
         // Cast the surviving sign-magnitude maxima back to two's-complement before the store. LREG4-7 are
@@ -805,7 +815,9 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
         for (std::uint32_t j = 0; j < block_ct_dim; j++) {
             std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
             if constexpr (is_int32) {
-                perform_reduce_row_max_int32_tile(tile_offset, tile_store_mode);
+                // Single column tile => this per-tile store is the final, packer-visible result and must
+                // be cast back to two's-complement; otherwise it is an intermediate kept in sign-magnitude.
+                perform_reduce_row_max_int32_tile(tile_offset, tile_store_mode, /*final_store=*/block_ct_dim == 1);
             } else {
                 perform_reduce_row_max_tile<INSTRUCTION_MODE, clear_high_bits>(tile_offset, tile_store_mode);
             }
