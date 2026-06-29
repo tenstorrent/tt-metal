@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -32,6 +34,8 @@ constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;
 constexpr uint32_t reader_w_addr = 2;
 constexpr uint32_t compute_chunk_start_tiles = 7;  // after 6 sched scalars + kv_len[6]
+constexpr uint32_t compute_straddle_q_tile = 8;    // mid-slab boundary-chip diagonal jump (q-tile-row)
+constexpr uint32_t compute_straddle_jump_tiles = 9;
 constexpr uint32_t writer_out_addr = 0;
 // Persistent-cache args, appended after each kernel's schedule/mcast args (hash-excluded, re-patched on a hit).
 constexpr uint32_t reader_num_scalars = 3 + 6;  // q/k/w addrs + schedule {row_group0..max_bands}
@@ -39,15 +43,49 @@ constexpr uint32_t mcast_args_per_dir = 8;      // role, rect (xs,ys,xe,ye), sen
 constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
+constexpr uint32_t reader_kv_len_partial = reader_kv_len_tiles + 1;  // 27: sub-tile remainder (mask-tile fill)
 constexpr uint32_t compute_kv_len_tiles = 6;     // after the 6 schedule scalars {row_group0..max_bands}
+constexpr uint32_t compute_kv_len_partial = 10;  // after straddle_jump[9]; sub-tile boundary-tile partial mask
 constexpr uint32_t writer_kv_len_tiles = 1 + 6;  // out_addr + the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_chunk_start_tiles = 1 + 7;  // after out_addr + 6 sched scalars + kv_len[7]; match writer
+constexpr uint32_t writer_straddle_q_tile = 1 + 8;    // mid-slab forced-local block jump (block-pool only)
+constexpr uint32_t writer_straddle_jump_tiles = 1 + 9;
 }  // namespace rt_arg
 
-// Per-device chunk_start (tiles): (base + rank*Sq) / TILE_WIDTH. Shared by create_at (device_index from
-// the coordinate) and override (stored device_index).
-inline uint32_t chunk_start_tiles_for(const operation_attributes_t& args, uint32_t device_index, uint32_t Sq) {
-    return (args.chunk_start_idx + device_index * Sq) / tt::constants::TILE_WIDTH;
+// Per-device causal geometry for the slab layout, all in tiles. Each device scores Sq queries; on a mesh
+// device r's q-row 0 sits at chunk_start_idx + r*Sq (this op's own SP split, stride Sq -- decoupled from the
+// cache's slab SP). When those Sq queries cross a CACHE slab boundary (a multiple of cl = the cache's
+// per-shard width = slab_chunk_size / slab_sp), the post-boundary q-rows live in the next slab, so the causal
+// diagonal JUMPS by (slab_chunk_size - cl) tiles at q-row (cl - offset). offset == 0, or Sq fitting inside one
+// slab (offset + Sq <= cl), leaves the diagonal linear -- which is the common chunk-aligned case and any
+// re-split where Sq divides cl. Reduces to plain linear when there is no slab. (validate_slab guarantees
+// Sq <= cl, so a device crosses at most one boundary.)
+struct DeviceCausalGeometry {
+    uint32_t chunk_start_tiles;    // global position of this device's q-row 0 (tiles)
+    uint32_t straddle_q_tile;      // q-tile-row at/after which the diagonal jumps (only when this device straddles)
+    uint32_t straddle_jump_tiles;  // diagonal jump in tiles (0 unless this device straddles)
+};
+inline DeviceCausalGeometry device_causal_geometry(
+    const operation_attributes_t& args, uint32_t device_index, uint32_t Sq, bool single_chip) {
+    const uint32_t TW = tt::constants::TILE_WIDTH;
+    // This device's q-row-0 global position. SINGLE CHIP: chunk_start_idx IS this (simulated) device's position
+    // (device_index is always 0). MESH: rank 0's chunk_start_idx + this rank's Sq stride.
+    const uint32_t chunk_start = single_chip ? args.chunk_start_idx : args.chunk_start_idx + device_index * Sq;
+    if (!args.slab.has_value()) {
+        return {chunk_start / TW, 0u, 0u};  // contiguous K -> linear diagonal, never straddles
+    }
+    const uint32_t cl = args.slab->chunk_size / args.slab->ring_size;  // cache per-shard slab width (elements)
+    const uint32_t chunk_global = args.slab->chunk_size;
+    // On one chip the straddle is opt-in (chunk_start alone can't tell a boundary-chip's block-cyclic queries
+    // from a contiguous-natural-query device); on a mesh it is always evaluated from the per-device position.
+    const bool allow_straddle = single_chip ? args.mid_slab_boundary : true;
+    const uint32_t offset = chunk_start % cl;  // position within the cache slab
+    uint32_t straddle_q_tile = 0, straddle_jump_tiles = 0;
+    if (allow_straddle && offset != 0 && offset + Sq > cl) {
+        straddle_q_tile = (cl - offset) / TW;
+        straddle_jump_tiles = (chunk_global - cl) / TW;
+    }
+    return {chunk_start / TW, straddle_q_tile, straddle_jump_tiles};
 }
 
 // This device's linearized SP-ring index; 0 on a single device (no coordinate lookup needed).
@@ -69,15 +107,21 @@ inline void patch_arg(tt::tt_metal::RuntimeArgsData& args, uint32_t index, uint3
 // (bakes at miss) and override_runtime_arguments() (re-patches on a hit).
 struct PersistentCacheArgs {
     uint32_t k_batch_page_offset;  // cache_batch_idx * Tt * Dt; 0 when not indexed
-    uint32_t kv_len_tiles;         // valid key prefix in tiles; full Tt when kv_len unset
+    uint32_t kv_len_tiles;         // valid key prefix in tiles (CEIL, so a sub-tile boundary tile is included)
+    uint32_t kv_len_partial;       // kv_len % TILE_WIDTH: sub-tile remainder, 0 = tile-aligned (no partial mask)
 };
 inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& attrs, const Tensor& k) {
     const auto& shape = k.logical_shape();
-    const uint32_t Tt = shape[2] / tt::constants::TILE_WIDTH;
-    const uint32_t Dt = shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t TW = tt::constants::TILE_WIDTH;
+    const uint32_t Tt = shape[2] / TW;
+    const uint32_t Dt = shape[3] / TW;
+    const uint32_t kv_len = attrs.kv_len.value_or(shape[2]);
+    // CEIL: a sub-tile kv_len keeps its last (partial) tile in the valid range; that tile's pad columns
+    // [kv_len%TW, TW) are masked per-column in compute (kv_len_partial != 0). Tile-aligned -> partial 0.
     return {
         .k_batch_page_offset = attrs.cache_batch_idx.value_or(0) * Tt * Dt,
-        .kv_len_tiles = attrs.kv_len.value_or(shape[2]) / tt::constants::TILE_WIDTH};
+        .kv_len_tiles = (kv_len + TW - 1) / TW,
+        .kv_len_partial = kv_len % TW};
 }
 
 // Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto a
@@ -103,8 +147,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
     // arg, so the binary is identical across coords and steps.
+    const bool single_chip = q.device_storage().get_coords().size() <= 1;
     const uint32_t device_index = device_index_for(args, coord, q);
-    const uint32_t chunk_t = chunk_start_tiles_for(args, device_index, Sq);
+    const auto geom = device_causal_geometry(args, device_index, Sq, single_chip);
+    const uint32_t chunk_t = geom.chunk_start_tiles;
 
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
     const uint32_t Tt = T / tt::constants::TILE_WIDTH;
@@ -327,6 +373,22 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.push_back(args.synthesize_gate ? 1u : 0u);  // fill cb_w with gate_scale in L1 vs read DRAM
     reader_ct.push_back(gate_scale_bits);                 // bf16 pair, the in-kernel gate fill value
 
+    // Slab (per-SP-shard) K: bake invP's divisors as reader defines (only when a slab layout is present, so
+    // the contiguous path emits no defines -> byte-identical reader binary). cl_t = (chunk/ring)/TILE_WIDTH
+    // per-shard slab in tiles; the kernel maps logical tile L -> L + c*SLAB_DELTA_T - shard*SLAB_K_T.
+    // ring_size/chunk/T are all hashed, so SLAB_DELTA_T is a pure compile-time constant (no per-dispatch arg).
+    std::map<std::string, std::string> reader_defines;
+    if (args.has_slab()) {
+        const uint32_t ring = args.slab->ring_size;
+        const uint32_t chunk_t = args.slab->chunk_size / tt::constants::TILE_WIDTH;
+        const uint32_t cl_t = chunk_t / ring;  // per-shard slab width in tiles
+        reader_defines["SLAB_ENABLE"] = "1";
+        reader_defines["SLAB_RING"] = std::to_string(ring);
+        reader_defines["SLAB_CHUNK_LOCAL_T"] = std::to_string(cl_t);
+        reader_defines["SLAB_K_T"] = std::to_string(cl_t * (ring - 1));
+        reader_defines["SLAB_DELTA_T"] = std::to_string((Tt - chunk_t) / ring);
+    }
+
     std::vector<uint32_t> writer_ct = common_ct;
     const uint32_t out_elem_bytes = out.element_size();  // bf16 today
     // row-major page = one output row: T scores, or nblocks block-scores when pooling.
@@ -346,7 +408,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(
-        program, kdir + "reader_indexer_score.cpp", core_ranges, tt::tt_metal::ReaderDataMovementConfig(reader_ct));
+        program,
+        kdir + "reader_indexer_score.cpp",
+        core_ranges,
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct, reader_defines));
     auto writer_id = tt::tt_metal::CreateKernel(
         program, kdir + "writer_indexer_score.cpp", core_ranges, tt::tt_metal::WriterDataMovementConfig(writer_ct));
     auto compute_id = tt::tt_metal::CreateKernel(
@@ -365,7 +430,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // mcast rects are fixed per core; only the data changes per phase.
     const auto u32 = [](auto v) { return static_cast<uint32_t>(v); };
     // Indexed-cache k page offset + valid kv_len, baked at miss and re-applied each dispatch (both hash-excluded).
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
+    const auto [k_batch_page_offset, kv_len_tiles, kv_len_partial] = persistent_cache_args(args, k);
     std::vector<CoreCoord> cores;
     cores.reserve(num_cores);
     for (uint32_t row = 0; row < rows_used; ++row) {
@@ -430,19 +495,25 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
                 q_py,
                 q_sender,
                 cols_used - 1);
-            // Persistent-cache args last (slots reader[25,26]).
+            // Persistent-cache args last (slots reader[25,26,27]).
             reader_rt.push_back(k_batch_page_offset);
             reader_rt.push_back(kv_len_tiles);
+            reader_rt.push_back(kv_len_partial);  // slot [27], sub-tile remainder for the partial mask-tile fill
             tt::tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
-            // compute: schedule[0-5], then kv_len_tiles[6] + chunk_start_tiles[7] (both hash-excluded runtime).
+            // compute: schedule[0-5], kv_len_tiles[6], chunk_start[7], straddle[8,9], kv_len_partial[10].
             std::vector<uint32_t> compute_rt(sched.begin(), sched.end());
-            compute_rt.push_back(kv_len_tiles);  // slot [6]
-            compute_rt.push_back(chunk_t);       // slot [7]
+            compute_rt.push_back(kv_len_tiles);              // slot [6]
+            compute_rt.push_back(chunk_t);                   // slot [7]
+            compute_rt.push_back(geom.straddle_q_tile);      // slot [8], mid-slab boundary-chip diagonal jump
+            compute_rt.push_back(geom.straddle_jump_tiles);  // slot [9]
+            compute_rt.push_back(kv_len_partial);            // slot [10], sub-tile boundary-tile partial mask
             tt::tt_metal::SetRuntimeArgs(program, compute_id, core, compute_rt);
             std::vector<uint32_t> writer_rt = {out.buffer()->address()};
             writer_rt.insert(writer_rt.end(), sched.begin(), sched.end());
-            writer_rt.push_back(kv_len_tiles);  // slot [7], after out_addr + the 6 schedule scalars
-            writer_rt.push_back(chunk_t);       // slot [8], per-device chunk-start (tiles); block-pool forced-local
+            writer_rt.push_back(kv_len_tiles);              // slot [7], after out_addr + the 6 schedule scalars
+            writer_rt.push_back(chunk_t);                   // slot [8], per-device chunk-start (tiles); forced-local
+            writer_rt.push_back(geom.straddle_q_tile);      // slot [9], mid-slab forced-local block jump (pool only)
+            writer_rt.push_back(geom.straddle_jump_tiles);  // slot [10]
             tt::tt_metal::SetRuntimeArgs(program, writer_id, core, writer_rt);
         }
     }
@@ -484,13 +555,15 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     // Re-apply all hash-excluded runtime values on a hit: buffer addresses, cache_batch_idx / kv_len, and
     // chunk_start (per-coordinate, from the stored device_index).
     const uint32_t Sq = tensors.q.logical_shape()[2];
-    const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
+    const bool single_chip = tensors.q.device_storage().get_coords().size() <= 1;
+    const auto [k_batch_page_offset, kv_len_tiles, kv_len_partial] = persistent_cache_args(args, tensors.k);
     for (auto& [range, shared] : cached.shared_variables) {
         auto& program = cached.workload.get_programs().at(range);
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel);
         auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, shared.compute_kernel);
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, shared.writer_kernel);
-        const uint32_t chunk_t = chunk_start_tiles_for(args, shared.device_index, Sq);
+        const auto geom = device_causal_geometry(args, shared.device_index, Sq, single_chip);
+        const uint32_t chunk_t = geom.chunk_start_tiles;
         for (const auto& core : shared.worker_cores) {
             auto& reader_rt = reader_args[core.x][core.y];
             patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
@@ -498,11 +571,34 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
             patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
             patch_arg(reader_rt, rt_arg::reader_k_batch_offset, k_batch_page_offset, "reader.k_batch_offset");
             patch_arg(reader_rt, rt_arg::reader_kv_len_tiles, kv_len_tiles, "reader.kv_len_tiles");
+            patch_arg(reader_rt, rt_arg::reader_kv_len_partial, kv_len_partial, "reader.kv_len_partial");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_kv_len_tiles, kv_len_tiles, "compute.kv_len_tiles");
+            patch_arg(
+                compute_args[core.x][core.y], rt_arg::compute_kv_len_partial, kv_len_partial, "compute.kv_len_partial");
             patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
+            patch_arg(
+                compute_args[core.x][core.y],
+                rt_arg::compute_straddle_q_tile,
+                geom.straddle_q_tile,
+                "compute.straddle_q_tile");
+            patch_arg(
+                compute_args[core.x][core.y],
+                rt_arg::compute_straddle_jump_tiles,
+                geom.straddle_jump_tiles,
+                "compute.straddle_jump_tiles");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_kv_len_tiles, kv_len_tiles, "writer.kv_len_tiles");
             patch_arg(writer_args[core.x][core.y], rt_arg::writer_chunk_start_tiles, chunk_t, "writer.chunk_start");
+            patch_arg(
+                writer_args[core.x][core.y],
+                rt_arg::writer_straddle_q_tile,
+                geom.straddle_q_tile,
+                "writer.straddle_q_tile");
+            patch_arg(
+                writer_args[core.x][core.y],
+                rt_arg::writer_straddle_jump_tiles,
+                geom.straddle_jump_tiles,
+                "writer.straddle_jump_tiles");
         }
     }
 }

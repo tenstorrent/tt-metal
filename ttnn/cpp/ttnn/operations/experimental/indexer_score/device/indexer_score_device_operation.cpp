@@ -80,7 +80,9 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
     if (attrs.kv_len.has_value()) {
         const uint32_t T = k.logical_shape()[2];
         const uint32_t kv_len = attrs.kv_len.value();
-        TT_FATAL(kv_len % tt::constants::TILE_WIDTH == 0, "indexer_score kv_len {} must be tile-aligned", kv_len);
+        // kv_len need NOT be tile-aligned: a sub-tile valid length (real ISL not a multiple of 32) is masked
+        // per-column in the last valid tile (cols [kv_len%32, 32) -> -inf), mirroring ring_mla's
+        // global_n_partial_col. Only (0, T] is required.
         TT_FATAL(
             kv_len > 0 && kv_len <= T,
             "indexer_score kv_len {} must be in (0, T={}] (the allocated k length)",
@@ -89,8 +91,13 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
     }
 }
 
-// Runs on miss AND hit (chunk_start is hash-excluded). All chunk_start checks in one place: base alignment
-// and the fullest device's window against T and (when set) kv_len.
+// Runs on miss AND hit (chunk_start is hash-excluded). Base alignment + the fullest device's window vs T.
+// NOTE: the window is intentionally NOT bounded by kv_len. With a partially-filled (padded) chunk -- the real
+// ISL is smaller than the fixed chunk, so kv_len < the chunk extent -- the padded-query devices legitimately
+// have causal windows that reach past the valid prefix. That is correct, not an error: keys at positions
+// >= kv_len are masked (kv_len caps each cell's valid columns) and the padded queries' output is discarded.
+// So kv_len purely masks keys; only the allocated-buffer bound (window <= T) is enforced here. This mirrors
+// ring_mla, whose valid region is the contiguous prefix [0, kv_len) and whose pad is dropped by masking.
 void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const uint32_t Sq = t.q.logical_shape()[2];
     const uint32_t T = t.k.logical_shape()[2];
@@ -108,20 +115,36 @@ void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args
         T,
         attrs.chunk_start_idx,
         Sq);
-    // Causal window must also stay inside the valid prefix.
-    if (attrs.kv_len.has_value()) {
-        const uint32_t kv_len = attrs.kv_len.value();
-        TT_FATAL(
-            max_cs + Sq <= kv_len,
-            "fullest-device causal window [{}, {}+{}) exceeds kv_len={} (cannot attend past the valid keys; "
-            "base={}, per-rank stride Sq={})",
-            max_cs,
-            max_cs,
-            Sq,
-            kv_len,
-            attrs.chunk_start_idx,
-            Sq);
+}
+// Slab layout (slab_sp / slab_chunk_size, passed by the caller): ring_size/chunk are hashed and bake invP's
+// divisors into the reader, so the per-shard slab must be tile-aligned and tile the cache evenly -- miss-only
+// (a hit can't differ). Sq <= cl bounds a device's queries to at most one cache-slab crossing (one straddle).
+void validate_slab(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!attrs.slab.has_value()) {
+        return;
     }
+    const uint32_t ring = attrs.slab->ring_size;
+    const uint32_t chunk = attrs.slab->chunk_size;
+    const uint32_t T = t.k.logical_shape()[2];
+    const uint32_t Sq = t.q.logical_shape()[2];
+    TT_FATAL(ring >= 1, "slab ring_size (slab_sp) must be >= 1 (got {})", ring);
+    TT_FATAL(chunk > 0 && chunk % ring == 0, "slab chunk_size {} must be > 0 and divisible by slab_sp {}", chunk, ring);
+    const uint32_t chunk_local = chunk / ring;
+    TT_FATAL(
+        chunk_local % tt::constants::TILE_WIDTH == 0,
+        "slab per-shard width chunk_size/slab_sp ({}) must be tile-aligned",
+        chunk_local);
+    TT_FATAL(
+        T % chunk == 0,
+        "slab chunk_size {} must divide T {} (the cache must be a whole number of global chunks)",
+        chunk,
+        T);
+    TT_FATAL(
+        Sq <= chunk_local,
+        "Sq ({}) must be <= the slab per-shard width chunk_size/slab_sp ({}); a device's queries may cross at "
+        "most one cache-slab boundary (one straddle). A coarser indexer SP (Sq > cl) is not yet supported.",
+        Sq,
+        chunk_local);
 }
 }  // namespace
 
@@ -148,6 +171,11 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.cluster_axis.value_or(0u),
         attrs.has_indexed_kv_cache(),
         attrs.has_runtime_kv_len(),
+        // The slab layout bakes invP divisors into the reader as compile-time defines, so ring_size/chunk
+        // must be hashed (a contiguous vs slab read, or a different slab shape, is a different binary).
+        attrs.has_slab(),
+        attrs.slab.has_value() ? attrs.slab->ring_size : 0u,
+        attrs.slab.has_value() ? attrs.slab->chunk_size : 0u,
         tensor_args);
 }
 
@@ -186,6 +214,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     // slot/kv_len runtime values are re-checked every dispatch.
     validate_static(attrs, tensor_args);
     validate_runtime_values(attrs, tensor_args);
+    validate_slab(attrs, tensor_args);
 
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4, "q, k must be rank 4");
@@ -394,7 +423,9 @@ IndexerScoreDeviceOperation::invoke(
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<SlabLayout> slab,
+    bool mid_slab_boundary) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
@@ -407,7 +438,9 @@ IndexerScoreDeviceOperation::invoke(
             .program_config = program_config,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
-            .kv_len = kv_len},
+            .kv_len = kv_len,
+            .slab = slab,
+            .mid_slab_boundary = mid_slab_boundary},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
 }
 
@@ -433,31 +466,47 @@ ttnn::Tensor launch_indexer_score(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> slab_sp,
+    std::optional<uint32_t> slab_chunk_size,
+    bool mid_slab_boundary) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
+    using ttnn::operations::experimental::indexer_score::SlabLayout;
 
-    // base = rank 0's absolute chunk_start. Omit it on a mesh -> deduce base = T - sp_ring*Sq (assumes K is
-    // history + the full SP-gathered chunk). Caveats: the deduced window ends at T (incompatible with a
-    // growing kv_len < T -- pass chunk_start_idx there); omitting on one chip now gives base = T - Sq, not 0.
+    const uint32_t Sq = q.logical_shape()[2];
+
+    // The K-cache slab layout is PASSED, not derived: slab_sp = the SP the cache was gathered across (the
+    // cache's own SP, independent of how THIS op splits Q) and slab_chunk_size = the global chunk granularity.
+    // Both must be given together; slab_sp <= 1 (or unset) means contiguous K (no remap).
+    TT_FATAL(
+        slab_sp.has_value() == slab_chunk_size.has_value(),
+        "indexer_score: slab_sp and slab_chunk_size must be passed together (got slab_sp={}, slab_chunk_size={})",
+        slab_sp.has_value(),
+        slab_chunk_size.has_value());
+    const std::optional<SlabLayout> slab =
+        (slab_sp.has_value() && *slab_sp > 1)
+            ? std::optional<SlabLayout>{SlabLayout{.ring_size = *slab_sp, .chunk_size = *slab_chunk_size}}
+            : std::nullopt;
+
+    // base = the absolute chunk_start of this op's rank 0. Omit it -> deduce: with a slab the gathered chunk is
+    // slab_chunk_size, so base = T - slab_chunk_size; contiguous -> base = T - Sq (single device). The deduced
+    // window ends at T (incompatible with a growing kv_len < T -- pass chunk_start_idx there).
     uint32_t base = 0;
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;
     } else {
-        const uint32_t Sq = q.logical_shape()[2];
         const uint32_t T = k.logical_shape()[2];
-        // sp_ring = max_rank + 1 (get_linearized_index returns coord-min; get_topological_dimension would
-        // over-count on a nonzero-offset sub-mesh). max_linearized_rank is shared with the validated window.
-        const uint32_t sp_ring =
-            ttnn::operations::experimental::indexer_score::max_linearized_rank(q, cluster_axis) + 1;
+        const uint32_t window = slab.has_value() ? slab->chunk_size : Sq;
         TT_FATAL(
-            T >= sp_ring * Sq,
-            "indexer_score: cannot deduce chunk_start_idx -- T={} < sp_ring({})*Sq({}). Pass chunk_start_idx "
-            "explicitly if K does not equal history + the SP-gathered chunk.",
+            T >= window,
+            "indexer_score: cannot deduce chunk_start_idx -- T={} < {}={}. Pass chunk_start_idx explicitly if K "
+            "does not equal history + the gathered chunk.",
             T,
-            sp_ring,
-            Sq);
-        base = T - sp_ring * Sq;
+            slab.has_value() ? "slab_chunk_size" : "Sq",
+            window);
+        base = T - window;
     }
+
     // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi, else HiFi2); a caller config
     // overrides per field. fp32-dest acc / full-sync default off (the only modes the custom LLK is validated for).
     const bool both_bfp8 = q.dtype() == DataType::BFLOAT8_B && k.dtype() == DataType::BFLOAT8_B;
@@ -483,7 +532,9 @@ ttnn::Tensor launch_indexer_score(
         resolved,
         cache_batch_idx,
         kv_len,
-        cluster_axis);
+        cluster_axis,
+        slab,
+        mid_slab_boundary);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -498,7 +549,10 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> slab_sp,
+    std::optional<uint32_t> slab_chunk_size,
+    bool mid_slab_boundary) {
     // DSA/GLM: relu, learned per-head gates, one head-summed plane, no pooling. Reads its real weights tensor.
     return launch_indexer_score(
         q,
@@ -514,7 +568,10 @@ ttnn::Tensor indexer_score_dsa(
         compute_kernel_config,
         cache_batch_idx,
         kv_len,
-        cluster_axis);
+        cluster_axis,
+        slab_sp,
+        slab_chunk_size,
+        mid_slab_boundary);
 }
 
 ttnn::Tensor indexer_score_msa(
@@ -526,7 +583,10 @@ ttnn::Tensor indexer_score_msa(
     uint32_t block_size,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> slab_sp,
+    std::optional<uint32_t> slab_chunk_size,
+    bool mid_slab_boundary) {
     // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
     // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
     // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
@@ -545,7 +605,10 @@ ttnn::Tensor indexer_score_msa(
         compute_kernel_config,
         /*cache_batch_idx=*/std::nullopt,
         /*kv_len=*/std::nullopt,
-        cluster_axis);
+        cluster_axis,
+        slab_sp,
+        slab_chunk_size,
+        mid_slab_boundary);
 }
 
 }  // namespace ttnn::experimental

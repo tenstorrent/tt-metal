@@ -395,19 +395,47 @@ inline void block_max_pool_batched(uint32_t unit_strip) {
     acc.pop_front(unit_strip);
 }
 
-/** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place (empty when fully valid). */
+/** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place (empty when fully valid).
+ *  straddle_* shift the diagonal on the mid-slab boundary chip (0 elsewhere); see causal_diag_tile. */
 inline void stamp_masked_suffix(
     const WorkUnitSpan& span,
     uint32_t q_row,
     uint32_t slot_base,
     uint32_t k_tiles_in_unit,
-    uint32_t chunk_start_tiles) {
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles) {
     const uint32_t k_tile0 = span.k_tile_start();
-    const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + q_row;
-    const uint32_t valid = row_valid_prefix(span.q_tile_start() + q_row, k_tile0, k_tiles_in_unit, chunk_start_tiles);
+    const uint32_t q_row_abs = span.q_tile_start() + q_row;
+    const uint32_t diag_tile =
+        iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    const uint32_t valid =
+        row_valid_prefix(q_row_abs, k_tile0, k_tiles_in_unit, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
     for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
         stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, k_tile0 + k_col, diag_tile);
     }
+}
+
+/** Sub-tile kv_len: when the valid prefix ends mid-tile, L1-accumulate the partial-column -inf mask
+ *  (cb_mask[2], cols [kv_len%32, 32) -> -inf) onto the boundary tile -- the band's last valid tile, local
+ *  index k_tiles_in_unit-1. Stacks with the causal/diagonal mask (both -inf), keeping the valid [0,
+ *  kv_len%32) scores. Only the band whose last valid tile IS the global boundary tile carries it; a no-op
+ *  when kv_len is tile-aligned (kv_len_partial == 0) or this band has no/interior tiles. */
+inline void stamp_partial_kv_len_tile(
+    const WorkUnitSpan& span, uint32_t slot_base, uint32_t k_tiles_in_unit, uint32_t kv_len_partial) {
+    if (kv_len_partial == 0 || k_tiles_in_unit == 0 ||
+        span.k_tile_start() + k_tiles_in_unit != span.valid_k_len_tiles) {
+        return;
+    }
+    copy_tile_to_dst_init_short(cb_mask);
+    pack_reconfig_l1_acc(1);  // accumulate -inf onto [kv_len%32, 32); the valid prefix columns keep their score
+    tile_regs_acquire();
+    copy_tile(cb_mask, 2, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile<true>(0, cb_acc_strip, slot_base + (k_tiles_in_unit - 1));
+    tile_regs_release();
+    pack_reconfig_l1_acc(0);
 }
 
 void kernel_main() {
@@ -425,6 +453,13 @@ void kernel_main() {
     const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
     // Per-device chunk-start offset (tiles); runtime so distinct values reuse one program.
     const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
+    // Mid-slab boundary-chip diagonal straddle (tiles): q-rows >= straddle_q_tile jump by straddle_jump_tiles.
+    // Both 0 on every non-boundary device and in the chunk-aligned case, leaving the diagonal linear.
+    const uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
+    const uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+    // Sub-tile kv_len remainder (kv_len % 32): when nonzero, the last valid k-tile's columns [remainder, 32)
+    // are pad and get the partial-column -inf mask (cb_mask[2]). 0 = tile-aligned (no partial mask).
+    const uint32_t kv_len_partial = get_arg_val<uint32_t>(10);
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
@@ -508,7 +543,15 @@ void kernel_main() {
                     // Matmul left srcA in k's format; the mask copies a bf16 -inf tile -> reconfig srcA to bf16.
                     reconfig_data_format_srca(cb_k, cb_mask);
                     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                        stamp_masked_suffix(span, r, r * k_tiles_per_unit, k_tiles_in_unit, chunk_start_tiles);
+                        stamp_masked_suffix(
+                            span,
+                            r,
+                            r * k_tiles_per_unit,
+                            k_tiles_in_unit,
+                            chunk_start_tiles,
+                            straddle_q_tile,
+                            straddle_jump_tiles);
+                        stamp_partial_kv_len_tile(span, r * k_tiles_per_unit, k_tiles_in_unit, kv_len_partial);
                     }
                     acc.push_back(unit_strip);
                 } else {
@@ -536,7 +579,15 @@ void kernel_main() {
                             accumulate_row_streaming(q_row, slot_base);
                         }
 
-                        stamp_masked_suffix(span, q_row, slot_base, k_tiles_in_unit, chunk_start_tiles);
+                        stamp_masked_suffix(
+                            span,
+                            q_row,
+                            slot_base,
+                            k_tiles_in_unit,
+                            chunk_start_tiles,
+                            straddle_q_tile,
+                            straddle_jump_tiles);
+                        stamp_partial_kv_len_tile(span, slot_base, k_tiles_in_unit, kv_len_partial);
                     }
                     acc.push_back(unit_strip);
                 }
