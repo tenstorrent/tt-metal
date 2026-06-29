@@ -4,10 +4,17 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
+
+# Iteration knob for tuning the WH ring-SDPA chunk at the single-block sequence
+# length (4608 on 1024x1024), which is currently untuned and falls back to the
+# default. Set TT_RING_SDPA_CHUNK="q,k" (e.g. "128,256") to override it for a
+# perf run; the best value is then baked into ring_sdpa_chunk_size_map.
+_RING_SDPA_CHUNK_OVERRIDE = os.environ.get("TT_RING_SDPA_CHUNK")
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -51,7 +58,11 @@ class Attention(Module):
     ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
         # -1 is the default resolution.
         (False, 2, 4): {-1: (256, 256)},
-        (False, 4, 8): {-1: (128, 512), 4096: (256, 512)},  # WH Galaxy ring (non-fsdp)
+        (False, 4, 8): {
+            -1: (128, 512),
+            4096: (256, 512),  # 1024x1024 double blocks (spatial)
+            4608: (256, 512),  # 1024x1024 single blocks (spatial+prompt) — L1-bounded optimum, sweep 2026-06-29
+        },  # WH Galaxy ring
         (False, 8, 4): {-1: (256, 256)},
         (True, 2, 2): {-1: (128, 512)},
         (True, 4, 8): {
@@ -164,7 +175,13 @@ class Attention(Module):
 
         # chunks=3 splits QKV inside minimal_matmul_split (faster than matmul + ttnn.chunk).
         self.to_qkv = ColParallelLinear(
-            query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
+            query_dim,
+            3 * padded_inner_dim,
+            bias=proj_bias,
+            mesh_axis=tp_axis,
+            chunks=3,
+            fsdp_gather_bf8=True,
+            **common_args,
         )
 
         # Fuses head-split + RMSNorm + RoPE. Weight is tiled per-head → [padded_inner_dim] in
@@ -197,7 +214,13 @@ class Attention(Module):
             self.to_add_out = UnregisteredModule(self.to_out) if self.to_out is not None else None
         elif added_kv_proj_dim > 0:
             self.add_qkv_proj = ColParallelLinear(
-                added_kv_proj_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
+                added_kv_proj_dim,
+                3 * padded_inner_dim,
+                bias=proj_bias,
+                mesh_axis=tp_axis,
+                chunks=3,
+                fsdp_gather_bf8=True,
+                **common_args,
             )
 
             self.norm_added_q = DistributedRMSNorm(
@@ -274,6 +297,11 @@ class Attention(Module):
                     f"No ring SDPA chunk size found for resolution {per_device_seq_len}, using default {ring_chunk_size[-1]}"
                 )
                 ring_chunk_size = ring_chunk_size[-1]
+
+            if _RING_SDPA_CHUNK_OVERRIDE is not None and per_device_seq_len == 4608:
+                q_c, k_c = (int(v) for v in _RING_SDPA_CHUNK_OVERRIDE.split(","))
+                logger.info(f"ring SDPA chunk override @4608: ({q_c}, {k_c})")
+                ring_chunk_size = (q_c, k_c)
 
             self.ring_sdpa_program_config[per_device_seq_len] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
