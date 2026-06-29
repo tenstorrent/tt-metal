@@ -7,12 +7,12 @@ In-process NavSim agent for the DiffusionDrive TTNN model (single-env path).
 Unlike ``scripts/navsim_bridge/`` — which delegates inference to a separate
 ``ttnn_pdm_server.py`` over a Unix-domain socket because navsim was Python 3.9
 and ``ttnn`` is Python 3.10 — this agent runs the TTNN model **in the same
-process** as the NavSim eval harness.  Run it in the ``navsim310`` conda env
+process** as the NavSim eval harness.  Run it in the ``navsim`` conda env
 (Python 3.10), where both the navsim stack and ``ttnn`` import.
 
 Why this is possible now: the upstream DiffusionDrive ``python310`` branch
 modernised navsim's dependencies to Python 3.10 (torch 2.0.1+cpu, numpy 1.23.4,
-…), materialised as the ``navsim310`` conda env — so navsim and the compiled
+…), materialised as the ``navsim`` conda env — so navsim and the compiled
 ``ttnn`` wheel coexist.  No socket, no second process, no server lifecycle.
 
 Device arbitration — one Wormhole = one device handle, the TTNN device context is
@@ -44,8 +44,8 @@ PDM scoring), the ``single_machine_thread_pool`` funnel above (~1.59×, the
 dominant eval lever).
 
 Wire-up (see scripts/navsim_inproc/README.md for the full recipe + caveats):
-  1. ``conda activate navsim310``
-  2. one-time: install ttnn's pure-Python deps into navsim310 and put the
+  1. ``conda activate navsim``
+  2. one-time: install ttnn's pure-Python deps into navsim and put the
      tt-metal ttnn *inner-package parent* on PYTHONPATH (just $TT_METAL_HOME
      resolves to an empty namespace package — ttnn.open_device would be missing):
        pip install --no-deps loguru==0.6.0 graphviz==0.21 seaborn==0.13.2 ml_dtypes==0.5.4
