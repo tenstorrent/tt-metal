@@ -13,95 +13,91 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # # Wormhole Galaxy e2e tests
-# - id: galaxy-ccl
-#   name: Galaxy CCL tests
-#   cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
-#   skus:
-#     wh_galaxy:
-#       timeout: 60
-#   owner_id: U05ACKAJTHS # Naif Tarafdar
-#   team: ttnn
+- id: galaxy-ccl
+  name: Galaxy CCL tests
+  cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
+  skus:
+    wh_galaxy:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
 
-# - id: galaxy-moe
-#   name: Galaxy MoE tests
-#   cmd: |
-#     TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe &&
-#     TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py
-#   skus:
-#     wh_galaxy:
-#       timeout: 60
-#   owner_id: U05ACKAJTHS # Naif Tarafdar
-#   team: ttnn
+- id: galaxy-moe
+  name: Galaxy MoE tests
+  cmd: |
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe &&
+    TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe/test_moe_compute_6U.py
+  skus:
+    wh_galaxy:
+      timeout: 60
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
 
-# - id: galaxy-fabric-unit
-#   name: Galaxy Fabric unit tests
-#   cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
-#   skus:
-#     wh_galaxy:
-#       timeout: 25
-#     bh_galaxy:
-#       timeout: 30
-#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-#   team: scaleout
+- id: galaxy-fabric-unit
+  name: Galaxy Fabric unit tests
+  cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
+  skus:
+    wh_galaxy:
+      timeout: 25
+    bh_galaxy:
+      timeout: 30
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
 
-# - id: galaxy-fabric-2d-torus-nightly
-#   name: Galaxy Fabric 2D Torus Nightly Tests
-#   cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_nightly.yaml
-#   skus:
-#     wh_galaxy:
-#       timeout: 45
-#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-#   team: scaleout
+- id: galaxy-fabric-2d-torus-nightly
+  name: Galaxy Fabric 2D Torus Nightly Tests
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_nightly.yaml
+  skus:
+    wh_galaxy:
+      timeout: 45
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
 
-# - id: galaxy-fabric-multi-mesh-4x4-2x4s
-#   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
-#   cmd: |
-#     python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-#     tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_stability_short_running.yaml
-#     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_passthrough.yaml
-#   skus:
-#     wh_galaxy:
-#       timeout: 15
-#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-#   team: scaleout
+- id: galaxy-fabric-multi-mesh-4x4-2x4s
+  name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_stability_short_running.yaml
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_passthrough.yaml
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
 
-# - id: galaxy-fabric-multi-mesh-2x8-2x4s
-#   name: Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests
-#   cmd: |
-#     python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-#     tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_stability_short_running.yaml
-#     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_passthrough.yaml
-#   skus:
-#     wh_galaxy:
-#       timeout: 15
-#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-#   team: scaleout
+- id: galaxy-fabric-multi-mesh-2x8-2x4s
+  name: Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_stability_short_running.yaml
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_passthrough.yaml
+  skus:
+    wh_galaxy:
+      timeout: 15
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
 
-# # Blackhole Galaxy e2e tests
-# - id: bh-galaxy-ccl
-#   name: BH Galaxy CCL tests
-#   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
-#   skus:
-#     bh_galaxy:
-#       timeout: 40
-#   owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
-#   team: ttnn
+# Blackhole Galaxy e2e tests
+- id: bh-galaxy-ccl
+  name: BH Galaxy CCL tests
+  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
+  skus:
+    bh_galaxy:
+      timeout: 40
+  owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
+  team: ttnn
 
-# - id: bh-galaxy-fabric-torus-stability
-#   name: BH Galaxy Fabric Torus Stability Tests
-#   cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml
-#   skus:
-#     bh_galaxy:
-#       timeout: 20
-#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-#   team: scaleout
+- id: bh-galaxy-fabric-torus-stability
+  name: BH Galaxy Fabric Torus Stability Tests
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml
+  skus:
+    bh_galaxy:
+      timeout: 20
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
 
 - id: bh-galaxy-socket-pipeline
   name: BH Galaxy Socket Pipeline Single Galaxy
-  # Setting TT_METAL_OPERATION_TIMEOUT_SECONDS=0 disables the dispatch hang-detection watchdog
-  # (CI defaults it to 5s). This socket pipeline test legitimately blocks on cross-process socket
-  # handshakes longer than that without the dispatcher making forward progress, which would
-  # otherwise false-positive as a hang. tt-run propagates TT_-prefixed env vars to all ranks.
   cmd: |
     python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
     TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
