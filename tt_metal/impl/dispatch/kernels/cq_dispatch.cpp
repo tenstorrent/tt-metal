@@ -1054,12 +1054,9 @@ static void process_wait() {
         last_wait_stream = stream;
         volatile uint32_t* sem_addr = reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
-        DPRINT("DISPATCH WAIT STREAM 0x{:08x} count {}\n", stream, count);
-        DPRINT("stream reg addr value before do loop: {:#x}\n", *sem_addr);
         do {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!stream_wrap_ge(*sem_addr, count));
-        DPRINT("stream reg addr value after do loop: {:#x}\n", *sem_addr);
     }
     WAYPOINT("PWD");
 
