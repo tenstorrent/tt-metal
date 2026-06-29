@@ -1322,6 +1322,77 @@ def test_generate_text_from_checkpoint_state_can_create_seeded_canvas_init(monke
     assert calls["generate"][4]["logits_fn_builder"] == "builder"
 
 
+def test_generate_text_from_checkpoint_state_allows_zero_base_seed_for_default_hooks(monkeypatch):
+    calls = {}
+
+    class _Model:
+        mesh_device = "mesh"
+
+    def fake_noise_tokens_fn(mesh_device, **kwargs):
+        calls["noise_tokens"] = (mesh_device, kwargs)
+        return "noise"
+
+    def fake_gumbel_noise_fn(mesh_device, **kwargs):
+        calls["gumbel_noise"] = (mesh_device, kwargs)
+        return "gumbel"
+
+    def fake_generate_text(tt_model, logits_fn, tokenizer, prompt, **kwargs):
+        calls["generate"] = kwargs
+        return "result"
+
+    monkeypatch.setattr(G, "make_seeded_host_noise_tokens_fn", fake_noise_tokens_fn)
+    monkeypatch.setattr(G, "make_seeded_gumbel_noise_fn", fake_gumbel_noise_fn)
+
+    out = generate_text_from_checkpoint_state(
+        _Model(),
+        "tokenizer",
+        "hello",
+        dg_state_dict={"raw": "state"},
+        num_blocks=1,
+        config=DiffusionConfig(canvas_length=4),
+        init_canvas_fn="init",
+        vocab_size=99,
+        seed=0,
+        logits_fn_builder_factory=lambda *args, **kwargs: "builder",
+        generate_text_fn=fake_generate_text,
+    )
+
+    assert out == "result"
+    assert calls["noise_tokens"][1]["seed"] == 1
+    assert calls["gumbel_noise"][1]["seed"] == 2
+    assert calls["generate"]["noise_tokens_fn"] == "noise"
+    assert calls["generate"]["gumbel_noise_fn"] == "gumbel"
+
+
+@pytest.mark.parametrize(
+    ("seed", "message"),
+    [
+        (1.5, "host random token seed must be an integer"),
+        (True, "host random token seed must be an integer"),
+        ("3", "host random token seed must be an integer"),
+        (-1, "host random token seed must be non-negative"),
+    ],
+)
+def test_generate_text_from_checkpoint_state_rejects_invalid_base_seed_before_derived_hooks(seed, message):
+    def fail_builder_factory(*args, **kwargs):
+        raise AssertionError("logits builder should not run for invalid base seed")
+
+    with pytest.raises(ValueError, match=message):
+        generate_text_from_checkpoint_state(
+            "model",
+            "tokenizer",
+            "hello",
+            dg_state_dict={"raw": "state"},
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=4),
+            init_canvas_fn="init",
+            vocab_size=99,
+            seed=seed,
+            logits_fn_builder_factory=fail_builder_factory,
+            generate_text_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_generate_text_from_checkpoint_state_uses_tokenizer_vocab_size_for_seeded_hooks(monkeypatch):
     calls = {}
 

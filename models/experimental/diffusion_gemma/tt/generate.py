@@ -1026,6 +1026,8 @@ def generate_text_from_checkpoint_state(
         generate_kwargs["max_new_tokens"] = max_new_tokens
     if num_blocks > 0:
         _validate_batch_size(batch)
+        if seed is not None:
+            seed = _validate_host_rand_seed(seed)
     if vocab_size is None and num_blocks > 0:
         vocab_size = _infer_generation_vocab_size(tokenizer, tt_model)
     if vocab_size is not None:
