@@ -540,6 +540,7 @@ def denoise_and_commit_block(
     )
     if trajectory.committed is None:
         raise RuntimeError("denoise trajectory did not produce committed canvas tokens")
+    _validate_committed_block_shape(trajectory.committed, batch_size=1, canvas_length=config.canvas_length)
     commit_fn(
         tt_model,
         trajectory.committed,

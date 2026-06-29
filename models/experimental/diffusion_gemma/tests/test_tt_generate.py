@@ -117,6 +117,26 @@ def test_denoise_and_commit_block_rejects_missing_commit():
         )
 
 
+def test_denoise_and_commit_block_rejects_bad_committed_shape_before_commit():
+    trajectory = DenoiseTrajectory(
+        committed=torch.tensor([[7, 8]], dtype=torch.long), num_steps=1, halted=True, per_step=[]
+    )
+
+    def fail_commit(*args, **kwargs):
+        raise AssertionError("commit should not run for malformed committed canvas")
+
+    with pytest.raises(ValueError, match="block.committed"):
+        denoise_and_commit_block(
+            object(),
+            object(),
+            object(),
+            DiffusionConfig(canvas_length=3),
+            start_pos=0,
+            denoise_block_fn=lambda *args, **kwargs: trajectory,
+            commit_fn=fail_commit,
+        )
+
+
 def test_generate_blocks_advances_position_and_concatenates_commits():
     calls = []
 
