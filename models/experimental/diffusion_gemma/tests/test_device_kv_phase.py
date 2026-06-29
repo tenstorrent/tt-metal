@@ -292,6 +292,7 @@ def test_commit_append_decode_writes_full_256_token_canvas(mesh_device, reset_se
 
     k_cache, v_cache = model.tt_kv_cache[0]
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
     k_prompt_before = _cache_region(k_cache, 0, prompt_len, is_mesh=is_mesh)
     v_prompt_before = _cache_region(v_cache, 0, prompt_len, is_mesh=is_mesh)
     k_canvas_before = _cache_region(k_cache, prompt_len, prompt_len + canvas_len, is_mesh=is_mesh)
