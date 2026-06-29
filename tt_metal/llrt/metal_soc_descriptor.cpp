@@ -10,13 +10,19 @@
 #include <umd/device/types/arch.hpp>
 
 namespace {
+// True if physical DRAM `channel` is harvested per `dram_harvesting_mask`. Single home for the
+// bit-masking convention used across the DRAM-view helpers below.
+bool is_dram_channel_harvested(uint32_t dram_harvesting_mask, size_t channel) {
+    return (dram_harvesting_mask & (1u << channel)) != 0;
+}
+
 // Number of harvested DRAM channels with index strictly below `channel`. Maps a physical DRAM
 // channel to its compacted/logical index via (physical - harvested_before): UMD presents only
 // non-harvested channels, compacted, so a physical channel with a gap must be shifted down.
 size_t harvested_before(uint32_t dram_harvesting_mask, size_t channel) {
     size_t count = 0;
     for (size_t c = 0; c < channel; ++c) {
-        if ((dram_harvesting_mask & (1u << c)) != 0) {
+        if (is_dram_channel_harvested(dram_harvesting_mask, c)) {
             ++count;
         }
     }
@@ -105,7 +111,7 @@ size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
     const size_t physical_channel = get_physical_channel_for_dram_view(dram_view);
     const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
     TT_ASSERT(
-        (dram_harvesting_mask & (1u << physical_channel)) == 0,
+        !is_dram_channel_harvested(dram_harvesting_mask, physical_channel),
         "dram_view={} refers to harvested physical DRAM channel {}",
         dram_view,
         physical_channel);
@@ -205,13 +211,10 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     this->dram_bank_endpoint_coords.clear();
 
     const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
-    auto is_dram_channel_harvested = [dram_harvesting_mask](size_t physical_channel) {
-        return (dram_harvesting_mask & (1u << physical_channel)) != 0;
-    };
 
     for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
         size_t channel = dram_view["channel"].as<size_t>();
-        if (is_dram_channel_harvested(channel)) {
+        if (is_dram_channel_harvested(dram_harvesting_mask, channel)) {
             continue;
         }
         const size_t logical_channel = channel - harvested_before(dram_harvesting_mask, channel);
