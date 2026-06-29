@@ -133,6 +133,11 @@ struct WanFusedDistributedRmsnormSizing {
     uint32_t num_chunks_per_device = 0;  // ceil(num_tile_rows / window_size)
     uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 on the is_tp_1 path)
     uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
+    // Stats transported per token-tile: 1 for RMSNorm (sum-of-squares), 2 for
+    // Welford LayerNorm (mean, M2). Each stat is a 128 B packed stick, so the
+    // physical stick is stats_per_token * 128 B.
+    uint32_t stats_per_token = 1;
+    uint32_t stick_bytes = 128;  // stats_per_token * 128
 };
 
 WanFusedDistributedRmsnormSizing compute_sizing(

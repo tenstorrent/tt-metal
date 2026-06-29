@@ -790,8 +790,9 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
 
 _LN_PARAMS = [
     ((4, 8), _DP_GAL, WAN, 1, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, WAN, 2, ttnn.Topology.Linear, GALAXY_LINKS, 1, False),
 ]
-_LN_IDS = ["ln_tp1"]
+_LN_IDS = ["ln_tp1", "ln_tp2"]
 
 
 @pytest.mark.parametrize(
@@ -807,13 +808,14 @@ def test_layernorm_corr(mesh_device, model, tp, topology, op_override, tp_axis, 
     tiles) fits the resident layout (no streaming / block-major)."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
     links = _fused_links(op_override)
+    # dim scaled so feat_local = dim/tp = 1024 (32 tiles) stays resident at every TP.
     cfgs = [
         Cfg(
-            "ln_block_N128_D1024",
+            f"ln_block_N128_D{1024 * tp}",
             model,
             tp,
             rows=128,
-            dim=1024,
+            dim=1024 * tp,
             head_dim=None,
             rope=False,
             full_heads=1,

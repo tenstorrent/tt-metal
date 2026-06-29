@@ -76,7 +76,7 @@ constexpr uint32_t kRopeStreamBlocks = 2u;
 //   3. measured DRAM/compute knee (arch-specific; Blackhole = 48).
 // Read inside the single-source-of-truth sizing path so the op + create_stats_buffer
 // agree on num_workers / buffer geometry.
-uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links, tt::ARCH arch) {
+uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links, tt::ARCH arch, uint32_t stick_bytes = 128u) {
     const uint32_t max_cores = grid_size.x * grid_size.y;
     const uint32_t num_forwarders = std::max<uint32_t>(1u, num_links);  // one forwarder per link
     const uint32_t budget = max_cores > num_forwarders ? max_cores - num_forwarders : 1u;
@@ -90,7 +90,7 @@ uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links, tt::A
     // raw grid budget is 108 (12x10) -> 54 workers/forwarder > 32 -> would TT_FATAL;
     // this clamps it to the valid 64.
     const uint32_t sticks_per_packet =
-        std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / 128u);
+        std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
     cap = std::min(cap, sticks_per_packet * num_forwarders);
     // Perf knee is ARCH-SPECIFIC. On Blackhole the worker sweep
     // (REBENCH_baseline_vs_fused.md) put the DRAM/compute optimum at ~48 — well below
@@ -243,11 +243,15 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     // when ring_size > 1. From the kernel's perspective this is "is_tp_1" =
     // no fabric, no all-gather, drain-only writer.
     s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
+    // LayerNorm transports 2 stats/token (mean, M2) -> 256 B sticks; RMS 1 (128 B).
+    // Set before derive_worker_cap so its packet-capacity clamp uses the right width.
+    s.stats_per_token = (args.norm_type == WanFusedNormType::LAYERNORM) ? 2u : 1u;
+    s.stick_bytes = s.stats_per_token * 128u;
     // Worker cap = device compute grid − forwarder cores. Derived from the input's
     // device so create_stats_buffer / validate / compute_output_specs / create_at all
     // agree on num_workers (they share this single-source-of-truth path).
-    const uint32_t worker_cap =
-        derive_worker_cap(input.device()->compute_with_storage_grid_size(), args.num_links, input.device()->arch());
+    const uint32_t worker_cap = derive_worker_cap(
+        input.device()->compute_with_storage_grid_size(), args.num_links, input.device()->arch(), s.stick_bytes);
     s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows, worker_cap);
     // use_mux selects the fabric-forwarder all-gather path (+ DRAM scratch);
     // !use_mux (is_tp_1) reduces locally with no fabric.
@@ -268,9 +272,12 @@ WanFusedDistributedRmsnormSizing compute_sizing(
         // Pack as many 128 B fp32 sticks as fit one fabric packet. Reuse the
         // existing page formula by setting window_size = sticks_per_packet:
         // page_size_bytes = TILE_HEIGHT(=32) * window_size * 4 = sticks * 128.
+        // Token-tiles (each stick_bytes wide) that fit one fabric packet.
         const uint32_t sticks_per_packet =
-            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / 128u);
-        s.window_size = sticks_per_packet;
+            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / s.stick_bytes);
+        // window_size is the logical fp32 page width / TILE_HEIGHT; keep the page
+        // formula page_size = TILE_HEIGHT * window_size * 4 == sticks_per_packet * stick_bytes.
+        s.window_size = sticks_per_packet * s.stats_per_token;
         s.num_chunks_per_device = num_forwarders * max_rounds;
         s.total_pages = args.ring_size * s.num_chunks_per_device;
         s.page_size_bytes = TILE_HEIGHT * s.window_size * sizeof(float);
@@ -383,6 +390,11 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     const uint32_t max_cores = core_grid.size();
 
+    // LayerNorm gathers 2 stats/token (mean, M2) -> 256 B sticks; RMS 1 (128 B).
+    // Must match compute_sizing so the stats-buffer geometry and the program agree.
+    const uint32_t stick_bytes = (args.norm_type == WanFusedNormType::LAYERNORM) ? 256u : 128u;
+    const uint32_t stats_per_token = stick_bytes / 128u;  // 1 RMS, 2 LayerNorm (mean, var)
+
     uint32_t num_workers;
     if (is_tp_1) {
         num_workers = std::min<uint32_t>(max_cores, num_tile_rows);
@@ -390,8 +402,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // TP>1 (forwarder AG): one worker per tile-row, capped at the core budget
         // (grid − forwarders). Same derivation as compute_sizing so the stats-buffer
         // geometry matches. Tiny shapes (<kMuxRowsThreshold) collapse to 1 worker.
-        num_workers =
-            pick_num_workers_tp_gt_1(num_tile_rows, derive_worker_cap(grid_size, args.num_links, device->arch()));
+        num_workers = pick_num_workers_tp_gt_1(
+            num_tile_rows, derive_worker_cap(grid_size, args.num_links, device->arch(), stick_bytes));
     }
     use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
 
@@ -665,14 +677,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
 
     // Transposed stat CBs on the worker cores. For is_tp_1 these are unused stubs
-    // (that path keeps stats in col 0 and reduces locally). chunk==1 so local is 1.
-    create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, 1u, fp32_format);
+    // (that path keeps stats in col 0 and reduces locally). chunk==1 so local is
+    // stats_per_token (1 RMS sum-sq, 2 LayerNorm mean+var); gathered is
+    // stats_per_token * ring_size (the per-device partials to merge).
+    create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, stats_per_token, fp32_format);
     create_cb(
         stats_transposed_gathered_cb_id,
         program,
         worker_core_set,
         fp32_tile_size,
-        use_mux ? args.ring_size : 1u,
+        use_mux ? args.ring_size * stats_per_token : 1u,
         fp32_format);
     uint32_t unit_packet_bytes = 0u;
     if (use_mux) {
@@ -681,8 +695,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // stick into its forwarder's copy at this same address; the forwarder reads
         // its own). page == one fabric packet (sticks_per_packet * 128 B), depth 2.
         const uint32_t sticks_per_packet =
-            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / 128u);
-        unit_packet_bytes = sticks_per_packet * 128u;
+            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
+        unit_packet_bytes = sticks_per_packet * stick_bytes;
         TT_FATAL(
             sticks_per_packet >= workers_per_forwarder,
             "wan_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
@@ -956,7 +970,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             head_dim_tiles,
             num_tile_rows,
             max_rounds,
-            128u,  // stick_bytes (32 fp32)
+            stick_bytes,  // 128 (RMS, 1 stat) or 256 (LayerNorm, mean+M2)
             num_chunks_per_device,
             packet_cb_id,
             arrival_sem_id,
@@ -1003,7 +1017,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             num_forwarders,
             group_size,
             max_rounds,
-            128u,  // stick_bytes
+            stick_bytes,  // 128 (RMS) or 256 (LayerNorm: mean+M2)
             num_chunks_per_device,
             arrival_sem_id,
             go_sem_id,

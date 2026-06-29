@@ -3,29 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * Fused Wan2.2 distributed LayerNorm compute kernel (Welford) — Phase 2 bringup.
+ * Fused Wan2.2 distributed LayerNorm compute kernel (Welford) — Phases 2-3.
  *
- * Scope (Phase 2): is_tp_1 (no all-gather / fabric), whole-row norm (no
- * per_head), no RoPE, bf16 input, resident layout (no streaming / block-major).
+ * Scope: whole-row norm (no per_head), no RoPE, bf16 input, resident layout.
  * Optional gamma (weight) and beta (bias), broadcast [1,H] or per-token [N,H].
+ * TP=1 (is_tp_1): reduce locally, no fabric. TP>1: gather per-shard Welford
+ * (mean, var) partials over the fabric ring and merge them (parallel Welford).
  *
- * Per tile-row of the core's slice:
- *   1) PRE (Welford): transpose each of the num_tile_cols input tiles into DST
- *      and fold it into the running per-token mean/M2 (welford_update). After
- *      all tiles, welford_finalize_to_row converts M2 -> variance and writes the
- *      per-token mean to row 0 of one DST tile and variance to row 0 of the next.
- *   2) Transpose mean/var back to col 0 (so they broadcast over feature columns),
- *      compute 1/std = rsqrt(var + eps), and stage mean (stats_local_cb) and
- *      1/std (reduce_result_cb) as col-0 broadcast tiles.
- *   3) POST: x' = (x - mean) [rotated_input_cb] ; x'' = x' * (1/std)
- *      [norm_result_cb] ; optional * weight ; optional + bias ; -> output_cb.
+ * Per tile-row:
+ *   1) PRE (Welford): transpose each of the num_tile_cols input tiles into DST and
+ *      fold it into the running per-token mean/M2; welford_finalize_to_row converts
+ *      M2 -> per-shard variance, writing mean to row 0 of one DST tile and variance
+ *      to row 0 of the next (over the local shard of feat_local = num_tile_cols*32).
+ *   2a) is_tp_1: that IS the full mean/var -> transpose to col 0, 1/std = rsqrt(var+eps).
+ *   2b) TP>1: push (mean, var) row-0 sticks; the worker writer ring-gathers all
+ *       ring_size shards' partials into stats_transposed_gathered_cb (interleaved
+ *       [mean_d, var_d]); combine_welford_partials merges them into the global
+ *       (mean, 1/std); transpose both to col 0.
+ *   3) POST: x' = (x - mean) [rotated_input_cb] ; x'' = x' * (1/std) ; [* weight] ;
+ *      [+ bias] -> output_cb.
  *
- * This shares the program factory's CBs / reader / writer with the RMSNorm
- * kernel. CBs idle on the is_tp_1 + no-RoPE path are repurposed: stats_local_cb
- * holds the per-token mean, reduce_result_cb holds 1/std, and rotated_input_cb
- * (RoPE-only normally) holds (x - mean). The cross-shard Welford merge (TP>1)
- * and wide-shard / fp32-input handling are later phases. See
- * WELFORD_LAYERNORM_DESIGN.md.
+ * Shares the program factory's CBs / reader / writer with the RMSNorm kernel.
+ * On is_tp_1/no-RoPE: stats_local_cb holds the per-token mean (col 0),
+ * reduce_result_cb holds 1/std (col 0), rotated_input_cb (RoPE-only normally)
+ * holds (x - mean). On TP>1: stats_transposed_local_cb carries the local
+ * (mean, var) partial, stats_transposed_gathered_cb the gathered ring partials,
+ * stats_gathered_cb the merged (mean, 1/std). See WELFORD_LAYERNORM_DESIGN.md.
  */
 
 #include <cstdint>
@@ -37,40 +40,47 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/transpose_wh.h"
 #include "api/compute/welford.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "tools/profiler/kernel_profiler.hpp"
+
+using norm::kernel_util::compute::combine_welford_partials;
+using norm::kernel_util::compute::RSqrtPolicy;
 
 void kernel_main() {
     // === Compile-time args (shared list with the RMSNorm kernel; LN reads a subset) ===
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t mean_cb = get_compile_time_arg_val(1);  // stats_local_cb (idle on is_tp_1) -> per-token mean
+    constexpr uint32_t combine_cb = get_compile_time_arg_val(2);  // stats_gathered_cb -> merged [mean, 1/std]
+    constexpr uint32_t mean_cb = get_compile_time_arg_val(1);     // stats_local_cb (idle) -> per-token mean (col 0)
     constexpr uint32_t weight_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t invstd_cb = get_compile_time_arg_val(7);        // reduce_result_cb -> 1/std
+    constexpr uint32_t invstd_cb = get_compile_time_arg_val(7);        // reduce_result_cb -> 1/std (col 0)
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(8);  // norm / weight result (fp32)
     constexpr uint32_t output_cb = get_compile_time_arg_val(10);
     constexpr uint32_t xmm_cb = get_compile_time_arg_val(14);  // rotated_input_cb (idle, no RoPE) -> (x - mean)
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(15);
     constexpr uint32_t block_size = get_compile_time_arg_val(16);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(17);  // stats_tiles_cols (== TP shards)
     constexpr uint32_t has_weight = get_compile_time_arg_val(20);
+    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(23);
+    constexpr uint32_t stats_local_cb = get_compile_time_arg_val(24);     // local partial (mean, var) row 0
+    constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(25);  // ring partials [mean_d, var_d] row 0
     constexpr uint32_t bias_cb = get_compile_time_arg_val(28);
     constexpr uint32_t has_bias = get_compile_time_arg_val(29);
     constexpr uint32_t per_token_weight = get_compile_time_arg_val(32);
     constexpr uint32_t per_token_bias = get_compile_time_arg_val(33);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(34);
 
-    // Welford reduces over the full row: num_tile_cols * TILE_WIDTH features.
+    // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
     constexpr uint32_t tile_width = 32u;
-    constexpr uint32_t reduce_width = num_tile_cols * tile_width;
-    // No reciprocal LUT in Phase 2: reciprocal_size==0 -> runtime 1/(idx+1) division.
+    constexpr uint32_t reduce_width = num_tile_cols * tile_width;  // = feat_local
+    // No reciprocal LUT in this bringup: reciprocal_size==0 -> runtime division.
     constexpr std::array<uint32_t, 0> no_lut{};
 
-    // DST tile assignment for the Welford pass.
     constexpr uint32_t welford_in_dst = 0;
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
 
-    // has_bias implies has_weight (enforced in validate). Keep the normalized
-    // result in fp32 intermediate_cb when weight/bias follow; otherwise straight
-    // to output_cb.
+    // has_bias implies has_weight (enforced in validate).
     constexpr uint32_t norm_result_cb = (has_weight != 0) ? intermediate_cb : output_cb;
     constexpr uint32_t weight_result_cb = (has_bias != 0) ? intermediate_cb : output_cb;
 
@@ -79,17 +89,14 @@ void kernel_main() {
     binary_op_init_common(input_cb, input_cb, input_cb);
 
     for (uint32_t row = 0; row < num_tile_rows; row++) {
-        // Input for this row stays resident: used by the Welford pass (transpose)
-        // and re-read by POST (x - mean). Popped at end of row.
+        // Input stays resident: used by the Welford pass and re-read by POST.
         cb_wait_front(input_cb, num_tile_cols);
 
-        // -------- PHASE 1: PRE — Welford per-token (mean, var) over the row --------
+        // -------- PHASE 1: PRE — local per-token Welford (mean, var) over the shard --------
         {
             DeviceZoneScopedN("LN_PRE_WELFORD");
-            // bf16 input -> transpose_wh_tile goes through SrcA and does NOT touch
-            // the SFPU replay buffer, so no welford_init<PreserveStats> recovery is
-            // needed after each transpose (that is only required on the fp32
-            // UnpackToDest path). Phase 2 requires bf16 input (enforced in validate).
+            // bf16 input -> transpose_wh_tile goes through SrcA (no SFPU replay-buffer
+            // clobber), so no welford_init<PreserveStats> recovery is needed.
             transpose_wh_init_short(input_cb);
             tile_regs_acquire();
             welford_init();
@@ -99,42 +106,51 @@ void kernel_main() {
                 welford_update<0>(welford_in_dst, start_n, no_lut);
                 start_n += tile_width;
             }
-            // M2 -> variance (population, scale = 1/reduce_width); mean -> row 0 of
-            // mean_dst, var -> row 0 of var_dst.
-            welford_finalize_to_row<0>(mean_dst, reduce_width - 1, no_lut);
+            welford_finalize_to_row<0>(mean_dst, reduce_width - 1, no_lut);  // mean->dst1 row0, var->dst2 row0
             tile_regs_commit();
 
-            // Stash the row-0 mean/var so we can transpose them back to col 0.
-            cb_reserve_back(mean_cb, 1);
-            cb_reserve_back(invstd_cb, 1);
-            tile_regs_wait();
-            pack_reconfig_data_format(mean_cb);
-            pack_tile(mean_dst, mean_cb);
-            pack_reconfig_data_format(invstd_cb);
-            pack_tile(var_dst, invstd_cb);
-            tile_regs_release();
-            cb_push_back(mean_cb, 1);
-            cb_push_back(invstd_cb, 1);
+            if constexpr (is_tp_1 != 0) {
+                // Local stat IS the full mean/var: stash row 0 for the transpose below.
+                cb_reserve_back(mean_cb, 1);
+                cb_reserve_back(invstd_cb, 1);
+                tile_regs_wait();
+                pack_reconfig_data_format(mean_cb);
+                pack_tile(mean_dst, mean_cb);
+                pack_reconfig_data_format(invstd_cb);
+                pack_tile(var_dst, invstd_cb);
+                tile_regs_release();
+                cb_push_back(mean_cb, 1);
+                cb_push_back(invstd_cb, 1);
+            } else {
+                // Push the local (mean, var) partial (row 0) for the worker writer to
+                // ring-gather. stats_local_cb holds [mean, var] for this shard.
+                cb_reserve_back(stats_local_cb, 2);
+                tile_regs_wait();
+                pack_reconfig_data_format(stats_local_cb);
+                pack_tile(mean_dst, stats_local_cb);
+                pack_tile(var_dst, stats_local_cb);
+                tile_regs_release();
+                cb_push_back(stats_local_cb, 2);
+            }
         }
 
-        // -------- Transpose mean/var to col 0; var -> 1/std = rsqrt(var + eps) --------
-        {
+        // -------- Produce per-token mean (col 0) + 1/std (col 0) into mean_cb / invstd_cb --------
+        if constexpr (is_tp_1 != 0) {
             DeviceZoneScopedN("LN_STAT_FINALIZE");
+            // Transpose row 0 -> col 0; 1/std = rsqrt(var + eps).
             cb_wait_front(mean_cb, 1);
             cb_wait_front(invstd_cb, 1);
             reconfig_data_format_srca(mean_cb);
             transpose_wh_init_short(mean_cb);
             tile_regs_acquire();
-            transpose_wh_tile(mean_cb, 0, mean_dst);   // mean row 0 -> col 0
-            transpose_wh_tile(invstd_cb, 0, var_dst);  // var  row 0 -> col 0
-            // 1/std = rsqrt(var + eps), in place on var_dst (col 0).
+            transpose_wh_tile(mean_cb, 0, mean_dst);
+            transpose_wh_tile(invstd_cb, 0, var_dst);
             binop_with_scalar_tile_init();
             add_unary_tile(var_dst, eps_bits);
             rsqrt_tile_init();
             rsqrt_tile(var_dst);
             tile_regs_commit();
 
-            // Overwrite mean_cb / invstd_cb (now col-0 broadcast tiles) in place.
             cb_pop_front(mean_cb, 1);
             cb_pop_front(invstd_cb, 1);
             cb_reserve_back(mean_cb, 1);
@@ -147,9 +163,47 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(mean_cb, 1);
             cb_push_back(invstd_cb, 1);
-            cb_wait_front(mean_cb, 1);
-            cb_wait_front(invstd_cb, 1);
+        } else {
+            DeviceZoneScopedN("LN_MERGE");
+            // Parallel-Welford merge of the ring_size per-shard partials (equal counts
+            // = reduce_width). combine_welford_partials consumes the gathered
+            // [mean_d, var_d] tiles (waits internally) and writes [global_mean,
+            // 1/std] (row 0) into combine_cb. NOTE: combine_welford_partials does
+            // reserve_back(2) + pack_tile but does NOT push_back — the caller must
+            // (mirrors layernorm_post_allgather_welford.cpp).
+            CircularBuffer gathered_obj(stats_gathered_cb);
+            CircularBuffer combined_obj(combine_cb);
+            combine_welford_partials(
+                gathered_obj,
+                combined_obj,
+                ring_size,
+                [](uint32_t) { return reduce_width; },
+                RSqrtPolicy{/*compute=*/true, /*eps=*/eps_bits});
+            cb_push_back(combine_cb, 2);
+
+            // Transpose merged mean / 1/std row 0 -> col 0.
+            cb_wait_front(combine_cb, 2);
+            reconfig_data_format_srca(combine_cb);
+            transpose_wh_init_short(combine_cb);
+            tile_regs_acquire();
+            transpose_wh_tile(combine_cb, 0, mean_dst);
+            transpose_wh_tile(combine_cb, 1, var_dst);
+            tile_regs_commit();
+            cb_pop_front(combine_cb, 2);
+            cb_reserve_back(mean_cb, 1);
+            cb_reserve_back(invstd_cb, 1);
+            tile_regs_wait();
+            pack_reconfig_data_format(mean_cb);
+            pack_tile(mean_dst, mean_cb);
+            pack_reconfig_data_format(invstd_cb);
+            pack_tile(var_dst, invstd_cb);
+            tile_regs_release();
+            cb_push_back(mean_cb, 1);
+            cb_push_back(invstd_cb, 1);
         }
+
+        cb_wait_front(mean_cb, 1);
+        cb_wait_front(invstd_cb, 1);
 
         // -------- PHASE 2: POST — (x - mean) * (1/std) [* weight] [+ bias] --------
         // Sub-phase A: x - mean (broadcast mean over feature cols) -> xmm_cb.

@@ -54,6 +54,11 @@ constexpr uint32_t padded_row_tiles = ((num_tile_cols + block_size - 1u) / block
 // row0 = bytes [1024,1088). 32 fp32 = 128 B real data per stat tile.
 constexpr uint32_t kFaceRowBytes = 64u;
 constexpr uint32_t kFace01Off = 1024u;
+// Stats transported per token-tile: 1 for RMSNorm (sum-of-squares), 2 for Welford
+// LayerNorm (mean, variance). The physical stick is num_stats * 128 B; each stat is
+// one 128 B packed row-0 stick (two 64 B face-rows). num_stats==1 -> RMS layout.
+constexpr uint32_t kStatBytes = 128u;
+constexpr uint32_t num_stats = stick_bytes / kStatBytes;
 
 // Scalar/eps/trans_mat population args (after the output + dram accessors).
 constexpr auto output_args = TensorAccessorArgs<14>();
@@ -111,20 +116,26 @@ void kernel_main() {
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         const uint32_t round = tile_row - tile_row_start;
 
-        // ---- 1. push my stick into the forwarder's packet_buf, then inc arrival ----
+        // ---- 1. push my num_stats sticks into the forwarder's packet_buf, inc arrival ----
+        // Each stat occupies a 128 B sub-stick at dst + s*128 (mean then variance for
+        // LayerNorm); the worker contributes one slot (my_slot*stick_bytes) regardless.
         {
             DeviceZoneScopedN("W_PUSH");
-            cb_wait_front(stats_transposed_local_cb, 1);
-            const uint32_t src = get_read_ptr(stats_transposed_local_cb);
+            cb_wait_front(stats_transposed_local_cb, num_stats);
+            const uint32_t src0 = get_read_ptr(stats_transposed_local_cb);
             const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
-            const uint64_t dst_noc0 = safe_get_noc_addr(fwd_x, fwd_y, dst, 0);
-            const uint64_t dst_noc1 = safe_get_noc_addr(fwd_x, fwd_y, dst + kFaceRowBytes, 0);
-            noc_async_write(src, dst_noc0, kFaceRowBytes);               // face_00 row0
-            noc_async_write(src + kFace01Off, dst_noc1, kFaceRowBytes);  // face_01 row0
+            for (uint32_t s = 0; s < num_stats; s++) {
+                const uint32_t src = src0 + s * stat_tile_bytes;
+                const uint32_t sub = dst + s * kStatBytes;
+                const uint64_t dst_noc0 = safe_get_noc_addr(fwd_x, fwd_y, sub, 0);
+                const uint64_t dst_noc1 = safe_get_noc_addr(fwd_x, fwd_y, sub + kFaceRowBytes, 0);
+                noc_async_write(src, dst_noc0, kFaceRowBytes);               // face_00 row0
+                noc_async_write(src + kFace01Off, dst_noc1, kFaceRowBytes);  // face_01 row0
+            }
             noc_async_write_barrier();
             noc_semaphore_inc(fwd_arrival_noc, 1);
             noc_async_atomic_barrier();
-            cb_pop_front(stats_transposed_local_cb, 1);
+            cb_pop_front(stats_transposed_local_cb, num_stats);
         }
 
         // ---- 2. wait for the forwarder's go (this round's ring gather landed) ----
@@ -134,18 +145,22 @@ void kernel_main() {
             noc_semaphore_wait_min(go_sem_ptr, go_target);
         }
 
-        // ---- 3. read ring_size gathered sticks from DRAM into ROW 0 of gathered tiles ----
-        cb_reserve_back(stats_transposed_gathered_cb, ring_size);
+        // ---- 3. read num_stats*ring gathered sticks from DRAM into ROW 0 of gathered tiles ----
+        // Device-major, stat-minor order: gathered tile (d*num_stats + s). For LayerNorm
+        // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
+        cb_reserve_back(stats_transposed_gathered_cb, num_stats * ring_size);
         const uint32_t gbase = get_write_ptr(stats_transposed_gathered_cb);
         for (uint32_t d = 0; d < ring_size; d++) {
             const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
-            const uint32_t tile_dst = gbase + d * gathered_tile_bytes;
-            const uint64_t src = get_noc_addr(page_idx, stats_dram, my_slot * stick_bytes);
-            noc_async_read(src, tile_dst, kFaceRowBytes);                               // -> face_00 row0
-            noc_async_read(src + kFaceRowBytes, tile_dst + kFace01Off, kFaceRowBytes);  // -> face_01 row0
+            for (uint32_t s = 0; s < num_stats; s++) {
+                const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
+                const uint64_t src = get_noc_addr(page_idx, stats_dram, my_slot * stick_bytes + s * kStatBytes);
+                noc_async_read(src, tile_dst, kFaceRowBytes);                               // -> face_00 row0
+                noc_async_read(src + kFaceRowBytes, tile_dst + kFace01Off, kFaceRowBytes);  // -> face_01 row0
+            }
         }
         noc_async_read_barrier();
-        cb_push_back(stats_transposed_gathered_cb, ring_size);
+        cb_push_back(stats_transposed_gathered_cb, num_stats * ring_size);
 
         // ---- 4. drain this row's output_cb tiles ----
         {
