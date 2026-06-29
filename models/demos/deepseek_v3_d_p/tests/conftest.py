@@ -21,10 +21,11 @@ from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.demos.deepseek_v3.utils.config_helpers import detect_language_model_prefix, sub_state_dict
-from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANTS, TestVariant
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 # Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
