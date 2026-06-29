@@ -440,6 +440,15 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
+    # Surface experimental enums (nanobind registers them on the raw ccl_experimental
+    # submodule, not via the string-routed op registry) alongside their ops under
+    # ttnn.experimental, e.g. ttnn.experimental.WanFusedNormType.
+    setattr(
+        sys.modules["ttnn.experimental"],
+        "WanFusedNormType",
+        ttnn._ttnn.operations.experimental.ccl_experimental.WanFusedNormType,
+    )
+
 from ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div

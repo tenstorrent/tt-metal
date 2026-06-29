@@ -14,6 +14,13 @@
 namespace ttnn::operations::experimental::ccl {
 
 void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
+    nb::enum_<ttnn::experimental::WanFusedNormType>(mod, "WanFusedNormType")
+        .value("RMS", ttnn::experimental::WanFusedNormType::RMS, "RMSNorm: x * rsqrt(E[x^2] + eps)")
+        .value(
+            "LAYERNORM",
+            ttnn::experimental::WanFusedNormType::LAYERNORM,
+            "Welford LayerNorm: (x - mean) * rsqrt(var + eps), with bias");
+
     ttnn::bind_function<"wan_fused_distributed_rmsnorm", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -50,7 +57,8 @@ void bind_wan_fused_distributed_rmsnorm(nb::module_& mod) {
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("use_device_op") = false);
+        nb::arg("use_device_op") = false,
+        nb::arg("norm_type") = ttnn::experimental::WanFusedNormType::RMS);
 
     ttnn::bind_function<"wan_fused_distributed_rmsnorm_create_stats_buffer", "ttnn.experimental.">(
         mod,

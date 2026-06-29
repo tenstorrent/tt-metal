@@ -124,6 +124,12 @@ void kernel_main() {
     // per_head_norm==0. Bit-exact with the resident path (same math + order, fp32
     // intermediates), trading per-block reconfigs for a bounded L1 footprint.
     constexpr uint32_t block_major_post = get_compile_time_arg_val(37);
+    // Normalization variant: 0 = RMSNorm (PRE sum-of-squares, POST x*rsqrt(E[x^2]+eps)),
+    // 1 = Welford LayerNorm (PRE per-shard Welford (mean, M2), POST merge +
+    // (x-mean)*rsqrt(var+eps)). Wired in Phase 1; the LayerNorm code paths land in
+    // later phases. Until then only RMS is exercised, so this stays inert.
+    constexpr uint32_t norm_type = get_compile_time_arg_val(38);
+    static_assert(norm_type == 0u, "Welford LayerNorm (norm_type=1) is not yet implemented in the compute kernel");
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the

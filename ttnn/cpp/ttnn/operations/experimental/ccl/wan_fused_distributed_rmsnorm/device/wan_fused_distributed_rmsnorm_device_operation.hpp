@@ -61,6 +61,7 @@ Tensor wan_fused_distributed_rmsnorm(
     std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+    ttnn::experimental::WanFusedNormType norm_type = ttnn::experimental::WanFusedNormType::RMS);
 
 }  // namespace ttnn::prim
