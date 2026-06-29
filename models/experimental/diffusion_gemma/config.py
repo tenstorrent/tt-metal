@@ -189,9 +189,10 @@ class VisionConfig:
     hidden_size: int = 1152  # verified
     patch_size: int = 16  # verified (config.json patch_size)
     soft_tokens_per_image: int = 280  # verified (config.json vision_soft_tokens_per_image)
-    # Variable-resolution token budgets (#47467). "SigLIP" is an author-applied
-    # family label; the config model_type is gemma4_vision.
-    resolution_token_budgets: tuple[int, ...] = (70, 140, 280, 560, 1120)  # verified
+    # Variable-resolution token budgets from the #47467 plan, not current
+    # config.json keys. "SigLIP" is an author-applied family label; the config
+    # model_type is gemma4_vision.
+    resolution_token_budgets: tuple[int, ...] = (70, 140, 280, 560, 1120)
 
 
 @dataclass(frozen=True)
