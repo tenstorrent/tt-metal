@@ -17,6 +17,14 @@
 // The descriptor builder sets it from operation_attrs.grouped (false -> 1, true -> 0) on all three RISC
 // kernels; the compute API (#if GMG_UNGROUPED_TOP8) #errors if it is undefined, so there is no silent default.
 
+// DEBUG: uncomment to dump LREG0-3 around the SFPSHFT2 pair in _gmg_merge4_top8 (topA). The gate early-returns
+// right after topA's merge4 and PACK writes the scores tile (output_cb): face0 rows 0-7 = registers BEFORE the
+// two SFPSHFT2, rows 8-15 = AFTER. Must be defined before the includes so both the compute API and the LLK
+// header see it. This is a device-side JIT kernel (no ttnn rebuild needed), but the kernel cache may not pick
+// up the LLK/compute-API header edits — clear it first: `rm -rf ~/.cache/tt-metal-cache`. Read out via the
+// test_dump_merge4_shft2 pytest. Leave commented in normal builds.
+// #define GMG_DUMP_MERGE4_SHFT2
+
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"
 #include "../unified_kernels/generalized_moe_gate.hpp"

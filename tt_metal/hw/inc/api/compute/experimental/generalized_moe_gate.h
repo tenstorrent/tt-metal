@@ -183,6 +183,12 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
         (APPROX, DST_ACCUM_MODE, 0, 0, 2),
         0,
         VectorMode::RC_custom)));
+#ifdef GMG_DUMP_MERGE4_SHFT2
+    // DEBUG dump: stop right after topA's merge4 so PACK writes the in-function SFPSHFT2 snapshot out via the
+    // scores tile (DEST tile0 -> output_cb): face0 rows 0-7 = LREG0-3 BEFORE, rows 8-15 = LREG0-3 AFTER. See
+    // the matching guard in _gmg_merge4_top8. No-op in normal builds.
+    return;
+#endif
     // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
     MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit, 20>()));
     MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));

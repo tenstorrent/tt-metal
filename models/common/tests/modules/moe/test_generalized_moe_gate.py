@@ -384,6 +384,109 @@ def test_generalized_moe_gate_512_global(device, batch_size, enable_sigmoid, see
     ), f"512 normalized scores not consistent with device selection.\n dev={dev_scores}\n expected={expected}"
 
 
+def test_dump_merge4_shft2(device):
+    """DEBUG dump (NOT a correctness test): reads the LREG0-3 snapshot that _gmg_merge4_top8 writes around the
+    SFPSHFT2 pair into the scores tile when the kernel is compiled with GMG_DUMP_MERGE4_SHFT2.
+
+    Requires GMG_DUMP_MERGE4_SHFT2 to be #define'd in generalized_moe_gate_kernel.cpp (the gate early-returns
+    after topA's merge4, so the normal output is intentionally garbage here). Unlike the correctness tests this
+    allocates a FULL (1,32,32) output so to_torch exposes all of face0 (the (1,1,16) output only exposes row 0).
+    The dump layout (scores tile / output_cb, face0):
+        rows  0-3  even cols = LREG0 BEFORE   rows  0-3  odd cols = LREG1 BEFORE
+        rows  4-7  even cols = LREG2 BEFORE   rows  4-7  odd cols = LREG3 BEFORE
+        rows  8-11 even cols = LREG0 AFTER    rows  8-11 odd cols = LREG1 AFTER
+        rows 12-15 even cols = LREG2 AFTER    rows 12-15 odd cols = LREG3 AFTER
+    SFPSHFT2 writes LREG2/LREG3 (LREG0/LREG1 are the sources), so expect LREG0/LREG1 identical before/after and
+    LREG2/LREG3 shuffled (SUBVEC_SHFLROR1 = subvector rotate-right-by-1). Run with -s to see the prints.
+    """
+    batch_size, enable_sigmoid, seed, topk = 1, False, 42, 8
+    eps, scaling_factor = 1e-20, 2.5
+    input_shape = (batch_size, 8, 32)
+    reshaped_input_shape = (batch_size, 16, 16)
+    shard = (32, 32)
+    tile = ttnn.Tile(shard)
+    dump_shape = (batch_size, 32, 32)  # FULL tile so to_torch exposes all of face0 (not just row 0)
+
+    torch.manual_seed(seed)
+    # Monotonic input so the bitonic-sorted/merged register values are distinct -> the SHFLROR1 shuffle is
+    # visually obvious in the BEFORE-vs-AFTER blocks. (Any input works; this just makes the rotation legible.)
+    torch_input = torch.sigmoid((2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1)
+    torch_bias = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
+
+    grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch.reshape(torch_input, reshaped_input_shape),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        tile=tile,
+    )
+    reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1)
+    ttnn_bias = ttnn.from_torch(
+        reshaped_bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem, tile=tile
+    )
+    torch_input_indices = torch.arange(reshaped_input_shape[1] * reshaped_input_shape[2], dtype=torch.int32)
+    torch_input_indices = torch_input_indices.unsqueeze(0).expand(reshaped_input_shape[0], -1)
+    torch_input_indices = torch.transpose(torch_input_indices.reshape(reshaped_input_shape), -2, -1).to(torch.uint16)
+    ttnn_input_indices = ttnn.from_torch(
+        torch_input_indices, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem, tile=tile
+    )
+    ttnn_output = ttnn.from_torch(
+        torch.zeros(dump_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        tile=tile,
+    )
+    ttnn_output_indices = ttnn.from_torch(
+        torch.zeros(dump_shape, dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        tile=tile,
+    )
+
+    res_scores, _ = ttnn.experimental.deepseek.moe.generalized_moe_gate(
+        ttnn_input,
+        bias_tensor=ttnn_bias,
+        input_indices_tensor=ttnn_input_indices,
+        output_tensor=ttnn_output,
+        output_indices_tensor=ttnn_output_indices,
+        eps=eps,
+        scaling_factor=scaling_factor,
+        enable_sigmoid=enable_sigmoid,
+        topk=topk,
+        output_softmax=False,
+    )
+
+    face0 = ttnn.to_torch(res_scores)[0, :16, :16].float()
+    torch.set_printoptions(precision=4, sci_mode=False, linewidth=200)
+    logger.info(f"raw face0 (rows 0-7 = BEFORE, rows 8-15 = AFTER):\n{face0}")
+    # De-interleave each register's 32 lanes (4 rows x 8 even/odd cols) into a 4x8 block.
+    regs = {
+        "LREG0 BEFORE": face0[0:4, 0::2],
+        "LREG1 BEFORE": face0[0:4, 1::2],
+        "LREG2 BEFORE": face0[4:8, 0::2],
+        "LREG3 BEFORE": face0[4:8, 1::2],
+        "LREG0 AFTER ": face0[8:12, 0::2],
+        "LREG1 AFTER ": face0[8:12, 1::2],
+        "LREG2 AFTER ": face0[12:16, 0::2],
+        "LREG3 AFTER ": face0[12:16, 1::2],
+    }
+    for name, block in regs.items():
+        logger.info(f"{name} (4x8):\n{block}")
+
+
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201])

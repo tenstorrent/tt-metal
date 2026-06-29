@@ -457,12 +457,33 @@ inline void _gmg_merge4_top8()
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + read_base + 4);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + read_base + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + read_base + 4);
+    // LREG0+1 is descending, LREG2+3 is ascending,lane0=lane6, lane1=lane7
+    /*
+    LREG0([[1.3594, 1.7031, 0.0000, 0.0000, 0.0000, 0.0000, 1.3594, 1.7031],
+        [1.3047, 1.3359, 0.0000, 0.0000, 0.0000, 0.0000, 1.3047, 1.3359],
+        [1.3047, 1.2734, 3.0312, 3.1875, 3.2812, 2.9219, 1.3047, 1.2734],
+        [1.1484, 1.2422, 3.0312, 3.1875, 3.2812, 2.9219, 1.1484, 1.2422]])
+    LREG1([[1.1406, 1.2344, 3.0312, 3.1875, 3.2812, 2.9219, 1.1406, 1.2344],
+        [1.1328, 1.1719, 3.0312, 3.1875, 3.2812, 2.9219, 1.1328, 1.1719],
+        [1.0547, 1.1484, 0.0000, 0.0000, 0.0000, 0.0000, 1.0547, 1.1484],
+        [1.0078, 1.0859, 0.0000, 0.0000, 0.0000, 0.0000, 1.0078, 1.0859]])
+    LREG2([[1.1797, 1.0781, 0.7266, 0.6602, 0.5195, 0.6211, 1.1797, 1.0781],
+        [1.2891, 1.1953, 0.6328, 0.6367, 0.6641, 0.6680, 1.2891, 1.1953],
+        [1.3125, 1.2734, 0.5977, 0.4844, 0.7852, 0.6445, 1.3125, 1.2734],
+        [1.3594, 1.2734, 1.0469, 0.4141, 0.9648, 0.4375, 1.3594, 1.2734]])
+    LREG3([[1.3828, 1.2812, 1.2422, 0.8398, 0.5859, 1.6172, 1.3828, 1.2812],
+        [1.4219, 1.3047, 0.8750, 1.6250, 0.0977, 0.7695, 1.4219, 1.3047],
+        [1.4766, 1.5625, 0.7266, 0.6602, 0.5195, 0.6211, 1.4766, 1.5625],
+        [1.6328, 1.6250, 0.6328, 0.6367, 0.6641, 0.6680, 1.6328, 1.6250]])
+    */
     bitonic_top8_ph3_st4_to_1<idir, true>();
+    // after this LREG 0+1+2+3's lane0 is the descending order order of the previous LREG 0+1+2+3's lane0; lane1 is the same
     bitonic_topk_store8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
 
     // Stage 2: shift in "the other column of 8", merge (base-independent — identical to
     // _generalized_moe_gate_top8 lines for the second merge stage).
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    // LREG1 right-shift by 1 and write to LREG2(per-row 8 elements)
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
@@ -470,9 +491,33 @@ inline void _gmg_merge4_top8()
     TTI_SFPCONFIG(0x4, 0xF, 1);
     reverse_sort_order();
     bitonic_topk_load8_even_cols_concatted_indices_single_face<is_fp32_dest_acc_en>();
+#ifdef GMG_DUMP_MERGE4_SHFT2
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 2);
+    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_3, scores_offset + 6);
+#endif
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
+#ifdef GMG_DUMP_MERGE4_SHFT2
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 8);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 10);
+    TTI_SFPSTORE(p_sfpu::LREG2, 0, ADDR_MOD_3, scores_offset + 12);
+    TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_3, scores_offset + 14);
+    return;
+#endif
+    /*
+2026-06-26 20:35:36.467 | INFO     | models.common.tests.modules.moe.test_generalized_moe_gate:test_dump_merge4_shft2:506 - LREG0 AFTER  (4x8):
+tensor([[1.6328, 1.7031, 3.0312, 3.1875, 3.2812, 2.9219, 1.6328, 1.7031],
+        [1.4766, 1.6250, 3.0312, 3.1875, 3.2812, 2.9219, 1.4766, 1.6250],
+        [1.4219, 1.5625, 3.0312, 3.1875, 3.2812, 2.9219, 1.4219, 1.5625],
+        [1.3828, 1.3594, 3.0312, 3.1875, 3.2812, 2.9219, 1.3828, 1.3594]])
+2026-06-26 20:35:36.468 | INFO     | models.common.tests.modules.moe.test_generalized_moe_gate:test_dump_merge4_shft2:506 - LREG1 AFTER  (4x8):
+tensor([[1.3594, 1.3828, 1.3359, 3.0312, 3.1875, 3.2812, 2.9219, 1.3828],
+        [1.5625, 1.4219, 1.5625, 3.0312, 3.1875, 3.2812, 2.9219, 1.4219],
+        [1.6250, 1.4766, 1.6250, 3.0312, 3.1875, 3.2812, 2.9219, 1.4766],
+        [1.7031, 1.6328, 1.7031, 3.0312, 3.1875, 3.2812, 2.9219, 1.6328]])
+    */
     // Result: merged top-8 — bias values in LREG0/LREG1, concat(idx|score) in LREG4/LREG5.
     // Store as a re-mergeable run at columns {store_lo, store_hi} so the existing top8 can
     // consume cols {0,2,4,6} for the final merge.
