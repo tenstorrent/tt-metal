@@ -367,7 +367,7 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
 
 
 # ---------------------------------------------------------------------------------------------
-# FP32 coverage for the complete (non-distributed) interleaved LayerNorm op.
+# FP32 coverage for the complete (non-distributed) interleaved LayerNorm op
 # Spans the full config matrix: {legacy, welford} x {fp32, bf16} input x {TILE, ROW_MAJOR} input
 # x {bf16, fp32} gamma/beta. FP32 requires fp32_dest_acc_en=True. Welford requires TILE input
 # (ROW_MAJOR input hangs for every dtype), so welford x rm_in is skipped to record the limitation
