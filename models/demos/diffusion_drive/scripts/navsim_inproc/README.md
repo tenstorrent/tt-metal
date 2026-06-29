@@ -56,7 +56,7 @@ the bridge.
 
 ## Prerequisite — make `ttnn` importable in `navsim`
 
-`navsim` has the navsim stack but not the tt-metal Python wiring. Two one-time
+`navsim` has the navsim stack but not the tt-metal Python wiring. Three one-time
 fixes (no torch/numpy change needed):
 
 1. **Path.** The real `ttnn` package lives at `$TT_METAL_HOME/ttnn/ttnn/`, so
@@ -76,8 +76,15 @@ fixes (no torch/numpy change needed):
    ```
    (ttnn declares `numpy>=1.24.4`, but it imports and runs fine on the navsim
    env's pinned `1.23.4` — leave numpy alone.)
+3. **libstdc++.** Put the conda env's `lib` ahead of the system one so the loader
+   finds a `libstdc++` with `CXXABI_1.3.15` (the env's `sqlite3`/ICU needs it; the
+   system `libstdc++` may be older). Without it, `import ttnn` fails with
+   `` version `CXXABI_1.3.15' not found ``:
+   ```bash
+   export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
+   ```
 
-Verify: `PYTHONPATH=$TTNN_PP python -c "import ttnn; print(ttnn.open_device)"`.
+Verify: `LD_LIBRARY_PATH=$CONDA_PREFIX/lib PYTHONPATH=$TTNN_PP python -c "import ttnn; print(ttnn.open_device)"`.
 
 ## 0. One-time: validate parity (recommended before a full run)
 
@@ -87,6 +94,7 @@ Confirm the on-device stack still matches the PyTorch reference **under torch
 ```bash
 conda activate navsim
 export TTNN_PP=$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
 PYTHONPATH=$TTNN_PP:$NAVSIM_DEVKIT_ROOT \
   python $TT_METAL_HOME/models/demos/diffusion_drive/scripts/navsim_inproc/check_parity.py \
     --checkpoint "$DD_CHECKPOINT_PATH" \
@@ -101,6 +109,7 @@ PYTHONPATH=$TTNN_PP:$NAVSIM_DEVKIT_ROOT \
 conda activate navsim
 BR=$TT_METAL_HOME/models/demos/diffusion_drive/scripts/navsim_inproc
 export TTNN_PP=$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
 # (a) agent class on PYTHONPATH (imported as a bare top-level module), plus tt-metal ttnn
 export PYTHONPATH=$BR:$TTNN_PP:$NAVSIM_DEVKIT_ROOT
 # (b) hydra config into the navsim agent config dir
