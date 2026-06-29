@@ -6,19 +6,19 @@
 
 operands:
   - name: "input_A"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float16_b"
   - name: "input_B"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float16_b"
   - name: "out_raw"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float16_b"
   - name: "out_after_exp"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float16_b"
   - name: "out_after_neg"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float16_b"
 
 operations:
@@ -29,7 +29,7 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-    block_size: [32, 32]
+    block_size: [64, 64]
     pack:
       - output: "out_raw"
         packer: "Packer"
