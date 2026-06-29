@@ -97,8 +97,9 @@ def assert_quality(result, ref, *, pcc_threshold, rtol, atol, label=""):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-def test_cast_to_fp8_scale(device, dtype):
+def test_cast_to_fp8_scale(device, dtype, layout):
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
 
@@ -110,9 +111,7 @@ def test_cast_to_fp8_scale(device, dtype):
     block_values = torch.tensor([-448, -224, -112, -56, 56, 112, 224, 448], dtype=torch_dtype)
     x_row = block_values.repeat_interleave(BLOCK_W)
     x = x_row.repeat([M, 1])
-    x_tt = ttnn.from_torch(
-        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    x_tt = ttnn.from_torch(x, dtype=ttnn_dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     scale = ttnn.to_torch(scale_tt).float()
 
@@ -120,18 +119,17 @@ def test_cast_to_fp8_scale(device, dtype):
     assert_equal(scale, ref)
 
 
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
-def test_cast_to_fp8_scale_values(device, dtype, shape):
+def test_cast_to_fp8_scale_values(device, dtype, shape, layout):
     torch.manual_seed(0)
 
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
 
     x = (torch.randn(*shape) * 5.0).to(torch_dtype)
-    x_tt = ttnn.from_torch(
-        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    x_tt = ttnn.from_torch(x, dtype=ttnn_dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     scale = ttnn.to_torch(scale_tt).float()
 
@@ -143,8 +141,8 @@ def test_cast_to_fp8_scale_values(device, dtype, shape):
     assert output_e4m3_tt.dtype == ttnn.fp8_e4m3
     assert x_tt.dtype == ttnn_dtype
     assert scale_tt.dtype == ttnn.float32
-    assert x_tt.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert output_e4m3_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert x_tt.layout == layout
+    assert output_e4m3_tt.layout == ttnn.ROW_MAJOR_LAYOUT  # outputs are always ROW_MAJOR
     assert scale_tt.layout == ttnn.ROW_MAJOR_LAYOUT
 
     max_rel = ((scale - ref).abs() / ref.abs().clamp_min(1e-9)).max().item()
