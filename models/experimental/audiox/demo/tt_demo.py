@@ -17,6 +17,8 @@ Run from the tt-metal root with a connected device:
         --output /tmp/out.wav
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import sys
@@ -26,7 +28,6 @@ from pathlib import Path
 import torch
 import ttnn
 
-from models.common.auto_compose import to_torch_auto_compose
 from models.experimental.audiox.demo.demo import (
     _HF_CONFIG,
     _build_audio_pretransform,
@@ -41,9 +42,6 @@ from models.experimental.audiox.demo.demo import (
 )
 from models.experimental.audiox.demo.media import resample_output_audio, save_output_audio
 from models.experimental.audiox.demo.tt_runtime import apply_tt_env_overrides, restore_tt_env, tt_open_kwargs_from_env
-from models.experimental.audiox.tt.dit import TtDiffusionTransformer
-from models.experimental.audiox.tt.oobleck import TtOobleckDecoder
-from models.experimental.audiox.tt.sampler import sample_rf as tt_sample_rf
 from models.experimental.audiox.utils.loader import (
     load_audiox_checkpoint,
     load_into,
@@ -55,6 +53,8 @@ from models.experimental.audiox.utils.loader import (
 
 
 def _build_tt_dit(cpu_state_dict: dict, device):
+    from models.experimental.audiox.tt.dit import TtDiffusionTransformer
+
     try:
         return TtDiffusionTransformer(
             mesh_device=device,
@@ -132,7 +132,8 @@ def open_tt_device(device_id: int):
     return ttnn.open_device(device_id=device_id, **open_kwargs)
 
 
-def _to_tt(t: torch.Tensor, device, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
+def _to_tt(t: torch.Tensor, device, layout=None) -> ttnn.Tensor:
+    layout = ttnn.TILE_LAYOUT if layout is None else layout
     return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device)
 
 
@@ -140,6 +141,8 @@ def _tt_to_torch(tensor: ttnn.Tensor, device) -> torch.Tensor:
     if isinstance(device, ttnn.MeshDevice):
         if device.get_num_devices() == 1:
             return ttnn.to_torch(tensor)
+        from models.common.auto_compose import to_torch_auto_compose
+
         return to_torch_auto_compose(tensor, device=device)
     return ttnn.to_torch(tensor)
 
@@ -220,6 +223,8 @@ class TtAudioXSession:
             self.cpu_decoder = None
             cpu_decoder = _build_decoder().eval()
             load_into(cpu_decoder, decoder_sd, label="decoder")
+            from models.experimental.audiox.tt.oobleck import TtOobleckDecoder
+
             self.tt_decoder = TtOobleckDecoder(
                 mesh_device=device,
                 state_dict=cpu_decoder.state_dict(),
@@ -375,6 +380,8 @@ class TtAudioXSession:
             return self.tt_dit(x, t, cross_attn_cond=tt_cond)
 
         started_at = time.perf_counter()
+        from models.experimental.audiox.tt.sampler import sample_rf as tt_sample_rf
+
         tt_latent = tt_sample_rf(model_fn, tt_noise, mesh_device=self.device, steps=steps)
         _synchronize_tt_device(self.device)
         timings["sampling_seconds"] = time.perf_counter() - started_at
