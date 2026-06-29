@@ -16,13 +16,26 @@
 
 namespace ckernel {
 
+// clang-format off
 /**
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose_wh_dest to be
- * executed correctly.
+ * executed correctly. On Quasar the operand's data format programs the transpose ALU config for 32-bit DST; on other
+ * architectures the operand is unused.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                                | Type     | Valid Range | Required |
+ * |----------|------------------------------------------------------------|----------|-------------|----------|
+ * | operand  | The identifier of the circular buffer (CB) holding the data| uint32_t | 0 to 31     | True     |
  */
+// clang-format on
 template <bool is_32bit = false, bool transpose_of_faces = true>
-ALWI void transpose_wh_dest_init_short() {
+ALWI void transpose_wh_dest_init_short([[maybe_unused]] uint32_t operand) {
+#ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest_init<transpose_of_faces, is_32bit>()));
+#else
+    MATH((llk_math_transpose_dest_init<transpose_of_faces, is_32bit>(operand)));
+#endif
 }
 
 // clang-format off
@@ -42,7 +55,11 @@ ALWI void transpose_wh_dest_init_short() {
 template <bool is_32bit = false, bool transpose_of_faces = true>
 ALWI void transpose_wh_dest(uint32_t idst) {
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
+#ifndef ARCH_QUASAR
     MATH((llk_math_transpose_dest<transpose_of_faces, is_32bit>(idst)));
+#else
+    MATH((llk_math_transpose_dest(idst)));
+#endif
 }
 
 }  // namespace ckernel

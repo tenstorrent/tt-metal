@@ -510,7 +510,13 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = model._supports_on_device_sampling
+        # Diagnostic A/B toggle (#48037). The gibberish fix is enabling the on-device force-argmax
+        # sampling path for the qwen25_vl Transformer (allow_force_argmax via SAMPLING_AG_CONFIG;
+        # see tt/model.py), which keeps greedy decode on-device. Setting TT_QWEN_FORCE_HOST_SAMPLING=1
+        # forces host argmax instead: a known-good reference (correct output) but slower (per-step
+        # logits read-back, fails the wh_llmbox_perf decode target), useful only for local A/B.
+        force_host_sampling = os.environ.get("TT_QWEN_FORCE_HOST_SAMPLING", "0") == "1"
+        argmax_on_device = model._supports_on_device_sampling and not force_host_sampling
         if argmax_on_device:
             logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
@@ -564,6 +570,9 @@ def test_demo(
                     top_p=sampling_params["top_p"],
                     on_host=True,
                 )
+                # Normalize to [batch, 1] to match the on-device path (out_tok feeds the next
+                # decode and is indexed per-user); the host argmax can return [batch] or [1, batch].
+                out_tok = out_tok.reshape(batch_size, 1)
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)

@@ -28,24 +28,38 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 }
 
 struct operation_attributes_t {
-    // Absolute chunk_start of rank 0 (lowest cluster_axis coord; the only device on a single chip). Rank r
-    // uses chunk_start_idx + r*Sq (Sq = per-device q seq len; r = linearized index along cluster_axis), so
-    // the per-device value is derived host-side and passed to compute as a RUNTIME arg, hash-excluded --
-    // distinct values reuse one program (see compute_program_hash).
-    uint32_t chunk_start_idx{0};             // absolute chunk_start of rank 0 (elements, tile-aligned)
+    // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived
+    // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
+    uint32_t chunk_start_idx{0};             // elements, tile-aligned
     std::optional<uint32_t> cluster_axis{};  // mesh axis that is the SP ring; unset = linear device order
+    // ReLU on each per-head q.kT before the gate-mul. true = DSA/GLM (relu(q.k)*w); false = raw dot (M3 MSA).
+    // Compile-time, so the true path is byte-identical to before.
+    bool apply_relu{true};
+    // Output groups. 1 = sum ALL Hi heads -> [B,1,Sq,T] (DSA/GLM). G>1 = partition into G groups of Hi/G,
+    // sum within each -> [B,G,Sq,T] (M3 per-GQA-group). Compile-time (G==1 byte-identical). G>1 needs all
+    // heads resident (head_group_size 0 or Hi) and the full-strip path (k_chunk_size>=64).
+    uint32_t num_groups{1};
+    // Block-max-pool width in keys. 0 = no pooling -> [B,G,Sq,T]. >0 = max over each block -> [B,G,Sq,T/bs]
+    // (M3 block selection). Compile-time (block_tiles = block_size/TILE_WIDTH; bs==0 byte-identical). >0 needs
+    // bs % TILE_WIDTH == 0, T % bs == 0, k_chunk_size % bs == 0, and blocks-per-unit <= TILE_HEIGHT.
+    uint32_t block_size{0};
+    // MSA has no learned gates, only a constant 1/sqrt(d) scale: when true the reader fills cb_w with
+    // gate_scale in L1 (no weights tensor, no extra fill op) instead of reading DRAM. The weights handle in
+    // tensor_args is then an unused placeholder (the caller passes q). Compile-time + hashed (changes the
+    // reader binary); gate_scale is hashed too so distinct scales get distinct programs. DSA: false (reads
+    // its learned weights), byte-identical to before.
+    bool synthesize_gate{false};
+    float gate_scale{1.0f};
     IndexerScoreProgramConfig program_config{};
-    // Resolved (not optional) so it is part of the reflected program-cache key; the public callable
-    // fills it from the user's optional config, defaulting math_fidelity to the dtype-derived choice.
+    // Resolved (not optional) so it is part of the program-cache key; the callable fills it from the user's
+    // optional config, defaulting math_fidelity to the dtype-derived choice.
     DeviceComputeKernelConfig compute_kernel_config{};
     // Indexed KV cache: selects the batch slot of a shared [B,1,T,D] k (page ids offset by
-    // cache_batch_idx * Tt * Dt). k may then also be ND-sharded across DRAM banks. Value is NOT hashed and
-    // is re-applied in override_runtime_arguments, so switching slots does NOT recompile.
+    // cache_batch_idx * Tt * Dt). NOT hashed, re-applied each dispatch, so switching slots does NOT recompile.
     std::optional<uint32_t> cache_batch_idx{std::nullopt};
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
-    // Runtime KV length: the valid prefix this dispatch of a k allocated at its full T; the rest is
-    // masked out. Value is NOT hashed (re-applied per dispatch), so growing kv_len <= T reuses ONE program.
-    // grid/work-split/output width stay keyed on the hashed T. nullopt == T.
+    // Runtime KV length: the valid prefix this dispatch (rest masked). NOT hashed, so growing kv_len <= T
+    // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
 };

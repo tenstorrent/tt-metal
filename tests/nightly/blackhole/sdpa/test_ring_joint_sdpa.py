@@ -15,6 +15,7 @@ Perf tests are included but skipped on CI.
 Model Configurations:
 - WAN: nhq == nhk == nhv, d_q == d_k == d_v == 128, bfloat16 for all tensors
 - MLA: nhk == 1, d_q == d_k == 576, d_v == 128, bfloat16 for Q, bfloat8_b for K/V
+- Minimax3 GQA: nhk == nhv < nhq, d_q == d_k == d_v == 128, bfloat16 for Q, bfloat8_b for K/V
 
 BH adaptation: uses init_device_compute_kernel_config instead of WormholeComputeKernelConfig.
 """
@@ -68,7 +69,6 @@ class ModelConfig:
     d_k: int
     d_v: int
     is_causal: bool
-    is_balanced: bool
 
     # Dtypes
     q_dtype: ttnn.DataType
@@ -80,6 +80,8 @@ class ModelConfig:
 
     # Can be hardware-dependent to keep per-core work balanced between Galaxy and Quiet Box
     seq_len: int
+
+    is_balanced: bool = False
 
 
 def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
@@ -98,12 +100,53 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             d_k=128,
             d_v=128,
             is_causal=False,
-            is_balanced=False,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat16,
             q_chunk_sizes=[224, 256, 288],
             k_chunk_sizes=[128, 256, 512],
             seq_len=9472 if mesh_config.is_galaxy else 8544,  # Tuned for each platform to match per-core work
+        )
+    )
+
+    configs.append(
+        ModelConfig(
+            name="minimax3_gqa_smoke",
+            nhq=16,
+            nhk=1,
+            nhv=1,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            # q_chunk=256 (Sq_chunk_t > 2*qktv_h) exercises the full-size cb_out streaming path on the
+            # production row-wide multicast transport — guards the streaming cb_out shrink fix.
+            q_chunk_sizes=[128, 256],
+            k_chunk_sizes=[512],
+            seq_len=1024,
+        )
+    )
+
+    configs.append(
+        ModelConfig(
+            name="minimax3_gqa_unicast_smoke",
+            nhq=16,
+            nhk=2,
+            nhv=2,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=True,
+            is_balanced=True,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat8_b,
+            # Grouped-unicast fallback (nhk>1) is otherwise only nominally exercised, so sweep a
+            # small q/k chunk cross-product over a longer prefix instead of a single shape.
+            q_chunk_sizes=[128, 256],
+            k_chunk_sizes=[256, 512],
+            seq_len=1024,
         )
     )
 
@@ -118,7 +161,6 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             d_k=128,
             d_v=128,
             is_causal=False,
-            is_balanced=False,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat16,
             q_chunk_sizes=[224, 256, 288],
@@ -140,7 +182,6 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             d_k=128,
             d_v=128,
             is_causal=False,
-            is_balanced=False,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat16,
             q_chunk_sizes=[224],
@@ -162,7 +203,6 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             d_k=128,
             d_v=128,
             is_causal=False,
-            is_balanced=False,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat16,
             q_chunk_sizes=[288],
@@ -185,7 +225,6 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
             d_k=128,
             d_v=128,
             is_causal=False,
-            is_balanced=False,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat16,
             q_chunk_sizes=[288],
@@ -242,6 +281,45 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
 MODEL_CONFIGS = generate_model_configs(MESH_CONFIG)
 
 
+def generate_ring_joint_perf_model_configs(
+    mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]
+) -> Dict[str, ModelConfig]:
+    perf_configs = dict(model_configs)
+
+    perf_configs["minimax3_gqa_causal_perf"] = ModelConfig(
+        name="minimax3_gqa_causal_perf",
+        nhq=16,
+        nhk=1,
+        nhv=1,
+        d_q=128,
+        d_k=128,
+        d_v=128,
+        is_causal=True,
+        is_balanced=True,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat8_b,
+        q_chunk_sizes=[128],
+        k_chunk_sizes=[512],
+        seq_len=4096,
+    )
+
+    return perf_configs
+
+
+RING_JOINT_PERF_MODEL_CONFIGS = generate_ring_joint_perf_model_configs(MESH_CONFIG, MODEL_CONFIGS)
+
+
+def model_uses_tp_replicated_shared_k(model: ModelConfig) -> bool:
+    return model.nhk == 1 and model.nhv == model.nhq
+
+
+def scaled_model_heads_for_mesh(model: ModelConfig, mesh_config: MeshConfig) -> Tuple[int, int, int]:
+    nhq = model.nhq * mesh_config.tp_size
+    nhk = model.nhk if model_uses_tp_replicated_shared_k(model) else model.nhk * mesh_config.tp_size
+    nhv = model.nhv * mesh_config.tp_size
+    return nhq, nhk, nhv
+
+
 # Accuracy threshold constants
 DEFAULT_PCC_THRESHOLD = 0.994
 DEFAULT_RMSE_THRESHOLD = 0.05
@@ -294,10 +372,12 @@ def torch_sdpa_reference(q, k, v, is_causal=False):
     Dv = v.shape[-1]
 
     def take_heads(t, h_start, h_end):
-        # MLA broadcasts a single KV head across all Q heads via expand (no copy).
-        if t.shape[1] != H:
-            return t.expand(B, h_end - h_start, -1, -1)
-        return t[:, h_start:h_end]
+        if t.shape[1] == H:
+            return t[:, h_start:h_end]
+        assert H % t.shape[1] == 0, f"Q heads must be divisible by KV heads, got H={H}, KV={t.shape[1]}"
+        heads_per_kv = H // t.shape[1]
+        kv_indices = torch.arange(h_start, h_end, device=t.device) // heads_per_kv
+        return t[:, kv_indices]
 
     if total_seq <= SEQ_CHUNK and H <= HEAD_CHUNK:
         attn_out = torch.nn.functional.scaled_dot_product_attention(
@@ -366,6 +446,13 @@ def assert_pcc_rmse(expected, actual, pcc_threshold, rmse_threshold, label):
         assert rmse < rmse_threshold, f"{label} RMSE {rmse:.6f} exceeds threshold {rmse_threshold}"
     assert pcc >= pcc_threshold, f"{label} PCC {pcc} below threshold {pcc_threshold}"
     return pcc, rmse
+
+
+def is_supported_ring_joint_head_mode(nhq, nhk, nhv):
+    is_mha = nhq == nhk == nhv
+    is_separate_v_shared_k = nhk == 1 and nhv == nhq
+    is_gqa_grouped_kv = nhk == nhv < nhq and nhk > 0 and nhq % nhk == 0
+    return is_mha or is_separate_v_shared_k or is_gqa_grouped_kv
 
 
 def device_tensors_mismatch_marker(reference_tensor, actual_tensor):
@@ -518,17 +605,15 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
     config_ids = []
 
     for _, model in model_configs.items():
+        nhq, nhk, nhv = scaled_model_heads_for_mesh(model, mesh_config)
         for q_chunk, k_chunk in product(model.q_chunk_sizes, model.k_chunk_sizes):
             configs.append(
                 (
                     BATCH_SIZE,
                     model.seq_len * mesh_config.sp_size,  # Global sequence length across all devices in the ring
-                    model.nhq * mesh_config.tp_size,  # Total query heads across all TP shards
-                    model.nhk
-                    * (
-                        mesh_config.tp_size if model.nhk != 1 else 1
-                    ),  # Total key heads across all TP shards (handle nhk=1 case for MLA)
-                    model.nhv * mesh_config.tp_size,  # Total value heads across all TP shards
+                    nhq,  # Total query heads across all TP shards
+                    nhk,  # Total key heads across all TP shards
+                    nhv,  # Total value heads across all TP shards
                     model.d_q,
                     model.d_k,
                     model.d_v,
@@ -696,11 +781,8 @@ def run_ring_joint_sdpa(
     # Ensure reproducible results
     torch.manual_seed(1234)
 
-    # Validate head count constraints
-    # For WAN: nhq == nhk == nhv (standard attention)
-    # For MLA: nhk == 1, nhq == nhv (multi-latent attention with single K head)
-    if nhk != 1 and nhq != nhk:
-        pytest.skip(f"Ring joint attention requires nhq == nhk or nhk == 1, got nhq={nhq}, nhk={nhk}")
+    if not is_supported_ring_joint_head_mode(nhq, nhk, nhv):
+        pytest.skip(f"Unsupported ring joint attention heads: nhq={nhq}, nhk={nhk}, nhv={nhv}")
 
     runtime = open_ring_joint_sdpa_runtime(mesh_config)
     mesh_device = runtime.mesh_device
@@ -919,9 +1001,7 @@ def run_ring_joint_sdpa_model_configs(
     torch.manual_seed(1234)
 
     b = BATCH_SIZE
-    nhq = model.nhq * mesh_config.tp_size
-    nhk = model.nhk * (mesh_config.tp_size if model.nhk != 1 else 1)
-    nhv = model.nhv * mesh_config.tp_size
+    nhq, nhk, nhv = scaled_model_heads_for_mesh(model, mesh_config)
     sq = model.seq_len * mesh_config.sp_size
     d_q, d_k, d_v = model.d_q, model.d_k, model.d_v
     q_dtype, kv_dtype = model.q_dtype, model.kv_dtype
@@ -936,8 +1016,8 @@ def run_ring_joint_sdpa_model_configs(
         f"do_check={do_check}, num_iterations={num_iterations}"
     )
 
-    if nhk != 1 and nhq != nhk:
-        pytest.skip(f"Ring joint attention requires nhq == nhk or nhk == 1, got nhq={nhq}, nhk={nhk}")
+    if not is_supported_ring_joint_head_mode(nhq, nhk, nhv):
+        pytest.skip(f"Unsupported ring joint attention heads: nhq={nhq}, nhk={nhk}, nhv={nhv}")
 
     owns_runtime = runtime is None
     if runtime is None:
@@ -1436,13 +1516,12 @@ def run_ring_joint_sdpa_chunked(
         qk_configs = list(qk_configs)
         assert qk_configs, f"No q/k configs provided for chunked model {model.name}"
 
-    # model.nhq/nhk/nhv are PER RING; scale to total head counts across all TP shards
-    # (mirrors the sweep convention; nhk=1 stays 1 for MLA's single shared K head).
-    nhq = model.nhq * mesh_config.tp_size
-    nhk = model.nhk * (mesh_config.tp_size if model.nhk != 1 else 1)
-    nhv = model.nhv * mesh_config.tp_size
+    # model.nhq/nhk/nhv are PER RING; scale to total head counts across all TP shards.
+    # Only the MLA-style shared-K path keeps nhk=1 replicated across TP.
+    nhq, nhk, nhv = scaled_model_heads_for_mesh(model, mesh_config)
     d_q, d_k, d_v = model.d_q, model.d_k, model.d_v
     q_dtype, kv_dtype = model.q_dtype, model.kv_dtype
+    # Chunked cache growth is linear in sequence order; balanced zigzag applies only to full prefill.
     is_balanced = False
 
     b = BATCH_SIZE
@@ -1743,8 +1822,7 @@ def run_ring_joint_sdpa_chunked(
                         persistent_output_buffer_kv=persistent_output_buffer_k,
                         head_dim_v=d_v,
                         logical_n=e,
-                        # kv_actual_isl requires is_balanced=False.
-                        is_balanced=False if reuse_kv_buffer else is_balanced,
+                        is_balanced=is_balanced,
                         program_config=program_config,
                         compute_kernel_config=compute_kernel_config,
                         dim=2,
@@ -1766,8 +1844,7 @@ def run_ring_joint_sdpa_chunked(
                     tt_V,
                     e,
                     is_causal=True,
-                    # kv_actual_isl requires is_balanced=False.
-                    is_balanced=False if reuse_kv_buffer else is_balanced,
+                    is_balanced=is_balanced,
                     p_buf_k=persistent_output_buffer_k,
                     p_buf_v=persistent_output_buffer_v,
                     program_config=program_config,
@@ -2780,7 +2857,6 @@ def test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy():
         d_k=64,
         d_v=32,
         is_causal=True,
-        is_balanced=False,
         q_dtype=ttnn.bfloat16,
         kv_dtype=ttnn.bfloat16,
         q_chunk_sizes=[32],
@@ -2854,7 +2930,6 @@ def test_ring_mla_chunked_nd_sharded_indexed_kv_cache_accuracy_and_determinism()
         d_k=64,
         d_v=32,
         is_causal=True,
-        is_balanced=False,
         q_dtype=ttnn.bfloat16,
         kv_dtype=ttnn.bfloat16,
         q_chunk_sizes=[32],
@@ -2904,9 +2979,10 @@ def test_ring_mla_nd_sharded_indexed_kv_cache_accuracy():
     )
 
 
-# Generate test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
-TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, MODEL_CONFIGS)
+# Generate perf test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
+TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, RING_JOINT_PERF_MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
+PERF_TEST_CONFIG_MODELS = list(RING_JOINT_PERF_MODEL_CONFIGS.keys())
 
 
 def generate_ring_mla_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]):
@@ -3128,7 +3204,6 @@ def test_ring_joint_attention_sdpa_determinism(model_names):
     RING_MLA_TEST_CONFIGS,
     ids=RING_MLA_TEST_CONFIG_IDS,
 )
-@skip_with_llk_assert("ring_mla deterministic replay is timing-sensitive with LLK asserts enabled. Issue #47906.")
 def test_ring_mla_determinism(
     b,
     sq,
@@ -3164,7 +3239,7 @@ def test_ring_mla_determinism(
 
 # === TEST 4: PERFORMANCE TABLE GENERATOR (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
-@pytest.mark.parametrize("model_name", TEST_CONFIG_MODELS)
+@pytest.mark.parametrize("model_name", PERF_TEST_CONFIG_MODELS)
 def test_ring_joint_attention_create_perf_table(model_name):
     """
     Sweep chunk sizes for ring joint attention SDPA and print a performance table.
@@ -3173,7 +3248,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
     from tracy.process_model_log import run_device_profiler
 
     mesh_config = MESH_CONFIG
-    model_configs = MODEL_CONFIGS
+    model_configs = RING_JOINT_PERF_MODEL_CONFIGS
 
     ring_size = mesh_config.sp_size
 
@@ -3445,7 +3520,7 @@ def test_ring_joint_attention_perf_check(
 
     assert (
         len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
-    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
+    ), "profiler returned no SDPA ops - inner test was skipped or did not produce a kernel run"
 
     measured_core_count = int(r["CORE COUNT"][0])
     duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
@@ -3553,7 +3628,6 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
         d_k=576,
         d_v=128,
         is_causal=True,
-        is_balanced=True,
         q_dtype=ttnn.bfloat16,
         kv_dtype=ttnn.bfloat8_b,
         q_chunk_sizes=[32],
@@ -3571,6 +3645,27 @@ RING_MLA_CHUNKED_MODEL_CONFIGS = {
     name: replace(cfg, d_v=RING_MLA_CHUNKED_LATENT_D_V) for name, cfg in CHUNKED_PREFILL_MODEL_CONFIGS.items()
 }
 
+# Minimax3 production chunked-prefill GQA shape. The full model is 64 Q heads and 4 K/V
+# heads. With TP=4, each chip sees one KV head; keep the config per-ring so the generic
+# TP scaling produces 64Q/4KV globally on Galaxy and still exercises one-KV-head GQA locally.
+MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS = {
+    "minimax3_55k": ModelConfig(
+        name="minimax3_55k",
+        nhq=16,
+        nhk=1,
+        nhv=1,
+        d_q=128,
+        d_k=128,
+        d_v=128,
+        is_causal=True,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat8_b,
+        q_chunk_sizes=[128],
+        k_chunk_sizes=[512],
+        seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+    ),
+}
+
 
 def _generate_chunked_configs(model_configs):
     configs = []
@@ -3584,6 +3679,9 @@ def _generate_chunked_configs(model_configs):
 
 CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs(CHUNKED_PREFILL_MODEL_CONFIGS)
 RING_MLA_CHUNKED_CONFIGS, RING_MLA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(RING_MLA_CHUNKED_MODEL_CONFIGS)
+MINIMAX3_GQA_CHUNKED_CONFIGS, MINIMAX3_GQA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(
+    MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS
+)
 
 
 def _generate_chunked_test_configs(model_configs, chunked_configs, chunked_config_ids):
@@ -3611,6 +3709,14 @@ RING_MLA_CHUNKED_TEST_CONFIGS, RING_MLA_CHUNKED_TEST_CONFIG_IDS = _generate_chun
     RING_MLA_CHUNKED_CONFIGS,
     RING_MLA_CHUNKED_CONFIG_IDS,
 )
+MINIMAX3_GQA_CHUNKED_TEST_CONFIGS, MINIMAX3_GQA_CHUNKED_TEST_CONFIG_IDS = _generate_chunked_test_configs(
+    MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS,
+    MINIMAX3_GQA_CHUNKED_CONFIGS,
+    MINIMAX3_GQA_CHUNKED_CONFIG_IDS,
+)
+
+MINIMAX3_GQA_CHUNKED_ACCURACY_CHUNK_SIZE = CHUNKED_PREFILL_CHUNK_SIZE
+MINIMAX3_GQA_CHUNKED_ACCURACY_TOTAL_SEQ = 3 * MINIMAX3_GQA_CHUNKED_ACCURACY_CHUNK_SIZE
 
 
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
@@ -3632,6 +3738,138 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, qk_configs, chun
     )
 
 
+@pytest.mark.parametrize(
+    "nhq, nhk, nhv, supported",
+    [
+        # Supported head modes (mirror the device-op classification in ring_joint_sdpa_device_operation.cpp).
+        (16, 16, 16, True),  # MHA
+        (16, 1, 16, True),  # separate-V shared-K
+        (16, 1, 1, True),  # GQA, one local KV head (production multicast case)
+        (16, 2, 2, True),  # GQA, grouped KV (unicast-fallback case)
+        (16, 4, 4, True),  # GQA, larger group count
+        # Rejected: GQA ratio must divide evenly and K/V head counts must match.
+        (16, 3, 3, False),  # nhq % nhk != 0
+        (16, 5, 5, False),  # nhq % nhk != 0
+        (16, 2, 4, False),  # nhk != nhv
+        (16, 16, 1, False),  # NVH must equal NQH for shared-K, or NQH for GQA
+        (16, 32, 32, False),  # nhk > nhq
+    ],
+)
+def test_is_supported_ring_joint_head_mode(nhq, nhk, nhv, supported):
+    """Lock the GQA head-mode acceptance contract that the test harness uses to skip and that the
+    device op enforces via TT_FATAL (ring_joint_sdpa_device_operation.cpp head-relationship check).
+    Pure host-side check — no device required."""
+    assert is_supported_ring_joint_head_mode(nhq, nhk, nhv) == supported
+
+
+def test_ring_joint_attention_gqa_with_joint_tensors_rejected(expect_error):
+    """GQA grouped-K/V is unsupported with joint tensors; the device op must reject it (validation-only,
+    so no kernel runs). Covers ring_joint_sdpa_device_operation.cpp's GQA-with-joint TT_FATAL, which the
+    host head-mode guard does not catch."""
+    mesh_config = MESH_CONFIG
+    b, nhq, nhk, nhv, d = 1, 16, 2, 2, 128  # GQA grouped K/V (nhk == nhv < nhq)
+    sq = 512 * mesh_config.sp_size
+    joint_l = 32  # tile-aligned joint length
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh_device = runtime.mesh_device
+        sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+        mesh_shape = tuple(mesh_device.shape)
+        replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+
+        # Mirror the run helper's sharding so the gathered-buffer shape check (input_seq * ring_size)
+        # passes and validation proceeds to the GQA-with-joint check.
+        def sharded(t, shard_heads):
+            dims = [None, None]
+            dims[sp_axis] = 2  # shard inputs on the sequence dim
+            if mesh_config.tp_size > 1 and shard_heads:
+                dims[tp_axis] = 1
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+            )
+
+        def persistent(t):
+            dims = [None, None]  # seq NOT sharded: holds the gathered full sequence
+            if mesh_config.tp_size > 1:
+                dims[tp_axis] = 1
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+            )
+
+        def replicated(t):
+            return ttnn.from_torch(
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=replicate
+            )
+
+        tt_q = sharded(fa_rand(b, nhq, sq, d), shard_heads=True)
+        tt_k = sharded(fa_rand(b, nhk, sq, d), shard_heads=True)
+        tt_v = sharded(fa_rand(b, nhv, sq, d), shard_heads=True)
+        # Joint tensors only need to exist with valid shapes to reach the GQA-with-joint check.
+        joint_q = replicated(fa_rand(b, nhq, joint_l, d))
+        joint_k = replicated(fa_rand(b, nhk, joint_l, d))
+        joint_v = replicated(fa_rand(b, nhv, joint_l, d))
+        p_buf_k, p_buf_v = persistent(torch.zeros(b, nhk, sq, d)), persistent(torch.zeros(b, nhv, sq, d))
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=128,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+
+        # Joint tensors require non-causal (causal+joint is rejected earlier), so this is the
+        # non-causal GQA + joint case that the GQA-with-joint TT_FATAL is meant to catch.
+        with expect_error(RuntimeError, "GQA with joint tensors"):
+            ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_q,
+                tt_k,
+                tt_v,
+                joint_q,
+                joint_k,
+                joint_v,
+                persistent_output_buffer_k=p_buf_k,
+                persistent_output_buffer_v=p_buf_v,
+                joint_strategy="rear",
+                logical_n=sq,
+                is_causal=False,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_attention_minimax3_gqa_chunked_accuracy():
+    """Small causal GQA chunked-prefill PCC gate for Minimax3 dims without the full 55k CPU reference."""
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"],
+        chunk_size=MINIMAX3_GQA_CHUNKED_ACCURACY_CHUNK_SIZE,
+        total_seq=MINIMAX3_GQA_CHUNKED_ACCURACY_TOTAL_SEQ,
+        qk_configs=[(128, 512)],
+        persistent_buffer_mode="reuse_max",
+    )
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
@@ -3649,6 +3887,30 @@ def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_si
     run_ring_joint_sdpa_chunked(
         mesh_config,
         CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
+        chunk_size=chunk_size,
+        qk_configs=qk_configs,
+        persistent_buffer_mode="reuse_max",
+        do_check=False,
+        reuse_kv_buffer=reuse_kv_buffer,
+    )
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,qk_configs",
+    MINIMAX3_GQA_CHUNKED_TEST_CONFIGS,
+    ids=MINIMAX3_GQA_CHUNKED_TEST_CONFIG_IDS,
+)
+def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
+    """Minimax3 GQA chunked prefill without the CPU reference. This mirrors the Kimi chunked
+    perf harness but uses one KV head per TP shard."""
+    mesh_config = MESH_CONFIG
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS[model_name],
         chunk_size=chunk_size,
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
@@ -3725,6 +3987,29 @@ def test_ring_joint_attention_sdpa_chunked_determinism(model_name, qk_configs, c
         qk_configs=qk_configs,
         num_iterations=3,
     )
+
+
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,qk_configs",
+    MINIMAX3_GQA_CHUNKED_TEST_CONFIGS,
+    ids=MINIMAX3_GQA_CHUNKED_TEST_CONFIG_IDS,
+)
+def test_ring_joint_attention_minimax3_gqa_chunked_determinism(model_name, qk_configs, chunk_size):
+    """Run the Minimax3 final chunk three times and require bit-exact output. The final chunk is
+    the production-shaped 5k Q chunk attending to the full 55k K/V cache on Galaxy."""
+    mesh_config = MESH_CONFIG
+    n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
+    final_chunk = n_chunks - 1
+
+    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(final_chunk)}):
+        run_ring_joint_sdpa_chunked(
+            mesh_config,
+            MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS[model_name],
+            chunk_size=chunk_size,
+            qk_configs=qk_configs,
+            num_iterations=3,
+        )
 
 
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
@@ -3924,6 +4209,54 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,q_chunk_size,k_chunk_size",
+    MINIMAX3_GQA_CHUNKED_CONFIGS,
+    ids=MINIMAX3_GQA_CHUNKED_CONFIG_IDS,
+)
+def test_ring_joint_attention_minimax3_gqa_create_chunked_perf_table(
+    model_name, q_chunk_size, k_chunk_size, chunk_size
+):
+    """Per-chunk math-util + duration table for Minimax3 GQA chunked prefill."""
+    _run_chunked_perf_table(
+        MESH_CONFIG,
+        MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS[model_name],
+        model_name,
+        q_chunk_size,
+        k_chunk_size,
+        chunk_size,
+        accuracy_test_name="test_ring_joint_attention_minimax3_gqa_chunked_perf_impl",
+        subdir="ttnn_ring_joint_sdpa_minimax3_gqa_chunked_performance",
+        label="Ring Joint Minimax3 GQA Chunked-Prefill (reuse KV buffer)",
+        id_suffix="-reuse_kv",
+    )
+
+
+def compute_chunked_prefill_perf_check_utilization(
+    mesh_config, model, chunk_size, perf_chunk, duration_ns, measured_core_count
+):
+    # Chunk geometry: q_per_dev Q rows attend to the full prefix (non-causal rectangle) plus
+    # the current chunk's causal triangle. Folding the triangle into an effective K/V length
+    # (prefix + chunk_size/2) makes compute_ring_joint_utilization's non-causal FLOPs exact.
+    q_per_dev = chunk_size // mesh_config.sp_size
+    prefix_k = perf_chunk * chunk_size
+    effective_kv = prefix_k + chunk_size // 2
+
+    # Match perf-table effective_cores rounding (ignore non-multiple-of-grid-row CCL strays).
+    effective_cores = measured_core_count - measured_core_count % mesh_config.grid_rows
+    assert (
+        effective_cores > 0
+    ), f"effective_cores=0 (measured_core_count={measured_core_count}) - profiler output incomplete"
+
+    utilization = compute_ring_joint_utilization(
+        q_per_dev, effective_kv, model.d_q, model.d_v, model.nhq, duration_ns, effective_cores, is_causal=False
+    )
+    return utilization, effective_cores
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize(
+    "model_name,q_chunk_size,k_chunk_size",
     RING_MLA_CHUNKED_CONFIGS,
     ids=RING_MLA_CHUNKED_CONFIG_IDS,
 )
@@ -3960,6 +4293,20 @@ else:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
+    ]
+
+
+if MESH_CONFIG.is_galaxy:
+    MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS = [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # 8-device ring (Galaxy, sp=8 tp=4): production 5k Q chunk attending to 50k K/V prefix.
+        ("minimax3_55k", 128, 512, 8, 47.64),
+    ]
+else:
+    MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS = [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # 4-device ring (QuietBox): same per-device Q rows and 16Q/1KV local GQA shape.
+        ("minimax3_55k", 128, 512, 4, 47.64),
     ]
 
 
@@ -4014,26 +4361,13 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     assert (
         len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
-    ), "profiler returned no SDPA ops — inner test was skipped or did not produce a kernel run"
+    ), "profiler returned no SDPA ops - inner test was skipped or did not produce a kernel run"
 
     measured_core_count = int(r["CORE COUNT"][0])
     duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
 
-    # Match perf-table effective_cores rounding (ignore non-multiple-of-10 strays)
-    effective_cores = measured_core_count - measured_core_count % 10
-    assert (
-        effective_cores > 0
-    ), f"effective_cores=0 (measured_core_count={measured_core_count}) — profiler output incomplete"
-
-    # Chunk geometry: q_per_dev Q rows attend to the full prefix (non-causal rectangle) plus
-    # the current chunk's causal triangle. Folding the triangle into an effective K/V length
-    # (prefix + chunk_size/2) makes compute_ring_joint_utilization's non-causal FLOPs exact.
-    q_per_dev = chunk_size // ring_size_expected
-    prefix_k = perf_chunk * chunk_size
-    effective_kv = prefix_k + chunk_size // 2
-
-    utilization = compute_ring_joint_utilization(
-        q_per_dev, effective_kv, model.d_q, model.d_v, model.nhq, duration_ns, effective_cores, is_causal=False
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, measured_core_count
     )
 
     lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
@@ -4041,6 +4375,80 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     logger.info(
         f"ring_mla chunked 50k+5k perf check {config_id}: "
+        f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+    )
+
+    assert lower <= utilization <= upper, (
+        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("SDPA_PERF_CHECKS") != "1",
+    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
+)
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
+    MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS,
+    ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS],
+)
+def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
+    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util
+):
+    """Measure Minimax3 GQA chunked-prefill math utilization for the production-style final chunk.
+
+    RING_JOINT_CHUNKED_CHUNK_ID isolates the final chunk so only its iteration is profiled; the
+    inner perf_impl uses reuse_kv mode so kv_actual_isl models the long prefix with a stable cache shape.
+    """
+    from tracy.process_model_log import run_device_profiler
+
+    if MESH_CONFIG.sp_size != ring_size_expected:
+        pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
+
+    model = MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS[model_name]
+    chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
+    n_chunks = CHUNKED_PREFILL_TOTAL_SEQ // chunk_size
+    perf_chunk = n_chunks - 1
+
+    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-reuse_kv"
+    subdir = "ttnn_ring_joint_sdpa_minimax3_gqa_chunked_perf_check"
+    command = (
+        "pytest tests/nightly/blackhole/sdpa/"
+        f"test_ring_joint_sdpa.py::test_ring_joint_attention_minimax3_gqa_chunked_perf_impl[{config_id}]"
+    )
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+
+    with mock.patch.dict(os.environ, {"CI": "false", CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir,
+        float_columns=float_cols,
+        columns=cols,
+        op_name="RingJointSDPADeviceOperation",
+        sum_vals=False,
+        has_signposts=False,
+    )
+
+    assert (
+        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
+    ), "profiler returned no SDPA ops - inner test was skipped or did not produce a kernel run"
+
+    measured_core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
+    utilization, _ = compute_chunked_prefill_perf_check_utilization(
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, measured_core_count
+    )
+
+    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
+    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+
+    logger.info(
+        f"Minimax3 GQA chunked final-chunk perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
         f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
     )
