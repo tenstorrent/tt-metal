@@ -4,6 +4,9 @@ file(
     GLOB_RECURSE TT_METAL_KERNELS
     "${CMAKE_SOURCE_DIR}/tt_metal/kernels/*.cpp"
     "${CMAKE_SOURCE_DIR}/tt_metal/kernels/*.cc"
+    "${CMAKE_SOURCE_DIR}/tt_metal/programming_examples/*/kernels/*.cpp"
+    "${CMAKE_SOURCE_DIR}/tt_metal/programming_examples/*/*/kernels/*.cpp"
+    "${CMAKE_SOURCE_DIR}/tt_metal/programming_examples/*/*/*/kernels/*.cpp"
 )
 file(
     GLOB_RECURSE TT_METAL_DISPATCH_KERNELS
