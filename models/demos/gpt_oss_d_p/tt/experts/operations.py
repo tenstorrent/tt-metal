@@ -108,3 +108,23 @@ def apply_sequence_parallel_allgather(tensor, mesh_config, ccl_manager):
     )
     tensor.deallocate(True)
     return tensor_gathered
+
+
+def apply_sequence_parallel_reduce_scatter(tensor, mesh_config, ccl_manager):
+    """Reduce-scatter on the SP axis (sequence dim).
+
+    Replaces the EP all_reduce + SP all_gather pair when SP and EP share the same axis:
+    sums each row's partial expert contributions across rows while scattering the result
+    back to SP-sharded layout, restoring the per-row token ownership from before the
+    preceding all_gather.
+    """
+    tensor_scattered = ttnn.reduce_scatter(
+        tensor,
+        dim=-2,
+        cluster_axis=mesh_config.sp_axis,
+        memory_config=tensor.memory_config(),
+        topology=ccl_manager.topology,
+        num_links=ccl_manager.num_links,
+    )
+    tensor.deallocate(True)
+    return tensor_scattered

@@ -10,53 +10,37 @@ from .config import ExpertConfig, ProgramConfig
 from .operations import (
     apply_expert_parallel_allreduce,
     apply_routing_weights,
-    apply_sequence_parallel_allgather,
+    apply_sequence_parallel_reduce_scatter,
     apply_tensor_parallel_allreduce,
     reduce_experts,
 )
 from .weights import ExpertWeights
 
 
-def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_config, ccl_manager):
-    """
-    Convert replicated prefill inputs to SP row-sharded tensors using device-side CCL.
+def _gather_for_sequence_parallel(hidden_states, routing_weights, mesh_config, ccl_manager):
+    """All-gather SP-sharded inputs to full sequence length.
 
-    This avoids host reads (`to_torch/get_device_tensors`) so it is trace-capture safe.
-    The input tensors are replicated across rows, so reduce-scatter sums identical values.
-    We rescale by 1/sp to recover the original values after sharding.
+    Used when SP > 1 and EP > 1 share the same axis: each row needs all tokens
+    so it can route them to its local subset of experts.
     """
-    sp = mesh_config.get_config(Mode.PREFILL).sp
-    if sp <= 1:
-        return hidden_states, routing_weights
-
     cluster_axis = mesh_config.sp_axis
-    scale = 1.0 / sp
-
-    hidden_states_sharded = ttnn.reduce_scatter(
+    hidden_states_gathered = ttnn.all_gather(
         hidden_states,
-        dim=2,  # sequence dimension for hidden states: [1, B, S, H]
+        dim=2,
         cluster_axis=cluster_axis,
-        memory_config=hidden_states.memory_config(),
-        topology=ccl_manager.topology,
         num_links=ccl_manager.num_links,
+        topology=ccl_manager.topology,
     )
-    routing_weights_sharded = ttnn.reduce_scatter(
+    routing_weights_gathered = ttnn.all_gather(
         routing_weights,
-        dim=0,  # sequence dimension for routing weights: [S, E]
+        dim=0,
         cluster_axis=cluster_axis,
-        memory_config=routing_weights.memory_config(),
-        topology=ccl_manager.topology,
         num_links=ccl_manager.num_links,
+        topology=ccl_manager.topology,
     )
-
-    hidden_states_sharded = ttnn.mul(hidden_states_sharded, scale, output_tensor=hidden_states_sharded)
-    routing_weights_sharded = ttnn.mul(routing_weights_sharded, scale, output_tensor=routing_weights_sharded)
-
-    # Inputs are replaced by sharded outputs; release replicated tensors early.
     hidden_states.deallocate(True)
     routing_weights.deallocate(True)
-
-    return hidden_states_sharded, routing_weights_sharded
+    return hidden_states_gathered, routing_weights_gathered
 
 
 def _process_prefill_chunk(
@@ -234,9 +218,12 @@ def prefill_forward(
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
 
+    Expects SP-sharded inputs when SP > 1: hidden_states [1, B, S/sp, H] and
+    routing_weights [S/sp, E].  Returns SP-sharded output [1, B, S/sp, H].
+
     Args:
-        hidden_states: Input tensor [batch, seq_len, hidden_size]
-        routing_weights: Router output [seq_len, num_experts]
+        hidden_states: Input tensor [1, batch, seq_len_local, hidden_size]
+        routing_weights: Router output [seq_len_local, num_experts]
         weights: Expert weights
         config: Expert configuration
         mesh_config: Mesh parallelization config
@@ -246,40 +233,36 @@ def prefill_forward(
         prefill_sparsity: Cached prefill sparsity mask
 
     Returns:
-        Expert output [1, batch, seq_len, hidden_size]
+        Expert output [1, batch, seq_len_local, hidden_size]
     """
-    activation_dtype = ttnn.bfloat8_b
     batch_dim = 1
     seq_dim = 2
     batch_size = hidden_states.shape[batch_dim]
-    seq_len_global = hidden_states.shape[seq_dim]
+    seq_len_local = hidden_states.shape[seq_dim]  # S/sp per device (or S when SP=1)
 
     if batch_size != 1:
         raise NotImplementedError(f"Currently only batch_size=1 supported, got {batch_size}")
 
-    if seq_len_global <= 1:
-        raise ValueError(
-            f"Prefill mode requires seq_len>1, got {seq_len_global}. " f"Use decode mode for single tokens."
-        )
+    if seq_len_local <= 1:
+        raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len_local}. Use decode mode for single tokens.")
 
     TILE_SIZE = 32
 
-    # Get parallelization config before the divisibility check so we can validate
-    # the per-device sequence length (after inner SP scatter) as well as the global one.
     mode_config = mesh_config.get_config(Mode.PREFILL)
     ep, sp, tp = mode_config.ep, mode_config.sp, mode_config.tp
 
-    required_alignment = TILE_SIZE * sp  # per-device seq must also be tile-aligned
-    if seq_len_global % required_alignment != 0:
+    # The per-device sequence length must be tile-aligned.
+    if seq_len_local % TILE_SIZE != 0:
         raise ValueError(
-            f"Prefill seq_len must be divisible by {required_alignment} "
-            f"(TILE_SIZE={TILE_SIZE} × SP={sp}), got {seq_len_global}. "
-            f"Please pad your sequence to a multiple of {required_alignment}."
+            f"Per-device sequence length must be divisible by {TILE_SIZE} "
+            f"(got {seq_len_local}, SP={sp}). Pad your sequence to a multiple of {TILE_SIZE * sp}."
         )
 
-    # Reshard for sequence parallelism if needed
-    if sp > 1:
-        hidden_states, routing_weights = _reshard_for_sequence_parallel(
+    # When SP and EP share the same axis (rows), all-gather the SP-sharded inputs so each row
+    # sees all tokens and can route them to its local expert subset.
+    # When EP=1 every row holds all experts and processes its shard independently — no gather needed.
+    if sp > 1 and ep > 1:
+        hidden_states, routing_weights = _gather_for_sequence_parallel(
             hidden_states, routing_weights, mesh_config, ccl_manager
         )
 
@@ -318,29 +301,34 @@ def prefill_forward(
         routing_chunk.deallocate(True)
     next_states = next_states_acc
 
-    # Expert parallel communication
-    if ep > 1:
+    # Post-computation collectives.
+    #
+    # SP > 1, EP > 1 (same axis): reduce_scatter replaces the old EP all_reduce + SP all_gather
+    # pair — it sums each row's partial expert contributions across rows while scattering back
+    # to SP-sharded layout in a single fused op.
+    #
+    # SP > 1, EP = 1: each row computed its full shard independently; no row collective needed.
+    #
+    # SP = 1, EP > 1: standard EP all_reduce (current behaviour, unchanged).
+    if sp > 1 and ep > 1:
+        next_states = apply_sequence_parallel_reduce_scatter(next_states, mesh_config, ccl_manager)
+    elif ep > 1:
         next_states = apply_expert_parallel_allreduce(next_states, mesh_config, ccl_manager)
 
-    # Tensor parallel communication
     if tp > 1:
         next_states = apply_tensor_parallel_allreduce(
             next_states,
             mesh_config,
             mesh_device,
-            seq_len_global,
+            seq_len_local,
             ccl_manager,
         )
 
-    # Sequence parallel all-gather
-    if sp > 1:
-        next_states = apply_sequence_parallel_allgather(next_states, mesh_config, ccl_manager)
-
-    # Final reshape
+    # Final reshape to [1, B, seq_len_local, H]
     next_states = ttnn.reshape(
         next_states,
-        (1, batch_size, seq_len_global, config.hidden_size),
-        (1, batch_size, max(32, seq_len_global), config.hidden_size),
+        (1, batch_size, seq_len_local, config.hidden_size),
+        (1, batch_size, max(32, seq_len_local), config.hidden_size),
     )
 
     return next_states
