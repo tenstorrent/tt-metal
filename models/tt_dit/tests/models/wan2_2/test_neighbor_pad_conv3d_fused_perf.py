@@ -2,20 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device driver for the fused neighbor_pad_conv3d vs standalone (NP + conv3d) comparison.
+"""Trace-mode per-op speedup table: fused neighbor_pad_conv3d vs standalone (NP + conv3d).
 
-This test only DISPATCHES both paths per shape — standalone (two ops: NeighborPadAsync + Conv3d,
-both on the FULL grid) then fused (one NpConv3d op) — so a profiler can capture their device time.
-The clean speedup TABLE is produced by the repo-root ``np_speedup_table.py``, which runs this test
-under tracy and reports device-FW MIN: fused vs (NP + conv) with the NP/conv/sum broken out.
+``test_bench`` captures each path as a ttnn trace and replays it, so the wall/iter is the op's true
+device latency (host dispatch removed). Standalone = two ops (NeighborPadAsync + Conv3d, both full-grid);
+fused = one NpConv3d op (reserves column-0 for the NP fabric). Reports fused-vs-standalone per shape.
 
-The wall-clock logged here is host-dispatch-bound and only indicative — it makes fusion look slower
-while the real device win is hidden (wiki/NP_CONV3D_FUSED.md §4e). Use the table for the real number.
+ACCURACY: this is the WAN op in isolation — accurate for "did my kernel change move this op's device
+time" and "which op is faster for this shape alone" (blocking-verified, no cross-iter overlap). It is
+NOT the e2e routing metric: the production decode is LTXVideoDecoder (different standalone path) and
+per-layer cost differs in-context. For the deployment decision use the whole-decode trace
+(models/tt_dit/tests/models/ltx/prof_vae_ltx.py::test_prof_vae_ltx_trace).
 
 Coverage: every LTX VAE production shape on 2x4 (real NP topology) and 4x8mock (4x8 per-device conv
 sizes on this 2x4 box — NP topology is still 2x4), plus a real 4x8 set (skipped unless a 32-chip mesh
-is present). The standalone conv3d always runs on the full grid; the fused op reserves column-0 for
-the NP fabric — that is the real deployed comparison.
+is present). The fused op is trace-safe (all NP sems self-reset on-device, no host reset).
 """
 
 from __future__ import annotations
@@ -34,8 +35,6 @@ from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.conv3d import ConvDims, conv_pad_height, conv_pad_in_channels
 from ....utils.tensor import typed_tensor_2dshard
-
-NUM_MEASURED_DISPATCHES = 5
 
 # Real 4x8 (32-device) shapes need a 32-chip mesh; skip on the 8-chip BH-LB so the coverage gap is
 # visible in the report rather than silently dropped. 4x8mock shapes run here (they use a 2x4 mesh).
@@ -163,22 +162,6 @@ def _build_input(mesh_device, B, C_in, T, H, W, h_axis, w_axis):
     return x, logical_h
 
 
-def _measure(model, input_tensor, logical_h, mesh_device, *, n):
-    """Wall-clock ms/dispatch (host-dispatch-bound; indicative only — the device truth is the table)."""
-    _ = model(input_tensor, logical_h=logical_h)  # warmup: pay JIT/cache once
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter_ns()
-    for _ in range(n):
-        out = model(input_tensor, logical_h=logical_h)
-    ttnn.synchronize_device(mesh_device)
-    elapsed_ms = (time.perf_counter_ns() - t0) / n / 1e6
-    try:
-        ttnn.deallocate(out)
-    except Exception:
-        pass
-    return elapsed_ms
-
-
 def _param(*row):
     """Build a parametrize entry; id is the trailing shape_id, real 4x8 (mesh (4,8)) is auto-skipped."""
     return pytest.param(*row, id=row[-1], marks=(_SKIP_4X8,) if row[8] == (4, 8) else ())
@@ -227,49 +210,19 @@ _PERF_PARAMS = [
 ]
 
 
-@pytest.mark.parametrize(
-    "B, C_in, C_out, T, H, W, kernel_size, padding, mesh_device, h_axis, w_axis, num_links, shape_id",
-    _PERF_PARAMS,
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16], ids=["bf16"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.timeout(600)
-def test_fused_vs_standalone_perf(
-    mesh_device, B, C_in, C_out, T, H, W, kernel_size, padding, h_axis, w_axis, num_links, dtype, shape_id
-):
-    """Dispatch standalone (full-grid NP + conv3d) then fused, back-to-back; log wall-clock (indicative).
-
-    Log-only — no assertions. Read the real device-FW speedup from ``np_speedup_table.py``, which runs
-    this under tracy. Wall-clock here is host-dispatch-bound and makes fusion look slower (§4e).
-    """
-    sa_model, *_ = _build_model(
-        mesh_device, B, C_in, C_out, T, H, W, kernel_size, padding, h_axis, w_axis, num_links, dtype, use_fused=False
-    )
-    sa_input, sa_logical_h = _build_input(mesh_device, B, C_in, T, H, W, h_axis, w_axis)
-    sa_ms = _measure(sa_model, sa_input, sa_logical_h, mesh_device, n=NUM_MEASURED_DISPATCHES)
-    ttnn.deallocate(sa_input)
-
-    f_model, *_ = _build_model(
-        mesh_device, B, C_in, C_out, T, H, W, kernel_size, padding, h_axis, w_axis, num_links, dtype, use_fused=True
-    )
-    f_input, f_logical_h = _build_input(mesh_device, B, C_in, T, H, W, h_axis, w_axis)
-    f_ms = _measure(f_model, f_input, f_logical_h, mesh_device, n=NUM_MEASURED_DISPATCHES)
-    ttnn.deallocate(f_input)
-
-    ratio = f_ms / sa_ms if sa_ms > 0 else float("inf")
-    logger.info(
-        f"PERF shape={shape_id}  fused={f_ms:.3f}ms  standalone={sa_ms:.3f}ms  ratio={ratio:.3f}  "
-        f"(WALL — host-bound; device truth in test_bench; n={NUM_MEASURED_DISPATCHES})"
-    )
-
-
 # =====================================================================================================
-# Trace-mode bench (ported from cglagovich/fused_rms_norm test_bench/_trace_and_time/_print_table).
-# This is the ACCURATE device-time comparison: trace replay strips per-op host dispatch, so the wall of
-# the replay loop is the device time. Standalone (full-grid NP + conv3d, two ops) is captured as one
-# trace, fused (one NpConv3d op) as another; we report fused vs standalone wall + speedup. The fused op
-# is trace-safe because every progress/neighbor/barrier semaphore self-resets on-device (no host reset).
+# Trace-mode per-op bench (ported from cglagovich/fused_rms_norm test_bench/_trace_and_time/_print_table).
+# Trace replay strips per-op host dispatch, so the replay wall IS the op's device latency. Standalone
+# (full-grid NP + conv3d, two ops) is captured as one trace, fused (one NpConv3d op) as another; we
+# report fused vs standalone wall + speedup per shape. Blocking-verified (NP_BENCH_BLOCKING=1 matches the
+# default), so the numbers are the true single-dispatch device latency, no cross-iter overlap.
+#
+# SCOPE: this is the WAN op in ISOLATION. It answers "is the fused OP faster than the standalone NP+conv
+# OP for this shape, run alone" — accurate for kernel-change validation. It does NOT predict the LTX VAE
+# decode: that uses a different model (LTXVideoDecoder) and the per-layer cost differs in-context. For
+# the e2e routing decision use the whole-decode trace (prof_vae_ltx.py::test_prof_vae_ltx_trace), which
+# is the production-representative metric. The fused op is trace-safe (every progress/neighbor/barrier
+# sem self-resets on-device, no host reset) so it replays cleanly.
 # =====================================================================================================
 _BENCH_ITERS = 30
 _PINGPONG = 2  # distinct resource sets alternated across replays (absorbs cross-device fabric skew)
@@ -296,9 +249,13 @@ def _trace_and_time(mesh_device, run_ops, *, num_iters):
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         trace_ids.append(tid)
     ttnn.synchronize_device(mesh_device)
+    # NP_BENCH_BLOCKING=1 serializes each replay (host waits per iter) to rule out any cross-iter
+    # trace-boundary overlap — the unambiguous single-dispatch latency. Default non-blocking (queue all,
+    # one final sync) measures the back-to-back replay wall.
+    blocking = os.environ.get("NP_BENCH_BLOCKING") == "1"
     t0 = time.perf_counter()
     for i in range(num_iters):
-        ttnn.execute_trace(mesh_device, trace_ids[i % n], cq_id=0, blocking=False)
+        ttnn.execute_trace(mesh_device, trace_ids[i % n], cq_id=0, blocking=blocking)
     ttnn.synchronize_device(mesh_device)
     elapsed_us = (time.perf_counter() - t0) * 1e6
     for tid in trace_ids:

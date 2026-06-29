@@ -252,3 +252,119 @@ def test_prof_vae_ltx_trace(mesh_device, device_params):
         f"iters={_TRACE_ITERS}",
         flush=True,
     )
+
+
+# Per-op trace bench on the *LTX* conv (LTXCausalConv3d) — the production op, unlike the Wan-op bench in
+# wan2_2/test_neighbor_pad_conv3d_fused_perf.py. Compares the fused NpConv3d vs the LTX standalone NP+conv
+# per shape, in isolation. More representative than the Wan bench (right standalone path: LTX's
+# persistent-buffer NP + temporal-pad concats), but still ISOLATED — the e2e routing metric is the
+# whole-decode trace above. Fused-deployed shapes + a couple standalone for contrast; full LTX 2x4 dims.
+# (id, C_in, C_out, T, H_full, W_full, deployed)
+_LTX_OP_SHAPES = [
+    ("s3_res", 256, 256, 147, 136, 240, "fused(halo_last)"),
+    ("s3_chg", 256, 512, 147, 136, 240, "fused(halo_last)"),
+    ("s4_res", 128, 128, 147, 272, 480, "fused(halo_last)"),
+    ("s4_out", 128, 48, 147, 272, 480, "fused(force_spatial)"),
+    ("s1_res", 512, 512, 39, 68, 120, "standalone"),
+    ("s2_res", 512, 512, 75, 136, 240, "standalone"),
+]
+
+
+def _build_ltx_conv(mesh, c_in, c_out, T, H, W, *, use_fused):
+    from models.tt_dit.utils.conv3d import ConvDims
+
+    pc = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh.shape)[0], mesh_axis=0),
+        width_parallel=ParallelFactor(factor=tuple(mesh.shape)[1], mesh_axis=1),
+    )
+    ccl = CCLManager(mesh, topology=ttnn.Topology.Linear, num_links=2)
+    conv = LTXCausalConv3d(
+        c_in,
+        c_out,
+        kernel_size=3,
+        mesh_device=mesh,
+        parallel_config=pc,
+        ccl_manager=ccl,
+        conv_dims=ConvDims(T=T, H=H // tuple(mesh.shape)[0], W=W // tuple(mesh.shape)[1]),
+        use_fused=use_fused,
+    )
+    torch.manual_seed(0)
+    w = torch.randn(conv.out_channels, conv.in_channels, 3, 3, 3, dtype=torch.float32) * 0.01
+    conv.load_torch_state_dict({"weight": w, "bias": torch.zeros(conv.out_channels)})
+    # Bypass the hybrid MIN_T threshold so the fused path is exercised for every shape (matches decode use).
+    if use_fused and conv._needs_halo and (conv.conv_config.halo_last or conv.conv_config.force_spatial_parallel):
+        conv._use_fused = True
+    return conv, pc
+
+
+def _ltx_conv_input(mesh, pc, c_in, T, H, W):
+    from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_width
+    from models.tt_dit.utils.tensor import typed_tensor_2dshard
+
+    torch.manual_seed(42)
+    x = torch.randn(1, c_in, T, H, W, dtype=torch.float32).permute(0, 2, 3, 4, 1)  # B,T,H,W,C
+    x, lh = conv_pad_height(x, pc.height_parallel.factor)
+    x, lw = conv_pad_width(x, pc.width_parallel.factor)
+    x = typed_tensor_2dshard(
+        x,
+        mesh,
+        shard_mapping={pc.height_parallel.mesh_axis: 2, pc.width_parallel.mesh_axis: 3},
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    return x, lh, lw
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_bench_ltx_op(mesh_device, device_params):
+    """Trace-mode per-op table on the LTX conv: fused NpConv3d vs LTX standalone NP+conv, per shape.
+
+    Isolated (not e2e) but uses the production op/standalone path — unlike the Wan-op bench. The e2e
+    routing metric remains the whole-decode trace (test_prof_vae_ltx_trace)."""
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    rows = []
+    for sid, c_in, c_out, T, H, W, deployed in _LTX_OP_SHAPES:
+        row = {"cid": sid, "ci": c_in, "co": c_out, "t": T, "hw": f"{H // 2}x{W // 4}", "dep": deployed}
+        for key, uf in (("sa", False), ("f", True)):
+            try:
+                conv, pc = _build_ltx_conv(mesh, c_in, c_out, T, H, W, use_fused=uf)
+                x, lh, lw = _ltx_conv_input(mesh, pc, c_in, T, H, W)
+                conv(x, causal=False, logical_h=lh, logical_w=lw)  # warmup + cold-compile
+                ttnn.synchronize_device(mesh)
+                tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+                conv(x, causal=False, logical_h=lh, logical_w=lw)
+                ttnn.end_trace_capture(mesh, tid, cq_id=0)
+                ttnn.synchronize_device(mesh)
+                t0 = time.perf_counter()
+                for _ in range(_TRACE_ITERS):
+                    ttnn.execute_trace(mesh, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh)
+                row[key] = (time.perf_counter() - t0) * 1e6 / _TRACE_ITERS
+                ttnn.release_trace(mesh, tid)
+            except Exception as e:  # noqa: BLE001
+                row[f"{key}_err"] = type(e).__name__
+                print(f"{sid} {'fused' if uf else 'standalone'} FAILED: {str(e)[:160]}", flush=True)
+        rows.append(row)
+        print(f"LTX-OP-BENCH {sid}: standalone={row.get('sa')} fused={row.get('f')}", flush=True)
+
+    cid_w = max(len("config_id"), max(len(r["cid"]) for r in rows))
+    hdr = (
+        f"{'config_id':<{cid_w}}  {'C_in':>5} {'C_out':>5} {'T':>4} {'HxW(dev)':>9} "
+        f"{'standalone us':>13} {'fused us':>10} {'speedup':>8}  {'deployed':<18}"
+    )
+    box = "=" * len(hdr)
+    lines = [box, "LTX-op isolated trace bench (BH 2x4)", box, hdr, "-" * len(hdr)]
+    for r in rows:
+        sa = f"{r['sa']:>13.1f}" if r.get("sa") is not None else f"{r.get('sa_err', 'n/a'):>13}"
+        fu = f"{r['f']:>10.1f}" if r.get("f") is not None else f"{r.get('f_err', 'n/a'):>10}"
+        sp = f"{r['sa'] / r['f']:>7.2f}x" if (r.get("sa") and r.get("f")) else f"{'-':>8}"
+        lines.append(
+            f"{r['cid']:<{cid_w}}  {r['ci']:>5} {r['co']:>5} {r['t']:>4} {r['hw']:>9} {sa} {fu} {sp}  {r['dep']:<18}"
+        )
+    lines += [box, "speedup = standalone/fused (>1.0 => fusion faster); isolated per-op, not e2e."]
+    print("\n" + "\n".join(lines), flush=True)
