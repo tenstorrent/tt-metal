@@ -198,16 +198,7 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             / "flat_config"
             / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
         )
-        # Flatten only the small config/code/tokenizer files. NEVER copy weight shards or the TT
-        # tensor cache that may live alongside them in the snapshot dir -- dereferencing those
-        # (symlinks=False) would duplicate hundreds of GB and fill the disk.
-        shutil.copytree(
-            model_dir,
-            flat_dir,
-            symlinks=False,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("*.safetensors", "tensor_cache_*", "*.tensorbin"),
-        )
+        shutil.copytree(model_dir, flat_dir, symlinks=False, dirs_exist_ok=True)
 
         logger.success(f"✓ Config files downloaded to: {model_dir} (flattened to: {flat_dir})")
         return flat_dir
@@ -390,9 +381,7 @@ def _unwrap_multimodal_config(cfg):
     """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
-    under `text_config`. Dequantization is format-aware (fp8 block-wise vs compressed-tensors
-    INT4) and reads the quantization metadata directly, so no `weight_block_size` stub is
-    needed here for either variant.
+    under `text_config`.
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
