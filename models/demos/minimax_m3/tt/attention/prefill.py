@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
@@ -261,6 +263,26 @@ def prefill_forward(
             program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len),
             compute_kernel_config=program_config.get_compute_kernel_config(),
         )
+    # H-A discriminator (DEBUG_LAYERS): is the raw SDPA output already out-of-range vs its V input?
+    # A correct ring_joint output is ~|V| (softmax-convex combination); tt_sdpa_out >> max|V| => the
+    # SDPA op itself emitted an out-of-range value (masking / persistent-buffer defect), not arithmetic.
+    if os.getenv("DEBUG_LAYERS") == "1":
+        rng = os.getenv("DBG_SUB_RANGE", "0-59")
+        _lo, _hi = (int(v) for v in rng.split("-"))
+        if _lo <= layer_idx <= _hi:
+            try:
+                from loguru import logger
+
+                vmax = ttnn.to_torch(ttnn.get_device_tensors(tt_v)[0]).float().abs().max().item()
+                omax = ttnn.to_torch(ttnn.get_device_tensors(tt_sdpa_out)[0]).float().abs().max().item()
+                logger.info(
+                    f"[DBG L{layer_idx} sdpa] max|V|={vmax:.4e} max|sdpa_out|={omax:.4e} ratio={omax / (vmax + 1e-9):.3e}"
+                )
+            except Exception as e:
+                from loguru import logger
+
+                logger.info(f"[DBG L{layer_idx} sdpa] failed: {e}")
+
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)

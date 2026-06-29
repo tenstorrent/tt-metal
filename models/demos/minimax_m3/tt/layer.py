@@ -9,10 +9,18 @@ from models.demos.minimax_m3.utils.substate import substate
 
 
 def _dbg_sub(layer_idx, tag, t):
-    """DEBUG_LAYERS=1: probe a SUBLAYER tensor (device-0 shard) at layers 32-39 to localize the token-0
-    activation explosion (attention-out vs MoE-out). Logs whole-tensor + last-row max|x|/std/finite, plus
-    the (row,col) of the global max so we can see WHICH token position blows up first."""
-    if os.getenv("DEBUG_LAYERS") != "1" or not (32 <= layer_idx <= 39):
+    """DEBUG_LAYERS=1: probe a SUBLAYER tensor (device-0 shard) to localize the token-0 activation
+    explosion (attention-out vs MoE-out vs residual-add). Logs whole-tensor + last-row max|x|/std/finite,
+    the (row,col) of the global max, AND the value at a FIXED tracked position (env DBG_SUB_POS="row,col",
+    e.g. "183,1172") so we follow the actual exploding element rather than the moving argmax. Layer range
+    env-configurable via DBG_SUB_RANGE="lo-hi" (default all layers 0-59)."""
+    if os.getenv("DEBUG_LAYERS") != "1":
+        return
+    lo, hi = 0, 59
+    rng = os.getenv("DBG_SUB_RANGE")
+    if rng:
+        lo, hi = (int(x) for x in rng.split("-"))
+    if not (lo <= layer_idx <= hi):
         return
     try:
         import torch
@@ -23,15 +31,53 @@ def _dbg_sub(layer_idx, tag, t):
         last = flat[-1]
         amax = flat.abs().max()
         pos = (flat.abs() == amax).nonzero()[0].tolist() if torch.isfinite(amax) else [-1, -1]
+        tracked = ""
+        sp = os.getenv("DBG_SUB_POS")
+        if sp:
+            r, c = (int(v) for v in sp.split(","))
+            if r < flat.shape[0] and c < flat.shape[1]:
+                tracked = f" @[{r},{c}]={flat[r, c].item():.4e}"
         logger.info(
             f"[DBG L{layer_idx} {tag}] max|x|={amax.item():.3e} std={flat.std().item():.3e} "
-            f"finite={bool(torch.isfinite(x).all())} argmax_pos(row,col)={pos} "
+            f"finite={bool(torch.isfinite(x).all())} argmax_pos(row,col)={pos}{tracked} "
             f"|| LASTROW max|x|={last.abs().max().item():.3e} std={last.std().item():.3e}"
         )
     except Exception as e:
         from loguru import logger
 
         logger.info(f"[DBG L{layer_idx} {tag}] failed: {e}")
+
+
+def _dbg_dump(layer_idx, tag, t, mesh_device):
+    """DBG_DUMP=1: save REAL intermediate activations to /tmp/m3_dump for fast isolation testing (feed real
+    massive-activation data into attn/MoE unit tests, instead of randn). Reassembles the full SP-sharded
+    tensor across the rows axis (device (r,0) holds seq rows [r*S_local:...], TP cols replicate) -> full
+    [1,1,S,H], saved as L{idx}_{tag}.pt. Layers via DBG_DUMP_LAYERS="0,3,6,..." (default every 3)."""
+    if os.getenv("DBG_DUMP") != "1":
+        return
+    layers_env = os.getenv("DBG_DUMP_LAYERS")
+    dump_layers = {int(v) for v in layers_env.split(",")} if layers_env else set(range(0, 60, 3)) | {33, 34, 35, 36}
+    if layer_idx not in dump_layers:
+        return
+    try:
+        import os as _os
+
+        import torch
+        from loguru import logger
+
+        rows, cols = tuple(mesh_device.shape)
+        dts = ttnn.get_device_tensors(t)
+        # SP-sharded on seq across rows, TP-replicated across cols -> take col-0 device of each row.
+        shards = [ttnn.to_torch(dts[r * cols]).float() for r in range(rows)]
+        full = torch.cat(shards, dim=-2)  # concat on seq
+        _os.makedirs("/tmp/m3_dump", exist_ok=True)
+        path = f"/tmp/m3_dump/L{layer_idx}_{tag}.pt"
+        torch.save(full, path)
+        logger.info(f"[DUMP L{layer_idx} {tag}] saved {tuple(full.shape)} -> {path}")
+    except Exception as e:
+        from loguru import logger
+
+        logger.info(f"[DUMP L{layer_idx} {tag}] failed: {e}")
 
 
 from .attention import Attention, AttentionConfig
@@ -173,6 +219,7 @@ class DecoderLayer:
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
         residual = hidden_states
+        _dbg_dump(self.layer_idx, "residual_in", hidden_states, self.mesh_device)
         hidden_states_post_norm = self.input_layernorm(hidden_states)
 
         # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
@@ -188,6 +235,7 @@ class DecoderLayer:
         )
         hidden_states_post_norm.deallocate(True)
         _dbg_sub(self.layer_idx, "attn_out", hidden_states)
+        _dbg_dump(self.layer_idx, "attn_out", hidden_states, self.mesh_device)
 
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
@@ -201,6 +249,7 @@ class DecoderLayer:
         hidden_states = self.mlp(hidden_states_post_norm)
         hidden_states_post_norm.deallocate(True)
         _dbg_sub(self.layer_idx, "mlp_out", hidden_states)
+        _dbg_dump(self.layer_idx, "mlp_out", hidden_states, self.mesh_device)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)

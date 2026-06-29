@@ -18,6 +18,33 @@ from .dense_mlp import DenseMLP
 from .topk import TopKRouter
 
 
+def _dbg_alldev(tag, t):
+    """DEBUG_LAYERS=1: all-device max|x| + which device/(row,col) holds it (cols=4). Reveals the non-
+    device-0 TP column where the token-0 garbage lives (post-all-gather probe)."""
+    if os.getenv("DEBUG_LAYERS") != "1":
+        return
+    try:
+        import torch
+        from loguru import logger
+
+        dts = ttnn.get_device_tensors(t)
+        gmax, gdev, fin = 0.0, -1, True
+        for i, d in enumerate(dts):
+            xa = ttnn.to_torch(d).float()
+            m = xa.abs().max().item()
+            fin = fin and bool(torch.isfinite(xa).all())
+            if m > gmax:
+                gmax, gdev = m, i
+        logger.info(
+            f"[MLP {tag}] GLOBALmax|x|={gmax:.3e} @dev{gdev}(row{gdev // 4},col{gdev % 4}) "
+            f"finite_all={fin} shape={tuple(ttnn.to_torch(dts[0]).shape)}"
+        )
+    except Exception as e:
+        from loguru import logger
+
+        logger.info(f"[MLP {tag}] failed: {e}")
+
+
 def _ep_cache_dir(tensor_cache_path):
     """EP sub-modules (gate/routed_expert) want a Path *directory* for weight caching
     (they do `path / name`). Return a Path dir under the layer's cache, or None."""
@@ -47,6 +74,8 @@ class MLP:
         ep_seq_len_per_chip=1024,
     ):
         self.mesh_device = mesh_device
+        self.mesh_config = mesh_config
+        self.ccl = ccl_manager
         # Split state dict. MiniMax's SparseMoeBlock has `gate.weight` (no bias) plus a sibling
         # `e_score_correction_bias` buffer; experts live under `experts.*`.
         router_state_dict = dict(substate(state_dict, "gate"))
@@ -166,9 +195,17 @@ class MLP:
         out = self.experts(x3d, topk_indices=idx, topk_weights=wts)  # -> [1,S,H/tp] reduce-scattered
         out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
         if self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
-            out = ttnn.all_gather(
-                out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
-            )
+            # TP all-gather (reduce-scattered emb -> full emb). Use the MANAGED all_gather_async
+            # (mesh_config.allgather, semaphore/barrier-managed — the path DeepSeek's MoE uses) instead of
+            # the raw ttnn.all_gather: the raw op left a stale tile-face on a non-device-0 TP column's
+            # slice under the full-model footprint -> ~1e38 garbage -> token-0 (token-0 hunt 2026-06-29).
+            if self.mesh_config is not None and self.ccl is not None:
+                out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
+            else:
+                out = ttnn.all_gather(
+                    out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
+                )
+        _dbg_alldev("post_AG", out)  # all-device: did the swap fix it / which col still has garbage?
         if shared_out is not None:
             out = ttnn.add(out, shared_out)
             shared_out.deallocate(True)
