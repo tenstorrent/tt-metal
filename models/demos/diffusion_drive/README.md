@@ -484,10 +484,19 @@ live in two script READMEs:
 - [`scripts/navsim_bridge/`](scripts/navsim_bridge/README.md) — fallback:
   cross-process socket bridge (use only if `ttnn` cannot import in the navsim env).
 
-**Validated result:** TTNN PDM ≈ **0.8789** over the full `navtest` (12146
-scenarios) — vs the PyTorch reference agent **0.8795** on this setup (§9.4) and
-upstream published 88.04. The bf16 on-device stack reproduces the reference PDM
-within ~0.07 %.
+**Validated result** — full `navtest` (12146 scenarios, 0 failed), this setup:
+
+| Source | PDM score | Wall time |
+|---|---|---|
+| Paper (published) | 0.8804 (88.04 PDMS) | — |
+| PyTorch reference (CPU) | 0.8795 | ~48 min |
+| **TTNN (Wormhole N300s)** | **0.8789** | **26 min** |
+
+The bf16 on-device stack reproduces the PyTorch reference PDM to within **~0.07 %**
+(0.8789 vs 0.8795) and the published score to within **~0.17 %**, at **~1.8×
+faster wall** than the CPU reference on this 4-core host. Both recipes are in §9.4;
+measured 2026-06-29 (TTNN: in-process agent, `worker=single_machine_thread_pool` +
+backbone trace, 26m4s; PyTorch: `agent=diffusiondrive_agent`, `worker=ray_distributed`).
 
 ### 9.1 Eval environment (customize to your machine)
 
@@ -625,8 +634,11 @@ conda activate navsim
 BR=$TT_METAL_HOME/models/demos/diffusion_drive/scripts/navsim_inproc
 
 # ttnn must import in the navsim env: one-time deps + the inner-package parent on
-# PYTHONPATH (just $TT_METAL_HOME resolves to an empty namespace pkg — see sub-README).
+# PYTHONPATH (just $TT_METAL_HOME resolves to an empty namespace pkg — see sub-README),
+# and the conda libstdc++ ahead of the system one (provides CXXABI_1.3.15, which the
+# env's sqlite3/ICU needs — otherwise `import ttnn` fails resolving CXXABI_1.3.15).
 export TTNN_PP=$TT_METAL_HOME/ttnn:$TT_METAL_HOME:$TT_METAL_HOME/tools
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}
 export PYTHONPATH=$BR:$TTNN_PP:$NAVSIM_DEVKIT_ROOT
 
 # install the agent's hydra config into the devkit (one-time)
