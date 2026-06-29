@@ -88,7 +88,7 @@ def canvas_sample_from_params(
     default_seed: int | None = None,
     gumbel_noise=None,
     use_vocab_chunked_noise: bool = False,
-    use_vocab_permuted_noise: bool = False,
+    use_vocab_permuted_noise: bool = True,
     vocab_chunk_size: int = 1,
 ):
     """Apply duck-typed TT sampling params to the device canvas sampler.
@@ -96,9 +96,10 @@ def canvas_sample_from_params(
     This is the small vLLM seam for W4: callers pass the vLLM-owned
     ``TTSamplingParams`` object (or a dict with the same fields), and the helper
     maps temperature/seed onto the per-position DiffusionGemma canvas sampler.
-    ``top_k``/``top_p`` remain parsed-only until the reference sampler ships
-    those filters. The permuted-vocab RNG workaround is opt-in until it is
-    validated at production vocabulary scale.
+    ``top_k``/``top_p`` remain parsed-only until the reference sampler ships those
+    filters. Seed-regenerated Gumbel noise defaults to the permuted-vocab path to
+    avoid the known QB2 innermost-vocab ``ttnn.rand`` correlation; set
+    ``use_vocab_permuted_noise=False`` only for raw-RNG diagnostics.
     """
     from models.experimental.diffusion_gemma.tt import sampling as TS
 

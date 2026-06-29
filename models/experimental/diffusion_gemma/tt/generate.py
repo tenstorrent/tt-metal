@@ -359,12 +359,17 @@ def make_seeded_gumbel_noise_fn(
     vocab_size: int,
     seed: int,
 ):
-    """Create deterministic device Gumbel noise hooks for ``generate_blocks``."""
+    """Create deterministic device Gumbel noise hooks for ``generate_blocks``.
+
+    The production-shaped seeded path uses the permuted-vocab TTNN RNG workaround
+    validated by W4 distributional tests, avoiding the raw innermost-vocab
+    correlation path kept only as a diagnostic in ``tt.sampling``.
+    """
     _check_random_token_args(batch, canvas_len, vocab_size)
 
     def gumbel_noise_for_block(block_idx: int):
         def gumbel_noise_for_step(step: int):
-            return TS.sample_gumbel_noise(
+            return TS.sample_gumbel_noise_with_permuted_vocab(
                 (batch, 1, canvas_len, vocab_size),
                 device=mesh_device,
                 seed=seed + block_idx * 1_000_003 + step,

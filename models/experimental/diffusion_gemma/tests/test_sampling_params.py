@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from models.experimental.diffusion_gemma.tt import sampling as TS
 from models.experimental.diffusion_gemma.tt.sampling_params import (
     MODEL_CAPABILITIES,
     canvas_sample_from_params,
@@ -18,6 +19,13 @@ class DuckTypedTTSamplingParams:
     top_k: int | list[int]
     top_p: float | list[float]
     seed: int | list[int] | None = None
+
+
+class _FakeLogits:
+    shape = (2, 1, 4, 16)
+
+    def device(self):
+        return "mesh"
 
 
 def test_canvas_sampling_params_defaults_and_capability():
@@ -85,3 +93,29 @@ def test_canvas_sample_from_params_rejects_multiple_rng_workarounds():
             use_vocab_chunked_noise=True,
             use_vocab_permuted_noise=True,
         )
+
+
+def test_canvas_sample_from_params_defaults_to_permuted_vocab_rng(monkeypatch):
+    calls = {}
+
+    def fake_permuted_noise(shape, *, device, seed):
+        calls["noise"] = (shape, device, seed)
+        return "permuted-gumbel"
+
+    def fake_canvas_sample(logits, temperature, gumbel_noise):
+        calls["sample"] = (logits, temperature, gumbel_noise)
+        return "samples"
+
+    monkeypatch.setattr(TS, "sample_gumbel_noise_with_permuted_vocab", fake_permuted_noise)
+    monkeypatch.setattr(TS, "canvas_sample", fake_canvas_sample)
+
+    logits = _FakeLogits()
+    out = canvas_sample_from_params(
+        logits,
+        {"temperature": 0.7, "seed": 47472},
+        default_temperature=0.8,
+    )
+
+    assert out == "samples"
+    assert calls["noise"] == (_FakeLogits.shape, "mesh", 47472)
+    assert calls["sample"] == (logits, 0.7, "permuted-gumbel")
