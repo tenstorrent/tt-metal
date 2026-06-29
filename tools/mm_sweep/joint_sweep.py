@@ -22,7 +22,7 @@ import os, sys, math, statistics, json, torch, ttnn
 
 CLOCK = float(os.environ.get("MM_CLOCK_HZ", 1.35e9))  # BH 1.35GHz; set 1.0e9 for WH
 NO_LEVERS = os.environ.get("MM_NO_LARGE_LEVERS", "1") == "1"
-WARMUP, REPS = 2, 4
+WARMUP, REPS = 0, 3  # 1+WARMUP discarded (compile+cache), REPS measured -> 4 calls/config, median of 3
 CHUNK = 1 + WARMUP + REPS
 RAW = os.path.join(os.environ["TT_METAL_HOME"], "generated/profiler/.logs/profile_log_device.csv")
 
@@ -200,40 +200,63 @@ def sweep_shape(M, K, N):
         os.environ["TT_MM_NO_LARGE_LEVERS"] = "1"
     man = []  # (tag, ok, pcc)
 
+    rv = ref.flatten()
+    rv = rv - rv.mean()
+    rvn = rv.norm()
+
+    def pcc(t):
+        ov = t.flatten().float()[: rv.numel()]
+        ov = ov - ov.mean()
+        return float(torch.dot(ov, rv) / (ov.norm() * rvn + 1e-12))
+
     def run(cfg, tag):
+        # n_exec = device dispatches that ran (each minimal_matmul call == exactly one profiled
+        # program == one entry in durs()). Tracked so the duration parser can advance past configs
+        # that EXECUTED but didn't qualify, keeping later configs aligned (the profiler CSV flushes
+        # only at device close, so per-config reads aren't possible). Incremented AFTER each call.
+        #
+        # Correctness vs timing are measured on DIFFERENT runs on purpose:
+        #  - fresh_pcc = PCC of the first (fresh-compile) call. This is the real correctness of the
+        #    config's math. The fused split-K (Pk>1) BH program-cache bug zeros the output on CACHED
+        #    replays only -- the fresh run is correct -- so fresh_pcc lets us KEEP Pk>1 configs in the
+        #    ranking while still rejecting genuinely-wrong blocks (e.g. silent subblock corruption).
+        #  - p (cache_pcc) = PCC of the last cached replay; <0.99 flags the cache bug (informational).
+        #  - timing comes from the cached replays (production path). For Pk>1 those replays currently
+        #    output zeros; the bug is data-only (same kernel/cycles), so the timing is representative.
         d.clear_program_cache()
         ok = True
         p = 0.0
+        fresh = 0.0
+        n_exec = 0
         try:
-            for _ in range(1 + WARMUP):
+            ot = None
+            for j in range(1 + WARMUP):
                 o = (
                     ttnn.experimental.minimal_matmul(a, b, compute_kernel_config=cc, config=cfg)
                     if cfg
                     else ttnn.experimental.minimal_matmul(a, b, compute_kernel_config=cc)
                 )
+                n_exec += 1
+                if j == 0:
+                    fresh = pcc(ttnn.to_torch(o))  # correctness from the fresh-compile run
                 o.deallocate()
             ttnn.synchronize_device(d)
-            ot = None
             for _ in range(REPS):
                 o = (
                     ttnn.experimental.minimal_matmul(a, b, compute_kernel_config=cc, config=cfg)
                     if cfg
                     else ttnn.experimental.minimal_matmul(a, b, compute_kernel_config=cc)
                 )
+                n_exec += 1
                 ot = ttnn.to_torch(o)
                 o.deallocate()
             ttnn.synchronize_device(d)
             ttnn.ReadDeviceProfiler(d)
-            ov = ot.flatten().float()
-            rv = ref.flatten()
-            ov -= ov.mean()
-            rv = rv - rv.mean()
-            p = float(torch.dot(ov, rv) / (ov.norm() * rv.norm() + 1e-12))
-            if p < 0.99:
-                ok = False
+            p = pcc(ot)  # cached-replay PCC (0 for the fused-K cache bug)
+            ok = fresh >= 0.99  # qualify on FRESH correctness, not cached replay
         except Exception:
             ok = False
-        man.append((tag, ok, p))
+        man.append((tag, ok, p, fresh, n_exec))
 
     # AUTO baseline (full auto path: heuristic S/Pk + auto-block), lever-free
     clear_spk()
@@ -260,18 +283,28 @@ def sweep_shape(M, K, N):
     a.deallocate()
     b.deallocate()
     ttnn.close_device(d)
-    # parse durations (CHUNK per OK config, in run-order)
+    # parse durations: each config emitted n_exec durations in run-order; advance the index by
+    # n_exec for EVERY config (incl. PCC-failed ones that ran) so survivors stay aligned. Only
+    # configs that passed (ok) and produced a full run (n_exec == CHUNK durations present) are kept.
     ds = durs()
     i = 0
-    recs = []
+    recs = []  # (tag, us, fresh_pcc, cache_pcc)
+    n_pcc_fail = n_exc = n_cache_bug = 0
     util = lambda us: 100 * 2 * M * K * N / (PEAK * us * 1e-6) if us else None
-    for tag, ok, p in man:
-        if ok and len(ds[i : i + CHUNK]) == CHUNK:
-            us = statistics.median(ds[i : i + CHUNK][-REPS:]) / 1000
-            i += CHUNK
-            recs.append((tag, us, p))
-        elif ok:
-            i += CHUNK
+    for tag, ok, p, fresh, n_exec in man:
+        seg = ds[i : i + n_exec]
+        i += n_exec
+        if ok and n_exec == CHUNK and len(seg) == CHUNK:
+            us = statistics.median(seg[-REPS:]) / 1000
+            recs.append((tag, us, fresh, p))
+            if p < 0.99:  # fresh-correct but cached replay wrong == the fused-K cache bug
+                n_cache_bug += 1
+        elif not ok:
+            # distinguish fresh-correctness fail (full dispatch) from never-ran (exception)
+            if n_exec == CHUNK:
+                n_pcc_fail += 1
+            else:
+                n_exc += 1
     auto = next((r for r in recs if r[0] == "AUTO"), None)
     blocks = sorted([r for r in recs if r[0] != "AUTO"], key=lambda r: r[1])
     hS, hPk = pick_S_Pk(Mt, Nt, Kt, GY, GX)
@@ -282,7 +315,7 @@ def sweep_shape(M, K, N):
         "grid": [GX, GY],
         "peak_tflops": PEAK / 1e12,
         "heuristic_SPk": [hS, hPk],
-        "auto": {"us": auto[1], "util": util(auto[1]), "pcc": auto[2]} if auto else None,
+        "auto": {"us": auto[1], "util": util(auto[1]), "pcc": auto[2], "cache_pcc": auto[3]} if auto else None,
         "best": {
             "S": best[0][0],
             "Pk": best[0][1],
@@ -293,12 +326,16 @@ def sweep_shape(M, K, N):
             "sbw": best[0][6],
             "us": best[1],
             "util": util(best[1]),
-            "pcc": best[2],
+            "pcc": best[2],  # fresh-compile correctness
+            "cache_pcc": best[3],  # cached-replay PCC; <0.99 == fused-K cache bug (timing still valid)
         }
         if best
         else None,
         "best_vs_auto": (auto[1] / best[1]) if (auto and best) else None,
         "n_configs": len(blocks),
+        "n_pcc_fail": n_pcc_fail,  # ran but FRESH PCC<0.99 (genuinely wrong math) -- excluded
+        "n_exception": n_exc,  # never dispatched (validation/compile/OOM)
+        "n_cache_bug": n_cache_bug,  # included configs whose cached replay is wrong (fused-K bug)
         "all": [
             {
                 "S": t[0],
@@ -310,8 +347,10 @@ def sweep_shape(M, K, N):
                 "sbw": t[6],
                 "us": us,
                 "util": util(us),
+                "pcc": fresh,
+                "cache_pcc": cp,
             }
-            for (t, us, p) in blocks
+            for (t, us, fresh, cp) in blocks
         ],
     }
 
@@ -426,10 +465,17 @@ if __name__ == "__main__":
             json.dump(done, open(OUT, "w"), indent=0)
             b = r["best"]
             a = r["auto"]
+            auto_s = (f"AUTO {a['util']:.1f}%" + ("*" if a["cache_pcc"] < 0.99 else "")) if a else "AUTO FAIL"
+            best_s = (
+                f"BEST S{b['S']}Pk{b['Pk']} {b['mb']}/{b['kb']}/{b['nb']} {b['util']:.1f}%"
+                + ("*" if b["cache_pcc"] < 0.99 else "")
+                + (f" ({r['best_vs_auto']:.2f}x)" if r["best_vs_auto"] else "")
+                if b
+                else "BEST none"
+            )
             print(
-                f"{key:<18} grid{r['grid']} heurSPk{r['heuristic_SPk']} | "
-                f"AUTO {a['util']:.1f}% | BEST S{b['S']}Pk{b['Pk']} {b['mb']}/{b['kb']}/{b['nb']} "
-                f"{b['util']:.1f}% ({r['best_vs_auto']:.2f}x) | {r['n_configs']} cfgs",
+                f"{key:<18} grid{r['grid']} heurSPk{r['heuristic_SPk']} | {auto_s} | {best_s} | "
+                f"{r['n_configs']} ok ({r['n_cache_bug']} cachebug*), {r['n_pcc_fail']} wrong, {r['n_exception']} exc",
                 flush=True,
             )
         except Exception as e:
