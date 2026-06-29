@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/add_int_sfpu.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
 #define DEBUG_PRINT 0
@@ -44,7 +45,7 @@ void kernel_main() {
     constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
 
     // CB ids are Metal 2.0 DFB tokens. Keep the legacy variable names so the rest of the
-    // kernel (experimental::CB construction and LLK calls taking a uint32_t CB id) is unchanged;
+    // kernel (DataflowBuffer construction and LLK calls taking a uint32_t CB id) is unchanged;
     // dfb::<name> converts implicitly to uint32_t.
     constexpr auto in_cb_id_0 = dfb::in_cb_0;
 #ifdef SPLIT_READER
@@ -117,16 +118,16 @@ void kernel_main() {
     constexpr uint32_t tilize_untilize_cb = out_cb_id;
 #endif
 
-    experimental::CB in_scalar_cb_0(in_scalar_cb_id_0);
-    experimental::CB in_cb_0(in_cb_id_0);
+    DataflowBuffer in_scalar_cb_0(in_scalar_cb_id_0);
+    DataflowBuffer in_cb_0(in_cb_id_0);
 #ifdef SPLIT_READER
-    experimental::CB in_scalar_cb_1(in_scalar_cb_id_1);
-    experimental::CB in_cb_1(in_cb_id_1);
+    DataflowBuffer in_scalar_cb_1(in_scalar_cb_id_1);
+    DataflowBuffer in_cb_1(in_cb_id_1);
 #endif
-    experimental::CB out_cb(out_cb_id);
+    DataflowBuffer out_cb(out_cb_id);
 #ifdef OUTPUT_TILED
-    experimental::CB pre_tilize_cb(pre_tilize_cb_id);
-    experimental::CB fast_tilize_cb(fast_tilize_cb_id);
+    DataflowBuffer pre_tilize_cb(pre_tilize_cb_id);
+    DataflowBuffer fast_tilize_cb(fast_tilize_cb_id);
 #endif
 
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
@@ -161,13 +162,13 @@ void kernel_main() {
 #ifdef SPLIT_READER
         const uint32_t curr_scalar_cb_id = use_reader1_scalar ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        experimental::CB curr_scalar_cb = use_reader1_scalar ? in_scalar_cb_1 : in_scalar_cb_0;
-        experimental::CB curr_in_cb = reader0 ? in_cb_0 : in_cb_1;
+        DataflowBuffer curr_scalar_cb = use_reader1_scalar ? in_scalar_cb_1 : in_scalar_cb_0;
+        DataflowBuffer curr_in_cb = reader0 ? in_cb_0 : in_cb_1;
 #else
         const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = in_cb_id_0;
-        experimental::CB curr_scalar_cb = in_scalar_cb_0;
-        experimental::CB curr_in_cb = in_cb_0;
+        DataflowBuffer curr_scalar_cb = in_scalar_cb_0;
+        DataflowBuffer curr_in_cb = in_cb_0;
 #endif
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);

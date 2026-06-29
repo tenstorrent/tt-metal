@@ -1656,12 +1656,30 @@ def test_demo_text(
             profiler,
             1,  # grab the second repeat batch of prefill
             "inference_prefill",
-            f"ttft_e2e_{galaxy_type}",
-            round(avg_time_to_first_token * 1000, 2),
-        )  # average TTFT in ms
+            "time_to_token",
+            avg_time_to_first_token,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            repeat_batches - 1,  # use the last batch iteration (the one with an end timestamp)
+            "inference_decode",
+            "tokens/s",
+            decode_tok_s,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            repeat_batches - 1,
+            "inference_decode",
+            "tokens/s/user",
+            decode_tok_s_user,
+        )
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg_llama_text_demo_prefill",
-            ml_model_name="llama70b-tg",
+            run_type="demo_perf",
+            ml_model_name=model_args.base_model_name,
+            ml_model_type="llm",
+            batch_size=batch_size,
+            input_sequence_length=len(input_prompts[0]),
+            output_sequence_length=num_tokens_generated_decode[0],
         )

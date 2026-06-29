@@ -395,8 +395,8 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates: if True, forward to TtMoe so it runs its
                 intermediates-gated checks (per-chip dispatch buffer overflow,
                 region-offset bounds). Has no effect on dense layers.
-            on_layer_complete: optional callback passed to MLA. In chunked prefill MLA writes the
-                chunk, zeros the pad window past actual_end, then fires this per layer.
+            on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
+                the chunk this block zeros the pad window past actual_end, flushes, then fires this.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
                 write offset = cumulative valid-KV count before it; None for single-shot). Selects
                 MLA's chunked path; requires the block to have been built with is_chunked=True.
@@ -415,14 +415,13 @@ class TtPrefillBlock(LightweightModule):
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
+        seq_len_local = attn_norm_out.shape[2]
         mla_out = self.mla.forward(
             attn_norm_out,
             rope_tensors,
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
-            on_layer_complete=on_layer_complete,
             actual_start=actual_start,
-            actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
         )
@@ -430,6 +429,27 @@ class TtPrefillBlock(LightweightModule):
         if return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
         ttnn.deallocate(attn_norm_out)
+
+        # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
+        # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
+        # 128-boundary; zero that pad window so the decode side reads clean zeros. The synchronize
+        # flushes the (async) zero to device before on_layer_complete hands this layer's KV to the
+        # migration worker, which reads the cache over NoC out-of-band from the ttnn command queue —
+        # without the flush it could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
+        # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
+        if on_layer_complete is not None:
+            assert actual_end is not None, "actual_end required when on_layer_complete is set"
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                kvpe_cache,
+                cache_user_id,
+                cache_layer_idx,
+                self.mla.layer_num,
+                actual_end,
+                seq_len_local * self.mla.sp_factor,
+                self.mla.sp_axis,
+            )
+            ttnn.synchronize_device(self.mesh_device)
+            on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block

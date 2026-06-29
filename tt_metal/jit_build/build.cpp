@@ -275,12 +275,6 @@ void JitBuildEnv::init(
     if (san.enabled) {
         this->defines_ += "-DLLK_SAN_ENABLE ";
 
-        if (san.method == tt::llrt::SanitizerReportMethod::Assert) {
-            this->defines_ += "-DLLK_SAN_SETTING_ASSERT ";
-        } else if (san.method == tt::llrt::SanitizerReportMethod::Print) {
-            this->defines_ += "-DLLK_SAN_SETTING_PRINT ";
-        }
-
         auto add_sanitizer_toggle = [&](const std::optional<bool>& opt, std::string_view name) {
             if (opt.has_value()) {
                 this->defines_ += "-DLLK_SAN_SETTING_" + std::string(name) + "=" + std::to_string(*opt) + " ";

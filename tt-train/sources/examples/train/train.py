@@ -530,7 +530,9 @@ def run_training(
     else:
         mapper = None
     collate = partial(causal_lm_collate_fn, seq_len=seq_len, mapper=mapper)
-    dataloader = InMemoryDataloader(dataset, collate, batch_size=training_cfg.batch_size, shuffle=True, drop_last=True)
+    dataloader = InMemoryDataloader(
+        dataset, collate, batch_size=training_cfg.batch_size, shuffle=True, drop_last=True, seed=training_cfg.seed
+    )
 
     peak_tflops = get_device_peak_tflops_bf16() * mesh.num_devices() if flops_per_token > 0 else 0.0
 

@@ -129,6 +129,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sub_int_sfpu.h
     inc/api/compute/tile_move_copy.h
     inc/api/compute/tilize.h
+    inc/api/compute/transpose.h
+    inc/api/compute/transpose_dest.h
     inc/api/compute/transpose_wh.h
     inc/api/compute/transpose_wh_dest.h
     inc/api/compute/untilize.h

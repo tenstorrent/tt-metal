@@ -80,7 +80,7 @@ void kernel_main() {
 
     // sparsity args
     constexpr uint32_t batchB = get_arg(args::batchB);
-    constexpr uint32_t sparsity_pagesize = get_arg(args::sparsity_pagesize);
+    [[maybe_unused]] constexpr uint32_t sparsity_pagesize = get_arg(args::sparsity_pagesize);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     constexpr bool bcast_A = (bool)get_arg(args::bcast_A);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
@@ -135,25 +135,26 @@ void kernel_main() {
         in0_tensor_next_h_dim_block_stride * in0_single_tile_size_bytes;
 
     uint32_t noc_shard_read_start_addr = 0;
-    // dfb::cb_in0_sharded is bound only when the factory extracts shard sub-blocks. kernel_main is
-    // non-template, so an `if constexpr` discarded branch still does name lookup on the token — it
-    // must be gated out with #ifdef (not if constexpr) on paths where the DFB is not bound.
 #ifdef EXTRACT_SHARD_SUB_BLOCKS
-    {
-        constexpr uint32_t cb_id_in2 = dfb::cb_in0_sharded;  // in0 sharded cb if extract_shard_sub_blocks
-        DataflowBuffer cb_in2(cb_id_in2);
-        noc_shard_read_start_addr = cb_in2.get_read_ptr();
-    }
+    // The resident in0 shard is reached by L1 base address from a local TensorAccessor over the in0
+    // tensor (no borrowed self-loop CB, which Metal 2.0 forbids on DM kernels).
+    noc_shard_read_start_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::in0).get_noc_addr(0));
 #endif
 
 #else
     const auto s0 = TensorAccessor(tensor::in0);
 #endif  // IN0_SHARDED
 
-    // sparsity accessor
+    // sparsity accessor. cb_sparsity is an inert DMA-landing scratch used only when sparsity is
+    // enabled (batchB > 0). As a single-kernel self-loop DFB (PRODUCER+CONSUMER) it is rejected by
+    // the Metal 2.0 DM-kernel self-loop validator, so it is gated behind SPARSITY — never defined by
+    // the non-sparse mcast factories that build this kernel (batchB is always 0 here). tensor::sparsity
+    // stays referenced so the factory's inert sparsity tensor binding remains valid.
+    [[maybe_unused]] const auto s_sparsity = TensorAccessor(tensor::sparsity);
+#ifdef SPARSITY
     constexpr uint32_t cb_id_sparsity = dfb::cb_sparsity;
     DataflowBuffer cb_sparsity(cb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(tensor::sparsity);
+#endif
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -166,19 +167,23 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 #endif  // SKIP_MCAST
 
-    uint32_t l1_write_addr_sparsity = 0;
+    [[maybe_unused]] uint32_t l1_write_addr_sparsity = 0;
+#ifdef SPARSITY
     if constexpr (batchB > 0) {
         cb_sparsity.reserve_back(1);
         l1_write_addr_sparsity = cb_sparsity.get_write_ptr();
     }
+#endif
 
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
     for (uint32_t b = 0; b < in0_B; ++b) {
+#ifdef SPARSITY
         if constexpr (batchB > 0) {
             noc.async_read(s_sparsity, cb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
+#endif
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
@@ -418,11 +423,13 @@ void kernel_main() {
         ASSERT(num_valid_batches == num_batch_compute);
     }
 
+#ifdef SPARSITY
     if constexpr (batchB > 0) {
         cb_sparsity.push_back(1);
         cb_sparsity.wait_front(1);
         cb_sparsity.pop_front(1);
     }
+#endif
     // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
     DPRINT("IN0 end\n");  // DEBUG: matmul layer3 hang
