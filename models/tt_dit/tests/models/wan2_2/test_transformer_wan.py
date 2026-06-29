@@ -44,6 +44,25 @@ ROPE_MAX_SEQ_LEN = 1024
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _load_model_and_golden(test_name, param_id):
+    """Resolve and log the model commit hash, retrieve cached golden data, and load the model.
+
+    Returns ``(commit_hash, golden, torch_model)`` where ``golden`` is None if no cached
+    golden data exists for this commit/test/param.
+    """
+    _, commit_hash = TorchWanTransformer3DModel.load_config(
+        MODEL_NAME, subfolder="transformer", return_commit_hash=True
+    )
+    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
+
+    golden = load_golden(commit_hash, test_name, param_id)
+
+    torch_model = TorchWanTransformer3DModel.from_pretrained(
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+    )
+    return commit_hash, golden, torch_model
+
+
 def _register_block_hooks(model):
     """Register forward hooks on each transformer block to log when it is called."""
     hooks = []
@@ -148,17 +167,7 @@ def test_wan_transformer_block(
     spatial_seq_len = (T // p_t) * (H // p_h) * (W // p_w)
 
     param_id = request.node.name
-    golden = load_golden("wan_transformer_block", param_id)
-
-    # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
-    _, commit_hash = TorchWanTransformer3DModel.load_config(
-        MODEL_NAME, subfolder="transformer", return_commit_hash=True
-    )
-    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
-
-    parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-    )
+    commit_hash, golden, parent_torch_model = _load_model_and_golden("wan_transformer_block", param_id)
     hooks = _register_block_hooks(parent_torch_model)
     torch_model = parent_torch_model.blocks[0]
     torch_model.eval()
@@ -174,6 +183,7 @@ def test_wan_transformer_block(
         torch_rope_sin = golden["torch_rope_sin"]
         torch_spatial_out = golden["torch_spatial_out"]
     else:
+        logger.warning("Computing reference results from scratch; this will be VERY SLOW.")
         # Generate inputs with fixed seed
         torch.manual_seed(0)
         spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
@@ -196,6 +206,7 @@ def test_wan_transformer_block(
         del parent_torch_model, torch_model
 
         save_golden(
+            commit_hash,
             "wan_transformer_block",
             param_id,
             {
@@ -327,17 +338,7 @@ def test_wan_transformer_model(
         num_layers = NUM_LAYERS
 
     param_id = request.node.name
-    golden = load_golden("wan_transformer_model", param_id)
-
-    # Load Wan2.2-T2V-14B model from HuggingFace and compute reference
-    _, commit_hash = TorchWanTransformer3DModel.load_config(
-        MODEL_NAME, subfolder="transformer", return_commit_hash=True
-    )
-    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
-
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-    )
+    commit_hash, golden, torch_model = _load_model_and_golden("wan_transformer_model", param_id)
     hooks = _register_block_hooks(torch_model)
     torch_model.eval()
     state_dict = torch_model.state_dict()
@@ -348,6 +349,7 @@ def test_wan_transformer_model(
         timestep_input = golden["timestep_input"]
         torch_spatial_out = golden["torch_spatial_out"]
     else:
+        logger.warning("Computing reference results from scratch; this will be VERY SLOW.")
         # Generate inputs with fixed seed
         torch.manual_seed(0)
         spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
@@ -368,6 +370,7 @@ def test_wan_transformer_model(
         del torch_model
 
         save_golden(
+            commit_hash,
             "wan_transformer_model",
             param_id,
             {
@@ -445,17 +448,9 @@ def test_wan_transformer_inner_step(
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
     param_id = request.node.name
-    golden = load_golden("wan_transformer_inner_step", param_id)
+    commit_hash, golden, torch_model = _load_model_and_golden("wan_transformer_inner_step", param_id)
 
-    # Load pretrained torch model and truncate to 1 layer
-    _, commit_hash = TorchWanTransformer3DModel.load_config(
-        MODEL_NAME, subfolder="transformer", return_commit_hash=True
-    )
-    logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
-
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
-    )
+    # Truncate to 1 layer
     torch_model.blocks = torch.nn.ModuleList([torch_model.blocks[0]])
     torch_model.eval()
     hooks = _register_block_hooks(torch_model)
@@ -467,6 +462,7 @@ def test_wan_transformer_inner_step(
         timestep_input = golden["timestep_input"]
         torch_output = golden["torch_output"]
     else:
+        logger.warning("Computing reference results from scratch; this will be VERY SLOW.")
         # Generate inputs with fixed seed
         torch.manual_seed(0)
         spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
@@ -484,6 +480,7 @@ def test_wan_transformer_inner_step(
         torch_output = torch_output[0]
 
         save_golden(
+            commit_hash,
             "wan_transformer_inner_step",
             param_id,
             {
