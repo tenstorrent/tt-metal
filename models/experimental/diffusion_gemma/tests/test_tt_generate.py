@@ -1893,11 +1893,37 @@ def test_generation_sequences_rejects_prompt_len_mismatch():
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
+@pytest.mark.parametrize("prompt_len", [3.0, True])
+def test_generation_sequences_rejects_non_integer_prompt_len(prompt_len):
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=prompt_len,
+        next_pos=5,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match="generation.prompt_len"):
+        generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
+
+
 def test_generation_sequences_rejects_next_pos_mismatch():
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
         prompt_len=3,
         next_pos=7,
+        trajectories=[],
+    )
+
+    with pytest.raises(ValueError, match="generation.next_pos"):
+        generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
+
+
+@pytest.mark.parametrize("next_pos", [5.0, True])
+def test_generation_sequences_rejects_non_integer_next_pos(next_pos):
+    generation = G.DeviceGeneration(
+        generated=torch.tensor([[4, 5]], dtype=torch.long),
+        prompt_len=3,
+        next_pos=next_pos,
         trajectories=[],
     )
 

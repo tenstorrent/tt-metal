@@ -773,6 +773,8 @@ def generation_sequences(prompt_tokens: torch.Tensor, generation: DeviceGenerati
         shape_name="[batch, seq_len]",
         allow_empty_length=True,
     )
+    _validate_position_span(generation.prompt_len, 1, name="generation.prompt_len")
+    _validate_position_span(generation.next_pos, 1, name="generation.next_pos")
     if prompt_tokens.shape[0] != generation.generated.shape[0]:
         raise ValueError("prompt_tokens and generation.generated batch sizes must match")
     if prompt_tokens.shape[1] != generation.prompt_len:
