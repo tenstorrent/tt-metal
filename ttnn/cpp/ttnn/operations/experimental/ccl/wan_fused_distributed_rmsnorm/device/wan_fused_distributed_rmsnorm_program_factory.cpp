@@ -541,17 +541,13 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // Whole-row block-major streams input; per_head_norm block-major keeps it resident.
     const bool streaming_low_l1 = streaming_input;
 
-    // Welford LayerNorm (Phase 2) runs a dedicated compute kernel and only
-    // supports the resident layout: the whole row stays L1-resident for the
-    // Welford pass + the (x-mean)*1/std re-read. Wide shards that would need
-    // streaming / block-major POST are a later phase.
+    // Welford LayerNorm runs a dedicated compute kernel. Wide shards use the same
+    // streaming-input (Welford PRE re-reads the row) + block-major POST machinery
+    // as RMS; the reader's defer_input (block_major && is_tp_1 && streaming) keeps
+    // the no-AG path from deadlocking. per_head_norm LayerNorm is not supported.
     const bool is_layernorm = (args.norm_type == WanFusedNormType::LAYERNORM);
     if (is_layernorm) {
-        TT_FATAL(
-            !streaming_low_l1 && !block_major_post,
-            "LayerNorm requires the resident layout (shard must fit L1); wide-shard LayerNorm "
-            "(streaming / block-major) is not implemented yet. num_tile_cols={}",
-            num_tile_cols);
+        TT_FATAL(!args.per_head_norm, "LayerNorm does not support per_head_norm (block-major head-major path)");
     }
     // Clamp to a single resident row for (a) per-head RoPE — its cos/sin CBs are
     // chunk*num_tile_cols fp32 tiles (overflow L1 at feat>=1024) and the compute

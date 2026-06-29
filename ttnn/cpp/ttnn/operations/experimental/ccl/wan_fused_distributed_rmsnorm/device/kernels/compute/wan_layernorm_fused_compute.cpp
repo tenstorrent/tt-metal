@@ -69,6 +69,12 @@ void kernel_main() {
     constexpr uint32_t per_token_weight = get_compile_time_arg_val(32);
     constexpr uint32_t per_token_bias = get_compile_time_arg_val(33);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(34);
+    // Wide-shard layout: streaming_low_l1 streams the input (Welford PRE consumes
+    // the reader's 1st pass block-by-block; POST consumes the 2nd pass).
+    // block_major_post fuses (x-mean)*1/std*w+b per block so intermediate/output
+    // CBs stay O(block_size). For wide LayerNorm the factory sets both together.
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(35);
+    constexpr uint32_t block_major_post = get_compile_time_arg_val(37);
 
     // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
     constexpr uint32_t tile_width = 32u;
@@ -89,8 +95,11 @@ void kernel_main() {
     binary_op_init_common(input_cb, input_cb, input_cb);
 
     for (uint32_t row = 0; row < num_tile_rows; row++) {
-        // Input stays resident: used by the Welford pass and re-read by POST.
-        cb_wait_front(input_cb, num_tile_cols);
+        // Resident layout: whole row stays in L1 (Welford PRE + POST re-read).
+        // Streaming layout (wide shards): each pass waits/pops per block instead.
+        if constexpr (streaming_low_l1 == 0) {
+            cb_wait_front(input_cb, num_tile_cols);
+        }
 
         // -------- PHASE 1: PRE — local per-token Welford (mean, var) over the shard --------
         {
@@ -101,10 +110,24 @@ void kernel_main() {
             tile_regs_acquire();
             welford_init();
             uint32_t start_n = 0;
-            for (uint32_t col = 0; col < num_tile_cols; col++) {
-                transpose_wh_tile(input_cb, col, welford_in_dst);
-                welford_update<0>(welford_in_dst, start_n, no_lut);
-                start_n += tile_width;
+            if constexpr (streaming_low_l1 != 0) {
+                // Streamed 1st pass: wait + Welford + pop each block; LREG4/5 accumulate
+                // across blocks. The reader re-pushes the row for the POST 2nd pass.
+                for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
+                    cb_wait_front(input_cb, block_size);
+                    for (uint32_t i = 0; i < block_size; i++) {
+                        transpose_wh_tile(input_cb, i, welford_in_dst);
+                        welford_update<0>(welford_in_dst, start_n, no_lut);
+                        start_n += tile_width;
+                    }
+                    cb_pop_front(input_cb, block_size);
+                }
+            } else {
+                for (uint32_t col = 0; col < num_tile_cols; col++) {
+                    transpose_wh_tile(input_cb, col, welford_in_dst);
+                    welford_update<0>(welford_in_dst, start_n, no_lut);
+                    start_n += tile_width;
+                }
             }
             welford_finalize_to_row<0>(mean_dst, reduce_width - 1, no_lut);  // mean->dst1 row0, var->dst2 row0
             tile_regs_commit();
@@ -206,124 +229,236 @@ void kernel_main() {
         cb_wait_front(invstd_cb, 1);
 
         // -------- PHASE 2: POST — (x - mean) * (1/std) [* weight] [+ bias] --------
-        // Sub-phase A: x - mean (broadcast mean over feature cols) -> xmm_cb.
-        {
-            DeviceZoneScopedN("LN_SUB_MEAN");
-            reconfig_data_format(input_cb, mean_cb);
-            pack_reconfig_data_format(xmm_cb);
-            sub_bcast_cols_init_short(input_cb, mean_cb);
-            for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
-                const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                cb_reserve_back(xmm_cb, n);
+        if constexpr (block_major_post != 0) {
+            // ===== Block-major POST (wide shards) =====
+            // Per block: re-read the streamed input (2nd pass) and fuse
+            // (x-mean) -> *1/std -> [*weight] -> [+bias] -> output, so xmm /
+            // intermediate / output CBs stay O(block_size). mean_cb / invstd_cb
+            // (col 0) and weight_cb / bias_cb (whole-row) stay resident.
+            DeviceZoneScopedN("LN_BLKMAJOR");
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                // (x - mean) -> xmm_cb
+                cb_wait_front(input_cb, block_size);
+                reconfig_data_format(input_cb, mean_cb);
+                pack_reconfig_data_format(xmm_cb);
+                sub_bcast_cols_init_short(input_cb, mean_cb);
+                cb_reserve_back(xmm_cb, block_size);
                 tile_regs_acquire();
-                for (uint32_t i = 0; i < n; i++) {
-                    sub_tiles_bcast_cols(input_cb, mean_cb, col + i, 0, i);
+                for (uint32_t i = 0; i < block_size; i++) {
+                    sub_tiles_bcast_cols(input_cb, mean_cb, i, 0, i);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t i = 0; i < n; i++) {
+                for (uint32_t i = 0; i < block_size; i++) {
                     pack_tile(i, xmm_cb);
                 }
                 tile_regs_release();
-                cb_push_back(xmm_cb, n);
-            }
-        }
+                cb_push_back(xmm_cb, block_size);
+                cb_pop_front(input_cb, block_size);
 
-        // Sub-phase B: (x - mean) * (1/std) -> norm_result_cb.
-        {
-            DeviceZoneScopedN("LN_MUL_INVSTD");
-            reconfig_data_format(xmm_cb, invstd_cb);
-            pack_reconfig_data_format(norm_result_cb);
-            mul_bcast_cols_init_short(xmm_cb, invstd_cb);
-            for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
-                const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
+                // (x - mean) * (1/std) -> norm_result_cb
                 cb_wait_front(xmm_cb, block_size);
-                cb_reserve_back(norm_result_cb, n);
+                reconfig_data_format(xmm_cb, invstd_cb);
+                pack_reconfig_data_format(norm_result_cb);
+                mul_bcast_cols_init_short(xmm_cb, invstd_cb);
+                cb_reserve_back(norm_result_cb, block_size);
                 tile_regs_acquire();
-                for (uint32_t i = 0; i < n; i++) {
+                for (uint32_t i = 0; i < block_size; i++) {
                     mul_tiles_bcast_cols(xmm_cb, invstd_cb, i, 0, i);
                 }
                 tile_regs_commit();
+                cb_pop_front(xmm_cb, block_size);
                 tile_regs_wait();
-                for (uint32_t i = 0; i < n; i++) {
+                for (uint32_t i = 0; i < block_size; i++) {
                     pack_tile(i, norm_result_cb);
                 }
                 tile_regs_release();
-                cb_push_back(norm_result_cb, n);
-                cb_pop_front(xmm_cb, block_size);
-            }
-        }
+                cb_push_back(norm_result_cb, block_size);
 
-        // Sub-phase C: * weight (gamma).
-        if constexpr (has_weight != 0) {
-            DeviceZoneScopedN("LN_WEIGHT");
-            reconfig_data_format(norm_result_cb, weight_cb);
-            pack_reconfig_data_format(weight_result_cb);
-            if constexpr (per_token_weight != 0) {
-                mul_tiles_init(norm_result_cb, weight_cb);
-            } else {
-                mul_bcast_rows_init_short(norm_result_cb, weight_cb);
-            }
-            for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
-                const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                cb_wait_front(weight_cb, col + n);
-                cb_wait_front(norm_result_cb, block_size);
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < n; i++) {
+                // * weight
+                if constexpr (has_weight != 0) {
+                    cb_wait_front(weight_cb, col_tile + block_size);
+                    cb_wait_front(norm_result_cb, block_size);
+                    reconfig_data_format(norm_result_cb, weight_cb);
+                    pack_reconfig_data_format(weight_result_cb);
                     if constexpr (per_token_weight != 0) {
-                        mul_tiles(norm_result_cb, weight_cb, i, col + i, i);
+                        mul_tiles_init(norm_result_cb, weight_cb);
                     } else {
-                        mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, col + i, i);
+                        mul_bcast_rows_init_short(norm_result_cb, weight_cb);
                     }
+                    cb_reserve_back(weight_result_cb, block_size);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < block_size; i++) {
+                        if constexpr (per_token_weight != 0) {
+                            mul_tiles(norm_result_cb, weight_cb, i, col_tile + i, i);
+                        } else {
+                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, col_tile + i, i);
+                        }
+                    }
+                    tile_regs_commit();
+                    cb_pop_front(norm_result_cb, block_size);
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < block_size; i++) {
+                        pack_tile(i, weight_result_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(weight_result_cb, block_size);
                 }
-                tile_regs_commit();
-                cb_pop_front(norm_result_cb, block_size);
-                cb_reserve_back(weight_result_cb, n);
-                tile_regs_wait();
-                for (uint32_t i = 0; i < n; i++) {
-                    pack_tile(i, weight_result_cb);
-                }
-                tile_regs_release();
-                cb_push_back(weight_result_cb, n);
-            }
-        }
 
-        // Sub-phase D: + bias (beta).
-        if constexpr (has_bias != 0) {
-            DeviceZoneScopedN("LN_BIAS");
-            reconfig_data_format(weight_result_cb, bias_cb);
-            pack_reconfig_data_format(output_cb);
-            if constexpr (per_token_bias != 0) {
-                add_tiles_init(weight_result_cb, bias_cb);
-            } else {
-                add_bcast_rows_init_short(weight_result_cb, bias_cb);
-            }
-            for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
-                const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
-                cb_wait_front(bias_cb, col + n);
-                cb_wait_front(weight_result_cb, block_size);
-                tile_regs_acquire();
-                for (uint32_t i = 0; i < n; i++) {
+                // + bias
+                if constexpr (has_bias != 0) {
+                    cb_wait_front(bias_cb, col_tile + block_size);
+                    cb_wait_front(weight_result_cb, block_size);
+                    reconfig_data_format(weight_result_cb, bias_cb);
+                    pack_reconfig_data_format(output_cb);
                     if constexpr (per_token_bias != 0) {
-                        add_tiles(weight_result_cb, bias_cb, i, col + i, i);
+                        add_tiles_init(weight_result_cb, bias_cb);
                     } else {
-                        add_tiles_bcast_rows(weight_result_cb, bias_cb, i, col + i, i);
+                        add_bcast_rows_init_short(weight_result_cb, bias_cb);
                     }
+                    cb_reserve_back(output_cb, block_size);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < block_size; i++) {
+                        if constexpr (per_token_bias != 0) {
+                            add_tiles(weight_result_cb, bias_cb, i, col_tile + i, i);
+                        } else {
+                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, col_tile + i, i);
+                        }
+                    }
+                    tile_regs_commit();
+                    cb_pop_front(weight_result_cb, block_size);
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < block_size; i++) {
+                        pack_tile(i, output_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(output_cb, block_size);
                 }
-                tile_regs_commit();
-                cb_pop_front(weight_result_cb, block_size);
-                cb_reserve_back(output_cb, n);
-                tile_regs_wait();
-                for (uint32_t i = 0; i < n; i++) {
-                    pack_tile(i, output_cb);
-                }
-                tile_regs_release();
-                cb_push_back(output_cb, n);
             }
-        }
+        } else {
+            // ===== Resident POST (shard fits L1) =====
+            // Sub-phase A: x - mean (broadcast mean over feature cols) -> xmm_cb.
+            {
+                DeviceZoneScopedN("LN_SUB_MEAN");
+                reconfig_data_format(input_cb, mean_cb);
+                pack_reconfig_data_format(xmm_cb);
+                sub_bcast_cols_init_short(input_cb, mean_cb);
+                for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
+                    const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
+                    cb_reserve_back(xmm_cb, n);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < n; i++) {
+                        sub_tiles_bcast_cols(input_cb, mean_cb, col + i, 0, i);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < n; i++) {
+                        pack_tile(i, xmm_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(xmm_cb, n);
+                }
+            }
+
+            // Sub-phase B: (x - mean) * (1/std) -> norm_result_cb.
+            {
+                DeviceZoneScopedN("LN_MUL_INVSTD");
+                reconfig_data_format(xmm_cb, invstd_cb);
+                pack_reconfig_data_format(norm_result_cb);
+                mul_bcast_cols_init_short(xmm_cb, invstd_cb);
+                for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
+                    const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
+                    cb_wait_front(xmm_cb, block_size);
+                    cb_reserve_back(norm_result_cb, n);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < n; i++) {
+                        mul_tiles_bcast_cols(xmm_cb, invstd_cb, i, 0, i);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < n; i++) {
+                        pack_tile(i, norm_result_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(norm_result_cb, n);
+                    cb_pop_front(xmm_cb, block_size);
+                }
+            }
+
+            // Sub-phase C: * weight (gamma).
+            if constexpr (has_weight != 0) {
+                DeviceZoneScopedN("LN_WEIGHT");
+                reconfig_data_format(norm_result_cb, weight_cb);
+                pack_reconfig_data_format(weight_result_cb);
+                if constexpr (per_token_weight != 0) {
+                    mul_tiles_init(norm_result_cb, weight_cb);
+                } else {
+                    mul_bcast_rows_init_short(norm_result_cb, weight_cb);
+                }
+                for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
+                    const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
+                    cb_wait_front(weight_cb, col + n);
+                    cb_wait_front(norm_result_cb, block_size);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < n; i++) {
+                        if constexpr (per_token_weight != 0) {
+                            mul_tiles(norm_result_cb, weight_cb, i, col + i, i);
+                        } else {
+                            mul_tiles_bcast_rows(norm_result_cb, weight_cb, i, col + i, i);
+                        }
+                    }
+                    tile_regs_commit();
+                    cb_pop_front(norm_result_cb, block_size);
+                    cb_reserve_back(weight_result_cb, n);
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < n; i++) {
+                        pack_tile(i, weight_result_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(weight_result_cb, n);
+                }
+            }
+
+            // Sub-phase D: + bias (beta).
+            if constexpr (has_bias != 0) {
+                DeviceZoneScopedN("LN_BIAS");
+                reconfig_data_format(weight_result_cb, bias_cb);
+                pack_reconfig_data_format(output_cb);
+                if constexpr (per_token_bias != 0) {
+                    add_tiles_init(weight_result_cb, bias_cb);
+                } else {
+                    add_bcast_rows_init_short(weight_result_cb, bias_cb);
+                }
+                for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
+                    const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
+                    cb_wait_front(bias_cb, col + n);
+                    cb_wait_front(weight_result_cb, block_size);
+                    tile_regs_acquire();
+                    for (uint32_t i = 0; i < n; i++) {
+                        if constexpr (per_token_bias != 0) {
+                            add_tiles(weight_result_cb, bias_cb, i, col + i, i);
+                        } else {
+                            add_tiles_bcast_rows(weight_result_cb, bias_cb, i, col + i, i);
+                        }
+                    }
+                    tile_regs_commit();
+                    cb_pop_front(weight_result_cb, block_size);
+                    cb_reserve_back(output_cb, n);
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < n; i++) {
+                        pack_tile(i, output_cb);
+                    }
+                    tile_regs_release();
+                    cb_push_back(output_cb, n);
+                }
+            }
+        }  // end resident POST (else of block_major_post)
 
         cb_pop_front(mean_cb, 1);
         cb_pop_front(invstd_cb, 1);
-        cb_pop_front(input_cb, num_tile_cols);
+        if constexpr (block_major_post == 0) {
+            // Resident path holds the row through POST; block-major popped per block.
+            cb_pop_front(input_cb, num_tile_cols);
+        }
     }
 }

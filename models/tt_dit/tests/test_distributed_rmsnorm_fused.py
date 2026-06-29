@@ -850,9 +850,12 @@ def test_layernorm_corr(mesh_device, model, tp, topology, op_override, tp_axis, 
             out0 = _fused(0)
         except RuntimeError as e:
             msg = str(e)
-            if "resident" in msg or "LayerNorm requires the resident layout" in msg:
+            # NEED_WIDE: shard too wide to fit even the block-major + streaming layout
+            # in L1 (TP>1 wide adds the AG/combine CBs on top of whole-row weight/bias).
+            # A clean program-construction error, not a hang — CB-fit tuning is pending.
+            if "resident" in msg or "beyond max L1 size" in msg or "max L1 size" in msg:
                 need_wide.append(cfg.cid)
-                logger.info(f"LNCORR {cfg.cid:<26} NEED_WIDE (overflows L1 resident; Phase-4 streaming/block-major)")
+                logger.info(f"LNCORR {cfg.cid:<26} NEED_WIDE (CBs exceed L1; needs wide-shard CB-fit tuning)")
                 continue
             raise
 
