@@ -493,7 +493,7 @@ class LTXDistilledPipeline(LTXPipeline):
         output_type: str = "rgb",
         # I2V: list of (image_path, frame_idx, strength). Only frame_idx==0 is supported.
         images: list[tuple[str, int, float]] | None = None,
-        num_frames: int = 121,
+        num_frames: int = 145,
         height: int = 512,
         width: int = 768,
         seed: int = 42,
