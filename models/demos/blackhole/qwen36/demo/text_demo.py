@@ -1,9 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.5-9B e2e text generation on Blackhole P150 (128-256k ISL, traced/paged).
+"""Qwen3.5/3.6 end-to-end text generation test on Blackhole (P150 / P150x4).
 
-Run: pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s [-k "traced_128"]
+A single parametrized test covering prefill + decode across ISLs from 128 up to 256k
+(single-user) and batched serving (B=8/B=32, multi-device TP) up to 64k.
+
+Run all:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s
+Run 128:      pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
+Run batched:  MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "b8"
 
 GDN prefill runs the fast fused path by DEFAULT — no env vars needed: chunk-parallel phase-split
 (PREP fanned across the grid + V-block SCAN), fp32 o output, fp32 state, and flat token-major q/k/v
@@ -206,13 +211,21 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(262144, 100, True, 1, 1, id="traced_256k"),
         # Determinism: re-run the traced 128 case and assert identical output across runs.
         pytest.param(128, 50, True, 1, 2, id="determinism_128"),
-        # Batched decode (TP only): B users sharing one shared paged KV + batched GDN state.
+        # Batched decode (TP only): B users share one paged KV + batched GDN state.
         pytest.param(128, 50, True, 8, 1, id="batched_128_b8"),
         pytest.param(128, 50, True, 32, 1, id="batched_128_b32"),
-        # Batched LONG prefill (TP only): T>128 routes to prefill_chunked_peruser (per-user
-        # chunk-outer prefill into a B=1 GDN scratch, assembled into the batched decode buffers).
+        # Batched long prefill (TP only): T>128 routes to prefill_chunked_peruser.
         pytest.param(4096, 50, True, 8, 1, id="batched_4k_b8"),
         pytest.param(4096, 50, True, 32, 1, id="batched_4k_b32"),
+        # B=8 long-context ladder. Paged KV scales as B x ISL (~1 GB/device at 8k to ~8 GB at
+        # 64k), within the P150x4 budget. Each user prefilled via prefill_chunked_peruser, then
+        # all 8 decode together in one B-wide trace; identical prompts decode identically.
+        pytest.param(8192, 50, True, 8, 1, id="batched_8k_b8"),
+        pytest.param(16384, 50, True, 8, 1, id="batched_16k_b8"),
+        pytest.param(32768, 50, True, 8, 1, id="batched_32k_b8"),
+        # Per-user prefill is sequential, so the 64k TTFT (~357s) exceeds pytest.ini's 300s
+        # default; give it a generous per-test timeout.
+        pytest.param(65536, 50, True, 8, 1, id="batched_64k_b8", marks=pytest.mark.timeout(900)),
     ],
 )
 def test_demo_text(
@@ -264,8 +277,8 @@ def test_demo_text(
     # sequence — the long-context OOM fix), then incremental paged single-token decode.
     if model.num_devices > 1 and batch > 1:
         # Batched serving: B users share one paged KV + batched GDN state. The demo replicates the
-        # one loaded prompt to all B users, so every row MUST generate identical tokens — a built-in
-        # batched-correctness check layered on the throughput measurement.
+        # one loaded prompt to all B users, so every row must generate identical tokens (asserted
+        # below as a batched-correctness check).
         rows, perf = _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch)
         text0 = tokenizer.decode(rows[0], skip_special_tokens=True)
         logger.info(

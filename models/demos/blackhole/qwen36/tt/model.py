@@ -3313,9 +3313,8 @@ class Qwen36Model:
 
         B = tokens.shape[0]
         tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # Per-user positions: current_pos may be a [B] tensor (each user at its own absolute
-        # position — variable prompt lengths / real serving) or a scalar (lockstep / B=1). Build a
-        # [B] int32 vector so cur_pos and the TP rope tables carry one rotation per user.
+        # Per-user positions: current_pos may be a [B] tensor (each user at its own position) or a
+        # scalar (lockstep). Build a [B] int32 vector so cur_pos and rope carry one rotation per user.
         if isinstance(current_pos, torch.Tensor):
             pos_vec = current_pos.to(torch.int32).reshape(-1)
             assert pos_vec.shape[0] == B, f"current_pos length {pos_vec.shape[0]} != batch {B}"
