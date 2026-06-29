@@ -56,6 +56,11 @@ void kernel_main() {
     uint64_t identity_tile_global_multicast_addr =
             get_noc_multicast_addr(start_x, start_y, end_x, end_y, tile_l1_addr);
     noc_async_write_multicast(tile_l1_addr, identity_tile_global_multicast_addr, single_tile_size, num_dests);
+#ifdef ARCH_BLACKHOLE
+    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be
+    // sent in order they are issued
+    noc_async_writes_flushed();
+#endif
 
     ////////// MULTICAST 'VALID' STATE TO RECEIVERS //////////
     *(receiver_addr_ptr) = VALID;
