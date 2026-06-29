@@ -106,3 +106,42 @@ def load_checkpoint_inputs(
     tokenizer = load_tokenizer(checkpoint_dir, **(tokenizer_kwargs or {}))
     state_dict = load_text_generation_state_dict(checkpoint_dir, prefixes=state_prefixes, device=device)
     return CheckpointInputs(tokenizer=tokenizer, state_dict=state_dict)
+
+
+def generate_text_from_checkpoint_dir(
+    tt_model,
+    checkpoint_dir: str | Path,
+    prompt,
+    *,
+    tokenizer_kwargs: dict | None = None,
+    state_prefixes: tuple[str, ...] | list[str] | str = TEXT_GENERATION_PREFIXES,
+    state_device: str = "cpu",
+    checkpoint_loader=load_checkpoint_inputs,
+    generate_fn=None,
+    **generate_kwargs,
+):
+    """Load a HF checkpoint directory and run the TT prompt-to-text entrypoint.
+
+    This is the thin runnable glue for #47464: callers provide an already-built
+    TT Gemma4/DiffusionGemma model and a checkpoint directory; this helper loads
+    the host tokenizer + raw decoder state and delegates to
+    ``generate_text_from_checkpoint_state``.
+    """
+
+    inputs = checkpoint_loader(
+        checkpoint_dir,
+        tokenizer_kwargs=tokenizer_kwargs,
+        state_prefixes=state_prefixes,
+        device=state_device,
+    )
+    if generate_fn is None:
+        from models.experimental.diffusion_gemma.tt.generate import generate_text_from_checkpoint_state
+
+        generate_fn = generate_text_from_checkpoint_state
+    return generate_fn(
+        tt_model,
+        inputs.tokenizer,
+        prompt,
+        dg_state_dict=inputs.state_dict,
+        **generate_kwargs,
+    )
