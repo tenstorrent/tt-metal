@@ -16,7 +16,7 @@
 //   - weight/bias TensorAccessorArgs + base-address RTAs -> tensor::weights / tensor::bias bindings
 //   - weights-mcast semaphore RTAs -> Semaphore(sem::weights_mcast_sender / weights_mcast_receiver)
 //   - remaining positional CTAs -> get_arg(args::name); remaining RTAs -> get_arg(args::name)
-//   - experimental::CB -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
+//   - DataflowBuffer -> DataflowBuffer (objects passed to conv_reader_common.hpp helpers stay
 //     experimental::CB); get_tile_size(cb) -> cb.get_entry_size()
 //   - dfb::bias / tensor::bias gated behind FUSE_BIAS; dfb::act_second_reader gated behind SPLIT_READER
 
@@ -79,7 +79,7 @@ void kernel_main() {
     Noc noc;
 
 #ifdef SPLIT_READER
-    experimental::CB cb_act_second_obj(dfb::act_second_reader);
+    DataflowBuffer cb_act_second_obj(dfb::act_second_reader);
     if constexpr (split_reader_enabled) {
         if constexpr (needs_act_block_zero_out) {
             zero_out_tiles<dfb::act_second_reader>(noc, cb_act_second_obj);

@@ -259,6 +259,42 @@ def assert_with_ulp(
     return ulp_passed, ulp_message
 
 
+def ulp_distance(a: torch.Tensor, b: torch.Tensor, treat_zero_signs_equal: bool = True) -> torch.Tensor:
+    """Per-element integer ULP distance for matching-dtype BF16 or FP32 tensors.
+
+    Maps each value's sign-magnitude bit pattern to a monotonic int (negatives
+    -> all_ones - bits, positives -> bits + sign_bit) so float ordering is
+    preserved by int subtraction; per-element ULP = |mono(a) - mono(b)|.
+
+    Differs from ``comp_ulp`` (which divides by ``ulp(golden)``) in two ways:
+      * Integer-valued across power-of-2 boundaries (``comp_ulp`` can return
+        fractional ULPs there because ``ulp(a)`` differs above vs below the
+        boundary).
+      * Optionally treats +0 and -0 as 0 ULP apart -- they are numerically
+        equal per IEEE 754, and some Tenstorrent SFPU pack/convert paths
+        canonicalise -0 to +0, so the 1-ULP gap the bit mapping would
+        otherwise report is an artefact.
+    """
+    assert a.dtype == b.dtype, f"dtype mismatch: {a.dtype} vs {b.dtype}"
+    if a.dtype == torch.bfloat16:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int16, torch.int32, 0x8000, 0xFFFF
+    elif a.dtype == torch.float32:
+        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int32, torch.int64, 0x80000000, 0xFFFFFFFF
+    else:
+        raise ValueError(f"ulp_distance: unsupported dtype {a.dtype}; only bfloat16 and float32 are supported")
+
+    a_bits = a.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    b_bits = b.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
+    a_mono = torch.where((a_bits & sign_mask) != 0, all_mask - a_bits, a_bits + sign_mask)
+    b_mono = torch.where((b_bits & sign_mask) != 0, all_mask - b_bits, b_bits + sign_mask)
+    diff = (a_mono - b_mono).abs()
+    if treat_zero_signs_equal:
+        magnitude_mask = all_mask ^ sign_mask
+        both_zero = ((a_bits & magnitude_mask) == 0) & ((b_bits & magnitude_mask) == 0)
+        diff = torch.where(both_zero, torch.zeros_like(diff), diff)
+    return diff
+
+
 def measure_ulp_with_near_zero_atol(
     expected_result: Union[ttnn.Tensor, torch.Tensor],
     actual_result: Union[ttnn.Tensor, torch.Tensor],

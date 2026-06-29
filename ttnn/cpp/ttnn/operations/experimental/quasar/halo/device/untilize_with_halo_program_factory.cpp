@@ -54,8 +54,11 @@ namespace {
 //                       input shard; compute consumes it.  (tiled path only)
 //   UNTILIZE_OUT0/1   - real scratch FIFOs: compute produces, reader0/reader1
 //                       consume (one each, SPSC-clean).  (tiled path only)
-//   PAD0/1            - per-reader private scratch holding the immediate pad
-//                       value (only when pad_val != 0).  Self-loop bound.
+//   PAD0/1            - per-reader pad-immediate scratch (only when pad_val != 0).
+//                       Cross-reader bound: reader0 produces PAD0 / consumes PAD1,
+//                       reader1 produces PAD1 / consumes PAD0 (the pad value is the
+//                       same constant on both, both run on the same core), so neither
+//                       DM kernel self-loops a DFB.  See make_reader.
 // ---------------------------------------------------------------------------
 const TensorParamName IN{"in"};
 const TensorParamName OUT{"out"};
@@ -391,6 +394,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     const auto make_reader = [&](const KernelSpecName& name,
                                  const DFBSpecName& untilize_out_dfb,
                                  const DFBSpecName& pad_dfb,
+                                 const DFBSpecName& pad_other_dfb,
                                  const DFBSpecName& gather_scratch_dfb,
                                  const DFBSpecName& pad_scratch_dfb,
                                  const TensorParamName& gather_cfg,
@@ -422,7 +426,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         }
 
         // DFB bindings: untilize_out (consumer) on the tiled path; pad scratch
-        // (self-loop) when used.
+        // (cross-reader, see below) when used.
         if (!skip_untilize) {
             reader.dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = untilize_out_dfb,
@@ -438,10 +442,17 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                 .dfb_spec_name = SRC_DFB, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER});
         }
         if (use_pad_scratch) {
+            // Cross-reader pad scratch (the pad value is the SAME constant on both readers, and both
+            // readers run on the same core, so PAD0/PAD1 are interchangeable L1 sources). Each reader
+            // PRODUCES its own pad DFB (pad_fill) and CONSUMES the peer reader's identical pad DFB
+            // (pad_read). Neither reader binds one DFB as both producer and consumer -> no self-loop,
+            // and each DFB has exactly one producer + one consumer (different kernels) -> SPSC clean.
             reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = pad_dfb, .accessor_name = "pad", .endpoint_type = DFBEndpointType::PRODUCER});
+                .dfb_spec_name = pad_dfb, .accessor_name = "pad_fill", .endpoint_type = DFBEndpointType::PRODUCER});
             reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = pad_dfb, .accessor_name = "pad", .endpoint_type = DFBEndpointType::CONSUMER});
+                .dfb_spec_name = pad_other_dfb,
+                .accessor_name = "pad_read",
+                .endpoint_type = DFBEndpointType::CONSUMER});
         }
         if (config_tensors_in_dram) {
             // DRAM config landing scratch (self-loop: reader fills via NoC read, then reads it).
@@ -517,7 +528,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     KernelSpec reader0 = make_reader(
         READER0,
         UNTILIZE_OUT0,
-        PAD0,
+        /*pad_dfb (own)=*/PAD0,
+        /*pad_other_dfb (peer)=*/PAD1,
         GATHER_SCRATCH0,
         PAD_SCRATCH0,
         GATHER_CONFIG0,
@@ -528,7 +540,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     KernelSpec reader1 = make_reader(
         READER1,
         UNTILIZE_OUT1,
-        PAD1,
+        /*pad_dfb (own)=*/PAD1,
+        /*pad_other_dfb (peer)=*/PAD0,
         GATHER_SCRATCH1,
         PAD_SCRATCH1,
         GATHER_CONFIG1,

@@ -121,7 +121,7 @@ class TransformerConfig:
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
             self.original_context_length = self.rope.get("original_context_length", None)
 
-        # Qwen3-specific.
+        # Qwen3-specific
         self.head_dim = tc.get("head_dim", None)
 
 

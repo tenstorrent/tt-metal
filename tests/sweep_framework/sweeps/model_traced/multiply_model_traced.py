@@ -21,6 +21,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
+    check_with_pcc_safe,
     extract_named_tensor_kwargs,
     parse_dict_value,
 )
@@ -103,7 +104,7 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config, device=device)
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -118,6 +119,14 @@ def run(
         # Tensor-scalar multiply: use the scalar value directly.
         # The scalar may come from 'scalar' kwarg, 'arg1' param, or default to 2.0.
         scalar_value = scalar if scalar is not None else (arg1 if arg1 is not None else 2.0)
+        # The scalar is a float (e.g. masking value -FLT_MAX ≈ -3.4e38) but the
+        # tracer serializes it as a huge Python int; passing that to ttnn.multiply
+        # tries to cast to unsigned ("can't convert negative int to unsigned").
+        # Coerce numeric scalars to float so the op gets a real float scalar.
+        if isinstance(scalar_value, bool):
+            pass
+        elif isinstance(scalar_value, int):
+            scalar_value = float(scalar_value)
         torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
         is_scalar_multiply = True
     else:
@@ -310,6 +319,6 @@ def run(
         output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output_tensor.shape)]
 
     # Check with PCC
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc = check_with_pcc_safe(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

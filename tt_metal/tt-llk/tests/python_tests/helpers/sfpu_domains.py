@@ -158,6 +158,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Gelu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
     ),
+    # gelu_tanh: tanh approximation of gelu — same Gaussian spread exercises both
+    # tails (saturation) and values near 0 (the +-0 sign path).
+    MathOperation.GeluTanh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
+    ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
     MathOperation.Hardsigmoid: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
