@@ -163,7 +163,7 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
 
     rand_shape = (shape[-1], *shape[1:-1], shape[0])
     permute_order = (len(shape) - 1, *range(1, len(shape) - 1), 0)
-    u = ttnn.rand(
+    raw_u = ttnn.rand(
         rand_shape,
         device=device,
         dtype=dtype,
@@ -173,7 +173,9 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
         seed=seed,
         mesh_mapper=_rand_mesh_mapper(device),
     )
-    u = ttnn.permute(u, permute_order)
+    u = ttnn.permute(raw_u, permute_order)
+    if u is not raw_u:
+        raw_u.deallocate(True)
     return _gumbel_from_uniform(u)
 
 
@@ -209,4 +211,7 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
 
     if len(parts) == 1:
         return parts[0]
-    return ttnn.concat(parts, dim=-1)
+    gumbel = ttnn.concat(parts, dim=-1)
+    for part in parts:
+        part.deallocate(True)
+    return gumbel
