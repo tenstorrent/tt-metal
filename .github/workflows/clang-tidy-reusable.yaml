@@ -57,12 +57,6 @@ jobs:
         # Log ccache operations to a file so remote storage errors are visible in CI.
         # Errors (storage helper failures, S3 timeouts) would otherwise be silent.
         CCACHE_LOGFILE: /tmp/ccache.log
-        # Strip the working directory prefix from hashed paths so cache entries
-        # are reusable across machines even if the checkout path differs. Without
-        # this, ccache's direct-mode key embeds absolute source/-I paths, so this
-        # job never matches the shared bucket populated by build-artifact's
-        # container jobs (which set CCACHE_BASEDIR=/work) — the cause of the 0%
-        # remote hit rate while the byte-identical asan-build job hit ~99%.
         CCACHE_BASEDIR: /work
       volumes:
         - ${{ github.workspace }}:/work
