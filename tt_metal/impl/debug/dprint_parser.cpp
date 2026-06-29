@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -147,6 +148,7 @@ private:
     size_t string_info_size{};
     std::vector<ParsedStringInfo> parsed_string_info;
     std::map<std::string, EnumInfo, std::less<>> enum_info_cache_;
+    std::unordered_map<uint64_t, std::vector<ttexalens::native_elf::CallstackEntry>> callstack_cache_;
 };
 
 template <uint8_t PointerSize>
@@ -1077,7 +1079,12 @@ auto DevicePrintParserImpl<PointerSize>::resolve_top_callstack(const TopCallstac
     // Trims anything past first terminal
     const auto resolve = [&](uint64_t offset) -> std::vector<CallstackEntry> {
         const uint64_t address = text_start + offset;
-        return ttexalens::native_elf::get_frame_callstack(elfs, address, /*extract_variables=*/false);
+        if (auto it = callstack_cache_.find(address); it != callstack_cache_.end()) {
+            return it->second;
+        }
+        auto frames = ttexalens::native_elf::get_frame_callstack(elfs, address, /*extract_variables=*/false);
+        callstack_cache_.emplace(address, frames);
+        return frames;
     };
 
     if (is_invalid_address(info.pc) || is_invalid_address(info.ra)) {

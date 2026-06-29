@@ -17,20 +17,20 @@
 
 #ifndef LLK_SAN_ENABLE
 
-#elif defined(LLK_SAN_SETTING_ASSERT)
+#elif defined(ENABLE_LLK_ASSERT)
 
 #include "llk_assert.h"
 
-#elif defined(LLK_SAN_SETTING_PRINT)
+#elif defined(DEBUG_PRINT_ENABLED)
 
 #ifdef ENV_LLK_INFRA
-#error "llk::san | fault   | LLK_SAN_SETTING_PRINT is not supported in LLK INFRA, only in metal"
+#error "llk::san | fault   | DEBUG_PRINT_ENABLED is not supported in LLK INFRA, only in metal"
 #endif
 
 #include "api/debug/device_print.h"
 
 #else
-#error "llk::san | fault   | terrible failure :D"
+#error "llk::san | fault   | LLK_SAN_ENABLE is set but neither ENABLE_LLK_ASSERT nor DEBUG_PRINT_ENABLED is defined"
 #endif
 
 namespace llk::san

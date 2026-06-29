@@ -47,9 +47,9 @@ jsbeautifier==1.14.7
 datasets>=2.20,<3
 
 pyarrow>=21.0.0,<22
-torch==2.11.0 ; platform_machine == 'aarch64'
+torch==2.12.1 ; platform_machine == 'aarch64'
 networkx==3.1
-torchvision==0.26.0 ; platform_machine == 'aarch64'
+torchvision==0.27.1 ; platform_machine == 'aarch64'
 torchmetrics==1.9.0
 torch-fidelity==0.3.0
 xlsxwriter==3.0.8
@@ -103,5 +103,5 @@ efficientnet-pytorch==0.7.1
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.11.0 ; platform_machine == 'x86_64'
-torchvision==0.26.0 ; platform_machine == 'x86_64'
+torch==2.12.1 ; platform_machine == 'x86_64'
+torchvision==0.27.1 ; platform_machine == 'x86_64'

@@ -1472,32 +1472,48 @@ def test_demo_text(
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, num_tokens_generated_decode[0]):
+        if not token_accuracy:
+            # Save the decode performance of every iteration for plotting in superset
+            for i in range(1, num_tokens_generated_decode[0]):
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    f"time_to_token_{i}",
+                    profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                    step_warm_up_num_iterations=None,
+                    target=None,
+                )
+
+            # Named decode checkpoints for easy Superset querying
+            for token_pos in [1, 128, 1024, 2048, 4096, 8192]:
+                step_key = token_pos  # iteration index (1-based), matching time_to_token_{i}
+                if step_key < num_tokens_generated_decode[0]:
+                    benchmark_data.add_measurement(
+                        profiler,
+                        0,
+                        "inference_decode",
+                        f"decode_latency_ms_token_{token_pos}",
+                        profiler.get_duration(f"inference_decode_time_{step_key}") * 1000,
+                        step_warm_up_num_iterations=None,
+                        target=None,
+                    )
+
+            # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+            num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
+            inference_decode_time_first_128 = sum(
+                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
+            )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                "avg_decode_time_first_128",
+                inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
                 step_warm_up_num_iterations=None,
                 target=None,
             )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
         if token_accuracy:
             benchmark_data.add_measurement(
                 profiler,
@@ -1519,7 +1535,7 @@ def test_demo_text(
             )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_accuracy" if token_accuracy else "demo_perf",
             ml_model_name=model_name,
             ml_model_type="llm",
             device_name=tt_device_name,

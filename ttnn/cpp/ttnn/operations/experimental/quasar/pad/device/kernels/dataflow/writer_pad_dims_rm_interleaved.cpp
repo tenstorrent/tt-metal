@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -27,7 +28,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
 
     const auto s1 = TensorAccessor(dst_args, dst_addr);
     Noc noc;
