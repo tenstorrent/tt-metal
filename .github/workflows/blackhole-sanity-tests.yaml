@@ -120,8 +120,8 @@ on:
   schedule:
     - cron: "0 */4 * * *"
   # Pause this since not enough runners to support every commit to main
-  # push:
-  #  branches: ["main"]
+  push:
+    branches: ["tdowdall/BHPC-reorg"]
 
 run-name: >-
   ${{ (inputs.enable-watcher == true && 'Blackhole sanity tests (watcher enabled)')
@@ -165,22 +165,9 @@ jobs:
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       ci-test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
 
-  profiler-tests:
-    needs: [resolve-docker-pull-refs, build-artifact]
-    if: ${{ always() && !cancelled() && (inputs.run-profiler-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
-    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: "bh_p150b_civ2_viommu"
-      test-selection: post-commit
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-sanity-tests:
     needs: [resolve-docker-pull-refs, build-artifact]
-    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    if: ${{ always() && !cancelled() && (github.event_name == 'push' && inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
     secrets: inherit
     uses: ./.github/workflows/umd-sanity-tests-impl.yaml
     with:
@@ -191,7 +178,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-unit-tests:
     needs: [resolve-docker-pull-refs, build-artifact, check-harbor]
-    if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    if: ${{ always() && !cancelled() && (github.event_name == 'push' && inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
@@ -204,7 +191,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ops-sanity-tests:
     needs: [resolve-docker-pull-refs, build-artifact]
-    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    if: ${{ always() && !cancelled() && (github.event_name == 'push' && inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
     secrets: inherit
     uses: ./.github/workflows/ops-sanity-impl.yaml
     with:
@@ -217,7 +204,7 @@ jobs:
 
   # Multi-card post-commit tests (QB2/P300 box).
   blackhole-multi-card-fast-sanity-tests:
-    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    if: ${{ always() && !cancelled() && (github.event_name == 'push' && inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
     needs: [build-artifact]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-sanity-tests-impl.yaml
