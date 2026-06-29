@@ -48,7 +48,12 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     bool use_device_op = false,
-    WanFusedNormType norm_type = WanFusedNormType::RMS);
+    WanFusedNormType norm_type = WanFusedNormType::RMS,
+    // Optional Welford reciprocal LUT (LAYERNORM only): row-major fp32 [.., reduce_width]
+    // == [1/1..1/H_local], replicated per device. Read by the writer at kernel start so
+    // the Welford LLK does an array load instead of a soft-float 1/(N+1) per sample.
+    // Absent -> runtime-division fallback. Build with ttnn.create_layer_norm_reciprocals.
+    const std::optional<const ttnn::Tensor>& reciprocals = std::nullopt);
 
 // Allocate the persistent stats DRAM scratch buffer required by the all-gather
 // path (TP>1, whole-row norm). Returns std::nullopt for shapes that don't

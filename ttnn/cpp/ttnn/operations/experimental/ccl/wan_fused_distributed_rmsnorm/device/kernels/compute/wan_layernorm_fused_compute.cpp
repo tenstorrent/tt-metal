@@ -42,6 +42,7 @@
 #include "api/compute/welford.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using norm::kernel_util::compute::combine_welford_partials;
@@ -75,12 +76,43 @@ void kernel_main() {
     // CBs stay O(block_size). For wide LayerNorm the factory sets both together.
     constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(35);
     constexpr uint32_t block_major_post = get_compile_time_arg_val(37);
+    // Reciprocal LUT (CT 39/40): when use_recip_lut, recip_lut_cb holds reduce_width fp32
+    // reciprocals [1/1..1/reduce_width] (reader filled it once from DRAM). The Welford LLK
+    // does an array load instead of a soft-float 1/(N+1) per sample. Absent -> runtime div.
+    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(39);
+    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(40);
 
     // Welford reduces over the local shard: num_tile_cols * TILE_WIDTH features.
     constexpr uint32_t tile_width = 32u;
     constexpr uint32_t reduce_width = num_tile_cols * tile_width;  // = feat_local
-    // No reciprocal LUT in this bringup: reciprocal_size==0 -> runtime division.
+    // Reciprocal-LUT fallback: empty array -> the LLK computes 1/(N+1) by float division.
     constexpr std::array<uint32_t, 0> no_lut{};
+    // LUT pointer: typed std::array<uint32_t, reduce_width>* always (NOT gated on
+    // use_recip_lut) so the discarded if-constexpr branch below still type-checks — this
+    // kernel is a plain function, so both branches are semantically validated. It's only
+    // dereferenced (and the CB only filled) when use_recip_lut. Welford reads it via the
+    // SFPU as the per-sample 1/(N+1) lookup; see wan_rmsnorm_fused_reader.cpp.
+    const std::array<uint32_t, reduce_width>* p_recip = nullptr;
+    if constexpr (use_recip_lut != 0) {
+        cb_wait_front(recip_lut_cb, 1);
+        p_recip = norm::kernel_util::compute::memory::get_pointer_to_cb_data<std::array<uint32_t, reduce_width>>(
+            recip_lut_cb, 0);
+    }
+    // Compile-time dispatch to the LUT or division flavor of each Welford call.
+    auto wf_update = [&](uint32_t dst, uint32_t start) {
+        if constexpr (use_recip_lut != 0) {
+            welford_update<reduce_width>(dst, start, *p_recip);
+        } else {
+            welford_update<0>(dst, start, no_lut);
+        }
+    };
+    auto wf_finalize = [&](uint32_t mean_d, uint32_t scale) {
+        if constexpr (use_recip_lut != 0) {
+            welford_finalize_to_row<reduce_width>(mean_d, scale, *p_recip);
+        } else {
+            welford_finalize_to_row<0>(mean_d, scale, no_lut);
+        }
+    };
 
     constexpr uint32_t welford_in_dst = 0;
     constexpr uint32_t mean_dst = 1;
@@ -117,7 +149,7 @@ void kernel_main() {
                     cb_wait_front(input_cb, block_size);
                     for (uint32_t i = 0; i < block_size; i++) {
                         transpose_wh_tile(input_cb, i, welford_in_dst);
-                        welford_update<0>(welford_in_dst, start_n, no_lut);
+                        wf_update(welford_in_dst, start_n);
                         start_n += tile_width;
                     }
                     cb_pop_front(input_cb, block_size);
@@ -125,11 +157,11 @@ void kernel_main() {
             } else {
                 for (uint32_t col = 0; col < num_tile_cols; col++) {
                     transpose_wh_tile(input_cb, col, welford_in_dst);
-                    welford_update<0>(welford_in_dst, start_n, no_lut);
+                    wf_update(welford_in_dst, start_n);
                     start_n += tile_width;
                 }
             }
-            welford_finalize_to_row<0>(mean_dst, reduce_width - 1, no_lut);  // mean->dst1 row0, var->dst2 row0
+            wf_finalize(mean_dst, reduce_width - 1);  // mean->dst1 row0, var->dst2 row0
             tile_regs_commit();
 
             if constexpr (is_tp_1 != 0) {

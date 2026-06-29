@@ -38,6 +38,24 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !trans_mat.has_value() && !rope_cos.has_value() && !rope_sin.has_value(),
             "LayerNorm does not support fused RoPE yet");
+        // Optional reciprocal LUT: when provided, the writer reads it into a CB and the
+        // Welford LLK does an array load instead of a soft-float 1/(N+1) per sample.
+        // Absent -> the kernel uses the runtime-division fallback (still correct).
+        if (tensor_args.reciprocals.has_value()) {
+            const auto& recip = tensor_args.reciprocals.value();
+            TT_FATAL(recip.dtype() == DataType::FLOAT32, "reciprocals must be FLOAT32, got {}", recip.dtype());
+            TT_FATAL(recip.layout() == Layout::ROW_MAJOR, "reciprocals must be ROW_MAJOR, got {}", recip.layout());
+            TT_FATAL(
+                recip.buffer() != nullptr && recip.storage_type() == StorageType::DEVICE,
+                "reciprocals must be an allocated device tensor");
+            // [.., reduce_width] where reduce_width == per-device H (the Welford reduce
+            // width). The LLK indexes it by sample count 0..reduce_width-1.
+            TT_FATAL(
+                recip.logical_shape()[-1] == input.logical_shape()[3],
+                "reciprocals last dim ({}) must equal per-device H ({})",
+                recip.logical_shape()[-1],
+                input.logical_shape()[3]);
+        }
     }
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input must be on device");
@@ -293,7 +311,8 @@ Tensor wan_fused_distributed_rmsnorm(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    ttnn::experimental::WanFusedNormType norm_type) {
+    ttnn::experimental::WanFusedNormType norm_type,
+    const std::optional<const Tensor>& reciprocals) {
     using OperationType = ttnn::experimental::prim::WanFusedDistributedRmsnormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -330,7 +349,8 @@ Tensor wan_fused_distributed_rmsnorm(
         .transformation_mat = transformation_mat,
         .rope_cos = rope_cos,
         .rope_sin = rope_sin,
-        .persistent_output_buffer = persistent_output_buffer};
+        .persistent_output_buffer = persistent_output_buffer,
+        .reciprocals = reciprocals};
 
     auto outputs = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     // outputs[0] = rmsnorm output, outputs[1] (if present) = stats DRAM scratch.

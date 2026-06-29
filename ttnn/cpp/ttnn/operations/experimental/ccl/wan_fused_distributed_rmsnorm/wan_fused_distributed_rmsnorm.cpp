@@ -36,7 +36,8 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const bool use_device_op,
-    const WanFusedNormType norm_type) {
+    const WanFusedNormType norm_type,
+    const std::optional<const ttnn::Tensor>& reciprocals) {
     if (use_device_op) {
         // Dispatch to the new fused device op. Currently supports TP=1 only.
         return ttnn::prim::wan_fused_distributed_rmsnorm(
@@ -59,7 +60,8 @@ ttnn::Tensor wan_fused_distributed_rmsnorm(
             subdevice_id,
             memory_config,
             compute_kernel_config,
-            norm_type);
+            norm_type,
+            reciprocals);
     }
 
     // LayerNorm is only implemented on the fused device-op path (it needs the

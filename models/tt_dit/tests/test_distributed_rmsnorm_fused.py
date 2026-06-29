@@ -237,6 +237,13 @@ def _build(submesh: ttnn.MeshDevice, cfg: Cfg, tp_axis: int) -> dict:
             scale_p1.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1
         )
         out["shift_b"] = bf16_tensor(shift.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        # Welford reciprocal LUT (LayerNorm): [1/1..1/H_local] fp32, ROW_MAJOR, replicated
+        # per device (H_local = per-device shard width = dim // tp == the Welford reduce
+        # width). The op reads it so the LLK does an array load vs a soft-float 1/(N+1).
+        if cfg.norm == "layernorm":
+            h_local = cfg.dim // cfg.tp
+            recip = torch.tensor([1.0 / (i + 1) for i in range(h_local)], dtype=torch.float32).reshape(1, 1, 1, h_local)
+            out["recip"] = from_torch(recip, device=submesh, layout=ttnn.Layout.ROW_MAJOR, dtype=ttnn.float32)
         return out
 
     # qk path: weight on unless weight_mode="none"; optional broadcast bias when
@@ -387,6 +394,7 @@ def _call_op(
         use_device_op=use_device_op,
         per_head_norm=per_head_norm,
         norm_type=norm_type,
+        reciprocals=(inp.get("recip") if norm_type == ttnn.experimental.WanFusedNormType.LAYERNORM else None),
     )
 
 

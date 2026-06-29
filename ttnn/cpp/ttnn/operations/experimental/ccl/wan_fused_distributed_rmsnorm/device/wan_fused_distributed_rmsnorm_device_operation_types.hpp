@@ -105,6 +105,12 @@ struct WanFusedDistributedRmsnormInputs {
     std::optional<const Tensor> rope_sin;
     // Persistent buffer for the AG of stats (optional; allocated internally if null).
     std::optional<Tensor> persistent_output_buffer;
+    // Welford LayerNorm reciprocal LUT: a row-major fp32 [1, reduce_width] DRAM tensor
+    // holding [1/1, 1/2, ..., 1/reduce_width] (== ttnn.create_layer_norm_reciprocals),
+    // replicated per device. The writer NoC-reads it into a CB at kernel start so the
+    // Welford LLK does an array load instead of a soft-float 1/(N+1) per sample. Only
+    // consumed on the LAYERNORM path; ignored (may be null) for RMS.
+    std::optional<const Tensor> reciprocals;
 };
 
 // Sizing derived from args + input shape. Shared between compute_output_specs
