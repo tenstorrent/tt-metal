@@ -607,6 +607,19 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
+- name: Qwen3-VL-32B unit tests
+  cmd: |
+    uv pip install -r models/demos/qwen3_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K PYTEST_ADDOPTS="--tb=short"
+    pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen3_vl/tests/conftest.py
+  model: qwen3-vl-32b
+  skus:
+    wh_llmbox:
+      timeout: 15
+      tier: 2
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+
 - name: Phi-3-mini unit tests
   cmd: |
     export HF_MODEL=microsoft/Phi-3-mini-128k-instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/microsoft/Phi-3-mini-128k-instruct
