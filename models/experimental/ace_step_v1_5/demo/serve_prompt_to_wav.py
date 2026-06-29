@@ -332,7 +332,7 @@ class AceStepModelRegistry:
         duration_sec = float(kw["duration_sec"])
         seed = int(kw["seed"])
         _ = kw["variant"]
-        _ = kw["lm_variant"]
+        lm_variant = kw["lm_variant"]
         t_schedule = kw["t_schedule"]
         gs = float(kw["guidance_scale"])
         use_adg = bool(kw["use_adg"])
