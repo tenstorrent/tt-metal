@@ -45,5 +45,5 @@ pyyaml==6.0.3
 sympy==1.14.0
 termcolor==3.2.0
 tomli==2.2.1
-torch==2.9.1
+torch==2.12.1
 typing-extensions==4.15.0
