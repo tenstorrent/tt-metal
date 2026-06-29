@@ -164,6 +164,10 @@ class DiffusionConfig:
     # denoise, zeroed on encoder passes.
     use_self_conditioning: bool = True  # verified
 
+    def __post_init__(self) -> None:
+        if self.max_denoise_steps <= 0:
+            raise ValueError("max_denoise_steps must be positive")
+
 
 @dataclass(frozen=True)
 class VisionConfig:

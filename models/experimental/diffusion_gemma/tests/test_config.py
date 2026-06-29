@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from models.experimental.diffusion_gemma.config import DiffusionGemmaConfig, TextConfig
+from models.experimental.diffusion_gemma.config import DiffusionConfig, DiffusionGemmaConfig, TextConfig
 
 # Repo root: honor TT_METAL_HOME, else derive from this file's location so the
 # config-drift guard below actually runs wherever the repo is checked out (a
@@ -26,6 +26,12 @@ CFG_26B = os.path.join(REPO, "models/demos/gemma4/configs/gemma-4-26B-A4B-it/con
 
 def test_max_context_is_256k():
     assert DiffusionGemmaConfig().max_context == 262144  # 256 canvas * 1024 blocks
+
+
+@pytest.mark.parametrize("max_denoise_steps", [0, -1])
+def test_diffusion_config_rejects_nonpositive_denoise_steps(max_denoise_steps):
+    with pytest.raises(ValueError, match="max_denoise_steps must be positive"):
+        DiffusionConfig(max_denoise_steps=max_denoise_steps)
 
 
 def test_full_attention_layer_count_matches_pattern():
