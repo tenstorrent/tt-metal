@@ -29,8 +29,6 @@ underflow and reducing accept-boundary flips at the 256-token canvas length.
 
 from __future__ import annotations
 
-from typing import Optional
-
 import ttnn
 
 
@@ -212,14 +210,3 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
     if len(parts) == 1:
         return parts[0]
     return ttnn.concat(parts, dim=-1)
-
-
-def softmax(logits, temperature: float = 1.0, *, compute_kernel_config: Optional[object] = None):
-    """``softmax(logits / T)`` over the vocab axis (the self-conditioning soft-embed prob)."""
-    z = temperature_scale(logits, temperature)
-    if compute_kernel_config is not None:
-        probs = ttnn.softmax(z, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config)
-    else:
-        probs = ttnn.softmax(z, dim=-1, numeric_stable=True)
-    _deallocate_scaled_if_temporary(z, logits)
-    return probs
