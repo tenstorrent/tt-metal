@@ -1,0 +1,1 @@
+{"event":"read_sdpa_implementation","details":"Read program descriptor + 3 kernels (compute/reader/writer). is_causal accepted but NOT used in kernel logic; only attn_mask is handled via has_mask CT arg. Online softmax recurrence in compute.cpp phases 0-14. Q-blocks outer, KV-blocks inner.","ts":"2026-06-29T11:34:04+00:00"}

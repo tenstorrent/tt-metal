@@ -96,7 +96,7 @@ SUPPORTED = {
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
-    "mask_mode": ["none", "custom"],
+    "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
 }
 
@@ -119,8 +119,9 @@ SUPPORTED = {
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
     # causal + cross-attention is structurally invalid for the triangular mask.
-    # Kept commented until causal mask_mode enters SUPPORTED via refinement.
-    # {"mask_mode": "causal", "attention_kind": "cross"},
+    # Causal masking requires S_q == S_kv (decoder self-attention); cross-attn
+    # has S_q != S_kv by definition, so the triangular mask is undefined.
+    {"mask_mode": "causal", "attention_kind": "cross"},
 ]
 
 
@@ -248,7 +249,18 @@ def _make_padding_mask(query, key, attn_mask, *, is_causal):
     Returns (combined_mask, combined_mask_is_per_head) where combined_mask
     is a ttnn.Tensor or None.  When S_kv is tile-aligned, no padding mask
     is needed and the original attn_mask is returned unchanged.
+
+    When is_causal=True: the causal mask is generated on-device and naturally
+    masks out all positions where col > row. For self-attention (S_q == S_kv),
+    padded KV positions always have col > row (since they're past the valid
+    S_kv range), so the causal mask subsumes the padding mask. Return None
+    to let the reader's causal path handle everything.
     """
+    if is_causal:
+        # Causal mask generated on-device naturally handles padded KV positions.
+        # For self-attention, padded columns have col > row → -inf in the causal
+        # pattern, which is exactly what the padding mask would add.
+        return None, False
     import torch
 
     B = list(query.shape)[0]

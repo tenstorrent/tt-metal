@@ -53,6 +53,11 @@ def create_program_descriptor(
     num_cores, all_cores, _, _, u1, u2 = ttnn.split_work_to_cores(grid_size, num_work_units, row_wise=True)
     has_mask = attn_mask is not None
     mask_is_per_head = has_mask and (attn_mask.shape[1] == H_q)
+    # When is_causal=True, the reader generates the causal mask on-device
+    # (no mask tensor needed). The compute kernel's mask-add path is used,
+    # so has_mask is also True when is_causal.
+    if is_causal:
+        has_mask = True
     num_q_blocks = (S_q_tiles + B_q_t - 1) // B_q_t
     num_kv_blocks = (S_kv_tiles + B_kv_t - 1) // B_kv_t
     num_o_tiles = B_q_t * D_t
@@ -104,7 +109,9 @@ def create_program_descriptor(
         cb(0, num_o_tiles),  # cb_q (input dtype)
         cb(1, 2 * B_kv_t * D_t),  # cb_k (input dtype)
         cb(2, 2 * B_kv_t * D_t),  # cb_v (input dtype)
-        cb(3, 2 * num_score_tiles),  # cb_mask (input dtype)
+        # cb_mask: bf16 when causal (reader generates bf16 tiles on-device),
+        # input dtype when custom mask (read from DRAM in input dtype)
+        cb_bf16(3, 2 * num_score_tiles) if is_causal else cb(3, 2 * num_score_tiles),  # cb_mask
         # Constants: always bf16. The reader fills scale_factor with bf16 bits,
         # and calculate_and_prepare_reduce_scaler fills scalers in the CB's format.
         # The FPU reads these through srcA/srcB (TF32) — bf16 is lossless for 1.0
@@ -126,8 +133,8 @@ def create_program_descriptor(
         cb_interm(31, num_o_tiles),  # cb_o_accum (PV matmul scratch)
     ]
 
-    # Reader CT args: [has_mask, H_q, H_kv, mask_is_per_head, ...Q_acc, ...K_acc, ...V_acc, ...mask_acc]
-    reader_ct_args = [1 if has_mask else 0, H_q, H_kv, 1 if mask_is_per_head else 0]
+    # Reader CT args: [has_mask, is_causal, H_q, H_kv, mask_is_per_head, ...Q_acc, ...K_acc, ...V_acc, ...mask_acc]
+    reader_ct_args = [1 if has_mask else 0, 1 if is_causal else 0, H_q, H_kv, 1 if mask_is_per_head else 0]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(key).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
@@ -155,7 +162,7 @@ def create_program_descriptor(
         rt.append(key.buffer_address())
         rt.append(value.buffer_address())
         rt.append(scale_bits)
-        rt.append(attn_mask.buffer_address() if has_mask else 0)
+        rt.append(attn_mask.buffer_address() if (has_mask and not is_causal) else 0)
         reader_rt_args[core.x][core.y] = rt
 
     reader_kernel = ttnn.KernelDescriptor(
