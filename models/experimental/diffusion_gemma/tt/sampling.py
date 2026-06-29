@@ -132,9 +132,21 @@ def _validate_ttnn_rand_seed(seed: int) -> int:
     return seed
 
 
+def _validate_gumbel_noise_shape(shape, *, require_vocab_axis: bool = False) -> tuple[int, ...]:
+    shape = tuple(shape)
+    if not shape:
+        raise ValueError("Gumbel noise shape must be non-empty")
+    if any(dim <= 0 for dim in shape):
+        raise ValueError("Gumbel noise shape dimensions must be positive")
+    if require_vocab_axis and len(shape) < 2:
+        raise ValueError("Gumbel noise shape must include at least a sample axis and a vocab axis")
+    return shape
+
+
 def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
     """Generate device Gumbel(0,1) noise with a deterministic TTNN rand seed."""
     seed = _validate_ttnn_rand_seed(seed)
+    shape = _validate_gumbel_noise_shape(shape)
     u = ttnn.rand(
         shape,
         device=device,
@@ -157,9 +169,7 @@ def sample_gumbel_noise_with_permuted_vocab(shape, *, device, seed: int, dtype=t
     element while avoiding that correlation in W4 distributional validation.
     """
     seed = _validate_ttnn_rand_seed(seed)
-    shape = tuple(shape)
-    if len(shape) < 2:
-        raise ValueError("shape must include at least a sample axis and a vocab axis")
+    shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)
 
     rand_shape = (shape[-1], *shape[1:-1], shape[0])
     permute_order = (len(shape) - 1, *range(1, len(shape) - 1), 0)
@@ -191,7 +201,7 @@ def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk
     if vocab_chunk_size <= 0:
         raise ValueError("vocab_chunk_size must be positive")
 
-    shape = tuple(shape)
+    shape = _validate_gumbel_noise_shape(shape, require_vocab_axis=True)
     vocab_size = shape[-1]
     parts = []
     for offset in range(0, vocab_size, vocab_chunk_size):

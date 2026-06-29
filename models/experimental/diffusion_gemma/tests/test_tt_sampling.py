@@ -67,6 +67,28 @@ def test_ttnn_gumbel_noise_helpers_reject_nonpositive_seed(seed):
         TS.sample_gumbel_noise_by_vocab_chunks((1, 1, 32, 32), device=device, seed=seed)
 
 
+@pytest.mark.parametrize("shape", [(), (1, 0, 32), (1, -2, 32)])
+def test_ttnn_gumbel_noise_helpers_reject_bad_shape_dimensions(shape):
+    device = _FakeDevice(num_devices=1)
+
+    with pytest.raises(ValueError, match="shape"):
+        TS.sample_gumbel_noise(shape, device=device, seed=47472)
+    with pytest.raises(ValueError, match="shape"):
+        TS.sample_gumbel_noise_with_permuted_vocab(shape, device=device, seed=47472)
+    with pytest.raises(ValueError, match="shape"):
+        TS.sample_gumbel_noise_by_vocab_chunks(shape, device=device, seed=47472)
+
+
+@pytest.mark.parametrize("shape", [(32,), (1,)])
+def test_vocab_axis_gumbel_noise_helpers_require_sample_and_vocab_axes(shape):
+    device = _FakeDevice(num_devices=1)
+
+    with pytest.raises(ValueError, match="sample axis and a vocab axis"):
+        TS.sample_gumbel_noise_with_permuted_vocab(shape, device=device, seed=47472)
+    with pytest.raises(ValueError, match="sample axis and a vocab axis"):
+        TS.sample_gumbel_noise_by_vocab_chunks(shape, device=device, seed=47472)
+
+
 def test_permuted_vocab_gumbel_noise_deallocates_pre_permute_tensor(monkeypatch):
     calls = {}
     raw = _FakeTensor("raw")
