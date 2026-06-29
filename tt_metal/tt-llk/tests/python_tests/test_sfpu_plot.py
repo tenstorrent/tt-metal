@@ -1253,6 +1253,9 @@ def _plot_and_print(
 #   clamp_negative          enable the kernel's negative-input clamp
 #   dest_acc / unpack_to_dest  override the format-derived accumulator defaults
 #   name                    custom test id (name of file) (defaults to "<Op>-<fmt>")
+#   input_dimensions        sample-point count (defaults to [32, 32] = 1024, one
+#                           tile). Fine for bf16/fp16, but samples fp32's grid
+#                           sparsely; for denser fp32 use [32, 32*K] -> 1024*K.
 
 BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 FP16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
@@ -1296,7 +1299,14 @@ CASES = [
     # bfloat16 demo: log over a positive (in-domain) range.
     Case(op=MathOperation.Log, spec=StimuliSpec.ramp(low=0.5, high=10.0)),
     # float32 demo: sqrt over [0, 100] (auto fp32 dest-accumulator path).
-    Case(op=MathOperation.Sqrt, spec=StimuliSpec.ramp(low=0.0, high=100.0), fmt=FP32),
+    # 4 tiles (4096 points) so fp32's fine grid is sampled more densely than
+    # the single-tile default.
+    Case(
+        op=MathOperation.Sqrt,
+        spec=StimuliSpec.ramp(low=0.0, high=100.0),
+        fmt=FP32,
+        input_dimensions=[32, 32 * 4],
+    ),
     # intervals demo: 1/x sampled on both sides of 0 but never on the
     # singularity at 0 (the gap between the two bands is skipped).
     Case(
