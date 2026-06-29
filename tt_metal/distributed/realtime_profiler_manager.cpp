@@ -1161,6 +1161,13 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
 
 void RealtimeProfilerManager::publish_device_profiler_sync_anchor(
     uint32_t chip_id, double host_anchor, double device_anchor, double frequency, const std::string& core_label) {
+    // Accumulate-only for now: in accumulate mode the device profiler skips its own
+    // syncDeviceHost handshake, so it borrows the rt profiler's host<->device fit. In
+    // non-accumulate mode the device profiler runs its own sync, so don't publish --
+    // leave realtime_sync_line unset and let updateTracyContext use that sync instead.
+    if (!MetalContext::instance(context_id_).rtoptions().get_profiler_accumulate()) {
+        return;
+    }
     // Mirror the rt context's calibration point onto the device (Tracy) profiler so its
     // worker zones host-align to the same line as the rt records. We pass the raw anchor
     // (host TSC, device cycle, frequency) -- NOT a finished SyncInfo -- because the device
