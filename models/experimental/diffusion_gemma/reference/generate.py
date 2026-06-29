@@ -46,9 +46,32 @@ def make_replay_canvas_init_fn(host_canvases) -> BlockCanvasFn:
 
     def init_canvas_fn(block_idx: int, prefix_tokens: torch.Tensor) -> torch.Tensor:
         del prefix_tokens
+        if block_idx < 0 or block_idx >= len(canvases):
+            raise IndexError(f"replay canvas block index {block_idx} out of range for {len(canvases)} blocks")
         return canvases[block_idx].clone()
 
     return init_canvas_fn
+
+
+def make_replay_noise_fn(host_noise) -> BlockNoiseFn:
+    """Create a block/step noise hook that replays fixed host tensors."""
+    blocks = [[noise.clone() for noise in block] for block in host_noise]
+
+    def noise_for_block(block_idx: int) -> NoiseFn:
+        if block_idx < 0 or block_idx >= len(blocks):
+            raise IndexError(f"replay noise block index {block_idx} out of range for {len(blocks)} blocks")
+
+        def noise_for_step(step: int) -> torch.Tensor:
+            if step < 0 or step >= len(blocks[block_idx]):
+                raise IndexError(
+                    f"replay noise step index {step} out of range for block {block_idx} "
+                    f"with {len(blocks[block_idx])} steps"
+                )
+            return blocks[block_idx][step].clone()
+
+        return noise_for_step
+
+    return noise_for_block
 
 
 def _validate_generate_args(
