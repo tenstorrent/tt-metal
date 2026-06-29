@@ -423,13 +423,6 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
         "{}). "
         "Call LaunchProgram on another device first.",
         device_id);
-    // Kernel scratchpads are fast/mesh-dispatch only (see LaunchProgram). This is the slow-dispatch
-    // multi-local-device mesh route (devices 2..N), which bypasses LaunchProgram — guard it too.
-    TT_FATAL(
-        !program.impl().has_scratchpads(),
-        "Program has kernel scratchpad(s), which require fast/mesh dispatch. The slow-dispatch multi-device path "
-        "(DispatchCompiledProgramToDevice) is not supported for scratchpad-bearing programs (target device {}).",
-        device_id);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     TT_FATAL(
@@ -838,17 +831,6 @@ void LaunchProgram(
 }
 
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    // Kernel scratchpads are fast/mesh-dispatch only. Their framework-allocated L1 base address is
-    // delivered as a common runtime arg, but on this slow-dispatch path WriteRuntimeArgsToDevice writes
-    // the CRTA buffer to the device BEFORE ConfigureDeviceWithProgram allocates the ephemeral L1
-    // (allocate_dataflow_buffers / allocate_scratchpads), so the address would never reach the kernel.
-    // Reject up front rather than silently shipping a 0 / stale scratchpad base address. Note: this is
-    // the funnel for all slow-dispatch program launches; the fast/mesh path (EnqueueMeshWorkload) never
-    // reaches here. (Do not gate on force_slow_dispatch — it is false on the SDMeshCommandQueue route.)
-    TT_FATAL(
-        !program.impl().has_scratchpads(),
-        "Program has kernel scratchpad(s), which require fast/mesh dispatch (EnqueueMeshWorkload). It cannot "
-        "be run via the slow-dispatch LaunchProgram path.");
     {  // Profiler scope start
         ZoneScoped;
         /// This function is shared between FD and SD.
@@ -974,6 +956,11 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     program.impl().validate_circular_buffer_core_ranges(validation_device);
     program.impl().validate_circular_buffer_region(validation_device);
     program.impl().allocate_dataflow_buffers(validation_device);
+    // Metal 2.0 scratchpads stack on the DFB allocators, so allocate them AFTER the DFBs are placed and
+    // BEFORE WriteRuntimeArgsToDevice commits the CRTAs (allocate_scratchpads patches each scratchpad's
+    // allocated L1 base address into the kernel's CRTA buffer). The slow-dispatch program-execution paths
+    // reorder Configure ahead of WriteRuntimeArgsToDevice precisely so this patch lands first.
+    program.impl().allocate_scratchpads(validation_device);
     program.impl().validate_dataflow_buffer_region(validation_device);
 
     bool is_emulated = false;
