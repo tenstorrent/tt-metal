@@ -1073,6 +1073,17 @@ void py_module_types(nb::module_& mod) {
             nb::keep_alive<0, 1>(),
             R"pbdoc(
                 Iterate over (MeshCoordinateRange, ProgramDescriptor) pairs.
+            )pbdoc")
+        .def_rw(
+            "semaphores",
+            &tt::tt_metal::experimental::MeshProgramDescriptor::semaphores,
+            R"pbdoc(
+                Optional op-internal GlobalSemaphores parked on the descriptor. The generic_op
+                adapter copies them into the cached workload's shared_variables at program-cache
+                miss, keeping each semaphore's device-side L1 allocation alive for the cached
+                workload's lifetime — so a multi-device CCL op can create its cross-device
+                semaphore once and reuse it across program-cache hits instead of re-creating it
+                (and re-barriering) every call. Excluded from the program-cache hash. Default empty.
             )pbdoc");
 
     // TODO_NANOBIND: AFFECTS BEHAVIOR

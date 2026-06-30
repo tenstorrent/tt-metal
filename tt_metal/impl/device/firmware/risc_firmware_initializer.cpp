@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <chrono>
 #include <future>
 #include <set>
@@ -60,6 +61,13 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
 
 int firmware_wait_timeout_ms() {
     const auto& rtoptions = MetalContext::instance().rtoptions();
+    // Explicit override (ms) wins. Needed for large-chip-count functional ttsim (.so): the
+    // default 10s below is too short for FW boot to complete in wall-clock when many chips are
+    // simulated in one process (e.g. a 32-chip multichip craq-sim runs at ~1 kHz). 0 => infinite.
+    // The caller's wall-clock backstop still bounds a genuine hang.
+    if (const char* env = std::getenv("TT_METAL_FW_INIT_TIMEOUT_MS")) {
+        return std::atoi(env);
+    }
     // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
     // llrt treats timeout_ms==0 on sim as infinite wait.
     if (rtoptions.get_simulator_enabled() && rtoptions.get_simulator_path().extension() != ".so") {

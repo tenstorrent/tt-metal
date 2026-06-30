@@ -1,0 +1,119 @@
+# Topology matrix for the deterministic multi-device (craq-sim) pytest runner.
+#
+# Consumed by scripts/run_multidevice_sim_pytest.py. Each entry is one simulated
+# multi-chip topology: a sim backend (.so) + a mock cluster descriptor (which chips)
+# + a mesh-graph descriptor (mesh dims, ring-vs-linear). One process = one topology,
+# so the runner iterates these serially, each in its own process.
+#
+# WHY a config matrix (not agent judgment): verification determinism must come from a
+# script + declarative config, so the same op always runs against the same topology env.
+#
+# ── Machine config ──────────────────────────────────────────────────────────────────
+# The sim .so + craq-sim descriptors live OUTSIDE the repo (they are built/staged per
+# ~/ccl_op_gen/SETUP.md, and are host-specific). `defaults` below resolves each from an
+# env var if set, else the documented staged path. On a differently-laid-out host, set
+# TT_SIM_BH_SO / TT_SIM_WH_SO / CRAQSIM_DATA and nothing else changes.
+#
+# Topology path fields use Python str.format placeholders ({sim_bh_so}, {craqsim_data}, ...)
+# resolved against the `defaults` below.
+
+defaults:
+  sim_bh_so:
+    env: TT_SIM_BH_SO
+    default: /localdev/wransom/sim-bh/libttsim.so
+  sim_wh_so:
+    env: TT_SIM_WH_SO
+    default: /localdev/wransom/sim-wh/libttsim.so
+  craqsim_data:
+    env: CRAQSIM_DATA
+    default: /localdev/wransom/craq-sim/data
+  # Sim clock the device CQ waits before re-checking (consumed inside libttsim.so).
+  cq_wait_clocks: 200
+  # Sim hang watchdog: abort after N simulated clocks with NO progress on any chip
+  # (libttsim.cpp hang_watchdog; resets on progress, so it only fires on a real deadlock).
+  hang_watchdog_clocks: 2000000
+  # Wall-clock backstop per topology (an 8-chip sim run is ~30-90s; this catches a
+  # livelock the clock-watchdog can't, since a livelock still "makes progress").
+  wall_clock_timeout_s: 900
+
+topologies:
+  # ── Phase 1: the proven topology ────────────────────────────────────────────────────
+  # Blackhole 8x P150, all-MMIO, torus-x mesh. point_to_point has no BH skip and is
+  # verified working on this sim (SETUP.md). FABRIC_1D is set by the test, not here.
+  - name: bh_8xP150_p2p
+    arch: blackhole
+    sim_so: "{sim_bh_so}"
+    cluster_desc: "{craqsim_data}/bh/blackhole_8xP150.yaml"
+    mesh_graph_desc: "{craqsim_data}/bh/blackhole_8xP150_torus_x_mesh_graph_descriptor.textproto"
+    # The mesh-graph descriptor fixes the mesh shape. A test/op that opens a DIFFERENT
+    # mesh_device shape will hang fabric init ("Fabric Router Sync: Timeout") — so the
+    # generated op's acceptance test MUST open this shape with this fabric_config.
+    mesh_shape: [2, 4]
+    fabric_config: FABRIC_1D
+    applies_to_ops: [point_to_point]
+    grade_primary: true   # run_eval grades the dashboard subset on THIS topology only (fast, deterministic);
+                          # the other p2p topologies are coverage, exercised by direct `--op` fan-out.
+    required: true        # failure of a required topology => non-zero aggregate exit
+    extra_env: {}
+
+  # ── BH coverage topology #2: Galaxy 4x2 (8 chips) ────────────────────────────────────
+  # `--op point_to_point` now fans out over EVERY applies_to_ops topology (the runner gives each its
+  # own per-topology junit, so no overwrite); the env-driven confirmation test adapts its mesh shape
+  # per topology. So this is in the p2p coverage set, not just --topology-only.
+  - name: bh_galaxy_4x2_p2p
+    arch: blackhole
+    sim_so: "{sim_bh_so}"
+    cluster_desc: "{craqsim_data}/bh/blackhole_8xGalaxy_4x2.yaml"
+    mesh_graph_desc: "{craqsim_data}/bh/blackhole_8xGalaxy_4x2_torus_x_mesh_graph_descriptor.textproto"
+    mesh_shape: [4, 2]    # dims [4,2] (LINE, RING); 8 chips. VALIDATED 2026-06-25: p2p green.
+    fabric_config: FABRIC_1D
+    applies_to_ops: [point_to_point]
+    required: false
+    extra_env: {}
+
+  # ── BH coverage topology #3: bh6u 8x4 (32 chips — Galaxy-class) ───────────────────────
+  # The largest simulatable single-host BH config. host_topology [1,1] => ONE python process sees
+  # all 32 chips (no MPI), so it runs in this single-process runner. dims [8,4] (LINE, RING) torus_x.
+  # Heavier sim (32 chips) => a larger wall-clock backstop.
+  - name: bh_bh6u_8x4_p2p
+    arch: blackhole
+    sim_so: "{sim_bh_so}"
+    cluster_desc: "{craqsim_data}/bh/blackhole_bh6u_8x4_torus_x_cluster_desc.yaml"
+    mesh_graph_desc: "{craqsim_data}/bh/blackhole_bh6u_8x4_torus_x_mesh_graph_descriptor.textproto"
+    mesh_shape: [8, 4]    # dims [8,4] (LINE, RING); 32 chips, single host.
+    fabric_config: FABRIC_1D
+    applies_to_ops: [point_to_point]
+    required: false
+    wall_clock_timeout_s: 1800   # 32-chip sim is ~4x heavier than 8-chip
+    # The 32-chip sim at ~0.9 kHz needs BOTH init timeouts scaled up (8-chip runs at ~3 kHz):
+    #   - FW-init wait defaults to 10s (firmware_wait_timeout_ms) → "Device N init: failed to initialize FW"
+    #   - fabric router ethernet handshake defaults to 15s → "Fabric Router Sync: Timeout"
+    #   - the per-test pytest-timeout (pytest.ini default 300s) is too short for the shard/transfer/
+    #     sync over 32 chips at ~0.8 kHz → PYTEST_TIMEOUT bumps it (stays under wall_clock_timeout_s).
+    extra_env:
+      TT_METAL_FW_INIT_TIMEOUT_MS: 120000
+      TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: 180000
+      PYTEST_TIMEOUT: 1500
+
+  # ── NOT wired (multi-host): bh_2x4_qb ────────────────────────────────────────────────
+  # blackhole_2x4_qb_torus_x_mesh_graph_descriptor has host_topology [1,2] (spans TWO QuietBox
+  # hosts) → it needs an MPI/multi-host launch, which this single-process runner does NOT do.
+  # Left out deliberately; revisit if/when the runner grows multi-host support.
+
+  # ── Phase 2 (declared, not yet exercised here): WH T3K all-MMIO for all_gather ───────
+  # all_gather is @skip_for_blackhole, so it needs the WH sim. Uses Nachiket's shipped
+  # all-MMIO descriptor (fixes the remote-chip CQ-drain hang). sim-wh must be rebuilt
+  # from the current craq-sim before use (see SETUP.md / project notes).
+  - name: wh_t3k_allmmio_all_gather
+    arch: wormhole_b0
+    sim_so: "{sim_wh_so}"
+    # All-MMIO cluster (Nachiket's fix for the remote-chip CQ-drain hang). The mesh-graph
+    # descriptor is the (1,8) line that the existing t3000 all_gather test opens — it ships
+    # in the tt-metal tree, not craq-sim's data/, so it uses the {repo} placeholder.
+    cluster_desc: "{craqsim_data}/wh/wormhole_t3k_all_mmio.yaml"
+    mesh_graph_desc: "{repo}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto"
+    mesh_shape: [1, 8]    # matches test_minimal_all_gather_async.py's mesh_device=[(1,8)]
+    fabric_config: FABRIC_1D
+    applies_to_ops: [all_gather]
+    required: true        # VALIDATED 2026-06-25: test_all_gather_async gather_dim_0/fabric_linear PASS on the WH all-MMIO sim
+    extra_env: {}

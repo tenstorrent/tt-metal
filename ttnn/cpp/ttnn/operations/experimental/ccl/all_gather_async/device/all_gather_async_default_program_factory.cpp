@@ -5,6 +5,7 @@
 #include "all_gather_async_default_program_factory.hpp"
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -591,14 +592,15 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
             sender_writer_compile_args);
     }
 
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), barrier_mcast_forward_args.begin(), barrier_mcast_forward_args.end());
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
-    sender_writer_compile_args.insert(
-        sender_writer_compile_args.end(), barrier_mcast_backward_args.begin(), barrier_mcast_backward_args.end());
+    // Pack the bidirectional line-route block (fwd-unicast, fwd-mcast, bwd-unicast, bwd-mcast)
+    // in the exact order minimal_default_writer reads it. Route args are computed above by
+    // ccl::get_forward_backward_line_*; this helper owns only the host<->kernel layout contract.
+    ttnn::ccl::dataflow::append_ccl_line_route_ct_args(
+        sender_writer_compile_args,
+        unicast_forward_args,
+        barrier_mcast_forward_args,
+        unicast_backward_args,
+        barrier_mcast_backward_args);
 
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);

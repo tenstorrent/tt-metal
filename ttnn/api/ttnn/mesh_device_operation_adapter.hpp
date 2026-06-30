@@ -516,7 +516,22 @@ public:
                         auto bindings = tt::tt_metal::resolve_bindings(
                             program, desc, collected.buffers, collected.num_input_buffers);
                         mesh_workload.add_program(device_range, std::move(program));
-                        shared_variables[device_range] = shared_variables_t{.resolved_bindings = std::move(bindings)};
+                        // Park any op-internal GlobalSemaphores the descriptor declared into the
+                        // cached shared_variables (via workload_descriptor.semaphores, which already
+                        // holds resources alive for the cached workload's lifetime — see the struct
+                        // comment). This is the B1 fix: a MeshProgramDescriptor.semaphores entry
+                        // keeps its device-side L1 allocation valid across program-cache reuse, so a
+                        // CCL op can create its cross-device semaphore once and reuse it on hits.
+                        // SFINAE-gated: only generic_op's MeshProgramDescriptor attributes declare a
+                        // `semaphores` field; every other descriptor-factory op (Typecast, Bernoulli,
+                        // ...) shares this template and has no such field, so it skips this.
+                        tt::tt_metal::WorkloadDescriptor parked_resources;
+                        if constexpr (requires { attrs.semaphores; }) {
+                            parked_resources.semaphores = attrs.semaphores;
+                        }
+                        shared_variables[device_range] = shared_variables_t{
+                            .workload_descriptor = std::move(parked_resources),
+                            .resolved_bindings = std::move(bindings)};
                     };
 
                 if constexpr (create_descriptor_uses_mesh_dispatch_coordinate()) {
