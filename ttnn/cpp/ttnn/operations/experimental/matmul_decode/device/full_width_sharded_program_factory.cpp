@@ -59,7 +59,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "MatmulDecode: in0_tile_size: {}, in1_tile_size: {}, out_tile_size: {}",
         in0_tile_size,
@@ -96,12 +96,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         "Output tensor tile width {} must be equal to the tile width 32",
         output_tile_width);
 
-    log_info(tt::LogOp, "MatmulDecode: inputA_tile: {}", inputA_tile);
+    log_debug(tt::LogOp, "MatmulDecode: inputA_tile: {}", inputA_tile);
 
     // Full output width (in tiles) to shard across the core grid.
     uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
     uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
-    // uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
 
     IDevice* device = input_tensor_a.device();
     auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
@@ -121,7 +120,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     TT_FATAL(
         inputA_shard_shape[0] == (M_tiles * inputA_tile_height),
         "Input tensor A shard shape {} [0] must be equal to M_tiles {} * tile height {}",
-        inputA_shard_shape,
+        inputA_shard_shape[0],
         M_tiles,
         inputA_tile_height);
     TT_FATAL(
@@ -132,8 +131,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
     TT_FATAL(
         inputB_shard_shape[0] == (K_tiles * tt::constants::TILE_HEIGHT),
-        "Input tensor A shard shape {} [1] must be equal to K_tiles {} * tile height {}",
-        inputA_shard_shape,
+        "Input tensor B shard shape {} [0] must be equal to K_tiles {} * tile height {}",
+        inputB_shard_shape[0],
         K_tiles,
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
