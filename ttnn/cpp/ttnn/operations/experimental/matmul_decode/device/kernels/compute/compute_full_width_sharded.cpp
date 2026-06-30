@@ -6,6 +6,8 @@
 
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
 using std::uint32_t;
 
@@ -71,14 +73,19 @@ void kernel_main() {
     // tiles per sender slice in full_in0 (== reader's shard_num_tiles)
     constexpr uint32_t sender_slice_tiles = M_tiles * inA_K_tiles_per_core;
 
+    CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
+
     // Gathered A is a regular CB (reader publishes via push_back).
-    cb_wait_front(in0_cb_id, in0_num_tiles);
+    in0_cb.wait_front(in0_num_tiles);
     // in1/out are buffer-backed (sharded) CBs: their data is already resident in L1.
 
-    mm_block_init(in0_cb_id, in1_cb_id, out_cb_id, false, out_block_w, out_block_h, in0_block_w);
+    matmul_block_init(in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
     // Reserve the whole output shard ([M_tiles x N_tiles_per_core] tiles, row-major).
-    cb_reserve_back(out_cb_id, M_tiles * N_tiles_per_core);
+    out_cb.reserve_back(M_tiles * N_tiles_per_core);
     for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
         tile_regs_acquire();
         for (uint32_t sender = 0; sender < num_senders; ++sender) {
@@ -101,7 +108,7 @@ void kernel_main() {
         }
         tile_regs_release();
     }
-    cb_push_back(out_cb_id, M_tiles * N_tiles_per_core);
+    out_cb.push_back(M_tiles * N_tiles_per_core);
 
-    cb_pop_front(in0_cb_id, in0_num_tiles);
+    in0_cb.pop_front(in0_num_tiles);
 }

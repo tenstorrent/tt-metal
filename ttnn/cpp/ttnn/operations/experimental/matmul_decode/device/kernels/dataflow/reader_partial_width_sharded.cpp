@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 
 // Partial-width-sharded matmul activation (in0 / A) reader.
 //
@@ -76,6 +77,7 @@ void kernel_main() {
     CircularBuffer full_in0_cb(full_in0_cb_index);
     Semaphore<> stage_sem(stage_sem_id);
     Semaphore<> done_sem(done_sem_id);
+    UnicastEndpoint hub;
 
     // B (in1) is already resident in L1; just publish it to compute.
     in1_cb.reserve_back(in1_num_tiles);
@@ -98,12 +100,12 @@ void kernel_main() {
         // offset.  full_in0_cb is allocated identically on every core, so the
         // local write pointer is also the destination address on the hub.  When
         // this core *is* the owning hub the write is a NoC loopback to its own
-        // coordinates (a local copy).  get_noc_addr applies the per-NOC
-        // coordinate translation, so the untranslated hub coords are correct on
-        // whichever NOC this kernel runs on (host picks the hub-appropriate NOC).
+        // coordinates (a local copy).  The NoC applies the per-NOC coordinate
+        // translation, so the untranslated hub coords are correct on whichever
+        // NOC this kernel runs on (host picks the hub-appropriate NOC).
         const uint32_t dst_l1_addr = full_in0_cb.get_write_ptr() + dst_offset_bytes;
-        const uint64_t dst_noc_addr = get_noc_addr(hub_x, hub_y, dst_l1_addr);
-        noc_async_write(in0_cb.get_read_ptr(), dst_noc_addr, shard_size_bytes);
+        noc.async_write(
+            in0_cb, hub, shard_size_bytes, {.offset_bytes = 0}, {.noc_x = hub_x, .noc_y = hub_y, .addr = dst_l1_addr});
         // Ensure the slice has landed on the hub before reporting in.
         noc.async_write_barrier();
         stage_sem.up(noc, hub_x, hub_y, 1);

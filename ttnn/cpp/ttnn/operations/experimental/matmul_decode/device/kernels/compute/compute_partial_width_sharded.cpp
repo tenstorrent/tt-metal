@@ -7,6 +7,8 @@
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
 using std::uint32_t;
 
@@ -74,14 +76,22 @@ void kernel_main() {
     // in0 row stride within a sender slice (K-tiles per M-row) == matmul kt_dim.
     constexpr uint32_t in0_block_w = inA_K_tiles_per_core;
 
-    // ---- Phase 1: partial matmul ----
-    cb_wait_front(full_in0_cb_id, full_in0_num_tiles);
-    cb_wait_front(in1_cb_id, in1_num_tiles);
+    CircularBuffer full_in0_cb(full_in0_cb_id);
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+    CircularBuffer partial_cb(partial_cb_id);
+    CircularBuffer reduce_cb(reduce_cb_id);
 
-    mm_block_init(full_in0_cb_id, in1_cb_id, partial_cb_id, false, out_block_w, out_block_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(full_in0_cb_id, in1_cb_id, partial_cb_id);
+
+    // ---- Phase 1: partial matmul ----
+    full_in0_cb.wait_front(full_in0_num_tiles);
+    in1_cb.wait_front(in1_num_tiles);
+
+    matmul_block_init(full_in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
     const uint32_t k_offset = k_idx * Kc_tiles;  // this core's K-slice start (global K-tile)
-    cb_reserve_back(partial_cb_id, block_num_tiles);
+    partial_cb.reserve_back(block_num_tiles);
     for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
         tile_regs_acquire();
         for (uint32_t kc = 0; kc < Kc_tiles; ++kc) {
@@ -102,8 +112,8 @@ void kernel_main() {
         }
         tile_regs_release();
     }
-    cb_push_back(partial_cb_id, block_num_tiles);
-    cb_pop_front(full_in0_cb_id, full_in0_num_tiles);
+    partial_cb.push_back(block_num_tiles);
+    full_in0_cb.pop_front(full_in0_num_tiles);
 
     if (is_base == 0) {
         return;
@@ -111,12 +121,12 @@ void kernel_main() {
     // ---- Phase 2: reduce K_blocks partials (base cores only) ----
     // reduce_cb holds K_blocks contiguous [M_tiles x Nc_tiles] slabs; for each
     // (mt,nc) pairwise accumulate the matching tile across all K_blocks slabs.
-    cb_wait_front(reduce_cb_id, reduce_num_tiles);
+    reduce_cb.wait_front(reduce_num_tiles);
 
     binary_op_init_common(reduce_cb_id, reduce_cb_id, out_cb_id);
     add_tiles_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
 
-    cb_reserve_back(out_cb_id, block_num_tiles);
+    out_cb.reserve_back(block_num_tiles);
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {
         for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
             const uint32_t tile_in_block = mt * Nc_tiles + nc;
@@ -135,6 +145,6 @@ void kernel_main() {
             tile_regs_release();
         }
     }
-    cb_push_back(out_cb_id, block_num_tiles);
-    cb_pop_front(reduce_cb_id, reduce_num_tiles);
+    out_cb.push_back(block_num_tiles);
+    reduce_cb.pop_front(reduce_num_tiles);
 }
