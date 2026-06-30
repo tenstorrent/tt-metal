@@ -186,6 +186,20 @@ void D2HSocket::write_socket_metadata(
     if (config_buffer_) {
         distributed::WriteShard(
             mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
+    } else if (sender_is_l2cpu_) {
+        // Non-worker sender (X280 L2CPU): sender_core_.core_coord is a physical NoC coord and
+        // config_buffer_address_ is the full LIM address. Write directly via the cluster using
+        // the virtual coord (worker_core_from_logical_core / WORKER translation would target a
+        // Tensix worker instead).
+        const auto& cluster = MetalContext::instance().get_cluster();
+        IDevice* device = mesh_device->get_device(sender_core_.device_coord);
+        CoreCoord virt =
+            cluster.get_virtual_coordinate_from_physical_coordinates(device->id(), sender_core_.core_coord);
+        cluster.write_core(
+            config_data.data(),
+            static_cast<uint32_t>(config_data.size() * sizeof(uint32_t)),
+            tt_cxy_pair(device->id(), virt),
+            config_buffer_address_);
     } else {
         IDevice* device = mesh_device->get_device(sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -203,11 +217,17 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
-        sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        sender_core_tlb_ = cluster.get_driver()
-                               ->get_chip(sender_device_id)
-                               ->get_tlb_manager()
-                               ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        sender_virtual_core = sender_is_l2cpu_ ? cluster.get_virtual_coordinate_from_physical_coordinates(
+                                                     sender_device_id, sender_core_.core_coord)
+                                               : mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
+        // The L2CPU (X280) has no static TLB window (those exist for workers/PCIe/DRAM); use the
+        // dynamic cluster.write_core path below instead.
+        if (!sender_is_l2cpu_) {
+            sender_core_tlb_ = cluster.get_driver()
+                                   ->get_chip(sender_device_id)
+                                   ->get_tlb_manager()
+                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        }
     } else {
         sender_device_id = device_id.value();
         sender_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
@@ -215,7 +235,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !sender_is_l2cpu_) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
@@ -313,6 +333,7 @@ D2HSocket::D2HSocket(
         external_config.address,
         l1_alignment);
     config_buffer_address_ = external_config.address;
+    sender_is_l2cpu_ = external_config.sender_is_l2cpu;
     init_common(mesh_device);
 }
 

@@ -41,6 +41,10 @@
 #include <llrt/hal.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
 #include <tracy/TracyTTDevice.hpp>
@@ -215,6 +219,7 @@ int main(int argc, char** argv) {
     int emit_tracy = 0;                      // --tracy: after the run, push relayed markers to Tracy zones
     double dev_ghz = 1.35;                   // --freq: device wall-clock GHz for cycle->ns (Blackhole ~1.35)
     int no_reset = 0;                        // --no-reset: skip tt-smi -r, boot X280 via L2CPU reset only
+    int derisk_socket = 0;                   // --derisk-socket: can a D2HSocket target the X280 L2CPU as sender?
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -243,6 +248,8 @@ int main(int argc, char** argv) {
             dev_ghz = std::stod(next());
         } else if (a == "--no-reset") {
             no_reset = 1;
+        } else if (a == "--derisk-socket") {
+            derisk_socket = 1;
         } else {
             fprintf(stderr, "unknown arg: %s\n", a.c_str());
             return 2;
@@ -269,6 +276,53 @@ int main(int argc, char** argv) {
     auto mesh = MeshDevice::create_unit_mesh(device_id);
     Cluster& cluster = MetalContext::instance().get_cluster();
     const auto& hal = MetalContext::instance().hal();
+
+    if (derisk_socket) {
+        // DE-RISK: can a tt-metal D2HSocket use the X280 L2CPU as its sender_core, and does
+        // the host write the sender_socket_md config into the X280's LIM? Both are built
+        // around a Tensix sender; this probes the two suspected mismatches (L2CPU CoreCoord,
+        // and the uint32 config address vs LIM's 0x08000000 base).
+        using tt::tt_metal::distributed::D2HSocket;
+        using tt::tt_metal::distributed::MeshCoordinate;
+        using tt::tt_metal::distributed::MeshCoreCoord;
+        printf("[derisk] required_config_buffer_size = %u\n", D2HSocket::required_config_buffer_size());
+        CoreCoord l2phys = l2cpu_tile(l2cpu);
+        CoreCoord l2virt = cluster.get_virtual_coordinate_from_physical_coordinates(device_id, l2phys);
+        tt_cxy_pair l2v(device_id, l2virt);
+        printf(
+            "[derisk] X280 L2CPU phys=(%u,%u) virt=(%u,%u)\n",
+            (unsigned)l2phys.x,
+            (unsigned)l2phys.y,
+            (unsigned)l2virt.x,
+            (unsigned)l2virt.y);
+        const uint32_t cfg_addr = 0x08019000u;  // LIM: above STAGECTL, below STAGE_BASE
+        std::vector<uint8_t> zc(256, 0);
+        cluster.write_core(zc.data(), (uint32_t)zc.size(), l2v, cfg_addr);  // zero so we can see a write land
+        try {
+            MeshCoreCoord sender{MeshCoordinate(0, 0), l2phys};
+            D2HSocket sock(
+                mesh, sender, 4096u, D2HSocket::ExternalConfigBuffer{.address = cfg_addr, .sender_is_l2cpu = true});
+            sock.set_page_size(64);
+            printf("[derisk] D2HSocket CONSTRUCTED OK; config_buffer_address=0x%x\n", sock.get_config_buffer_address());
+            uint32_t md[7] = {0};
+            cluster.read_core(md, sizeof(md), l2v, cfg_addr);
+            printf(
+                "[derisk] sender_socket_md@LIM: bytes_sent=%u num_downstreams=%u write_ptr=%u "
+                "dn_bytes_sent_addr=0x%x dn_fifo_addr=0x%x fifo_total=%u is_d2h=%u\n",
+                md[0],
+                md[1],
+                md[2],
+                md[3],
+                md[4],
+                md[5],
+                md[6]);
+            printf("[derisk] config landed in LIM: %s\n", (md[5] != 0 || md[4] != 0) ? "YES" : "NO");
+        } catch (const std::exception& e) {
+            printf("[derisk] D2HSocket construction FAILED: %s\n", e.what());
+        }
+        std::fflush(stdout);
+        std::_Exit(0);
+    }
 
     CoreCoord grid = mesh->compute_with_storage_grid_size();
     uint32_t gx = (uint32_t)grid.x, gy = (uint32_t)grid.y;

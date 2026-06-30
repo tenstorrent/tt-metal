@@ -89,6 +89,11 @@ public:
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
+        // Set when the sender core is NOT a Tensix worker (e.g. an X280 L2CPU). The socket
+        // then targets the sender via physical->virtual NoC translation + the full L1 address
+        // (the X280's LIM), instead of worker_core_from_logical_core + worker-L1 semantics,
+        // for both the config write and the bytes_acked (flow-control) write-back.
+        bool sender_is_l2cpu = false;
     };
 
     /**
@@ -341,6 +346,7 @@ private:
     uint32_t read_ptr_ = 0;
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
+    bool sender_is_l2cpu_ = false;  // sender is an X280 L2CPU, not a Tensix worker (see ExternalConfigBuffer)
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
