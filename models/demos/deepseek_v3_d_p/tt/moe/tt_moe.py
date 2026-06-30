@@ -159,6 +159,7 @@ class TtMoe(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         routing_use_l1_small_for_semaphores: bool = False,
         is_balanced: bool = False,
+        use_compression: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -197,6 +198,12 @@ class TtMoe(LightweightModule):
                 setup and run them sequentially on the full Tensix grid.
             is_balanced: If True, uses zigzag sequence placement for padding awareness.
                 Should match the is_balanced flag used in MLA/transformer.
+            use_compression: If True, FP8-compress x before dispatch and decompress the routed
+                buffer after, to cut inter-device dispatch bytes. The per-token fp32 scales ride the
+                metadata tail (metadata_len grows to 5 + emb_dim/128) and the dispatched buffer is
+                FP8_E4M3; the masked per_token_cast_back reconstructs bf16 using the same expert
+                token counts / region offsets the routed expert uses. Requires emb_dim % 128 == 0
+                and Blackhole.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -210,6 +217,16 @@ class TtMoe(LightweightModule):
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
+        self.use_compression = use_compression
+
+        # Compression rides the per-token fp32 scales in the metadata tail and dispatches an FP8_E4M3
+        # buffer, so the dispatch op needs a wider metadata (5 routing fields + emb_dim/128 scale
+        # fields) and an fp8 output. Both are construction-time; the flag only branches the forward.
+        if use_compression:
+            assert emb_dim % 128 == 0, f"use_compression requires emb_dim % 128 == 0, got {emb_dim}"
+            dispatch_metadata_len = 5 + emb_dim // 128
+        else:
+            dispatch_metadata_len = metadata_len
         self.hidden_dim = hidden_dim
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
 
@@ -325,7 +342,7 @@ class TtMoe(LightweightModule):
             experts_per_chip=experts_per_chip,
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
-            metadata_len=metadata_len,
+            metadata_len=dispatch_metadata_len,
             max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
@@ -333,6 +350,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             subdevice_id=self.dispatch_sd_id,
+            fp8_output=use_compression,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -553,14 +571,32 @@ class TtMoe(LightweightModule):
         # ========================================
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
-        dispatched_buffer, metadata = self.dispatch_module(
-            x,
-            scores,
-            indices,
-            tt_expert_offsets,
-            self.tt_expert_dispatch_table,
-            padding_config=padding_config,
-        )
+        # Path 1 (use_compression): FP8-compress x; dispatch the fp8 buffer with its per-token scales
+        # riding the metadata tail. Path 2: dispatch x (bf16) unchanged. x_scale is kept alive only to
+        # satisfy per_token_cast_back's input_scale arg (unused in masked mode — scales come from the
+        # metadata) and is freed right after the decompress below.
+        x_scale = None
+        if self.use_compression:
+            x_fp8, x_scale = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x)
+            dispatched_buffer, metadata = self.dispatch_module(
+                x_fp8,
+                scores,
+                indices,
+                tt_expert_offsets,
+                self.tt_expert_dispatch_table,
+                padding_config=padding_config,
+                scales=x_scale,
+            )
+            ttnn.deallocate(x_fp8)
+        else:
+            dispatched_buffer, metadata = self.dispatch_module(
+                x,
+                scores,
+                indices,
+                tt_expert_offsets,
+                self.tt_expert_dispatch_table,
+                padding_config=padding_config,
+            )
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.clear_loaded_sub_device_manager()
         # padding_config was shared with both the gate and dispatch; free it now that
@@ -573,6 +609,29 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
 
         signpost("shared_expert_and_dispatch_end")
+
+        # ========================================
+        # Step 2.5: Decompress (use_compression only)
+        # ========================================
+        # The dispatched buffer is FP8_E4M3 with each routed token's fp32 scales in the metadata tail.
+        # Masked per_token_cast_back reconstructs bf16 in place of the routed regions, gated by the
+        # same expert token counts / region offsets the routed expert consumes (garbage rows are left
+        # untouched and never read). x_scale satisfies the op's input_scale arg but is unused as a
+        # scale source in masked mode — the scales are read from the metadata tail.
+        if self.use_compression:
+            decompressed_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                dispatched_buffer,
+                x_scale,
+                output_dtype=ttnn.bfloat16,
+                expert_token_counts=tt_expert_token_counts,
+                expert_region_offsets=tt_expert_region_offsets,
+                metadata=metadata,
+                experts_per_chip=self.experts_per_chip,
+                dispatch_group_size=self.dispatch_group_size,
+            )
+            ttnn.deallocate(dispatched_buffer)
+            ttnn.deallocate(x_scale)
+            dispatched_buffer = decompressed_buffer
 
         # ========================================
         # Step 3: Routed experts (enabled)
