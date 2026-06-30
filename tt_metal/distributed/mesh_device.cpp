@@ -1282,13 +1282,13 @@ std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceI
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(trace_id);
 }
 
-MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
+MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, TracePolicy policy) {
     auto trace_id = MeshTrace::next_id();
-    this->begin_mesh_trace(cq_id, trace_id);
+    this->begin_mesh_trace(cq_id, trace_id, policy);
     return trace_id;
 }
 
-void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, TracePolicy policy) {
     TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
     TT_FATAL(
         !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
@@ -1312,7 +1312,7 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         this->mesh_id_,
         active_sub_device_manager->id());
     auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
-    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_buffer->desc);
+    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_buffer->desc, policy);
 }
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
@@ -1787,9 +1787,11 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
-MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
-void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    pimpl_->begin_mesh_trace(cq_id, trace_id);
+MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id, TracePolicy policy) {
+    return pimpl_->begin_mesh_trace(cq_id, policy);
+}
+void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, TracePolicy policy) {
+    pimpl_->begin_mesh_trace(cq_id, trace_id, policy);
 }
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) { pimpl_->end_mesh_trace(cq_id, trace_id); }
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {

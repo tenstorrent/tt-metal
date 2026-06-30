@@ -107,7 +107,7 @@ void DummyMeshCommandQueue::reset_worker_state(
 }
 
 void DummyMeshCommandQueue::record_begin(
-    const MeshTraceId& /*trace_id*/, const std::shared_ptr<MeshTraceDescriptor>& /*ctx*/) {
+    const MeshTraceId& /*trace_id*/, const std::shared_ptr<MeshTraceDescriptor>& /*ctx*/, TracePolicy /*policy*/) {
     TT_THROW("Trace operations not supported for DummyMeshCommandQueue (inactive rank)");
 }
 

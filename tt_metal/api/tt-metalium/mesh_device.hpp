@@ -30,6 +30,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/trace_policy.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 // UMD: re-exports tt::ARCH (used in MeshDevice::arch return type).
@@ -150,8 +151,8 @@ public:
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     // If cq_id is not provided, the current command queue is returned from the current thread
-    MeshTraceId begin_mesh_trace(uint8_t cq_id);
-    void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    MeshTraceId begin_mesh_trace(uint8_t cq_id, TracePolicy policy = TracePolicy::NONE);
+    void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, TracePolicy policy = TracePolicy::NONE);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);

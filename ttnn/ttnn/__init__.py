@@ -149,6 +149,7 @@ from ttnn._ttnn.events import (
 
 from ttnn._ttnn.operations.trace import (
     MeshTraceId,
+    TracePolicy,
     begin_trace_capture,
     end_trace_capture,
     execute_trace,
