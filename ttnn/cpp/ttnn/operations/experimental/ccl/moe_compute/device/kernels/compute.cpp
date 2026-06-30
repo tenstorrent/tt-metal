@@ -241,7 +241,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // compute_kernel_hw_startup must be the first compute API call; the has_bias block below
     // issues compute work, so the startup is hoisted above it (otherwise it would be mid-kernel).
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_s2c_in2_id);
 
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
