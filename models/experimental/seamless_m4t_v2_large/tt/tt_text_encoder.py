@@ -319,15 +319,22 @@ class TTSeamlessM4Tv2Encoder:
                 packer_l1_acc=True,
             )
 
-        # Normalize the input to a 2-D ``[m_actual, k]`` interleaved L1 tensor for slicing.
+        # Normalize the input to a 2-D ``[m_actual, k]`` interleaved tensor for slicing.
+        # Keep x_inter in DRAM so that L1 interleaved chunks can be freed before the matmul
+        # program is dispatched without triggering validate_circular_buffer_region.
         if ttnn.is_sharded(x):
-            x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            x_inter = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         else:
             x_inter = x
         if len(x_inter.shape) == 3:
             x_inter = ttnn.reshape(x_inter, (m_actual, k))
         elif len(x_inter.shape) != 2:
             x_inter = ttnn.reshape(x_inter, (m_actual, k))
+        if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
+            _x_inter_prev = x_inter
+            x_inter = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
+            if _x_inter_prev is not x:
+                ttnn.deallocate(_x_inter_prev)
 
         chunks: list[ttnn.Tensor] = []
         num_chunks = (m_actual + m - 1) // m
@@ -340,6 +347,9 @@ class TTSeamlessM4Tv2Encoder:
             if chunk_rows < m:
                 chunk = self._pad_token_rows(chunk, chunk_rows, m)
             chunk_sharded = ensure_l1_width_sharded_activation(self.device, chunk, m, k, n)
+            if chunk_sharded is not chunk and chunk is not x_inter:
+                ttnn.deallocate(chunk)
+                chunk = None
             out_sharded = ttnn.linear(
                 chunk_sharded,
                 weight,
@@ -350,7 +360,7 @@ class TTSeamlessM4Tv2Encoder:
             )
             if chunk_sharded is not chunk:
                 ttnn.deallocate(chunk_sharded)
-            if chunk is not x_inter:
+            if chunk is not None and chunk is not x_inter:
                 ttnn.deallocate(chunk)
             out_inter = width_sharded_to_l1_interleaved(out_sharded)
             if getattr(self, "_long_seq_mc", None) is ttnn.DRAM_MEMORY_CONFIG:

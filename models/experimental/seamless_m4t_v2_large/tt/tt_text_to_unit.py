@@ -452,14 +452,29 @@ def _linear_dram_chunked(
             packer_l1_acc=True,
         )
 
+    x_inter_from_sharded = False
     if ttnn.is_sharded(x):
         x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+        x_inter_from_sharded = True
     else:
         x_inter = x
     if len(x_inter.shape) == 3:
         x_inter = ttnn.reshape(x_inter, (m_actual, k))
     elif len(x_inter.shape) != 2:
         x_inter = ttnn.reshape(x_inter, (m_actual, k))
+
+    # Move x_inter to DRAM if it is in L1 so that any L1 interleaved chunk sliced from it
+    # can be freed before the matmul program is dispatched.  The DRAM-sharded matmul
+    # (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) places the width-sharded
+    # activation on DRAM-channel cores, not on the compute cores.  Leaving x_inter (or
+    # chunk) on compute cores when the program is dispatched triggers
+    # validate_circular_buffer_region to report a clash with the static CB region.
+    if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
+        _x_inter_dram = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
+        if x_inter_from_sharded:
+            ttnn.deallocate(x_inter)
+        x_inter = _x_inter_dram
+        x_inter_from_sharded = True  # x_inter is now a new allocation, caller should not free x
 
     chunks: list[ttnn.Tensor] = []
     num_chunks = (m_actual + m - 1) // m
@@ -472,6 +487,15 @@ def _linear_dram_chunked(
         if chunk_rows < m:
             chunk = _pad_token_rows(chunk, chunk_rows, m)
         chunk_sharded = ensure_l1_width_sharded_activation(device, chunk, m, k, n)
+        # Free the interleaved chunk before dispatching the matmul.  The width-sharded copy
+        # (chunk_sharded) lives on the DRAM-channel cores used by MatmulMultiCoreReuseMultiCastDRAMSharded;
+        # the interleaved chunk lives on the compute cores.  Holding the interleaved buffer alive while
+        # the matmul program is compiled/dispatched causes validate_circular_buffer_region to see a
+        # dynamic L1 allocation on the compute cores that falls below the program's CB region end,
+        # raising "Statically allocated circular buffers clash with L1 buffers".
+        if chunk_sharded is not chunk and chunk is not x_inter:
+            ttnn.deallocate(chunk)
+            chunk = None
         out_sharded = ttnn.linear(
             chunk_sharded,
             weight,
@@ -482,7 +506,7 @@ def _linear_dram_chunked(
         )
         if chunk_sharded is not chunk:
             ttnn.deallocate(chunk_sharded)
-        if chunk is not x_inter:
+        if chunk is not None and chunk is not x_inter:
             ttnn.deallocate(chunk)
         out_inter = width_sharded_to_l1_interleaved(out_sharded)
         if long_seq_mc is ttnn.DRAM_MEMORY_CONFIG:
@@ -502,6 +526,9 @@ def _linear_dram_chunked(
                 memory_config=trim_mc,
             )
         chunks.append(out_inter)
+
+    if x_inter_from_sharded:
+        ttnn.deallocate(x_inter)
 
     concat_mc = long_seq_mc or ttnn.L1_MEMORY_CONFIG
     if len(chunks) == 1:
@@ -2618,6 +2645,13 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
 
         char_w = int(char_input_ids.shape[1])
         char_seq_total = int(sum(cc_list))
+        # Set _long_seq_mc early so _layer_norm inside _duration_predictor uses DRAM output
+        # when char_len > TILE.  The final update at line ~2810 will refine this with unit_seq
+        # once duration counts are known; this early assignment prevents the first forward()
+        # call from using None (L1 layer-norm) which can land at the L1 address that clashes
+        # with the conv1d program's CB region.
+        if not full_trace_prebuf:
+            self._long_seq_mc = ttnn.DRAM_MEMORY_CONFIG if char_seq_total > TILE else None
         if full_trace_prebuf:
             char_pad = tb.char_pad_bf16_tile
         else:
@@ -2638,6 +2672,14 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             frame_idx_f32=char_frame_f32,
             frame_idx_cache=None if full_trace_prebuf else self._frame_idx_cache,
         )
+        # ``_hard_upsample_nlc`` may return an L1-interleaved tensor (from sharded_to_interleaved).
+        # After a decode trace, the L1 allocator's high-water mark can place ``up1`` at ~833 KB —
+        # inside the duration-predictor conv1d program's CB region (~869 KB end). Move to DRAM so
+        # the conv1d dispatch never sees ``up1`` as an L1 buffer within its CB range.
+        if not full_trace_prebuf and up1.memory_config().buffer_type == ttnn.BufferType.L1:
+            _up1_dram = ttnn.to_memory_config(up1, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(up1)
+            up1 = _up1_dram
         # Upsampled character length equals ``sum(char_count_per_id)`` (batch 1). On multi-device
         # meshes ``up1.shape[1]`` may reflect a single shard, not the logical width.
         char_len = char_seq_total
@@ -2725,6 +2767,12 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             frame_idx_f32=unit_frame_f32,
             frame_idx_cache=None if full_trace_prebuf else self._frame_idx_cache,
         )
+        # Same L1→DRAM guard as ``up1``: keep ``up2`` in DRAM so decoder conv1d programs whose CB
+        # region ends at ~869 KB do not clash with an L1-interleaved ``up2`` landing at ~833 KB.
+        if not full_trace_prebuf and up2.memory_config().buffer_type == ttnn.BufferType.L1:
+            _up2_dram = ttnn.to_memory_config(up2, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(up2)
+            up2 = _up2_dram
         unit_seq = int(sum(dur_list))
         if self._tp == 1 and int(up2.shape[1]) != unit_seq:
             raise RuntimeError(
