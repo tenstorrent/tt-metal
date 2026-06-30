@@ -141,12 +141,20 @@ def load_attention_weights(
             o_proj = torch.nn.functional.pad(o_proj, (0, padded_hidden - hidden_size), "constant", value=0.0)
 
     else:
-        # If state_dict is not provided, create empty tensors for weights
+        # Cache-only loading (empty state_dict): pass None for every torch weight so ttnn.as_tensor
+        # loads each tilized tensor from disk. Which OPTIONAL weights to build (q/k-norm, MSA index
+        # branch) can't be read from an absent state_dict, so decide from the attention config below.
         qkv_cat = None
         o_proj = None
         q_norm_w = None
         k_norm_w = None
         index_q_proj_w = index_k_proj_w = index_q_norm_w = index_k_norm_w = None
+
+    # Whether to build the optional weights: from source presence when we have a state_dict, else
+    # (cache-only) from the model config — use_qk_norm gates q/k-norm, is_sparse gates the MSA index
+    # branch (only sparse layers cached those). torch weights stay None in cache-only mode -> cache load.
+    build_qk_norm = (q_norm_w is not None) if state_dict else bool(config.use_qk_norm)
+    build_index = (index_q_proj_w is not None) if state_dict else bool(config.is_sparse)
 
     # Clean mesh mapping using MeshConfig
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
@@ -187,7 +195,7 @@ def load_attention_weights(
             cache_file_name=get_cache_file_name(tensor_cache_path, "q_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if q_norm_w is not None
+        if build_qk_norm
         else None
     )
     k_norm_tt = (
@@ -200,18 +208,24 @@ def load_attention_weights(
             cache_file_name=get_cache_file_name(tensor_cache_path, "k_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if k_norm_w is not None
+        if build_qk_norm
         else None
     )
 
     # MSA index branch (sparse layers only): index_q_proj column-parallel (4 heads -> 1/col),
     # index_k_proj + norms replicated (index_k is the single shared head). Kept bf16.
     def _as_index(w, mapper, layout, name, dtype=ttnn.bfloat16):
-        if w is None:
+        # build_index drives construction; w is None in cache-only mode -> loads from the cache.
+        if not build_index:
             return None
         return ttnn.as_tensor(
-            w, device=mesh_device, layout=layout, dtype=dtype, mesh_mapper=mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, name), memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            w,
+            device=mesh_device,
+            layout=layout,
+            dtype=dtype,
+            mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, name),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     index_q_proj_tt = _as_index(index_q_proj_w, col_mesh_mapper, ttnn.TILE_LAYOUT, "index_q_proj", weight_dtype)

@@ -13,6 +13,8 @@ Env:
   PREFILL_CHUNKED     "1" -> chunked prefill (chunk loop, cache-read path); "0" -> one-shot  [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
+  PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
+                      M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
 
 Run (after weights are present on disk):
@@ -122,6 +124,7 @@ def check_kv_pcc(runtime, golden_dir, n_tokens, num_layers, hf_config):
 def main():
     from models.demos.minimax_m3.tt.model_config import ModelArgs
     from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+    from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
 
     _raise_nproc_limit()  # tt-metal parallel kernel JIT needs a high process limit (see fn docstring)
 
@@ -157,16 +160,51 @@ def main():
         model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
         hf_config = model_args.hf_config
         num_layers = hf_config.num_hidden_layers
+        nl_override = os.getenv("PREFILL_NUM_LAYERS")
+        if nl_override:
+            num_layers = int(nl_override)
+            hf_config.num_hidden_layers = num_layers  # build/run only the first N decoder layers
+            # Only read the safetensors shards holding layers 0..N-1 (+ embed/norm/lm_head) — skips most of
+            # the NFS source read. The full model's first N layers are causal-identical to the truncated
+            # model's, so the golden's first N layers are still the correct reference.
+            os.environ.setdefault("M3_LOAD_NLAYERS", str(num_layers))
+            print(
+                f"[prefill-pcc] PREFILL_NUM_LAYERS={num_layers}: first {num_layers} layers only "
+                f"(M3_LOAD_NLAYERS={os.environ['M3_LOAD_NLAYERS']})",
+                flush=True,
+            )
 
-        print("[prefill-pcc] loading real bf16 weights + EP placement (slow first run) ...", flush=True)
-        state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+        # Weight loading. The bf16 source backbone is ~869GB — larger than host RAM here — so reading
+        # it every run thrashes the page cache for >1h. Every weight module already loads its tilized
+        # tensor from a per-tensor .tensorbin cache via ttnn.as_tensor(cache_file_name=); on a cache hit
+        # the source tensor is ignored. So once the cache is populated we pass an EMPTY state_dict and
+        # never touch the source — DeepSeek's state_dict={} + check_cache_complete trick.
+        #   M3_FORCE_LOAD_WEIGHTS=1  force the source read (to (re)populate the cache / first run)
+        #   M3_WEIGHTS_FROM_CACHE=1  force cache-only even if the completeness check is unsure
+        cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
+        expert_dtype = ttnn.bfloat8_b  # must match TtPrefillRuntimeConfig.expert_weight_dtype (default)
+        force_load = os.getenv("M3_FORCE_LOAD_WEIGHTS") == "1"
+        cache_only = not force_load and (
+            os.getenv("M3_WEIGHTS_FROM_CACHE") == "1"
+            or weight_cache_is_complete(cache_path, hf_config, num_layers, expert_dtype)
+        )
+        if cache_only:
+            print(
+                "[prefill-pcc] tilized weight cache complete -> loading from cache, "
+                "skipping the ~869GB bf16 source read",
+                flush=True,
+            )
+            state_dict = {}
+        else:
+            print("[prefill-pcc] loading real bf16 weights + EP placement (slow: bf16 source read) ...", flush=True)
+            state_dict = ModelArgs.load_state_dict(model_args.weights_path)
         cfg = TtPrefillRuntimeConfig(
             num_layers=num_layers,
             max_seq_len=total,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
             num_users=1,
-            weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
+            weight_cache_path=cache_path,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict

@@ -61,9 +61,16 @@ class MLP:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
         )
 
+        # Cache-only loading: an empty state_dict means "load every tilized weight from the on-disk
+        # cache" (the source bf16 was skipped). Conditional submodules must then be built from the
+        # cache rather than skipped, so key their construction off the model config / cache, not off
+        # substate presence (which is empty in this mode). See tt/weight_cache.py.
+        cache_only = not state_dict
+
         # M3: always-on shared expert (block_sparse_moe.shared_experts.{gate,up,down}_proj), a plain
         # clamped-swigluoai FFN at shared_intermediate_size. Its output is ADDED to the routed-expert
         # output (the routed side already carries routed_scaling_factor from the router). Reuses DenseMLP.
+        # M3 MoE layers always have a shared expert -> build it from cache in cache-only mode.
         shared_state_dict = substate(state_dict, "shared_experts")
         self.shared_expert = (
             DenseMLP(
@@ -74,7 +81,7 @@ class MLP:
                 ccl_manager=ccl_manager,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "shared_expert"),
             )
-            if shared_state_dict
+            if (shared_state_dict or cache_only)
             else None
         )
 
@@ -97,21 +104,34 @@ class MLP:
         experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(
             ep_seq_len_per_chip, E, hf_config.num_experts_per_tok, mesh_device.get_num_devices(), dgs, 2
         )
-        # MiniMax experts: w1=gate, w3=up, w2=down (direct map, no transpose).
-        routed_w = [
-            {
-                "gate_proj": experts_state_dict[f"{e}.w1.weight"],
-                "up_proj": experts_state_dict[f"{e}.w3.weight"],
-                "down_proj": experts_state_dict[f"{e}.w2.weight"],
-            }
-            for e in range(E)
-        ]
+        # MiniMax experts: w1=gate, w3=up, w2=down (direct map, no transpose). None in cache-only mode —
+        # TtRoutedExpert then loads the tilized per-expert weights straight from the cache.
+        routed_w = (
+            None
+            if cache_only
+            else [
+                {
+                    "gate_proj": experts_state_dict[f"{e}.w1.weight"],
+                    "up_proj": experts_state_dict[f"{e}.w3.weight"],
+                    "down_proj": experts_state_dict[f"{e}.w2.weight"],
+                }
+                for e in range(E)
+            ]
+        )
         # M3_COMPOSITE_MOE=1 -> self-owned composite EP-MoE (AllGather tokens -> per-device weighted experts
         # -> sum), which is CORRECT for M3's real-gate skewed routing. The DeepSeek dispatch/combine path is
         # wrong for it (random routing PCC 0.998, real routing 0.607 — the DS all-to-all, not bf4/experts/
         # capacity). Composite validated at SP=8xTP=4xEP=32 real weights = PCC 0.9998 (test_composite_moe_sp).
         self.composite_moe = os.getenv("M3_COMPOSITE_MOE") == "1"
         if self.composite_moe:
+            if cache_only:
+                # CompositeEPMoE tilizes experts from the source state_dict on every run (raw
+                # ttnn.from_torch, no cache_file_name), so it can't load cache-only. Force the source
+                # read or use the cached EP-MoE path.
+                raise NotImplementedError(
+                    "M3_COMPOSITE_MOE=1 does not support cache-only weight loading. Unset M3_COMPOSITE_MOE "
+                    "to use the cached EP-MoE path, or set M3_FORCE_LOAD_WEIGHTS=1 to read the bf16 source."
+                )
             from .experts_throughput.composite_moe import CompositeEPMoE
 
             self.experts = CompositeEPMoE(

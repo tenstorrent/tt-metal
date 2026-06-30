@@ -20,7 +20,7 @@ HF reference (MiniMaxM2SparseMoeBlock.route_tokens_to_experts):
 """
 
 import ttnn
-from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_cache_file_name
 
 
 def route_tokens_to_experts(
@@ -91,19 +91,25 @@ class TopKRouter:
         score_bias_torch = None
         if state_dict and "e_score_correction_bias" in state_dict:
             score_bias_torch = state_dict["e_score_correction_bias"].reshape(1, -1)
+        bias_cache_file = get_cache_file_name(tensor_cache_path, "e_score_correction_bias")
+        # Build the bias tensor when we have the source weight, OR (cache-only loading, empty
+        # state_dict) when it was previously cached — torch=None then loads it straight from disk.
+        # Whether the checkpoint HAS a correction bias can't be known without the source, so the
+        # cached file's existence is the signal.
+        build_bias = score_bias_torch is not None or (not state_dict and cache_file_exists(bias_cache_file))
         self.score_bias = (
             ttnn.as_tensor(
                 score_bias_torch,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
-                cache_file_name=get_cache_file_name(tensor_cache_path, "e_score_correction_bias"),
+                cache_file_name=bias_cache_file,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
                 if isinstance(mesh_device, ttnn.MeshDevice)
                 else None,
             )
-            if score_bias_torch is not None
+            if build_bias
             else None
         )
 

@@ -585,7 +585,9 @@ class Model:
             tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not trace_enabled:
-            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            # bf16 (not bf8) so the residual stream it seeds keeps full dynamic range — bf8's per-tile
+            # shared exponent crushes small channels once massive activations appear (see layer.py adds).
+            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
             tokens.deallocate(True)
 
             # Ensure proper 4D shape
