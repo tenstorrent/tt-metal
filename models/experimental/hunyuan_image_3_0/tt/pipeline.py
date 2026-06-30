@@ -347,6 +347,7 @@ def decode_latent(
     *,
     scaling_factor: float = 0.562679178327931,  # config.json vae.scaling_factor
     decoder=None,  # optional prebuilt VAEDecoderTTNN (reuse across calls)
+    grid_hw=None,  # (h, w) latent grid; when set, build the decoder for this size
     dtype=ttnn.bfloat16,
     ccl_manager=None,  # set (with h/w_mesh_axis) to run the decoder H/W-spatial-parallel
     h_mesh_axis=None,
@@ -367,7 +368,10 @@ def decode_latent(
     from .vae.decoder import VAEDecoderTTNN, bcthw_to_bthwc, bthwc_to_bcthw
 
     if decoder is None:
-        decoder = VAEDecoderTTNN(mesh_device, dtype=dtype)
+        vae_kwargs = {}
+        if grid_hw is not None:
+            vae_kwargs = dict(latent_h=int(grid_hw[0]), latent_w=int(grid_hw[1]))
+        decoder = VAEDecoderTTNN(mesh_device, dtype=dtype, **vae_kwargs)
 
     spatial = ccl_manager is not None and (h_mesh_axis is not None or w_mesh_axis is not None)
     if spatial:
