@@ -173,6 +173,7 @@ option(TT_METAL_SKIP_LINKING "Replace the linker with a no-op touch for clang-ti
 if(TT_METAL_SKIP_LINKING)
     set(CMAKE_CXX_LINK_EXECUTABLE "cmake -E touch <TARGET>")
     set(CMAKE_C_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
 endif()
 
 ############################################################################################################################

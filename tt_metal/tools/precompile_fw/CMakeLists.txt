@@ -20,20 +20,24 @@ set_target_properties(
 
 tt_reuse_precompile_headers(precompile_fw TT::CommonPCH)
 
-add_custom_command(
-    OUTPUT
-        ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
-    COMMAND
-        ${CMAKE_COMMAND} -E env ASAN_OPTIONS=detect_odr_violation=0 $<TARGET_FILE:precompile_fw>
-    COMMAND
-        ${CMAKE_COMMAND} -E touch ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    DEPENDS
-        precompile_fw
-    COMMENT "Pre-compiling firmware binaries"
-)
+if(NOT TT_METAL_SKIP_LINKING)
+    add_custom_command(
+        OUTPUT
+            ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
+        COMMAND
+            ${CMAKE_COMMAND} -E env ASAN_OPTIONS=detect_odr_violation=0 $<TARGET_FILE:precompile_fw>
+        COMMAND
+            ${CMAKE_COMMAND} -E touch ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        DEPENDS
+            precompile_fw
+        COMMENT "Pre-compiling firmware binaries"
+    )
 
-add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp)
+    add_custom_target(precompile-fw ALL DEPENDS ${PROJECT_BINARY_DIR}/tt_metal/pre-compiled/.stamp)
+else()
+    add_custom_target(precompile-fw ALL)
+endif()
 
 if(TT_INSTALL)
     install(
