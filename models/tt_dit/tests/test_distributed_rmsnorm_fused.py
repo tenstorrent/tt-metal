@@ -1010,10 +1010,15 @@ def test_layernorm_fused_vs_composite_diff(mesh_device, model, tp, topology, tp_
     each path's error vs the fp32 torch reference. LNMOD_ROWS picks N (default 4096,
     multi-AG-round where the gap appears)."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
-    dim = _LN_HID[model]
+    dim = int(_os.getenv("LNMOD_DIM", str(_LN_HID[model])))  # LNMOD_DIM probes narrow-vs-wide at fixed tp
     rows = int(_os.getenv("LNMOD_ROWS", "4096"))
     torch.manual_seed(0)
     x_t = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()  # mean-0, bf16-representable
+    # Optional large mean offset: disambiguates collapse cause. invstd->0 (stats bug) zeros
+    # the row regardless of mean; POST-pass-input==0 (reader bug) -> row = -mean*invstd (large).
+    _diff_mean = float(_os.getenv("LNMOD_DIFF_MEAN", "0"))
+    if _diff_mean:
+        x_t = (x_t + _diff_mean).to(torch.bfloat16).float()
     # fp32 torch reference: pure LayerNorm, no affine.
     mean = x_t.mean(-1, keepdim=True)
     var = x_t.var(-1, unbiased=False, keepdim=True)
@@ -1051,6 +1056,20 @@ def test_layernorm_fused_vs_composite_diff(mesh_device, model, tp, topology, tp_
         f"({'NON-DETERMINISTIC (AG race)' if det > 1e-4 else 'deterministic'}) | "
         f"degenerate rows: launch1={int((sp1<0.01).sum())} launch2={int((sp2<0.01).sum())} /{rows}"
     )
+    # Structure of the collapse: WHICH token-rows (and tile-rows = row//32) are degenerate,
+    # and WHAT value they collapse to (~0 -> garbage variance/invstd; large -> garbage mean).
+    degen = torch.nonzero(sp1 < 0.01).flatten()
+    if degen.numel():
+        tile_rows = torch.unique(degen // 32)
+        vals = out_f[degen].mean(-1)  # the ~constant value each degenerate row holds
+        logger.info(
+            f"LNDIFF collapse: {degen.numel()} rows in {tile_rows.numel()} tile-rows "
+            f"{tile_rows[:24].tolist()}{'...' if tile_rows.numel()>24 else ''}"
+        )
+        logger.info(
+            f"LNDIFF collapse value: mean|val|={vals.abs().mean():.5f} max|val|={vals.abs().max():.5f} "
+            f"(~0 => invstd->0 garbage var; large => garbage mean) | first rows={degen[:6].tolist()}"
+        )
 
     d = (out_f - out_c).abs()
     row_max = d.max(dim=-1).values  # per-row max |fused-composite|
