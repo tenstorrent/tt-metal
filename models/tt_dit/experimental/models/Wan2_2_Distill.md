@@ -24,8 +24,17 @@ half of the denoising trajectory and a low-noise expert handles the rest. With
 
 From [lightx2v/Wan2.2-Distill-Models](https://huggingface.co/lightx2v/Wan2.2-Distill-Models):
 
-- `wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors` (BF16, 28.6 GB) — high-noise expert
-- `wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors` (BF16, 28.6 GB) — low-noise expert
+- `wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors` (FP32, 57.2 GB) — high-noise expert
+- `wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors` (FP32, 57.2 GB) — low-noise expert
+
+These are the 2026-04-12 release trained on a high-quality 720p dataset for
+improved detail and visual texture. The source files are FP32; tt-metal casts
+them to the device dtype (bf16) at load time, so device memory and inference
+speed are unchanged versus the older BF16 weights — only the host-side download
+(~114 GB for the pair) and weight-conversion RAM are larger.
+
+> The older BF16 weights (`..._lightx2v_4step.safetensors`, 28.6 GB each) remain
+> available in the same repo if a smaller download is required.
 
 From [Wan-AI/Wan2.2-I2V-A14B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers):
 tokenizer, text encoder, VAE, scheduler config.

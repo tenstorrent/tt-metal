@@ -90,10 +90,15 @@ def _patch_torch_transformer_random(seed: int = 0):
 
 class WanDistillPipelineI2V(WanPipelineI2V):
     LIGHTX2V_REPO = "lightx2v/Wan2.2-Distill-Models"
-    HIGH_NOISE_FILE = "wan2.2_i2v_A14b_high_noise_lightx2v_4step.safetensors"
-    LOW_NOISE_FILE = "wan2.2_i2v_A14b_low_noise_lightx2v_4step.safetensors"
+    # 720p-optimized 4-step distill (2026-04-12 release): trained on a
+    # high-quality 720p dataset with an improved low-noise training algorithm
+    # for better fine-grained detail and visual texture. Source weights are
+    # FP32; tt-metal casts to the device dtype (bf16) at load time.
+    HIGH_NOISE_FILE = "wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors"
+    LOW_NOISE_FILE = "wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors"
     BASE_DIFFUSERS_REPO = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-    CACHE_NAMESPACE = "Wan2.2-Distill-lightx2v-4step"
+    # Bumped so the TT-tensor cache from the older 4-step weights is not reused.
+    CACHE_NAMESPACE = "Wan2.2-Distill-lightx2v-4step-720p-260412"
     RANDOM_CACHE_NAMESPACE = "Wan2.2-Distill-random"
     DISTILL_BOUNDARY_RATIO = 0.5
 
