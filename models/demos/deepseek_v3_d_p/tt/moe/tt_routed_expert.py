@@ -201,7 +201,7 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
-        swiglu_oai: bool = False,
+        activation=None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -238,10 +238,11 @@ class TtRoutedExpert(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self.global_expert_idx_table = global_expert_idx_table
-        # SwiGLU-OAI (clamped, MiniMax-M3 / gpt-oss) vs default SiLU SwiGLU
-        # (DeepSeek). Forwarded to the fused unified_routed_expert_moe kernel;
-        # default False keeps the DeepSeek activation byte-identical.
-        self.swiglu_oai = swiglu_oai
+        # Activation variant for the fused unified_routed_expert_moe kernel.
+        # None -> Silu (DeepSeek default, byte-identical). Pass
+        # ttnn.RoutedExpertActivation.SwiGluOai for the MiniMax-M3 / gpt-oss
+        # clamped swigluoai activation.
+        self.activation = activation if activation is not None else ttnn.RoutedExpertActivation.Silu
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -416,7 +417,7 @@ class TtRoutedExpert(LightweightModule):
                 self.down_projs,
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
-                swiglu_oai=self.swiglu_oai,
+                activation=self.activation,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

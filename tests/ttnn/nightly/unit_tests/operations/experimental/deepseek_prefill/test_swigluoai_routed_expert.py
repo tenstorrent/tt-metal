@@ -13,9 +13,9 @@ SiLU SwiGLU:
     up   = clamp(up, -limit, limit)
     out  = (up + 1) * gate * sigmoid(alpha * gate)   # alpha = 1.702
 
-The fused kernel bakes alpha/limit (``SwiGLUConfigGPTOSS``) and is selected by the
-``swiglu_oai=True`` flag (compile-time ``SWIGLU_OAI`` define). This test runs the
-real op (via ``TtRoutedExpert``, single chip / single expert) and compares against
+The fused kernel bakes alpha/limit (``SwiGLUConfigGPTOSS``) and is selected by
+``activation=RoutedExpertActivation.SwiGluOai`` (compile-time ``SWIGLU_OAI`` define).
+This test runs the real op (via ``TtRoutedExpert``, single chip / single expert) and compares against
 a hand-written torch reference. Inputs/weights are scaled so the ±limit clamp is
 actually exercised. Blackhole-only (the op assumes the BH compute grid).
 """
@@ -114,7 +114,7 @@ def run_swigluoai_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim, sw
         torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        swiglu_oai=swiglu_oai,
+        activation=(ttnn.RoutedExpertActivation.SwiGluOai if swiglu_oai else ttnn.RoutedExpertActivation.Silu),
     )
 
     tt_output = tt_expert(tt_input, expert_token_counts_tt, expert_region_offsets_tt)

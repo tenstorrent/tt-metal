@@ -44,6 +44,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
-    bool swiglu_oai = false);
+    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation =
+        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu);
 
 }  // namespace ttnn::prim

@@ -543,6 +543,7 @@ from ttnn.operations.pool import (
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
+from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
