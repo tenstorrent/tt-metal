@@ -260,7 +260,14 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
             f"lower the weight dtype (now {wdtype}) to bf8_b/bf4_b; if PCC fails, record_kernel_attempt(...,'dtype',...) to mark it tried",
         )
     if _is_kernel_able(op_code):
-        if _ttl_available() and "tt-lang" not in kinds:
+        if "tt-lang" not in kinds:
+            if not _ttl_available():
+                return (
+                    False,
+                    "tt-lang:install-required",
+                    "this op needs a tt-lang kernel but the ttl toolchain is not installed — install "
+                    "tt-lang first (e.g. pip install tt-lang==1.0.1 --no-deps, matching your ttnn)",
+                )
             return (
                 False,
                 "tt-lang",
@@ -788,6 +795,7 @@ def termination_check() -> dict:
     if host_block:
         blocking.append(host_block)
     can_stop = not blocking
+    halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
     next_target = (
         {
@@ -804,6 +812,8 @@ def termination_check() -> dict:
     )
     return {
         "can_stop": can_stop,
+        "halt": bool(halt),
+        "halt_reason": halt.get("reason") if halt else None,
         "device_ms": dev,
         "at_floor": at_floor,
         "residual_gap_ms": rep.get("residual_gap_ms"),
