@@ -1009,6 +1009,7 @@ inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint3
     // Set unpacker Z-stride to the canonical baseline for unpack_dst_format. Paired with
     // unpack_to_dest_tile_done's canonical restore; no GPR snapshot of the prior value.
     TT_SETDMAREG(0, LOWER_HALFWORD(canonical_unpA_z_stride(unpack_dst_format) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // Wait for ThCon to land the SETDMAREG GPR write before WRCFG reads it (BH)
     TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     if (context_id == 0)
     {
