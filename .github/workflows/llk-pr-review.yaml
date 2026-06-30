@@ -116,12 +116,32 @@ jobs:
             echo "documented convention, regardless of file path or which CLAUDE.md applies."
             echo "Apply it to ALL files in this PR, including those under tt_metal/hw/."
             echo
+            # === HUMAN-PINNED RULES — ABSOLUTE HIGHEST PRIORITY ===
+            pinned="$src/pinned-rules.md"
+            if [ -e "$pinned" ]; then
+              echo "# ------------------------------------------------------------"
+              echo "# HUMAN-PINNED REVIEW RULES — ABSOLUTE HIGHEST PRIORITY"
+              echo "# ------------------------------------------------------------"
+              echo
+              echo "Treat each pinned rule as a"
+              echo "MANDATORY check: for every rule, actively hunt the PR (the diff AND the"
+              echo "surrounding/cross-file code) for violations and flag EVERY instance you"
+              echo "find, in the normal reviewer voice. A pinned rule is a documented team"
+              echo "convention, so a violation is always a citeable finding worth surfacing —"
+              echo "do NOT skip, soften, downgrade, or silently drop a pinned-rule finding."
+              echo
+              cat "$pinned"
+              echo
+            fi
+
             echo "# ------------------------------------------------------------"
             echo "# LLK REVIEW KNOWLEDGE (authoritative)"
             echo "# ------------------------------------------------------------"
             echo
             for f in "$src"/*.md; do
               [ -e "$f" ] || continue
+              # pinned-rules.md is injected above with elevated priority; don't repeat it.
+              case "$(basename "$f")" in pinned-rules.md) continue ;; esac
               echo "# === $(basename "$f") ==="
               cat "$f"
               echo
