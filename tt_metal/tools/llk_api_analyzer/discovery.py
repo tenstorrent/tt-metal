@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 """Discovery of compiled compute-kernel ELFs from a tt-metal run.
 
 A TTNN/metal run writes JIT-compiled kernels under
@@ -41,7 +42,7 @@ def discover_compute_kernels(root: str | Path) -> list[KernelArtifacts]:
     ``root`` may be the cache root, a ``<build_key>`` directory, a ``kernels``
     directory, a single kernel directory, or a single compile-hash directory.
     """
-    root = Path(root)
+    root = Path(root).expanduser()
     if not root.exists():
         raise FileNotFoundError(f"Path does not exist: {root}")
 

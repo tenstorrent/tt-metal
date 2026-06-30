@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 """Extract LLK API invocations from a compute thread's DWARF.
 
 Compute-kernel APIs are all ``ALWI`` (always-inline) and the kernels are built

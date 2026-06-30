@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 """Run a model/test command and capture its compiled kernels for analysis.
 
 The most reliable way to know exactly which kernels a run produced is to control
@@ -22,9 +23,6 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-
-# tt-metal appends this subdirectory to whatever TT_METAL_CACHE points at.
-_CACHE_SUBDIR = "tt-metal-cache"
 
 
 @dataclass

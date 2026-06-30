@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 """Mapping of ``tt::DataFormat`` enum codes to names.
 
 The generated ``chlkc_descriptors.h`` stores per-circular-buffer formats as raw

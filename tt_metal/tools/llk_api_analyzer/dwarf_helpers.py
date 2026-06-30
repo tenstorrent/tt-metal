@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 """Generic helpers for navigating a parsed DWARF tree.
 
 These utilities are deliberately independent of any LLK-specific knowledge:

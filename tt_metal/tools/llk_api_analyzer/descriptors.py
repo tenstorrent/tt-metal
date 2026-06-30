@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 """Parser for the generated ``chlkc_descriptors.h`` kernel-config header.
 
 This header sits beside the compiled ELFs (``<kernel>/<hash>/chlkc_descriptors.h``)
