@@ -59,6 +59,16 @@ enum class ChannelBufferSizeKind : uint8_t {
     LargerAligned,
 };
 
+enum class StagingTestPattern : uint32_t {
+    BasicSend = 0,
+    ZeroPacket = 1,
+    StageThenFlush = 2,
+    OpportunisticFlush = 3,
+    StageAndClose = 4,
+    StageRingFull = 5,
+    StageIdle = 6,
+};
+
 struct TestCaseConfig {
     const char* name = "";
     uint32_t num_senders = 1;
@@ -69,6 +79,11 @@ struct TestCaseConfig {
     uint32_t service_burst_size = kDefaultForwarderServiceBurstSize;
     uint32_t trid_ring_capacity = kDefaultTridRingCapacity;
     ChannelBufferSizeKind channel_buffer_size_kind = ChannelBufferSizeKind::ExactFitAligned;
+    bool eager_staging = false;
+    bool use_stateful_lane = false;
+    StagingTestPattern test_pattern = StagingTestPattern::BasicSend;
+    uint32_t stage_count = 0;
+    uint32_t idle_cycles = 0;
 };
 
 struct SenderMemoryLayout {
@@ -229,7 +244,8 @@ private:
 };
 
 std::optional<SenderMemoryLayout> try_build_sender_memory_layout(
-    const MeshDevicePtr& device, uint32_t packet_payload_size_bytes) {
+    const MeshDevicePtr& device, uint32_t packet_payload_size_bytes, const TestCaseConfig& test_case) {
+    (void)test_case;
     AlignedL1Cursor cursor(device);
     SenderMemoryLayout layout{};
     layout.test_results_address = cursor.reserve(kTestResultsSizeBytes);
@@ -567,13 +583,17 @@ std::vector<uint32_t> make_common_compile_args(
     uint32_t test_results_address,
     const SenderMemoryLayout& sender_memory,
     const ReceiverMemoryLayout& receiver_memory,
-    const TestRuntimeConfig& test_runtime_config) {
+    const TestRuntimeConfig& test_runtime_config,
+    const TestCaseConfig& test_case) {
     return {
         test_results_address,
         kTestResultsSizeBytes,
         receiver_memory.receiver_slots_base_address,
         sender_memory.credit_handshake_address,
         test_runtime_config.use_mesh_api ? 1u : 0u,
+        test_case.eager_staging ? 1u : 0u,
+        test_case.use_stateful_lane ? 1u : 0u,
+        static_cast<uint32_t>(test_case.test_pattern),
     };
 }
 
@@ -623,6 +643,10 @@ std::vector<uint32_t> make_sender_runtime_args(
     const SenderReceiverAssignment& assignment,
     const SenderMemoryLayout& sender_memory,
     const CoreCoord& receiver_virtual_core) {
+    const uint32_t effective_stage_count = std::min(
+        test_case.stage_count,
+        std::min(test_case.num_packets, static_cast<uint32_t>(test_case.num_buffers_per_channel)));
+
     return {
         sender_memory.packet_header_buffer_address,
         sender_memory.payload_buffer_address,
@@ -635,6 +659,8 @@ std::vector<uint32_t> make_sender_runtime_args(
         test_runtime_config.use_mesh_api ? 0u : assignment.receiver.linear_num_hops,
         static_cast<uint32_t>(assignment.receiver.fabric_node_id.chip_id),
         static_cast<uint32_t>(*assignment.receiver.fabric_node_id.mesh_id),
+        effective_stage_count,
+        test_case.idle_cycles,
     };
 }
 
@@ -680,8 +706,8 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
     ASSERT_TRUE(sender_receiver_assignments.has_value())
         << "Case " << test_case.name << " could not assign sender and receiver worker cores";
 
-    auto sender_memory =
-        try_build_sender_memory_layout(routing_selection->sender_device, test_runtime_config.packet_payload_size_bytes);
+    auto sender_memory = try_build_sender_memory_layout(
+        routing_selection->sender_device, test_runtime_config.packet_payload_size_bytes, test_case);
     ASSERT_TRUE(sender_memory.has_value())
         << "Case " << test_case.name << " sender worker memory layout exceeds worker L1 budget for payload size "
         << test_runtime_config.packet_payload_size_bytes;
@@ -725,7 +751,11 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
             kReceiverKernelSrc,
             assignment.receiver.logical_core,
             make_common_compile_args(
-                receiver_memory.test_results_address, sender_memory.value(), receiver_memory, test_runtime_config));
+                receiver_memory.test_results_address,
+                sender_memory.value(),
+                receiver_memory,
+                test_runtime_config,
+                test_case));
         auto receiver_runtime_args = make_receiver_runtime_args(
             test_case,
             test_runtime_config,
@@ -741,7 +771,11 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
             kSenderKernelSrc,
             assignment.sender_logical_core,
             make_common_compile_args(
-                sender_memory->test_results_address, sender_memory.value(), receiver_memory, test_runtime_config));
+                sender_memory->test_results_address,
+                sender_memory.value(),
+                receiver_memory,
+                test_runtime_config,
+                test_case));
         auto sender_runtime_args = make_sender_runtime_args(
             test_case, test_runtime_config, assignment, sender_memory.value(), receiver_virtual_core);
         bind_worker_to_mux_channel(
@@ -808,7 +842,7 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 7> kTestCases = {{
+constexpr std::array<TestCaseConfig, 21> kTestCases = {{
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
@@ -854,6 +888,129 @@ constexpr std::array<TestCaseConfig, 7> kTestCases = {{
         .num_buffers_per_channel = 8,
         .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
         .trid_ring_capacity = 2,
+    },
+    // Eager staging tests — non-stateful lane
+    TestCaseConfig{
+        .name = "Staging_NonStateful_ZeroPacket",
+        .num_packets = 0,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::ZeroPacket,
+    },
+    TestCaseConfig{
+        .name = "Staging_NonStateful_StageThenFlush",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageThenFlush,
+        .stage_count = 2,
+    },
+    TestCaseConfig{
+        .name = "Staging_NonStateful_OppFlush",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::OpportunisticFlush,
+        .stage_count = 2,
+    },
+    TestCaseConfig{
+        .name = "Staging_NonStateful_StageAndClose",
+        .num_packets = 1,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageAndClose,
+        .stage_count = 1,
+    },
+    TestCaseConfig{
+        .name = "Staging_NonStateful_StageRingFull",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageRingFull,
+        .stage_count = 4,
+    },
+    TestCaseConfig{
+        .name = "Staging_NonStateful_StageIdle",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageIdle,
+        .stage_count = 1,
+        .idle_cycles = 1000,
+    },
+    // Eager staging tests — stateful lane
+    TestCaseConfig{
+        .name = "Staging_Stateful_ZeroPacket",
+        .num_packets = 0,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::ZeroPacket,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stateful_StageThenFlush",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::StageThenFlush,
+        .stage_count = 2,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stateful_StageAndClose",
+        .num_packets = 1,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::StageAndClose,
+        .stage_count = 1,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stateful_StageRingFull",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::StageRingFull,
+        .stage_count = 4,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stateful_StageIdle",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::StageIdle,
+        .stage_count = 1,
+        .idle_cycles = 1000,
+    },
+    // Multi-sender staging stress tests
+    TestCaseConfig{
+        .name = "Staging_Stress_8Senders_4Bufs_StageThenFlush",
+        .num_senders = 8,
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageThenFlush,
+        .stage_count = 2,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stress_8Senders_16Bufs_DeepStage",
+        .num_senders = 8,
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 16,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageRingFull,
+        .stage_count = 16,
+    },
+    TestCaseConfig{
+        .name = "Staging_Stress_16Senders_1Buf_RingFullOnFirst",
+        .num_senders = 16,
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 1,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageRingFull,
+        .stage_count = 1,
     },
 }};
 

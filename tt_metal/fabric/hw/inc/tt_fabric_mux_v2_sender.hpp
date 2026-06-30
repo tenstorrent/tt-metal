@@ -15,6 +15,14 @@
 
 namespace tt::tt_fabric {
 
+enum class FabricMuxV2SenderState : uint8_t {
+    Disconnected = 0,
+    Staging = 1,
+    Connected = 2,
+};
+
+static constexpr uint8_t kInvalidStatusReadTrid = 0xFF;
+
 /*
  * FabricMuxV2Sender: worker-facing client adapter for the transient self-poll Mux V2.
  *
@@ -50,7 +58,7 @@ namespace tt::tt_fabric {
  *   9  teardown_sem_id                (local: teardown ack; also status scratch)
  *   10 mux_status_address             (mux-global status word)
  */
-template <uint8_t NUM_BUFFERS = 0>
+template <bool EAGER_STAGING = false, uint8_t NUM_BUFFERS = 0>
 class FabricMuxV2Sender {
 public:
     static constexpr bool USER_DEFINED_NUM_BUFFERS = NUM_BUFFERS != 0;
@@ -92,21 +100,58 @@ public:
     // No write barrier here: the inline handshake writes are non-posted and the
     // manager polls for them; first-send correctness does not depend on them
     // having landed (mirrors WorkerToFabricEdmSenderBase::open).
-    void open() {
-        wait_until_ready();
+    void open(uint8_t status_trid = kInvalidStatusReadTrid) {
+        if constexpr (EAGER_STAGING) {
+            open_staging(status_trid);
+        } else {
+            open_blocking();
+        }
+    }
 
-        write_counter = 0;
-        current_slot = 0;
-        *flow_control_ptr = 0;  // read counter the manager will publish into
-        *teardown_ptr = 0;      // teardown ack word
-
-        publish_worker_location_info();
-        request_connection_open();
+    // Force the Staging -> Connected transition if READY has been observed.
+    // Blocking: blocks until READY, then transitions. Always returns true.
+    // Non-blocking: returns true if READY observed (or already Connected),
+    //   false if still Staging.
+    template <bool Blocking = true>
+    bool flush() {
+        if (state != FabricMuxV2SenderState::Staging) {
+            return true;
+        }
+        if constexpr (Blocking) {
+            if (status_read_in_flight) {
+                drain_status_read_trid();
+                if (check_scratch_ready()) {
+                    open_finish();
+                    return true;
+                }
+                status_read_in_flight = false;
+            }
+            wait_until_ready_blocking();
+            open_finish();
+            return true;
+        } else {
+            if (status_read_in_flight) {
+                if (!poll_status_read_trid()) {
+                    return false;
+                }
+                if (check_scratch_ready()) {
+                    open_finish();
+                    return true;
+                }
+            }
+            issue_status_read();
+            return false;
+        }
     }
 
     // Request teardown and wait for the manager's ack. Valid even with zero
     // packets sent; the mux drains any staged packets before retiring credit.
     void close() {
+        if constexpr (EAGER_STAGING) {
+            flush<true>();
+            noc_async_writes_flushed();
+        }
+
         const uint64_t handshake_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, connection_handshake_address, noc_index);
         noc_inline_dw_write<InlineWriteDst::L1>(
             handshake_noc_addr, connection_interface::close_connection_request_value, 0xf, noc_index);
@@ -158,13 +203,27 @@ public:
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         const uint64_t slot_noc_addr = this->current_slot_noc_addr();
         send_chunk_from_address<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, 1, size_bytes, slot_noc_addr);
-        this->commit_current_slot();
+        if constexpr (EAGER_STAGING) {
+            commit_or_stage_non_stateful();
+        } else {
+            this->commit_current_slot();
+        }
     }
 
     // ---------------------------------------------------------------------
     // Data plane: stateful perf lane
     // ---------------------------------------------------------------------
 
+    // Program stateful command buffers for the stateful send lane.
+    // DATA cmd buf (write_reg_cmd_buf): programmed with mux core destination address.
+    // SYNC cmd buf (write_at_cmd_buf): programmed with credit stream reg address and -1 packed value.
+    //
+    // IMPORTANT: The SYNC cmd buf state can be clobbered by any noc_inline_dw_write or
+    // noc_semaphore_inc that uses write_at_cmd_buf internally. In staging mode, open_finish()
+    // calls signal_pending_non_stateful() which clobbers SYNC; open_finish() reprograms it
+    // automatically if stateful_setup_done is true. Callers must avoid using noc_semaphore_inc
+    // or other write_at_cmd_buf-consuming NOC ops between stateful sends, as those will
+    // clobber the SYNC state without automatic restoration.
     template <bool posted = false>
     FORCE_INLINE void setup_stateful_send_cmd_bufs(uint8_t noc = noc_index) {
         this->data_noc_cmd_buf = write_reg_cmd_buf;
@@ -178,6 +237,7 @@ public:
         const uint32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
             credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc, NOC_UNICAST_WRITE_VC);
+        stateful_setup_done = true;
     }
 
     template <bool posted = false>
@@ -190,25 +250,45 @@ public:
         const uint32_t slot_l1_addr = this->current_slot_l1_addr();
         ncrisc_noc_write_with_state<noc_mode, /*posted=*/posted, /*update_counter=*/true, /*one_packet=*/false>(
             noc, this->data_noc_cmd_buf, packet_source_l1_addr, slot_l1_addr, packet_size_bytes);
-        this->commit_current_slot_stateful(noc);
+        if constexpr (EAGER_STAGING) {
+            commit_or_stage_stateful(noc);
+        } else {
+            this->commit_current_slot_stateful(noc);
+        }
+    }
+
+    template <bool posted = false>
+    FORCE_INLINE void send_current_slot_stateful_non_blocking(
+        uint32_t payload_source_l1_addr,
+        uint32_t payload_size_bytes,
+        uint32_t header_source_l1_addr,
+        uint8_t noc = noc_index) {
+        ASSERT(tt::tt_fabric::is_valid(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_source_l1_addr))));
+
+        const uint32_t slot_l1_addr = this->current_slot_l1_addr();
+        ncrisc_noc_write_with_state<noc_mode, /*posted=*/posted, /*update_counter=*/true, /*one_packet=*/false>(
+            noc,
+            this->data_noc_cmd_buf,
+            payload_source_l1_addr,
+            slot_l1_addr + sizeof(PACKET_HEADER_TYPE),
+            payload_size_bytes);
+        ncrisc_noc_write_with_state<noc_mode, /*posted=*/posted, /*update_counter=*/true, /*one_packet=*/false>(
+            noc, this->data_noc_cmd_buf, header_source_l1_addr, slot_l1_addr, sizeof(PACKET_HEADER_TYPE));
+        if constexpr (EAGER_STAGING) {
+            commit_or_stage_stateful(noc);
+        } else {
+            this->commit_current_slot_stateful(noc);
+        }
     }
 
     FORCE_INLINE uint8_t get_stateful_send_data_noc_cmd_buf() const { return this->data_noc_cmd_buf; }
 
-private:
-    void wait_until_ready() {
-        const uint64_t status_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address, noc_index);
-        // Reuse the teardown word as the readback scratch; it is cleared in open().
-        volatile tt_l1_ptr uint32_t* scratch = teardown_ptr;
-        WAYPOINT("MV2W");
-        do {
-            noc_async_read(status_noc_addr, reinterpret_cast<size_t>(scratch), sizeof(uint32_t), noc_index);
-            noc_async_read_barrier(noc_index);
-            invalidate_l1_cache();
-        } while (*scratch != static_cast<uint32_t>(FabricMuxStatus::READY_FOR_TRAFFIC));
-        WAYPOINT("MV2R");
+    FORCE_INLINE bool is_staging_ring_full() const {
+        return state == FabricMuxV2SenderState::Staging && deferred_count == num_buffers;
     }
 
+private:
     void publish_worker_location_info() {
         const uint64_t worker_semaphore_field = get_noc_addr(
             mux_noc_x,
@@ -249,27 +329,180 @@ private:
         return get_noc_addr(mux_noc_x, mux_noc_y, this->current_slot_l1_addr(), noc_index);
     }
 
+    FORCE_INLINE void advance_local_cursor() {
+        write_counter++;
+        advance_slot();
+    }
+
+    FORCE_INLINE void signal_pending_non_stateful(uint32_t count) {
+        const uint64_t credit_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, credit_stream_reg_write_addr, noc_index);
+        const int32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-static_cast<int32_t>(count));
+        noc_inline_dw_write<InlineWriteDst::REG>(credit_noc_addr, packed_val, 0xf, noc_index);
+    }
+
+    FORCE_INLINE void signal_pending_stateful(uint32_t count, uint8_t noc) {
+        if (count == 1) {
+            noc_inline_dw_write_with_state</*posted=*/false, /*update=*/true, false, false, false, InlineWriteDst::REG>(
+                0, 0, this->sync_noc_cmd_buf, noc);
+        } else {
+            // Batched flush: use inline write (non-stateful) for the -count value.
+            // This only happens once in open_finish(); the sync cmd-buf state is
+            // programmed immediately after for steady-state -1 sends.
+            signal_pending_non_stateful(count);
+        }
+    }
+
     FORCE_INLINE void advance_slot() {
         const uint8_t slot_count = USER_DEFINED_NUM_BUFFERS ? NUM_BUFFERS : num_buffers;
         current_slot = (current_slot + 1 == slot_count) ? 0 : static_cast<uint8_t>(current_slot + 1);
     }
 
-    // Publish half of the stage/commit seam: signal a pending packet to the
-    // forwarder (decrement its per-channel credit stream reg), then advance our
-    // local write counter and slot cursor.
     FORCE_INLINE void commit_current_slot() {
-        const uint64_t credit_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, credit_stream_reg_write_addr, noc_index);
-        const int32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        noc_inline_dw_write<InlineWriteDst::REG>(credit_noc_addr, packed_val, 0xf, noc_index);
-        write_counter++;
-        this->advance_slot();
+        signal_pending_non_stateful(1);
+        advance_local_cursor();
     }
 
     FORCE_INLINE void commit_current_slot_stateful(uint8_t noc) {
-        noc_inline_dw_write_with_state</*posted=*/false, /*update=*/true, false, false, false, InlineWriteDst::REG>(
-            0, 0, this->sync_noc_cmd_buf, noc);
-        write_counter++;
-        this->advance_slot();
+        signal_pending_stateful(1, noc);
+        advance_local_cursor();
+    }
+
+    // -----------------------------------------------------------------
+    // Staging helpers (only compiled when EAGER_STAGING = true)
+    // -----------------------------------------------------------------
+
+    void open_blocking() {
+        wait_until_ready_blocking();
+        init_local_state();
+        publish_worker_location_info();
+        request_connection_open();
+        state = FabricMuxV2SenderState::Connected;
+    }
+
+    void open_staging(uint8_t status_trid) {
+        init_local_state();
+        publish_worker_location_info();
+        status_read_trid = status_trid;
+        if (status_read_trid != kInvalidStatusReadTrid) {
+            issue_status_read();
+        }
+        state = FabricMuxV2SenderState::Staging;
+    }
+
+    void init_local_state() {
+        write_counter = 0;
+        current_slot = 0;
+        deferred_count = 0;
+        *flow_control_ptr = 0;
+        *teardown_ptr = 0;
+    }
+
+    void open_finish() {
+        if (status_read_in_flight) {
+            drain_status_read_trid();
+            status_read_in_flight = false;
+        }
+        *teardown_ptr = 0;
+        request_connection_open();
+        if (deferred_count > 0) {
+            signal_pending_non_stateful(deferred_count);
+            deferred_count = 0;
+        }
+        if constexpr (EAGER_STAGING) {
+            if (stateful_setup_done) {
+                reprogram_stateful_sync_cmd_buf();
+            }
+        }
+        state = FabricMuxV2SenderState::Connected;
+    }
+
+    FORCE_INLINE void commit_or_stage_non_stateful() {
+        if (state == FabricMuxV2SenderState::Staging) {
+            if (deferred_count == num_buffers) {
+                flush<true>();
+            }
+            if (state == FabricMuxV2SenderState::Staging) {
+                advance_local_cursor();
+                deferred_count++;
+                ready_check_opportunistic();
+                return;
+            }
+        }
+        commit_current_slot();
+    }
+
+    FORCE_INLINE void commit_or_stage_stateful(uint8_t noc) {
+        if (state == FabricMuxV2SenderState::Staging) {
+            if (deferred_count == num_buffers) {
+                flush<true>();
+            }
+            if (state == FabricMuxV2SenderState::Staging) {
+                advance_local_cursor();
+                deferred_count++;
+                ready_check_opportunistic();
+                return;
+            }
+        }
+        commit_current_slot_stateful(noc);
+    }
+
+    FORCE_INLINE void ready_check_opportunistic() {
+        if (status_read_trid == kInvalidStatusReadTrid) {
+            return;
+        }
+        if (!status_read_in_flight) {
+            issue_status_read();
+            return;
+        }
+        if (poll_status_read_trid()) {
+            if (check_scratch_ready()) {
+                open_finish();
+            } else {
+                issue_status_read();
+            }
+        }
+    }
+
+    void wait_until_ready_blocking() {
+        const uint64_t status_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address, noc_index);
+        volatile tt_l1_ptr uint32_t* scratch = teardown_ptr;
+        WAYPOINT("MV2W");
+        do {
+            noc_async_read(status_noc_addr, reinterpret_cast<size_t>(scratch), sizeof(uint32_t), noc_index);
+            noc_async_read_barrier(noc_index);
+            invalidate_l1_cache();
+        } while (*scratch != static_cast<uint32_t>(FabricMuxStatus::READY_FOR_TRAFFIC));
+        WAYPOINT("MV2R");
+    }
+
+    void issue_status_read() {
+        if (status_read_trid == kInvalidStatusReadTrid) {
+            return;
+        }
+        const uint64_t status_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, mux_status_address, noc_index);
+        noc_async_read_set_trid(status_read_trid, noc_index);
+        noc_async_read(status_noc_addr, reinterpret_cast<size_t>(teardown_ptr), sizeof(uint32_t), noc_index);
+        status_read_in_flight = true;
+    }
+
+    bool poll_status_read_trid() { return ncrisc_noc_read_with_transaction_id_flushed(noc_index, status_read_trid); }
+
+    void drain_status_read_trid() {
+        while (!poll_status_read_trid()) {
+        }
+        invalidate_l1_cache();
+    }
+
+    bool check_scratch_ready() {
+        invalidate_l1_cache();
+        return *teardown_ptr == static_cast<uint32_t>(FabricMuxStatus::READY_FOR_TRAFFIC);
+    }
+
+    void reprogram_stateful_sync_cmd_buf() {
+        const uint64_t credit_noc_addr = get_noc_addr(mux_noc_x, mux_noc_y, credit_stream_reg_write_addr, noc_index);
+        const uint32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+        noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
+            credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc_index, NOC_UNICAST_WRITE_VC);
     }
 
     uint8_t mux_noc_x = 0;
@@ -294,6 +527,12 @@ private:
 
     uint8_t data_noc_cmd_buf = write_reg_cmd_buf;
     uint8_t sync_noc_cmd_buf = write_at_cmd_buf;
+
+    FabricMuxV2SenderState state = FabricMuxV2SenderState::Disconnected;
+    uint8_t deferred_count = 0;
+    uint8_t status_read_trid = kInvalidStatusReadTrid;
+    bool status_read_in_flight = false;
+    bool stateful_setup_done = false;
 };
 
 }  // namespace tt::tt_fabric

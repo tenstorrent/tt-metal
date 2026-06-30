@@ -10,7 +10,7 @@
 
 namespace tt::tt_fabric {
 // Forward declaration to avoid pulling the full V2 sender header into this widely-included file.
-template <uint8_t NUM_BUFFERS>
+template <bool EAGER_STAGING, uint8_t NUM_BUFFERS>
 class FabricMuxV2Sender;
 }  // namespace tt::tt_fabric
 
@@ -182,8 +182,8 @@ constexpr bool is_edm_sender_v = is_edm_sender<T>::value;
 template <typename T>
 struct is_fabric_mux_v2_sender : std::false_type {};
 
-template <uint8_t N>
-struct is_fabric_mux_v2_sender<tt::tt_fabric::FabricMuxV2Sender<N>> : std::true_type {};
+template <bool E, uint8_t N>
+struct is_fabric_mux_v2_sender<tt::tt_fabric::FabricMuxV2Sender<E, N>> : std::true_type {};
 
 template <typename T>
 constexpr bool is_fabric_mux_v2_sender_v = is_fabric_mux_v2_sender<T>::value;
