@@ -51,6 +51,7 @@ inline void _reduce_row_transpose_alu_cfg_enter_()
     // cfg_rmw(ALU_ACC_CTRL_Fp32_enabled_RMW, 1);
     // cfg_rmw(ALU_ACC_CTRL_INT8_math_enabled_RMW, 0);
     cfg_rmw(ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW, 1);
+    cfg_rmw(ALU_FORMAT_SPEC_REG_Dstacc_override_RMW, 1);
 }
 
 /**
@@ -65,34 +66,8 @@ inline void _reduce_row_transpose_alu_cfg_exit_()
     // cfg_rmw(ALU_ACC_CTRL_Fp32_enabled_RMW, 0);
     // cfg_rmw(ALU_ACC_CTRL_INT8_math_enabled_RMW, 1);
     cfg_rmw(ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW, 0);
+    cfg_rmw(ALU_FORMAT_SPEC_REG_Dstacc_override_RMW, 0);
 }
-
-// /**
-//  * @brief One-time prime of the SrcB transpose region (and engine latch) with zeros,
-//  *        so the first real hi16 MOVB2D in _reduce_row_transpose_fpu_ doesn't read
-//  *        power-on garbage. Must transpose KNOWN-ZERO data, not raw dest.
-//  */
-// inline void _reduce_row_transpose_warmup_()
-// {
-//     constexpr std::uint32_t warmup_scratch_row = 16; // any in-tile row the real pool will overwrite
-//
-//     tensix_sync();
-//     _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
-//     _reduce_row_transpose_alu_cfg_enter_();
-//
-//     // Guarantee the source datums are zero before we transpose them
-//     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, warmup_scratch_row);
-//
-//     // Dummy transpose of zeros: flushes the transpose-engine latch and leaves
-//     // SrcB[16:31] holding a known zero column before the first real use.
-//     TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, warmup_scratch_row);
-//     TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, warmup_scratch_row);
-//
-//     tensix_sync();
-//     _reduce_row_transpose_alu_cfg_exit_();
-//     _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
-//     tensix_sync();
-// }
 
 /**
  * @brief Int32 half-dest row transpose at an explicit dest row (row-reduce uses row 0).
@@ -139,6 +114,34 @@ inline void _reduce_row_transpose_fpu_(const std::uint32_t dest_addr = 0)
 }
 
 /**
+ * @brief Seed the int32 dest rows with the max-pool identity (most-negative int) before the first GMPOOL.
+ *
+ * The GMPOOL accumulates max against dest, so an unseeded 0 dest collapses all-negative rows to 0.
+ *
+ * Seeds via SrcB (not SrcA): ZEROSRC CLR_B fills SrcB with the int -inf pattern and MOVB2D broadcasts
+ * it into the int32 dest (hi16 via DEST_NORM, lo16 via DEST_32B_LOW). SrcA must NOT be touched here --
+ * it holds the unpacked face the very next GMPOOL pools, and clobbering it drops a lane (MAX comes out
+ * too low). MAX's GMPOOL ignores SrcB, so overwriting SrcB is safe.
+ */
+inline void _reduce_int32_dest_init_min_for_max_(const std::uint32_t dst_addr)
+{
+    TTI_ZEROSRC(1, 1, 0, 1, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_B); // SrcB = int -inf (SrcA/face untouched)
+    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+
+    tensix_sync();
+    _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
+
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, dst_addr + 0);
+    TTI_MOVB2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, dst_addr + 8);
+    TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, dst_addr + 0);
+    TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, dst_addr + 8);
+
+    tensix_sync();
+    _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
+    tensix_sync();
+}
+
+/**
  * @brief Pool one pair of input faces (one output face row) into dest at an explicit row offset.
  *
  * Int32-dest reduce only (LoFi exact-integer accumulation; no fidelity multi-pass).
@@ -146,6 +149,12 @@ inline void _reduce_row_transpose_fpu_(const std::uint32_t dest_addr = 0)
 template <PoolType POOL_TYPE, std::uint8_t DST_ADDR>
 inline void _reduce_row_pool_face_pair_()
 {
+    if constexpr (POOL_TYPE == PoolType::MAX)
+    {
+        // Seed dest to the int max-pool identity; GMPOOL accumulates max against it (it does not
+        // overwrite a 0 dest), so without this all-negative rows reduce to 0.
+        _reduce_int32_dest_init_min_for_max_(DST_ADDR);
+    }
     tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, DST_ADDR>();
     tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, DST_ADDR>();
 }
@@ -174,11 +183,16 @@ inline void _llk_math_reduce_row_int32_fpu_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Perform reduce-scalar at runtime for Int32 dest using FPU transpose glue (not replay buffer).
+ * @brief Perform reduce-scalar at runtime for Int32 dest.
  *
- * Flow: pool 4 faces -> 1x16 int32 row at scratch -> hi/lo transpose -> MOVD2B/MOVB2A column into
- * SrcA -> final pool to dest[0]. Hi/lo transpose is required for int32 dest layout (each datum
- * spans hi/lo address spaces), not because partial sums exceed 16 bits.
+ * Flow: pool the faces -> 1x16 partial row at scratch -> MOVD2B(transpose) the row into a SrcB column
+ * -> MOVB2A into SrcA -> final pool to dest[0]. The MOVD2B->MOVB2A load (not a math-side MOVD2A from
+ * dest) is required so SrcA stays source-valid for the final pool: a plain MOVD2A moves data but does
+ * not raise SrcA dvalid, and the pool then consumes nothing (yields 0). This mirrors the canonical
+ * MOP path (@ref _llk_math_reduce_scalar_mop_config_), kept as straight-line TTI.
+ *
+ * @note MAX is exact (Int8-range). SUM/AVG is only exact while per-column partials stay within Int8
+ * range; larger partials truncate when MOVD2B narrows the int32 dest row. See REDUCE_INT8_QUASAR_HANDOFF.md.
  */
 template <PoolType POOL_TYPE>
 inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
@@ -189,31 +203,15 @@ inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
     {
         tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
     }
-
     tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
 
-    // WH parity: AB counters at 0; MOVD2B uses explicit scratch_dst_addr operand.
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
-
-    // 1 int32 row -> 16 int32 rows in dest[scratch, scratch+15].
-    _reduce_row_transpose_fpu_(scratch_dst_addr);
-
-    // MOVD2A: arg `src` is offset from dest counter; arg `dst` is SrcA row (see move_d2a_fixed_face).
-
-    TTI_MOVD2A(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, 0);
-    TTI_MOVD2A(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, 8);
-
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, scratch_dst_addr);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
-
-    if constexpr (POOL_TYPE == PoolType::MAX)
-    {
-        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-    }
-    else
-    {
-        TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
-        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCAB_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-    }
+    _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int8, DataFormat::Int8);
+    tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
 }
 
 /**
@@ -527,7 +525,7 @@ inline void _llk_math_reduce_addrmod_()
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @param en_int32_dest: When true for REDUCE_ROW/REDUCE_SCALAR SUM/AVG, skip MOV-glue MOP and use SFPU at execute time.
+ * @param en_int32_dest: When true for REDUCE_ROW/REDUCE_SCALAR, skip MOV-glue MOP and use FPU glue at execute time.
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
@@ -559,10 +557,6 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape, const bool e
         if (!use_int32_fpu_glue)
         {
             _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
-        }
-        else
-        {
-            // _reduce_row_transpose_warmup_(); // SCALAR DOES NOT WORK YET
         }
     }
 
