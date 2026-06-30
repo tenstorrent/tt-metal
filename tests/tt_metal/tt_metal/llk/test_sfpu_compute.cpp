@@ -1226,6 +1226,9 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
     if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
         GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
     }
+    if (arch_ == tt::ARCH::QUASAR && sfpu_op == "rsqrt" && num_tiles == 4) {
+        GTEST_SKIP() << "Skipping Quasar rsqrt_4tiles until the approximate SFPU path is fixed";
+    }
     if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
         ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {

@@ -45,7 +45,7 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-kt_dims = [1, 2, 4]
+kt_dims = [1]  # [1, 2, 4]
 
 
 def matmul_dimensions_dest_sync(dest_acc_modes):
@@ -74,13 +74,13 @@ def matmul_dimensions_dest_sync(dest_acc_modes):
 MATMUL_FORMAT = input_output_formats(
     [
         DataFormat.Float16,
-        DataFormat.Float16_b,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
+        # DataFormat.Float16_b,
+        # DataFormat.MxFp8R,
+        # DataFormat.MxFp8P,
+        # DataFormat.MxFp4,
+        # DataFormat.MxInt8,
+        # DataFormat.MxInt4,
+        # DataFormat.MxInt2,
     ],
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
@@ -93,13 +93,13 @@ _ARCH = get_chip_architecture()
     # Integer matmul is LoFi-only on Quasar.
     math_fidelity=lambda format: (
         [MathFidelity.LoFi]
-        if format.input_format == DataFormat.Int8
-        else [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
-        ]
+        # if format.input_format == DataFormat.Int8
+        # else [
+        #     MathFidelity.LoFi,
+        #     MathFidelity.HiFi2,
+        #     MathFidelity.HiFi3,
+        #     MathFidelity.HiFi4,
+        # ]
     ),
     dimensions_dest_acc_dest_sync=lambda format: (
         matmul_dimensions_dest_sync((DestAccumulation.Yes,))

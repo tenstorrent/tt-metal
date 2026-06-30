@@ -9,6 +9,8 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "perf.h"
+#include "profiler.h"
 #include "sfpu_stub.h"
 
 // Globals
@@ -32,42 +34,52 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // Setup sync for unpack
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
-    set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
-    // src A input configuration
-    tdma_descriptor_t tdma_desc_src_a;
-    tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
-    tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_A_src);
-    tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc.f.z_dim        = num_faces_A; // Number of faces = 4, tiny tiles not supported for quasar
-    tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
-    tdma_desc_src_a.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_A_dst);
-
-    // src B input configuration
-    tdma_descriptor_t tdma_desc_src_b;
-    tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
-    tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_B_src);
-    tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc.f.z_dim        = num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
-    tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
-    tdma_desc_src_b.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_B_dst);
-
-    _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
-    _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
-    _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(tdma_desc_src_a);
-    _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(tdma_desc_src_b);
-
-    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM); // transpose in src_A not supported for
-                                                                                                                    // quasar
-
-    for (std::uint32_t j = 0; j < KT_DIM; j++)
     {
-        _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+        ZONE_SCOPED("INIT")
+        // Setup sync for unpack
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
+        // src A input configuration
+        tdma_descriptor_t tdma_desc_src_a;
+        tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
+        tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_A_src);
+        tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
+        tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
+        tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
+        tdma_desc_src_a.buf_desc.f.z_dim        = num_faces_A; // Number of faces = 4, tiny tiles not supported for quasar
+        tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
+        tdma_desc_src_a.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_A_dst);
+
+        // src B input configuration
+        tdma_descriptor_t tdma_desc_src_b;
+        tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
+        tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_B_src);
+        tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
+        tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
+        tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
+        tdma_desc_src_b.buf_desc.f.z_dim        = num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
+        tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
+        tdma_desc_src_b.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_B_dst);
+
+        _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
+        _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
+        _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(tdma_desc_src_a);
+        _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(tdma_desc_src_b);
+
+        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM); // transpose in src_A not supported for
+                                                                                                                        // quasar
+        PROFILER_SYNC();
+    }
+    {
+        ZONE_SCOPED("TILE_LOOP")
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        {
+            for (std::uint32_t j = 0; j < KT_DIM; j++)
+            {
+                _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -84,30 +96,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+    {
+        ZONE_SCOPED("INIT")
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    DataFormat math_format     = static_cast<DataFormat>(formats.math);
-    DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-    if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+        DataFormat math_format     = static_cast<DataFormat>(formats.math);
+        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
+        }
+        else
+        {
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
+        }
+        // ENABLE_2X_FORMAT enables the 2x-packed FP4 matmul path (8 MVMULs per tile vs 16, K-dim
+        // halved per MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are
+        // configured as MxFp4_2x_A or MxFp4_2x_B.
+        // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
+        // the auto-increment-addr_mod MVMUL variant.
+        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+        PROFILER_SYNC();
     }
-    else
     {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
+        ZONE_SCOPED("TILE_LOOP")
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        {
+            for (std::uint32_t i = 0; i < KT_DIM; i++)
+            {
+                _llk_math_matmul_block_(CT_DIM, RT_DIM);
+            }
+            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+        }
+        PROFILER_SYNC();
     }
-    // ENABLE_2X_FORMAT enables the 2x-packed FP4 matmul path (8 MVMULs per tile vs 16, K-dim
-    // halved per MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are
-    // configured as MxFp4_2x_A or MxFp4_2x_B.
-    // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
-    // the auto-increment-addr_mod MVMUL variant.
-    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
-
-    for (std::uint32_t i = 0; i < KT_DIM; i++)
-    {
-        _llk_math_matmul_block_(CT_DIM, RT_DIM);
-    }
-    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 
 #endif
@@ -123,24 +145,34 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+    {
+        ZONE_SCOPED("INIT")
+        set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    tdma_descriptor_t tdma_desc_dst;
-    tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_Res[0]);
-    tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
-    tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;
-    tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
-    tdma_desc_dst.buf_desc.f.z_dim        = num_faces;
-    tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
-    tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
+        tdma_descriptor_t tdma_desc_dst;
+        tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_Res[0]);
+        tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
+        tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
+        tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;
+        tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
+        tdma_desc_dst.buf_desc.f.z_dim        = num_faces;
+        tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
+        tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
 
-    _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
-    _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
-
-    _llk_pack_matmul_(0, 0);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
+        _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc_dst);
+        _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1); // Use destination buffer descriptor for packing output
+        PROFILER_SYNC();
+    }
+    {
+        ZONE_SCOPED("TILE_LOOP")
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+        {
+            _llk_pack_matmul_(0, 0);
+            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

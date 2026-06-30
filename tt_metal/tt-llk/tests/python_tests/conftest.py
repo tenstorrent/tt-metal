@@ -51,6 +51,7 @@ from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
 
 _exalens_server: Optional[ExalensServer] = None
+_reuse_simulator_connected = False
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
@@ -146,6 +147,13 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Restart the tt-exalens server after each test. "
+        "Only effective with --run-simulator.",
+    )
+    parser.addoption(
+        "--reuse-simulator-server",
+        action="store_true",
+        default=False,
+        help="Connect to an existing tt-exalens server instead of starting one. "
         "Only effective with --run-simulator.",
     )
 
@@ -380,6 +388,25 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
+    if (
+        TestConfig.TEST_TARGET.reuse_simulator_server
+        and not TestConfig.TEST_TARGET.run_simulator
+    ):
+        pytest.exit(
+            "ERROR: --reuse-simulator-server requires --run-simulator.",
+            returncode=1,
+        )
+
+    if (
+        TestConfig.TEST_TARGET.reuse_simulator_server
+        and TestConfig.TEST_TARGET.reset_simulator_per_test
+    ):
+        pytest.exit(
+            "ERROR: --reuse-simulator-server cannot be used with "
+            "--reset-simulator-per-test.",
+            returncode=1,
+        )
+
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
@@ -393,13 +420,21 @@ def pytest_configure(config):
                 # ttsim: already initialized at module import above; runs in-process, no server.
                 # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
+                if TestConfig.TEST_TARGET.reuse_simulator_server:
+                    pytest.exit(
+                        "ERROR: --reuse-simulator-server is not supported with ttsim. "
+                        "Re-run without it.",
+                        returncode=1,
+                    )
                 if TestConfig.TEST_TARGET.reset_simulator_per_test:
                     pytest.exit(
                         "ERROR: --reset-simulator-per-test is not supported with ttsim. "
                         "Re-run without it.",
                         returncode=1,
                     )
-            elif not hasattr(config, "workerinput"):
+            elif not TestConfig.TEST_TARGET.reuse_simulator_server and not hasattr(
+                config, "workerinput"
+            ):
                 # RTL simulator: only the controller process manages the server; xdist workers
                 # just connect to the already-running instance.
                 global _exalens_server
@@ -636,6 +671,22 @@ def pytest_runtest_makereport(item, call):
 _reset_simulator_pending = False
 
 
+def _init_reused_simulator_remote() -> None:
+    """Connect this pytest process to an externally managed tt-exalens server."""
+    global _reuse_simulator_connected
+    if _reuse_simulator_connected:
+        return
+
+    logger.info(
+        "Connecting to existing tt-exalens server (port={})...",
+        TestConfig.TEST_TARGET.simulator_port,
+    )
+    tt_exalens_init.init_ttexalens_remote(
+        port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
+    )
+    _reuse_simulator_connected = True
+
+
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
     if not TestConfig.TEST_TARGET.reset_simulator_per_test:
@@ -653,6 +704,10 @@ def pytest_runtest_teardown(item, nextitem):
 def pytest_runtest_setup(item):
     """Start the server on the first test, or restart between tests if requested."""
     global _exalens_server, _reset_simulator_pending
+
+    if TestConfig.TEST_TARGET.reuse_simulator_server:
+        _init_reused_simulator_remote()
+        return
 
     if _exalens_server is None:
         return
