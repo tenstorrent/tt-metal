@@ -106,6 +106,13 @@ def test_flux2_performance(
     # Performance measurement runs
     logger.info(f"Running {NUM_PERF_RUNS} timed iterations...")
 
+    prompts = [
+        "A photo of a cat sitting on a windowsill at sunset",
+        "A lifelike, warm portrait of a woman in her late 30s, shot on an 85mm lens, golden-hour lighting casting a soft glow, shallow depth of field, sharp focus on the eyes, highly detailed skin texture, photorealistic editorial style.",
+        "Create an image of an alien world with floating rock islands, massive glowing tropical plants, and twin moons in the night sky. Wide-angle shot, cinematic lighting, vivid colors, highly detailed sci-fi concept art.",
+    ]
+
+    results = []
     for i in range(NUM_PERF_RUNS):
         logger.info(f"Performance run {i + 1}/{NUM_PERF_RUNS}...")
 
@@ -115,13 +122,14 @@ def test_flux2_performance(
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
                 images = pipeline(
-                    prompts=["A photo of a cat sitting on a windowsill at sunset"],
+                    prompts=[prompts[i % len(prompts)]],
                     num_inference_steps=NUM_INFERENCE_STEPS,
                     seed=42,
                     traced=True,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                 )
+                results.append(images)
                 ttnn.synchronize_device(mesh_device)
 
         logger.info(f"  Run {i + 1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -142,10 +150,11 @@ def test_flux2_performance(
     if not is_ci_env:
         rank = int(ttnn.distributed_context_get_rank())
         if rank == 0:
-            mesh_tag = "x".join(str(s) for s in mesh_device.shape)
-            output_path = f"flux2_{mesh_tag}_{width}x{height}.png"
-            images[0].save(output_path)
-            logger.info(f"Image saved as {output_path}")
+            for i in range(NUM_PERF_RUNS):
+                mesh_tag = "x".join(str(s) for s in mesh_device.shape)
+                output_path = f"flux2_{mesh_tag}_{width}x{height}_{i}.png"
+                results[i][0].save(output_path)
+                logger.info(f"Image {i} saved as {output_path}")
 
     # Report results
     print("\n" + "=" * 80)
