@@ -41,6 +41,7 @@ def test_denoise_block_requires_injected_noise_hooks(gumbel_noise_fn, noise_toke
 def test_denoise_block_deallocates_consumed_injected_noise(monkeypatch):
     gumbel_noise = _FakeTensor("gumbel")
     noise_tokens = _FakeTensor("noise")
+    logits = _FakeTensor("logits")
     init_canvas = _FakeTensor("init-canvas")
     next_canvas = _FakeTensor("next-canvas")
 
@@ -64,7 +65,7 @@ def test_denoise_block_deallocates_consumed_injected_noise(monkeypatch):
     monkeypatch.setattr(DL, "_accept_to_torch", lambda tensor: torch.ones(1, 1, dtype=torch.bool))
 
     trajectory = DL.denoise_block(
-        lambda canvas, step: _FakeTensor("logits"),
+        lambda canvas, step: logits,
         init_canvas,
         DiffusionConfig(max_denoise_steps=1, entropy_stop_threshold=1.0, stable_steps_to_halt=0),
         gumbel_noise_fn=lambda step: gumbel_noise,
@@ -74,3 +75,4 @@ def test_denoise_block_deallocates_consumed_injected_noise(monkeypatch):
     assert trajectory.halted
     assert gumbel_noise.deallocated
     assert noise_tokens.deallocated
+    assert logits.deallocated

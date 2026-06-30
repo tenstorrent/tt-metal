@@ -196,8 +196,9 @@ def denoise_block(
         )
         gumbel_noise = gumbel_noise_fn(step) if gumbel_noise_fn else None
         noise_tokens = noise_tokens_fn(step) if noise_tokens_fn else None
+        logits = logits_fn(canvas, step)
         res = denoise_step(
-            logits_fn(canvas, step),
+            logits,
             temperature=temperature,
             entropy_budget=config.entropy_budget,
             gumbel_noise=gumbel_noise,
@@ -213,6 +214,7 @@ def denoise_block(
         sampled = _ids_to_torch(res.sampled)
         accept_mask = _accept_to_torch(res.accept_mask)
         host_canvas = _ids_to_torch(res.canvas)
+        logits.deallocate(True)
         entropy_mean = entropy.mean().item()
         records.append(
             StepRecord(
