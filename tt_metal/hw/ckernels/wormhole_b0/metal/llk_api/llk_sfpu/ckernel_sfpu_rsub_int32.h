@@ -23,21 +23,16 @@ inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in
     // the subtrahend, matching the original TTI_SFPIADD(..., 2SCOMP_LREG_DST). The load/store DataLayout
     // is chosen so its SFP load/store format byte equals the original InstrModLoadStore value:
     //   INT32 (4) -> I32 (sign-mag<->2's-comp conversion), LO16 (6) -> U16, INT32_2S_COMP (12) -> SM32 (raw).
+    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16)            ? sfpi::DataLayout::U16
+                                        : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) ? sfpi::DataLayout::SM32
+                                                                                                 : sfpi::DataLayout::I32;
+    using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        if constexpr (INSTRUCTION_MODE == InstrModLoadStore::LO16) {
-            sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<sfpi::DataLayout::U16>();
-            sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<sfpi::DataLayout::U16>();
-            sfpi::dst_reg[dst_index_out * dst_tile_size].mode<sfpi::DataLayout::U16>() = b - a;
-        } else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
-            sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<sfpi::DataLayout::SM32>();
-            sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<sfpi::DataLayout::SM32>();
-            sfpi::dst_reg[dst_index_out * dst_tile_size].mode<sfpi::DataLayout::SM32>() = b - a;
-        } else {  // InstrModLoadStore::INT32
-            sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<sfpi::DataLayout::I32>();
-            sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<sfpi::DataLayout::I32>();
-            sfpi::dst_reg[dst_index_out * dst_tile_size].mode<sfpi::DataLayout::I32>() = b - a;
-        }
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<layout>();
+        vType b = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<layout>();
+        sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = b - a;
         sfpi::dst_reg++;
     }
 }
