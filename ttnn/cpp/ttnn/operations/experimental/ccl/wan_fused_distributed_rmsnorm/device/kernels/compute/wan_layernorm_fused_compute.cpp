@@ -202,8 +202,10 @@ void kernel_main() {
             transpose_wh_tile(invstd_cb, 0, var_dst);
             binop_with_scalar_tile_init();
             add_unary_tile(var_dst, eps_bits);
-            rsqrt_tile_init();
-            rsqrt_tile(var_dst);
+            // legacy rsqrt to match the composite dit_layernorm baseline (it uses
+            // rsqrt_tile<true>); the non-legacy default diverges on low-variance rows.
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(var_dst);
             tile_regs_commit();
 
             cb_pop_front(mean_cb, 1);
@@ -233,7 +235,9 @@ void kernel_main() {
                 combined_obj,
                 ring_size,
                 [](uint32_t) { return reduce_width; },
-                RSqrtPolicy{/*compute=*/true, /*eps=*/eps_bits});
+                // legacy=true: match the composite dit_layernorm rsqrt (rsqrt_tile<true>);
+                // the non-legacy default diverges on low-variance rows -> in-block PCC loss.
+                RSqrtPolicy{/*compute=*/true, /*eps=*/eps_bits, /*legacy=*/true});
             cb_push_back(combine_cb, 2);
 
             // Transpose merged mean / 1/std row 0 -> col 0.
