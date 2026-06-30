@@ -25,6 +25,7 @@ from pydantic import (
 
 from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig, GlobalConfig
+from .validator import PackSchema
 
 FUSER_CONFIG_DIR = (
     Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
@@ -141,7 +142,9 @@ class FuserConfigSchema(BaseModel):
                 if hasattr(node, "src_b"):
                     seen_operands.add(node.src_b)
 
-            for pack_entry in op.pack:
+            pack_schemas = [e for e in op.pack if isinstance(e, PackSchema)]
+
+            for pack_entry in pack_schemas:
                 if pack_entry.output in seen_operands:
                     raise ValueError(
                         f"cannot use '{pack_entry.output}' as output twice"
@@ -158,14 +161,14 @@ class FuserConfigSchema(BaseModel):
                             f"Dest Accumulation must be enabled for {input_fmt.name} input and {output_fmt.name} output"
                         )
 
-            if len(op.pack) > 1:
-                pack_formats = [formats[e.output] for e in op.pack]
+            if len(pack_schemas) > 1:
+                pack_formats = [formats[e.output] for e in pack_schemas]
                 first_exp_b = pack_formats[0].is_exponent_B()
                 if any(f.is_exponent_B() != first_exp_b for f in pack_formats[1:]):
-                    names = [e.output for e in op.pack]
+                    names = [e.output for e in pack_schemas]
                     logger.warning(
                         f"Pack outputs {names} have mixed exponent families, "
-                        f"unpack/math format inference will use {op.pack[0].output} as reference",
+                        f"unpack/math format inference will use {pack_schemas[0].output} as reference",
                     )
 
         return self

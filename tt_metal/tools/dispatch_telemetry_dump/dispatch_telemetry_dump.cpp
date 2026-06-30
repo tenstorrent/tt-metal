@@ -117,7 +117,7 @@ Program create_blank_program(const CoreCoord& core) {
     Program program = CreateProgram();
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/blank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     return program;

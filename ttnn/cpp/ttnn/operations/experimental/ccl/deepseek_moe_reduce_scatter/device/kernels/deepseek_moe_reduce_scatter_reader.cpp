@@ -76,7 +76,6 @@ void kernel_main() {
         uint32_t tiles_to_read = start_tiles_to_read;
         while (tiles_read < tiles_to_read) {
             if (do_reduce) {
-                // Device 2.0 migration: legacy primitive retained, op_semaphore is a GlobalSemaphore address.
                 noc_semaphore_wait_min(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(op_semaphore), semaphore_target_val + 1);
                 semaphore_target_val++;
@@ -99,6 +98,5 @@ void kernel_main() {
     }
 
     // reset the semaphore
-    // Device 2.0 migration: legacy primitive retained, op_semaphore is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(op_semaphore), 0);
 }

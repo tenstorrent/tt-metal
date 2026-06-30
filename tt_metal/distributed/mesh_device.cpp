@@ -876,7 +876,6 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     }
     auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
     view_ = std::move(new_view);
-    clear_program_cache();  // Reshape remaps device order
 }
 
 bool MeshDeviceImpl::close() {
@@ -1104,13 +1103,11 @@ void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manag
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
-    clear_program_cache();  // Manager switch may remap SubDeviceId
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
-    clear_program_cache();  // possibility of remapping worker cores baked into cached programs.
 }
 
 CoreCoord MeshDeviceImpl::dram_grid_size() const {
