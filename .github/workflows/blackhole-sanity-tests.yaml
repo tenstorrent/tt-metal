@@ -32,11 +32,11 @@ on:
         type: boolean
         default: true
         description: "Run profiler regression tests"
-      run-umd-unit-tests:
+      run-umd-sanity-tests:
         required: false
         type: boolean
         default: true
-        description: "Run UMD unit tests"
+        description: "Run UMD sanity tests"
       run-ops-unit-tests:
         required: false
         type: boolean
@@ -97,11 +97,11 @@ on:
         type: boolean
         default: true
         description: "Run profiler regression tests"
-      run-umd-unit-tests:
+      run-umd-sanity-tests:
         required: false
         type: boolean
         default: true
-        description: "Run UMD unit tests"
+        description: "Run UMD sanity tests"
       run-ops-unit-tests:
         required: false
         type: boolean
@@ -180,7 +180,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-sanity-tests:
     needs: [resolve-docker-pull-refs, build-artifact]
-    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    if: ${{ always() && !cancelled() && (inputs.run-umd-sanity-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
     secrets: inherit
     uses: ./.github/workflows/umd-sanity-tests-impl.yaml
     with:

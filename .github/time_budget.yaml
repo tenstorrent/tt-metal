@@ -357,6 +357,7 @@ models:
 umd:
   unit:
     wh_galaxy_perf: 35
+  sanity:
     wh_n150_civ2: 15
     wh_n300_civ2: 15
     bh_p100a_civ2_viommu: 15
