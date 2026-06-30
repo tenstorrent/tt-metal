@@ -1199,7 +1199,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilize) {
 // Quasar's unpack_tilizeA_B is only compatible with the reduce math kernel.
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeUnpackTilizeA_B) {
     for (bool dst_full_sync_en : {true, false}) {
-        for (bool fp32_dest_acc_en : {true, false}) {
+        for (bool fp32_dest_acc_en : {false}) {  // TODO: Enable fp32_dest_acc_en=true once ISSUE #48504 is resolved
             for (tt::DataFormat data_format : {tt::DataFormat::Float16_b}) {
                 uint32_t tile_size = tt::tile_size(data_format);
                 tt::DataFormat output_data_format = data_format;
