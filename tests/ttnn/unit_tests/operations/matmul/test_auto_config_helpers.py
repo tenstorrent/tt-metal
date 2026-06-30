@@ -434,6 +434,8 @@ def test_select_candidate_uses_runtime_winner_when_tuning_is_disabled(monkeypatc
 
 def test_dispatch_matmul_stages_host_rhs_even_when_auto_config_disabled(monkeypatch):
     class FakeTensor:
+        shape = (4, 4)
+
         def device(self):
             return "device"
 
@@ -473,6 +475,8 @@ def test_dispatch_matmul_stages_host_rhs_even_when_auto_config_disabled(monkeypa
 
 def test_dispatch_matmul_bypasses_selector_for_unsupported_distributed_plan(monkeypatch):
     class FakeTensor:
+        shape = (4, 4)
+
         def device(self):
             return "device"
 
@@ -512,6 +516,8 @@ def test_dispatch_matmul_bypasses_selector_for_unsupported_distributed_plan(monk
 
 def test_dispatch_matmul_bypasses_selector_when_graph_report_is_enabled(monkeypatch):
     class FakeTensor:
+        shape = (4, 4)
+
         def device(self):
             return "device"
 
