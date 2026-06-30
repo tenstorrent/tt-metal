@@ -84,7 +84,7 @@ class Mistral7BExecutorRuntimeConfig:
         # tracing buys nothing. Mistral-7B has no model-specific entry, so it uses the family
         # default: N150 -> [128], N300/T3K -> [128, 1024]. (The old `return False` -- "prefill trace
         # capture hits TT_FATAL under LazyWeight + distributed norms" -- no longer reproduces;
-        # prefill compiles, captures and replays cleanly. See REBASE_UPDATE.md.) Decode trace
+        # prefill compiles, captures and replays cleanly, confirmed on N150/N300/T3K.) Decode trace
         # remains enabled at the engine layer regardless.
         num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
         allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
