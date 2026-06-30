@@ -4,6 +4,8 @@
 
 Use it when you want to see how an SFPU op behaves across its input domain: where it loses precision, whether it stays monotonic, and how big the worst-case error is.
 
+> **Note:** Supported on Wormhole and Blackhole only.
+
 ## Quick start
 
 Run from the `tests/` directory.
@@ -18,7 +20,7 @@ pytest python_tests/test_sfpu_plot.py -s
 
 - `-k <Op>` selects a single case by op name, for example `Log`, `Sqrt`, or `Reciprocal`.
 - `-s` lets the stats summary print to your terminal.
-- `CHIP_ARCH` (`blackhole`, `wormhole`, or `quasar`) selects the target device.
+- `CHIP_ARCH` (`blackhole` or `wormhole`) selects the target device.
 
 Each case writes its plot to `_plot_output/sfpu_<id>.png` and asserts that the hardware result matches golden.
 
