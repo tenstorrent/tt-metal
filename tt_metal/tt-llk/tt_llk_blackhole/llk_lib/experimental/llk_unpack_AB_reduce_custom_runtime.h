@@ -81,9 +81,11 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
 
     TTI_SETDMAREG(0, 1 * FACE_C_DIM * FACE_R_DIM, 0, LO_16(p_gpr_unpack::TMP0));
     TTI_SETDMAREG(0, 1 * FACE_C_DIM * FACE_R_DIM, 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // Wait for ThCon to land the SETDMAREG GPR write before WRCFG reads it (BH)
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     TTI_SETDMAREG(0, 4 /* y_dim */, 0, LO_16(p_gpr_unpack::TMP0));
     TTI_SETDMAREG(0, 1 /* z_dim */, 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // Wait for ThCon to land the SETDMAREG GPR write before WRCFG reads it (BH)
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
 
     _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(block_ct_dim, respect_trigger); // Unpack operand and scaler

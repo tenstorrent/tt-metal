@@ -243,8 +243,9 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
     TTI_SETDMAREG(0, LOWER_HALFWORD(row_set_mapping_1), 0, LO_16(p_gpr_pack::TMP1));
     TTI_SETDMAREG(0, UPPER_HALFWORD(row_set_mapping_1), 0, HI_16(p_gpr_pack::TMP1));
 
-    // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    // Wait for packer to finish to avoid breaking its current configuration (PACK), and for ThCon to land the
+    // SETDMAREG GPR writes above before the WRCFGs below consume them (THCON, required on Blackhole)
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
 
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(face_r_dim);
 
@@ -276,8 +277,9 @@ inline void _llk_pack_reduce_mask_clear_()
     TTI_SETDMAREG(0, LOWER_HALFWORD(pack_edge_offset.val), 0, LO_16(p_gpr_pack::TMP0));
     TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
 
-    // Wait for packer to finish to avoid breaking its current configuration
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+    // Wait for packer to finish to avoid breaking its current configuration (PACK), and for ThCon to land the
+    // SETDMAREG GPR writes above before the WRCFGs below consume them (THCON, required on Blackhole)
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
 
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1);
 
