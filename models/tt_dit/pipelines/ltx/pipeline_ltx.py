@@ -889,6 +889,9 @@ class LTXPipeline:
         ``C_in_block`` changes (mirrors Wan)."""
         if self.vae_decoder is None:
             return
+        # Static load keeps the VAE resident across the audio decode — skip the per-request reload.
+        if self.vae_decoder.is_loaded():
+            return
 
         def _vae_state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"VAE cache miss — loading safetensors: {self._vae_checkpoint_path}")
@@ -2065,12 +2068,8 @@ class LTXPipeline:
             torch.save(audio_latent.cpu(), _dump)
             logger.info(f"dumped audio latent {tuple(audio_latent.shape)} -> {_dump}")
 
-        # VAE and audio modules can't be L1-coresident on BH-LB. With
-        # dynamic_load the audio (re)load below evicts the VAE via the
-        # coresident exclusions registered in `_register_coresident_exclusions`;
-        # without dynamic_load nothing evicts, so free the VAE explicitly.
-        if not self.dynamic_load and self.vae_decoder is not None and self.vae_decoder.is_loaded():
-            self.vae_decoder.deallocate_weights()
+        # No explicit VAE free: dynamic_load evicts it via coresident exclusions; static load keeps
+        # it resident (the _prepare_vae is_loaded guard then skips the reload).
 
         # Shells are built by `_new_audio_decoder` at instantiation time; this
         # method only loads weights into them.
