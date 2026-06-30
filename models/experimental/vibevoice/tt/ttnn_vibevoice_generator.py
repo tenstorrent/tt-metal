@@ -239,6 +239,20 @@ class TTVibeVoiceGenerator:
         self._pd_audio_out: Optional[ttnn.Tensor] = None
         self._pd_eager_frames = 0
 
+        # Optional ttnn trace of the diffusion-head forward (opt-in via VV_TRACE_DIFFUSION=1,
+        # set by demo_ttnn.py --trace).  The head is stateless (no streaming caches) and has a
+        # fixed CFG-batched shape, so a single capture replays for every step of every frame —
+        # no per-segment reset, and bit-exact vs eager (the WAR hazard that limits the
+        # post-diffusion trace is absent here).  scheduler.step stays host-side: its per-step
+        # coefficients are Python floats that would bake into the trace.
+        self._trace_diffusion = os.environ.get("VV_TRACE_DIFFUSION", "0") == "1"
+        self._diff_tid = None
+        self._diff_sample_in: Optional[ttnn.Tensor] = None
+        self._diff_t_in: Optional[ttnn.Tensor] = None
+        self._diff_cond_in: Optional[ttnn.Tensor] = None
+        self._diff_eps_out: Optional[ttnn.Tensor] = None
+        self._diff_eager_steps = 0
+
     def _token_label(self, token_id: int) -> str:
         labels = {
             self.speech_start_id: "speech_start",
@@ -486,7 +500,74 @@ class TTVibeVoiceGenerator:
             initial_latent,
             cfg_scale=self.cfg_scale,
             num_steps=self.num_diffusion_steps,
+            head_runner=self._diff_head_runner if self._trace_diffusion else None,
         )
+
+    def _diff_head_runner(
+        self, noisy_images: ttnn.Tensor, timesteps: ttnn.Tensor, condition: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """Trace/replay the (stateless, fixed-shape) diffusion-head forward.
+
+        Drop-in for ``diffusion_head(...)`` inside the DPM loop.  The three inputs are
+        copied into persistent fixed-address buffers before each replay; the persistent
+        output is fully consumed (CFG split/combine + scheduler.step) within the step
+        before the next replay overwrites it.
+
+        Lifecycle (mirrors the post-diffusion trace so the two coexist safely): the head
+        runs eager for a whole first frame (``num_diffusion_steps`` calls), then captures
+        on the next call, then replays.  The full-frame warm-up matters because the
+        post-diffusion streaming caches are allocated lazily during frame 0's post-diffusion
+        block — capturing before that allocation, or letting it happen while the trace is
+        live, corrupts the trace.  ``_reset_diffusion_trace`` drops the capture at each
+        segment boundary (where those caches are reset + reallocated) so it re-warms there."""
+        dev = self.device
+        if self._diff_sample_in is None:
+            self._diff_sample_in = ttnn.zeros(
+                list(noisy_images.shape),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._diff_t_in = ttnn.zeros(
+                list(timesteps.shape),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._diff_cond_in = ttnn.zeros(
+                list(condition.shape),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        ttnn.copy(input_a=noisy_images, input_b=self._diff_sample_in)
+        ttnn.copy(input_a=timesteps, input_b=self._diff_t_in)
+        ttnn.copy(input_a=condition, input_b=self._diff_cond_in)
+
+        if self._diff_tid is None:
+            if self._diff_eager_steps < self.num_diffusion_steps:
+                self._diff_eager_steps += 1
+                return self.diffusion_head(self._diff_sample_in, self._diff_t_in, self._diff_cond_in)
+            self._diff_tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._diff_eps_out = self.diffusion_head(self._diff_sample_in, self._diff_t_in, self._diff_cond_in)
+            ttnn.end_trace_capture(dev, self._diff_tid, cq_id=0)
+            _vv_debug("diffusion_head: trace captured")
+            return self._diff_eps_out
+        ttnn.execute_trace(dev, self._diff_tid, cq_id=0, blocking=False)
+        return self._diff_eps_out
+
+    def _reset_diffusion_trace(self) -> None:
+        """Invalidate the diffusion-head trace at a segment boundary.  The head is stateless,
+        but the post-diffusion streaming caches are reset + reallocated here; allocating DRAM
+        while any trace is live corrupts it, so release the head trace and re-warm/recapture
+        on the next segment (the persistent I/O buffers are kept — only the capture is dropped)."""
+        if self._diff_tid is not None:
+            ttnn.release_trace(self.device, self._diff_tid)
+        self._diff_tid = None
+        self._diff_eager_steps = 0
 
     def _post_diffusion_embeds(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Diffusion latent → (fused next-step embed, current audio chunk)."""
@@ -842,9 +923,13 @@ class TTVibeVoiceGenerator:
                 _vv_debug("  new speech segment: reset neg-CFG cache + acoustic/semantic streaming caches")
                 neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
                 neg_prev_diffusion_token = None
+                # Release both traces before touching the streaming caches: the caches are
+                # freed + reallocated here, and a live trace referencing them (or any DRAM
+                # alloc while a trace is live) would be corrupted.
+                self._reset_postdiff_trace()
+                self._reset_diffusion_trace()
                 self.acoustic_tok.reset_decode_cache()
                 self.semantic_tok.reset_cache()
-                self._reset_postdiff_trace()  # caches realloc → captured trace is stale
                 if self.ref_inference is not None:
                     self._reset_ref_tokenizer_caches()
 
