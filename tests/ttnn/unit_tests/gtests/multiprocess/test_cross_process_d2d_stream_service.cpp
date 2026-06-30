@@ -587,6 +587,95 @@ MeshWorkload make_stress_compute_workload(
     return workload;
 }
 
+template <typename Upstream>
+MeshWorkload make_stress_d2h_compute_workload(
+    Upstream* inbound,
+    const std::shared_ptr<MeshDevice>& mesh,
+    D2HStreamService* d2h_service,
+    uint32_t skip_gate,
+    uint32_t metadata_size_bytes = 0) {
+    const auto& coords = inbound->get_backing_tensor().tensor_topology().mesh_coords();
+    const auto* up_buf = inbound->get_backing_tensor().buffer();
+    const uint32_t page_size = up_buf->aligned_page_size();
+    const uint32_t num_pages = up_buf->num_pages();
+    const CoreRange worker_cores = inbound->get_worker_cores();
+    const uint32_t num_workers = core_range_volume(worker_cores);
+    constexpr auto kScratchCb = CBIndex::c_0;
+
+    const uint32_t dest_addr = static_cast<uint32_t>(d2h_service->get_backing_tensor().buffer()->address());
+    const uint32_t transfer_done_sem_addr = static_cast<uint32_t>(d2h_service->get_transfer_done_sem_addr());
+
+    // Metadata path: read the per-stage increment from the blob the inbound service
+    // mcast into the worker grid (uniform L1 addr), and — when producing — the
+    // designated core propagates it to the outbound D2D sender's metadata buffer.
+    const bool metadata_enabled = metadata_size_bytes > 0;
+    const uint32_t inbound_metadata_l1_addr =
+        metadata_enabled ? static_cast<uint32_t>(inbound->get_metadata_addr()) : 0u;
+
+    MeshWorkload workload;
+    for (const auto& coord : coords) {
+        auto program = CreateProgram();
+        auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
+                          .set_page_size(kScratchCb, page_size);
+        CreateCircularBuffer(program, worker_cores, cb_cfg);
+
+        const auto* up_dbuf = inbound->get_backing_tensor().mesh_buffer().get_device_buffer(coord);
+        auto accessor_ct = TensorAccessorArgs(*up_dbuf).get_compile_time_args();
+        std::vector<uint32_t> ct_args = {
+            transfer_done_sem_addr,
+            static_cast<uint32_t>(inbound->get_data_ready_sem_addr()),
+            static_cast<uint32_t>(up_buf->address()),
+            dest_addr,
+            page_size,
+            static_cast<uint32_t>(kScratchCb),
+            kFillDelta,  // fallback increment when metadata disabled
+            metadata_enabled ? 1u : 0u,
+            metadata_size_bytes,
+            inbound_metadata_l1_addr,
+        };
+        ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
+
+        auto kernel = CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stress_relay_d2h.cpp",
+            worker_cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = ct_args,
+                .defines = {{"STRESS_MODE", "0"}}});
+
+        auto* device = mesh->get_device(coord);
+        const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
+        const auto d2h_svc_phys = device->worker_core_from_logical_core(d2h_service->get_service_core(coord));
+        const uint32_t write_ack_addr = static_cast<uint32_t>(d2h_service->get_write_ack_counter_addr(coord));
+        const uint32_t d2h_metadata_input_addr =
+            metadata_enabled ? static_cast<uint32_t>(d2h_service->get_metadata_input_addr(coord)) : 0u;
+        for (const auto& wc : worker_cores) {
+            const auto [start_page, end_page] =
+                worker_page_range(worker_index(wc, worker_cores), num_workers, num_pages);
+            // Single designated core forwards the metadata blob to the D2H service core.
+            const uint32_t is_metadata_writer = (metadata_enabled && wc == worker_cores.end_coord) ? 1u : 0u;
+            const std::vector<uint32_t> rt_args = {
+                start_page,
+                end_page,
+                static_cast<uint32_t>(inbound->get_consumed_counter_addr(coord)),
+                static_cast<uint32_t>(up_svc_phys.x),
+                static_cast<uint32_t>(up_svc_phys.y),
+                skip_gate,
+                write_ack_addr,
+                static_cast<uint32_t>(d2h_svc_phys.x),
+                static_cast<uint32_t>(d2h_svc_phys.y),
+                is_metadata_writer,
+                d2h_metadata_input_addr,
+            };
+            SetRuntimeArgs(program, kernel, wc, rt_args);
+        }
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
+    }
+    return workload;
+}
+
 // ForwardChainStress SIGNAL pass (d2d_stress_relay, STRESS_MODE=1): every worker core
 // atomic-incs the outbound data_ready_counter -> num_workers acks -> the sender forwards
 // this iter's output. Run AFTER the lease release so the forward fires last.
@@ -776,7 +865,8 @@ MeshWorkload make_stress_fabric_workload(
 }
 
 // Assert `output` holds the iota (base + i) on every coord.
-void expect_output_tensor_iota(const Tensor& output, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
+[[maybe_unused]] void expect_output_tensor_iota(
+    const Tensor& output, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
     // ReadShard needs a shared_ptr<MeshBuffer>, but the Tensor only exposes a
     // `const MeshBuffer&`. Build a non-owning view over the existing device
     // allocation (same address, no new allocation, no const_cast). The view must
@@ -799,7 +889,7 @@ void expect_output_tensor_iota(const Tensor& output, const std::shared_ptr<MeshD
 // (the last iter's propagated increment). Reads the uniform worker-grid metadata L1 on
 // every participating (coord, worker core) directly — a separate, explicit check that
 // the blob arrived intact, complementing the iota's value-driven check.
-void expect_worker_metadata(
+[[maybe_unused]] void expect_worker_metadata(
     D2DStreamServiceReceiver* inbound,
     const std::shared_ptr<MeshDevice>& mesh,
     const CoreRange& worker_cores,
@@ -865,6 +955,20 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
             D2DEndpointConfig{.sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx});
     }
 
+    std::unique_ptr<D2HStreamService> d2h_service;
+    if (has_inbound && !has_outbound) {
+        const auto spec = make_cfg(mesh_device_, global_shape).global_spec;
+        D2HStreamService::Config cfg{
+            .global_spec = spec,
+            .mapper = create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)}),
+            .fifo_size_bytes = fifo_bytes_for(spec),
+            .scratch_cb_size_bytes = fifo_bytes_for(spec),
+            .worker_cores = kWorkerCores,
+            .metadata_size_bytes = 0,
+        };
+        d2h_service = std::make_unique<D2HStreamService>(mesh_device_, std::move(cfg));
+    }
+
     // [B1] All services resident across all ranks before any data flows.
     ctx->barrier();
 
@@ -874,20 +978,6 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
     std::thread h2d_feeder;
     if (is_stage0) {
         h2d_feeder = std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, kNumIters); });
-    }
-
-    std::unique_ptr<D2HStreamService> d2h_service;
-    if (has_inbound && !has_outbound) {
-        const auto spec = make_cfg(mesh_device_, global_shape).global_spec;
-        D2HStreamService::Config cfg{
-            .global_spec = spec,
-            .mapper = create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)}),
-            .fifo_size_bytes = fifo_bytes_for(spec),
-            .scratch_cb_size_bytes = fifo_bytes_for(spec),
-            .worker_cores = kWorkerCores,  // worker_cores for stress
-            .metadata_size_bytes = 0,      // kStressMetadataBytes for stress
-        };
-        d2h_service = std::make_unique<D2HStreamService>(mesh_device_, std::move(cfg));
     }
 
     // Op parameters are loop-invariant (backing/output addresses are fixed at allocation):
@@ -975,15 +1065,6 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
             std::vector<uint32_t> actual(host_buf.size() / sizeof(uint32_t));
             std::memcpy(actual.data(), host_buf.data(), host_buf.size());
             EXPECT_EQ(actual, expected) << "D2H readback mismatch at iter " << iter;
-
-            // ForwardChainStress: also read + verify metadata
-            // std::vector<std::byte> metadata_out(kStressMetadataBytes);
-            // d2h_service->read_from_tensor(host_buf, metadata_out);
-            // const uint32_t delta = seeds[iter];
-            // expected = make_iota_u32(..., kFillBase + iter + world_size * delta);
-            // uint32_t meta_val;
-            // std::memcpy(&meta_val, metadata_out.data(), sizeof(uint32_t));
-            // EXPECT_EQ(meta_val, delta);
         }
     }
 
@@ -1079,6 +1160,21 @@ void run_forward_chain_stress(
             D2DEndpointConfig{.sender_rank = Rank{rank}, .receiver_rank = Rank{rank + 1}, .distributed_context = ctx});
     }
 
+    std::unique_ptr<D2HStreamService> d2h_service;
+    if (has_inbound && !has_outbound) {
+        const auto spec = make_cfg(mesh_device_, global_shape).global_spec;
+        D2HStreamService::Config cfg{
+            .global_spec = spec,
+            .mapper = create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)}),
+            .fifo_size_bytes = fifo_bytes_for(spec),
+            .scratch_cb_size_bytes = fifo_bytes_for(spec),
+            .worker_cores = worker_cores,
+            .metadata_master_core = worker_cores.end_coord,
+            .metadata_size_bytes = kStressMetadataBytes,
+        };
+        d2h_service = std::make_unique<D2HStreamService>(mesh_device_, std::move(cfg));
+    }
+
     ctx->barrier();  // [B1]
 
     // Per-iter random increments, generated identically on every rank from the fixed
@@ -1093,15 +1189,9 @@ void run_forward_chain_stress(
             std::thread([&] { run_h2d_feed_loop(*h2d_service, global_shape, num_iters, kStressMetadataBytes, seeds); });
     }
 
-    Tensor output;
-    if (has_inbound && !has_outbound) {
-        output = create_device_tensor(
-            inbound->get_per_shard_spec(), mesh_device_.get(), inbound->get_backing_tensor().tensor_topology());
-    }
-
     const bool produce = has_outbound;
     const uint32_t dest_addr = produce ? static_cast<uint32_t>(outbound->get_backing_tensor().buffer()->address())
-                                       : static_cast<uint32_t>(output.buffer()->address());
+                                       : static_cast<uint32_t>(d2h_service->get_backing_tensor().buffer()->address());
     D2DStreamServiceSender* const gate_sender = has_outbound ? outbound.get() : nullptr;
 
     // Mesh-wide fabric-test GlobalSemaphore on the single fabric core; neighbors atomic-inc
@@ -1117,16 +1207,27 @@ void run_forward_chain_stress(
         inbound->release_fabric_links();
     }
 
+    std::vector<std::byte> host_buf;
+    if (d2h_service) {
+        host_buf.resize(d2h_service->payload_size_bytes());
+    }
+
     auto& cq = mesh_device_->mesh_command_queue();
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         // (a) COMPUTE (all cores): fused gate (skipped iter 0 / no outbound) + wait inbound
         //     + mutate (+1) this worker's slice + ack inbound consumed. No data_ready yet.
         const uint32_t skip_gate = iter == 0 ? 1u : 0u;
-        MeshWorkload compute =
-            is_stage0 ? make_stress_compute_workload(
-                            h2d_service.get(), mesh_device_, dest_addr, gate_sender, skip_gate, kStressMetadataBytes)
-                      : make_stress_compute_workload(
-                            inbound.get(), mesh_device_, dest_addr, gate_sender, skip_gate, kStressMetadataBytes);
+        MeshWorkload compute;
+        if (is_stage0) {
+            compute = make_stress_compute_workload(
+                h2d_service.get(), mesh_device_, dest_addr, gate_sender, skip_gate, kStressMetadataBytes);
+        } else if (has_outbound) {
+            compute = make_stress_compute_workload(
+                inbound.get(), mesh_device_, dest_addr, gate_sender, skip_gate, kStressMetadataBytes);
+        } else {
+            compute = make_stress_d2h_compute_workload(
+                inbound.get(), mesh_device_, d2h_service.get(), skip_gate, kStressMetadataBytes);
+        }
         EnqueueMeshWorkload(cq, compute, /*blocking=*/false);
         Finish(cq);
 
@@ -1163,22 +1264,26 @@ void run_forward_chain_stress(
             EnqueueMeshWorkload(cq, signal, /*blocking=*/false);
             Finish(cq);
         }
+
+        if (d2h_service) {
+            // ForwardChainStress: also read + verify metadata
+            std::vector<std::byte> metadata_out(kStressMetadataBytes);
+            d2h_service->read_from_tensor(host_buf, metadata_out);
+            d2h_service->barrier();
+            const uint32_t delta = seeds[iter];
+            auto expected = make_iota_u32(
+                host_buf.size() / sizeof(uint32_t), kFillBase + iter + static_cast<uint32_t>(world_size) * delta);
+            std::vector<uint32_t> actual(host_buf.size() / sizeof(uint32_t));
+            std::memcpy(actual.data(), host_buf.data(), host_buf.size());
+            EXPECT_EQ(actual, expected) << "D2H stress payload mismatch at iter " << iter;
+            uint32_t meta_val;
+            std::memcpy(&meta_val, metadata_out.data(), sizeof(uint32_t));
+            EXPECT_EQ(meta_val, delta) << "D2H stress metadata mismatch at iter " << iter;
+        }
     }
 
     if (h2d_feeder.joinable()) {
         h2d_feeder.join();
-    }
-
-    // Each of the world_size stages added the per-iter metadata increment to the final
-    // iter's iota, so the end value is kFillBase + (num_iters-1) + e + world_size*delta
-    // (delta = seeds[last]) on every element/coord. Plus an explicit metadata readback:
-    // the blob the inbound receiver multicast must equal seeds[last]. Together these
-    // catch any drop/garble/stale metadata at any hop.
-    if (has_inbound && !has_outbound) {
-        const uint32_t last_delta = seeds[num_iters - 1];
-        expect_output_tensor_iota(
-            output, mesh_device_, kFillBase + num_iters - 1 + static_cast<uint32_t>(world_size) * last_delta);
-        expect_worker_metadata(inbound.get(), mesh_device_, worker_cores, last_delta);
     }
 
     Synchronize(mesh_device_.get(), std::nullopt);
