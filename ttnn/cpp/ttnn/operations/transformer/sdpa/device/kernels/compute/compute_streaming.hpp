@@ -111,7 +111,6 @@ template <
     uint32_t NeginfTileIdx,
     uint32_t CausalDiagTileIdx,
     uint32_t LocalNPaddedTiles,
-    uint32_t JointNPaddedTiles,
     uint32_t GlobalNPartialCol,
     uint32_t JointLPartialCol,
     uint32_t GlobalNPartialTileIdx,
@@ -121,13 +120,13 @@ struct RingStreamingMaskCtx {
     // Per-ring-iter runtime fields (the only ones needing stack storage):
     bool is_causal = false;
     uint32_t global_n_padded_tiles = 0;
+    uint32_t joint_n_padded_tiles = 0;
     uint32_t straddle_num_padded_tiles = 0;
     // Compile-time-constant fields (no per-instance storage):
     static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
     static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t primary_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
-    static constexpr uint32_t joint_n_padded_tiles = JointNPaddedTiles;
     static constexpr uint32_t global_n_partial_col = GlobalNPartialCol;
     static constexpr uint32_t joint_l_partial_col = JointLPartialCol;
     static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
@@ -2257,6 +2256,10 @@ template <
     uint32_t v_cb_physical_width_t = vDHt,
     bool v_shares_k_buffer = false,
     bool kt_inplace_v = false,
+    // Sharded joint: skip joint K chunks that lie entirely in the padded joint tail, mirroring the
+    // reader's kv_chunk_is_beyond_logical_l skip so the K/V CB producer/consumer counts stay aligned.
+    bool joint_n_skip_enabled = false,
+    uint32_t joint_local_padded_Nt = 0,  // Lt_local: per-device joint tile count (sharded path)
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2280,7 +2283,9 @@ void sdpa_ring_v2(
     const bool skip_first_half_q = false,
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
-    const bool is_first_active_iter = true) {
+    const bool is_first_active_iter = true,
+    // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
+    const uint32_t logical_lt = 0) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2367,6 +2372,12 @@ void sdpa_ring_v2(
     // Skip KV chunks beyond the logical sequence length (padding tiles).
     auto try_skip_oob_kv = [&](uint32_t k_chunk, bool kv_chunk_is_joint) -> bool {
         if (kv_chunk_is_joint) {
+            // Skip joint chunk at/after logical_lt - pure padding
+            if constexpr (joint_n_skip_enabled) {
+                const uint32_t joint_global_start_tile =
+                    ring_id * joint_local_padded_Nt + (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                return joint_global_start_tile >= logical_lt;
+            }
             return false;
         }
         return !kv_chunk_starts_before_logical_end<
@@ -2508,7 +2519,11 @@ void sdpa_ring_v2(
                 apply_mask = apply_mask || is_global_n_mask_chunk;
             }
             if constexpr (joint_n_mask_enabled) {
-                apply_mask = apply_mask || is_joint_n_mask_chunk;
+                // Mirror the spatial local_n strategy for the joint chunk. The exp variant's LightweightMaskContext
+                // keeps it runtime.
+                if (lw_mask.joint_l_partial_col > 0) {
+                    apply_mask = apply_mask || is_joint_n_mask_chunk;
+                }
             }
 
             // Resolve lightweight mask params for partial tile masking

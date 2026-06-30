@@ -512,6 +512,66 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             joint_v_shape[2]);
     }
 
+    // Sharded-joint path validation
+    if (tensor_args.joint_is_sharded()) {
+        // Defensive guard: must be true by construction in the prim, but assert before any deref.
+        TT_FATAL(
+            tensor_args.gathered_joint_k.has_value() && tensor_args.gathered_joint_v.has_value(),
+            "sharded joint path requires resolved gathered joint K/V buffers");
+
+        // L here is the per-device joint shard length (joint_q_shape[2]); the padded total across
+        // the ring is L * ring_size. The true (unpadded) joint token count is args.logical_l, which
+        // may be smaller than the padded total when the joint prompt leaves pad rows on the global
+        // tail. This mirrors how the spatial path keeps logical_n <= the padded gathered N_global.
+        const uint32_t padded_L = L * args.ring_size;
+        TT_FATAL(args.logical_l > 0, "logical_l must be provided and > 0 for the sharded-joint path");
+        TT_FATAL(
+            L % tt::constants::TILE_HEIGHT == 0,
+            "joint shard seq ({}) must be tile-aligned (TILE_HEIGHT={})",
+            L,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            args.logical_l <= padded_L,
+            "logical_l ({}) must be <= the padded joint length (per-shard {} * ring_size {} = {})",
+            args.logical_l,
+            L,
+            args.ring_size,
+            padded_L);
+        TT_FATAL(
+            tensor_args.gathered_joint_k->logical_shape()[2] == padded_L,
+            "gathered joint K seq ({}) must equal the padded joint length ({})",
+            tensor_args.gathered_joint_k->logical_shape()[2],
+            padded_L);
+        TT_FATAL(
+            tensor_args.gathered_joint_v->logical_shape()[2] == padded_L,
+            "gathered joint V seq ({}) must equal the padded joint length ({})",
+            tensor_args.gathered_joint_v->logical_shape()[2],
+            padded_L);
+
+        // Mode incompatibilities: none of these combinations are reasoned about for sharded-joint.
+        TT_FATAL(!args.is_causal, "sharded joint is incompatible with is_causal");
+        TT_FATAL(!args.is_balanced, "sharded joint is incompatible with is_balanced (zigzag)");
+        TT_FATAL(!args.is_cross, "sharded joint is incompatible with is_cross");
+        TT_FATAL(!args.kv_cache_batch_idx.has_value(), "sharded joint is incompatible with indexed KV cache");
+        TT_FATAL(!args.kv_actual_isl.has_value(), "sharded joint is incompatible with KV-pad rotation");
+
+        // Page-size parity: joint K/V are appended to the same fused all-gather list as spatial K/V.
+        // The AG validator enforces uniform page size; assert explicitly for a clear error on divergence.
+        TT_FATAL(
+            tensor_args.joint_k->buffer()->page_size() == tensor_args.input_k.buffer()->page_size(),
+            "joint K page size ({}) must match spatial K page size ({}) for fused all-gather",
+            tensor_args.joint_k->buffer()->page_size(),
+            tensor_args.input_k.buffer()->page_size());
+    } else if (args.logical_l > 0 && has_joint_tensors && L != args.logical_l) {
+        TT_FATAL(
+            false,
+            "joint per-device seq ({}) must equal logical_l (replicated) or logical_l/ring_size (sharded). "
+            "logical_l={}, ring_size={}",
+            L,
+            args.logical_l,
+            args.ring_size);
+    }
+
     TT_FATAL(
         N_global >= N_local_kv * args.ring_size,
         "Gathered K seq length must be >= per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
@@ -676,6 +736,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.is_balanced,
         args.is_cross,
         cache_key_logical_n,
+        args.logical_l,
+        tensor_args.joint_is_sharded(),
         args.ring_size,
         args.compute_kernel_config,
         args.program_config,
@@ -777,8 +839,11 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
     const std::string& joint_strategy,
     const std::size_t logical_n,
+    const std::size_t logical_l,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -862,6 +927,51 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             "joint tensors must be omitted when input_tensor_v is omitted for latent-V mode");
     }
 
+    // Detect sharded-joint path: each device holds a per-device joint shard (padded, tile-aligned),
+    // smaller than the true joint length. On the replicated path each device holds the full joint,
+    // so joint_seq == logical_l. The padded total gathered across the ring is joint_seq * num_devices,
+    // which may exceed the true logical_l when the prompt leaves pad rows on the global tail.
+    const std::size_t joint_seq =
+        joint_tensor_k.has_value() ? static_cast<std::size_t>(joint_tensor_k->logical_shape()[2]) : 0;
+    const bool joint_is_sharded = (logical_l > 0) && (joint_seq > 0) && (joint_seq < logical_l);
+
+    // For the sharded-joint path: allocate gather scratch buffers before building the AG list,
+    // because all_gather_output_tensors must contain real tensors (nullopt is a fatal error).
+    std::optional<Tensor> resolved_gathered_joint_k;
+    std::optional<Tensor> resolved_gathered_joint_v;
+    if (joint_is_sharded) {
+        TT_FATAL(
+            joint_tensor_k.has_value() && joint_tensor_v.has_value(),
+            "Joint K and V must be provided for the sharded-joint path");
+        // The gather concatenates one padded shard from each device, so the scratch buffer is sized
+        // to the padded total (joint_seq * num_devices), not the true logical_l. Extra tail rows are
+        // pad tokens that the kernels mask/skip.
+        const auto& jk = joint_tensor_k.value();
+        auto jk_shape = jk.logical_shape();
+        jk_shape[2] = static_cast<uint32_t>(joint_seq * num_devices);
+        resolved_gathered_joint_k =
+            persistent_output_buffer_joint_k.has_value()
+                ? persistent_output_buffer_joint_k.value()
+                : create_device_tensor(
+                      TensorSpec(jk_shape, TensorLayout(jk.dtype(), PageConfig(Layout::TILE), jk.memory_config())),
+                      jk.device());
+
+        const auto& jv = joint_tensor_v.value();
+        auto jv_shape = jv.logical_shape();
+        jv_shape[2] = static_cast<uint32_t>(joint_seq * num_devices);
+        resolved_gathered_joint_v =
+            persistent_output_buffer_joint_v.has_value()
+                ? persistent_output_buffer_joint_v.value()
+                : create_device_tensor(
+                      TensorSpec(jv_shape, TensorLayout(jv.dtype(), PageConfig(Layout::TILE), jv.memory_config())),
+                      jv.device());
+
+        all_gather_input_tensors.push_back(joint_tensor_k.value());
+        all_gather_output_tensors.push_back(resolved_gathered_joint_k);
+        all_gather_input_tensors.push_back(joint_tensor_v.value());
+        all_gather_output_tensors.push_back(resolved_gathered_joint_v);
+    }
+
     auto all_gather_tensor_args = ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs{
         std::move(all_gather_input_tensors), std::move(all_gather_output_tensors)};
 
@@ -872,6 +982,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         is_balanced,
         is_cross,
         logical_n,
+        logical_l,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::move(program_config),
@@ -894,6 +1005,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
         .gathered_v = persistent_output_buffer_v,
+        // Declaration order in RingJointSDPAInputs: gathered_joint_k/v precede slot_id/kv_actual_isl,
+        // and C++20 requires designated initializers in declaration order.
+        .gathered_joint_k = resolved_gathered_joint_k,
+        .gathered_joint_v = resolved_gathered_joint_v,
         .slot_id = slot_id,
         .kv_actual_isl = kv_actual_isl_tensor};
 

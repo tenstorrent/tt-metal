@@ -40,6 +40,8 @@ constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
 // All-gather writer runtime-arg layout: [0]=dim, [1]=sem_noc0_x, [2]=sem_noc0_y, [3]=ring_size,
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
+// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, tile_id_start, tile_id_end,
+// input_batch_base (offset 7), valid_pages_per_batch_head (offset 8).
 constexpr uint32_t kTensorDescriptorFieldCount = 9;
 constexpr uint32_t kInputBatchBaseFieldOffset = 7;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input

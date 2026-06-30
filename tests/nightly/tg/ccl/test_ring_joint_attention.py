@@ -8,11 +8,14 @@ from loguru import logger
 import pytest
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
+    run_ring_joint_sdpa_sharded_prompt,
     run_test_ring_joint_sdpa,
     create_ring_joint_sdpa_submesh,
     wh_glx_unit_test_params,
     mesh_device_map,
 )
+from models.tt_dit.utils.padding import get_padded_vision_seq_len
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 @wh_glx_unit_test_params
@@ -271,3 +274,64 @@ def test_ring_joint_sdpa_program_cache(
     )
 
     assert submesh.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "sp_axis, b, nh, base_seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
+    [
+        # sp_factor=8 on axis 0 of 8x4 mesh (same mesh as non-sharded Galaxy nightly)
+        (0, 1, 24, 64, 256, 64, 64, 64),
+        # sp_factor=4 on axis 1 of 8x4 mesh
+        (1, 1, 24, 64, 256, 64, 64, 64),
+    ],
+    ids=["sp8", "sp4"],
+)
+def test_ring_joint_sdpa_sharded_prompt(
+    mesh_device,
+    num_links,
+    sp_axis,
+    b,
+    nh,
+    base_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    all_gather_topology,
+    reset_seeds,
+):
+    """Sharded-joint path: joint Q/K/V are L/P per device; logical_l gathers joint K/V internally."""
+    sp_factor = mesh_device.shape[sp_axis]
+    up_axis = 1 - sp_axis
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    submesh.cache_entries_counter = CacheEntriesCounter(submesh)
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, sp_factor)
+    assert joint_seq_len % sp_factor == 0, "joint_seq_len must be divisible by sp_factor"
+    run_ring_joint_sdpa_sharded_prompt(
+        submesh,
+        b=b,
+        nh=nh,
+        base_seq_len=base_seq_len,
+        padded_seq_len=padded_seq_len,
+        joint_seq_len=joint_seq_len,
+        d=d,
+        rp_axis=sp_axis,
+        rp_factor=sp_factor,
+        up_axis=up_axis,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        num_links=num_links,
+        topology=all_gather_topology,
+    )
