@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <sys/_stdint.h>
+
 #include <cstdint>
 
 #include "ckernel.h"
@@ -66,16 +68,9 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
     if (tensor_shape.face_r_dim < FACE_R_DIM) // Using tiny faces
     {
         // Swapped REDUCE_ROW: data is in SrcB, pad SrcB; otherwise data is in SrcA, pad SrcA
-        if constexpr (swap_operands)
-        {
-            ckernel_template tmp(outerloop, innerloop, clear_pool_dep_srcb, lltt::replay_insn(0, REPLAY_BUF_LEN));
-            tmp.program();
-        }
-        else
-        {
-            ckernel_template tmp(outerloop, innerloop, clear_pool_dep_srca, lltt::replay_insn(0, REPLAY_BUF_LEN));
-            tmp.program();
-        }
+        static constexpr std::uint32_t clear_pool_dep = swap_operands ? clear_pool_dep_srcb : clear_pool_dep_srca;
+        ckernel_template tmp(outerloop, innerloop, clear_pool_dep, lltt::replay_insn(0, REPLAY_BUF_LEN));
+        tmp.program();
     }
     else // Using standard faces (face_r_dim = FACE_R_DIM)
     {
@@ -129,14 +124,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
 
     // UNP_B reads data faces (face_r_dim rows) in swapped mode, or a single
     // scaler row in the non-swapped (MAX / COL / SCALAR) mode.
-    if constexpr (swap_operands)
-    {
-        config_unpacker_x_end<p_setadc::UNP_B>(tensor_shape.face_r_dim);
-    }
-    else
-    {
-        config_unpacker_x_end<p_setadc::UNP_B>(1);
-    }
+    config_unpacker_x_end<p_setadc::UNP_B>(swap_operands ? tensor_shape.face_r_dim : 1);
 
     // Configure unpack MOP
     _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
