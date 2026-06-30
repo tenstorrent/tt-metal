@@ -11,7 +11,6 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_SRCS
     device/matmul_decode_device_operation.cpp
     device/full_width_sharded_program_factory.cpp
     device/partial_width_sharded_program_factory.cpp
-    device/multi_core_program_factory.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_NANOBIND_SRCS matmul_decode_nanobind.cpp)
