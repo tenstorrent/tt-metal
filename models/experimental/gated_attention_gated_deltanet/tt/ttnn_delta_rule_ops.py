@@ -16,6 +16,7 @@ Tensor layout convention (FLA style):
 """
 
 import math
+
 import torch
 import ttnn
 
@@ -295,10 +296,22 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
 
 
 def l2_norm_ttnn(x, dim=-1, eps=1e-6):
-    """L2 normalization along a given dimension."""
+    """L2 normalization along a given dimension: x / sqrt(sum(x^2) + eps).
+
+    For dim == last axis (all GDN callers): use the single fused ttnn.rms_norm kernel instead of
+    the 5-op multiply/sum/add/rsqrt/multiply chain (the sum's FillPad+Reduce are the expensive ops).
+    rms_norm computes x/sqrt(mean(x^2)+eps'); with no weight and eps'=eps/K that equals
+    l2_norm(x)*sqrt(K), so l2_norm(x) = rms_norm(x, eps/K) * K**-0.5 — PCC-equivalent (the eps
+    difference is negligible at eps=1e-6) but ~3 fewer kernels per call. Helps decode + prefill + 9B.
+    Falls back to the manual chain for the (unused) dim != last case.
+    """
     # Use DRAM for large tensors (T>512 produces tensors that don't fit in L1)
     T = x.shape[1] if len(x.shape) >= 3 else x.shape[0]
     mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
+    if dim in (-1, len(x.shape) - 1):
+        K = x.shape[-1]
+        normed = ttnn.rms_norm(x, epsilon=eps / K)
+        return ttnn.multiply(normed, K**-0.5, memory_config=mc)
     x_sq = ttnn.multiply(x, x, memory_config=mc)
     norm_sq = ttnn.sum(x_sq, dim=dim, keepdim=True, memory_config=mc)
     inv_norm = ttnn.rsqrt(ttnn.add(norm_sq, eps, memory_config=mc), memory_config=mc)

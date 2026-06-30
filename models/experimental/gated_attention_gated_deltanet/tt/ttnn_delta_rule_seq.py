@@ -77,35 +77,49 @@ def chunk_gated_delta_rule_seq_adapter(
     """
     B = q.shape[0]
     T = q.shape[1]
-    H = q.shape[2]
+    H = v.shape[2]  # value-head count (Nv): beta/g/v/output/state all use this
+    Hq = q.shape[2]  # q/k head count — may be < H (GQA). When < H, q/k are L2-normed + transformed
+    # at Hq heads (3x less work for a 4:1 ratio) and expanded to H AFTER, via a cheap dim-0 block
+    # repeat (no untilize). No-op when Hq == H (the pre-expanded path / 9B) → fully backward-compatible.
     K = q.shape[3]
     V = v.shape[3]
     BH = B * H
 
-    def _tilize_f32(t):
-        # Tilize + fp32 cast in one op, which avoids a separate typecast pass.
-        return ttnn.to_layout(t, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=_DRAM)
+    # L2-norm q/k (the seq kernel does NOT normalize; it only scales q internally).
+    q = l2_norm_ttnn(q, dim=-1)
+    k = l2_norm_ttnn(k, dim=-1)
 
-    def _to_bhtd(t, D):  # [B,T,H,D] -> [BH,T,D] float32 TILE/DRAM (ROW_MAJOR-correct)
+    def _to_bhtd(t, D, Hh):  # [B,T,Hh,D] -> [B*Hh,T,D] float32 TILE/DRAM (ROW_MAJOR-correct)
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
-        t = ttnn.reshape(t, [B, T, H, D])
-        t = ttnn.permute(t, (0, 2, 1, 3))  # [B,H,T,D]
-        t = ttnn.reshape(t, [BH, T, D])
-        return _tilize_f32(t)
+        t = ttnn.reshape(t, [B, T, Hh, D])
+        t = ttnn.permute(t, (0, 2, 1, 3))  # [B,Hh,T,D]
+        t = ttnn.reshape(t, [B * Hh, T, D])
+        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)
+        if t.dtype != ttnn.float32:
+            t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
+        return t
 
     def _to_bht(t):  # [B,T,H] -> [BH,T] float32 TILE/DRAM
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
         t = ttnn.reshape(t, [B, T, H])
         t = ttnn.permute(t, (0, 2, 1))  # [B,H,T]
         t = ttnn.reshape(t, [BH, T])
-        return _tilize_f32(t)
+        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)
+        if t.dtype != ttnn.float32:
+            t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
+        return t
 
-    q_bh = _to_bhtd(q, K)
-    k_bh = _to_bhtd(k, K)
-    v_bh = _to_bhtd(v, V)
-
-    q_bh = l2_norm_ttnn(q_bh, dim=-1)
-    k_bh = l2_norm_ttnn(k_bh, dim=-1)
+    q_bh = _to_bhtd(q, K, Hq)
+    k_bh = _to_bhtd(k, K, Hq)
+    v_bh = _to_bhtd(v, V, H)
+    if Hq != H:
+        # GQA late expand: replicate each q/k head rf times along the BH (outer, non-tile) axis —
+        # a cheap tile-block copy. q_bh rows are b*Hq+h, so dim-0 repeat_interleave maps output row
+        # b*H + (h*rf+j) <- key-head h, i.e. value-head (h*rf+j) uses key-head h. Identical to a
+        # token-major pre-expand, but the L2-norm + permute above ran on Hq (not H) heads.
+        rf = H // Hq
+        q_bh = ttnn.repeat_interleave(q_bh, rf, dim=0)
+        k_bh = ttnn.repeat_interleave(k_bh, rf, dim=0)
     g_bh = _to_bht(g)
     beta_bh = ttnn.reshape(_to_bht(beta), [BH, T, 1])
 

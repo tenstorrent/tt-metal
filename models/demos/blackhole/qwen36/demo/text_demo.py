@@ -23,6 +23,7 @@ import pytest
 import requests
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
@@ -292,6 +293,7 @@ def test_demo_text(
         max_batch_size=1,
         max_seq_len=max_seq_len,
         # n_layers=4,  # uncomment for fast iteration; default uses 32-layer config
+        # layer_indices=[0, 3],  # uncomment to run ONLY these specific checkpoint layers (profiling)
     )
     logger.info(f"Model load: {time.time() - t0:.1f}s")
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
@@ -460,6 +462,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # trace is parked, so a request never compiles a program that could clobber the trace.
     CHUNK = 2048
     t_cap = time.time()
+    signpost("compile_prefill")
     profiler.start("compile_prefill")
     model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
     profiler.end("compile_prefill")
@@ -467,6 +470,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     # ---- Chunk-outer prefill (real prompt only; the tail is masked internally). ----
     t0 = time.time()
+    signpost("inference_prefill")
     profiler.start("inference_prefill")
     logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
     ttnn.synchronize_device(model.device)
@@ -578,6 +582,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     trace_id = None
     tt_logits = None
+    signpost("compile_decode")
     profiler.start("compile_decode")
     if not eager:
         gdn_snap = _snapshot_gdn()  # exact post-prefill GDN state
@@ -592,6 +597,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     pos = T
     decode_times = []
+    signpost("inference_decode")
     profiler.start("inference_decode")
     while len(generated) < max_generated_tokens:
         _update(nxt, pos)
@@ -642,6 +648,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     chunk_size = 2048
     bucket_size = ((T + chunk_size - 1) // chunk_size) * chunk_size
     logger.info(f"Capturing prefill trace at bucket_size={bucket_size} (prompt {T} tokens, chunk-outer replay)...")
+    signpost("compile_prefill")
     t_cap = time.time()
     # Only warm the masked short-prompt buckets when this prompt will actually take the masked
     # path (T < chunk_size). For long prompts the prefill uses chunk-trace replay + eager tail,
@@ -661,6 +668,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     last_token = token_ids[:, -1:].expand(1, pad_len) if pad_len > 0 else token_ids[:, :0]
     padded_token_ids = torch.cat([token_ids, last_token], dim=1)
 
+    signpost("inference_prefill")
     t0 = time.time()
     if T < chunk_size:
         # Short prompt (whole prompt fits under one chunk): masked fixed-bucket prefill —
@@ -682,12 +690,14 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     # capture), which would otherwise double-advance the in-place GDN recurrent state.
     from models.demos.blackhole.qwen36.tt.generator_interface import prime_decode_trace
 
+    signpost("compile_decode")
     prime_decode_trace(gen, model, torch.tensor([[next_token]], dtype=torch.long), torch.tensor([T]), page_table)
 
     generated = [next_token]
     decode_times = []
     current_pos = T
 
+    signpost("inference_decode")
     for i in range(max_generated_tokens - 1):
         t_step = time.time()
         out = gen.decode_forward(
@@ -730,6 +740,7 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
     # Prefill
+    signpost("inference_prefill")
     t0 = time.time()
     logits = model.prefill_paged(token_ids, page_table)
     ttnn.synchronize_device(device)
@@ -744,6 +755,7 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     generated = [next_token]
     decode_times = []
 
+    signpost("inference_decode")
     for i in range(max_generated_tokens - 1):
         t_step = time.time()
         out = gen.decode_forward(
