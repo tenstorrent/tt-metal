@@ -265,8 +265,9 @@ all 8 devices).
 
 ```bash
 CSV=$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | head -1)
-python_env/bin/python _bench_runs/annotate_ops_csv_v4.py "$CSV"
-# Writes <CSV>_annotated_v4.csv next to the raw + prints the per-stage summary.
+# NOTE: the op-annotation helper (annotate_ops_csv_v4.py) was removed along with
+# the _bench_runs/ and socket_trace_experiment/ profiling tooling. Inspect the raw
+# ops_perf CSV directly, or restore the annotator from git history if needed.
 ```
 
 The annotator's stdout prints the per-call breakdown — this is the canonical
