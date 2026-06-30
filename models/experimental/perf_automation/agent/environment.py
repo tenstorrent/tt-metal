@@ -24,6 +24,7 @@ ARCH_FACTS: dict[str, dict[str, Any]] = {
         "grid_x": 8,
         "grid_y": 8,
         "dram_bw_gbps": 288.0,
+        "dram_capacity_bytes": 12 * 1024**3,
         "clock_ghz": 1.0,
         "peak_tflops_per_core": {"lofi": 4.0, "hifi2": 2.0, "hifi3": 1.33, "hifi4": 1.0},
     },
@@ -32,6 +33,7 @@ ARCH_FACTS: dict[str, dict[str, Any]] = {
         "grid_x": 8,
         "grid_y": 8,
         "dram_bw_gbps": 288.0,
+        "dram_capacity_bytes": 12 * 1024**3,
         "clock_ghz": 1.0,
         "peak_tflops_per_core": {"lofi": 4.0, "hifi2": 2.0, "hifi3": 1.33, "hifi4": 1.0},
     },
@@ -40,6 +42,7 @@ ARCH_FACTS: dict[str, dict[str, Any]] = {
         "grid_x": 13,
         "grid_y": 10,
         "dram_bw_gbps": 512.0,
+        "dram_capacity_bytes": 32 * 1024**3,
         "clock_ghz": 1.35,
         "peak_tflops_per_core": {"lofi": 5.4, "hifi2": 2.7, "hifi3": 1.8, "hifi4": 1.35},
     },
@@ -125,6 +128,11 @@ def parse_env_snapshot(text: str) -> dict[str, Any]:
     card = node.get("card") or node.get("board_type") or node.get("board")
     facts["card"] = card
     facts["worker_cores"] = facts["grid_x"] * facts["grid_y"]
+    count = data.get("device_count")
+    if not count and isinstance(data.get("device_info"), list):
+        count = len(data["device_info"])
+    if count:
+        facts["device_count"] = int(count)
     return facts
 
 
