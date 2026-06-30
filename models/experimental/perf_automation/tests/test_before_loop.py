@@ -62,7 +62,10 @@ def test_before_loop_all_mocks_produces_manifest_and_baseline(tmp_path, model_ro
     events = [json.loads(l) for l in (run_dir / "events.jsonl").read_text().splitlines()]
     assert [e["stage"] for e in events if e["event"] == "start"] == [
         "environment_check",
+        "startup_reset",
         "cache_playbook",
+        "agent_sdk_health",
+        "ensure_tt_lang",
         "discover",
         "lead_review",
         "preflight",
@@ -85,7 +88,7 @@ def test_before_loop_fatal_flag_stops_run(tmp_path, model_root):
             }
         )
 
-    with pytest.raises(ModelFilesError, match="CANNOT CONTINUE"):
+    with pytest.raises(ModelFilesError, match="CANNOT CONTINUE"):  # allow-pytest.raises: no expect_error fixture
         _run(tmp_path, model_root, runner=fatal_runner)
 
 
@@ -144,7 +147,7 @@ def test_manifest_written_even_when_tracy_fails(tmp_path, model_root):
         return rp
 
     config = {"model_root": str(model_root), "metric": "wall_ms", "runs": 1}
-    with pytest.raises(RuntimeError, match="device exploded"):
+    with pytest.raises(RuntimeError, match="device exploded"):  # allow-pytest.raises: no expect_error fixture
         before_loop(
             config,
             mock_env_probe,
