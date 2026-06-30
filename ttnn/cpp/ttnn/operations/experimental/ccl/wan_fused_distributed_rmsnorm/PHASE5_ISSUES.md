@@ -215,3 +215,39 @@ deterministic); [wan_tp4] unchanged (still fused, 99.987%); test_layernorm_modul
 The underlying block-major POST kernel race (token collapse + non-determinism) is NOT fixed — it
 stays open (the model just never exercises it now). Fix it to re-enable fused LN on wide low-TP
 shards.
+
+### ISSUE 3A — DEEP TRIAGE (root narrowed, kernel fix still OPEN; model still gated)
+Reproduced precisely with test_layernorm_fused_vs_composite_diff (knobs LNMOD_DIM/LNMOD_DIFF_MEAN
++ degenerate-row + collapse-value diagnostics) and DPRINT in the worker writer (use the NEW
+`DPRINT("fmt {}\n", ...)` macro from "api/debug/dprint.h" — the old `DPRINT << ...` is now a hard
+static_assert; old-style is why DPRINT "didn't compile" before). Findings:
+
+- The trigger is EXACTLY num_tile_cols >= 56 = the force_recip_stream threshold (52 tiles clean,
+  56 broken), i.e. the block-major + streaming POST path. INDEPENDENT of ring size (tp2 ring2 AND
+  a synthetic tp4 80-tile ring4 both break; tp2 at <56 tiles is clean). The earlier "odd tile-rows"
+  was a 2-rounds-per-worker artifact: the real pattern is WARM rows (round >= 1) break, round 0
+  (cold) is clean.
+- The collapse is invstd->0 from inf VARIANCE: the local per-shard Welford (c_16, BEFORE any
+  transport) already has var=inf / running-mean ~4.98e36 for specific token lanes on warm rows.
+  Confirmed via DPRINT of the local stat: r=0 mean/var fine, r=1 mean(t17)=4.98e36 var(t17)=inf.
+  So it is NOT the AG/forwarder/combine transport (gathered stats just carry the bad local value),
+  NOT a fabric race — it is the streaming Welford PRE producing garbage on warm rows.
+- The garbage value (4.98e36) is DATA-INDEPENDENT (bit-identical on both devices) -> a stale
+  accumulator/register left from the prior row's compute, surfacing only on the streaming path
+  (cb_wait/pop between welford_updates) when a per-row `combine` ran the prior row. is_tp_1 wide
+  (same streaming PRE + block-major POST, NO combine) is clean; non-streaming TP>1 (same combine,
+  no cb-ops-mid-welford) is clean -> it's the (combine state) x (streaming welford) interaction.
+- RULED OUT by direct on-device tests (each rebuilt + re-run): packet double-buffer (forced single
+  slot - still broke); per-tile welford replay re-arm (transpose_wh_init_short +
+  welford_init<PreserveStats>); clearing var/mean DST before finalize; moving welford_init after the
+  first cb_wait_front; SFPU lane re-enable in the welford clear (TTI_SFPENCC(3,0,0,10) = enable-all)
+  - NONE removed the inf. So it's not the replay buffer, not the DST stale, not a CC lane disable
+  in the clear.
+- NOT yet pinned: whether the bad value is in input_cb (an L1/reader interaction at >=56 tiles) or
+  in the Welford LREG4/5 accumulator that survives welford_init's clear. The fill_tile(0)-before-
+  transpose test was inconclusive (transpose overwrites). Next step: DPRINT input_cb raw uint16 in
+  the COMPUTE for a warm row (token 17 ~= input_cb byte 1056) to settle input-vs-accumulator; if
+  input is clean it's an LLK welford-state issue needing LLK-team input.
+
+MODEL STATUS: still gated (DistributedLayerNorm._FUSED_LN_MAX_RESIDENT_TILE_COLS=40). Narrow shards
+(WAN tp4/tp8, the common model configs) keep fused LN and are correct; wide shards use composite.

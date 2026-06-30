@@ -476,14 +476,12 @@ class DistributedLayerNorm(Module):
         entry["idx"] = (entry["idx"] + 1) % len(bufs)
         return buf
 
-    # Widest per-device shard (in 32-col tiles) the fused LN runs on its validated
-    # RESIDENT POST path. WAN TP=4 = 5120/4/32 = 40 tiles is the widest config proven
-    # clean (deterministic, bit-for-bit normalize). Wider shards (FLUX tp2=48, LTX
-    # tp2=64, WAN tp2=80, all tp1) trip the device op into its block-major / streaming
-    # POST path, which has a known correctness bug (ISSUE 3A: ~23% of tokens collapse
-    # to constant rows + run-to-run non-determinism at TP=2; see the op's
-    # PHASE5_ISSUES.md). Until that path is fixed, fall back to the composite Welford
-    # chain (correct at any width) for wide shards. Narrow shards keep the fused op.
+    # Widest per-device shard (in 32-col tiles) the fused LN runs correctly. >40 tiles trips the
+    # device op's block-major / streaming POST path, which has an OPEN correctness bug (ISSUE 3A:
+    # warm streaming rows produce inf variance for some token lanes -> those tokens collapse to a
+    # constant row, non-deterministic at TP=2; PHASE5_ISSUES.md). Triaged to the streaming-Welford
+    # + per-row combine interaction (NOT the AG, NOT the welford clear/CC/replay) but not yet fixed.
+    # Until then, wide shards fall back to the composite Welford chain (correct at any width).
     _FUSED_LN_MAX_RESIDENT_TILE_COLS = 40
 
     def _fused_ln_supported(self, x: ttnn.Tensor, dynamic_weight, weight) -> bool:
@@ -497,7 +495,7 @@ class DistributedLayerNorm(Module):
         # the [1,H] TILE the fused op wants. Only adaLN/no-affine go fused.
         if dynamic_weight is None and weight is not None:
             return False
-        # Wide per-device shards trip the broken block-major POST path -> use composite.
+        # Wide per-device shards trip the broken block-major streaming POST path -> use composite.
         width_per_device = self.embedding_dim // self.mesh_width
         if width_per_device // self.TILE_SIZE > self._FUSED_LN_MAX_RESIDENT_TILE_COLS:
             return False
