@@ -296,12 +296,13 @@ L1 sharded layout is preferred, with no broadcast and matching tensor specs for 
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, INT32</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
 <p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
+<p>Operands must have the same dtype.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>

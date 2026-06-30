@@ -292,12 +292,14 @@ L1 sharded layout is preferred, with no broadcast and matching tensor specs for 
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
 <p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
+<p>Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.</p>
+<p>UINT32 (range: [0, 4294967295]) is not a natively supported operand dtype. When one operand is float-family and the other is INT32 or UINT32, the integer operand is automatically typecast to the float operand’s dtype before device execution; output dtype follows the promoted float dtype.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>

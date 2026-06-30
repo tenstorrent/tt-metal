@@ -464,7 +464,6 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.sparse_sdpa.html">ttnn.transformer.sparse_sdpa</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.sparse_sdpa_msa.html">ttnn.transformer.sparse_sdpa_msa</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
-<li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.windowed_scaled_dot_product_attention.html">ttnn.transformer.windowed_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.indexer_score_dsa.html">ttnn.experimental.indexer_score_dsa</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.indexer_score_msa.html">ttnn.experimental.indexer_score_msa</a></li>
 </ul>
@@ -2210,14 +2209,10 @@
 <td><p>Splits <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">3</span> <span class="pre">*</span> <span class="pre">hidden_size]</span></code> into 3 tensors (Query, Key, Value) of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">hidden_size]</span></code>.</p></td>
 </tr>
 <tr class="row-even">
-<td><p><a class="reference internal" href="api/ttnn.transformer.windowed_scaled_dot_product_attention.html#ttnn.transformer.windowed_scaled_dot_product_attention" title="ttnn.transformer.windowed_scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.windowed_scaled_dot_product_attention</span></code></a></p></td>
-<td><p>Windowed scaled dot product attention.</p></td>
-</tr>
-<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.experimental.indexer_score_dsa.html#ttnn.experimental.indexer_score_dsa" title="ttnn.experimental.indexer_score_dsa"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.indexer_score_dsa</span></code></a></p></td>
 <td><p>DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.experimental.indexer_score_msa.html#ttnn.experimental.indexer_score_msa" title="ttnn.experimental.indexer_score_msa"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.indexer_score_msa</span></code></a></p></td>
 <td><p>MiniMax-M3 MSA lightning-indexer scorer.</p></td>
 </tr>

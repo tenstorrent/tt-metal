@@ -295,13 +295,13 @@ L1 sharded layout is preferred, with no broadcast and matching tensor specs for 
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B, FLOAT32</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
 <p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
-<p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">exponent</span></code> is a Tensor, supported dtypes are: BFLOAT16, FLOAT32. Both input tensors should be of same dtype.</p>
+<p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">exponent</span></code> is a Tensor, both input tensors must have the same dtype from: BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>

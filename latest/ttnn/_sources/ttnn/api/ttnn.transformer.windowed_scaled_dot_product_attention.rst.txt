@@ -1,8 +1,0 @@
-﻿ttnn.transformer.windowed\_scaled\_dot\_product\_attention
-==========================================================
-
-.. currentmodule:: ttnn.transformer
-
-.. _ttnn.transformer.windowed_scaled_dot_product_attention:
-
-.. autooperation:: ttnn.transformer.windowed_scaled_dot_product_attention

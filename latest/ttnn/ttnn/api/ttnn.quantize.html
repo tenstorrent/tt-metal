@@ -228,12 +228,13 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32</p></td>
 <td><p>TILE</p></td>
 </tr>
 </tbody>
 </table>
 <p>bfloat8_b/bfloat4_b supports only on TILE_LAYOUT</p>
+<p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">scale</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">zero_point</span></code> are tensors, they must be FLOAT32.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
