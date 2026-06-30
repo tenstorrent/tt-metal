@@ -7,6 +7,7 @@
 #include "ttnn/types.hpp"
 #include <ranges>
 #include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/trace_policy.hpp>
 
 namespace ttnn::operations::matmul {
 
@@ -993,11 +994,16 @@ MatmulProgramConfig get_program_config(
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
     }
+    const auto& mesh_cq = input_tensor_a.device()->mesh_command_queue();
+    const bool capturing_trace = mesh_cq.trace_id().has_value();
+    const bool unstable_cache_allowed =
+        tt::tt_metal::is_trace_policy_set(mesh_cq.trace_policy(), tt::tt_metal::TracePolicy::ALLOW_UNSTABLE_CACHE);
     TT_FATAL(
-        !input_tensor_a.device()->mesh_command_queue().trace_id().has_value(),
+        !capturing_trace || unstable_cache_allowed,
         "ttnn.matmul without a program_config is not trace-safe: it queries live device L1 space to auto-select "
         "blocking parameters, which can cause non-deterministic program cache misses during trace capture. "
-        "Pass a MatmulProgramConfig (e.g. MatmulMultiCoreReuseProgramConfig) to use matmul inside trace capture.");
+        "Either pass a MatmulProgramConfig (e.g. MatmulMultiCoreReuseProgramConfig), or capture with "
+        "begin_trace_capture(..., policy=TracePolicy.ALLOW_UNSTABLE_CACHE) to opt out of this check.");
     auto config = generate_matmul_program_config(
         input_tensor_a,
         input_tensor_b,

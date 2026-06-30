@@ -26,17 +26,30 @@ void py_module_types(nb::module_& mod) {
                 return "MeshTraceId(" + std::to_string(static_cast<int>(*self)) + ")";
             })
         .def(nb::self == nb::self);
+
+    nb::enum_<ttnn::TracePolicy>(mod, "TracePolicy", nb::is_flag(), R"doc(
+        Trace-capture safety policy. Pass to begin_trace_capture(..., policy=...) to relax
+        trace-safety checks for a capture region. Flags compose with ``|``.
+
+        - STRICT (default): no relaxations; trace-safety checks fire as normal.
+        - ALLOW_UNSTABLE_CACHE: permit ops whose program-cache key depends on live device
+          state (e.g. matmul without an explicit program_config). Only set this when the
+          capture is known to be stable regardless of device occupancy.
+    )doc")
+        .value("STRICT", ttnn::TracePolicy::STRICT)
+        .value("ALLOW_UNSTABLE_CACHE", ttnn::TracePolicy::ALLOW_UNSTABLE_CACHE);
 }
 
 void py_module(nb::module_& mod) {
     mod.def(
         "begin_trace_capture",
-        [](MeshDevice* device, std::optional<ttnn::QueueId> cq_id) {
-            return ttnn::operations::trace::begin_trace_capture(device, cq_id);
+        [](MeshDevice* device, std::optional<ttnn::QueueId> cq_id, ttnn::TracePolicy policy) {
+            return ttnn::operations::trace::begin_trace_capture(device, cq_id, policy);
         },
         nb::arg("mesh_device"),
         nb::kw_only(),
         nb::arg("cq_id") = nb::none(),
+        nb::arg("policy") = ttnn::TracePolicy::STRICT,
         nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(

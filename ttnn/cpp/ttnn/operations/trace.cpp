@@ -13,10 +13,10 @@
 
 namespace ttnn::operations::trace {
 
-MeshTraceId begin_trace_capture(MeshDevice* device, std::optional<QueueId> cq_id) {
+MeshTraceId begin_trace_capture(MeshDevice* device, std::optional<QueueId> cq_id, TracePolicy policy) {
     ZoneScoped;
     QueueId cq_id_value = cq_id.value_or(get_current_command_queue_id_for_thread());
-    return device->begin_mesh_trace(cq_id_value.get());
+    return device->begin_mesh_trace(cq_id_value.get(), policy);
 }
 void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id) {
     ZoneScoped;

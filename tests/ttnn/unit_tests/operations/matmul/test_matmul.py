@@ -3989,3 +3989,38 @@ def test_matmul_with_program_config_succeeds_during_trace(device):
 
     ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 10_000_000}], indirect=True)
+def test_matmul_without_program_config_allowed_with_policy(device):
+    """ttnn.matmul without a program_config is permitted under ALLOW_UNSTABLE_CACHE.
+
+    The region-level opt-out lets a caller who has verified their capture is stable
+    bypass the trace-safety fatal without threading an explicit program_config into
+    every op. The captured trace must replay successfully.
+
+    Related issue: https://github.com/tenstorrent/tt-metal/issues/48275
+    """
+    a = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Warm up the auto-config path / program cache outside capture first.
+    ttnn.matmul(a, b)
+    ttnn.synchronize_device(device)
+
+    tid = ttnn.begin_trace_capture(device, cq_id=0, policy=ttnn.TracePolicy.ALLOW_UNSTABLE_CACHE)
+    # No program_config: would fatal under the default STRICT policy, allowed here.
+    ttnn.matmul(a, b)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.release_trace(device, tid)
+
+
+def test_trace_policy_is_a_flag():
+    """TracePolicy must behave like an enum.Flag: STRICT is empty, bits compose with |."""
+    assert int(ttnn.TracePolicy.STRICT.value) == 0
+    combined = ttnn.TracePolicy.STRICT | ttnn.TracePolicy.ALLOW_UNSTABLE_CACHE
+    assert combined & ttnn.TracePolicy.ALLOW_UNSTABLE_CACHE
+    # STRICT carries no relaxation bit.
+    assert not (ttnn.TracePolicy.STRICT & ttnn.TracePolicy.ALLOW_UNSTABLE_CACHE)

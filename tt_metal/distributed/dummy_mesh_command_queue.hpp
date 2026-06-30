@@ -41,6 +41,7 @@ public:
     ~DummyMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;
+    TracePolicy trace_policy() const override { return TracePolicy::STRICT; }
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
@@ -64,7 +65,10 @@ public:
         const vector_aligned<uint32_t>& go_signal_noc_data,
         const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
         tt::stl::Span<const uint32_t> workers_per_sub_device) override;
-    void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
+    void record_begin(
+        const MeshTraceId& trace_id,
+        const std::shared_ptr<MeshTraceDescriptor>& ctx,
+        TracePolicy policy = TracePolicy::STRICT) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
 };

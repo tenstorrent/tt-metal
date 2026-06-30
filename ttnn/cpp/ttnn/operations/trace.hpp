@@ -6,6 +6,7 @@
 #pragma once
 
 #include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/trace_policy.hpp>
 
 #include <optional>
 
@@ -14,10 +15,12 @@
 namespace ttnn {
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
+using TracePolicy = tt::tt_metal::TracePolicy;
 
 namespace operations::trace {
 
-MeshTraceId begin_trace_capture(MeshDevice* device, std::optional<QueueId> cq_id);
+MeshTraceId begin_trace_capture(
+    MeshDevice* device, std::optional<QueueId> cq_id, TracePolicy policy = TracePolicy::STRICT);
 void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id);
 void execute_trace(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking);
 void release_trace(MeshDevice* device, MeshTraceId trace_id);
