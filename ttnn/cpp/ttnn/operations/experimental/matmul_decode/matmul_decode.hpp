@@ -11,12 +11,14 @@
 
 namespace ttnn::experimental {
 
-// matmul_decode: template op skeleton that performs a matrix multiply between two tensors.
+// matmul_decode: decode-optimized matrix multiply C = A @ B for width-sharded operands.
 //
-// This is currently implemented as a composite operation that delegates to ttnn::matmul.
-// It exists as a starting point: replace the body in matmul_decode.cpp with a dedicated
-// device operation (operation_attributes_t / tensor_args_t / program factories) when a
-// custom decode-optimized implementation is required.
+// Both inputs are L1 width-sharded. A ([M, K]) is width(K)-sharded and B is width-sharded;
+// the result ([M, N]) is L1 width-sharded across the core grid. Backed by the
+// MatmulDecodeDeviceOperation (ttnn::prim::matmul_decode) with two program factories:
+//   - default: B is width(N)-sharded; the full A is gathered onto every core.
+//   - partial_width_sharded: B is sharded along both K and N, with a cross-core
+//     K-reduction onto the output cores (see PartialWidthSharded for the B layout).
 Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

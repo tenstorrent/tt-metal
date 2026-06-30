@@ -42,8 +42,107 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         "Input tensor A must have the same M dimension as the operation attributes");
 
     if (operation_attributes.partial_width_sharded) {
-        // Partial width-sharded B: the 2D (K x N) block-sharding geometry is recovered and
-        // validated in PartialWidthSharded::create_descriptor.
+        // Partial width-sharded B: the caller reshapes/permutes a [K, N] weight into a
+        // width-sharded tensor with shard shape [Kc, Nc] across K_blocks * N_blocks cores
+        // (Kc = K / K_blocks, Nc = N / N_blocks), so B's logical shape becomes
+        // [Kc, K_blocks * N]. Recover that geometry (mirroring
+        // PartialWidthSharded::create_descriptor) and validate it.
+        const auto& a_tile = input_tensor_a.tensor_spec().tile();
+        const uint32_t a_tile_height = a_tile.get_height();
+        const int M_tiles = tt::div_up(operation_attributes.M, static_cast<int>(a_tile_height));
+        const int K_tiles = tt::div_up(operation_attributes.K, static_cast<int>(tt::constants::TILE_HEIGHT));
+        const int N_tiles = tt::div_up(operation_attributes.N, static_cast<int>(tt::constants::TILE_WIDTH));
+
+        // The compute kernel computes the whole M dimension in a single DST block
+        // (out_block_h = M_tiles), so M_tiles must fit in DST (<= 8 in half-sync mode).
+        TT_FATAL(
+            M_tiles <= 8,
+            "partial_width_sharded matmul_decode requires M_tiles (= ceil(M / tile_height)) <= 8 so the output "
+            "block fits in DST, but got M_tiles={} (M={}, tile_height={})",
+            M_tiles,
+            operation_attributes.M,
+            a_tile_height);
+
+        // ---- A (activation) shard ----
+        const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
+        TT_FATAL(
+            a_shard.shape[0] == static_cast<uint32_t>(M_tiles) * a_tile_height,
+            "Input tensor A shard height {} must equal M_tiles {} * tile height {}",
+            a_shard.shape[0],
+            M_tiles,
+            a_tile_height);
+        TT_FATAL(
+            a_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
+            "Input tensor A shard width {} must be divisible by the tile width {}",
+            a_shard.shape[1],
+            tt::constants::TILE_WIDTH);
+
+        // ---- B (weight) shard: [Kc, Nc] block, tile-aligned ----
+        const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
+        const uint32_t Kc = b_shard.shape[0];
+        const uint32_t Nc = b_shard.shape[1];
+        TT_FATAL(
+            Kc % tt::constants::TILE_HEIGHT == 0 && Nc % tt::constants::TILE_WIDTH == 0,
+            "partial_width_sharded matmul_decode requires B shard dims [{}, {}] to be tile-aligned (tile {}x{})",
+            Kc,
+            Nc,
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH);
+        const int Kc_tiles = static_cast<int>(Kc) / tt::constants::TILE_HEIGHT;
+        const int Nc_tiles = static_cast<int>(Nc) / tt::constants::TILE_WIDTH;
+
+        // ---- K split across cores (K_blocks) ----
+        TT_FATAL(
+            K_tiles % Kc_tiles == 0,
+            "partial_width_sharded matmul_decode requires K_tiles {} to be divisible by the B shard height in "
+            "tiles {} (Kc={})",
+            K_tiles,
+            Kc_tiles,
+            Kc);
+        const int K_blocks = K_tiles / Kc_tiles;
+        // The base-core reduction sums the K_blocks partials pairwise (block += 2), so the
+        // number of K-blocks must be even.
+        TT_FATAL(
+            K_blocks % 2 == 0,
+            "partial_width_sharded matmul_decode requires an even number of K-blocks (the cross-core reduction "
+            "sums partials pairwise), but got K_blocks={}",
+            K_blocks);
+
+        // ---- N split across cores (N_blocks) ----
+        TT_FATAL(
+            N_tiles % Nc_tiles == 0,
+            "partial_width_sharded matmul_decode requires N_tiles {} to be divisible by the B shard width in "
+            "tiles {} (Nc={})",
+            N_tiles,
+            Nc_tiles,
+            Nc);
+        const int N_blocks = N_tiles / Nc_tiles;
+
+        // ---- B is sharded across exactly K_blocks * N_blocks cores ----
+        const int num_B_cores = static_cast<int>(b_shard.grid.num_cores());
+        TT_FATAL(
+            num_B_cores == K_blocks * N_blocks,
+            "partial_width_sharded matmul_decode expects B sharded across K_blocks * N_blocks = {} * {} = {} "
+            "cores, but got {}",
+            K_blocks,
+            N_blocks,
+            K_blocks * N_blocks,
+            num_B_cores);
+
+        // ---- Folding: B's logical shape must be [Kc, K_blocks * N] after reshape/permute ----
+        TT_FATAL(
+            input_tensor_b.logical_shape()[-2] == static_cast<int>(Kc),
+            "partial_width_sharded matmul_decode expects B logical height {} to equal the shard height Kc={}",
+            input_tensor_b.logical_shape()[-2],
+            Kc);
+        TT_FATAL(
+            input_tensor_b.logical_shape()[-1] == K_blocks * operation_attributes.N,
+            "partial_width_sharded matmul_decode expects B logical width {} to equal K_blocks * N = {} * {} = {} "
+            "(B is reshaped/permuted so the K-blocks fold into the width)",
+            input_tensor_b.logical_shape()[-1],
+            K_blocks,
+            operation_attributes.N,
+            K_blocks * operation_attributes.N);
         return;
     }
 
@@ -124,8 +223,8 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     std::optional<const DataType> dtype) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
 
-    // For the partial width-sharded layout the caller reshapes/permutes B, so its
-    // last logical dim is no longer N; recover N from the shard spec in that case.
+    // For the partial width-sharded layout the caller reshapes/permutes B so that its last
+    // logical dim is K_blocks * N rather than N; recover the true N from the K_a / K_b ratio.
     int M, N, K;
     if (partial_width_sharded) {
         M = input_tensor_a.logical_shape()[-2];
