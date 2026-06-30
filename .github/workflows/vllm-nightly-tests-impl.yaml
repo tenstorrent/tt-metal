@@ -444,8 +444,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         HF_HUB_OFFLINE: 0
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+        HF_HUB_CACHE: /work/mlperf_cache/huggingface/hub
+        TT_CACHE_HOME: /work/mlperf_cache/huggingface/tt_cache
         FILE_SERVER_PID: "./server.pid"
         FILE_INSTALL_LOG: "./output/vllm_install.log"
         FILE_SERVER_LOG: "./output/vllm_server.log"
@@ -543,6 +543,7 @@ jobs:
           export HF_MODEL="${{ matrix.test-group.model }}"
           MODEL_NAME="${HF_MODEL/\//--}"
           export TT_CACHE_PATH="$TT_CACHE_HOME/$MODEL_NAME"
+          mkdir -p "$TT_CACHE_PATH" "$HF_HUB_CACHE"  # writable scratch caches (shared MLPerf mount is read-only)
 
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
