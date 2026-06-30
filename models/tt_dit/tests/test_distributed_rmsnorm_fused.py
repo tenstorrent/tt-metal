@@ -747,13 +747,19 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             # must not abort the fused-vs-torch correctness check, so swallow its failure.
             # Use the LAST ping-pong set so out0 (set 0, the determinism reference) is not
             # contaminated by the baseline's trailing fabric incs.
-            try:
-                comp = _gather(
-                    _run_baseline(inp, submesh, sems[_PINGPONG - 1], cfg, topology, tp_axis, op_override), tp_axis
-                )
-            except Exception as be:  # noqa: BLE001
+            # CORR_SKIP_BASELINE=1 exercises ONLY the fused op (e.g. under watcher, where the
+            # composite baseline's all_gather_async would abort the whole process and mask the
+            # fused path). The fused-vs-torch + determinism checks below still run.
+            if _os.getenv("CORR_SKIP_BASELINE") == "1":
                 comp = None
-                logger.warning(f"  baseline unavailable for {cfg.cid}: {type(be).__name__}: {str(be)[:120]}")
+            else:
+                try:
+                    comp = _gather(
+                        _run_baseline(inp, submesh, sems[_PINGPONG - 1], cfg, topology, tp_axis, op_override), tp_axis
+                    )
+                except Exception as be:  # noqa: BLE001
+                    comp = None
+                    logger.warning(f"  baseline unavailable for {cfg.cid}: {type(be).__name__}: {str(be)[:120]}")
             out0 = _fused(0)
 
             ndiff, maxdelta, worst_oi = 0, 0.0, None
@@ -1025,13 +1031,26 @@ def test_rmsnorm_module_corr(mesh_device, model, tp, topology, tp_axis, full_mes
 
 # (mesh, device_params, model, dim, tp, topology, tp_axis, full_mesh)
 _LNBENCH_PARAMS = [
-    ((4, 8), _DP_GAL, FLUX, 3072, 4, ttnn.Topology.Linear, 1, False),  # FLUX TP4 submesh line
+    ((4, 8), _DP_GAL, FLUX, _FLUX_DIM, 4, ttnn.Topology.Linear, 1, False),  # FLUX TP4 (1x4 line)
+    ((4, 8), _DP_GAL, FLUX, _FLUX_DIM, 8, ttnn.Topology.Linear, 1, False),  # FLUX TP8 (1x8 line)
     ((4, 8), _DP_GAL, WAN, 5120, 4, ttnn.Topology.Linear, 1, False),  # WAN TP4 (wider feat)
 ]
-_LNBENCH_IDS = ["flux_tp4", "wan_tp4"]
-# Typical FLUX-ish per-device row counts (full sequence; only dim is TP-sharded):
-# 512 text/prompt, 1024 (512px latent), 4096 (1024px latent), 8192 (large/video).
-_LNBENCH_SEQLENS = [512, 1024, 4096, 8192]
+_LNBENCH_IDS = ["flux_tp4", "flux_tp8", "wan_tp4"]
+# Per-(model, tp) per-device row counts swept (full seq; only dim is TP-sharded). FLUX uses the
+# RMS-bench shapes. On Blackhole galaxy run with WAN_GALAXY_LINKS=2 (2-link torus vs WH's 4).
+_LNBENCH_SEQLENS = {
+    (FLUX, 4): [512, 64, 2048, 8192],
+    (FLUX, 8): [1024, 128, 4096, 16384],
+    (WAN, 4): [512, 1024, 4096, 8192],
+}
+
+
+def _composite_ln_recip(submesh, width_per_device):
+    """HEIGHT_SHARDED Welford reciprocal tensor that dit_layernorm_pre_allgather consumes
+    (the composite baseline; the fused op instead reads a row-major recip LUT)."""
+    grid = submesh.compute_with_storage_grid_size()
+    crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    return ttnn.create_layer_norm_reciprocals(submesh, crs, width_per_device)
 
 
 @pytest.mark.skip_post_commit  # perf/dev benchmark, not a correctness gate
@@ -1041,10 +1060,14 @@ _LNBENCH_SEQLENS = [512, 1024, 4096, 8192]
     indirect=["mesh_device", "device_params"],
 )
 def test_layernorm_module_bench(mesh_device, model, dim, tp, topology, tp_axis, full_mesh):
-    """Traced speedup: fused Welford LayerNorm device op vs the composite
-    dit_layernorm chain, in the DistributedLayerNorm module (adaLN), across a span of
-    sequence lengths. Prints a table; not an assertion test."""
+    """Traced speedup: fused Welford LayerNorm device op vs the composite dit_layernorm
+    chain (dit_layernorm_pre_allgather -> all_gather_persistent_buffer ->
+    dit_layernorm_post_allgather, weight+bias), in the adaLN DistributedLayerNorm setup,
+    across a span of sequence lengths. Whole-row LN: weight+bias, no RoPE, no per-head norm.
+    Prints base/fused/speedup; not an assertion test. Galaxy only -- on Blackhole galaxy run
+    with WAN_GALAXY_LINKS=2 (2-link torus) instead of WH's 4."""
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    feat = dim // tp
     iters = 100
     ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
     mod = DistributedLayerNorm(
@@ -1055,8 +1078,11 @@ def test_layernorm_module_bench(mesh_device, model, dim, tp, topology, tp_axis, 
         mesh_device=submesh,
         ccl_manager=ccl,
     )
+    ckc, eps = mod.compute_kernel_config, mod.norm_eps
+    recip_comp = _composite_ln_recip(submesh, feat)
+    seqlens = _LNBENCH_SEQLENS.get((model, tp), [512, 1024, 4096, 8192])
     rows = []
-    for seq in _LNBENCH_SEQLENS:
+    for seq in seqlens:
         torch.manual_seed(0)
         x = bf16_tensor(
             torch.randn(1, 1, seq, dim, dtype=torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1
@@ -1064,27 +1090,48 @@ def test_layernorm_module_bench(mesh_device, model, dim, tp, topology, tp_axis, 
         dw = bf16_tensor(torch.randn(1, 1, dim, dtype=torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
         db = bf16_tensor(torch.randn(1, 1, dim, dtype=torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
         row = {"seq": seq}
+
+        # Fused: the module rotates its pob+AG-sem internally per forward, so two captured
+        # traces bind the two resource sets; replay them round-robin. Bind x/dw/db per iter.
         try:
-            # Ping-pong: the module rotates its pob+AG-sem internally per forward, so two
-            # captured traces bind the two resource sets; replay them round-robin.
-            run_ops = [lambda: mod.forward(x, dynamic_weight=dw, dynamic_bias=db) for _ in range(_PINGPONG)]
-            row["fused"] = _trace_and_time(submesh, run_ops, num_iters=iters)
+            fused_ops = [
+                lambda _x=x, _dw=dw, _db=db: mod.forward(_x, dynamic_weight=_dw, dynamic_bias=_db)
+                for _ in range(_PINGPONG)
+            ]
+            row["fused"] = _trace_and_time(submesh, fused_ops, num_iters=iters)
         except Exception as e:  # noqa: BLE001
-            row["err"] = type(e).__name__
-            logger.warning(f"seq={seq} FAILED: {str(e)[:160]}")
+            row["fused_err"] = type(e).__name__
+            logger.warning(f"{model} tp{tp} seq={seq} FUSED failed: {str(e)[:160]}")
+
+        # Composite baseline: pre_allgather -> AG(persistent buffer) -> post_allgather(weight,bias).
+        def _composite(_x=x, _dw=dw, _db=db):
+            stats = ttnn.experimental.dit_layernorm_pre_allgather(_x, recip_comp, compute_kernel_config=ckc)
+            stats = ccl.all_gather_persistent_buffer(stats, dim=len(_x.shape) - 1, mesh_axis=tp_axis)
+            return ttnn.experimental.dit_layernorm_post_allgather(
+                _x, stats, weight=_dw, bias=_db, epsilon=eps, compute_kernel_config=ckc, dtype=None
+            )
+
+        try:
+            row["base"] = _trace_and_time(submesh, _composite, num_iters=iters)
+        except Exception as e:  # noqa: BLE001
+            row["base_err"] = type(e).__name__
+            logger.warning(f"{model} tp{tp} seq={seq} BASELINE failed: {str(e)[:160]}")
         rows.append(row)
 
-    feat = dim // tp
-    title = f"DistributedLayerNorm fused (model={model}, dim={dim}, TP={tp}, feat_local={feat})"
-    box = "=" * max(len(title), 58)
+    title = (
+        f"DistributedLayerNorm fused vs composite (model={model}, dim={dim}, TP={tp}, "
+        f"feat_local={feat}, links={GALAXY_LINKS})"
+    )
+    box = "=" * max(len(title), 64)
     print("\n" + box + f"\n{title}\n" + box)
-    print(f"{'seq_len':>8} {'fused_us':>10}")
-    print("-" * 20)
+    print(f"{'seq_len':>8} {'base_us':>10} {'fused_us':>10} {'speedup':>9}")
+    print("-" * 42)
     for r in rows:
-        if "err" in r:
-            print(f"{r['seq']:>8} {r['err']:>10}")
-            continue
-        print(f"{r['seq']:>8} {r['fused']:>10.2f}")
+        b, f = r.get("base"), r.get("fused")
+        bs = f"{b:.2f}" if b is not None else r.get("base_err", "ERR")
+        fs = f"{f:.2f}" if f is not None else r.get("fused_err", "ERR")
+        sp = f"{b / f:.2f}x" if (b is not None and f is not None and f > 0) else "-"
+        print(f"{r['seq']:>8} {bs:>10} {fs:>10} {sp:>9}")
     print(box)
 
 
