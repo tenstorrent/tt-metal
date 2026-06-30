@@ -6,6 +6,7 @@
 GPT-OSS ModelArgs class that's compatible with tt_transformers interface
 """
 
+import gc
 import os
 from pathlib import Path
 
@@ -212,10 +213,38 @@ class ModelArgs:
                 chat.append({"role": "system", "content": system_prompt_text})
             if prompt_text:
                 chat.append({"role": "user", "content": prompt_text})
-            return self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
         else:
             # prompt_text is already a list of chat messages
-            return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+            encoded = self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+
+        # Normalize whatever apply_chat_template(tokenize=True) returns into a flat List[int].
+        # Across tokenizer/transformers versions this may be a List[int], a tokenizers.Encoding,
+        # a list of Encodings, or a BatchEncoding/dict ({"input_ids": ...}). The GPT-OSS fast
+        # tokenizer in CI returns a non-list form, which made downstream torch.tensor(...) raise
+        # "Could not infer dtype of tokenizers.Encoding".
+        raw_type = type(encoded).__name__
+        # BatchEncoding / dict -> take input_ids
+        if isinstance(encoded, dict) or hasattr(encoded, "input_ids"):
+            encoded = encoded["input_ids"] if "input_ids" in encoded else getattr(encoded, "input_ids")
+
+        def _to_ids(obj):
+            if hasattr(obj, "ids"):  # tokenizers.Encoding
+                return list(obj.ids)
+            if isinstance(obj, (list, tuple)):
+                flat = []
+                for item in obj:
+                    flat.append(item) if isinstance(item, int) else flat.extend(_to_ids(item))
+                return flat
+            return obj
+
+        encoded = _to_ids(encoded)
+        if not (isinstance(encoded, list) and (len(encoded) == 0 or isinstance(encoded[0], int))):
+            logger.warning(
+                f"[gpt-oss encode_prompt] unexpected token container: raw={raw_type}, "
+                f"normalized={type(encoded).__name__}"
+            )
+        return encoded
 
     @staticmethod
     def load_state_dict(weights_path, dummy_weights=False, convert_to_meta_format=True):
@@ -231,22 +260,35 @@ class ModelArgs:
             # Return dummy state dict for testing
             return {}
         else:
-            # Load actual GPT-OSS weights directly from safetensors files
-            # Check if we have a cached torch_state_dict.pt file
+            # Load actual GPT-OSS weights directly from safetensors files.
+            #
+            # GPT-OSS ships MXFP4-quantized weights (see configs/*/config.json). On a CPU host
+            # (CI loads weights on host before pushing them to the Tenstorrent device) transformers
+            # dequantizes the MXFP4 experts during from_pretrained. With torch_dtype="auto" that
+            # dequant intermediate lands in fp32, ~doubling the resident host footprint AND forcing
+            # the bf16 conversion pass below to allocate a second full copy of the state dict --
+            # enough to OOM / hang the host for the 20B & 120B demos (#48509, #48508). Loading
+            # straight to bf16 makes dequant target bf16 and turns that pass into a no-op (the dict
+            # comprehension then rebinds references rather than copying tensors).
             model = AutoModelForCausalLM.from_pretrained(
                 weights_path,
-                torch_dtype="auto"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
             )
+            head_dim = model.config.head_dim
             state_dict = model.state_dict()
+            # Drop the HF module graph/buffers now that we hold the weight tensors. state_dict shares
+            # storage with the params, so after this the peak host footprint is bounded by the bf16
+            # weights themselves rather than weights + a live HF model object.
+            del model
+            gc.collect()
             # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
             if convert_to_meta_format:
                 logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                state_dict = convert_hf_qkv_to_meta_format(state_dict, model.config.head_dim)
+                state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+            # Safety net: ensure bf16. With the bf16 load above this is a no-op for every tensor
+            # (references are reused); it only casts genuine fp32 stragglers.
             if state_dict["model.norm.weight"].dtype != torch.bfloat16:
-                # Convert to bfloat16 if needed
                 state_dict = {
                     k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
                     for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")

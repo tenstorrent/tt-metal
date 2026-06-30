@@ -144,7 +144,7 @@ TEST_F(MeshDeviceSingleCardFixture, CoreRangeSet) {
 
     auto unary_writer_kernel = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_1.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_1.cpp",
         core_ranges,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

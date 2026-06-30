@@ -197,52 +197,62 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 
 template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
+    sfpi::vSMag16 sm;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
     j = 1.442695f * a;
     r = 1.37805939e-3f;
-    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::Nearest);
+    sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
     f = j * -6.93145752e-1f + a;
     f = j * -1.42860677e-6f + f;
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
-    // interleaved with conversion of i from sign-mag to two's complement
+    // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
     r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
+    i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + 1.0f;
-    sfpi::vInt i_2c = sfpi::convert<sfpi::vInt>(i_smag);
+    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + 1.0f;
 
-    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i_2c;
     if constexpr (unsafe) {
         // y = 2**i * r
+        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i;
         y = sfpi::setexp(r, e);
     } else {
-        // overflow: y = infinity or NaN
-        y *= std::numeric_limits<float>::infinity();
-
-        // if e < 255
-        v_block {
-            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-
-            // y = 2**i * r
-            y = sfpi::setexp(r, e);
-
-            // if e < 1
-            v_if(e_lt_255 < -254) {
-                // underflow, including subnormals
-                y = 0.0f;
+        // IMPORTANT: this bit-level hack only works on Wormhole, which
+        // doesn't produce canonical NaNs and requires this hack to handle
+        // -NaN while maintaining performance.
+        // Often (but not always), we can guarantee that both -NaN and +NaN
+        // have a mantissa of exactly 1 on Wormhole.  For this specific code,
+        // we can guarantee this is the case.
+        // The hack: subtract 1, which converts ±NaN to ±inf, otherwise
+        // generates a finite value.
+        // Then, multiply by 0 to obtain 0*±inf = ±NaN, otherwise 0*±finite = 0.
+        // This is our underflow result, which handles -NaN correctly too.
+        y = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(y) + -1);
+        y *= 0.0f;
+        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i;
+        v_if(e >= 1) {
+            // Overflow: y = infinity or NaN
+            // We add infinity to our underflow result to get the overflow result.
+            // If underflow was NaN, then NaN+inf = NaN.  Otherwise 0+inf = inf.
+            y += std::numeric_limits<float>::infinity();
+            v_if(e < 255) {
+                // y = 2**i * r
+                y = sfpi::setexp(r, e);
             }
             v_endif;
         }
-        v_endblock;
+        v_endif;
     }
 
     return y;
