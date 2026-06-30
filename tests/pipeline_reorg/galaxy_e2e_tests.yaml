@@ -96,13 +96,17 @@
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
 
-- id: bh-galaxy-socket-pipeline
-  name: BH Galaxy Socket Pipeline Single Galaxy
-  cmd: |
-    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-    tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
-  skus:
-    bh_galaxy:
-      timeout: 10
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: scaleout
+# Disabled (issue #48239): the BH Galaxy Socket Pipeline single-galaxy test relies on the topology
+# auto-mapper to bind its four 4x2 meshes, but the auto-mapper does not yet support the 4-stage single
+# galaxy configuration (tracked in issue #47717). Until auto-mapper support lands (or the test is switched
+# to explicit rank bindings), this job fails in topology mapping. Re-enable once #47717 is resolved.
+# - id: bh-galaxy-socket-pipeline
+#   name: BH Galaxy Socket Pipeline Single Galaxy
+#   cmd: |
+#     python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+#     tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+#   skus:
+#     bh_galaxy:
+#       timeout: 10
+#   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+#   team: scaleout
