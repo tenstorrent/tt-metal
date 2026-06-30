@@ -104,6 +104,26 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     // Direct-write mode: expert_region_offsets present => the writer places
     // this expert's output into the SHARED optional_output buffer at the
     // expert's region offset (fusing ttnn::insert). Requires optional_output.
+    // Fused-extract mode: x is the whole shared dispatched buffer and the
+    // reader offsets its tile reads by this expert's region offset (read from
+    // expert_region_offsets device-side). fused_m_tiles is the per-expert
+    // allocated tile-row count; it must fit inside x. Always paired with
+    // direct-write (the writer places output back into the same shared buffer
+    // at the same region offset), so it requires expert_region_offsets +
+    // optional_output.
+    if (op.fused_m_tiles > 0) {
+        TT_FATAL(
+            t.expert_region_offsets.has_value(),
+            "fused-extract mode (fused_m_tiles > 0) requires expert_region_offsets");
+        TT_FATAL(t.optional_output.has_value(), "fused-extract mode (fused_m_tiles > 0) requires optional_output");
+        const uint32_t x_m_tiles = static_cast<uint32_t>(x_shape[-2]) / TILE;
+        TT_FATAL(
+            op.fused_m_tiles <= x_m_tiles,
+            "fused_m_tiles ({}) must be <= x's tile-row count ({})",
+            op.fused_m_tiles,
+            x_m_tiles);
+    }
+
     const bool direct_write = t.expert_region_offsets.has_value();
     if (direct_write) {
         const auto& start = *t.expert_region_offsets;
@@ -231,13 +251,15 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t chunk_M_tiles,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets) {
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    uint32_t fused_m_tiles) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
             .local_expert_id = local_expert_id,
+            .fused_m_tiles = fused_m_tiles,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,

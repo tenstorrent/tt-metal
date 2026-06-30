@@ -5,12 +5,39 @@
 #include "unified_routed_expert_ffn.hpp"
 
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
+#include "tt-metalium/constants.hpp"
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/extract/extract.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
+
+namespace {
+// Pick chunk_M_tiles for a given allocated M (tile rows). Factored out so both
+// the standalone wrapper (M from x's shape) and the fused MoE composite (M =
+// max_dispatched_tokens_per_expert / TILE, since x is the whole shared buffer)
+// share the exact same heuristic.
+uint32_t pick_chunk_m_tiles(uint32_t M_tiles_full) {
+    constexpr uint32_t kGridY = 8;
+    constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
+    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
+    uint32_t chunk_M_tiles = kMaxChunkMTiles;
+    uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
+    uint32_t best_waste = kMaxChunkMTiles + 1;
+    for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
+        const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
+        const uint32_t rem = M_tiles_full % cand;
+        const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
+        const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
+        if (better) {
+            best_num_chunks = num_chunks;
+            best_waste = waste;
+            chunk_M_tiles = cand;
+        }
+    }
+    return chunk_M_tiles;
+}
+}  // namespace
 
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
@@ -42,24 +69,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     // (same num_chunks), prefers smaller waste = closer to-aligned. For
     // DS-V3 this picks 64 for nearly all sizes; 5k → 64 (3 chunks, was 40
     // with 4 chunks); 25k → 64 (13 chunks, was 40 with 20 chunks).
-    constexpr uint32_t kGridY = 8;
-    constexpr uint32_t kMinChunkMTiles = 16;  // per_core_M >= 2
-    constexpr uint32_t kMaxChunkMTiles = 64;  // per_core_M <= 8 (L1 cap)
     const uint32_t M_tiles_full = x.padded_shape()[-2] / 32;
-    uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t best_num_chunks = (M_tiles_full + kMinChunkMTiles - 1) / kMinChunkMTiles + 1;
-    uint32_t best_waste = kMaxChunkMTiles + 1;
-    for (uint32_t cand = kMinChunkMTiles; cand <= kMaxChunkMTiles; cand += kGridY) {
-        const uint32_t num_chunks = (M_tiles_full + cand - 1) / cand;
-        const uint32_t rem = M_tiles_full % cand;
-        const uint32_t waste = (rem == 0) ? 0 : (cand - rem);
-        const bool better = (num_chunks < best_num_chunks) || (num_chunks == best_num_chunks && waste < best_waste);
-        if (better) {
-            best_num_chunks = num_chunks;
-            best_waste = waste;
-            chunk_M_tiles = cand;
-        }
-    }
+    const uint32_t chunk_M_tiles = pick_chunk_m_tiles(M_tiles_full);
 
     return ttnn::prim::unified_routed_expert_ffn(
         x,
@@ -73,7 +84,8 @@ ttnn::Tensor unified_routed_expert_ffn(
         compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
                                           : std::nullopt,
         output,
-        expert_region_offsets);
+        expert_region_offsets,
+        /*fused_m_tiles=*/0);
 }
 
 ttnn::Tensor unified_routed_expert_moe(
@@ -95,56 +107,53 @@ ttnn::Tensor unified_routed_expert_moe(
     const uint32_t experts_per_chip = static_cast<uint32_t>(gate_projs.size());
     TT_FATAL(experts_per_chip > 0, "Need at least one expert per chip");
 
-    // Per-expert composite: extract this expert's tokens out of the dispatched
-    // buffer, run the unified FFN on them, and have the FFN's writer place the
-    // result DIRECTLY back into the SAME dispatched buffer at the expert's
-    // region offset (in-place direct-write mode). This fuses what used to be a
-    // separate ttnn::insert op into the FFN writer — the FFN no longer writes a
-    // per-expert temp buffer that insert then copies elsewhere; it writes the
-    // dispatched buffer in place once. Same loop applies regardless of
-    // `num_routed_experts`, and the (mutated) dispatched buffer is returned.
+    // Per-expert composite. The FFN runs in FUSED-EXTRACT + DIRECT-WRITE mode:
+    // its reader reads this expert's tokens DIRECTLY out of the shared
+    // dispatched buffer at the expert's region offset (folding what a separate
+    // ttnn::extract op used to do — no per-expert temp buffer, no extra
+    // DRAM round-trip), and its writer places the result back into the SAME
+    // dispatched buffer at the same region offset (folding ttnn::insert). One
+    // device program per expert; the (mutated) dispatched buffer is returned.
     //
-    // In-place is safe across the loop: extract for expert i copies region i out
-    // into a fresh `tokens` tensor before the FFN overwrites region i, and each
-    // expert only touches its own (non-overlapping) region, so a later expert's
-    // extract still reads its original dispatched rows.
-    //
-    // `tokens` from extract is a per-expert (max_dispatched_tokens_per_expert,
-    // emb) tensor with rows starting at 0. The FFN reads from row 0 of its
-    // inputs; passing expert_region_offsets makes the writer add
-    // expert_region_offsets[global_expert_id]/TILE tile-rows so the output lands
-    // back in this expert's slice of the dispatched buffer.
-    //
-    // No separate output allocation or zero-fill: because the FFN writes back
-    // into the existing dispatched buffer (instead of a freshly-allocated
-    // output), there is no per-call DRAM allocation and no up-front fill. Rows
-    // the FFN writer does not touch (tile-aligned slack within a region, regions
-    // of zero-count experts, and the tail of the buffer) retain their original
-    // dispatched-buffer contents, which are never read by downstream `combine`
+    // In-place read+write to the shared buffer is safe within and across the
+    // chunk loop: for a given chunk the reader reads x rows at the START of the
+    // chunk (gate/up matmul input) and the writer writes the SAME rows at the
+    // END (down matmul output), so the read always precedes the write by a
+    // compute data-dependency; each row is written exactly once, by its own
+    // chunk's writer, after its own chunk's read. Different experts touch
+    // disjoint (non-overlapping) regions. Rows the writer never touches
+    // (tile-aligned slack, zero-count experts, buffer tail) keep their original
+    // dispatched-buffer contents, which downstream `combine` never reads
     // (bounded per expert to [offset, offset + ceil_tile(count))).
+    //
+    // x is the whole shared dispatched buffer; the FFN's M_tiles_full (chunk /
+    // loop math) is driven by fused_m_tiles = max_dispatched_tokens_per_expert
+    // / TILE, NOT by x's (full-buffer) row count. The chunk_M_tiles heuristic
+    // therefore matches what the old per-expert (max_tokens, emb) tensor used.
+    constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
+    const uint32_t fused_m_tiles = (max_dispatched_tokens_per_expert + TILE - 1) / TILE;
+    const uint32_t chunk_M_tiles = pick_chunk_m_tiles(fused_m_tiles);
+    const std::optional<ttnn::DeviceComputeKernelConfig> ckc =
+        compute_kernel_config.has_value() ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
+                                          : std::nullopt;
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
-        auto tokens = ttnn::extract(
+        // Fused-extract direct-write: x == output == dispatched_buffer, with
+        // expert_region_offsets so BOTH the reader (input slice) and the writer
+        // (output slice) offset into this expert's region of that same buffer.
+        // The op mutates dispatched_buffer in place; its return value is unused.
+        ttnn::prim::unified_routed_expert_ffn(
             dispatched_buffer,
-            expert_region_offsets,
-            expert_token_counts,
-            global_expert_idx_table,
-            local_expert,
-            max_dispatched_tokens_per_expert);
-        // In-place direct-write: output == dispatched_buffer, with
-        // expert_region_offsets so the writer offsets into this expert's region
-        // of that same buffer. The op mutates dispatched_buffer in place; its
-        // return value is unused (the composite returns dispatched_buffer below).
-        unified_routed_expert_ffn(
-            tokens,
             gate_projs[local_expert],
             up_projs[local_expert],
             down_projs[local_expert],
             expert_token_counts,
             global_expert_idx_table,
             local_expert,
-            compute_kernel_config,
+            chunk_M_tiles,
+            ckc,
             dispatched_buffer,
-            expert_region_offsets);
+            expert_region_offsets,
+            fused_m_tiles);
     }
     return dispatched_buffer;
 }
