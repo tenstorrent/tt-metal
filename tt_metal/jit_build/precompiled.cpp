@@ -10,9 +10,6 @@
 namespace tt::tt_metal::precompiled {
 
 std::optional<std::string> find_precompiled_dir(const std::string& root, uint64_t hash) {
-    // `hash` is the env-level build_key_ from JitBuildEnv, which encodes all firmware-relevant
-    // parameters including dispatch_message_addr.  ETH and WORKER dispatch configs produce
-    // different hashes and therefore different precompiled directories, preventing stale reuse.
     auto path = fmt::format("{}tt_metal/pre-compiled/{}/", root, hash);
     std::error_code ec;
     if (std::filesystem::is_directory(path, ec)) {
