@@ -52,6 +52,23 @@ The model can be made to *run* (and emit text) **without** resolving fidelity �
 
 > **Cheapest unblocked step:** start #47464 device integration with the CPU outer-loop oracle now pinned. The next useful slice is device commit-append / per-block position advancement for a single generated 256-token block before joining all 30 real layers.
 
+### Spike R0 — real-26B single-block denoise on QB2 (`bh-qbge-06`)  (#47464 + #48291)
+
+**Why:** one run answers the two unmeasured unknowns at once — (a) does the **real-size** denoise step *fit + run* on the (1,4) mesh (critical-path step 4, ⬜), and (b) what is the **real-checkpoint** committed-argmax fidelity vs HF (the #48291 number, so far only inferred from the ~50% causal-prefill proxy — no real denoise trajectory has ever run). Short prompt first (≤512 ctx), **not** 256K — fit/fidelity, not long-context.
+
+**Prereqs (all met):** DG ckpt on bhqb (`~/.cache/huggingface/hub/models--google--diffusiongemma-26B-A4B-it`, 11 safetensors / 49 GB / config+index+chat_template ✅); helpers exist — `weight_mapping.remap_state_dict` (backbone + self-cond split), `DiffusionGemma4Model`, `make_generation_logits_fn_builder_from_checkpoint_state`, `build_self_conditioning`, `read_prompt_kv_cache_by_layer`, `tt_denoise_block`/`denoise_and_commit_block`, replay helpers `make_replay_canvas_init_fn`/`make_replay_noise_fn`.
+
+| # | Step | Acceptance | Risk |
+|---|---|---|---|
+| R0.1 | **Build real `DiffusionGemma4Model` on (1,4) mesh** from DG ckpt: load 11 shards → `remap_state_dict` → backbone_state (gemma4-keyed) + self_cond_state; build at `max_seq_len≈512, num_layers=30, create_kv_cache=True`, experts **TP-sharded** (column/row parallel per #47487). | Builds without OOM; log per-chip DRAM via `ttnn.get_memory_view`. | expert-shard config; tied embedding (262144×2816 ~1.5 GB); 52 GB across 4 chips per budget doc |
+| R0.2 | **Prefill a short prompt (causal)** via chat template (~32 tok) → write 30-layer prompt KV (`prefill_prompt_tokens` / `collect_prompt_kv_by_layer`). | Prefill runs; KV populated. **Bonus: real-ckpt prompt-logits PCC vs HF** (the #47461 exit that was never met on DG weights). | prefill chunking at short ctx is trivial; mainly a build/glue check |
+| R0.3 | **Build denoise logits adapter from the real ckpt** (`make_generation_logits_fn_builder_from_checkpoint_state(..., prompt_len)`), then call `adapter(canvas_tokens, step=0)` once. | Returns `[1,1,256,vocab]` logits **without OOM** — critical-path step 4, the unmeasured "real-size denoise step fits" (full-canvas logits + 262k soft-embed matmul + 30-layer `[P+C]` KV concat). | **highest fit risk**; soft-embed `[256,262144]@[262144,2816]` matmul + 30× KV concat L1/DRAM |
+| R0.4 | **Run ONE denoise block** (`denoise_and_commit_block`) with released `DiffusionConfig()` (cap steps), seeded host canvas init + injected reference Gumbel noise. | Block completes, commits 256 tokens, decodes to text (garbage allowed). | step-schedule cost; intra-block early-stop still host-side |
+| R0.5 | **Measure decision fidelity vs HF** — replay the SAME canvas/noise through `reference/generate_blocks` (replay helpers), compare per-position committed-argmax agreement. | A real-scale agreement number → updates #48291 (vs the ~50% proxy). | likely ~50% → confirms #48291 is the dominant blocker |
+| R0.6 | **Record** → update this roadmap (steps 3–4), #48291 (real-scale fidelity), #47464. | Results posted; status flipped. | — |
+
+> Sequence: R0.1→R0.2→R0.3 is the **fit** answer; R0.4→R0.5 is the **fidelity** answer. If R0.3 OOMs, that *is* the finding (real-size step doesn't fit → right-size soft-embed / chunk the vocab matmul before proceeding). Device is the shared QB2 (`bh-qbge-06`) — coordinate the device lock (a long-running vLLM has held it; `sudo tt-smi -r` recovers a wedged board).
+
 ### Phased roadmap
 
 **Phase 0 — Foundation** ✅ done — torch reference + PCC harness (#47468 ✅ closed), causal backbone PCC (#47461 ✅), QB2 memory fit (#47487).
