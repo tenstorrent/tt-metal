@@ -116,7 +116,11 @@ def dense_sp_attention(
         is_causal=True,
         scale=scale,
         is_balanced=False,
-        kv_cache_batch_idx=slot_idx,
+        # Fold the layer into the cache batch index, matching update_padded_kv_cache's write
+        # (batch_idx = slot_idx*num_layers + layer_idx). The cache packs all layers user-major in the
+        # batch dim; passing slot_idx alone made every dense layer read layer 0's cache (L0 correct by
+        # coincidence, L1+ read stale L0 K/V -> wrong attn_out -> residual corruption -> KV-PCC crater).
+        kv_cache_batch_idx=slot_idx * num_layers + layer_idx,
         kv_actual_isl=kv_actual,
     )
     return out
