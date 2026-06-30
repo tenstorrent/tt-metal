@@ -29,8 +29,8 @@
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
           "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
           "BUILD_TT_TRAIN": {"value": "ON"},
-          "CMAKE_CXX_LINK_EXECUTABLE": {"value": "cmake -E touch <TARGET>"},
-          "CMAKE_C_LINK_EXECUTABLE": {"value": "cmake -E touch <TARGET>"}
+          "CMAKE_CXX_LINK_EXECUTABLE": {"value": "${sourceDir}/cmake/clang-tidy-link-stub-wrapper.sh <TARGET> <CMAKE_CXX_COMPILER> <FLAGS> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>"},
+          "CMAKE_C_LINK_EXECUTABLE": {"value": "${sourceDir}/cmake/clang-tidy-link-stub-wrapper.sh <TARGET> <CMAKE_C_COMPILER> <FLAGS> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>"}
         }
       },
       {
