@@ -11,6 +11,7 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
     build_self_conditioning,
     TtSelfConditioning,
     _dram_for_rms_norm,
+    _width_sharded_rms_norm,
     _rms_norm_dram,
     validate_self_conditioning_state,
 )
@@ -347,3 +348,73 @@ def test_rms_norm_dram_chunks_long_sequences(monkeypatch):
         2,
         "dram-memcfg",
     )
+
+
+def test_width_sharded_rms_norm_uses_sharded_program_for_production_width(monkeypatch):
+    calls = []
+
+    class _Tensor:
+        def __init__(self, name, shape=(1, 1, 32, 2816)):
+            self.name = name
+            self.shape = shape
+            self.deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        TILE_SIZE = 32
+        DRAM_MEMORY_CONFIG = "dram"
+        ShardStrategy = SimpleNamespace(WIDTH="width")
+        ShardOrientation = SimpleNamespace(ROW_MAJOR="row-major")
+
+        @staticmethod
+        def CoreGrid(*, x, y):
+            return ("grid", x, y)
+
+        @staticmethod
+        def create_sharded_memory_config(shape, **kwargs):
+            calls.append(("create_mem", shape, kwargs))
+            return "sharded-mem"
+
+        @staticmethod
+        def LayerNormShardedMultiCoreProgramConfig(**kwargs):
+            calls.append(("program", kwargs))
+            return "program"
+
+        @staticmethod
+        def to_memory_config(tensor, memory_config):
+            calls.append(("to_mem", tensor.name, memory_config))
+            return _Tensor(f"{tensor.name}:{memory_config}", tensor.shape)
+
+        @staticmethod
+        def rms_norm(tensor, **kwargs):
+            calls.append(("rms_norm", tensor.name, kwargs))
+            return _Tensor("sharded-out", tensor.shape)
+
+        @staticmethod
+        def sharded_to_interleaved(tensor, memory_config):
+            calls.append(("to_interleaved", tensor.name, memory_config))
+            return _Tensor("dram-out", tensor.shape)
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+
+    out = _width_sharded_rms_norm(_Tensor("x"), weight=_Tensor("w"), epsilon=1e-6)
+
+    assert out.name == "dram-out"
+    assert calls[0] == (
+        "create_mem",
+        (32, 2816),
+        {"core_grid": ("grid", 8, 1), "strategy": "width", "orientation": "row-major"},
+    )
+    assert calls[1] == (
+        "program",
+        {"compute_with_storage_grid_size": (8, 1), "subblock_w": 1, "block_h": 1, "block_w": 11, "inplace": False},
+    )
+    assert ("to_mem", "x", "sharded-mem") in calls
+    assert ("to_mem", "w", "sharded-mem") in calls
+    rms_call = next(call for call in calls if call[0] == "rms_norm")
+    assert rms_call[2]["program_config"] == "program"
+    assert rms_call[2]["memory_config"] == "sharded-mem"

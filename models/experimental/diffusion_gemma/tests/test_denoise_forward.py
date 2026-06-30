@@ -9,6 +9,8 @@ from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
     DenoiseLogitsAdapter,
     _build_denoise_attn_mask_for_layer,
+    _chunked_norm_forward,
+    _denoise_router_forward,
     denoise_attention_forward,
     embed_canvas_tokens,
     make_denoise_logits_adapter_from_kv_cache,
@@ -23,6 +25,10 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
 class _FakeTensor:
     def __init__(self, shape):
         self.shape = shape
+        self.deallocated = False
+
+    def deallocate(self, force):
+        self.deallocated = force
 
 
 class _FakeAttention:
@@ -181,6 +187,129 @@ def test_denoise_attn_mask_builder_rejects_missing_sliding_window():
             canvas_len=6,
             mask_builder=lambda *args, **kwargs: "mask",
         )
+
+
+def test_chunked_norm_forward_slices_canvas_rows(monkeypatch):
+    calls = []
+
+    class _FakeTtnn:
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def slice(tensor, starts, ends, *, memory_config):
+            calls.append(("slice", starts, ends, memory_config))
+            return _FakeTensor([tensor.shape[0], tensor.shape[1], ends[2] - starts[2], tensor.shape[3]])
+
+        @staticmethod
+        def concat(tensors, *, dim, memory_config):
+            calls.append(("concat", [tensor.shape for tensor in tensors], dim, memory_config))
+            return _FakeTensor([1, 1, sum(tensor.shape[2] for tensor in tensors), tensors[0].shape[3]])
+
+    class _FakeNorm:
+        def forward(self, tensor):
+            calls.append(("norm", tensor.shape))
+            return _FakeTensor(tensor.shape)
+
+    monkeypatch.setattr(DF, "ttnn", _FakeTtnn)
+
+    out = _chunked_norm_forward(_FakeNorm(), _FakeTensor([1, 1, 96, 2816]))
+
+    assert out.shape == [1, 1, 96, 2816]
+    assert [call[0] for call in calls] == ["slice", "norm", "slice", "norm", "slice", "norm", "concat"]
+    assert calls[-1] == (
+        "concat",
+        [[1, 1, 32, 2816], [1, 1, 32, 2816], [1, 1, 32, 2816]],
+        2,
+        "dram",
+    )
+
+
+def test_chunked_norm_forward_uses_sharded_scaleless_norm(monkeypatch):
+    calls = []
+
+    def fake_rms_norm_dram(tensor, *, epsilon, chunk_size):
+        calls.append((tensor.shape, epsilon, chunk_size))
+        return _FakeTensor(tensor.shape)
+
+    monkeypatch.setattr(DF, "_rms_norm_dram", fake_rms_norm_dram)
+    norm = SimpleNamespace(with_scale=False, tt_weight=None, eps=1e-6)
+
+    out = _chunked_norm_forward(norm, _FakeTensor([1, 1, 96, 2816]))
+
+    assert out.shape == [1, 1, 96, 2816]
+    assert calls == [([1, 1, 96, 2816], 1e-6, 32)]
+
+
+def test_denoise_router_forward_uses_chunked_norm(monkeypatch):
+    calls = []
+
+    class _Tensor(_FakeTensor):
+        def __init__(self, name, shape=[1, 1, 96, 128]):
+            super().__init__(shape)
+            self.name = name
+
+    class _FakeTtnn:
+        @staticmethod
+        def mul(lhs, rhs):
+            calls.append(("mul", lhs.name, getattr(rhs, "name", rhs)))
+            return _Tensor(f"mul({lhs.name})")
+
+        @staticmethod
+        def linear(lhs, rhs):
+            calls.append(("linear", lhs.name, rhs.name))
+            return _Tensor("scores", [1, 1, 96, 16])
+
+        @staticmethod
+        def softmax(tensor, *, dim):
+            calls.append(("softmax", tensor.name, dim))
+            return _Tensor("probs", tensor.shape)
+
+        @staticmethod
+        def topk(tensor, *, k, dim):
+            calls.append(("topk", tensor.name, k, dim))
+            return _Tensor("topk-values", [1, 1, 96, k]), _Tensor("topk-indices", [1, 1, 96, k])
+
+        @staticmethod
+        def sum(tensor, *, dim, keepdim):
+            calls.append(("sum", tensor.name, dim, keepdim))
+            return _Tensor("topk-sum", [1, 1, 96, 1])
+
+        @staticmethod
+        def div(lhs, rhs):
+            calls.append(("div", lhs.name, rhs.name))
+            return _Tensor("topk-normalized", lhs.shape)
+
+        @staticmethod
+        def zeros_like(tensor):
+            calls.append(("zeros_like", tensor.name))
+            return _Tensor("zeros", tensor.shape)
+
+        @staticmethod
+        def scatter(tensor, *, dim, index, src):
+            calls.append(("scatter", tensor.name, dim, index.name, src.name))
+            return _Tensor("dense-routing", tensor.shape)
+
+    def fake_chunked_norm(norm, hidden_states):
+        calls.append(("chunked_norm", norm.name, hidden_states.name))
+        return _Tensor("normed", hidden_states.shape)
+
+    monkeypatch.setattr(DF, "ttnn", _FakeTtnn)
+    monkeypatch.setattr(DF, "_chunked_norm_forward", fake_chunked_norm)
+    router = SimpleNamespace(
+        norm=SimpleNamespace(name="router-norm"),
+        scale=_Tensor("scale", [1, 1, 1, 128]),
+        scalar_root_size=0.125,
+        proj_weight=_Tensor("proj-weight", [1, 1, 128, 16]),
+        top_k=2,
+        per_expert_scale=_Tensor("per-expert-scale", [1, 1, 1, 16]),
+    )
+
+    out = _denoise_router_forward(router, _Tensor("hidden"))
+
+    assert out.name == "mul(dense-routing)"
+    assert calls[0] == ("chunked_norm", "router-norm", "hidden")
+    assert ("linear", "mul(mul(normed))", "proj-weight") in calls
+    assert ("scatter", "zeros", -1, "topk-indices", "topk-normalized") in calls
 
 
 def test_denoise_logits_adapter_threads_canvas_rope_offset():

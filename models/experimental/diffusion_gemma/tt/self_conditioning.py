@@ -108,14 +108,77 @@ def _dram_for_rms_norm(tensor):
     return ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
 
 
+def _norm_shard_core_count(hidden_size: int) -> int:
+    tile_size = getattr(ttnn, "TILE_SIZE", 32)
+    tile_cols = hidden_size // tile_size
+    for cores in (8, 4, 2):
+        if tile_cols % cores == 0:
+            return cores
+    return 1
+
+
+def _norm_subblock_w(block_w: int) -> int:
+    for subblock_w in range(4, 0, -1):
+        if block_w % subblock_w == 0:
+            return subblock_w
+    return 1
+
+
+def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float):
+    hidden_size = chunk.shape[-1]
+    tile_size = getattr(ttnn, "TILE_SIZE", 32)
+    if hidden_size % tile_size != 0 or chunk.shape[-2] != tile_size:
+        kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+        if weight is not None:
+            kwargs["weight"] = weight
+        return ttnn.rms_norm(chunk, **kwargs)
+    tile_cols = hidden_size // tile_size
+    cores = _norm_shard_core_count(hidden_size)
+    if cores == 1:
+        kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+        if weight is not None:
+            kwargs["weight"] = weight
+        return ttnn.rms_norm(chunk, **kwargs)
+
+    grid = ttnn.CoreGrid(x=cores, y=1)
+    sharded_mem = ttnn.create_sharded_memory_config(
+        (tile_size, hidden_size),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(cores, 1),
+        subblock_w=_norm_subblock_w(tile_cols // cores),
+        block_h=1,
+        block_w=tile_cols // cores,
+        inplace=False,
+    )
+
+    chunk_sharded = ttnn.to_memory_config(chunk, sharded_mem)
+    weight_sharded = None
+    if weight is not None:
+        weight_sharded = ttnn.to_memory_config(weight, sharded_mem)
+    out_sharded = ttnn.rms_norm(
+        chunk_sharded,
+        weight=weight_sharded,
+        epsilon=epsilon,
+        program_config=program_config,
+        memory_config=sharded_mem,
+    )
+    out = ttnn.sharded_to_interleaved(out_sharded, ttnn.DRAM_MEMORY_CONFIG)
+    out_sharded.deallocate(True)
+    chunk_sharded.deallocate(True)
+    if weight_sharded is not None and weight_sharded is not weight:
+        weight_sharded.deallocate(True)
+    return out
+
+
 def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32):
     norm_input = _dram_for_rms_norm(tensor)
     seq_len = norm_input.shape[-2]
-    kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
-    if weight is not None:
-        kwargs["weight"] = weight
     if seq_len <= chunk_size:
-        out = ttnn.rms_norm(norm_input, **kwargs)
+        out = _width_sharded_rms_norm(norm_input, weight=weight, epsilon=epsilon)
         if norm_input is not tensor:
             norm_input.deallocate(True)
         return out
@@ -129,7 +192,7 @@ def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32)
             [norm_input.shape[0], norm_input.shape[1], end, norm_input.shape[3]],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        chunks.append(ttnn.rms_norm(chunk, **kwargs))
+        chunks.append(_width_sharded_rms_norm(chunk, weight=weight, epsilon=epsilon))
         chunk.deallocate(True)
     out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     for chunk in chunks:
@@ -155,13 +218,13 @@ class TtSelfConditioning:
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
 
-        # scaled pre_norm weight: ROW_MAJOR, bf16, [1,1,hidden/32,32] (gemma4 RMSNorm layout).
-        pre_w = state_dict["pre_norm.weight"].reshape((1, 1, -1, ttnn.TILE_SIZE))
+        # scaled pre_norm weight for self-conditioning RMSNorm.
+        pre_w = state_dict["pre_norm.weight"].reshape((1, 1, 1, hidden_size))
         self.pre_norm_weight = ttnn.as_tensor(
             pre_w,
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # post_norm is scaleless — no checkpoint weight, no tensor built.

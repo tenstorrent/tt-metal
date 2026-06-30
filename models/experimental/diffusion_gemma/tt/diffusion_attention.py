@@ -32,7 +32,6 @@ from models.demos.gemma4.tt.attention.operations import (
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
-    apply_rope,
     concat_heads,
     split_qkv_heads_prefill,
 )
@@ -62,11 +61,11 @@ def _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len):
     sizes must independently divide each axis.
     """
     if head_dim >= 512:
-        grid = ttnn.CoreCoord(8, 4)
-        dq, dk = 128, 128
+        grid = ttnn.CoreCoord(8, 1)
+        dq, dk = 32, 32
     else:
-        grid = ttnn.CoreCoord(8, 8)
-        dq, dk = 256, 128
+        grid = ttnn.CoreCoord(8, 1)
+        dq, dk = 32, 32
     q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
     k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
     return ttnn.SDPAProgramConfig(
@@ -85,6 +84,80 @@ def _slice_rope_cache(cache, start, length):
     if start == 0 and cache.shape[-2] == length:
         return cache
     return ttnn.slice(cache, [0, 0, start, 0], [cache.shape[0], cache.shape[1], start + length, cache.shape[3]])
+
+
+def _apply_rope_chunked(
+    tensor,
+    cos_cache,
+    sin_cache,
+    *,
+    start_offset: int,
+    chunk_size: int = TILE_SIZE,
+    head_chunk_size: int = 1,
+):
+    def apply_rope_dram(chunk, token_index):
+        half_dim = chunk.shape[-1] // 2
+        cos = _slice_rope_cache(cos_cache, token_index, chunk.shape[-2])
+        sin = _slice_rope_cache(sin_cache, token_index, chunk.shape[-2])
+        x1 = ttnn.slice(
+            chunk,
+            [0, 0, 0, 0],
+            [chunk.shape[0], chunk.shape[1], chunk.shape[2], half_dim],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x2 = ttnn.slice(
+            chunk,
+            [0, 0, 0, half_dim],
+            [chunk.shape[0], chunk.shape[1], chunk.shape[2], chunk.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        neg_x2 = ttnn.mul(x2, -1.0)
+        rotated = ttnn.concat([neg_x2, x1], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_cos = ttnn.mul(chunk, cos)
+        r_sin = ttnn.mul(rotated, sin)
+        out = ttnn.add(x_cos, r_sin)
+        x1.deallocate(True)
+        x2.deallocate(True)
+        neg_x2.deallocate(True)
+        rotated.deallocate(True)
+        x_cos.deallocate(True)
+        r_sin.deallocate(True)
+        if cos is not cos_cache:
+            cos.deallocate(True)
+        if sin is not sin_cache:
+            sin.deallocate(True)
+        return out
+
+    seq_len = tensor.shape[-2]
+    num_heads = tensor.shape[1]
+    if seq_len <= chunk_size and num_heads <= head_chunk_size:
+        return apply_rope_dram(tensor, start_offset)
+
+    chunks = []
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        head_chunks = []
+        for head_start in range(0, num_heads, head_chunk_size):
+            head_end = min(head_start + head_chunk_size, num_heads)
+            chunk = ttnn.slice(
+                tensor,
+                [0, head_start, start, 0],
+                [tensor.shape[0], head_end, end, tensor.shape[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            head_chunks.append(apply_rope_dram(chunk, start_offset + start))
+            chunk.deallocate(True)
+        if len(head_chunks) == 1:
+            chunks.append(head_chunks[0])
+        else:
+            chunks.append(ttnn.concat(head_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            for chunk in head_chunks:
+                chunk.deallocate(True)
+    out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for chunk in chunks:
+        chunk.deallocate(True)
+    tensor.deallocate(True)
+    return out
 
 
 def denoise_attention(
@@ -144,24 +217,12 @@ def denoise_attention(
     tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
     tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
-    q_cos = _slice_rope_cache(cos_cache, q_rope_offset, tt_q.shape[-2])
-    q_sin = _slice_rope_cache(sin_cache, q_rope_offset, tt_q.shape[-2])
-    tt_q = apply_rope(tt_q, q_cos, q_sin)
-    if q_cos is not cos_cache:
-        q_cos.deallocate(True)
-    if q_sin is not sin_cache:
-        q_sin.deallocate(True)
+    tt_q = _apply_rope_chunked(tt_q, cos_cache, sin_cache, start_offset=q_rope_offset)
 
     # When K is just the canvas (kv_hidden recomputes the full prompt+canvas, so its
     # RoPE starts at 0), only the canvas-only K path needs the prompt_len offset.
     k_rope_offset = q_rope_offset if prefix_kv is not None else 0
-    k_cos = _slice_rope_cache(cos_cache, k_rope_offset, tt_k.shape[-2])
-    k_sin = _slice_rope_cache(sin_cache, k_rope_offset, tt_k.shape[-2])
-    tt_k = apply_rope(tt_k, k_cos, k_sin)
-    if k_cos is not cos_cache:
-        k_cos.deallocate(True)
-    if k_sin is not sin_cache:
-        k_sin.deallocate(True)
+    tt_k = _apply_rope_chunked(tt_k, cos_cache, sin_cache, start_offset=k_rope_offset)
 
     if prefix_kv is not None:
         prefix_k, prefix_v = prefix_kv
@@ -177,6 +238,20 @@ def denoise_attention(
         canvas_k.deallocate(True)
         canvas_v.deallocate(True)
 
+    q_old, k_old, v_old = tt_q, tt_k, tt_v
+    tt_q_dram = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+    if tt_q_dram is not tt_q:
+        q_old = tt_q
+    tt_q = tt_q_dram
+    tt_k_dram = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+    if tt_k_dram is not tt_k:
+        k_old = tt_k
+    tt_k = tt_k_dram
+    tt_v_dram = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+    if tt_v_dram is not tt_v:
+        v_old = tt_v
+    tt_v = tt_v_dram
+
     q_seq_len = tt_q.shape[-2]
     k_seq_len = tt_k.shape[-2]
     program_config = _denoise_sdpa_program_config(config.head_dim, q_seq_len, k_seq_len)
@@ -188,6 +263,7 @@ def denoise_attention(
             attn_mask=attn_mask,
             is_causal=False,
             scale=1.0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=program_config,
         )
     else:
@@ -197,11 +273,18 @@ def denoise_attention(
             tt_v,
             is_causal=False,
             scale=1.0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=program_config,
         )
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)
+    if q_old is not tt_q:
+        q_old.deallocate(True)
+    if k_old is not tt_k:
+        k_old.deallocate(True)
+    if v_old is not tt_v:
+        v_old.deallocate(True)
 
     tt_out = concat_heads(tt_sdpa, is_decode_mode=False)
     tt_out = apply_output_projection(tt_out, weights)

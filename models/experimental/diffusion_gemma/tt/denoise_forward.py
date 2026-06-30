@@ -18,6 +18,7 @@ import ttnn
 from models.experimental.diffusion_gemma.reference.attention_mask import build_canvas_denoise_mask
 from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
+    _rms_norm_dram,
     build_self_conditioning,
     build_self_conditioning_embedding_weight,
 )
@@ -171,10 +172,72 @@ def _prompt_source_len(prompt_source):
     return prompt_source[0].shape[-2] if isinstance(prompt_source, (tuple, list)) else prompt_source.shape[-2]
 
 
+def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
+    if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
+        return _rms_norm_dram(hidden_states, epsilon=norm.eps, chunk_size=chunk_size)
+    seq_len = hidden_states.shape[-2]
+    if seq_len <= chunk_size:
+        return norm.forward(hidden_states)
+
+    chunks = []
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        chunk = ttnn.slice(
+            hidden_states,
+            [0, 0, start, 0],
+            [hidden_states.shape[0], hidden_states.shape[1], end, hidden_states.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        chunks.append(norm.forward(chunk))
+        chunk.deallocate(True)
+    out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for chunk in chunks:
+        chunk.deallocate(True)
+    return out
+
+
+def _denoise_router_forward(router, hidden_states):
+    normed = _chunked_norm_forward(router.norm, hidden_states)
+    scaled = ttnn.mul(normed, router.scale)
+    normed.deallocate(True)
+    scaled = ttnn.mul(scaled, router.scalar_root_size)
+
+    expert_scores = ttnn.linear(scaled, router.proj_weight)
+    scaled.deallocate(True)
+
+    router_probs = ttnn.softmax(expert_scores, dim=-1)
+    expert_scores.deallocate(True)
+
+    top_k_values, top_k_indices = ttnn.topk(router_probs, k=router.top_k, dim=-1)
+    top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
+    top_k_values = ttnn.div(top_k_values, top_k_sum)
+    top_k_sum.deallocate(True)
+
+    dense_routing = ttnn.scatter(
+        ttnn.zeros_like(router_probs),
+        dim=-1,
+        index=top_k_indices,
+        src=top_k_values,
+    )
+    router_probs.deallocate(True)
+    top_k_values.deallocate(True)
+    top_k_indices.deallocate(True)
+
+    if router.per_expert_scale is not None:
+        dense_routing = ttnn.mul(dense_routing, router.per_expert_scale)
+
+    return dense_routing
+
+
+def _denoise_moe_forward(moe, router_input, expert_input):
+    dense_routing = _denoise_router_forward(moe.router, router_input)
+    return moe.experts(expert_input, dense_routing)
+
+
 def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
     layer = tt_model.layers[layer_idx]
     residual = hidden_states
-    normed = layer.input_layernorm.forward(hidden_states)
+    normed = _chunked_norm_forward(layer.input_layernorm, hidden_states)
     prefix_kv = prompt_source if isinstance(prompt_source, (tuple, list)) else None
     kv_hidden = None if prefix_kv is not None else ttnn.concat([prompt_source, normed], dim=2)
     attn_output = denoise_attention(
@@ -190,23 +253,23 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, at
     if kv_hidden is not None:
         kv_hidden.deallocate(True)
 
-    attn_output = layer.post_attention_layernorm.forward(attn_output)
+    attn_output = _chunked_norm_forward(layer.post_attention_layernorm, attn_output)
     hidden_states = ttnn.add(residual, attn_output)
     residual.deallocate(True)
     attn_output.deallocate(True)
 
     residual = hidden_states
-    normed = layer.pre_feedforward_layernorm.forward(hidden_states)
+    normed = _chunked_norm_forward(layer.pre_feedforward_layernorm, hidden_states)
     mlp_output = layer.shared_mlp(normed)
     normed.deallocate(True)
 
     if layer.enable_moe_block:
-        mlp_normed = layer.post_feedforward_layernorm_1.forward(mlp_output)
+        mlp_normed = _chunked_norm_forward(layer.post_feedforward_layernorm_1, mlp_output)
         mlp_output.deallocate(True)
-        expert_input = layer.pre_feedforward_layernorm_2.forward(residual)
-        expert_output = layer.moe(residual, expert_input)
+        expert_input = _chunked_norm_forward(layer.pre_feedforward_layernorm_2, residual)
+        expert_output = _denoise_moe_forward(layer.moe, residual, expert_input)
         expert_input.deallocate(True)
-        expert_normed = layer.post_feedforward_layernorm_2.forward(expert_output)
+        expert_normed = _chunked_norm_forward(layer.post_feedforward_layernorm_2, expert_output)
         expert_output.deallocate(True)
         hidden_states = ttnn.add(mlp_normed, expert_normed)
         mlp_normed.deallocate(True)
@@ -214,7 +277,7 @@ def _denoise_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, at
     else:
         hidden_states = mlp_output
 
-    hidden_states = layer.post_feedforward_layernorm.forward(hidden_states)
+    hidden_states = _chunked_norm_forward(layer.post_feedforward_layernorm, hidden_states)
     combined = ttnn.add(residual, hidden_states)
     residual.deallocate(True)
     hidden_states.deallocate(True)
@@ -264,7 +327,7 @@ def denoise_hidden_forward(
             q_rope_offset,
         )
         _deallocate_optional_tensor(attn_mask)
-    return tt_model.norm.forward(hidden_states)
+    return _chunked_norm_forward(tt_model.norm, hidden_states)
 
 
 def denoise_logits_forward(

@@ -13,7 +13,12 @@ import pytest
 import torch
 from types import SimpleNamespace
 
-from models.experimental.diffusion_gemma.tt.diffusion_attention import _slice_rope_cache, validate_q_rope_offset
+from models.experimental.diffusion_gemma.tt import diffusion_attention as DA
+from models.experimental.diffusion_gemma.tt.diffusion_attention import (
+    _apply_rope_chunked,
+    _slice_rope_cache,
+    validate_q_rope_offset,
+)
 from models.experimental.diffusion_gemma.tt.model import DiffusionGemma4Model
 
 
@@ -49,3 +54,64 @@ def test_slice_rope_cache_rejects_overflow():
     cache = SimpleNamespace(shape=[1, 1, 262144, 8])
     with pytest.raises(ValueError, match=r"RoPE cache slice \[262144, 262176\) exceeds cache length 262144"):
         _slice_rope_cache(cache, 262144, 32)
+
+
+def test_apply_rope_chunked_slices_tensor_and_cache(monkeypatch):
+    calls = []
+
+    class _Tensor:
+        def __init__(self, name, shape):
+            self.name = name
+            self.shape = shape
+            self.deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    class _FakeTtnn:
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def slice(tensor, starts, ends, *, memory_config=None):
+            calls.append(("slice", tensor.name, starts, ends, memory_config))
+            return _Tensor(
+                f"{tensor.name}[h{starts[1]}:{ends[1]},s{starts[2]}:{ends[2]},d{starts[3]}:{ends[3]}]",
+                [ends[idx] - starts[idx] for idx in range(4)],
+            )
+
+        @staticmethod
+        def concat(tensors, *, dim, memory_config):
+            calls.append(("concat", [tensor.name for tensor in tensors], dim, memory_config))
+            shape = list(tensors[0].shape)
+            shape[dim] = sum(tensor.shape[dim] for tensor in tensors)
+            return _Tensor("rope-out", shape)
+
+        @staticmethod
+        def mul(lhs, rhs):
+            calls.append(("mul", lhs.name, getattr(rhs, "name", rhs)))
+            return _Tensor(f"mul({lhs.name})", lhs.shape)
+
+        @staticmethod
+        def add(lhs, rhs):
+            calls.append(("add", lhs.name, rhs.name))
+            return _Tensor(f"add({lhs.name})", lhs.shape)
+
+    monkeypatch.setattr(DA, "ttnn", _FakeTtnn)
+
+    out = _apply_rope_chunked(
+        _Tensor("q", [1, 2, 64, 256]),
+        _Tensor("cos", [1, 1, 512, 256]),
+        _Tensor("sin", [1, 1, 512, 256]),
+        start_offset=32,
+    )
+
+    assert out.shape == [1, 2, 64, 256]
+    assert [call for call in calls if call[0] == "add"] == [
+        ("add", "mul(q[h0:1,s0:32,d0:256])", "mul(rope-out)"),
+        ("add", "mul(q[h1:2,s0:32,d0:256])", "mul(rope-out)"),
+        ("add", "mul(q[h0:1,s32:64,d0:256])", "mul(rope-out)"),
+        ("add", "mul(q[h1:2,s32:64,d0:256])", "mul(rope-out)"),
+    ]
+    cache_slices = [call for call in calls if call[0] == "slice" and call[1] in {"cos", "sin"}]
+    assert {tuple(call[2]) for call in cache_slices} == {(0, 0, 32, 0), (0, 0, 64, 0)}
+    assert calls[-1] == ("concat", ["rope-out", "rope-out"], 2, "dram")
