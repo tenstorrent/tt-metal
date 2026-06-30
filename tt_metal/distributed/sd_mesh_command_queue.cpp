@@ -24,7 +24,6 @@
 #include <distributed/mesh_device_impl.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include <thread>
-#include "tt_metal/impl/emulation/emulated_program_runner.hpp"
 #endif
 
 namespace {
@@ -209,15 +208,10 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
-    // Emule note: under TT_METAL_USE_EMULE the mesh register/run split is bracketed by
-    // enqueue_mesh_workload around the WHOLE workload (begin_mesh_dispatch ... run_mesh_dispatch),
-    // not here per-program. That is essential for cross-chip handshakes: a point_to_point workload
-    // has a SENDER program on one chip and a RECEIVER program on another, and the receiver blocks on
-    // a semaphore the sender increments over fabric. Both must be REGISTERED before a single
-    // run_until_idle so the two sides co-run in ONE scheduler generation and the teleport's fiber
-    // wake reaches the parked receiver. With begin/run here (per program) they would run in separate
-    // generations and the wake would miss. So LaunchProgram / DispatchCompiledProgramToDevice below
-    // just register (the defer flag is set by the outer begin_mesh_dispatch).
+    // Emule note: the register/run split is bracketed by enqueue_mesh_workload around the whole
+    // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
+    // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
+    // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
 
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
     tt_metal::detail::LaunchProgram(local_devices[0], program, false);
@@ -275,12 +269,10 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
 #ifdef TT_METAL_USE_EMULE
     if (this->get_target_device_type() == tt::TargetDevice::Emule) {
-        // Co-schedule EVERY program in this workload in ONE fiber run. A point_to_point workload
-        // carries a SENDER program on one chip and a RECEIVER program on another; the receiver
-        // blocks on a semaphore the sender increments over fabric. Both must be REGISTERED before a
-        // single run_until_idle so the two sides co-run in one scheduler generation and the
-        // teleport's fiber wake reaches the parked receiver. Register all (deferred) sequentially,
-        // then run once. (Sequential, not the thread pool, so fiber registration can't race.)
+        // Co-schedule every program in this workload in one fiber run so cross-chip sender/receiver
+        // programs co-run in one scheduler generation and the teleport's fiber wake reaches the
+        // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
+        // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
         tt::tt_metal::emule::begin_mesh_dispatch();
         for (auto& [coord_range, program] : range_program_map) {
             dispatch_program(coord_range, program, /*blocking=*/false);  // register only (defer)

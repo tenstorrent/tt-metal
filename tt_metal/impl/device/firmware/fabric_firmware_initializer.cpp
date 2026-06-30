@@ -33,12 +33,9 @@ namespace {
 using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
 
-// Emule never runs the ERISC fabric router (eth cores are not executed); cross-chip traffic is
-// teleported at the fabric client-API shim instead. So the router-launch + router-sync handshake
-// would never complete and must be skipped, exactly as it is for programmatic mock devices. This
-// mirrors the firmware-build skip for TargetDevice::Emule in risc_firmware_initializer.cpp. The
-// host-side FabricContext (needed by CCL program factories) is created in the ControlPlane ctor,
-// independent of this initializer, so skipping here does not starve the op build.
+// Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
+// so its launch/sync handshake would never complete — skip it (as for Mock). See tt-emule
+// docs/fabric-ccl-emulation.md.
 bool skip_fabric_fw_for_emule() {
     return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 }

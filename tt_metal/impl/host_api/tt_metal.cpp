@@ -413,10 +413,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
 #ifdef TT_METAL_USE_EMULE
     if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
-        // Emule JIT-compiles kernels lazily inside execute_program_emulated, so the program is never
-        // marked is_compiled() in the tt-metal sense — the is_compiled() assert below would fire on the
-        // 2nd..Nth device of a multi-device coord range. Mirror LaunchProgram's emule path: write this
-        // device's runtime args + configure, then execute synchronously on this device's SWEmuleChip.
+        // Emule lazily JIT-compiles inside execute_program_emulated, so is_finalized()/is_compiled()
+        // are never set — skip both asserts (HW-only) and run synchronously, mirroring LaunchProgram.
         detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
         detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
         emule::execute_program_emulated(device, program);
@@ -430,20 +428,6 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
         "Program must be finalized before calling DispatchCompiledProgramToDevice (target device {}). "
         "Call LaunchProgram on another device first.",
         device_id);
-
-#ifdef TT_METAL_USE_EMULE
-    if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
-        // Emule has no "compile once, dispatch binaries" step — each mesh device emulates its
-        // own kernels (the JIT cache is shared, so peer devices reuse device 0's compiled .so).
-        // Configure this device's L1/CBs/runtime args, then execute synchronously, mirroring
-        // LaunchProgram's emule path. is_compiled is never set under emule (CompileProgram is
-        // skipped), so the is_compiled precondition below is HW-only.
-        detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
-        detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
-        emule::execute_program_emulated(device, program);
-        return;
-    }
-#endif
 
     TT_FATAL(
         program.impl().is_compiled(),

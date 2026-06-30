@@ -59,7 +59,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.all_post_commit.test_
         (100, 10),
     ],
 )
-@pytest.mark.parametrize("trace_mode", [False])  # emule: slow dispatch has no trace capture
+@pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
     [

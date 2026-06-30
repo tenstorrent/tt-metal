@@ -26,10 +26,9 @@
 #include <unordered_map>
 #include <vector>
 
-// Silicon-named per-RISC globals that cannot move into the ctx (read by unmodified
-// upstream). Defined in emulated_program_runner.cpp; the scheduler restores them on
-// every swap-in (one worker hosts many fibers, so the coords must be reset to the
-// incoming fiber's core). __emule_self is extern-declared in emule_thread_ctx.h.
+// Silicon-named per-RISC globals (read by unmodified upstream); defined in
+// emulated_program_runner.cpp. The scheduler restores them on every swap-in
+// since one worker hosts many fibers. See tt-emule docs/fiber-engine.md.
 extern thread_local uint8_t my_x[2];
 extern thread_local uint8_t my_y[2];
 
@@ -50,9 +49,8 @@ struct Fiber {
     const void* park_key = nullptr;
     Fiber* park_link = nullptr;     // intrusive parked-list
     std::exception_ptr eptr;
-    unsigned home = 0;              // pinned worker — a fiber NEVER migrates across workers
-                                    // (the JIT kernel caches the thread_local __emule_self
-                                    //  address; migration would dereference a stale slot)
+    unsigned home = 0;              // pinned worker — a fiber NEVER migrates (the JIT kernel
+                                    // caches the thread_local __emule_self address)
 
     ~Fiber() {
         if (map_base) {
@@ -108,10 +106,9 @@ struct FiberSchedulerImpl {
 
     size_t stack_bytes_ = 1u << 20;          // 1 MB default
 
-    // Persistent worker pool: created once (lazily, on the first run), reused across every
-    // program. Threads block on start_cv_ between programs; run_until_idle bumps generation_
-    // + notify_all to launch a run, then waits on done_cv_ for workers_done_ == W_. This
-    // eliminates the per-program create/join (fiber-engine.md §10.4).
+    // Persistent worker pool, created once and reused: threads block on start_cv_
+    // between programs; run_until_idle bumps generation_ + notify_all to launch and
+    // waits on done_cv_ for workers_done_ == W_. See tt-emule docs/fiber-engine.md.
     std::vector<std::thread> pool_;
     std::condition_variable start_cv_;       // pool waits here between programs
     std::condition_variable done_cv_;        // run_until_idle waits here for run completion
@@ -153,10 +150,9 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
 }
 
 void FiberSchedulerImpl::worker_main(unsigned w) {
-    // Persistent worker: parks on start_cv_ between programs and participates only when this
-    // program activated it (w < W_). The same OS thread is reused across every program — safe
-    // because all per-RISC state is per-fiber (ThreadCommonCtx, repointed by install_fiber) or
-    // restored per swap-in (my_x/my_y); nothing per-RISC is a bare worker thread_local.
+    // Persistent worker: parks on start_cv_ between programs, participates only when
+    // this program activated it (w < W_). Reuse is safe because all per-RISC state is
+    // per-fiber or restored per swap-in. See tt-emule docs/fiber-engine.md.
     t_impl = this;
     t_worker = w;
     uint64_t seen = 0;
@@ -192,17 +188,14 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
             if (active_ == 0) break;
             ++idle_;
             // Quiescence: nothing executing, nothing runnable in any queue. The
-            // `!any_ready()` term is essential — `idle_ == W_` alone is a false positive at
-            // W>1, because a worker counts itself idle before re-acquiring mu_ to observe a
-            // fiber a concurrent wake() just enqueued into its ready queue. Checking the
-            // queues (under mu_) closes that window. (W_ = active workers this program, not the
-            // pool size K_ — surplus pool workers aren't counted in idle_.)
+            // `!any_ready()` term is essential — `idle_ == W_` alone is a false positive
+            // at W>1 (a worker counts itself idle before re-observing a just-enqueued
+            // fiber). See tt-emule docs/fiber-engine.md.
             if (idle_ == W_ && running_ == 0 && !any_ready()) {
-                // Read-latency model: a fiber latency-parked at its first noc_async_read
-                // barrier represents an in-flight read. At quiescence — every other runnable
-                // core has had its turn — the read "completes": release them all (lowest
-                // priority). This reproduces the silicon ordering some kernels lean on (e.g.
-                // argmax's first reduction iteration; see docs/fiber-engine.md).
+                // Read-latency model: a latency-parked fiber is an in-flight read. At
+                // quiescence the read "completes" — release them all (lowest priority),
+                // reproducing the silicon ordering some kernels lean on.
+                // See tt-emule docs/fiber-engine.md.
                 if (!latency_parked_.empty()) {
                     for (Fiber* f : latency_parked_) {
                         f->state = FiberState::Ready;
@@ -436,9 +429,8 @@ void FiberSchedulerImpl::watchdog() {
 void FiberScheduler::run_until_idle() {
     p_->stack_bytes_ = env_size("TT_EMULE_FIBER_STACK_BYTES", 1u << 20);
 
-    // Lazily create the persistent worker pool on the first run (K is process-constant). The
-    // threads live until ~FiberScheduler and park on start_cv_ between programs — no per-program
-    // create/join (fiber-engine.md §10.4).
+    // Lazily create the persistent worker pool on the first run (K is process-constant);
+    // threads live until ~FiberScheduler. See tt-emule docs/fiber-engine.md.
     if (p_->pool_.empty()) {
         p_->K_ = static_cast<unsigned>(env_size("TT_EMULE_FIBER_WORKERS", 64));
         p_->pool_.reserve(p_->K_);
@@ -462,8 +454,8 @@ void FiberScheduler::run_until_idle() {
         p_->first_eptr_ = nullptr;
         p_->latency_parked_.clear();
         // Activate W = min(K, fiber count) workers; pin each fiber round-robin across [0,W).
-        // Surplus pool workers (>= W) stay parked on start_cv_ — per-fiber wake()/yield()
-        // (which notify cv_) never touch them, so a tiny program at K=64 does not pay a herd.
+        // Surplus workers (>= W) stay parked on start_cv_, so a tiny program pays no herd.
+        // See tt-emule docs/fiber-engine.md.
         W = std::min<unsigned>(p_->K_, p_->active_);
         p_->W_ = W;
         p_->ready_.assign(W, {});

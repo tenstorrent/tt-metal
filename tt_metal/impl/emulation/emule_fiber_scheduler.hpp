@@ -3,22 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-// Cooperative stackful-fiber scheduler for the emule program runner.
-//
-// Replaces OS-thread-per-RISC execution: each (core, RISC) kernel runs on a
-// ucontext stackful fiber, multiplexed onto a PERSISTENT worker pool of K threads
-// (env TT_EMULE_FIBER_WORKERS, default 64) created once and reused across every
-// program — each program activates only min(K, fiber count) of them. A fiber that
-// blocks at a sync point parks (yields its worker) and is woken when its predicate
-// is satisfied — so tens of thousands of fibers run on K workers, with no OS-thread
-// ceiling and no spin.
-//
-// The scheduler is a process-global singleton sitting above the IDevices (shared
-// ready/parked pool; register/run split for future multi-device). The blocking
-// jit_hw sync primitives reach it through the extern-C bridge
-// (include/jit_hw/internal/emule_fiber_bridge.h, defined as thunks in the runner).
-//
-// Authoritative reference + concurrency model: docs/fiber-engine.md.
+// Cooperative stackful-fiber scheduler for the emule program runner: each
+// (core, RISC) kernel runs on a ucontext fiber multiplexed onto a persistent
+// pool of K worker threads; a fiber that blocks at a sync point parks and is
+// woken on its predicate. Process-global singleton reached from jit_hw sync
+// primitives via the extern-C bridge.
+// See tt-emule docs/fiber-engine.md.
 
 #include <cstdint>
 #include <functional>

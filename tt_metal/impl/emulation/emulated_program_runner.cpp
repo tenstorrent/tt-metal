@@ -138,19 +138,26 @@ static constexpr uint32_t NOC_NODE_ID_BITS = 6;
 static constexpr uint64_t NOC_LOCAL_MASK = (1ULL << NOC_LOCAL_BITS) - 1;
 static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 
-// C-linkage bridge functions for JIT kernels.
-// These run on the kernel thread (called synchronously by the JIT kernel), so
-// __emule_self is set; the null guards preserve the old "unset → nullptr" behavior.
+// C-linkage bridge/fabric hooks for JIT kernels. Every one runs inside a kernel fiber, so
+// __emule_self is always set; a null means the hook ran outside a fiber — a contract violation,
+// not a recoverable state. Fail loudly (uniform across the whole bridge surface).
+static inline void emule_require_self(const char* fn) {
+    TT_FATAL(__emule_self != nullptr, "{}: emule bridge call outside a kernel fiber context", fn);
+}
+
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
-    return (__emule_self && __emule_self->bridge_dram) ? __emule_self->bridge_dram + offset : nullptr;
+    emule_require_self(__func__);
+    return __emule_self->bridge_dram ? __emule_self->bridge_dram + offset : nullptr;
 }
 
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
-    return (__emule_self && __emule_self->bridge_l1) ? __emule_self->bridge_l1 + offset : nullptr;
+    emule_require_self(__func__);
+    return __emule_self->bridge_l1 ? __emule_self->bridge_l1 + offset : nullptr;
 }
 
 extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
-    if (__emule_self && __emule_self->core_map) {
+    emule_require_self(__func__);
+    if (__emule_self->core_map) {
         uint64_t key = (uint64_t(x) << 32) | y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
@@ -200,7 +207,8 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;  // 36 bits, raw
 
-    if (__emule_self && __emule_self->core_map) {
+    emule_require_self(__func__);
+    if (__emule_self->core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
@@ -238,7 +246,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     // check in the delivery loop below), so the mask is L1-correct here.
     l1_offset &= L1_SLOT_MASK;
 
-    if (!__emule_self || !__emule_self->core_map) {
+    emule_require_self(__func__);
+    if (!__emule_self->core_map) {
         return;
     }
 
@@ -1616,13 +1625,10 @@ static void collect_kernels(
 // ---------------------------------------------------------------------------
 // jit_compile_pending: Compile cache misses in parallel, resolve all fns.
 // ---------------------------------------------------------------------------
-// Global compile-once registry: dedups kernel compilation ACROSS the concurrent per-device dispatch
-// threads. Under emule's multi-device dispatch both devices run the same program, so both reach
-// jit_compile_pending with the same cache-miss kernels. Without dedup they would compile the same kernel
-// concurrently — and (pre-fix) to the same `.so.tmp.<pid>` file, so two clang processes wrote one output
-// → a corrupt .so → dlopen'd garbage → hangs/crashes. Here the FIRST thread to need a key launches its
-// compile and publishes a shared_future; later threads (any device) reuse that future instead of
-// recompiling. Each kernel is therefore compiled exactly once, to a unique tmp, with an atomic rename.
+// Global compile-once registry: dedups kernel compilation across jit_compile_pending's parallel compile
+// tasks. The first task to need a key publishes a shared_future the rest reuse, so each kernel compiles
+// exactly once to a unique tmp with an atomic rename (racing clang on one `.so.tmp` would corrupt it).
+// Shared across programs, hence the mutex. See tt-emule docs/metal-integration.md.
 static std::mutex g_compile_inflight_mutex;
 static std::unordered_map<std::string, std::shared_future<std::function<void()>>> g_compile_inflight;
 static std::atomic<uint64_t> g_compile_tmp_seq{0};
@@ -1700,9 +1706,8 @@ static void jit_compile_pending(
 // build_core_map: Build physical {x,y} → tt_emule::Core* for NOC resolution.
 // Cached per device_id since chip topology doesn't change between calls.
 // ---------------------------------------------------------------------------
-// Per-device physical {x,y}->Core* maps. Lifted to file scope (was a build_core_map static) so the
-// fabric teleport hooks below can resolve a *remote* chip's core: its map is already built by that
-// device's own execute_program_emulated, which runs concurrently (see the SDMeshCommandQueue emule path).
+// Per-device physical {x,y}->Core* maps, at file scope so the fabric teleport hooks below can resolve a
+// remote chip's core (its map is built by that device's own concurrent run). See tt-emule docs/fabric-ccl-emulation.md.
 static std::mutex g_core_map_mutex;
 static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
     g_core_map_cache;
@@ -1761,10 +1766,9 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
 }
 
 // ---------------------------------------------------------------------------
-// Fabric route table: resolve the FINAL destination chip for a fabric send by walking the control-plane
-// mesh graph (a static topology lookup, NOT multi-hop router simulation — then teleport). 1D dst =
-// (src, RoutingDirection, distance); 2D dst = explicit FabricNodeId via the control plane directly. The
-// 2-chip case is the degenerate distance-1 single-neighbor walk, subsuming __emule_fabric_neighbor.
+// Fabric route table: resolve a send's FINAL destination chip by a static walk of the
+// control-plane mesh graph (no multi-hop router sim). 1D dst = (src, dir, distance);
+// 2D dst = explicit FabricNodeId. See tt-emule docs/fabric-ccl-emulation.md.
 // ---------------------------------------------------------------------------
 static std::mutex g_fabric_route_mutex;
 // (src_chip << 3 | dir) -> ordered chips at distance 1,2,... in that direction (cached; topology is static).
@@ -1811,18 +1815,16 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
 }
 
 // ===========================================================================
-// Fabric teleport hooks (multi-chip CCL). emule intercepts the fabric client API
-// (WorkerToFabricEdmSender) in the jit_hw shadow and routes each send here. We do
-// NOT run the ethernet/ERISC router or model multi-hop: we decode the (real-layout)
-// packet header, resolve the destination chip, and apply the terminal NOC command
-// directly into that chip's L1 (teleport). Delivery is synchronous; the consumer on
-// the peer chip (running concurrently) observes it via its semaphore wait.
-// See docs/multichip/ for the design.
+// Fabric teleport hooks (multi-chip CCL): decode the real-layout packet header,
+// resolve the destination chip, and apply the terminal NOC command directly into
+// that chip's L1. Delivery is synchronous; the peer-chip consumer observes it via
+// its semaphore wait. See tt-emule docs/fabric-ccl-emulation.md.
 // ---------------------------------------------------------------------------
 
 // Resolve (noc_addr) -> host pointer on an arbitrary chip, mirroring __emule_resolve_noc_addr but
 // against the destination chip's cached core map (already built by that chip's launch).
 extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t noc_addr) {
+    emule_require_self(__func__);
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
     static const bool rdbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
     auto it = g_core_map_cache.find(dst_chip);
@@ -1842,14 +1844,11 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
         return m.find((uint64_t(x) << 32) | y);
     };
 
-    // (noc_x,noc_y) are the SOURCE chip's physical/virtual coords (get_noc_addr packs the caller core's
-    // coords). Resolve against the destination chip's core map.
-    //
-    // Cross-chip physical-coordinate translation is needed ONLY for WORKER (tensix) cores: per-chip
-    // harvesting can map the same logical worker to a different physical coord on the dest chip (e.g.
-    // n300 with different harvest masks). DRAM/ETH coordinates are identical across chips, so translating
-    // them is WRONG — it can collapse distinct DRAM banks onto one backing. So: verbatim first; only if
-    // the verbatim core is a WORKER (or there is no verbatim hit) do we translate src->logical->dst.
+    // (noc_x,noc_y) are the SOURCE chip's coords (get_noc_addr packs the caller core's); resolve against
+    // the destination chip's map. Cross-chip src->logical->dst translation applies ONLY to WORKER cores
+    // (harvesting can shift them per chip); DRAM/ETH coords are chip-invariant, so translating them would
+    // alias distinct banks. Try verbatim first; translate only if verbatim is a WORKER or missed.
+    // See tt-emule docs/fabric-ccl-emulation.md.
     auto cit = find_core(noc_x, noc_y);
     const uint32_t src_chip = __emule_self->chip_id;
     const bool verbatim_is_worker =
@@ -1885,9 +1884,8 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     return cit->second->l1_ptr(offset);
 }
 
-// The destination chip for a fabric send from src_chip. For a directly-connected 2-chip system
-// (n300/p300) there is a single ethernet-connected neighbor; resolve it from the cluster descriptor.
-// (Multi-hop / direction-aware resolution for >2 chips is a later milestone — see docs/multichip/.)
+// Destination chip for a fabric send from src_chip: the single ethernet-connected neighbor of a
+// directly-connected 2-chip system, from the cluster descriptor. See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" uint32_t __emule_fabric_neighbor(uint32_t src_chip) {
     auto ids = MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(src_chip);
     if (!ids.empty()) {
@@ -1896,12 +1894,9 @@ extern "C" uint32_t __emule_fabric_neighbor(uint32_t src_chip) {
     return src_chip;
 }
 
-// emule route metadata, keyed by packet-header L1-alias address. The kernel knows the dst only
-// semantically (2D explicit FabricNodeId, 1D hop distance, or a line-multicast extent), so the
-// fabric_set_*_route shims (tt-emule __emule_fabric_stubs.h) record it here via __emule_fabric_set_route;
-// the teleport resolves it to physical chip(s). Keyed by header address (stable + identical between the
-// shim's `hdr` and the teleport's `packet_header`, both the low-2GB L1 alias). KIND constants are mirrored
-// in the shim — KEEP IN SYNC.
+// emule route metadata, keyed by packet-header L1-alias address: the fabric_set_*_route shims record the
+// kernel's semantic dst (2D FabricNodeId, 1D hop distance, or line-multicast extent) here; the teleport
+// resolves it to physical chip(s). KIND constants KEEP IN SYNC with the shim. See tt-emule docs/fabric-ccl-emulation.md.
 namespace emule_route_kind {
 constexpr uint32_t UNSET = 0, UNICAST_1D = 1, UNICAST_2D = 2, MCAST_1D = 3, MCAST_2D = 4;
 }
@@ -1921,9 +1916,8 @@ extern "C" void __emule_fabric_set_route(
     r.kind = kind; r.a = a; r.b = b; r.c = c; r.d = d; r.e = e; r.f = f;  // dir_index set separately at send
 }
 
-// Record the per-connection direction signals for a 1D send, called from the sender's teleport_ just before
-// the teleport: the fwd/bwd conn_index (FabricConnectionManager direct path) and the worker's mux NOC coords
-// (fabric MUX path). 0xFFFF means "unset"; the teleport prefers the mux signal, then the range-match fallback.
+// Record a 1D send's per-connection direction signals: the fwd/bwd conn_index (direct path) and the
+// worker's mux NOC coords (MUX path); 0xFFFF means unset. See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_set_route_dir(
     uint32_t hdr, uint32_t conn_index, uint32_t mux_x, uint32_t mux_y) {
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
@@ -1933,34 +1927,28 @@ extern "C" void __emule_fabric_set_route_dir(
     r.mux_y = mux_y;
 }
 
-// Per-worker fabric connection routes, recorded host-side by append_fabric_connection_rt_args (the emule
-// analogue of the firmware connection table emule skips): for 1D the dst chip is bound to the connection,
-// not the header, so the host — which knows the forwarding_direction + the immediate neighbor for each
-// fwd/bwd connection — records them here, keyed by (src_chip, worker_core), in append order (fwd then bwd).
+// Fabric connection routes recorded host-side by append_fabric_connection_rt_args: for 1D the dst chip is
+// bound to the connection, not the header, so the host records each connection's direction + immediate
+// neighbor here. See tt-emule docs/fabric-ccl-emulation.md.
 struct ConnRoute {
     uint32_t dir;       // RoutingDirection (N/E/S/W)
     uint32_t neighbor;  // immediate neighbor physical chip
 };
 static std::mutex g_conn_route_mu;
-// Keyed by SRC CHIP only — the line direction is a per-chip property (every fabric send from chip X in a
-// given direction reaches the same neighbor), and the connection-owner core differs from the sending core
-// for some CCL ops, so a per-core key would miss. Deduped by direction; append order (fwd before bwd, per
-// the CCL builder) makes index 0=forward, 1=backward.
+// Keyed by SRC CHIP only (line direction is a per-chip property; the connection-owner core can differ from
+// the sender, so a per-core key would miss). Deduped by direction; append order makes index 0=fwd, 1=bwd.
+// See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
-// Cleared at the first connection-record of each new op (set true by execute_program_emulated): the table
-// is keyed by src chip and deduped by direction, but a later op can give a chip a DIFFERENT line
-// orientation, so stale entries from a previous op would corrupt the fwd/bwd ordering. Per-op reset keeps
-// it scoped to the current op's connections.
+// Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
+// orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
 static std::atomic<bool> g_conn_route_dirty{true};
-// Per-worker resolved line direction, keyed (src<<32 | wx<<16 | wy). On the fabric MUX path the worker's
-// fwd/bwd direction is not carried by the sender, so we infer it once from a multicast (its range equals
-// the walk length of the worker's direction on a line) and reuse it for that worker's unicast sends. Reset
-// per op alongside g_conn_route.
+// Per-worker resolved line direction, keyed (src<<32 | wx<<16 | wy): on the MUX path the sender carries no
+// direction, so infer it once from a multicast's range and reuse for that worker's unicasts. Reset per op.
+// See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint64_t, uint32_t> g_worker_dir;
-// Per-mux-core line direction, keyed (src<<32 | logical_x<<16 | logical_y). The mux→EDM connection's
-// append_fabric_connection_rt_args records the mux's forwarding_direction here (keyed by the mux's LOGICAL
-// core); a worker on the MUX path carries the mux's TRANSLATED NOC coords on its sender, which the teleport
-// translates back to this logical key to recover the real direction (replaces range-matching). Reset per op.
+// Per-mux-core line direction, keyed (src<<32 | logical_x<<16 | logical_y): the mux→EDM append records the
+// mux's forwarding_direction; the teleport recovers it from the worker's carried mux NOC coords. Reset per
+// op. See tt-emule docs/fabric-ccl-emulation.md.
 static std::unordered_map<uint64_t, uint32_t> g_mux_dir;
 static inline uint64_t __emule_worker_key(uint32_t src, uint32_t wx, uint32_t wy) {
     return (static_cast<uint64_t>(src) << 32) | (static_cast<uint64_t>(wx & 0xFFFF) << 16) | (wy & 0xFFFF);
@@ -1985,13 +1973,9 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
 }
 
 // Ordered ring members at distance 1,2,... from `src` starting in `start_dir`, by chaining the per-chip
-// recorded ring neighbors (g_conn_route). The 1D ring is a Hamiltonian cycle that snakes through the mesh
-// (consecutive members are physically adjacent but the cycle TURNS at the mesh edges), so the fixed-direction
-// compass walk dead-ends after one row — it can't follow the turn. The CCL host records, for every chip, the
-// immediate neighbor of each of its two ring connections (fwd/bwd); walking those — at each hop taking the
-// neighbor that is NOT the one we came from — follows the real ring all the way around. This is the same ring
-// all_gather relays over (its distance-1 sends define these edges); returns empty if the chain is incomplete
-// (caller falls back to the compass walk). 2D multicast keeps the compass walk.
+// recorded ring neighbors (g_conn_route) — at each hop taking the neighbor that is NOT where we came from,
+// so it follows the turning Hamiltonian cycle the compass walk can't. Returns empty if the chain is
+// incomplete (caller falls back to the compass walk). See tt-emule docs/fabric-ccl-emulation.md.
 static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t start_dir) {
     std::vector<uint32_t> walk;
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
@@ -2033,9 +2017,8 @@ static std::vector<uint32_t> __emule_fabric_walk_ring(uint32_t src, uint32_t sta
     return walk;
 }
 
-// Resolve the FINAL destination chip(s) for a send: a single chip for unicast, the line members for a
-// multicast. Gated by EMULE_FABRIC8 (off → legacy single neighbor, byte-for-byte today's behavior; the
-// 2-chip case is the degenerate distance-1 neighbor, so gate-on subsumes it — single code path).
+// Resolve the FINAL destination chip(s) for a send: one chip for unicast, the line members for a multicast.
+// Gated by EMULE_FABRIC8 (off → legacy single neighbor). See tt-emule docs/fabric-ccl-emulation.md.
 static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, uint32_t src_chip) {
     static const bool fabric8 = std::getenv("EMULE_FABRIC8") != nullptr;
     if (!fabric8) {
@@ -2083,17 +2066,12 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             return tgts;
         }
     } else if (r.kind == emule_route_kind::MCAST_1D || r.kind == emule_route_kind::UNICAST_1D) {
-        // 1D on the fabric MUX path the sender carries no direction tag. The host recorded this chip's
-        // connections (one per line direction). We infer the worker's direction from a MULTICAST — its range
-        // equals the number of chips reached that way, i.e. the walk length of that direction on a line — and
-        // cache it per (src, worker_core) so the worker's UNICAST sends follow the same direction. (Limitation:
-        // a topology where both directions have equal walk length — e.g. a ring — can't be disambiguated by
-        // range alone; that needs a real per-connection direction tag.)
-        uint32_t wx = 0, wy = 0;
-        if (__emule_self != nullptr && __emule_self->core != nullptr) {
-            wx = __emule_self->core->logical_x;
-            wy = __emule_self->core->logical_y;
-        }
+        // 1D MUX path carries no direction tag: infer the worker's direction from a multicast's range and
+        // cache it per (src, worker_core) for that worker's unicasts. See tt-emule docs/fabric-ccl-emulation.md.
+        emule_require_self(__func__);
+        TT_FATAL(__emule_self->core != nullptr, "{}: fiber has no core context", __func__);
+        const uint32_t wx = __emule_self->core->logical_x;
+        const uint32_t wy = __emule_self->core->logical_y;
         const uint64_t wkey = __emule_worker_key(src_chip, wx, wy);
         std::vector<ConnRoute> conns;
         {
@@ -2104,9 +2082,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             }
         }
         int dir = -1;
-        // (1) Mux-core direction (fabric MUX path): translate the worker's mux TRANSLATED NOC coords back to
-        // the mux's LOGICAL core (same coord handling as __emule_fabric_resolve_remote) and look up the
-        // direction the mux→EDM append recorded. Resolves ring, where the range-match below cannot.
+        // (1) Mux-core direction: translate the worker's mux NOC coords to the mux's LOGICAL core and look up
+        // the direction the mux→EDM append recorded. Resolves ring, where the range-match below cannot.
         if (dir < 0 && r.mux_x != 0xFFFF) {
             auto* src_obj = get_sw_emulated_chip(src_chip);
             if (src_obj != nullptr) {
@@ -2123,10 +2100,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
                 }
             }
         }
-        // (2) Fallback — the range-match heuristic (and its cached g_worker_dir / conn-index), used only when
-        // the mux signal above is absent (preserves the previously-green configs byte-for-byte). The direct
-        // 4-directional path (all_to_all_dispatch et al.) lands here for now; a faithful emule-side resolution
-        // (capture the real eth_channel rt-arg in build_from_args) is deferred until a consumer is unblocked.
+        // (2) Fallback — range-match heuristic (and its cached g_worker_dir / conn-index), used only when the
+        // mux signal above is absent. See tt-emule docs/fabric-ccl-emulation.md.
         if (dir < 0 && r.kind == emule_route_kind::MCAST_1D) {
             const uint32_t range = r.b ? r.b : 1;
             for (const auto& cr : conns) {
@@ -2152,10 +2127,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
             }
         }
         if (dir >= 0) {
-            // Follow the real 1D ring (turning Hamiltonian cycle) via the recorded per-chip ring neighbors;
-            // fall back to the fixed-direction compass walk if the chain is incomplete. walk[0] equals the
-            // compass neighbor, so distance-1 relays (all_gather, reduce_scatter) are unchanged; only the
-            // multi-hop reach (e.g. reduce_scatter's full-ring barrier multicast) differs.
+            // Follow the real 1D ring via the recorded per-chip neighbors; fall back to the compass walk if
+            // the chain is incomplete (walk[0] equals the compass neighbor). See tt-emule docs/fabric-ccl-emulation.md.
             std::vector<uint32_t> walk = __emule_fabric_walk_ring(src_chip, static_cast<uint32_t>(dir));
             if (walk.empty()) {
                 walk = __emule_fabric_walk(src_chip, static_cast<tt::tt_fabric::RoutingDirection>(dir));
@@ -2257,10 +2230,10 @@ static void __emule_fabric_deliver(
 }
 
 // Top-level teleport: decode the real-layout packet header (NocCommandFields @0, payload_size @40,
-// noc_send_type @42), resolve the destination chip + core, and apply the terminal NOC command.
-// payload/payload_size are the bytes staged by a prior send_payload_without_header* call (may be null
-// for header-only commands such as a bare atomic-inc).
+// noc_send_type @42), resolve the destination chip(s), and apply the terminal NOC command. payload may be
+// null for header-only commands (e.g. a bare atomic-inc). See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_teleport(const void* packet_header, const void* payload, uint32_t payload_size) {
+    emule_require_self(__func__);
     const uint8_t* h = static_cast<const uint8_t*>(packet_header);
     if (h == nullptr) {
         return;
@@ -2306,14 +2279,11 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
 }
 
 // DESIGN DIVERGENCE: see tt-emule/.claude/skills/workarounds (DM-1). Faithful mechanism, not a hack.
-// Remap a local-L1 host pointer to the CURRENT chip's copy. Cross-chip-shared objects (notably
-// global semaphores) are passed to kernels as a single absolute host pointer that is valid for only
-// ONE chip's MAP_32BIT mmap. When a kernel on a DIFFERENT chip dereferences it locally (e.g. a worker
-// spinning on a global semaphore that a peer increments over fabric), it must hit ITS OWN chip's copy.
-// This finds the (core, offset) the pointer denotes on whichever chip owns it, and returns the same
-// (core, offset) on the current chip. Single-chip runs short-circuit (no peer chip → no remap), so
-// the hot path is one map-size check. Used by the semaphore chokepoint __emule_sem_atomic.
+// Remap a local-L1 host pointer (a cross-chip-shared object's absolute pointer, valid for only one chip's
+// MAP_32BIT mmap) to the CURRENT chip's copy of the same (core, offset). Single-chip runs short-circuit.
+// See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" uint8_t* __emule_chip_relative_l1(uint8_t* p) {
+    emule_require_self(__func__);
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
     if (g_core_map_cache.size() <= 1) {
         return p;  // single chip: the pointer is already this chip's
@@ -2671,25 +2641,10 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
 // launch_cores: Spawn concurrent threads per core, each runs its kernels.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// RISC-V-faithful integer divide/modulo fault recovery on x86 hosts.
-//
-// The real Tensix cores are RISC-V, where integer div/rem faults are DEFINED and
-// non-trapping (RISC-V ISA M-extension):
-//   - divide by zero: `divu x,0 -> all-ones`, `div x,0 -> -1`, `rem(u) x,0 -> x`
-//   - signed overflow (`div INT_MIN,-1`): quotient = INT_MIN, remainder = 0
-// emule JIT-compiles each kernel to x86, where `div`/`idiv` raises #DE -> SIGFPE
-// (si_code FPE_INTDIV for /0, FPE_INTOVF for INT_MIN/-1) and aborts. Kernels
-// legitimately hit /0 on idle/degenerate cores: e.g. binary_ng's no_bcast reader
-// computes `start_tile_id % (D*N*C*Ht*Wt)` and the host hands idle cores all-zero
-// dims, so the divisor is 0 and the (dead) result is never used. To match silicon we
-// trap the SIGFPE, write RISC-V's defined result into the saved register image, and
-// step the saved RIP past the faulting instruction.
-//
-// Scope/caveats: (1) the handler is process-global for the lifetime of launch_cores,
-// so any host thread that faults in that window is also "recovered" — acceptable
-// because only kernel threads run div-heavy code then; (2) a *genuine* kernel div bug
-// becomes silent-wrong-output rather than a crash, but that is exactly what silicon
-// would do (no trap). See docs/riscv-intdiv-by-zero.md in the tt-emule repo.
+// RISC-V-faithful integer divide/modulo fault recovery on x86 hosts. RISC-V div/rem faults are DEFINED
+// and non-trapping, but the JIT-compiled x86 `div`/`idiv` raises #DE -> SIGFPE; trap it, write RISC-V's
+// defined result into the saved register image, and step RIP past the faulting instruction. The handler
+// is process-global for launch_cores' lifetime. See docs/riscv-intdiv-by-zero.md in the tt-emule repo.
 #if defined(__x86_64__) && defined(__linux__)
 namespace {
 
@@ -2813,25 +2768,19 @@ struct EmuleSigfpeGuard {
 }  // namespace
 #endif  // __x86_64__ && __linux__
 
-// [MESH] Register/run split for concurrent multi-device dispatch. A mesh command queue
-// brackets its per-device LaunchProgram/DispatchCompiledProgramToDevice loop with
-// begin_mesh_dispatch()/run_mesh_dispatch(): in defer mode each execute_program_emulated
-// REGISTERS its fibers (spawn, no run) and keeps the per-device state those fibers borrow
-// alive; run_mesh_dispatch then drives ONE run_until_idle so all chips' fibers run
-// concurrently on the worker pool. Per-fiber ctx already carries each device's core_map /
-// bridge_dram, so concurrent fibers resolve NOC addresses to the correct chip; the bank
-// arrays are topology-invariant across identical chips (homogeneous mesh). Single-device
-// (defer off) is unchanged. The kept state is freed in run_mesh_dispatch.
+// [MESH] Register/run split for concurrent multi-device dispatch: in defer mode each
+// execute_program_emulated REGISTERS its fibers (spawn, no run); run_mesh_dispatch then drives ONE
+// run_until_idle so all chips' fibers run concurrently. See tt-emule docs/fiber-engine.md.
 static bool g_emule_mesh_defer = false;
 static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>>>>
     g_mesh_dfb_keep;
 
-// Resolved-program cache — emule's analogue of silicon's program.impl().is_compiled():
-// collect_kernels + JIT compile + resolve run ONCE per program (keyed by ProgramId, stable
-// across the mesh's devices and program-cache reuse). Every device dispatches against the
-// shared resolved core_kernels (read-only at run time), mirroring LaunchProgram(compile) /
-// DispatchCompiledProgramToDevice(reuse). An entry is valid for the program's life (ids are
-// never reused, so no stale hits); LRU-bounded only as a safety net against unbounded growth.
+// Resolved-program cache — emule's analogue of silicon's is_compiled(): collect + JIT compile + resolve
+// run ONCE per program (keyed by ProgramId); every device dispatches against the shared read-only result.
+// LRU-bounded as a safety net. See tt-emule docs/fiber-engine.md.
+//
+// Lock-free by invariant: written only from prepare_program on the sequential mesh-register path — single
+// writer, never a fiber. prepare_program asserts this.
 struct ResolvedProgram {
     std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
     uint32_t emule_sem_base = 0;
@@ -2963,13 +2912,15 @@ static void launch_cores(
 }
 
 // ---------------------------------------------------------------------------
-// prepare_program: resolve a program's kernels ONCE (collect + JIT-compile + resolve),
-// memoized by ProgramId. emule's analogue of silicon's CompileProgram / is_compiled — the
-// first device of the mesh (and the first invocation) resolves; the rest reuse. The device-
-// derived compile defines are taken from this first device (identical across identical chips
-// of a homogeneous mesh).
+// prepare_program: resolve a program's kernels ONCE (collect + JIT-compile + resolve), memoized by
+// ProgramId — emule's analogue of silicon's CompileProgram. The first mesh device resolves; the rest
+// reuse, taking its (homogeneous-chip-identical) compile defines. See tt-emule docs/metal-integration.md.
 // ---------------------------------------------------------------------------
 static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
+    // Single-writer invariant for g_resolved_programs/g_resolved_lru: this runs only on the
+    // sequential dispatch thread (register phase), never inside a fiber. __emule_self is the
+    // running fiber (set on worker threads, null on the dispatch thread), so off-fiber == null.
+    TT_FATAL(__emule_self == nullptr, "prepare_program must run on the dispatch path, not a fiber");
     auto& impl = program.impl();
     const ProgramId pid = impl.get_id();
     if (auto it = g_resolved_programs.find(pid); it != g_resolved_programs.end()) {

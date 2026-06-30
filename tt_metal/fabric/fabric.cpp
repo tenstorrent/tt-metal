@@ -94,9 +94,9 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
 }
 
 #if defined(TT_METAL_USE_EMULE)
-// emule (software emulation) has no fabric router/firmware, so the device-L1 connection table that binds a
-// worker's fwd/bwd connection to its neighbor chip is never populated. Record that binding host-side instead
-// (the emule teleport reads it to resolve a 1D send's destination chip). Defined in the emule runner.
+// emule has no fabric router, so the device-L1 connection table is never populated. Record the
+// fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
+// See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
 #endif
 
