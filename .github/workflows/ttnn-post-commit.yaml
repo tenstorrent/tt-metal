@@ -105,6 +105,8 @@ jobs:
             merge_gate="${{ inputs.merge-gate-call }}"
             filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
           fi
+          # brain: narrow to sdpa group only for probe
+          filtered=$(echo "$filtered" | jq -c 'map(select(.name == "ttnn sdpa group"))')
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then
             echo "::error::No tests left after filtering for merge_gate=$merge_gate"
