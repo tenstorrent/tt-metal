@@ -1533,7 +1533,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         TT_FATAL(
                             input_tensor_a.shard_spec()->grid.bounding_box().start_coord.x ==
                                 input_tensor_a.shard_spec()->grid.bounding_box().end_coord.x,
-                            "Input tensor A must have a single-column shard grid for "
+                            "When input tensor A is HEIGHT_SHARDED, it must have a single-column shard grid for "
                             "MatmulMultiCoreReuseMultiCastProgramConfig (got x={} to x={}). Use "
                             "MatmulMultiCoreReuseProgramConfig for multi-column HEIGHT_SHARDED inputs.",
                             input_tensor_a.shard_spec()->grid.bounding_box().start_coord.x,
