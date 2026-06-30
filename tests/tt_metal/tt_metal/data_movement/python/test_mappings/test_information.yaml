@@ -988,6 +988,12 @@ tests:
     name: "Noc Estimator - DRAM Interleaved All to All"
     bandwidth_mode: "combined"
 
+  818:
+    name: "Noc Estimator - L1 One from One Loopback"
+
+  819:
+    name: "Noc Estimator - L1 One to One Loopback"
+
   900:
     name: "Quasar Addrgen - Strided1D SrcOnly"
 
