@@ -57,6 +57,16 @@ def _deallocate_decode_inputs(device_inputs) -> None:
             value.deallocate(True)
 
 
+def _deallocate_if_possible(value) -> None:
+    if value is None or not hasattr(value, "deallocate"):
+        return
+    try:
+        value.deallocate(True)
+    except Exception:
+        # Best-effort cleanup while preserving the original device failure.
+        pass
+
+
 def _replicate_mapper(mesh_device):
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
@@ -725,17 +735,21 @@ def generate_blocks(
 
     for block_idx in range(num_blocks):
         init_canvas = init_canvas_fn(block_idx, next_pos)
-        block = block_fn(
-            tt_model,
-            logits_fn,
-            init_canvas,
-            config,
-            start_pos=next_pos,
-            gumbel_noise_fn=gumbel_noise_fn(block_idx) if gumbel_noise_fn else None,
-            noise_tokens_fn=noise_tokens_fn(block_idx) if noise_tokens_fn else None,
-            page_table=page_table,
-            page_tables_per_layer=page_tables_per_layer,
-        )
+        try:
+            block = block_fn(
+                tt_model,
+                logits_fn,
+                init_canvas,
+                config,
+                start_pos=next_pos,
+                gumbel_noise_fn=gumbel_noise_fn(block_idx) if gumbel_noise_fn else None,
+                noise_tokens_fn=noise_tokens_fn(block_idx) if noise_tokens_fn else None,
+                page_table=page_table,
+                page_tables_per_layer=page_tables_per_layer,
+            )
+        except Exception:
+            _deallocate_if_possible(init_canvas)
+            raise
         _validate_committed_block_shape(block.committed, batch_size=batch_size, canvas_length=config.canvas_length)
         expected_next_pos = next_pos + block.committed.shape[1]
         if block.next_pos != expected_next_pos:

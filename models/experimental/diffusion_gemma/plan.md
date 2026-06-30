@@ -858,7 +858,7 @@ Adversarial multi-agent review of the `diffusion-gemma-function` branch (~15.4k 
 
 #### 🟢 Low / hardening (open)
 
-- ⬜ **[#47464] `init_canvas` device tensor leaks if `block_fn` raises mid-block** — `tt/generate.py:697`. `init_canvas = init_canvas_fn(block_idx, next_pos)` allocates a device tensor whose only deallocation owner is `denoise_block` (`denoise_loop.py:239`), reached only after the first `denoise_step` succeeds. There is no `try/finally` around the per-block call in `generate_blocks`, so an op failure on block 0 orphans the canvas on device (L1/DRAM); only impactful if a caller catches the exception and keeps reusing the live mesh. Fix: deallocate `init_canvas` in a `finally`/`except` guard (same convention already used by `commit_canvas_tokens`).
+- ✅ **Fixed 2026-06-30 [#47464] `init_canvas` device tensor is released if `block_fn` raises mid-block** — `tt/generate.py::generate_blocks` now wraps each `block_fn` call in an exception guard and best-effort deallocates the just-created initial canvas before re-raising the original device failure. This preserves the normal successful ownership path while preventing repeated caught failures from orphaning canvas tensors on a live mesh. Validated with CPU `test_tt_generate.py` (243 passed), including `test_generate_blocks_deallocates_init_canvas_if_block_fails`.
 
 #### Test rigor (open)
 

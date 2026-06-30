@@ -229,6 +229,32 @@ def test_generate_blocks_advances_position_and_concatenates_commits():
     ]
 
 
+def test_generate_blocks_deallocates_init_canvas_if_block_fails():
+    class _FakeDeviceCanvas:
+        deallocated = False
+
+        def deallocate(self, force):
+            self.deallocated = force
+
+    init_canvas = _FakeDeviceCanvas()
+
+    def failing_block(*args, **kwargs):
+        raise RuntimeError("device op failed")
+
+    with pytest.raises(RuntimeError, match="device op failed"):
+        generate_blocks(
+            "model",
+            "logits",
+            prompt_len=32,
+            num_blocks=1,
+            config=DiffusionConfig(canvas_length=3),
+            init_canvas_fn=lambda *args: init_canvas,
+            block_fn=failing_block,
+        )
+
+    assert init_canvas.deallocated is True
+
+
 def test_generate_blocks_rejects_negative_num_blocks():
     with pytest.raises(ValueError, match="num_blocks must be non-negative"):
         generate_blocks(
