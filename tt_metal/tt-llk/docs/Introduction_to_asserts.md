@@ -269,13 +269,17 @@ The key question then becomes:
 
 ## Testing newly added asserts
 
-After adding new `LLK_ASSERT` statements, you should validate them through CI to confirm they do not trigger false positives on supported configurations. The following tt-metal CI action is particularly useful:
+After adding new `LLK_ASSERT` statements, you should validate them through CI to confirm they do not trigger false positives on supported configurations. Two tt-metal CI actions are particularly useful:
 
-**Sanity action with LLK asserts enabled**
+**1. Sanity action with LLK asserts enabled**
 
 The [Sanity tests](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/sanity-tests.yaml) workflow accepts an `enable-llk-asserts` boolean input. When set to `true`, it exports `TT_METAL_LLK_ASSERTS=1` into the test environment, which causes JIT-compiled kernels to include `LLK_ASSERT` checks at runtime. This runs the full sanity suite (fast dispatch, models, ops, TTNN, profiler, etc.) with asserts active, exercising a broad range of configurations against your new checks.
 
-This action can be triggered manually via `workflow_dispatch` with the `enable-llk-asserts` checkbox enabled.
+**2. Blackhole sanity action**
+
+The [Blackhole sanity](https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/blackhole-sanity-tests.yaml) workflow also accepts `enable-llk-asserts`. It runs the full Blackhole test matrix (models, ops, TTNN, UMD, multi-card) with asserts enabled, validating Blackhole-specific code paths.
+
+Both actions can be triggered manually via `workflow_dispatch` with the `enable-llk-asserts` checkbox enabled.
 
 ## Why assert-helper functions use `noinline` and `no-jump-tables`
 
