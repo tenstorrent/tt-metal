@@ -60,6 +60,7 @@ jobs:
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           elif [ "${{ inputs.model }}" = "tt-training-models" ]; then
+            # Selecting tt-training-models will override the model filter to select all the models where team is "train"
             FILTERED=$(echo "$MATRIX" | jq -c '[.[] | select(.team == "train")]')
             if [ "$FILTERED" = "[]" ]; then
               echo "::error::No tests found for team 'train'. Ensure train-team entries exist in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
