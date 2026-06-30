@@ -40,26 +40,59 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         return str(cache_dir / n) if cache_dir is not None else None
 
     tw = {}
-    # Column-parallel: shard output dim (contiguous heads per device, gate kept with Q).
-    # q/k/v weights are stored DRAM-WIDTH_SHARDED so the M=1 decode matmul reads them at near-peak
-    # DRAM bandwidth (mirrors the MLP w1/w3 path). On by default for TP (the memcfgs exist); the
-    # single-device 9B path never reaches this loader. Distinct `.dramshard` cache names:
-    # ttnn.as_tensor reloads a cache as-is and ignores the requested memory_config, so the sharded
-    # and interleaved layouts must not share a cache file.
-    qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
-    qg_mc = args.attn_qg_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
-    k_mc = args.attn_k_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
-    v_mc = args.attn_v_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
-    tag = ".dramshard" if qkv_sharded else ""
-    tw["wqkv"] = tpc.shard_w(
-        state_dict["q_proj.weight"], mesh, dim=-1, memory_config=qg_mc, cache_path=c("wqkv" + tag), dtype=ttnn.bfloat8_b
-    )
-    tw["wk"] = tpc.shard_w(
-        state_dict["k_proj.weight"], mesh, dim=-1, memory_config=k_mc, cache_path=c("wk" + tag), dtype=ttnn.bfloat8_b
-    )
-    tw["wv"] = tpc.shard_w(
-        state_dict["v_proj.weight"], mesh, dim=-1, memory_config=v_mc, cache_path=c("wv" + tag), dtype=ttnn.bfloat8_b
-    )
+    # Column-parallel q/k/v in-projections (P4). Default for TP: one fused [q+gate|k|v] weight,
+    # per-device interleaved so the shard still gives each device [qg_d|k_d|v_d] — prefill does a
+    # single matmul reading the activation once. Falls back to three separate DRAM-WIDTH_SHARDED
+    # weights when the fused memcfg is unavailable. Distinct `.dramshard` cache names: ttnn.as_tensor
+    # reloads a cache as-is, ignoring the requested memory_config, so layouts must not share a file.
+    fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
+    if fused_qkv:
+        fused = tpc.prepare_attn_qkv(
+            state_dict["q_proj.weight"],
+            state_dict["k_proj.weight"],
+            state_dict["v_proj.weight"],
+            args.n_local_heads * args.head_dim * 2,
+            args.n_local_kv_heads * args.head_dim,
+            args.num_devices,
+        )
+        tw["wqkv_fused"] = tpc.shard_w(
+            fused,
+            mesh,
+            dim=-1,
+            memory_config=args.attn_qkv_fused_weight_memcfg,
+            cache_path=c("wqkv_fused.dramshard"),
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
+        qg_mc = args.attn_qg_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
+        k_mc = args.attn_k_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
+        v_mc = args.attn_v_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
+        tag = ".dramshard" if qkv_sharded else ""
+        tw["wqkv"] = tpc.shard_w(
+            state_dict["q_proj.weight"],
+            mesh,
+            dim=-1,
+            memory_config=qg_mc,
+            cache_path=c("wqkv" + tag),
+            dtype=ttnn.bfloat8_b,
+        )
+        tw["wk"] = tpc.shard_w(
+            state_dict["k_proj.weight"],
+            mesh,
+            dim=-1,
+            memory_config=k_mc,
+            cache_path=c("wk" + tag),
+            dtype=ttnn.bfloat8_b,
+        )
+        tw["wv"] = tpc.shard_w(
+            state_dict["v_proj.weight"],
+            mesh,
+            dim=-1,
+            memory_config=v_mc,
+            cache_path=c("wv" + tag),
+            dtype=ttnn.bfloat8_b,
+        )
     # Row-parallel: shard input dim → reduce-scatter after
     tw["wo"] = tpc.shard_w(
         state_dict["o_proj.weight"],
@@ -100,6 +133,8 @@ class TPAttention:
         # Mirror the weight-load gate: q/k/v stored DRAM-WIDTH_SHARDED → use the DRAM-sharded
         # decode matmul (see _col_proj). Must match qkv_sharded in load_attention_weights_tp.
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
+        # P4: one fused [q+gate|k|v] matmul (default for TP). Must match fused_qkv in the loader.
+        self._fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
         self.k_caches = None
         self.v_caches = None
         # Paged KV cache (vLLM / model-contract path). Bound via set_paged_kv_cache;
@@ -114,6 +149,27 @@ class TPAttention:
         self.paged_k = k_cache
         self.paged_v = v_cache
         self.use_paged = True
+
+    def _qkv(self, x):
+        """Q+gate / K / V projections, returning (qg, kp, vp) in DRAM-interleaved layout. Default:
+        three separate column-parallel matmuls (fallback). Fused (default for TP): one matmul over
+        the concatenated [q+gate|k|v] weight, then slice — reads the activation once."""
+        tw = self.tw
+        if not self._fused_qkv:
+            return (
+                self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg),
+                self._col_proj(x, tw["wk"], self.args.attn_k_progcfg),
+                self._col_proj(x, tw["wv"], self.args.attn_v_progcfg),
+            )
+        qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
+        qg_dim = self.NH * self.HD * 2
+        kv_dim = self.NKV * self.HD
+        sh = list(qkv.shape)
+        qg = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qg_dim))
+        kp = ttnn.slice(qkv, (0, 0, 0, qg_dim), (sh[0], sh[1], sh[2], qg_dim + kv_dim))
+        vp = ttnn.slice(qkv, (0, 0, 0, qg_dim + kv_dim), (sh[0], sh[1], sh[2], qg_dim + 2 * kv_dim))
+        ttnn.deallocate(qkv)
+        return qg, kp, vp
 
     def _col_proj(self, x, weight, decode_progcfg):
         """Column-parallel input projection (q / k / v). When DRAM-sharding is enabled the
@@ -187,9 +243,7 @@ class TPAttention:
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         S = x.shape[-2]
 
-        qg = self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg)
-        kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
-        vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
+        qg, kp, vp = self._qkv(x)
 
         q, gate, k, v = self._make_heads(qg, kp, vp, S)
 
@@ -254,9 +308,7 @@ class TPAttention:
         if not use_paged and self.k_caches is None:
             self.reset_state()
 
-        qg = self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg)
-        kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
-        vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
+        qg, kp, vp = self._qkv(x)
 
         qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2))
         ttnn.deallocate(qg)
@@ -401,9 +453,7 @@ class TPAttention:
             chunk_start_idx = 0
         S = x.shape[-2]
 
-        qg = self._col_proj(x, tw["wqkv"], self.args.attn_qg_progcfg)
-        kp = self._col_proj(x, tw["wk"], self.args.attn_k_progcfg)
-        vp = self._col_proj(x, tw["wv"], self.args.attn_v_progcfg)
+        qg, kp, vp = self._qkv(x)
 
         q, gate, k, v = self._make_heads(qg, kp, vp, S)
 

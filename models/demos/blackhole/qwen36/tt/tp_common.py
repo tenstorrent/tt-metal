@@ -273,6 +273,22 @@ def dequant_fp8_block(weight_fp8, scale_inv, block_size=128):
 
 
 # ── Weight-prep helpers (reorder HF weights for per-device sharding) ─────────
+def prepare_attn_qkv(q_w, k_w, v_w, qg_per, kv_per, tp):
+    """Interleave the full-attention q+gate / k / v weights into one fused [out, in] tensor so
+    ShardTensorToMesh(dim=-1) on the transposed result gives each device a contiguous
+    [qg_d | k_d | v_d] slice (matching the separate column-parallel shards it replaces).
+
+    q_w: [n_heads*head_dim*2, in] (q_proj packs [Q,gate] per head); k_w/v_w: [n_kv_heads*head_dim, in].
+    qg_per = n_local_heads*head_dim*2; kv_per = n_local_kv_heads*head_dim (the per-device out blocks).
+    """
+    parts = []
+    for d in range(tp):
+        parts.append(q_w[d * qg_per : (d + 1) * qg_per, :])
+        parts.append(k_w[d * kv_per : (d + 1) * kv_per, :])
+        parts.append(v_w[d * kv_per : (d + 1) * kv_per, :])
+    return torch.cat(parts, dim=0)
+
+
 def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
     """Interleave GDN Q/K/V heads so ShardTensorToMesh(dim=0) on the transposed
     weight gives each device a contiguous block of (nk/tp) Q heads, (nk/tp) K
