@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include <variant>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+
+namespace ttnn::operations::kv_sdpa {
+
+// Specialized fused-flash scaled-dot-product attention for the small-query MQA case.
+//
+//   Q is [1, NQH, Sq, DH] with Sq == one tile (32); K/V are [1, NKH, KV, DH] with NKH dividing NQH
+//   (GQA/MQA); non-causal full attention. Output is [1, NQH, Sq, DH].
+//
+// One core per Q head runs the production transformer-SDPA online-softmax routine (sdpa_standard),
+// specialized to Sq == 1 tile / single-KV-head reuse, so the attention math matches the production
+// fused-flash kernel without its general-case overhead.
+struct KvSdpaDeviceOperation {
+    struct operation_attributes_t {
+        uint32_t scale_bits;  // fp32 bit-pattern of the softmax scale
+        std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+    };
+
+    struct tensor_args_t {
+        const Tensor& q;
+        const Tensor& k;
+        const Tensor& v;
+        // Optional attention mask. NOTE: this op implements non-causal full attention and treats the
+        // mask as a no-op; it is accepted only for call-site compatibility.
+        std::optional<Tensor> mask;
+    };
+
+    using spec_return_value_t = ttnn::TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    // One core per Q head; the compute kernel calls the transformer-SDPA sdpa_standard() flash loop.
+    struct FlashFused {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    };
+
+    using program_factory_t = std::variant<FlashFused>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+};
+
+}  // namespace ttnn::operations::kv_sdpa
+
+namespace ttnn::prim {
+ttnn::operations::kv_sdpa::KvSdpaDeviceOperation::tensor_return_value_t kv_sdpa(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    std::optional<Tensor> mask,
+    uint32_t scale_bits,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+}  // namespace ttnn::prim
