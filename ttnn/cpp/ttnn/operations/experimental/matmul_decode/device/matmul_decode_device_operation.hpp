@@ -13,7 +13,7 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
-namespace ttnn::operations::matmul_decode {
+namespace ttnn::operations::experimental::matmul_decode {
 
 // -----------------------------------------------------------------------------
 // MatmulDecodeDeviceOperation
@@ -96,10 +96,10 @@ struct MatmulDecodeDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::matmul_decode
+}  // namespace ttnn::operations::experimental::matmul_decode
 
 namespace ttnn::prim {
-ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_value_t matmul_decode(
+ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_value_t matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,

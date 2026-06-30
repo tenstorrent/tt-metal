@@ -140,7 +140,7 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
 
     tracy.signpost(f"MatmulDecode: m: {m} k: {k} n: {n}")
     for x in range(2):
-        output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b)
+        output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b)
         output_tensor = ttnn.matmul(
             input_tensor_a_dram,
             input_tensor_b_dram,
@@ -242,7 +242,7 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
     print("input_tensor_b.shape:", input_tensor_b.shape)
     tracy.signpost(f"MatmulDecode: m: {m} k: {k} n: {n}", f" m: {m} k: {k} n: {n}")
     for x in range(2):
-        output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b, partial_width_sharded=True)
+        output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, partial_width_sharded=True)
 
     assert output_tensor.shape == (m, n)
 

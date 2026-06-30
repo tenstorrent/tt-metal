@@ -13,7 +13,7 @@
 #include <optional>
 #include <vector>
 
-namespace ttnn::operations::matmul_decode {
+namespace ttnn::operations::experimental::matmul_decode {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -367,7 +367,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }
         KernelDescriptor reader_kernel_desc;
         reader_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/reader_partial_width_sharded.cpp";
+            "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+            "reader_partial_width_sharded.cpp";
         reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
@@ -468,7 +469,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }
         KernelDescriptor writer_kernel_desc;
         writer_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/writer_partial_width_sharded.cpp";
+            "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+            "writer_partial_width_sharded.cpp";
         writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_kernel_desc.core_ranges = CoreRangeSet(ranges);
         writer_kernel_desc.compile_time_args = {
@@ -540,7 +542,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     // ---- Compute kernel (partial matmul + base-core reduction) ----
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/compute/compute_partial_width_sharded.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/compute_partial_width_sharded.cpp";
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = CoreRangeSet(b_core_ranges);
     compute_kernel_desc.compile_time_args = {
@@ -588,4 +590,4 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     return desc;
 }
 
-}  // namespace ttnn::operations::matmul_decode
+}  // namespace ttnn::operations::experimental::matmul_decode

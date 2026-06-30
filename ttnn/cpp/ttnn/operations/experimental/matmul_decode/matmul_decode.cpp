@@ -6,7 +6,7 @@
 
 #include "device/matmul_decode_device_operation.hpp"
 
-namespace ttnn {
+namespace ttnn::experimental {
 
 Tensor matmul_decode(
     const Tensor& input_tensor_a,
@@ -16,4 +16,4 @@ Tensor matmul_decode(
     return ttnn::prim::matmul_decode(input_tensor_a, input_tensor_b, partial_width_sharded, dtype);
 }
 
-}  // namespace ttnn
+}  // namespace ttnn::experimental
