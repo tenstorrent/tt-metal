@@ -205,16 +205,17 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync_mode),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
             NUM_FACES(),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

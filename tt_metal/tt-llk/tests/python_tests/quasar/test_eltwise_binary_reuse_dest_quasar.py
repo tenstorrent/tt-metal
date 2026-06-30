@@ -306,13 +306,13 @@ def test_eltwise_binary_reuse_dest_quasar(
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
             IMPLIED_MATH_FORMAT(implied_math_format),
             REUSE_DEST_TYPE(reuse_dest_type),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(
