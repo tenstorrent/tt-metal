@@ -1219,5 +1219,100 @@ void kernel_main() {
         << "Scratchpad base-address slot is 0 — the framework-allocated base was not delivered.";
 }
 
+// ============================================================================
+// Kernel Scratchpad: disjoint-node multi-binding (write / readback)
+// ============================================================================
+//
+// Proves the multi-binding relaxation on real hardware: one ScratchpadSpec bound by TWO kernels on
+// DISJOINT nodes. Each node hosts exactly one binding kernel, so each gets its own private per-node
+// instance — allocation and CRTA delivery are per-binding-kernel (allocate_scratchpads stacks each
+// kernel's scratchpad onto its own cores' allocators), so the two bindings never interact. Both
+// kernels write a known pattern into their scratchpad and report its framework-allocated base to a
+// host-known L1 address on their own node; the host reads each base and confirms the pattern landed.
+TEST_F(ProgramSpecHWTest, ScratchpadMultiBindDisjointNodesWriteReadback) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    constexpr uint32_t kScratchpadBytes = 64;                            // 16 x uint32_t
+    constexpr uint32_t kNumElems = kScratchpadBytes / sizeof(uint32_t);  // 16
+    constexpr uint32_t kReportAddr = 100 * 1024;                         // host-known fixed L1 addr (per node)
+    constexpr uint32_t kPatternBase = 0xC0DE0000u;                       // must match the kernel
+
+    const NodeCoord node_a{0, 0};
+    const NodeCoord node_b{1, 0};  // disjoint from node_a
+
+    // Two DM kernels, same source, binding the SAME scratchpad. Each on its own node — both on
+    // RISCV_0 is fine because they never share a node.
+    auto make_kernel = [](const std::string& name) {
+        KernelSpec k{
+            .unique_id = KernelSpecName{name},
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scratchpad_write_pattern.cpp",
+            .num_threads = 1,
+            .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .gen1_config =
+                        DataMovementHardwareConfig::Gen1Config{
+                            .processor = DataMovementProcessor::RISCV_0,
+                        },
+                },
+        };
+        k.scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+        return k;
+    };
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_multibind_disjoint";
+    spec.kernels = {make_kernel("scratch_kernel_a"), make_kernel("scratch_kernel_b")};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_a", node_a, {"scratch_kernel_a"}),
+        MakeMinimalWorkUnit("wu_b", node_b, {"scratch_kernel_b"}),
+    };
+
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"scratch_kernel_a"},
+            .runtime_arg_values = {{node_a, {{"report_addr", kReportAddr}}}},
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"scratch_kernel_b"},
+            .runtime_arg_values = {{node_b, {{"report_addr", kReportAddr}}}},
+        },
+    };
+    SetProgramRunArgs(program, params);
+
+    // Pre-zero both report locations so a kernel that never wrote its base would be caught.
+    std::vector<uint32_t> zero_report(1, 0u);
+    detail::WriteToDeviceL1(device, node_a, kReportAddr, zero_report);
+    detail::WriteToDeviceL1(device, node_b, kReportAddr, zero_report);
+
+    detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> expected(kNumElems);
+    for (uint32_t i = 0; i < kNumElems; i++) {
+        expected[i] = kPatternBase + i;
+    }
+
+    // Each node's binding kernel must have reached a real, private scratchpad and written the pattern.
+    for (const NodeCoord& node : {node_a, node_b}) {
+        std::vector<uint32_t> reported;
+        detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
+        ASSERT_EQ(reported.size(), 1u);
+        const uint32_t scratch_base = reported[0];
+        EXPECT_NE(scratch_base, 0u) << "Kernel on node " << node.str() << " reported a 0 scratchpad base address";
+
+        std::vector<uint32_t> scratch_contents;
+        detail::ReadFromDeviceL1(device, node, scratch_base, kScratchpadBytes, scratch_contents);
+        ASSERT_EQ(scratch_contents.size(), kNumElems);
+        EXPECT_EQ(scratch_contents, expected) << "Scratchpad L1 on node " << node.str() << " at base 0x" << std::hex
+                                              << scratch_base << " did not contain the pattern the kernel wrote";
+    }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

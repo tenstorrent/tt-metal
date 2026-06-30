@@ -1359,13 +1359,15 @@ TEST_F(ProgramSpecTestQuasar, UnboundScratchpadFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("declared but not bound")));
 }
 
-TEST_F(ProgramSpecTestQuasar, ScratchpadBoundByTwoKernelsFails) {
-    // One ScratchpadSpec bound by two different kernels. A scratchpad is private to a single kernel:
-    // exactly one binding across the whole ProgramSpec.
+TEST_F(ProgramSpecTestQuasar, ScratchpadBoundByTwoKernelsSameNodeFails) {
+    // One ScratchpadSpec bound by two kernels that share a node. A scratchpad is private node-local
+    // L1; binding it from two kernels on the SAME node would be true sharing, which is not yet
+    // supported (the disjoint-node case IS allowed — see the next test). MakeMinimalValidProgramSpec
+    // places both kernels on node {0,0}, so this is the same-node collision case.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
-    // kernels[0] (DM) and kernels[1] (compute) both bind it.
+    // kernels[0] (DM) and kernels[1] (compute) both bind it, and both run on node {0,0}.
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_dm"}};
     spec.kernels[1].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
@@ -1373,12 +1375,43 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadBoundByTwoKernelsFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("bound more than once")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadBoundByTwoKernelsDisjointNodesSucceeds) {
+    // Complement of the same-node case above: one ScratchpadSpec bound by two kernels on DISJOINT
+    // nodes is legal. Each node hosts exactly one binding kernel instance, so the per-node scratchpad
+    // stays private to that kernel (allocation + CRTA delivery are per-binding-kernel, so the two
+    // bindings never interact). This is the matmul-grid-style fan: one kernel source specialized into
+    // multiple KernelSpecs on disjoint node ranges, all binding the same scratchpad resource.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "scratchpad_shared_disjoint";
+
+    auto kernel_a = MakeMinimalGen1DMKernel("kernel_a");
+    kernel_a.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_shared"}, .accessor_name = "scratch"});
+    auto kernel_b = MakeMinimalGen1DMKernel("kernel_b");
+    kernel_b.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"scratch_shared"}, .accessor_name = "scratch"});
+
+    spec.kernels = {kernel_a, kernel_b};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_shared"}, .size_per_node = 1024}};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_a", node0, {"kernel_a"}),
+        MakeMinimalWorkUnit("wu_b", node1, {"kernel_b"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, ScratchpadBoundTwiceInOneKernelFails) {
-    // One kernel binds the SAME scratchpad twice under two different accessor_names. Still illegal:
-    // a scratchpad may be bound exactly once across the whole ProgramSpec, even by the same kernel.
+    // One kernel binds the SAME scratchpad twice under two different accessor_names. Illegal: a kernel
+    // may bind a given scratchpad at most once (two bindings would request two separate per-node
+    // allocations under one name). This is a structural input error with no node-set dependency, so
+    // it is caught up front during collection rather than by the placement census.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
@@ -1389,7 +1422,8 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadBoundTwiceInOneKernelFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("bound more than once")));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("binds scratchpad 'scratch_0' more than once")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DuplicateScratchpadAccessorNameFails) {
@@ -1442,7 +1476,8 @@ TEST_F(ProgramSpecTestQuasar, MultipleScratchpadsEachBoundToOwnKernelSucceeds) {
     ProgramSpec spec;
     spec.name = "scratchpad_multi";
 
-    // A scratchpad is private to a single kernel: two scratchpads, each owned by a distinct kernel.
+    // Two independent scratchpads, each bound by its own kernel on its own node — the simplest
+    // multi-scratchpad case (distinct from binding one shared scratchpad across disjoint nodes).
     auto kernel_a = MakeMinimalGen1DMKernel("kernel_a");
     kernel_a.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_a"}, .accessor_name = "scratch"});
