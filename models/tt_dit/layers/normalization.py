@@ -450,11 +450,16 @@ class DistributedLayerNorm(Module):
             self._fused_ln_stats_cache = cache
         entry = cache.get(key)
         if entry is None:
+            # num_links MUST match the op's num_preferred_links below: the buffer's
+            # chunk/window geometry is num_links-dependent (num_forwarders =
+            # min(num_links, num_workers)); a mismatch corrupts the gather. More links =
+            # more parallel AG planes = a faster gather (the AG dominates at large seq).
             bufs = [
                 ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
+                    num_links=self.ccl_manager.num_links,
                     norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
                 )
                 for _ in range(2)
@@ -510,6 +515,7 @@ class DistributedLayerNorm(Module):
                 weight=weight,
                 bias=bias,
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+                num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
                 dtype=dtype,
                 use_device_op=True,
                 norm_type=ttnn.experimental.WanFusedNormType.LAYERNORM,
