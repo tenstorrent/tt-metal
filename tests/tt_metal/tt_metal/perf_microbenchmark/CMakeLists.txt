@@ -34,15 +34,6 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 routing/fabric_mux_v2_benchmark_program.cpp
         )
     endif()
-    if(${TEST_SRC} STREQUAL "routing/benchmark_fabric_mux_saturation.cpp")
-        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
-        target_sources(
-            ${TEST_TARGET}
-            PRIVATE
-                routing/fabric_mux_benchmark_program_utils.cpp
-                routing/fabric_mux_saturation_program.cpp
-        )
-    endif()
     if(${TEST_SRC} STREQUAL "disaggregation/bench_kv_chunk_address_table.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
