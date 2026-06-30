@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
+namespace ttnn::experimental {
 
 // matmul_decode: template op skeleton that performs a matrix multiply between two tensors.
 //
@@ -23,4 +23,4 @@ Tensor matmul_decode(
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt);
 
-}  // namespace ttnn
+}  // namespace ttnn::experimental

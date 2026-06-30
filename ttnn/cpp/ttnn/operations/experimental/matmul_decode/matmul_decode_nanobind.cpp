@@ -8,13 +8,13 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/operations/matmul_decode/matmul_decode.hpp"
+#include "ttnn/operations/experimental/matmul_decode/matmul_decode.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::matmul_decode {
+namespace ttnn::operations::experimental::matmul_decode::detail {
 
 void bind_matmul_decode_operation(nb::module_& mod) {
-    ttnn::bind_function<"matmul_decode">(
+    ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
         R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
 
@@ -33,7 +33,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
         )doc",
-        &ttnn::matmul_decode,
+        &ttnn::experimental::matmul_decode,
         nb::arg("input_tensor_a"),
         nb::arg("input_tensor_b"),
         nb::kw_only(),
@@ -41,4 +41,4 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("dtype") = nb::none());
 }
 
-}  // namespace ttnn::operations::matmul_decode
+}  // namespace ttnn::operations::experimental::matmul_decode::detail

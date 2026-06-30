@@ -6,7 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::matmul_decode {
+namespace ttnn::operations::experimental::matmul_decode {
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -94,4 +94,4 @@ ProgramDescriptor MatmulDecodeDeviceOperation::MultiCore::create_descriptor(
     return desc;
 }
 
-}  // namespace ttnn::operations::matmul_decode
+}  // namespace ttnn::operations::experimental::matmul_decode
