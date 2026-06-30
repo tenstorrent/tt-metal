@@ -10,21 +10,27 @@ Baseline verified: built actual `origin/main` and measured — legacy transpose 
 transpose 71.5µs, both match the "main" column (70.5µs) within ~3µs cross-build noise. The baseline is
 genuinely unoptimized.
 
-## Single device (1-chip) — REAL dispatch (n150), true absolute host µs
-| op | main | spec+opts | Δ | spec = % of main |
-|----|----:|----:|----:|----:|
-| tilize | 21.8 | 45.5 | +23.7 | 209% |
-| transpose | 19.9 | 40.3 | +20.4 | 202% |
-| fold | 19.2 | 35.8 | +16.6 | 187% |
-| untilize | 19.4 | 35.9 | +16.5 | 185% |
-| i2s | 21.0 | 35.6 | +14.6 | 170% |
-| reshard | 22.6 | 37.3 | +14.7 | 165% |
-| slice | 41.2 | 64.8 | +23.6 | 157% |
+## Single device (1-chip) — both lenses side by side
 
-Single chip: spec is **~1.6-2.1x main** (a ~constant +14-24µs on a ~20-40µs op).
-(NOTE: these are REAL-dispatch absolutes. The earlier NO_DISPATCH 1-chip numbers showed only ~120-130%
-because graph-capture adds a ~50µs pedestal to BOTH columns — it cancels in the Δ but pads the ratio
-denominator, deflating the %. The Δ is identical either way; the real single-chip slowdown is ~2x.)
+`real` = real-dispatch absolutes (n150). `ND` = NO_DISPATCH. **The µs Δ is the same in both** (~+20µs).
+The **ratio differs** only because NO_DISPATCH adds a ~50µs graph-capture pedestal to *both* columns:
+it cancels in the Δ but pads the ratio denominator, so the same +20µs reads as ~2x on `real`
+(base ~20µs) and ~1.3x on `ND` (base ~70µs). **`real %` is the true single-chip slowdown.**
+
+| op | real main | real spec | real % | | ND main | ND spec | ND % | Δ (µs) |
+|----|----:|----:|----:|--|----:|----:|----:|----:|
+| tilize | 21.8 | 45.5 | **209%** | | 71.9 | 90.8 | 126% | +24 |
+| transpose | 19.9 | 40.3 | **202%** | | 70.5 | 91.4 | 130% | +20 |
+| fold | 19.2 | 35.8 | **187%** | | 66.5 | 84.7 | 127% | +17 |
+| untilize | 19.4 | 35.9 | **185%** | | 70.7 | 85.9 | 121% | +17 |
+| i2s | 21.0 | 35.6 | **170%** | | 72.9 | 86.8 | 119% | +15 |
+| reshard | 22.6 | 37.3 | **165%** | | 75.0 | 89.9 | 120% | +15 |
+| slice | 41.2 | 64.8 | **157%** | | 108.5 | 132.9 | 123% | +24 |
+
+> Why "2x here but 1.3x there": same physical cost (+~20µs), two lenses. `real` has no overhead so the
+> ratio is true (~2x on a ~20µs op). `ND`'s pedestal inflates the denominator, deflating the ratio. We use
+> `ND` only for 32-chip (real dispatch backpressures the 0.5KHz sim); there the base is big (~175µs) so the
+> +20µs is ~+11% under BOTH lenses — they converge.
 
 
 ## Multi device (32-chip, ttsim) — main = actual `origin/main` build
